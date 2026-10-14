@@ -447,6 +447,12 @@ Consequences for Argus:
   agents never share a NanoClaw host process, working directory, vault identity
   or container namespace. `agents_per_instance` is therefore fixed at 1 for this
   runtime (the pool validation enforces it); more capacity means more instances.
+- **The Docker socket is the remaining isolation gap, and sandboxing closes it.**
+  With `docker.runtime` set (e.g. `sysbox-runc`) the host gets no socket and runs
+  its own daemon, so each instance is isolated from the Docker host and from its
+  siblings. A dedicated Docker host per pool (`docker.host`) adds a VM boundary on
+  top and is the recommended hardening for untrusted workloads. Without
+  `docker.runtime` the socket is mounted and root-equivalent on that host.
 - **Argus ships a NanoClaw channel** (`integrations/nanoclaw/argus.ts`,
   TypeScript, installed into a NanoClaw checkout by `install.sh`; NanoClaw has no
   plugin loader). It is a native channel adapter in the host process, modeled on

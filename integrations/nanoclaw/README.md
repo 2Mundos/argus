@@ -88,10 +88,40 @@ How it works and what to know:
   finds them by `nanoclaw-group-folder` (`argus-<pool>-<instance id prefix>`), stops
   them with their host, keeps the instance un-terminated until they are gone, and
   removes orphans.
-- **The Docker socket is root-equivalent** on that Docker host.
+- **The Docker socket is root-equivalent** on that Docker host. Use the sandboxed
+  mode below to avoid mounting it.
 - **Upgrade tripwire.** For a fresh working directory the entrypoint stamps
   NanoClaw's upgrade marker with commit/tree `unknown` (its documented no-git
   case); an existing marker is never overwritten.
+
+## Sandboxed mode (sysbox)
+
+Set `docker.runtime` (e.g. `sysbox-runc`) and the host gets **no** Docker socket:
+the image runs its own `dockerd` inside the sandbox runtime, so a compromised host
+reaches neither the Docker host nor its sibling instances.
+
+```json
+"docker": {"runtime": "sysbox-runc", "extra_hosts": ["host.docker.internal:host-gateway"]},
+"nanoclaw": {"install_dir": "...", "instances_root": "/srv/nc-i",
+             "agent_image": "nanoclaw-agent-v2-008685e0:latest",
+             "agent_image_archive": "/srv/nanoclaw-agent.tar"}
+```
+
+- The Docker host needs [sysbox](https://github.com/nestybox/sysbox) installed and
+  registered as a runtime. `nanoclaw.user`/`group_add` must be empty (root inside
+  the sandbox is unprivileged outside it).
+- The inner daemon starts empty. `agent_image_archive` (a `docker save` file on the
+  Docker host, mounted read-only) is loaded on start; without it `agent_image` is
+  pulled from its registry.
+- **Gateway reachability.** Inside the sandbox `host-gateway` would be the instance
+  itself, so the entrypoint starts the inner daemon with `--host-gateway-ip` set to
+  what the instance resolves `host.docker.internal` to (the pool's `extra_hosts`
+  entry): agent containers then reach OneCLI on the real Docker host.
+- Verified: pool validation, the container spec, the entrypoint (inner daemon
+  starts, image loads, NanoClaw boots), and the gateway routing (an inner container
+  was refused at `host-gateway` before the flag and reached a host listener after),
+  on native Linux using `--privileged` as a stand-in. **Not verified:** under real
+  sysbox, which is not installed on any host I can reach.
 
 ## Verified with a real model (2026-10-14)
 
