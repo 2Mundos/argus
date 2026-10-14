@@ -305,20 +305,23 @@ Consequences for Argus:
 - **Agents talk back through the Argus MCP endpoint** (3.7), added to each agent
   group as a user MCP server. The module scopes the agent's token to the task it
   holds.
-- **Credentials stay in NanoClaw's gateway.** Argus decides *which* account a
-  session uses (3.9) and the module points the session at it; raw secrets do
-  not travel through Argus task payloads.
+- **Credentials never enter agent containers.** Argus is the source of truth
+  for credentials (3.9). When a session leases an account, the module loads
+  that credential into NanoClaw's gateway, which injects it at the HTTPS layer;
+  the gateway is a sink, not a second store. Raw secrets never travel through
+  task payloads.
 
 ## 3.9 Account pool and fallback
 
 Agents run on subscription or API accounts (Claude, Codex, Cursor, …) that hit
-usage limits. Argus owns the **account registry and leasing**; providers'
-credentials stay in a secret store.
+usage limits. Argus owns the **account registry and leasing** (in SQLite) and
+the **credentials** (in a SOPS file, 3.9.1). The two are kept apart: the
+database never holds a secret.
 
 - **`accounts`**: `id`, `provider` (`anthropic` | `openai` | `cursor` | …),
-  `kind` (`api_key` | `subscription`), `secret_ref` (a pointer such as
-  `env:NAME`, `file:/run/secrets/x`, or a gateway vault reference — never the
-  secret itself), `priority`, `state` (`available` | `exhausted` | `disabled`),
+  `kind` (`api_key` | `subscription`), `secret_ref` (a key into the secrets
+  file, `sops:<name>`; never the secret itself), `priority`, `state`
+  (`available` | `exhausted` | `disabled`),
   `exhausted_until`, `labels`.
 - **Leasing**: an agent session leases one account
   (`POST /accounts/lease {providers: [...]}`), choosing the highest-priority
@@ -340,6 +343,33 @@ credentials stay in a secret store.
 
 Check each provider's terms before pooling subscription accounts for automated
 use; some consumer plans restrict it.
+
+### 3.9.1 Credential store: SOPS + age
+
+- Credentials live in one SOPS-encrypted YAML file, `/data/secrets.sops.yaml`,
+  encrypted to one or more **age** recipients. Each top-level key is a
+  `secret_ref` name holding that account's material (an API key, or a
+  subscription's OAuth access/refresh tokens and expiry).
+- Argus decrypts the file into memory at startup with the age identity from
+  `SOPS_AGE_KEY_FILE` (or `SOPS_AGE_KEY`). Plaintext is never written to disk or
+  logged, and never returned by the API: the dashboard shows only which keys
+  exist and when each was last updated.
+- **Argus is the only writer** (single-node 3.1). Adding or rotating an account
+  from the dashboard, and persisting **refreshed OAuth tokens** for
+  subscription accounts, update the in-memory copy, re-encrypt with `sops` to a
+  temporary file in the same directory, `fsync`, and atomically rename it over
+  the original. Writes are serialized by the same in-process discipline as the
+  database writer. A token refresh that cannot be persisted fails loudly: the
+  account is marked `disabled` with the reason, rather than silently keeping a
+  token that will be lost on restart.
+- Editing the file by hand (`sops /data/secrets.sops.yaml`) is supported while
+  Argus is stopped, or followed by `POST /admin/secrets/reload` (which refuses
+  if the file changed since Argus last wrote it and Argus has unsaved changes).
+- Because the file is encrypted, it can be backed up anywhere or committed to a
+  private config repository. Losing the age identity means losing the
+  credentials; the operator keeps a second recipient key offline.
+- At startup, every `sops:` reference in `accounts` must resolve; unresolved
+  accounts are marked `disabled` with a reason instead of preventing startup.
 
 ## 3.10 Decision requests (human in the loop)
 
@@ -390,9 +420,7 @@ optional integration (single-node 3.5).
    whether a module can create inbound messages without a chat platform behind
    it, whether the gateway credential can be switched per session at spawn
    time, and whether the host tolerates running under Kubernetes with DinD.
-2. **Account secret store**: are `env:`/`file:` refs plus NanoClaw's gateway
-   vault enough, or do we need one store that feeds every runtime?
-3. **Exhaustion signals per provider**: which errors and headers reliably mean
+2. **Exhaustion signals per provider**: which errors and headers reliably mean
    "quota exhausted until T" for Claude subscriptions, Codex, and Cursor?
 
 # 5. Constraints
@@ -428,7 +456,7 @@ Build order, each step shippable and testable on its own:
 6. **Decisions** (3.10), including start and review gates.
 7. **Dashboard v1**, served by the API: task board, agent list, decision inbox,
    event timeline over SSE.
-8. **Account pool** (3.9).
+8. **Account pool** (3.9) and the SOPS credential store (3.9.1).
 9. **Pools + reconciler + `docker` target + `plain` runtime**, with an
    integration test that scales a pool of a trivial worker image up and down.
    Cover agent loss while its container stays running, unreachable providers,

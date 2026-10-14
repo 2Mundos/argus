@@ -72,7 +72,14 @@ Any integration that needs another service (S3, a secret manager, OpenTelemetry
 export, chat notifications) is optional, configured explicitly, and disabled by
 default. Argus never fails to start because an optional service is missing.
 
-## 3.6 Footprint budget
+## 3.6 Secrets in a file, not a service
+
+Provider credentials live in one SOPS-encrypted file in the data directory,
+decrypted in memory with an age key (see
+[worker lifecycle](worker-lifecycle.spec.md) 3.9.1). The `sops` binary ships in
+the image; no secret manager is required.
+
+## 3.7 Footprint budget
 
 Targets, checked as the code grows:
 
@@ -83,8 +90,9 @@ Targets, checked as the code grows:
 
 # 4. Open Questions
 
-1. Backup for `/data/artifacts`: Litestream covers only SQLite. Is a documented
-   `restic`/`rsync` job enough until an S3 artifact store exists?
+1. Backup for `/data/artifacts`: Litestream covers only SQLite (the encrypted
+   secrets file can be copied anywhere). Is a documented `restic`/`rsync` job
+   enough until an S3 artifact store exists?
 2. At what measured load (agents, tasks per second, database size) do we revisit
    this spec?
 
@@ -101,7 +109,8 @@ Targets, checked as the code grows:
 # 6. Implementation Consequences
 
 - `apps/api` serves `apps/dashboard`'s build output; the production image is
-  multi-stage (Node build, then Python runtime) and ships Litestream.
+  multi-stage (Node build, then Python runtime) and ships the Litestream
+  and `sops` binaries.
 - The data layer is a thin repository module over `sqlite3`/`aiosqlite`, with
   one writer and a reader pool; tests use a temporary database file per test.
 - No `docker-compose.yml` is needed for development: `make dev-api` creates
