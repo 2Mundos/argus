@@ -550,10 +550,12 @@ inbox. Chat notifications are a later, optional integration (single-node 3.5).
 
 # 4. Open Questions
 
-1. **NanoClaw details**, to verify against its source before building 3.8:
-   whether a module can create inbound messages without a chat platform behind
-   it, whether the gateway credential can be switched per session at spawn
-   time, and whether the host tolerates running under Kubernetes with DinD.
+1. **NanoClaw** ([research](../research/2026-10-14.nanoclaw-integration.research.md)):
+   an Argus channel is feasible (messages can be injected without a chat
+   platform); credential switching is per agent group through OneCLI 1.42.0 and
+   unverified on a running session; a NanoClaw host needs the Docker CLI and
+   identical host/container paths for its mounts, and there is no Kubernetes
+   driver, so the `nanoclaw` runtime is Docker-target only for now.
 2. **Exhaustion signals per provider**: which errors and headers reliably mean
    "quota exhausted until T" for Claude subscriptions, Codex, and Cursor?
 

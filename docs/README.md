@@ -49,4 +49,4 @@ every new dependency is judged against it.
 ### Research
 
 - [NanoClaw integration spike](research/2026-10-14.nanoclaw-integration.research.md) —
-  channels, credentials, drivers (partial)
+  channels, credentials, drivers
