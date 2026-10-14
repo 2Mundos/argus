@@ -424,18 +424,30 @@ agent), `question`, `options` (or free text), `requested_by`, `audience`
 (`human` | `orchestrator` | `any`), `state` (`open` | `answered` |
 `cancelled`), `answer`, `decided_by`.
 
+Who may answer: `human` → admin tokens; `orchestrator` and `any` →
+orchestrator or admin tokens. Workers never answer decisions.
+
 Uses:
 
-- **Questions from a worker**: the `ask` MCP tool. The task goes `blocked` until
-  answered; the answer is delivered back as a message to the agent.
-- **Start gate**: `requires_approval` tasks wait in `awaiting_approval`.
-- **Review gate**: `review` tasks wait in `in_review` after completion (3.2).
-- **Policy gates**: scaling a pool above a configured threshold, or an
-  orchestrator creating more than a configured number of tasks per hour, opens
-  a decision instead of failing outright.
+- **Questions from a worker** (`POST /tasks/{id}/ask`, lease required): the
+  task goes `blocked` (lease released) until answered. The answer is appended to
+  the task spec under a **Clarifications** heading and the task returns to
+  `ready`; the next claim sees it. Workers stay pull-only.
+- **Start gate**: a `requires_approval` task opens an `approval` decision
+  (audience `human`, options `approve`/`reject`); reject cancels the task.
+- **Review gate**: completion of a `review` task opens a `review` decision
+  (audience follows `review`, options `accept`/`reject`, `text` as notes).
+- **Policy gates**: an agent that has created `ARGUS_MAX_TASKS_PER_AGENT_HOUR`
+  (default 100; 0 disables) tasks in the last hour gets further tasks created
+  in `awaiting_approval` with a `policy` decision for a human, instead of a
+  refusal. The scaling-threshold gate arrives with pools (3.5).
+- **Moot decisions**: answering closes the decision before its transition
+  runs; any other move out of the state a decision waits on (or into a terminal
+  state) cancels it, e.g. a task cancelled while its question is open.
 
-The dashboard has an **inbox** of open decisions. Chat notifications are a later,
-optional integration (single-node 3.5).
+`GET /decisions` is the inbox (open, oldest first); `POST
+/decisions/{id}/answer` takes `{choice, text}`. The dashboard renders the
+inbox. Chat notifications are a later, optional integration (single-node 3.5).
 
 ## 3.11 Task kinds and result envelope
 

@@ -12,8 +12,10 @@ from uuid import uuid4
 import aiosqlite
 from argus_core.agents import LIVE, AgentState
 from argus_core.auth import Scope
+from argus_core.decisions import Audience, DecisionKind
 from argus_core.kinds import TaskKind
 from argus_core.tasks import (
+    TERMINAL,
     Action,
     Review,
     Task,
@@ -25,6 +27,7 @@ from argus_core.tasks import (
 )
 
 from argus_api.db import Tx, ts
+from argus_api.decisions import store as decisions
 from argus_api.errors import (
     ConflictError,
     ForbiddenError,
@@ -70,10 +73,20 @@ async def list_tasks(
 
 
 async def create_task(
-    tx: Tx, body: TaskCreate, actor: str, *, as_worker: str | None = None
+    tx: Tx,
+    body: TaskCreate,
+    actor: str,
+    *,
+    as_worker: str | None = None,
+    hourly_limit: int | None = None,
 ) -> Task:
-    """Create a task. `as_worker` (an agent id) limits creation to subtasks of a
-    task that agent currently holds (3.6)."""
+    """Create a task.
+
+    `as_worker` (an agent id) limits creation to subtasks of a task that agent
+    currently holds (3.6). `hourly_limit` is the policy gate (3.10): past that
+    many tasks by `actor` in the last hour, the task waits for human approval
+    instead of being refused.
+    """
     if body.parent_id is not None:
         parent = await _row(tx.conn, body.parent_id)
         if as_worker is not None and not (
@@ -92,7 +105,10 @@ async def create_task(
     if missing := set(deps) - dep_states.keys():
         raise NotFoundError(f"dependency not found: {', '.join(sorted(missing))}")
     deps_done = all(s is S.SUCCEEDED for s in dep_states.values())
-    if body.requires_approval:
+    over_limit = hourly_limit is not None and (
+        await _created_last_hour(tx, actor) >= hourly_limit
+    )
+    if body.requires_approval or over_limit:
         state = S.AWAITING_APPROVAL
     else:
         state = S.READY if deps_done else S.PENDING
@@ -129,6 +145,31 @@ async def create_task(
         [(task_id, d) for d in deps],
     )
     await record(tx, actor, "task", task_id, "task.created", {"to": state})
+    if over_limit:
+        await decisions.open_decision(
+            tx,
+            subject_type="task",
+            subject_id=task_id,
+            kind=DecisionKind.POLICY,
+            question=(
+                f"{actor} has created {hourly_limit} or more tasks in the last hour"
+                f" (the policy limit). Allow {body.title!r} to proceed?"
+            ),
+            options=list(_APPROVAL_OPTIONS),
+            audience=Audience.HUMAN,
+            requested_by="system",
+        )
+    elif body.requires_approval:
+        await decisions.open_decision(
+            tx,
+            subject_type="task",
+            subject_id=task_id,
+            kind=DecisionKind.APPROVAL,
+            question=f"Approve starting {body.title!r}?",
+            options=list(_APPROVAL_OPTIONS),
+            audience=Audience.HUMAN,
+            requested_by=actor,
+        )
     for dep, dep_state in dep_states.items():
         if dep_state in (S.FAILED, S.CANCELLED):
             await _dependency_failed_event(tx, task_id, dep, dep_state)
@@ -305,6 +346,22 @@ async def unblock(tx: Tx, task_id: str, actor: str) -> Task:
     return await get_task(tx.conn, task_id)
 
 
+async def add_clarification(
+    tx: Tx, task_id: str, question: str, answer: str, actor: str
+) -> None:
+    """Append an answered question to the task spec, so the next claim sees it."""
+    row = await _row(tx.conn, task_id)
+    spec = row["spec"]
+    if "\n## Clarifications\n" not in f"\n{spec}":
+        spec += "\n\n## Clarifications\n"
+    spec += f"\n- **Asked (attempt {row['attempt']}):** {question}\n"
+    spec += f"  **Answered by {actor}:** {answer}\n"
+    await tx.conn.execute(
+        "UPDATE tasks SET spec = ?, updated_at = ? WHERE id = ?",
+        (spec, ts(tx.now), task_id),
+    )
+
+
 async def cancel(tx: Tx, task_id: str, actor: str) -> Task:
     row = await _row(tx.conn, task_id)
     await _apply(tx, row, Action.CANCEL, actor)
@@ -449,11 +506,45 @@ async def _apply(
         f"task.{action}",
         {"from": old, "to": new, "attempt": row["attempt"], **(data or {})},
     )
+    # Decisions that waited on the old state are moot once the task leaves it
+    # (an answered decision is already closed before its transition runs).
+    if new in TERMINAL:
+        await decisions.cancel_open(tx, "task", row["id"])
+    elif old in decisions.WAITS_IN and new is not old:
+        await decisions.cancel_open(tx, "task", row["id"], decisions.WAITS_IN[old])
+    if new is S.IN_REVIEW:
+        review = Review(row["review"])
+        await decisions.open_decision(
+            tx,
+            subject_type="task",
+            subject_id=row["id"],
+            kind=DecisionKind.REVIEW,
+            question=f"Review the result of {row['title']!r} (attempt {row['attempt']}).",
+            options=list(_REVIEW_OPTIONS),
+            audience=Audience.HUMAN
+            if review is Review.HUMAN
+            else Audience.ORCHESTRATOR,
+            requested_by=actor,
+        )
     if new is S.SUCCEEDED:
         await _promote_dependents(tx, row["id"])
     elif new in (S.FAILED, S.CANCELLED):
         await _flag_dependents(tx, row["id"], new)
     return new
+
+
+_APPROVAL_OPTIONS = ("approve", "reject")
+_REVIEW_OPTIONS = ("accept", "reject")
+
+
+async def _created_last_hour(tx: Tx, actor: str) -> int:
+    async with tx.conn.execute(
+        "SELECT count(*) FROM tasks WHERE created_by = ? AND created_at > ?",
+        (actor, ts(tx.now - timedelta(hours=1))),
+    ) as cur:
+        row = await cur.fetchone()
+    assert row is not None
+    return row[0]
 
 
 async def _promote_dependents(tx: Tx, task_id: str) -> None:

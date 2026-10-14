@@ -39,5 +39,7 @@ every new dependency is judged against it.
 
 ### Drafts
 
+- [Knowledge](drafts/2026-10-14.knowledge.draft.md) — a shared, versioned wiki
+  for agents and humans (proposal, open questions)
 - [Worker lifecycle and task coordination](drafts/2026-10-14.worker-lifecycle.draft.md) —
   superseded by the spec above; kept as a record

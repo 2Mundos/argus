@@ -263,6 +263,54 @@
         "title": "Artifact",
         "type": "object"
       },
+      "Ask": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "audience": {
+            "$ref": "#/components/schemas/Audience",
+            "default": "any"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 2,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "question": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "question"
+        ],
+        "title": "Ask",
+        "type": "object"
+      },
+      "Audience": {
+        "enum": [
+          "human",
+          "orchestrator",
+          "any"
+        ],
+        "title": "Audience",
+        "type": "string"
+      },
       "BlockRequest": {
         "properties": {
           "attempt": {
@@ -347,6 +395,163 @@
         ],
         "title": "CompleteRequest",
         "type": "object"
+      },
+      "Decision": {
+        "properties": {
+          "answer_choice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Choice"
+          },
+          "answer_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Text"
+          },
+          "audience": {
+            "$ref": "#/components/schemas/Audience"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DecisionKind"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "requested_by": {
+            "title": "Requested By",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DecisionState"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_type": {
+            "title": "Subject Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "subject_type",
+          "subject_id",
+          "kind",
+          "question",
+          "options",
+          "audience",
+          "state",
+          "answer_choice",
+          "answer_text",
+          "requested_by",
+          "decided_by",
+          "created_at",
+          "decided_at"
+        ],
+        "title": "Decision",
+        "type": "object"
+      },
+      "DecisionAnswer": {
+        "properties": {
+          "choice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Choice"
+          },
+          "text": {
+            "default": "",
+            "maxLength": 10000,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "title": "DecisionAnswer",
+        "type": "object"
+      },
+      "DecisionKind": {
+        "enum": [
+          "question",
+          "approval",
+          "review",
+          "policy"
+        ],
+        "title": "DecisionKind",
+        "type": "string"
+      },
+      "DecisionState": {
+        "enum": [
+          "open",
+          "answered",
+          "cancelled"
+        ],
+        "title": "DecisionState",
+        "type": "string"
       },
       "FailRequest": {
         "properties": {
@@ -579,24 +784,6 @@
         ],
         "title": "Review",
         "type": "string"
-      },
-      "ReviewRequest": {
-        "properties": {
-          "accept": {
-            "title": "Accept",
-            "type": "boolean"
-          },
-          "notes": {
-            "default": "",
-            "title": "Notes",
-            "type": "string"
-          }
-        },
-        "required": [
-          "accept"
-        ],
-        "title": "ReviewRequest",
-        "type": "object"
       },
       "Role": {
         "enum": [
@@ -1750,6 +1937,187 @@
         ]
       }
     },
+    "/decisions": {
+      "get": {
+        "description": "The inbox: open decisions by default, oldest first.",
+        "operationId": "list_decisions_decisions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DecisionState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "open",
+              "title": "State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subject_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Decision"
+                  },
+                  "title": "Response List Decisions Decisions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Decisions",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/decisions/{decision_id}": {
+      "get": {
+        "operationId": "get_decision_decisions__decision_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "decision_id",
+            "required": true,
+            "schema": {
+              "title": "Decision Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Decision"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Decision",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/decisions/{decision_id}/answer": {
+      "post": {
+        "description": "Answer an open decision. Approvals take `approve`/`reject`, reviews\n`accept`/`reject` (with `text` as notes), questions their options or text.",
+        "operationId": "answer_decision_decisions__decision_id__answer_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "decision_id",
+            "required": true,
+            "schema": {
+              "title": "Decision Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionAnswer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Decision"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Answer Decision",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
     "/healthz": {
       "get": {
         "operationId": "healthz_healthz_get",
@@ -1975,7 +2343,7 @@
         ]
       },
       "post": {
-        "description": "Orchestrators and admins create any task; workers only subtasks of a task\nthey hold.",
+        "description": "Orchestrators and admins create any task; workers only subtasks of a task\nthey hold. Past the per-agent hourly limit, an agent's new tasks wait for\nhuman approval (a `policy` decision) instead of being refused.",
         "operationId": "create_task_tasks_post",
         "requestBody": {
           "content": {
@@ -2117,53 +2485,6 @@
         ]
       }
     },
-    "/tasks/{task_id}/approve": {
-      "post": {
-        "operationId": "approve_task_tasks__task_id__approve_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Task"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Approve Task",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
     "/tasks/{task_id}/artifacts": {
       "get": {
         "operationId": "list_artifacts_tasks__task_id__artifacts_get",
@@ -2282,6 +2603,64 @@
         "summary": "Upload Artifact",
         "tags": [
           "artifacts"
+        ]
+      }
+    },
+    "/tasks/{task_id}/ask": {
+      "post": {
+        "description": "Ask a question about the task you hold. The task is blocked until it is\nanswered; the answer is added to the task spec under \"Clarifications\" and\nthe task returns to ready.",
+        "operationId": "ask_tasks__task_id__ask_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Ask"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Decision"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Ask",
+        "tags": [
+          "decisions"
         ]
       }
     },
@@ -2556,64 +2935,6 @@
           }
         ],
         "summary": "Report Progress",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
-    "/tasks/{task_id}/review": {
-      "post": {
-        "description": "Tasks with `review: human` need an admin; `orchestrator` tasks accept either.",
-        "operationId": "review_task_tasks__task_id__review_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReviewRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Task"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Review Task",
         "tags": [
           "tasks"
         ]

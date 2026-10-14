@@ -16,6 +16,7 @@ from argus_api.artifacts.store import LocalArtifactStore
 from argus_api.auth import ensure_admin_token
 from argus_api.config import Settings
 from argus_api.db import Database, DataDirLock
+from argus_api.decisions.routes import router as decisions_router
 from argus_api.deps import get_db
 from argus_api.errors import DomainError
 from argus_api.kinds.routes import router as kinds_router
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     with DataDirLock(settings.data_dir):
         db = await Database.open(settings.db_path)
         app.state.db = db
+        app.state.settings = settings
         app.state.artifacts = LocalArtifactStore(
             settings.artifacts_dir, settings.artifact_max_bytes
         )
@@ -64,6 +66,7 @@ app.include_router(agents_router)
 app.include_router(admin_router)
 app.include_router(kinds_router)
 app.include_router(artifacts_router)
+app.include_router(decisions_router)
 
 
 @app.exception_handler(DomainError)

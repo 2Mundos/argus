@@ -1,0 +1,44 @@
+from argus_core.decisions import Ask, Decision, DecisionAnswer, DecisionState
+from fastapi import APIRouter, status
+
+from argus_api.decisions import service, store
+from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep
+
+router = APIRouter(tags=["decisions"])
+
+
+@router.get("/decisions")
+async def list_decisions(
+    db: DbDep,
+    _: CallerDep,
+    state: DecisionState | None = DecisionState.OPEN,
+    subject_id: str | None = None,
+) -> list[Decision]:
+    """The inbox: open decisions by default, oldest first."""
+    async with db.read() as conn:
+        return await service.list_decisions(conn, state=state, subject_id=subject_id)
+
+
+@router.get("/decisions/{decision_id}")
+async def get_decision(decision_id: str, db: DbDep, _: CallerDep) -> Decision:
+    async with db.read() as conn:
+        return await store.get(conn, decision_id)
+
+
+@router.post("/decisions/{decision_id}/answer")
+async def answer_decision(
+    decision_id: str, body: DecisionAnswer, db: DbDep, caller: ManagerDep
+) -> Decision:
+    """Answer an open decision. Approvals take `approve`/`reject`, reviews
+    `accept`/`reject` (with `text` as notes), questions their options or text."""
+    async with db.write() as tx:
+        return await service.answer(tx, decision_id, body, caller)
+
+
+@router.post("/tasks/{task_id}/ask", status_code=status.HTTP_201_CREATED)
+async def ask(task_id: str, body: Ask, db: DbDep, agent_id: AgentDep) -> Decision:
+    """Ask a question about the task you hold. The task is blocked until it is
+    answered; the answer is added to the task spec under "Clarifications" and
+    the task returns to ready."""
+    async with db.write() as tx:
+        return await service.ask(tx, agent_id, task_id, body)

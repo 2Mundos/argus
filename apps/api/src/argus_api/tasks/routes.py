@@ -5,7 +5,7 @@ from argus_core.tasks import Task, TaskCreate, TaskResult, TaskState
 from fastapi import APIRouter, Response, status
 from pydantic import BaseModel, Field
 
-from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep
+from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
 from argus_api.events import Event
 from argus_api.tasks import service
 
@@ -38,18 +38,20 @@ class BlockRequest(BaseModel):
     reason: str = Field(min_length=1)
 
 
-class ReviewRequest(BaseModel):
-    accept: bool
-    notes: str = ""
-
-
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def create_task(body: TaskCreate, db: DbDep, caller: CallerDep) -> Task:
+async def create_task(
+    body: TaskCreate, db: DbDep, caller: CallerDep, settings: SettingsDep
+) -> Task:
     """Orchestrators and admins create any task; workers only subtasks of a task
-    they hold."""
+    they hold. Past the per-agent hourly limit, an agent's new tasks wait for
+    human approval (a `policy` decision) instead of being refused."""
     as_worker = caller.agent_id if caller.scope is Scope.WORKER else None
+    limit = settings.max_tasks_per_agent_hour
+    hourly_limit = limit if caller.agent_id is not None and limit > 0 else None
     async with db.write() as tx:
-        return await service.create_task(tx, body, caller.actor, as_worker=as_worker)
+        return await service.create_task(
+            tx, body, caller.actor, as_worker=as_worker, hourly_limit=hourly_limit
+        )
 
 
 @router.get("")
@@ -142,25 +144,3 @@ async def unblock_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
 async def cancel_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
     async with db.write() as tx:
         return await service.cancel(tx, task_id, caller.actor)
-
-
-@router.post("/{task_id}/approve")
-async def approve_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
-    async with db.write() as tx:
-        return await service.approve(tx, task_id, caller.actor)
-
-
-@router.post("/{task_id}/review")
-async def review_task(
-    task_id: str, body: ReviewRequest, db: DbDep, caller: ManagerDep
-) -> Task:
-    """Tasks with `review: human` need an admin; `orchestrator` tasks accept either."""
-    async with db.write() as tx:
-        return await service.review(
-            tx,
-            task_id,
-            caller.actor,
-            caller.scope,
-            accept=body.accept,
-            notes=body.notes,
-        )

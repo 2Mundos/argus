@@ -190,6 +190,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Decisions
+         * @description The inbox: open decisions by default, oldest first.
+         */
+        get: operations["list_decisions_decisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/decisions/{decision_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Decision */
+        get: operations["get_decision_decisions__decision_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/decisions/{decision_id}/answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Answer Decision
+         * @description Answer an open decision. Approvals take `approve`/`reject`, reviews
+         *     `accept`/`reject` (with `text` as notes), questions their options or text.
+         */
+        post: operations["answer_decision_decisions__decision_id__answer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -259,7 +317,8 @@ export interface paths {
         /**
          * Create Task
          * @description Orchestrators and admins create any task; workers only subtasks of a task
-         *     they hold.
+         *     they hold. Past the per-agent hourly limit, an agent's new tasks wait for
+         *     human approval (a `policy` decision) instead of being refused.
          */
         post: operations["create_task_tasks_post"];
         delete?: never;
@@ -305,23 +364,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks/{task_id}/approve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Approve Task */
-        post: operations["approve_task_tasks__task_id__approve_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/tasks/{task_id}/artifacts": {
         parameters: {
             query?: never;
@@ -339,6 +381,28 @@ export interface paths {
          *     List the returned id in `result.artifacts` when completing the task.
          */
         post: operations["upload_artifact_tasks__task_id__artifacts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask
+         * @description Ask a question about the task you hold. The task is blocked until it is
+         *     answered; the answer is added to the task spec under "Clarifications" and
+         *     the task returns to ready.
+         */
+        post: operations["ask_tasks__task_id__ask_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -427,26 +491,6 @@ export interface paths {
          * @description Post a progress note (at most one per 10 s). Also renews the lease.
          */
         post: operations["report_progress_tasks__task_id__progress_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/{task_id}/review": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Review Task
-         * @description Tasks with `review: human` need an admin; `orchestrator` tasks accept either.
-         */
-        post: operations["review_task_tasks__task_id__review_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -577,6 +621,22 @@ export interface components {
             /** Task Id */
             task_id: string;
         };
+        /** Ask */
+        Ask: {
+            /** Attempt */
+            attempt: number;
+            /** @default any */
+            audience: components["schemas"]["Audience"];
+            /** Options */
+            options?: string[] | null;
+            /** Question */
+            question: string;
+        };
+        /**
+         * Audience
+         * @enum {string}
+         */
+        Audience: "human" | "orchestrator" | "any";
         /** BlockRequest */
         BlockRequest: {
             /** Attempt */
@@ -615,6 +675,57 @@ export interface components {
             attempt: number;
             result: components["schemas"]["TaskResult"];
         };
+        /** Decision */
+        Decision: {
+            /** Answer Choice */
+            answer_choice: string | null;
+            /** Answer Text */
+            answer_text: string | null;
+            audience: components["schemas"]["Audience"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decided At */
+            decided_at: string | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** Id */
+            id: string;
+            kind: components["schemas"]["DecisionKind"];
+            /** Options */
+            options: string[] | null;
+            /** Question */
+            question: string;
+            /** Requested By */
+            requested_by: string;
+            state: components["schemas"]["DecisionState"];
+            /** Subject Id */
+            subject_id: string;
+            /** Subject Type */
+            subject_type: string;
+        };
+        /** DecisionAnswer */
+        DecisionAnswer: {
+            /** Choice */
+            choice?: string | null;
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+        };
+        /**
+         * DecisionKind
+         * @enum {string}
+         */
+        DecisionKind: "question" | "approval" | "review" | "policy";
+        /**
+         * DecisionState
+         * @enum {string}
+         */
+        DecisionState: "open" | "answered" | "cancelled";
         /** FailRequest */
         FailRequest: {
             /** Attempt */
@@ -707,16 +818,6 @@ export interface components {
          * @enum {string}
          */
         Review: "none" | "human" | "orchestrator";
-        /** ReviewRequest */
-        ReviewRequest: {
-            /** Accept */
-            accept: boolean;
-            /**
-             * Notes
-             * @default
-             */
-            notes: string;
-        };
         /**
          * Role
          * @enum {string}
@@ -1287,6 +1388,104 @@ export interface operations {
             };
         };
     };
+    list_decisions_decisions_get: {
+        parameters: {
+            query?: {
+                state?: components["schemas"]["DecisionState"] | null;
+                subject_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Decision"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_decision_decisions__decision_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Decision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    answer_decision_decisions__decision_id__answer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionAnswer"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Decision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     healthz_healthz_get: {
         parameters: {
             query?: never;
@@ -1531,37 +1730,6 @@ export interface operations {
             };
         };
     };
-    approve_task_tasks__task_id__approve_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Task"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_artifacts_tasks__task_id__artifacts_get: {
         parameters: {
             query?: never;
@@ -1618,6 +1786,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Artifact"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ask_tasks__task_id__ask_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Ask"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Decision"];
                 };
             };
             /** @description Validation Error */
@@ -1779,41 +1982,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ProgressRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Task"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    review_task_tasks__task_id__review_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReviewRequest"];
             };
         };
         responses: {
