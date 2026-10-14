@@ -1,0 +1,442 @@
+# Worker Lifecycle and Task Coordination Spec
+
+Finalized from [the 2026-10-14 draft](../drafts/2026-10-14.worker-lifecycle.draft.md).
+Everything here operates within the [lightweight single-node](single-node.spec.md)
+principle.
+
+# 1. Purpose and Scope
+
+Define how Argus coordinates a fleet of agents:
+
+- **Tasks**: what a unit of work is, its states, and how a worker claims, runs,
+  and finishes one with only its current lease holder authorized to update it.
+- **Agents**: how a worker or orchestrator registers, proves it is alive, and is
+  declared lost.
+- **Instances**: how Argus starts and stops the containers agents run in, at the
+  request of the orchestrator or a human.
+- **Accounts**: how agents share a pool of provider accounts and fall back when
+  one is exhausted.
+- **Decisions, results, and outputs**: human-in-the-loop gates, task kinds, and
+  where progress, logs, and artifacts live.
+
+Actors:
+
+| Actor | Does |
+| --- | --- |
+| Orchestrator agent | Breaks goals into tasks, sets fleet size, reviews results. |
+| Worker agent | Claims tasks it can do, works on them, reports results. |
+| Human (dashboard) | Watches everything; answers decisions; can create/cancel tasks, scale pools, kill instances. |
+| Argus | Holds the state, enforces the rules below, runs the reconciler and reaper. |
+
+# 2. Non-Goals
+
+- Argus does not run agent logic, prompt models, or judge result quality. It
+  stores state and enforces transitions; agents do the thinking.
+- No general workflow engine (no loops, conditionals, timers in the task graph).
+  Dependencies between tasks are the only control flow.
+- No push-based dispatch. Workers pull; Argus never sends work into a container.
+- No multi-tenancy in v1. One Argus deployment serves one fleet.
+- No cross-host scheduling cleverness in v1 (bin-packing, affinity). One
+  target per pool.
+- No spend enforcement in v1. Usage is recorded (3.9), not capped.
+- No log aggregation or search stack (see single-node 3.4).
+
+# 3. Decisions Made
+
+## 3.1 Data model
+
+SQLite is the only store (single-node 3.2). JSON columns hold lists and
+documents.
+
+- **`pools`** — a named group of interchangeable workers: `name`, `target`,
+  `runtime`, `image`, `capabilities` (json), `agents_per_instance`,
+  `desired_replicas`, `max_replicas`, `config` (json: env, resources).
+- **`instances`** — one container: `id`, `pool`, `provider_ref`, `state`,
+  `created_at`, `terminated_at`, `exit_reason`.
+- **`agents`** — one registered agent identity: `id`, `role`
+  (`orchestrator` | `worker`), `instance_id` (nullable: an orchestrator may run
+  outside Argus), `capabilities` (json), `state`, `last_heartbeat_at`.
+- **`tasks`** — `id`, `parent_id`, `kind`, `title`, `spec` (Markdown),
+  `acceptance` (json list), `input` (json), `required_capabilities` (json),
+  `priority`, `state`, `requires_approval`, `review` (`none` | `human` |
+  `orchestrator`), `assignee_agent_id`, `lease_expires_at`, `attempt`,
+  `max_attempts`, `result` (json), `error`, `created_by`, timestamps.
+- **`task_deps`** — `(task_id, depends_on_id)`.
+- **`task_kinds`** — 3.11.
+- **`accounts`**, **`account_leases`** — 3.9.
+- **`decisions`** — 3.10.
+- **`tokens`** — hashed bearer tokens with scope, agent, and revocation time.
+- **`events`** — `id` (integer primary key), `at`, `actor`, `subject_type`,
+  `subject_id`, `kind`, `data` (json). Every state transition writes one row in
+  the same transaction. The dashboard timeline, SSE resume, and audit trail are
+  this table.
+
+Large outputs are never stored in `result`; it holds artifact references (3.12).
+
+## 3.2 Task state machine
+
+```
+                approve                 deps done           claim
+ awaiting_approval ───▶ pending ─────────────▶ ready ─────────────▶ claimed
+                          │                     ▲                   │
+                          │                     │ lease expired /   │ complete
+                          │                     │ fail, attempt<max │
+                          │                     ├───────────────────┤──▶ succeeded (review: none)
+                          │                     │ review rejected   │──▶ in_review ──▶ succeeded
+                          │                     └────── in_review ◀─┘
+                          │                     ▲
+                          │                     │ unblocked
+                          │                  blocked ◀── needs input / no account
+                          │
+                          │   fail / expire (attempt = max) ──▶ failed
+                          └── cancel (any non-terminal state) ──▶ cancelled
+```
+
+- A task created with `requires_approval` starts in `awaiting_approval` and
+  opens a decision (3.10); approval moves it on as if just created.
+- A task with no unfinished dependencies enters `ready` directly.
+- When a task `succeeded`, dependents whose dependencies are all done move to
+  `ready` in the same transaction.
+- If a dependency ends `failed` or `cancelled`, dependents stay `pending` and an
+  event is raised for the orchestrator to decide (cancel, replace, or retry).
+  Argus does not cascade cancellation on its own.
+- `blocked` means the worker needs something it cannot get (an answer, an
+  account, credentials). The lease is released; the task returns to `ready`
+  when unblocked.
+- With `review` set, completion moves the task to `in_review` and opens a
+  decision. Acceptance moves it to `succeeded`; rejection returns it to `ready`
+  with the reviewer's notes appended to `spec`, without counting a failed
+  attempt toward `max_attempts`.
+- Terminal states: `succeeded`, `failed`, `cancelled`.
+
+## 3.3 Claiming: leases, not locks
+
+- `POST /tasks/claim` with the worker's capabilities. In one write transaction,
+  Argus selects the highest priority, oldest `ready` task whose
+  `required_capabilities ⊆ agent.capabilities`, sets `claimed` and the assignee,
+  increments `attempt` (initially zero), and sets the lease deadline to the
+  current Argus time plus `lease_ttl`.
+- Claim long-polls (up to 30 s) when nothing is ready, so idle workers do not
+  hammer the API. Waiters are woken by the in-process event bus
+  (single-node 3.3).
+- Every worker mutation of a claimed task, including completion, failure,
+  blocking, progress, subtask creation, and lease renewal, carries
+  `(task_id, attempt)`. In the same transaction as the write, Argus checks that
+  the authenticated agent is active (`busy` or `draining`), the task is
+  `claimed`, its assignee matches that agent, its attempt matches, and
+  `lease_expires_at` is strictly later than the current Argus time. A failed
+  ownership check returns `409` without changing the task, even if the reaper
+  has not processed expiry yet. Revoked credentials return `401`.
+- Claims, worker writes, heartbeats, and reaping are serialized by the single
+  writer: each runs in its own `BEGIN IMMEDIATE` transaction, rechecks state
+  inside it, and reads the clock **after** the transaction has begun, so time
+  spent waiting for the writer can never validate a lease that expired in the
+  meantime. Renewal sets the deadline to that fresh time plus `lease_ttl` and
+  cannot revive an expired lease. Leaving `claimed` clears the assignee and
+  deadline in the same transaction as the transition and its event.
+- These rules fence writes to Argus. Execution is at least once: an expired
+  worker can continue external work while a retry runs. Workers must stop work
+  when renewal is rejected or the last confirmed lease expires. External
+  effects need destination-enforced idempotency using a stable operation key
+  across attempts, or destination-enforced fencing; Argus cannot guarantee
+  exactly-once effects in another system.
+- Defaults: `lease_ttl = 120 s`, heartbeat every 30 s, `max_attempts = 3`.
+  Per-task and per-kind override allowed.
+
+## 3.4 Agent liveness
+
+- Agent states: `registering → idle ⇄ busy → draining → gone`, plus `lost`.
+- An agent registers on boot with a one-time bootstrap token injected into its
+  container, and receives a long-lived agent token (3.6).
+- One heartbeat call (`POST /agents/{id}/heartbeat`) refreshes the agent and
+  renews the submitted list of `(task_id, attempt)` pairs using 3.3, plus its
+  account leases (3.9). The response lists renewed leases with their deadlines
+  and rejected pairs; a rejected pair does not renew that task or prevent other
+  valid pairs from renewing. Agent liveness can refresh even when a task lease is
+  rejected. Workers do not heartbeat per task.
+- The **reaper** loop (every 10 s) independently expires task leases whose
+  deadline has passed, including leases belonging to agents still sending
+  heartbeats. It also marks agents with
+  `last_heartbeat_at < now - 3 × interval` as `lost`, expires their leases
+  (tasks go back to `ready` or to `failed` per 3.2), releases their account
+  leases, revokes their agent and unused bootstrap tokens, and requests
+  termination of their instances. Agent loss, credential revocation, task
+  transitions, and events commit together in one write transaction. Provider
+  calls happen after commit.
+- `lost` is irreversible for that identity. A late heartbeat cannot restore it,
+  renew a lease, or authorize another claim; the old instance cannot register
+  again. A replacement gets a new instance id and bootstrap token.
+- `draining`: the agent finishes its current task, claims nothing new, then
+  exits. Used for scale-down and for rolling a pool to a new image.
+
+## 3.5 Provisioning: desired state + reconciler
+
+Nobody "spawns a container" directly. The orchestrator or a human sets
+`pools.desired_replicas`; a **reconciler** loop compares desired vs. live
+instances and converges:
+
+- Capacity counts every instance not confirmed terminated, including starting,
+  draining, terminating, and unreachable instances. Reserve a slot in the
+  database before each start; both `desired_replicas` and `max_replicas`
+  constrain starts. An ambiguous start result retains its reservation and is
+  resolved through provider lookup by the stable instance id before another
+  start is attempted.
+- Too few occupied slots → start instances through the pool's target.
+- Too many → mark the newest idle agents `draining`; never kill a busy agent
+  for scale-down.
+- Instance whose agent is `lost` → mark the instance `terminating` and request
+  `stop` with a bounded grace period followed by forced termination. Agent loss
+  alone never records a container exit or frees its capacity slot. Retrying
+  `stop` for the same provider reference is safe, including after an Argus
+  restart. If the instance hosts multiple agents, marking it `terminating` also
+  marks its other agents `lost`, revokes all its credentials, and expires their
+  leases in the same transaction before stopping the shared host.
+- Set an instance's terminal state and `terminated_at` only after a successful,
+  authoritative provider query confirms it stopped or no longer exists. A
+  timeout, connection failure, or stop acknowledgement is not confirmation.
+  Until confirmed, retain the slot, retry termination, and surface the unresolved
+  instance to the operator. Replacement for that instance waits for confirmation
+  and then starts only if occupied capacity is below desired and the cap.
+  Confirmation covers all instance-owned workloads, including NanoClaw agent
+  containers (3.8). Runtimes must propagate the Argus instance id to descendants
+  so the target can find and stop them even if their host has already exited.
+- Container confirmed exited → revoke its agent and bootstrap tokens and expire
+  any remaining leases in the same transaction as recording termination, then
+  replace it if still below desired. An idle or draining instance follows the
+  same confirmation rule before its slot is freed.
+- `max_replicas` caps what an orchestrator can request. Raising the cap is a
+  human-only action (guards against a runaway orchestrator).
+
+The reconciler is an asyncio task in the Argus process (single-node 3.1); the
+startup lock file guarantees there is only one.
+
+Provisioning has two independent axes, so N targets × M runtimes do not need
+N×M implementations:
+
+- **Target**: *where* a container runs. Two implementations cover the three
+  required forms:
+  - `docker`: the Docker Engine API. Local socket and remote host are the same
+    code; only `DOCKER_HOST` differs (`unix://…`, `ssh://user@host`, or
+    `tcp://…` with TLS).
+  - `kubernetes`: one Pod per instance, created by Argus in a configured
+    namespace (no CRD or operator in v1).
+- **Runtime**: *what* runs in the container and how it is wired to Argus
+  (image, env, mounts, how the agent learns its bootstrap token). v1 runtimes:
+  `nanoclaw` (3.8) and `plain` (any image that speaks the Argus API itself;
+  used for CI integration tests and custom workers).
+
+```python
+class Target(Protocol):
+    async def start(self, spec: ContainerSpec) -> str: ...  # returns provider_ref
+    async def stop(self, provider_ref: str, *, grace: timedelta) -> None: ...
+    async def list(self, labels: Mapping[str, str]) -> list[ProviderInstance]: ...
+    def logs(self, provider_ref: str) -> AsyncIterator[str]: ...
+
+
+class Runtime(Protocol):
+    def container_spec(
+        self, pool: Pool, instance: Instance, bootstrap: str
+    ) -> ContainerSpec: ...
+```
+
+A pool names one target and one runtime. `list()` filters on Argus labels
+(`argus.instance_id`, `argus.pool`) so the reconciler finds containers that
+died silently, and orphans Argus did not start. `start()` is idempotent by the
+instance id in `ContainerSpec`; retries and ambiguous starts must resolve to one
+instance on the target. `logs()` streams live container logs for the dashboard
+(3.12).
+
+## 3.6 Auth and scopes
+
+Bearer tokens, hashed in SQLite. Three scopes:
+
+| Scope | Can |
+| --- | --- |
+| `worker` | Claim, heartbeat, update/complete/fail/block its own tasks, report progress, ask questions, lease accounts, create subtasks under a task it holds. |
+| `orchestrator` | Everything `worker` can, plus create/cancel any task, edit deps, answer `orchestrator` decisions, set `desired_replicas` up to `max_replicas`, drain agents. |
+| `admin` (human) | Everything, including pool and account definitions, `max_replicas`, killing instances, revoking tokens. |
+
+Tokens are scoped to one agent and revoked when the agent becomes `lost` or its
+instance terminates. Unused bootstrap tokens for that instance are also revoked;
+revocation does not wait for an unreachable container to stop. The orchestrator
+starts outside Argus with an admin-minted `orchestrator` token; running it as a
+managed pool of size 1 uses the same model and comes later.
+
+## 3.7 Interfaces
+
+- **REST** (FastAPI) is the source of truth; its OpenAPI schema generates the
+  dashboard client (`@argus/api-client`).
+- **MCP endpoint** for agents, served by the same process: thin tools mapped
+  1:1 onto REST operations (`claim_task`, `heartbeat`, `report_progress`,
+  `complete_task`, `fail_task`, `ask`, `create_task`, `lease_account`,
+  `account_exhausted`, `scale_pool`, …). LLM agents use tools far more reliably
+  than hand-built HTTP calls. The MCP layer holds no state or logic of its own.
+- **SSE** stream (`GET /events/stream`) for the dashboard, fed by the in-process
+  event bus and resumable from the `events` table.
+- Every mutating call accepts an `Idempotency-Key` header; agents retry often.
+
+## 3.8 NanoClaw runtime
+
+NanoClaw is a single Node.js **host** process that itself spawns one Docker
+container per agent session, talking to it through per-session SQLite files
+(`inbound.db` / `outbound.db`). It keeps credentials out of agent containers by
+injecting them at the HTTPS layer (OneCLI Agent Vault or Iron Proxy), has a
+pluggable provider interface (Claude Code by default), supports user-added MCP
+servers, and is administered locally by the `ncl` CLI over a Unix socket (no
+HTTP admin API). See https://docs.nanoclaw.dev/concepts/architecture.
+
+Consequences for Argus:
+
+- **The unit Argus provisions is a NanoClaw host, not an agent container.**
+  One Argus instance = one NanoClaw host container (with access to a Docker
+  daemon: the socket on a Docker target, a DinD sidecar on Kubernetes). Each
+  NanoClaw agent group inside it registers with Argus as one agent, so one
+  instance can carry several agents (`pools.agents_per_instance`).
+- **Argus ships a NanoClaw module** (`integrations/nanoclaw`, TypeScript),
+  baked into an image built `FROM` the NanoClaw base. It uses the module and
+  channel extension points (`onHostStart`, channel registry):
+  1. On host start, redeems the bootstrap token and registers its agent groups.
+  2. Long-polls `POST /tasks/claim` per idle agent group, deterministically (in
+     code, not an LLM loop that burns tokens polling).
+  3. Writes the claimed task as an inbound message, which wakes the agent
+     container.
+  4. Heartbeats Argus while the session's `/workspace/.heartbeat` is fresh;
+     maps NanoClaw's own stale-container kill to a task failure.
+- **Agents talk back through the Argus MCP endpoint** (3.7), added to each agent
+  group as a user MCP server. The module scopes the agent's token to the task it
+  holds.
+- **Credentials stay in NanoClaw's gateway.** Argus decides *which* account a
+  session uses (3.9) and the module points the session at it; raw secrets do
+  not travel through Argus task payloads.
+
+## 3.9 Account pool and fallback
+
+Agents run on subscription or API accounts (Claude, Codex, Cursor, …) that hit
+usage limits. Argus owns the **account registry and leasing**; providers'
+credentials stay in a secret store.
+
+- **`accounts`**: `id`, `provider` (`anthropic` | `openai` | `cursor` | …),
+  `kind` (`api_key` | `subscription`), `secret_ref` (a pointer such as
+  `env:NAME`, `file:/run/secrets/x`, or a gateway vault reference — never the
+  secret itself), `priority`, `state` (`available` | `exhausted` | `disabled`),
+  `exhausted_until`, `labels`.
+- **Leasing**: an agent session leases one account
+  (`POST /accounts/lease {providers: [...]}`), choosing the highest-priority
+  `available` account among the providers its runtime supports. Leases follow
+  the agent's heartbeat like task leases do.
+- **Fallback**: when a provider call fails with a quota or rate-limit error, the
+  agent (or the NanoClaw module watching the session) calls
+  `POST /accounts/{id}/exhausted {until}`. Argus marks it exhausted until the
+  reported reset time (or a per-provider default), and the caller gets the next
+  account. Fallback first prefers another account of the same provider, then
+  another provider if the runtime supports it. An account returns to
+  `available` automatically when `exhausted_until` passes.
+- **No accounts left**: the agent's task goes `blocked` with reason
+  `no_account`, and every waiting agent is visible on the dashboard with the
+  earliest reset time. Tasks are unblocked automatically when an account frees.
+- **Usage is recorded, not enforced**: agents report tokens/cost per task and
+  account (the `usage` field of the result envelope, 3.11, plus interim
+  reports); Argus aggregates per account, pool, and task.
+
+Check each provider's terms before pooling subscription accounts for automated
+use; some consumer plans restrict it.
+
+## 3.10 Decision requests (human in the loop)
+
+One primitive covers every "someone must decide before this continues" case,
+instead of a special state per case. A **decision** has `subject` (task, pool,
+agent), `question`, `options` (or free text), `requested_by`, `audience`
+(`human` | `orchestrator` | `any`), `state` (`open` | `answered` |
+`cancelled`), `answer`, `decided_by`.
+
+Uses:
+
+- **Questions from a worker**: the `ask` MCP tool. The task goes `blocked` until
+  answered; the answer is delivered back as a message to the agent.
+- **Start gate**: `requires_approval` tasks wait in `awaiting_approval`.
+- **Review gate**: `review` tasks wait in `in_review` after completion (3.2).
+- **Policy gates**: scaling a pool above a configured threshold, or an
+  orchestrator creating more than a configured number of tasks per hour, opens
+  a decision instead of failing outright.
+
+The dashboard has an **inbox** of open decisions. Chat notifications are a later,
+optional integration (single-node 3.5).
+
+## 3.11 Task kinds and result envelope
+
+- Every task has `spec` (Markdown the agent reads) and `acceptance` (a list of
+  checkable criteria, which makes review gates concrete).
+- Every task has a `kind`. The **`task_kinds`** registry can attach a JSON
+  Schema for `input` and for `result.data`, default `required_capabilities`,
+  default lease, and default review policy. A kind without schemas is
+  free-form, so ad-hoc work never waits on a schema being written. Unknown kinds
+  are rejected; `generic` exists by default.
+- Every result uses one envelope, validated server-side:
+  `{summary: str, data: object | null, artifacts: [ArtifactRef], usage: Usage}`.
+  `data` is validated against the kind's schema when one exists; a failing
+  result is rejected with the validation errors so the agent can retry.
+
+## 3.12 Progress, logs, and artifacts
+
+| Output | Example | Home |
+| --- | --- | --- |
+| Progress notes | "tests written, fixing 2 failures" | `events` (`kind = progress`), shown live on the dashboard. A progress post is a worker write (3.3) and also renews the lease. Rate-limited per task (one per 10 s). |
+| Container logs | agent stdout/stderr | Not stored. The dashboard streams them live from the target (`Target.logs`) while the container exists. |
+| Artifacts | files, diffs, reports, transcripts | Local filesystem under `/data/artifacts/tasks/<task_id>/<attempt>/`, uploaded through the API with a size limit (single-node 3.4); `result.artifacts` holds the references. |
+
+# 4. Open Questions
+
+1. **NanoClaw details**, to verify against its source before building 3.8:
+   whether a module can create inbound messages without a chat platform behind
+   it, whether the gateway credential can be switched per session at spawn
+   time, and whether the host tolerates running under Kubernetes with DinD.
+2. **Account secret store**: are `env:`/`file:` refs plus NanoClaw's gateway
+   vault enough, or do we need one store that feeds every runtime?
+3. **Exhaustion signals per provider**: which errors and headers reliably mean
+   "quota exhausted until T" for Claude subscriptions, Codex, and Cursor?
+
+# 5. Constraints
+
+- Everything in [single-node](single-node.spec.md) applies: one process, SQLite
+  with one writer, no required external services.
+- No network calls inside a write transaction. Provider, target, and gateway
+  calls happen after commit and are retried idempotently.
+- Workers can crash, hang, or lose the network at any point. Every rule above
+  must hold under those conditions; correctness comes from leases and fencing,
+  never from trusting an agent to report its own death.
+- Agents are LLMs: their calls may repeat, arrive out of order, or carry wrong
+  ids. The API validates every transition server-side and returns clear,
+  actionable errors.
+- A runaway orchestrator must not be able to exhaust the host (`max_replicas`,
+  human-only cap changes, policy gates).
+
+# 6. Implementation Consequences
+
+Build order, each step shippable and testable on its own:
+
+1. **Data layer.** SQLite repository with one writer and a reader pool, SQL
+   migrations via `user_version`, startup lock file, optional Litestream restore.
+2. **Task API.** Create/list/get, the 3.2 state machine as one pure function
+   with exhaustive tests, claim, atomic ownership and deadline checks from 3.3,
+   events, in-process bus with long-poll. Cover writes and renewal after expiry
+   but before reaping, stale attempts after reassignment, and expiry while
+   waiting for the writer.
+3. **Agents + reaper.** Register, batched heartbeat renewal, independent task
+   lease expiry, irreversible `lost` handling and immediate token revocation.
+4. **Auth scopes** (3.6).
+5. **Task kinds, result envelope, progress, artifacts** (3.11, 3.12).
+6. **Decisions** (3.10), including start and review gates.
+7. **Dashboard v1**, served by the API: task board, agent list, decision inbox,
+   event timeline over SSE.
+8. **Account pool** (3.9).
+9. **Pools + reconciler + `docker` target + `plain` runtime**, with an
+   integration test that scales a pool of a trivial worker image up and down.
+   Cover agent loss while its container stays running, unreachable providers,
+   and Argus restart during termination or an ambiguous start; unresolved
+   instances retain capacity and replacements wait for confirmed termination.
+10. **MCP endpoint** over the same operations.
+11. **`nanoclaw` runtime + Argus module** (3.8), after a spike on 4.1.
+12. **`kubernetes` target.**
+
+`argus_core` holds the state enums, transition table, and Pydantic models shared
+by the API, the MCP layer, and any Python worker SDK.

@@ -16,12 +16,6 @@ setup: ## Install Python and Node dependencies.
 hooks: ## Enable .githooks/pre-push.
 	git config core.hooksPath .githooks
 
-.PHONY: infra-up infra-down
-infra-up: ## Start local infrastructure (Postgres).
-	docker compose up -d
-infra-down: ## Stop local infrastructure.
-	docker compose down
-
 .PHONY: dev-api dev-dashboard
 dev-api: ## Run the API with reload on :8000.
 	$(UV) run uvicorn argus_api.main:app --reload

@@ -19,11 +19,25 @@ fails otherwise (`scripts/validate_docs.py`).
 | [`research/`](research) | Investigations and comparisons |
 | [`runbooks/`](runbooks) | Operational procedures |
 
+## Core principle
+
+Argus starts **lightweight and single-node**: one process, one SQLite database
+(replicated by Litestream), no required external services. Read
+[the single-node spec](specs/single-node.spec.md) first; every other spec and
+every new dependency is judged against it.
+
 ## Index
 
 - [Spec template](templates/spec.md)
 
+### Specs
+
+- [Lightweight single-node](specs/single-node.spec.md) — the core principle:
+  one process, SQLite + Litestream, no required services
+- [Worker lifecycle and task coordination](specs/worker-lifecycle.spec.md) —
+  tasks, leases, agents, provisioning, accounts, decisions, outputs
+
 ### Drafts
 
 - [Worker lifecycle and task coordination](drafts/2026-10-14.worker-lifecycle.draft.md) —
-  tasks, leases, agent liveness, provisioning
+  superseded by the spec above; kept as a record

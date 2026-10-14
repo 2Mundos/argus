@@ -9,6 +9,11 @@ Instructions for AI agents working in this repo.
 - CI: Gitea Actions (`.gitea/workflows/quality.yaml`). Local mirror: `make check`.
 
 ## Rules
+- **Lightweight, single-node first** ([spec](docs/specs/single-node.spec.md)). One
+  process, SQLite (WAL, one writer, Litestream backups), local filesystem for
+  artifacts, in-process background loops and event bus. Never add a required
+  external service (Postgres, Redis, a broker, S3, Elasticsearch, …); optional
+  integrations are off by default. Changing this needs a spec PR first.
 - **Spec first.** Behaviour changes start in `docs/specs/` (`topic.spec.md`, six-section
   template). Other docs are `YYYY-MM-DD.name.type.md`. Link every doc from `docs/README.md`.
 - **Negentropy.** Code is a liability; add only what is needed.
