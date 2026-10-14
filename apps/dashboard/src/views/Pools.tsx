@@ -189,6 +189,9 @@ function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void }) {
       .join("\n"),
     extraHosts: pool?.docker.extra_hosts.join(", ") ?? "host.docker.internal:host-gateway",
     dockerHost: pool?.docker.host ?? "",
+    target: (pool?.target ?? "docker") as "docker" | "kubernetes",
+    k8sContext: pool?.kubernetes?.context ?? "",
+    k8sNamespace: pool?.kubernetes?.namespace ?? "default",
   });
   const [error, setError] = useState<string>();
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
@@ -224,6 +227,16 @@ function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void }) {
                   cpus: pool.cpus,
                   memory_mb: pool.memory_mb,
                   nanoclaw: pool.nanoclaw,
+                }
+              : { target: form.target }),
+            // Kubernetes placement is edited here too (a docker pool has none).
+            ...(form.target === "kubernetes"
+              ? {
+                  kubernetes: {
+                    ...(pool?.kubernetes ?? {}),
+                    context: form.k8sContext,
+                    namespace: form.k8sNamespace,
+                  },
                 }
               : {}),
             image: form.image,
@@ -289,20 +302,54 @@ function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void }) {
           Environment (KEY=value per line)
           <textarea rows={3} value={form.env} onChange={(e) => set("env", e.target.value)} />
         </label>
-        <div className="row">
+        {!pool && (
           <label>
-            Docker host (empty: local)
-            <input
-              value={form.dockerHost}
-              onChange={(e) => set("dockerHost", e.target.value)}
-              placeholder="ssh://user@host"
-            />
+            Target
+            <select
+              value={form.target}
+              onChange={(e) => set("target", e.target.value as typeof form.target)}
+            >
+              <option value="docker">docker</option>
+              <option value="kubernetes">kubernetes (one Pod per instance)</option>
+            </select>
           </label>
-          <label>
-            Extra hosts
-            <input value={form.extraHosts} onChange={(e) => set("extraHosts", e.target.value)} />
-          </label>
-        </div>
+        )}
+        {form.target === "kubernetes" ? (
+          <div className="row">
+            <label>
+              Kubeconfig context (or in-cluster)
+              <input
+                value={form.k8sContext}
+                onChange={(e) => set("k8sContext", e.target.value)}
+                required
+              />
+            </label>
+            <label>
+              Namespace
+              <input
+                value={form.k8sNamespace}
+                onChange={(e) => set("k8sNamespace", e.target.value)}
+                pattern="[a-z0-9]([\-a-z0-9]*[a-z0-9])?"
+                required
+              />
+            </label>
+          </div>
+        ) : (
+          <div className="row">
+            <label>
+              Docker host (empty: local)
+              <input
+                value={form.dockerHost}
+                onChange={(e) => set("dockerHost", e.target.value)}
+                placeholder="ssh://user@host"
+              />
+            </label>
+            <label>
+              Extra hosts
+              <input value={form.extraHosts} onChange={(e) => set("extraHosts", e.target.value)} />
+            </label>
+          </div>
+        )}
         {error && <p className="error">{error}</p>}
         <div className="actions">
           <button type="button" onClick={onClose}>

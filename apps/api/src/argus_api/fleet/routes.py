@@ -13,7 +13,7 @@ from fastapi.responses import PlainTextResponse
 
 from argus_api.deps import AdminDep, DbDep, ManagerDep
 from argus_api.errors import DomainError
-from argus_api.fleet import service
+from argus_api.fleet import runtimes, service
 from argus_api.fleet.targets import TargetError, TargetRegistry
 
 router = APIRouter(tags=["fleet"])
@@ -101,7 +101,7 @@ async def instance_logs(
         pool = await service.get_pool(conn, instance.pool)
     targets: TargetRegistry = request.app.state.targets
     try:
-        text = await targets.get(pool.target, pool.docker.host).logs(
+        text = await targets.get(pool.target, *runtimes.target_location(pool)).logs(
             instance.provider_ref, tail=tail
         )
     except TargetError as exc:

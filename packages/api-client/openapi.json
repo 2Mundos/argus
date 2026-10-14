@@ -1704,6 +1704,108 @@
         "title": "KnowledgeWrite",
         "type": "object"
       },
+      "KubernetesOptions-Input": {
+        "description": "Where and how the `kubernetes` target runs an instance (one Pod each).",
+        "properties": {
+          "context": {
+            "minLength": 1,
+            "title": "Context",
+            "type": "string"
+          },
+          "image_pull_secrets": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Image Pull Secrets",
+            "type": "array"
+          },
+          "namespace": {
+            "default": "default",
+            "maxLength": 63,
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "node_selector": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Node Selector",
+            "type": "object"
+          },
+          "service_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Account"
+          }
+        },
+        "required": [
+          "context"
+        ],
+        "title": "KubernetesOptions",
+        "type": "object"
+      },
+      "KubernetesOptions-Output": {
+        "description": "Where and how the `kubernetes` target runs an instance (one Pod each).",
+        "properties": {
+          "context": {
+            "minLength": 1,
+            "title": "Context",
+            "type": "string"
+          },
+          "image_pull_secrets": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Image Pull Secrets",
+            "type": "array"
+          },
+          "namespace": {
+            "default": "default",
+            "maxLength": 63,
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "node_selector": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Node Selector",
+            "type": "object"
+          },
+          "service_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Account"
+          }
+        },
+        "required": [
+          "context",
+          "namespace",
+          "service_account",
+          "image_pull_secrets",
+          "node_selector"
+        ],
+        "title": "KubernetesOptions",
+        "type": "object"
+      },
       "LeaseRef": {
         "properties": {
           "attempt": {
@@ -2259,6 +2361,16 @@
             "title": "Image",
             "type": "string"
           },
+          "kubernetes": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KubernetesOptions-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "last_error": {
             "anyOf": [
               {
@@ -2335,6 +2447,7 @@
           "cpus",
           "memory_mb",
           "docker",
+          "kubernetes",
           "nanoclaw",
           "name",
           "status",
@@ -2409,6 +2522,16 @@
             "minLength": 1,
             "title": "Image",
             "type": "string"
+          },
+          "kubernetes": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KubernetesOptions-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "max_replicas": {
             "maximum": 1000.0,

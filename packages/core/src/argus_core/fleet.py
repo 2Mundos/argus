@@ -26,6 +26,26 @@ class DockerOptions(BaseModel):
     extra_hosts: list[str] = []  # e.g. "host.docker.internal:host-gateway"
 
 
+IN_CLUSTER = "in-cluster"
+
+
+class KubernetesOptions(BaseModel):
+    """Where and how the `kubernetes` target runs an instance (one Pod each)."""
+
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
+    # Required: a kubeconfig context name, or "in-cluster" when Argus itself runs
+    # in the cluster. Argus never falls back to the kubeconfig's current context:
+    # a worker pool must not land on whichever cluster happened to be selected.
+    context: str = Field(min_length=1)
+    namespace: str = Field(
+        default="default", pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", max_length=63
+    )
+    service_account: str | None = None
+    image_pull_secrets: list[str] = []
+    node_selector: dict[str, str] = {}
+
+
 # 107 (sun_path limit) - 1 ("/") - 36 (instance uuid) - len("/data/ncl.sock") = 56.
 NANOCLAW_MAX_ROOT_LEN = 107 - 1 - 36 - len("/data/ncl.sock")
 
@@ -69,12 +89,18 @@ class PoolUpsert(BaseModel):
     cpus: float | None = Field(default=None, gt=0)
     memory_mb: int | None = Field(default=None, ge=16)
     docker: DockerOptions = DockerOptions()
+    kubernetes: KubernetesOptions | None = None  # required for the kubernetes target
     nanoclaw: NanoclawOptions | None = None  # required for the nanoclaw runtime
 
     @model_validator(mode="after")
     def consistent(self) -> "PoolUpsert":
         if self.desired_replicas > self.max_replicas:
             raise ValueError("desired_replicas cannot exceed max_replicas")
+        if self.target == TargetKind.KUBERNETES:
+            if self.kubernetes is None:
+                raise ValueError("the kubernetes target needs the `kubernetes` options")
+            if self.runtime != RuntimeKind.PLAIN:
+                raise ValueError("only the plain runtime runs on the kubernetes target")
         if self.runtime == RuntimeKind.NANOCLAW:
             if self.nanoclaw is None:
                 raise ValueError("the nanoclaw runtime needs the `nanoclaw` options")

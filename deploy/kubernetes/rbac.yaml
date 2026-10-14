@@ -1,0 +1,34 @@
+# What Argus needs to run workers as Pods in ONE namespace: nothing cluster-wide.
+# Apply to the cluster the pool's `kubernetes.context` points at, then bind the
+# ServiceAccount (or user) Argus authenticates as.
+#
+#   kubectl create namespace workers
+#   kubectl apply -n workers -f deploy/kubernetes/rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argus
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argus-workers
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argus-workers
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: argus-workers
+subjects:
+  - kind: ServiceAccount
+    name: argus

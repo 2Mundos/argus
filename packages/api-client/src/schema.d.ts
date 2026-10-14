@@ -1689,6 +1689,60 @@ export interface components {
              */
             status: "published" | "proposed";
         };
+        /**
+         * KubernetesOptions
+         * @description Where and how the `kubernetes` target runs an instance (one Pod each).
+         */
+        "KubernetesOptions-Input": {
+            /** Context */
+            context: string;
+            /**
+             * Image Pull Secrets
+             * @default []
+             */
+            image_pull_secrets?: string[];
+            /**
+             * Namespace
+             * @default default
+             */
+            namespace?: string;
+            /**
+             * Node Selector
+             * @default {}
+             */
+            node_selector?: {
+                [key: string]: string;
+            };
+            /** Service Account */
+            service_account?: string | null;
+        };
+        /**
+         * KubernetesOptions
+         * @description Where and how the `kubernetes` target runs an instance (one Pod each).
+         */
+        "KubernetesOptions-Output": {
+            /** Context */
+            context: string;
+            /**
+             * Image Pull Secrets
+             * @default []
+             */
+            image_pull_secrets: string[];
+            /**
+             * Namespace
+             * @default default
+             */
+            namespace: string;
+            /**
+             * Node Selector
+             * @default {}
+             */
+            node_selector: {
+                [key: string]: string;
+            };
+            /** Service Account */
+            service_account: string | null;
+        };
         /** LeaseRef */
         LeaseRef: {
             /** Attempt */
@@ -1980,6 +2034,7 @@ export interface components {
             };
             /** Image */
             image: string;
+            kubernetes: components["schemas"]["KubernetesOptions-Output"] | null;
             /** Last Error */
             last_error: string | null;
             /** Live Instances */
@@ -2041,6 +2096,7 @@ export interface components {
             };
             /** Image */
             image: string;
+            kubernetes?: components["schemas"]["KubernetesOptions-Input"] | null;
             /** Max Replicas */
             max_replicas: number;
             /** Memory Mb */

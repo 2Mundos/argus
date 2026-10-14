@@ -7,6 +7,7 @@ from argus_api.fleet.targets import (
     MANAGED_LABEL,
     POOL_LABEL,
     ContainerSpec,
+    KubernetesPlacement,
     Mount,
     TargetError,
 )
@@ -98,4 +99,21 @@ def container_spec(
         mounts=mounts,
         user=user,
         group_add=group_add,
+        kubernetes=(
+            KubernetesPlacement(
+                namespace=pool.kubernetes.namespace,
+                service_account=pool.kubernetes.service_account,
+                image_pull_secrets=list(pool.kubernetes.image_pull_secrets),
+                node_selector=dict(pool.kubernetes.node_selector),
+            )
+            if pool.target == "kubernetes" and pool.kubernetes
+            else None
+        ),
     )
+
+
+def target_location(pool: Pool) -> tuple[str | None, str | None]:
+    """(host/context, namespace) that select this pool's target client."""
+    if pool.target == "kubernetes" and pool.kubernetes:
+        return pool.kubernetes.context, pool.kubernetes.namespace
+    return pool.docker.host, None

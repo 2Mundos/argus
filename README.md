@@ -54,6 +54,26 @@ docker run -p 8000:8000 -v argus-data:/data argus   # dashboard at http://localh
 # (plus LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY)
 ```
 
+## Workers on Kubernetes
+
+A pool with `target: kubernetes` runs each instance as a Pod. Give it an explicit
+kubeconfig context (or `in-cluster`) and a namespace; Argus never uses the
+kubeconfig's current context.
+
+```bash
+kubectl create namespace workers
+kubectl apply -n workers -f deploy/kubernetes/rbac.yaml   # least-privilege Role
+curl -X PUT $ARGUS/api/pools/kw -H "Authorization: Bearer $ADMIN" \
+  -H 'Content-Type: application/json' -d '{
+  "target": "kubernetes", "image": "registry.example/worker:1",
+  "desired_replicas": 2, "max_replicas": 5,
+  "kubernetes": {"context": "my-cluster", "namespace": "workers"}
+}'
+```
+
+Pods must be able to reach `ARGUS_PUBLIC_URL`. Try it on a throwaway cluster with
+`make test-k8s` (kind; see the target's comment).
+
 ## Connecting agents (MCP)
 
 Argus serves an MCP endpoint at `/mcp`. Register an agent (mint a bootstrap

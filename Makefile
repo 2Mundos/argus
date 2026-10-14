@@ -26,6 +26,11 @@ dev-dashboard: ## Run the dashboard on :3000.
 test-docker: ## Run the real-Docker integration tests (needs a Docker daemon).
 	ARGUS_DOCKER_TESTS=1 $(UV) run pytest -q -p no:cacheprovider apps/api/tests/test_docker_integration.py
 
+.PHONY: test-k8s
+test-k8s: ## Kubernetes target integration test; needs ARGUS_K8S_CONTEXT (use an isolated kind cluster).
+	@test -n "$$ARGUS_K8S_CONTEXT" || { echo "set ARGUS_K8S_CONTEXT to a throwaway cluster's context (never a shared one); with kind also set ARGUS_KIND_CLUSTER"; exit 2; }
+	ARGUS_DOCKER_TESTS=1 $(UV) run pytest -q -p no:cacheprovider apps/api/tests/test_docker_integration.py -k kubernetes
+
 .PHONY: lint format typecheck test build
 lint: ## Ruff + Biome + docs validation.
 	$(UV) run ruff check .

@@ -215,3 +215,112 @@ def test_nanoclaw_runtime_registers_and_leaves_nothing_behind(
             if ids:
                 subprocess.run(["docker", "rm", "-f", *ids], capture_output=True)
         subprocess.run(["rm", "-rf", root], check=False)
+
+
+K8S_CONTEXT = os.environ.get("ARGUS_K8S_CONTEXT")
+K8S_NAMESPACE = os.environ.get("ARGUS_K8S_NAMESPACE", "workers")
+KIND_CLUSTER = os.environ.get("ARGUS_KIND_CLUSTER")  # load the image into kind
+
+
+@pytest.mark.skipif(
+    not K8S_CONTEXT,
+    reason="set ARGUS_K8S_CONTEXT (a kubeconfig context; use an isolated cluster such as kind)",
+)
+def test_kubernetes_target_scales_runs_work_and_cleans_up(argus: httpx.Client) -> None:
+    """Pods as instances: scale up, do work, an orphan pod is removed, scale down."""
+    from kubernetes import client, config
+
+    if KIND_CLUSTER:
+        subprocess.run(
+            ["kind", "load", "docker-image", IMAGE, "--name", KIND_CLUSTER],
+            check=True,
+            capture_output=True,
+        )
+    api = client.CoreV1Api(config.new_client_from_config(context=K8S_CONTEXT))
+    pool = "it-k8s"
+
+    def pods() -> list[str]:
+        found = api.list_namespaced_pod(
+            K8S_NAMESPACE, label_selector=f"argus.pool={pool}"
+        )
+        return [p.metadata.name for p in found.items]
+
+    body = {
+        "target": "kubernetes",
+        "image": IMAGE,
+        "desired_replicas": 2,
+        "max_replicas": 2,
+        "env": {"ECHO_WORK_SECONDS": "0.5"},
+        "kubernetes": {"context": K8S_CONTEXT, "namespace": K8S_NAMESPACE},
+    }
+    try:
+        assert argus.put(f"/pools/{pool}", json=body).status_code == 200
+        wait_for(
+            lambda: len(argus.get("/agents", params={"state": "active"}).json()) == 2,
+            120,
+            "two pods to register",
+        )
+        assert len(pods()) == 2
+
+        ids = [
+            argus.post(
+                "/tasks", json={"project": "global", "title": f"k8s job {n}"}
+            ).json()["id"]
+            for n in range(3)
+        ]
+        wait_for(
+            lambda: all(
+                argus.get(f"/tasks/{i}").json()["state"] == "succeeded" for i in ids
+            ),
+            60,
+            "tasks to complete on the pods",
+        )
+
+        # The logs endpoint returns decoded text from the pod.
+        [first, *_] = argus.get("/instances", params={"pool": pool}).json()
+        text = argus.get(f"/instances/{first['id']}/logs").text
+        assert "registered as" in text
+        assert not text.startswith("b'")
+
+        # An orphan (our labels, no instance row) is stopped by the reconciler.
+        api.create_namespaced_pod(
+            K8S_NAMESPACE,
+            {
+                "metadata": {
+                    "name": "argus-orphan-test",
+                    "labels": {
+                        "argus.managed": "true",
+                        "argus.pool": pool,
+                        "argus.instance_id": "00000000-0000-0000-0000-000000000000",
+                    },
+                },
+                "spec": {
+                    "restartPolicy": "Never",
+                    "containers": [
+                        {"name": "c", "image": IMAGE, "command": ["sleep", "300"]}
+                    ],
+                },
+            },
+        )
+        wait_for(
+            lambda: "argus-orphan-test" not in pods(),
+            60,
+            "the orphan pod to be removed",
+        )
+
+        argus.post(f"/pools/{pool}/scale", json={"desired_replicas": 0})
+        wait_for(lambda: not pods(), 90, "pods to be removed")
+        wait_for(
+            lambda: all(
+                i["state"] == "terminated"
+                for i in argus.get(
+                    "/instances", params={"pool": pool, "include_terminated": True}
+                ).json()
+            ),
+            60,
+            "instances to be confirmed terminated",
+        )
+    finally:
+        argus.put(f"/pools/{pool}", json={**body, "desired_replicas": 0})
+        for name in pods():
+            api.delete_namespaced_pod(name, K8S_NAMESPACE, grace_period_seconds=0)

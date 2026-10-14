@@ -83,7 +83,7 @@ async def reconcile_pool(
     async with db.read() as conn:
         pool = await fleet.get_pool(conn, name)
     try:
-        target = targets.get(pool.target, pool.docker.host)
+        target = targets.get(pool.target, *runtimes.target_location(pool))
         observed = {
             p.instance_id: p for p in await target.list({POOL_LABEL: pool.name})
         }

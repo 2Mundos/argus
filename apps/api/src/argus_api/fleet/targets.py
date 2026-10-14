@@ -8,10 +8,11 @@ creating a second one.
 
 import asyncio
 import builtins
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 MANAGED_LABEL = "argus.managed"
 POOL_LABEL = "argus.pool"
@@ -34,6 +35,14 @@ class Mount:
 
 
 @dataclass(frozen=True)
+class KubernetesPlacement:
+    namespace: str
+    service_account: str | None = None
+    image_pull_secrets: list[str] = field(default_factory=list)
+    node_selector: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ContainerSpec:
     instance_id: str
     image: str
@@ -46,6 +55,7 @@ class ContainerSpec:
     mounts: list[Mount] = field(default_factory=list)
     user: str | None = None
     group_add: list[str] = field(default_factory=list)
+    kubernetes: KubernetesPlacement | None = None
 
     @property
     def name(self) -> str:
@@ -223,20 +233,238 @@ def _extra_hosts(entries: list[str]) -> dict[str, str] | None:
     return hosts or None
 
 
+class KubernetesTarget:
+    """One Pod per instance, in one namespace of one cluster.
+
+    The client is built from an explicit kubeconfig context (or in-cluster
+    config) and never mutates global kubeconfig state. Pods never restart on
+    their own (`restartPolicy: Never`): replacing an instance is the
+    reconciler's decision. A pod that is being deleted still lists as running
+    until it is actually gone, so deletion is never mistaken for confirmation.
+    """
+
+    def __init__(self, context: str, namespace: str, api: Any = None) -> None:
+        self.context = context
+        self.namespace = namespace
+        self._api_obj = api
+
+    def _api(self) -> Any:
+        if self._api_obj is None:
+            from kubernetes import client, config
+
+            if self.context == "in-cluster":
+                config.load_incluster_config()
+                api_client = client.ApiClient()
+            else:
+                api_client = config.new_client_from_config(context=self.context)
+            self._api_obj = client.CoreV1Api(api_client)
+        return self._api_obj
+
+    async def _call(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        from kubernetes.client.exceptions import ApiException
+        from kubernetes.config.config_exception import ConfigException
+
+        try:
+            return await asyncio.to_thread(fn, *args, **kwargs)
+        except ApiException as exc:
+            raise _KubeError(
+                exc.status or 0, f"{exc.status} {exc.reason}: {_body(exc)}"
+            ) from exc
+        except (ConfigException, OSError) as exc:
+            raise TargetError(f"kubernetes: {str(exc)[:300]}") from exc
+
+    async def start(self, spec: ContainerSpec) -> str:
+        pod = pod_manifest(spec, self.namespace)
+        try:
+            await self._call(self._api().create_namespaced_pod, self.namespace, pod)
+        except _KubeError as exc:
+            if exc.status != 409:  # 409: created by an earlier, ambiguous attempt
+                raise TargetError(str(exc)) from exc
+        return pod["metadata"]["name"]
+
+    async def stop(self, ref: str, *, grace: timedelta) -> None:
+        try:
+            await self._call(
+                self._api().delete_namespaced_pod,
+                ref,
+                self.namespace,
+                grace_period_seconds=int(grace.total_seconds()),
+            )
+        except _KubeError as exc:
+            if exc.status != 404:
+                raise TargetError(str(exc)) from exc
+
+    async def list(self, labels: Mapping[str, str]) -> builtins.list[ProviderInstance]:
+        selector = ",".join(f"{k}={v}" for k, v in labels.items())
+        pods = await self._list_pods(selector)
+        return [
+            ProviderInstance(
+                p.metadata.labels[INSTANCE_LABEL],
+                p.metadata.name,
+                *pod_status(p),
+            )
+            for p in pods
+            if INSTANCE_LABEL in (p.metadata.labels or {})
+        ]
+
+    async def list_by_label(self, key: str) -> builtins.list[LabeledContainer]:
+        pods = await self._list_pods(key)
+        return [
+            LabeledContainer(
+                p.metadata.name, p.metadata.labels[key], pod_status(p)[0] != "exited"
+            )
+            for p in pods
+            if key in (p.metadata.labels or {})
+        ]
+
+    async def _list_pods(self, selector: str) -> Any:
+        try:
+            result = await self._call(
+                self._api().list_namespaced_pod, self.namespace, label_selector=selector
+            )
+        except _KubeError as exc:
+            raise TargetError(str(exc)) from exc
+        return result.items
+
+    async def logs(self, ref: str, *, tail: int) -> str:
+        try:
+            # The client's own str deserialization mangles the bytes body
+            # ("b'...'"), so read the raw response.
+            resp = await self._call(
+                self._api().read_namespaced_pod_log,
+                ref,
+                self.namespace,
+                tail_lines=tail,
+                timestamps=True,
+                _preload_content=False,
+            )
+            return bytes(resp.data).decode(errors="replace")
+        except _KubeError as exc:
+            if exc.status == 404:
+                return ""
+            if exc.status == 400:  # not started yet: say why instead of failing
+                return await self._why_not_started(ref)
+            raise TargetError(str(exc)) from exc
+
+    async def _why_not_started(self, ref: str) -> str:
+        try:
+            pod = await self._call(self._api().read_namespaced_pod, ref, self.namespace)
+        except _KubeError:
+            return ""
+        return describe_waiting(pod)
+
+
+class _KubeError(Exception):
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def _body(exc: Any) -> str:
+    try:
+        return str(json.loads(exc.body).get("message", exc.body))[:300]
+    except (ValueError, TypeError, AttributeError):
+        return str(exc.body)[:300]
+
+
+def pod_manifest(spec: ContainerSpec, namespace: str) -> dict[str, Any]:
+    k = spec.kubernetes or KubernetesPlacement(namespace)
+    resources: dict[str, dict[str, str]] = {}
+    if spec.cpus:
+        resources.setdefault("limits", {})["cpu"] = f"{int(spec.cpus * 1000)}m"
+    if spec.memory_mb:
+        resources.setdefault("limits", {})["memory"] = f"{spec.memory_mb}Mi"
+    if "limits" in resources:  # requests = limits: a predictable QoS class
+        resources["requests"] = dict(resources["limits"])
+    pod_spec: dict[str, Any] = {
+        "restartPolicy": "Never",
+        # Workers talk to Argus, not to the cluster API.
+        "automountServiceAccountToken": False,
+        "containers": [
+            {
+                "name": "worker",
+                "image": spec.image,
+                "env": [{"name": n, "value": v} for n, v in spec.env.items()],
+                "securityContext": {"allowPrivilegeEscalation": False},
+                **({"resources": resources} if resources else {}),
+            }
+        ],
+    }
+    if k.service_account:
+        pod_spec["serviceAccountName"] = k.service_account
+    if k.image_pull_secrets:
+        pod_spec["imagePullSecrets"] = [{"name": n} for n in k.image_pull_secrets]
+    if k.node_selector:
+        pod_spec["nodeSelector"] = dict(k.node_selector)
+    return {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": spec.name,
+            "namespace": namespace,
+            "labels": dict(spec.labels),
+        },
+        "spec": pod_spec,
+    }
+
+
+def pod_status(pod: Any) -> tuple[Status, int | None]:
+    """Map a Pod to the provider status the reconciler understands.
+
+    Pending is `created`; Running (including a pod being deleted, which is not
+    gone yet) is `running`; only Succeeded/Failed is `exited`.
+    """
+    phase = (pod.status.phase if pod.status else None) or "Unknown"
+    if phase == "Pending":
+        return "created", None
+    if phase in ("Succeeded", "Failed"):
+        code: int | None = 0 if phase == "Succeeded" else 1
+        for cs in pod.status.container_statuses or []:
+            term = cs.state.terminated if cs.state else None
+            if term is not None:
+                code = term.exit_code
+                break
+        return "exited", code
+    return "running", None
+
+
+def describe_waiting(pod: Any) -> str:
+    """Why a pod has no logs yet: the container's waiting reason, or its phase."""
+    for cs in (pod.status.container_statuses or []) if pod.status else []:
+        waiting = cs.state.waiting if cs.state else None
+        if waiting is not None:
+            return f"waiting: {waiting.reason}: {waiting.message or ''}".strip()
+    for cond in (pod.status.conditions or []) if pod.status else []:
+        if cond.status == "False" and cond.message:
+            return f"{cond.type}: {cond.reason}: {cond.message}"
+    return f"phase: {pod.status.phase if pod.status else 'unknown'}"
+
+
 class TargetRegistry:
-    """One client per (kind, host), created on first use."""
+    """One client per (kind, host, namespace), created on first use.
+
+    `host` is the Docker host, or the Kubernetes context; `namespace` is only
+    used by the Kubernetes target.
+    """
 
     def __init__(self) -> None:
-        self._targets: dict[tuple[str, str | None], Target] = {}
+        self._targets: dict[tuple[str, str | None, str | None], Target] = {}
 
-    def get(self, kind: str, host: str | None) -> Target:
-        key = (kind, host)
+    def get(self, kind: str, host: str | None, namespace: str | None = None) -> Target:
+        key = (kind, host, namespace)
         if key not in self._targets:
-            if kind != "docker":
-                raise TargetError(f"target {kind!r} is not supported yet")
-            self._targets[key] = DockerTarget(host)
+            if kind == "docker":
+                self._targets[key] = DockerTarget(host)
+            elif kind == "kubernetes":
+                if not host:
+                    raise TargetError("the kubernetes target needs an explicit context")
+                self._targets[key] = KubernetesTarget(host, namespace or "default")
+            else:
+                raise TargetError(f"target {kind!r} is not supported")
         return self._targets[key]
 
-    def override(self, kind: str, host: str | None, target: Target) -> None:
+    def override(
+        self, kind: str, host: str | None, target: Target, namespace: str | None = None
+    ) -> None:
         """For tests: route a target kind/host to a given implementation."""
-        self._targets[(kind, host)] = target
+        self._targets[(kind, host, namespace)] = target

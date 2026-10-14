@@ -11,10 +11,10 @@ from argus_core.fleet import Instance, InstanceAgent, Pool, PoolUpsert
 
 from argus_api.db import Tx, ts
 from argus_api.decisions import store as decisions
-from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
+from argus_api.errors import ConflictError, NotFoundError
 from argus_api.events import record
 
-_CONFIG_FIELDS = ("env", "cpus", "memory_mb", "docker", "nanoclaw")
+_CONFIG_FIELDS = ("env", "cpus", "memory_mb", "docker", "kubernetes", "nanoclaw")
 
 
 async def get_pool(conn: aiosqlite.Connection, name: str) -> Pool:
@@ -31,10 +31,6 @@ async def list_pools(conn: aiosqlite.Connection) -> list[Pool]:
 
 
 async def upsert_pool(tx: Tx, name: str, body: PoolUpsert, actor: str) -> Pool:
-    if body.target != "docker":
-        raise ValidationFailedError(
-            "only the docker target is available so far", code="not_supported_yet"
-        )
     config = json.dumps({f: getattr(body, f) for f in _CONFIG_FIELDS}, default=_dump)
     now = ts(tx.now)
     await tx.conn.execute(

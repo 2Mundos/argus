@@ -280,6 +280,30 @@ startup lock file guarantees there is only one. As built:
   agents). `runtimes.descendant_label/descendant_owner` identify them; they are
   stopped with their instance, an instance stays `terminating` until none remain,
   and ones whose instance is not live are stopped as orphans.
+- **Kubernetes target** (`target: kubernetes`, plain runtime only): one Pod per
+  instance in one namespace, named `argus-<instance id>` and carrying the same
+  `argus.*` labels, so every rule above (idempotent start by name, confirmation
+  only by listing, orphan sweep, crash-loop backoff) applies unchanged.
+  - **Explicit context.** `kubernetes.context` is required: a kubeconfig context
+    name, or `in-cluster`. Argus never falls back to the kubeconfig's current
+    context, so a pool cannot land on whichever cluster was last selected. The
+    client never mutates global kubeconfig state.
+  - **Pod shape.** `restartPolicy: Never` (replacing an instance is Argus's
+    decision, not the kubelet's), `automountServiceAccountToken: false` (workers
+    talk to Argus, not to the cluster), `allowPrivilegeEscalation: false`, CPU and
+    memory limits equal to requests when set, plus optional `service_account`,
+    `image_pull_secrets`, and `node_selector`.
+  - **Status mapping.** Pending → created, Running → running (a pod being
+    deleted still lists as running until it is actually gone), Succeeded/Failed →
+    exited with the container's exit code. A pod that cannot start (for example
+    `ErrImagePull`) is reported by the logs endpoint as its waiting reason.
+  - **Needs**: Pods in the pool's namespace can reach `ARGUS_PUBLIC_URL`, and the
+    credentials Argus uses can create/get/list/delete Pods and read their logs
+    there (`deploy/kubernetes/rbac.yaml`, a namespace-scoped Role). The one-time
+    bootstrap token is in the Pod's env, readable by anyone who can read Pods in
+    that namespace; it is single-use and expires.
+  - A NanoClaw host needs the node's Docker daemon and identical host paths, so
+    the `nanoclaw` runtime is not available on this target.
 - **Logs**: `GET /api/instances/{id}/logs?tail=N` reads the container's recent
   output live from the target; nothing is stored. Following logs in real time is
   a later addition.
