@@ -93,6 +93,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
     project: "global",
     priority: 0,
     capabilities: "",
+    timeoutMinutes: "",
     requires_approval: false,
     review: "none" as "none" | "human" | "orchestrator",
   });
@@ -117,6 +118,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
             priority: form.priority,
             requires_approval: form.requires_approval,
             review: form.review,
+            ...(form.timeoutMinutes ? { timeout_s: Number(form.timeoutMinutes) * 60 } : {}),
             ...(capabilities.length ? { required_capabilities: capabilities } : {}),
           },
         }),
@@ -181,6 +183,15 @@ function NewTask({ onClose }: { onClose: () => void }) {
         <label>
           Required capabilities (comma-separated; empty uses the kind's default)
           <input value={form.capabilities} onChange={(e) => set("capabilities", e.target.value)} />
+        </label>
+        <label>
+          Timeout in minutes (empty: the kind's, then the server's default)
+          <input
+            type="number"
+            min={1}
+            value={form.timeoutMinutes}
+            onChange={(e) => set("timeoutMinutes", e.target.value)}
+          />
         </label>
         <label className="check">
           <input

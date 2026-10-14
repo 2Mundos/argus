@@ -153,6 +153,15 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   effects need destination-enforced idempotency using a stable operation key
   across attempts, or destination-enforced fencing; Argus cannot guarantee
   exactly-once effects in another system.
+- **Attempt timeout.** A lease proves the holder is alive; it does not prove it is
+  making progress, and a healthy holder renews it forever. So each attempt also
+  has a wall-clock deadline (`timeout_at`) set at claim from the task's
+  `timeout_s`, else its kind's `default_timeout_s`, else `ARGUS_TASK_TIMEOUT_S`
+  (default 6 h; 0 disables). Neither renewals nor progress notes move it. The
+  reaper expires an overdue attempt exactly like a lost lease: it counts as a
+  failure (retried until `max_attempts`), the assignee is cleared, and the holder's
+  next write gets `409`. The expiry event carries `reason: timeout` (other
+  expiries: `lease_expired`, `agent_ended`).
 - Defaults: `lease_ttl = 120 s`, heartbeat every 30 s, `max_attempts = 3`.
   Per-task and per-kind override allowed.
 

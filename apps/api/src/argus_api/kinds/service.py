@@ -60,19 +60,22 @@ async def upsert_kind(tx: Tx, name: str, body: TaskKindUpsert, actor: str) -> Ta
         _dump(body.default_capabilities),
         body.default_lease_ttl_s,
         body.default_max_attempts,
+        body.default_timeout_s,
         body.default_review,
         _dump(body.default_knowledge),
     )
     await tx.conn.execute(
         "INSERT INTO task_kinds (name, description, input_schema, result_schema,"
         " default_capabilities, default_lease_ttl_s, default_max_attempts,"
+        " default_timeout_s,"
         " default_review, default_knowledge, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         " ON CONFLICT (name) DO UPDATE SET description = excluded.description,"
         " input_schema = excluded.input_schema, result_schema = excluded.result_schema,"
         " default_capabilities = excluded.default_capabilities,"
         " default_lease_ttl_s = excluded.default_lease_ttl_s,"
         " default_max_attempts = excluded.default_max_attempts,"
+        " default_timeout_s = excluded.default_timeout_s,"
         " default_review = excluded.default_review,"
         " default_knowledge = excluded.default_knowledge,"
         " updated_at = excluded.updated_at",

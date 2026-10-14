@@ -126,8 +126,9 @@ async def create_task(
     await tx.conn.execute(
         "INSERT INTO tasks (id, parent_id, kind, title, spec, acceptance, input,"
         " required_capabilities, priority, state, requires_approval, review,"
-        " lease_ttl_s, max_attempts, project, created_by, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " lease_ttl_s, max_attempts, project, timeout_s, created_by, created_at,"
+        " updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task_id,
             body.parent_id,
@@ -144,6 +145,7 @@ async def create_task(
             body.lease_ttl_s,
             body.max_attempts,
             body.project,
+            body.timeout_s,
             actor,
             now,
             now,
@@ -192,8 +194,14 @@ async def create_task(
 # -- worker operations (require a valid lease) --------------------------------
 
 
-async def claim(tx: Tx, agent_id: str, capabilities: list[str]) -> Task | None:
-    """Claim the highest-priority, oldest ready task the agent is capable of."""
+async def claim(
+    tx: Tx, agent_id: str, capabilities: list[str], *, default_timeout_s: int = 0
+) -> Task | None:
+    """Claim the highest-priority, oldest ready task the agent is capable of.
+
+    The attempt's wall-clock deadline is the task's `timeout_s` (which creation
+    filled from its kind), else `default_timeout_s`; 0 means no deadline.
+    """
     state = await _agent_state(tx.conn, agent_id)
     if state is not AgentState.ACTIVE:
         raise ConflictError(
@@ -220,6 +228,11 @@ async def claim(tx: Tx, agent_id: str, capabilities: list[str]) -> Task | None:
             "assignee_agent_id": agent_id,
             "attempt": attempt,
             "lease_expires_at": _deadline(tx.now, row["lease_ttl_s"]),
+            "timeout_at": (
+                _deadline(tx.now, timeout)
+                if (timeout := row["timeout_s"] or default_timeout_s) > 0
+                else None
+            ),
         },
         data={"attempt": attempt, "agent_id": agent_id},
     )
@@ -420,15 +433,22 @@ async def review(
 
 async def expire_leases(tx: Tx) -> list[str]:
     """Expire every lease past its deadline, whether or not its agent is alive."""
-    return await _expire_where(tx, "lease_expires_at <= ?", ts(tx.now))
+    return await _expire_where(tx, "lease_expires_at <= ?", ts(tx.now), "lease_expired")
+
+
+async def expire_timeouts(tx: Tx) -> list[str]:
+    """Expire every attempt past its wall-clock deadline, however healthy its
+    heartbeats: a holder that is alive but never finishes must not hold a task
+    forever. It counts as a failure and retries until max_attempts."""
+    return await _expire_where(tx, "timeout_at <= ?", ts(tx.now), "timeout")
 
 
 async def expire_agent_leases(tx: Tx, agent_id: str) -> list[str]:
     """Expire every lease an agent holds, e.g. because it was lost or left."""
-    return await _expire_where(tx, "assignee_agent_id = ?", agent_id)
+    return await _expire_where(tx, "assignee_agent_id = ?", agent_id, "agent_ended")
 
 
-async def _expire_where(tx: Tx, condition: str, param: str) -> list[str]:
+async def _expire_where(tx: Tx, condition: str, param: str, reason: str) -> list[str]:
     async with tx.conn.execute(
         f"SELECT * FROM tasks WHERE state = 'claimed' AND {condition} ORDER BY id",  # noqa: S608
         (param,),
@@ -441,7 +461,7 @@ async def _expire_where(tx: Tx, condition: str, param: str) -> list[str]:
             Action.EXPIRE,
             "system",
             set_={"failures": row["failures"] + 1},
-            data={"agent_id": row["assignee_agent_id"]},
+            data={"agent_id": row["assignee_agent_id"], "reason": reason},
         )
     return [r["id"] for r in rows]
 
@@ -506,7 +526,11 @@ async def _apply(
     new = transition(old, action, ctx)
     fields: dict[str, Any] = {"state": new, "updated_at": ts(tx.now), **(set_ or {})}
     if old is S.CLAIMED and new is not S.CLAIMED:
-        fields |= {"assignee_agent_id": None, "lease_expires_at": None}
+        fields |= {
+            "assignee_agent_id": None,
+            "lease_expires_at": None,
+            "timeout_at": None,
+        }
     assignments = ", ".join(f"{k} = ?" for k in fields)
     await tx.conn.execute(
         f"UPDATE tasks SET {assignments} WHERE id = ?",  # noqa: S608 - keys are code-controlled
@@ -608,6 +632,7 @@ def _apply_kind_defaults(body: TaskCreate, kind: TaskKind) -> TaskCreate:
         "required_capabilities": kind.default_capabilities,
         "lease_ttl_s": kind.default_lease_ttl_s,
         "max_attempts": kind.default_max_attempts,
+        "timeout_s": kind.default_timeout_s,
         "review": kind.default_review,
     }
     update = {

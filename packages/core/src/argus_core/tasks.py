@@ -127,6 +127,9 @@ class TaskCreate(BaseModel):
     knowledge: list[str] = []  # page ids pinned to the task, delivered on claim
     max_attempts: int = Field(default=3, ge=1, le=20)
     lease_ttl_s: int = Field(default=120, ge=10, le=3600)
+    # Wall-clock cap per attempt, counted from the claim; heartbeats and progress
+    # notes do not extend it. Unset: the kind's default, then the server's.
+    timeout_s: int | None = Field(default=None, ge=60, le=7 * 24 * 3600)
 
 
 class Task(BaseModel):
@@ -145,6 +148,8 @@ class Task(BaseModel):
     assignee_agent_id: str | None
     lease_expires_at: datetime | None
     lease_ttl_s: int
+    timeout_s: int | None
+    timeout_at: datetime | None  # this attempt's deadline while claimed
     attempt: int
     failures: int
     max_attempts: int

@@ -95,8 +95,10 @@ How it works and what to know:
 - Account leasing and the OneCLI credential switch (verified to work on a running
   process; not wired into the channel).
 - Several agents per NanoClaw host (`agents_per_instance > 1`).
-- A task whose model call fails stays claimed (the host keeps heartbeating, so
-  the lease never expires). NanoClaw's "agent run failed" notice arrives as a
-  progress note; cancel the task or terminate the instance.
+- A task whose model call fails stays claimed while the host heartbeats, until
+  Argus's wall-clock timeout (`timeout_s`, default 6 h; see the spec) expires the
+  attempt. NanoClaw's "agent run failed" notice arrives as a progress note; cancel
+  the task to end it sooner. The agent container is not interrupted when its
+  attempt expires; the channel just drops its replies and claims the next task.
 - Replies are matched by prefix, which an agent can get wrong; an MCP tool set
   would be sturdier but would put an Argus token near the agent.

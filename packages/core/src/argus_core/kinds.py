@@ -17,6 +17,7 @@ class TaskKindUpsert(BaseModel):
     default_capabilities: list[str] | None = None
     default_lease_ttl_s: int | None = Field(default=None, ge=10, le=3600)
     default_max_attempts: int | None = Field(default=None, ge=1, le=20)
+    default_timeout_s: int | None = Field(default=None, ge=60, le=7 * 24 * 3600)
     default_review: Review | None = None
     # Knowledge page ids pinned to every task of this kind (merged with the
     # task's own pins), e.g. the deploy runbook for every `deploy` task.

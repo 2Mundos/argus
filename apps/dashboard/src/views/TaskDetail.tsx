@@ -72,6 +72,12 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                   </dd>
                 </>
               )}
+              {task.timeout_at && (
+                <>
+                  <dt>Times out</dt>
+                  <dd>{relative(task.timeout_at)}</dd>
+                </>
+              )}
               {task.required_capabilities.length > 0 && (
                 <>
                   <dt>Needs</dt>

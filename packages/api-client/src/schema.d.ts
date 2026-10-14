@@ -1411,6 +1411,10 @@ export interface components {
             /** Spec */
             spec: string;
             state: components["schemas"]["TaskState"];
+            /** Timeout At */
+            timeout_at: string | null;
+            /** Timeout S */
+            timeout_s: number | null;
             /** Title */
             title: string;
             /**
@@ -2313,6 +2317,10 @@ export interface components {
             /** Spec */
             spec: string;
             state: components["schemas"]["TaskState"];
+            /** Timeout At */
+            timeout_at: string | null;
+            /** Timeout S */
+            timeout_s: number | null;
             /** Title */
             title: string;
             /**
@@ -2386,6 +2394,8 @@ export interface components {
              * @default
              */
             spec?: string;
+            /** Timeout S */
+            timeout_s?: number | null;
             /** Title */
             title: string;
         };
@@ -2405,6 +2415,8 @@ export interface components {
             /** Default Max Attempts */
             default_max_attempts?: number | null;
             default_review?: components["schemas"]["Review"] | null;
+            /** Default Timeout S */
+            default_timeout_s?: number | null;
             /**
              * Description
              * @default
@@ -2437,6 +2449,8 @@ export interface components {
             /** Default Max Attempts */
             default_max_attempts?: number | null;
             default_review?: components["schemas"]["Review"] | null;
+            /** Default Timeout S */
+            default_timeout_s?: number | null;
             /**
              * Description
              * @default

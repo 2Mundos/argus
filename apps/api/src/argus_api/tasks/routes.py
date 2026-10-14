@@ -79,7 +79,12 @@ async def claim_task(
     with db.bus.subscribe() as sub:
         while True:
             async with db.write() as tx:
-                task = await service.claim(tx, agent_id, body.capabilities)
+                task = await service.claim(
+                    tx,
+                    agent_id,
+                    body.capabilities,
+                    default_timeout_s=settings.task_timeout_s,
+                )
             if task is not None:
                 async with db.read() as conn:
                     refs = await knowledge.refs_for_task(

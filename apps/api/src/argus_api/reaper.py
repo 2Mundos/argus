@@ -25,6 +25,7 @@ async def reap(tx: Tx) -> ReapResult:
     # Lease expiry runs first and independently: a live agent's overdue lease
     # expires too. Then lost agents release whatever leases they still hold.
     expired = await tasks.expire_leases(tx)
+    expired += await tasks.expire_timeouts(tx)
     lost = await agents.mark_lost(tx)
     recovered = await accounts.recover(tx)
     return ReapResult(expired, lost, recovered)

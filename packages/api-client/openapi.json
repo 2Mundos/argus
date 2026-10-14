@@ -876,6 +876,29 @@
           "state": {
             "$ref": "#/components/schemas/TaskState"
           },
+          "timeout_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout At"
+          },
+          "timeout_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout S"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -902,6 +925,8 @@
           "assignee_agent_id",
           "lease_expires_at",
           "lease_ttl_s",
+          "timeout_s",
+          "timeout_at",
           "attempt",
           "failures",
           "max_attempts",
@@ -3137,6 +3162,29 @@
           "state": {
             "$ref": "#/components/schemas/TaskState"
           },
+          "timeout_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout At"
+          },
+          "timeout_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout S"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -3163,6 +3211,8 @@
           "assignee_agent_id",
           "lease_expires_at",
           "lease_ttl_s",
+          "timeout_s",
+          "timeout_at",
           "attempt",
           "failures",
           "max_attempts",
@@ -3282,6 +3332,19 @@
             "title": "Spec",
             "type": "string"
           },
+          "timeout_s": {
+            "anyOf": [
+              {
+                "maximum": 604800.0,
+                "minimum": 60.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout S"
+          },
           "title": {
             "maxLength": 200,
             "minLength": 1,
@@ -3365,6 +3428,19 @@
                 "type": "null"
               }
             ]
+          },
+          "default_timeout_s": {
+            "anyOf": [
+              {
+                "maximum": 604800.0,
+                "minimum": 60.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Timeout S"
           },
           "description": {
             "default": "",
@@ -3478,6 +3554,19 @@
                 "type": "null"
               }
             ]
+          },
+          "default_timeout_s": {
+            "anyOf": [
+              {
+                "maximum": 604800.0,
+                "minimum": 60.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Timeout S"
           },
           "description": {
             "default": "",
