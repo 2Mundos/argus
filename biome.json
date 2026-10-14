@@ -4,6 +4,7 @@
   "files": {
     "includes": [
       "**",
+      "!**/.pnpm-store/**",
       "!pnpm-lock.yaml",
       "!uv.lock",
       "!packages/api-client/openapi.json",
