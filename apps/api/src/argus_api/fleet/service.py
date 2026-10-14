@@ -14,7 +14,7 @@ from argus_api.decisions import store as decisions
 from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
 from argus_api.events import record
 
-_CONFIG_FIELDS = ("env", "cpus", "memory_mb", "docker")
+_CONFIG_FIELDS = ("env", "cpus", "memory_mb", "docker", "nanoclaw")
 
 
 async def get_pool(conn: aiosqlite.Connection, name: str) -> Pool:
@@ -31,10 +31,9 @@ async def list_pools(conn: aiosqlite.Connection) -> list[Pool]:
 
 
 async def upsert_pool(tx: Tx, name: str, body: PoolUpsert, actor: str) -> Pool:
-    if body.target != "docker" or body.runtime != "plain":
+    if body.target != "docker":
         raise ValidationFailedError(
-            "only the docker target and the plain runtime are available so far",
-            code="not_supported_yet",
+            "only the docker target is available so far", code="not_supported_yet"
         )
     config = json.dumps({f: getattr(body, f) for f in _CONFIG_FIELDS}, default=_dump)
     now = ts(tx.now)

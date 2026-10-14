@@ -313,3 +313,173 @@ def _boot(instance_id: str):
     from argus_core.agents import BootstrapTokenCreate
 
     return BootstrapTokenCreate(instance_id=instance_id)
+
+
+async def test_crash_looping_instances_back_off(
+    db: Database, registry: TargetRegistry, target: FakeTarget, clock: FakeClock
+) -> None:
+    await make_pool(db, desired=1)
+
+    async def crash_once() -> None:
+        await tick(db, registry)  # start (or replace)
+        [inst] = await instances(db)
+        clock.advance(3)  # dies within seconds of starting
+        target.exit(inst.provider_ref, code=1)
+        await tick(db, registry)  # confirmed exited; maybe replaced
+
+    for _ in range(3):
+        await crash_once()
+    started = len(target.started)
+    await tick(db, registry)
+    assert len(target.started) == started  # held: three quick crashes in a row
+    async with db.read() as conn:
+        pool = await fleet.get_pool(conn, "web")
+    assert pool.status == "failing"
+    assert "exited within a minute" in (pool.last_error or "")
+    clock.advance(11)  # the first hold is 10 s
+    await tick(db, registry)
+    assert len(target.started) == started + 1
+
+
+def test_nanoclaw_options_validation() -> None:
+    from argus_core.fleet import NanoclawOptions
+    from pydantic import ValidationError
+
+    ok = {"install_dir": "/opt/nc", "agent_image": "img:1"}
+    NanoclawOptions(instances_root="/srv/nc-i", **ok)
+    with pytest.raises(ValidationError):  # a socket path would exceed the OS limit
+        NanoclawOptions(instances_root="/" + "x" * 60, **ok)
+    with pytest.raises(ValidationError):  # must be absolute
+        NanoclawOptions(instances_root="relative", **ok)
+    with pytest.raises(ValidationError):  # one agent per host for now
+        PoolUpsert(
+            runtime="nanoclaw",
+            image="h",
+            max_replicas=1,
+            agents_per_instance=2,
+            nanoclaw=NanoclawOptions(instances_root="/srv/i", **ok),
+        )
+    with pytest.raises(ValidationError):  # needs its options
+        PoolUpsert(runtime="nanoclaw", image="h", max_replicas=1)
+
+
+async def test_nanoclaw_runtime_spec(
+    db: Database, registry: TargetRegistry, target: FakeTarget
+) -> None:
+    from argus_core.fleet import NanoclawOptions
+
+    async with db.write() as tx:
+        await fleet.upsert_pool(
+            tx,
+            "web",
+            PoolUpsert(
+                runtime="nanoclaw",
+                image="argus-nanoclaw-host:dev",
+                desired_replicas=1,
+                max_replicas=2,
+                nanoclaw=NanoclawOptions(
+                    install_dir="/opt/nanoclaw",
+                    instances_root="/srv/nc-i",
+                    agent_image="nanoclaw-agent:1",
+                    user="1000:1000",
+                    group_add=["999"],
+                ),
+            ),
+            "admin:test",
+        )
+    await tick(db, registry)
+    [spec] = target.specs.values()
+    # Identical host and container paths for everything NanoClaw hands to Docker.
+    assert [(m.host, m.container, m.mode) for m in spec.mounts] == [
+        ("/opt/nanoclaw", "/opt/nanoclaw", "ro"),
+        ("/srv/nc-i", "/srv/nc-i", "rw"),
+        ("/var/run/docker.sock", "/var/run/docker.sock", "rw"),
+    ]
+    assert spec.env["CONTAINER_IMAGE"] == "nanoclaw-agent:1"
+    assert spec.env["ARGUS_NANOCLAW_INSTANCES_ROOT"] == "/srv/nc-i"
+    assert spec.env["ARGUS_BOOTSTRAP_TOKENS"].startswith("argus_boot_")
+    assert (spec.user, spec.group_add) == ("1000:1000", ["999"])
+
+
+async def _nanoclaw_pool(db: Database) -> None:
+    from argus_core.fleet import NanoclawOptions
+
+    async with db.write() as tx:
+        await fleet.upsert_pool(
+            tx,
+            "web",
+            PoolUpsert(
+                runtime="nanoclaw",
+                image="host:dev",
+                desired_replicas=1,
+                max_replicas=2,
+                nanoclaw=NanoclawOptions(
+                    install_dir="/opt/nc", instances_root="/srv/i", agent_image="a:1"
+                ),
+            ),
+            "admin:test",
+        )
+
+
+def _child(target: FakeTarget, name: str, instance_id: str) -> None:
+    # What NanoClaw labels its agent containers with: argus-<pool>-<instance8>.
+    target.children[name] = {
+        "label": "nanoclaw-group-folder",
+        "value": f"argus-web-{instance_id[:8]}",
+    }
+
+
+async def test_descendants_must_be_gone_before_an_instance_is_confirmed(
+    db: Database, registry: TargetRegistry, target: FakeTarget
+) -> None:
+    await _nanoclaw_pool(db)
+    await tick(db, registry)
+    [inst] = await instances(db)
+    _child(target, "ncl-agent-1", inst.id)
+
+    async with db.write() as tx:
+        await fleet.request_termination(tx, inst.id, "test")
+    target.fail_stop = True  # nothing can be stopped yet
+    await tick(db, registry)
+    target.containers.pop(inst.provider_ref)  # the host dies on its own
+    await tick(db, registry)
+    [still] = await instances(db)
+    assert still.id == inst.id and still.state == "terminating"  # agent still alive
+    assert "ncl-agent-1" in target.children
+
+    target.fail_stop = False
+    await tick(db, registry)  # stops the child
+    await tick(db, registry)  # now nothing of it remains: confirmed
+    assert [i.state for i in await instances(db, True) if i.id == inst.id] == [
+        "terminated"
+    ]
+    assert target.children == {}
+
+
+async def test_host_exit_with_live_agents_stops_them_before_confirming(
+    db: Database, registry: TargetRegistry, target: FakeTarget
+) -> None:
+    await _nanoclaw_pool(db)
+    await tick(db, registry)
+    [inst] = await instances(db)
+    _child(target, "ncl-agent-1", inst.id)
+    target.exit(inst.provider_ref, code=1)
+    await tick(db, registry)
+    assert "ncl-agent-1" in target.stopped  # an unexpected host exit does not leak it
+    await tick(db, registry)
+    assert [i.state for i in await instances(db, True) if i.id == inst.id] == [
+        "terminated"
+    ]
+
+
+async def test_orphaned_agents_of_unknown_instances_are_stopped(
+    db: Database, registry: TargetRegistry, target: FakeTarget
+) -> None:
+    await _nanoclaw_pool(db)
+    await tick(db, registry)
+    _child(target, "ncl-orphan", "deadbeef-0000-0000-0000-000000000000")
+    _child(target, "ncl-other-pool", "x")  # not ours: wrong shape, left alone
+    target.children["ncl-other-pool"]["value"] = "argus-someone-else-12345678"
+    await tick(db, registry)
+    assert "ncl-orphan" in target.stopped
+    assert "ncl-other-pool" in target.children

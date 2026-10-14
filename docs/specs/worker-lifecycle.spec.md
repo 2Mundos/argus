@@ -264,6 +264,13 @@ startup lock file guarantees there is only one. As built:
   along with it, while an orchestrator's request opens a `policy` decision for a
   human (approve raises the cap and scales). Pool definitions, including the cap,
   are admin-only (`PUT /api/pools/{name}`).
+- **Crash loops**: three instances that exit within a minute of starting, inside
+  10 minutes, hold new starts for 10 s, 20 s, 40 s, … (up to 5 min), and the
+  pool is `failing` with the last exit reason. A single crash is replaced at once.
+- **Descendants**: a runtime may own containers Argus did not start (NanoClaw's
+  agents). `runtimes.descendant_label/descendant_owner` identify them; they are
+  stopped with their instance, an instance stays `terminating` until none remain,
+  and ones whose instance is not live are stopped as orphans.
 - **Logs**: `GET /api/instances/{id}/logs?tail=N` reads the container's recent
   output live from the target; nothing is stored. Following logs in real time is
   a later addition.
@@ -384,6 +391,11 @@ as a managed pool of size 1 uses the same model and comes later.
 - Every mutating call accepts an `Idempotency-Key` header; agents retry often.
 
 ## 3.8 NanoClaw runtime
+
+*Built*: pool `runtime: nanoclaw` with `nanoclaw` options (`install_dir`,
+`instances_root`, `agent_image`, `onecli_url`, `docker_socket`, `user`,
+`group_add`); image and entrypoint in `deploy/nanoclaw-host`; details and
+constraints in [`integrations/nanoclaw/README.md`](../../integrations/nanoclaw/README.md).
 
 NanoClaw is a single Node.js **host** process that itself spawns one Docker
 container per agent session, talking to it through per-session SQLite files

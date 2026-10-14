@@ -214,6 +214,18 @@ function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void }) {
         api.PUT("/api/pools/{name}", {
           params: { path: { name: form.name } },
           body: {
+            // The editor shows only some fields; the rest of an existing pool
+            // (runtime, nanoclaw options, limits) must survive a full replace.
+            ...(pool
+              ? {
+                  target: pool.target,
+                  runtime: pool.runtime,
+                  agents_per_instance: pool.agents_per_instance,
+                  cpus: pool.cpus,
+                  memory_mb: pool.memory_mb,
+                  nanoclaw: pool.nanoclaw,
+                }
+              : {}),
             image: form.image,
             capabilities: list(form.capabilities),
             desired_replicas: form.desired,

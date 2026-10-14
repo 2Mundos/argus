@@ -45,6 +45,9 @@ class FakeTarget:
         self.fail_stop = False
         self.started: list[str] = []
         self.stopped: list[str] = []
+        # Containers the runtime itself created (not started by Argus):
+        # name -> {"label": key, "value": value}
+        self.children: dict[str, dict] = {}
 
     def _check(self) -> None:
         from argus_api.fleet.targets import TargetError
@@ -79,6 +82,7 @@ class FakeTarget:
         if self.fail_stop:
             raise TargetError("stop failed")
         self.containers.pop(ref, None)
+        self.children.pop(ref, None)
         self.stopped.append(ref)
 
     async def list(self, labels):
@@ -89,6 +93,16 @@ class FakeTarget:
             ProviderInstance(c["instance_id"], name, c["status"], c["exit_code"])
             for name, c in self.containers.items()
             if c["pool"] == labels["argus.pool"]
+        ]
+
+    async def list_by_label(self, key):
+        from argus_api.fleet.targets import LabeledContainer
+
+        self._check()
+        return [
+            LabeledContainer(name, c["value"], True)
+            for name, c in self.children.items()
+            if c["label"] == key
         ]
 
     async def logs(self, ref, *, tail):

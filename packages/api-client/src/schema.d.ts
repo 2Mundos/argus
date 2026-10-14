@@ -1701,6 +1701,72 @@ export interface components {
             providers: string[];
         };
         /**
+         * NanoclawOptions
+         * @description The `nanoclaw` runtime (docs/research/2026-10-14.nanoclaw-integration).
+         *
+         *     NanoClaw bind-mounts paths from its own filesystem into agent containers, so
+         *     every path here is an absolute path **on the Docker host** and is mounted at
+         *     the identical path inside the NanoClaw host container.
+         */
+        "NanoclawOptions-Input": {
+            /** Agent Image */
+            agent_image: string;
+            /**
+             * Docker Socket
+             * @default /var/run/docker.sock
+             */
+            docker_socket?: string;
+            /**
+             * Group Add
+             * @default []
+             */
+            group_add?: string[];
+            /** Install Dir */
+            install_dir: string;
+            /** Instances Root */
+            instances_root: string;
+            /**
+             * Onecli Url
+             * @default http://host.docker.internal:10254
+             */
+            onecli_url?: string;
+            /** User */
+            user?: string | null;
+        };
+        /**
+         * NanoclawOptions
+         * @description The `nanoclaw` runtime (docs/research/2026-10-14.nanoclaw-integration).
+         *
+         *     NanoClaw bind-mounts paths from its own filesystem into agent containers, so
+         *     every path here is an absolute path **on the Docker host** and is mounted at
+         *     the identical path inside the NanoClaw host container.
+         */
+        "NanoclawOptions-Output": {
+            /** Agent Image */
+            agent_image: string;
+            /**
+             * Docker Socket
+             * @default /var/run/docker.sock
+             */
+            docker_socket: string;
+            /**
+             * Group Add
+             * @default []
+             */
+            group_add: string[];
+            /** Install Dir */
+            install_dir: string;
+            /** Instances Root */
+            instances_root: string;
+            /**
+             * Onecli Url
+             * @default http://host.docker.internal:10254
+             */
+            onecli_url: string;
+            /** User */
+            user: string | null;
+        };
+        /**
          * Page
          * @description A page with its current revision's content.
          */
@@ -1910,6 +1976,7 @@ export interface components {
             memory_mb: number | null;
             /** Name */
             name: string;
+            nanoclaw: components["schemas"]["NanoclawOptions-Output"] | null;
             /** @default plain */
             runtime: components["schemas"]["RuntimeKind"];
             status: components["schemas"]["PoolStatus"];
@@ -1964,6 +2031,7 @@ export interface components {
             max_replicas: number;
             /** Memory Mb */
             memory_mb?: number | null;
+            nanoclaw?: components["schemas"]["NanoclawOptions-Input"] | null;
             /** @default plain */
             runtime?: components["schemas"]["RuntimeKind"];
             /** @default docker */

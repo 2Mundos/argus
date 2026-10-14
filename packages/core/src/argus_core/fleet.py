@@ -26,6 +26,34 @@ class DockerOptions(BaseModel):
     extra_hosts: list[str] = []  # e.g. "host.docker.internal:host-gateway"
 
 
+# 107 (sun_path limit) - 1 ("/") - 36 (instance uuid) - len("/data/ncl.sock") = 56.
+NANOCLAW_MAX_ROOT_LEN = 107 - 1 - 36 - len("/data/ncl.sock")
+
+
+class NanoclawOptions(BaseModel):
+    """The `nanoclaw` runtime (docs/research/2026-10-14.nanoclaw-integration).
+
+    NanoClaw bind-mounts paths from its own filesystem into agent containers, so
+    every path here is an absolute path **on the Docker host** and is mounted at
+    the identical path inside the NanoClaw host container.
+    """
+
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
+    # A NanoClaw checkout, built (`pnpm run build`) with the Argus channel installed.
+    install_dir: str = Field(pattern=r"^/")
+    # Parent of the per-instance working directories (data/, groups/, store/).
+    # Short: NanoClaw binds Unix sockets at <root>/<instance id>/data/ncl.sock and
+    # the OS limits socket paths to ~107 bytes (longer fails as "EADDRINUSE").
+    instances_root: str = Field(pattern=r"^/", max_length=NANOCLAW_MAX_ROOT_LEN)
+    # The NanoClaw agent image, already present on that Docker daemon.
+    agent_image: str = Field(min_length=1)
+    onecli_url: str = "http://host.docker.internal:10254"
+    docker_socket: str = Field(default="/var/run/docker.sock", pattern=r"^/")
+    user: str | None = None  # "uid:gid" to run the host container as
+    group_add: list[str] = []  # e.g. the docker socket's group id
+
+
 class PoolUpsert(BaseModel):
     target: TargetKind = TargetKind.DOCKER
     runtime: RuntimeKind = RuntimeKind.PLAIN
@@ -38,11 +66,17 @@ class PoolUpsert(BaseModel):
     cpus: float | None = Field(default=None, gt=0)
     memory_mb: int | None = Field(default=None, ge=16)
     docker: DockerOptions = DockerOptions()
+    nanoclaw: NanoclawOptions | None = None  # required for the nanoclaw runtime
 
     @model_validator(mode="after")
-    def desired_within_cap(self) -> "PoolUpsert":
+    def consistent(self) -> "PoolUpsert":
         if self.desired_replicas > self.max_replicas:
             raise ValueError("desired_replicas cannot exceed max_replicas")
+        if self.runtime == RuntimeKind.NANOCLAW:
+            if self.nanoclaw is None:
+                raise ValueError("the nanoclaw runtime needs the `nanoclaw` options")
+            if self.agents_per_instance != 1:
+                raise ValueError("the nanoclaw runtime runs one agent per instance")
         return self
 
 

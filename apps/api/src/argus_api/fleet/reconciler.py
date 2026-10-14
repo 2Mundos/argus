@@ -22,7 +22,7 @@ Invariants:
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 import aiosqlite
@@ -36,6 +36,7 @@ from argus_api.fleet import runtimes
 from argus_api.fleet import service as fleet
 from argus_api.fleet.targets import (
     POOL_LABEL,
+    LabeledContainer,
     ProviderInstance,
     Target,
     TargetError,
@@ -86,19 +87,39 @@ async def reconcile_pool(
         observed = {
             p.instance_id: p for p in await target.list({POOL_LABEL: pool.name})
         }
+        descendants = await _observe_descendants(target, pool)
     except TargetError as exc:
         async with db.write() as tx:
             await _set_status(tx, name, "unreachable", str(exc))
         return
 
     async with db.write() as tx:
-        actions = await _decide(tx, name, observed, settings)
+        actions = await _decide(tx, name, observed, descendants, settings)
     for action in actions:
         await _act(db, target, name, action, settings)
 
 
+async def _observe_descendants(
+    target: Target, pool: Pool
+) -> dict[str, list[LabeledContainer]]:
+    """The runtime's own containers (e.g. NanoClaw agents), keyed by the id
+    prefix of the instance that owns them."""
+    key = runtimes.descendant_label(pool)
+    if key is None:
+        return {}
+    owned: dict[str, list[LabeledContainer]] = {}
+    for c in await target.list_by_label(key):
+        if (owner := runtimes.descendant_owner(pool, c.value)) is not None:
+            owned.setdefault(owner, []).append(c)
+    return owned
+
+
 async def _decide(
-    tx: Tx, name: str, observed: dict[str, ProviderInstance], settings: FleetSettings
+    tx: Tx,
+    name: str,
+    observed: dict[str, ProviderInstance],
+    descendants: dict[str, list[LabeledContainer]],
+    settings: FleetSettings,
 ) -> list[_Start | _Stop]:
     pool = await fleet.get_pool(tx.conn, name)
     if pool.status == "unreachable":
@@ -129,17 +150,25 @@ async def _decide(
                 why = (
                     "container vanished" if obs is None else f"exited ({obs.exit_code})"
                 )
-                await confirm_terminated(tx, inst["id"], why)
+                children = descendants.get(inst["id"][:8], [])
+                if children:  # the host is gone but its agents are not
+                    await begin_terminating(tx, inst["id"], why)
+                    actions.extend(_Stop(c.ref) for c in children)
+                else:
+                    await confirm_terminated(tx, inst["id"], why)
                 if obs is not None:
                     actions.append(_Stop(obs.ref))  # remove the exited container
             elif reason := await _why_terminate(tx.conn, inst, tx, settings):
                 await begin_terminating(tx, inst["id"], reason)
                 actions.append(_Stop(inst["provider_ref"]))
         elif state == "terminating":
+            children = descendants.get(inst["id"][:8], [])
+            actions.extend(_Stop(c.ref) for c in children)
             if obs is None or obs.status == "exited":
-                await confirm_terminated(
-                    tx, inst["id"], inst["exit_reason"] or "stopped"
-                )
+                if not children:  # confirmed only once every owned container is gone
+                    await confirm_terminated(
+                        tx, inst["id"], inst["exit_reason"] or "stopped"
+                    )
                 if obs is not None:
                     actions.append(_Stop(obs.ref))
             else:
@@ -148,6 +177,11 @@ async def _decide(
     # Containers carrying this pool's label that Argus does not track as live:
     # leftovers of terminated instances, or orphans. Stop them.
     actions.extend(_Stop(o.ref) for i, o in observed.items() if i not in known)
+    # Descendants whose instance is not live (terminated, or never ours): orphans.
+    live_prefixes = {i[:8] for i in known}
+    for owner, children in descendants.items():
+        if owner not in live_prefixes:
+            actions.extend(_Stop(c.ref) for c in children)
 
     actions.extend(await _scale(tx, pool, settings))
     return actions
@@ -186,6 +220,9 @@ async def _scale(tx: Tx, pool: Pool, settings: FleetSettings) -> list[_Start | _
     desired = min(pool.desired_replicas, pool.max_replicas)
     actions: list[_Start | _Stop] = []
     if len(live) < desired:
+        if hold := await _crash_loop_hold(tx, pool.name, settings):
+            await _set_status(tx, pool.name, "failing", hold)
+            return []
         if settings.argus_url is None:
             await _set_status(
                 tx,
@@ -244,6 +281,51 @@ async def _scale(tx: Tx, pool: Pool, settings: FleetSettings) -> list[_Start | _
         await record(tx, "system", "instance", inst["id"], "instance.draining")
         excess -= 1
     return actions
+
+
+CRASH_WINDOW = timedelta(minutes=10)
+CRASH_LIFETIME = timedelta(seconds=60)
+CRASH_FREE_STARTS = 3
+CRASH_BACKOFF_BASE = timedelta(seconds=10)
+
+
+async def _crash_loop_hold(
+    tx: Tx, pool_name: str, settings: FleetSettings
+) -> str | None:
+    """Back off when instances keep exiting soon after they started.
+
+    After CRASH_FREE_STARTS such exits in CRASH_WINDOW, new starts wait
+    10 s, 20 s, 40 s, … (max `start_backoff_max`) from the last exit. Returns the
+    message to show on the pool while holding, or None to go ahead.
+    """
+    async with tx.conn.execute(
+        "SELECT created_at, terminated_at, exit_reason FROM instances"
+        " WHERE pool = ? AND state = 'terminated' AND terminated_at > ?"
+        "   AND exit_reason LIKE 'exited%'"
+        " ORDER BY terminated_at DESC",
+        (pool_name, ts(tx.now - CRASH_WINDOW)),
+    ) as cur:
+        rows = [
+            r
+            for r in await cur.fetchall()
+            if datetime.fromisoformat(r["terminated_at"])
+            - datetime.fromisoformat(r["created_at"])
+            < CRASH_LIFETIME
+        ]
+    if len(rows) < CRASH_FREE_STARTS:
+        return None
+    wait = min(
+        CRASH_BACKOFF_BASE * 2 ** (len(rows) - CRASH_FREE_STARTS),
+        settings.start_backoff_max,
+    )
+    last = datetime.fromisoformat(rows[0]["terminated_at"])
+    if tx.now - last >= wait:
+        return None
+    return (
+        f"{len(rows)} instances exited within a minute of starting in the last"
+        f" {int(CRASH_WINDOW.total_seconds() // 60)} min (last: {rows[0]['exit_reason']});"
+        f" holding new starts for {int(wait.total_seconds())} s. See the instance logs."
+    )
 
 
 async def _act(

@@ -1715,6 +1715,126 @@
         "title": "LeaseRequest",
         "type": "object"
       },
+      "NanoclawOptions-Input": {
+        "description": "The `nanoclaw` runtime (docs/research/2026-10-14.nanoclaw-integration).\n\nNanoClaw bind-mounts paths from its own filesystem into agent containers, so\nevery path here is an absolute path **on the Docker host** and is mounted at\nthe identical path inside the NanoClaw host container.",
+        "properties": {
+          "agent_image": {
+            "minLength": 1,
+            "title": "Agent Image",
+            "type": "string"
+          },
+          "docker_socket": {
+            "default": "/var/run/docker.sock",
+            "pattern": "^/",
+            "title": "Docker Socket",
+            "type": "string"
+          },
+          "group_add": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Group Add",
+            "type": "array"
+          },
+          "install_dir": {
+            "pattern": "^/",
+            "title": "Install Dir",
+            "type": "string"
+          },
+          "instances_root": {
+            "maxLength": 56,
+            "pattern": "^/",
+            "title": "Instances Root",
+            "type": "string"
+          },
+          "onecli_url": {
+            "default": "http://host.docker.internal:10254",
+            "title": "Onecli Url",
+            "type": "string"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User"
+          }
+        },
+        "required": [
+          "install_dir",
+          "instances_root",
+          "agent_image"
+        ],
+        "title": "NanoclawOptions",
+        "type": "object"
+      },
+      "NanoclawOptions-Output": {
+        "description": "The `nanoclaw` runtime (docs/research/2026-10-14.nanoclaw-integration).\n\nNanoClaw bind-mounts paths from its own filesystem into agent containers, so\nevery path here is an absolute path **on the Docker host** and is mounted at\nthe identical path inside the NanoClaw host container.",
+        "properties": {
+          "agent_image": {
+            "minLength": 1,
+            "title": "Agent Image",
+            "type": "string"
+          },
+          "docker_socket": {
+            "default": "/var/run/docker.sock",
+            "pattern": "^/",
+            "title": "Docker Socket",
+            "type": "string"
+          },
+          "group_add": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Group Add",
+            "type": "array"
+          },
+          "install_dir": {
+            "pattern": "^/",
+            "title": "Install Dir",
+            "type": "string"
+          },
+          "instances_root": {
+            "maxLength": 56,
+            "pattern": "^/",
+            "title": "Instances Root",
+            "type": "string"
+          },
+          "onecli_url": {
+            "default": "http://host.docker.internal:10254",
+            "title": "Onecli Url",
+            "type": "string"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User"
+          }
+        },
+        "required": [
+          "install_dir",
+          "instances_root",
+          "agent_image",
+          "onecli_url",
+          "docker_socket",
+          "user",
+          "group_add"
+        ],
+        "title": "NanoclawOptions",
+        "type": "object"
+      },
       "Page": {
         "description": "A page with its current revision's content.",
         "properties": {
@@ -2134,6 +2254,16 @@
             "title": "Name",
             "type": "string"
           },
+          "nanoclaw": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NanoclawOptions-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "runtime": {
             "$ref": "#/components/schemas/RuntimeKind",
             "default": "plain"
@@ -2163,6 +2293,7 @@
           "cpus",
           "memory_mb",
           "docker",
+          "nanoclaw",
           "name",
           "status",
           "last_error",
@@ -2254,6 +2385,16 @@
               }
             ],
             "title": "Memory Mb"
+          },
+          "nanoclaw": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NanoclawOptions-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "runtime": {
             "$ref": "#/components/schemas/RuntimeKind",

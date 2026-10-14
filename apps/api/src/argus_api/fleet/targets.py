@@ -27,6 +27,13 @@ def container_name(instance_id: str) -> str:
 
 
 @dataclass(frozen=True)
+class Mount:
+    host: str
+    container: str
+    mode: Literal["ro", "rw"] = "rw"
+
+
+@dataclass(frozen=True)
 class ContainerSpec:
     instance_id: str
     image: str
@@ -36,6 +43,9 @@ class ContainerSpec:
     memory_mb: int | None = None
     network: str | None = None
     extra_hosts: list[str] = field(default_factory=list)
+    mounts: list[Mount] = field(default_factory=list)
+    user: str | None = None
+    group_add: list[str] = field(default_factory=list)
 
     @property
     def name(self) -> str:
@@ -59,10 +69,21 @@ class ProviderInstance:
     exit_code: int | None = None
 
 
+@dataclass(frozen=True)
+class LabeledContainer:
+    ref: str
+    value: str  # the value of the label that was asked for
+    running: bool
+
+
 class Target(Protocol):
     async def start(self, spec: ContainerSpec) -> str: ...
     async def stop(self, ref: str, *, grace: timedelta) -> None: ...
     async def list(self, labels: Mapping[str, str]) -> list[ProviderInstance]: ...
+    async def list_by_label(self, key: str) -> builtins.list[LabeledContainer]:
+        """Every container (any state) carrying the label `key`, with its value."""
+        ...
+
     async def logs(self, ref: str, *, tail: int) -> str: ...
 
 
@@ -96,6 +117,9 @@ class DockerTarget:
 
     async def list(self, labels: Mapping[str, str]) -> list[ProviderInstance]:
         return await self._call(self._list, dict(labels))
+
+    async def list_by_label(self, key: str) -> builtins.list[LabeledContainer]:
+        return await self._call(self._list_by_label, key)
 
     async def logs(self, ref: str, *, tail: int) -> str:
         return await self._call(self._logs, ref, tail)
@@ -135,6 +159,12 @@ class DockerTarget:
                 extra_hosts=_extra_hosts(spec.extra_hosts),
                 nano_cpus=int(spec.cpus * 1e9) if spec.cpus else None,
                 mem_limit=f"{spec.memory_mb}m" if spec.memory_mb else None,
+                volumes={
+                    m.host: {"bind": m.container, "mode": m.mode} for m in spec.mounts
+                }
+                or None,
+                user=spec.user,
+                group_add=spec.group_add or None,
             )
         except APIError as exc:
             if exc.status_code != 409:  # 409: created concurrently under our name
@@ -167,6 +197,16 @@ class DockerTarget:
             )
             result.append(ProviderInstance(instance_id, c.name, status, exit_code))
         return result
+
+    def _list_by_label(self, key: str) -> builtins.list[LabeledContainer]:
+        found = self._docker().containers.list(all=True, filters={"label": [key]})
+        return [
+            LabeledContainer(
+                c.name, c.labels[key], c.status in ("running", "paused", "restarting")
+            )
+            for c in found
+            if key in c.labels
+        ]
 
     def _logs(self, ref: str, tail: int) -> str:
         from docker.errors import NotFound

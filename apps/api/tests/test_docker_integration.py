@@ -127,3 +127,91 @@ def test_scale_up_work_and_scale_down(argus: httpx.Client) -> None:
     ).json()
     assert [i["state"] for i in instances] == ["terminated", "terminated"]
     assert {i["exit_reason"] for i in instances} <= {"all agents left", "exited (0)"}
+
+
+NANOCLAW_DIR = os.environ.get("ARGUS_NANOCLAW_INSTALL_DIR")
+NANOCLAW_AGENT_IMAGE = os.environ.get("ARGUS_NANOCLAW_AGENT_IMAGE")
+
+
+@pytest.mark.skipif(
+    not (NANOCLAW_DIR and NANOCLAW_AGENT_IMAGE),
+    reason="set ARGUS_NANOCLAW_INSTALL_DIR (built NanoClaw with the Argus channel)"
+    " and ARGUS_NANOCLAW_AGENT_IMAGE",
+)
+def test_nanoclaw_runtime_registers_and_leaves_nothing_behind(
+    argus: httpx.Client,
+) -> None:
+    import tempfile
+
+    subprocess.run(
+        [
+            "docker",
+            "build",
+            "-q",
+            "-t",
+            "argus-nanoclaw-host:test",
+            str(ROOT / "deploy/nanoclaw-host"),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    root = tempfile.mkdtemp(dir="/tmp", prefix="nci-")  # short: Unix socket paths
+    os.chmod(root, 0o777)
+    sock_gid = str(os.stat("/var/run/docker.sock").st_gid)
+    pool = "it-nc"
+    body = {
+        "runtime": "nanoclaw",
+        "image": "argus-nanoclaw-host:test",
+        "desired_replicas": 1,
+        "max_replicas": 1,
+        "docker": {"extra_hosts": ["host.docker.internal:host-gateway"]},
+        "nanoclaw": {
+            "install_dir": NANOCLAW_DIR,
+            "instances_root": root,
+            "agent_image": NANOCLAW_AGENT_IMAGE,
+            "user": f"{os.getuid()}:{os.getgid()}",
+            "group_add": [sock_gid],
+        },
+    }
+
+    def host_containers() -> list[str]:
+        out = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", f"label=argus.pool={pool}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return out.stdout.split()
+
+    def agent_containers() -> list[str]:
+        out = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", f"ancestor={NANOCLAW_AGENT_IMAGE}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return out.stdout.split()
+
+    try:
+        assert argus.put(f"/pools/{pool}", json=body).status_code == 200
+        wait_for(
+            lambda: len(argus.get("/agents", params={"state": "active"}).json()) >= 1,
+            90,
+            "the NanoClaw host to register with Argus",
+        )
+        # A task makes NanoClaw spawn an agent container (its model call will fail
+        # without a credential; the container is what we are checking).
+        argus.post("/tasks", json={"project": "global", "title": "nanoclaw it"})
+        wait_for(lambda: bool(agent_containers()), 60, "an agent container")
+
+        [inst] = argus.get("/instances", params={"pool": pool}).json()
+        assert argus.post(f"/instances/{inst['id']}/terminate").status_code == 200
+        argus.put(f"/pools/{pool}", json={**body, "desired_replicas": 0})
+        wait_for(lambda: not host_containers(), 60, "the host container to go")
+        wait_for(lambda: not agent_containers(), 60, "the agent container to go too")
+    finally:
+        argus.put(f"/pools/{pool}", json={**body, "desired_replicas": 0})
+        for ids in (host_containers(), agent_containers()):
+            if ids:
+                subprocess.run(["docker", "rm", "-f", *ids], capture_output=True)
+        subprocess.run(["rm", "-rf", root], check=False)
