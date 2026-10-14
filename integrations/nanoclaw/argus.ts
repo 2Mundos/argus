@@ -21,6 +21,9 @@
  *   ARGUS_AGENT_TOKEN         use an already-registered agent token instead
  *   ARGUS_CAPABILITIES        comma-separated capabilities to claim with
  *   ARGUS_AGENT_NAME          display name (default: the NanoClaw host name)
+ *   ARGUS_EXIT_ON_DRAIN       "false" to keep the host running once Argus has
+ *                             drained this agent (default: exit, so the
+ *                             instance ends; only when ARGUS_INSTANCE_ID is set)
  */
 import { log } from "../log.js";
 import type { ChannelAdapter, ChannelDefaults, ChannelSetup, OutboundMessage } from "./adapter.js";
@@ -51,6 +54,8 @@ export interface ArgusConfig {
   agentToken?: string;
   capabilities: string[];
   name: string;
+  /** Called once, after Argus drained this agent, its work is done, and it left. */
+  onDrained?: () => void;
   /** Test seams. */
   fetch?: typeof fetch;
   now?: () => number;
@@ -205,7 +210,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const { data } = await client.call("POST", "/agents/me/heartbeat", {
         leases: current ? [{ task_id: current.id, attempt: current.attempt }] : [],
       });
-      if (data.state === "draining") draining = true;
+      if (data.state === "draining") {
+        draining = true;
+        void completeDrainIfIdle();
+      }
       if (current && data.rejected?.some((r: any) => r.task_id === current!.id)) {
         log.warn("Argus lease on the task was rejected; abandoning it", { task: current.id });
         finishTask();
@@ -222,6 +230,23 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
+  /** Once drained and idle: leave Argus, stop claiming, and let the host exit. */
+  let drainedHandled = false;
+  async function completeDrainIfIdle(): Promise<void> {
+    if (!draining || current || drainedHandled || !registered) return;
+    drainedHandled = true;
+    log.info("Argus drained this agent and it is idle; leaving");
+    stopped = true;
+    abortClaim?.abort();
+    try {
+      await client.call("POST", "/agents/me/leave");
+    } catch (err) {
+      log.warn("Argus leave failed (the reaper ends us if it persists)", { err });
+    }
+    registered = false;
+    cfg.onDrained?.();
+  }
+
   function finishTask(): void {
     current = null;
     pendingProgress = null;
@@ -230,6 +255,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     const done = taskDone;
     taskDone = null;
     done?.();
+    void completeDrainIfIdle();
   }
 
   async function inlinePages(task: ArgusTask): Promise<Map<string, string>> {
@@ -288,6 +314,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         if (status === 200 && data) await runTask(data as ArgusTask);
       } catch (err) {
         if (stopped) return;
+        if (err instanceof ArgusError && err.code === "agent_draining") {
+          draining = true; // Argus told us directly: no need to wait for a heartbeat
+          await completeDrainIfIdle();
+          continue;
+        }
         log.warn("Argus claim failed (will retry)", { err });
         await sleep(backoff);
         backoff = Math.min(backoff * 2, 30_000);
@@ -446,6 +477,12 @@ export function fromEnv(): ChannelAdapter | null {
       .map((c) => c.trim())
       .filter(Boolean),
     name: process.env.ARGUS_AGENT_NAME?.trim() || "nanoclaw",
+    // Under an Argus instance, a drained agent means this host should go: ask
+    // NanoClaw to shut down through its own SIGTERM handling.
+    onDrained:
+      process.env.ARGUS_INSTANCE_ID && process.env.ARGUS_EXIT_ON_DRAIN !== "false"
+        ? () => void process.kill(process.pid, "SIGTERM")
+        : undefined,
   });
 }
 

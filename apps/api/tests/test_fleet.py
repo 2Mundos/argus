@@ -483,3 +483,25 @@ async def test_orphaned_agents_of_unknown_instances_are_stopped(
     await tick(db, registry)
     assert "ncl-orphan" in target.stopped
     assert "ncl-other-pool" in target.children
+
+
+async def test_exits_after_a_drain_are_not_crashes(
+    db: Database, registry: TargetRegistry, target: FakeTarget, clock: FakeClock
+) -> None:
+    """A drained host may exit non-zero (SIGTERM) soon after starting."""
+    await make_pool(db, desired=1)
+    for _ in range(4):
+        await tick(db, registry)
+        [inst] = await instances(db)
+        async with db.write() as tx:
+            await tx.conn.execute(
+                "UPDATE instances SET draining = 1 WHERE id = ?", (inst.id,)
+            )
+        clock.advance(2)
+        target.exit(inst.provider_ref, code=143)
+        await tick(db, registry)
+    # Four drained exits, each replaced at once: five starts, never held (three
+    # real crashes would have held the fourth).
+    assert len(target.started) == 5
+    async with db.read() as conn:
+        assert (await fleet.get_pool(conn, "web")).status == "ok"

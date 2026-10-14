@@ -301,7 +301,7 @@ async def _crash_loop_hold(
     async with tx.conn.execute(
         "SELECT created_at, terminated_at, exit_reason FROM instances"
         " WHERE pool = ? AND state = 'terminated' AND terminated_at > ?"
-        "   AND exit_reason LIKE 'exited%'"
+        "   AND exit_reason LIKE 'exited%' AND draining = 0"  # a drain is not a crash
         " ORDER BY terminated_at DESC",
         (pool_name, ts(tx.now - CRASH_WINDOW)),
     ) as cur:

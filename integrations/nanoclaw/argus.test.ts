@@ -6,7 +6,9 @@ import { type ArgusConfig, createArgusAdapter, fromEnv, parseReply, renderTask }
 type Call = { method: string; path: string; body: any };
 
 /** A scripted fake Argus API behind an injected fetch. */
-function fakeArgus(opts: { tasks?: any[]; completeStatus?: number; heartbeat?: any } = {}) {
+function fakeArgus(
+  opts: { tasks?: any[]; completeStatus?: number; heartbeat?: any; claimDraining?: boolean } = {},
+) {
   const calls: Call[] = [];
   const tasks = [...(opts.tasks ?? [])];
   const json = (status: number, body: unknown) =>
@@ -28,6 +30,9 @@ function fakeArgus(opts: { tasks?: any[]; completeStatus?: number; heartbeat?: a
     }
     if (path === "/agents/me/leave") return json(200, { state: "gone" });
     if (path === "/tasks/claim") {
+      if (opts.claimDraining) {
+        return json(409, { detail: { code: "agent_draining", message: "agent is draining" } });
+      }
       const next = tasks.shift();
       if (next) return json(200, next);
       // Long poll: hold until the channel aborts the request.
@@ -232,6 +237,51 @@ describe("Argus channel", () => {
     expect(fake.calls.filter((c) => c.path === "/tasks/claim").length).toBeLessThanOrEqual(
       claimsBefore + 1,
     );
+  });
+
+  it("when drained and idle: leaves Argus, stops claiming, and signals the host", async () => {
+    const fake = fakeArgus({ heartbeat: { state: "draining", renewed: [], rejected: [] } });
+    const onDrained = vi.fn();
+    const h = harness(fake, { onDrained });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => onDrained.mock.calls.length === 1, 3000);
+    expect(fake.calls.some((c) => c.path === "/agents/me/leave")).toBe(true);
+    expect(h.adapter.isConnected()).toBe(false);
+    const claims = fake.calls.filter((c) => c.path === "/tasks/claim").length;
+    await new Promise((r) => setTimeout(r, 300));
+    expect(fake.calls.filter((c) => c.path === "/tasks/claim").length).toBe(claims);
+    expect(onDrained).toHaveBeenCalledTimes(1);
+  });
+
+  it("a claim answered agent_draining also completes the drain, without a heartbeat", async () => {
+    const fake = fakeArgus({ claimDraining: true });
+    const onDrained = vi.fn();
+    const h = harness(fake, { onDrained });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => onDrained.mock.calls.length === 1, 500); // well under a heartbeat
+    expect(fake.calls.some((c) => c.path === "/agents/me/leave")).toBe(true);
+  });
+
+  it("when drained mid-task: finishes the task first, then leaves", async () => {
+    const fake = fakeArgus({
+      tasks: [task()],
+      heartbeat: { state: "draining", renewed: [], rejected: [] },
+    });
+    const onDrained = vi.fn();
+    const h = harness(fake, { onDrained });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await new Promise((r) => setTimeout(r, 1300)); // a heartbeat reports draining
+    expect(onDrained).not.toHaveBeenCalled(); // still working
+    expect(fake.calls.some((c) => c.path === "/agents/me/leave")).toBe(false);
+
+    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await until(() => onDrained.mock.calls.length === 1);
+    expect(fake.calls.some((c) => c.path === "/tasks/t1/complete")).toBe(true);
+    expect(fake.calls.some((c) => c.path === "/agents/me/leave")).toBe(true);
   });
 
   it("leaves Argus on teardown", async () => {

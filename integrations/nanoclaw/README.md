@@ -90,11 +90,27 @@ How it works and what to know:
   NanoClaw's upgrade marker with commit/tree `unknown` (its documented no-git
   case); an existing marker is never overwritten.
 
+## Verified with a real model (2026-10-14)
+
+Through Argus-managed containers, with an Anthropic credential in the OneCLI vault:
+
+| Run | Result |
+| --- | --- |
+| `Say pong` | claimed, agent container spawned, `COMPLETE: pong` → task `succeeded`, 10 s from claim to completion, attempt 1 |
+| `Pick the header colour` | agent sent `ASK:` → task paused, a `question` decision opened (6 s) → answered "Teal." → re-claimed as attempt 2 with the clarification → `COMPLETE: Teal`, no failures |
+| scale the pool to 0 | the idle agent was drained, left, and the host container exited; instance `terminated` ("all agents left"), nothing left behind |
+
+Drain behavior: once Argus marks the agent `draining` and no task is in flight,
+the channel leaves Argus, stops claiming, and signals the NanoClaw host to shut
+down (SIGTERM) so the instance ends. Under an Argus instance this is on by
+default; set `ARGUS_EXIT_ON_DRAIN=false` to keep the host running.
+
 ## Not done yet
 
 - Account leasing and the OneCLI credential switch (verified to work on a running
   process; not wired into the channel).
 - Several agents per NanoClaw host (`agents_per_instance > 1`).
+- No token usage is reported back (NanoClaw does not expose it to the channel).
 - A task whose model call fails stays claimed while the host heartbeats, until
   Argus's wall-clock timeout (`timeout_s`, default 6 h; see the spec) expires the
   attempt. NanoClaw's "agent run failed" notice arrives as a progress note; cancel
