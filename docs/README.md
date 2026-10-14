@@ -22,3 +22,5 @@ fails otherwise (`scripts/validate_docs.py`).
 ## Index
 
 - [Spec template](templates/spec.md)
+
+
