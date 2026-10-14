@@ -28,7 +28,11 @@ done
 # Sandboxed mode (pool docker.runtime, e.g. sysbox): no host socket; run a
 # private daemon and give it the agent image.
 if [ "${ARGUS_NANOCLAW_INNER_DOCKER:-}" = "1" ]; then
-  dockerd >/var/log/dockerd.log 2>&1 &
+  # Agent containers reach the OneCLI gateway as host.docker.internal:host-gateway.
+  # Inside this sandbox that name would point at the instance itself, so make it
+  # the address the instance resolves for the real Docker host (extra_hosts).
+  gw="$(getent ahostsv4 host.docker.internal 2>/dev/null | awk 'NR==1{print $1}')"
+  dockerd ${gw:+--host-gateway-ip="$gw"} >/var/log/dockerd.log 2>&1 &
   n=0
   until docker info >/dev/null 2>&1; do
     n=$((n + 1))
