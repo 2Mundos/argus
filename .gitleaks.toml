@@ -1,0 +1,6 @@
+# gitleaks config for the Quality `secret-scan` job (`make secret-scan`).
+# Default ruleset. For a reviewed false positive add `# gitleaks:allow` on the line.
+title = "argus gitleaks config"
+
+[extend]
+useDefault = true

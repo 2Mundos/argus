@@ -1,0 +1,51 @@
+[project]
+name = "argus"
+version = "0.1.0"
+description = "State and fleet control plane for agent workers"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "argus-api",
+    "argus-core",
+    "pytest>=9.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "pip-audit>=2.7",
+    "ty>=0.0.87",
+    "httpx2>=2.13.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["apps/api", "packages/core"]
+
+[tool.uv.sources]
+argus-api = { workspace = true }
+argus-core = { workspace = true }
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B", "I", "UP", "SIM", "RUF", "ASYNC", "C4", "PIE", "S", "PERF"]
+ignore = ["B008", "S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["ASYNC", "S"]
+"scripts/**" = ["ASYNC", "S"]
+".gitea/scripts/**" = ["S"]
+
+[tool.ty.src]
+include = ["apps/api/src", "packages/core/src"]
+
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+asyncio_mode = "auto"

@@ -1,0 +1,10 @@
+# Single source of truth for toolchain versions: `mise install`.
+[tools]
+python = "3.12"
+node = "22"
+pnpm = "10.0.0"
+uv = "0.11"
+gitleaks = "8.30.1"
+
+[env]
+_.python.venv = { path = ".venv", create = true }

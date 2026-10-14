@@ -1,0 +1,12 @@
+{
+  "lastQuery": "we can init the repo -> ssh://git@git.radar.dev.2mundos.net:2222/pmoraes/argus.git",
+  "perAgentQuery": {},
+  "graftReads": 0,
+  "sourceReads": 0,
+  "savedTokens": 0,
+  "injectedPointers": [],
+  "nudges": 0,
+  "inputCostMicros": 244912,
+  "inputTokensBilled": 541534,
+  "lastBillingUuid": "556b1402-6c95-44a0-824c-718eb6f75fe0"
+}
