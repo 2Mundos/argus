@@ -26,20 +26,20 @@ def client(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestCli
 
 @pytest.fixture
 def worker(client: TestClient) -> dict[str, str]:
-    boot = client.post("/agents/bootstrap-tokens", json={}, headers=ADMIN).json()
-    reg = client.post("/agents/register", json={"bootstrap_token": boot["token"]})
+    boot = client.post("/api/agents/bootstrap-tokens", json={}, headers=ADMIN).json()
+    reg = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
     return {"Authorization": f"Bearer {reg.json()['token']}"}
 
 
 @pytest.fixture
 def claimed(client: TestClient, worker: dict[str, str]) -> dict:
-    client.post("/tasks", json={"title": "t"}, headers=ADMIN)
-    return client.post("/tasks/claim", json={}, headers=worker).json()
+    client.post("/api/tasks", json={"title": "t"}, headers=ADMIN)
+    return client.post("/api/tasks/claim", json={}, headers=worker).json()
 
 
 def upload(client, headers, task, name="report.md", body=b"# hi", attempt=None):
     return client.post(
-        f"/tasks/{task['id']}/artifacts",
+        f"/api/tasks/{task['id']}/artifacts",
         params={"attempt": attempt or task["attempt"], "name": name},
         content=body,
         headers={**headers, "Content-Type": "text/markdown"},
@@ -58,14 +58,14 @@ def test_upload_list_download_and_complete(
     assert path.read_bytes() == b"# hi"
     assert not any((data_dir / "artifacts" / ".staging").iterdir())
 
-    listed = client.get(f"/tasks/{claimed['id']}/artifacts", headers=ADMIN).json()
+    listed = client.get(f"/api/tasks/{claimed['id']}/artifacts", headers=ADMIN).json()
     assert [a["id"] for a in listed] == [art["id"]]
-    content = client.get(f"/artifacts/{art['id']}/content", headers=ADMIN)
+    content = client.get(f"/api/artifacts/{art['id']}/content", headers=ADMIN)
     assert content.content == b"# hi"
     assert content.headers["content-type"].startswith("text/markdown")
 
     done = client.post(
-        f"/tasks/{claimed['id']}/complete",
+        f"/api/tasks/{claimed['id']}/complete",
         json={
             "attempt": claimed["attempt"],
             "result": {"summary": "wrote it", "artifacts": [art["id"]]},

@@ -87,13 +87,17 @@ async def cancel_open(
 
 
 async def get(conn: aiosqlite.Connection, decision_id: str) -> Decision:
-    async with conn.execute(
-        "SELECT * FROM decisions WHERE id = ?", (decision_id,)
-    ) as cur:
+    async with conn.execute(SELECT + " WHERE d.id = ?", (decision_id,)) as cur:
         row = await cur.fetchone()
     if row is None:
         raise NotFoundError(f"decision not found: {decision_id}")
     return to_decision(row)
+
+
+SELECT = (
+    "SELECT d.*, t.title AS subject_title FROM decisions d"
+    " LEFT JOIN tasks t ON d.subject_type = 'task' AND t.id = d.subject_id"
+)
 
 
 def to_decision(row: aiosqlite.Row) -> Decision:

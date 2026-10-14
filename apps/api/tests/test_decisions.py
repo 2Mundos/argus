@@ -220,31 +220,38 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestCli
 
 
 def test_inbox_over_http(client: TestClient) -> None:
-    boot = client.post("/agents/bootstrap-tokens", json={}, headers=ADMIN_H).json()
-    reg = client.post("/agents/register", json={"bootstrap_token": boot["token"]})
+    boot = client.post("/api/agents/bootstrap-tokens", json={}, headers=ADMIN_H).json()
+    reg = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
     worker = {"Authorization": f"Bearer {reg.json()['token']}"}
-    task = client.post("/tasks", json={"title": "t"}, headers=ADMIN_H).json()
-    claimed = client.post("/tasks/claim", json={}, headers=worker).json()
+    task = client.post("/api/tasks", json={"title": "t"}, headers=ADMIN_H).json()
+    claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
 
     res = client.post(
-        f"/tasks/{task['id']}/ask",
+        f"/api/tasks/{task['id']}/ask",
         json={"attempt": claimed["attempt"], "question": "Proceed?"},
         headers=worker,
     )
     assert res.status_code == 201
-    [inbox] = client.get("/decisions", headers=ADMIN_H).json()
+    [inbox] = client.get("/api/decisions", headers=ADMIN_H).json()
     assert inbox["question"] == "Proceed?"
     assert (
         client.post(
-            f"/decisions/{inbox['id']}/answer", json={"text": "yes"}, headers=worker
+            f"/api/decisions/{inbox['id']}/answer", json={"text": "yes"}, headers=worker
         ).status_code
         == 403
     )
     res = client.post(
-        f"/decisions/{inbox['id']}/answer", json={"text": "yes"}, headers=ADMIN_H
+        f"/api/decisions/{inbox['id']}/answer", json={"text": "yes"}, headers=ADMIN_H
     )
     assert res.json()["state"] == "answered"
-    assert client.get("/decisions", headers=ADMIN_H).json() == []
+    assert client.get("/api/decisions", headers=ADMIN_H).json() == []
     assert (
-        client.get(f"/tasks/{task['id']}", headers=ADMIN_H).json()["state"] == "ready"
+        client.get(f"/api/tasks/{task['id']}", headers=ADMIN_H).json()["state"]
+        == "ready"
     )
+
+
+async def test_decisions_carry_the_task_title(db: Database) -> None:
+    task = await create(db, requires_approval=True)
+    [decision] = await open_for(db, task.id)
+    assert decision.subject_title == "t"

@@ -27,18 +27,30 @@ class Event:
     data: dict[str, Any]
 
 
+class OverflowedError(Exception):
+    """The subscriber fell too far behind and missed events. Re-read state (or
+    resume from the events table) and subscribe again."""
+
+
 class Subscription:
-    def __init__(self) -> None:
-        self._queue: asyncio.Queue[Event] = asyncio.Queue()
+    def __init__(self, maxsize: int) -> None:
+        self._queue: asyncio.Queue[Event] = asyncio.Queue(maxsize)
+        self.overflowed = False
 
     def _put(self, event: Event) -> None:
-        self._queue.put_nowait(event)
+        try:
+            self._queue.put_nowait(event)
+        except asyncio.QueueFull:
+            self.overflowed = True
 
     async def next_matching(self, predicate: Callable[[Event], bool]) -> Event:
         """Wait for the next matching event; bound it with `asyncio.timeout`."""
-        while not predicate(event := await self._queue.get()):
-            pass
-        return event
+        while True:
+            if self.overflowed and self._queue.empty():
+                raise OverflowedError
+            event = await self._queue.get()
+            if predicate(event):
+                return event
 
 
 class EventBus:
@@ -50,9 +62,13 @@ class EventBus:
             sub._put(event)
 
     @contextmanager
-    def subscribe(self) -> Generator[Subscription]:
-        """Subscribe *before* checking state, so no event is missed in between."""
-        sub = Subscription()
+    def subscribe(self, maxsize: int = 1000) -> Generator[Subscription]:
+        """Subscribe *before* checking state, so no event is missed in between.
+
+        A subscriber that falls `maxsize` events behind is marked overflowed
+        rather than buffering without bound.
+        """
+        sub = Subscription(maxsize)
         self._subscriptions.add(sub)
         try:
             yield sub
@@ -80,3 +96,16 @@ async def record(
     event = Event(cur.lastrowid, tx.now, actor, subject_type, subject_id, kind, data)
     tx.events.append(event)
     return event
+
+
+def to_sse(event: Event) -> str:
+    payload = {
+        "id": event.id,
+        "at": event.at.isoformat(),
+        "actor": event.actor,
+        "subject_type": event.subject_type,
+        "subject_id": event.subject_id,
+        "kind": event.kind,
+        "data": event.data,
+    }
+    return f"id: {event.id}\ndata: {json.dumps(payload)}\n\n"

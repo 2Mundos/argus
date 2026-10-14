@@ -487,6 +487,17 @@
             "title": "Subject Id",
             "type": "string"
           },
+          "subject_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Title"
+          },
           "subject_type": {
             "title": "Subject Type",
             "type": "string"
@@ -552,6 +563,51 @@
         ],
         "title": "DecisionState",
         "type": "string"
+      },
+      "EventOut": {
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": true,
+            "title": "Data",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_type": {
+            "title": "Subject Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "actor",
+          "subject_type",
+          "subject_id",
+          "kind",
+          "data"
+        ],
+        "title": "EventOut",
+        "type": "object"
       },
       "FailRequest": {
         "properties": {
@@ -1467,9 +1523,9 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/admin/tokens": {
+    "/api/admin/tokens": {
       "get": {
-        "operationId": "list_admin_tokens_admin_tokens_get",
+        "operationId": "list_admin_tokens_api_admin_tokens_get",
         "responses": {
           "200": {
             "content": {
@@ -1478,7 +1534,7 @@
                   "items": {
                     "$ref": "#/components/schemas/AdminToken"
                   },
-                  "title": "Response List Admin Tokens Admin Tokens Get",
+                  "title": "Response List Admin Tokens Api Admin Tokens Get",
                   "type": "array"
                 }
               }
@@ -1498,7 +1554,7 @@
       },
       "post": {
         "description": "Mint another admin token. The secret is shown only in this response.",
-        "operationId": "create_admin_token_admin_tokens_post",
+        "operationId": "create_admin_token_api_admin_tokens_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1542,9 +1598,9 @@
         ]
       }
     },
-    "/admin/tokens/{token_id}/revoke": {
+    "/api/admin/tokens/{token_id}/revoke": {
       "post": {
-        "operationId": "revoke_admin_token_admin_tokens__token_id__revoke_post",
+        "operationId": "revoke_admin_token_api_admin_tokens__token_id__revoke_post",
         "parameters": [
           {
             "in": "path",
@@ -1582,9 +1638,9 @@
         ]
       }
     },
-    "/agents": {
+    "/api/agents": {
       "get": {
-        "operationId": "list_agents_agents_get",
+        "operationId": "list_agents_api_agents_get",
         "parameters": [
           {
             "in": "query",
@@ -1611,7 +1667,7 @@
                   "items": {
                     "$ref": "#/components/schemas/Agent"
                   },
-                  "title": "Response List Agents Agents Get",
+                  "title": "Response List Agents Api Agents Get",
                   "type": "array"
                 }
               }
@@ -1640,10 +1696,10 @@
         ]
       }
     },
-    "/agents/bootstrap-tokens": {
+    "/api/agents/bootstrap-tokens": {
       "post": {
         "description": "Mint a one-time token an agent redeems at registration.",
-        "operationId": "create_bootstrap_token_agents_bootstrap_tokens_post",
+        "operationId": "create_bootstrap_token_api_agents_bootstrap_tokens_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1687,10 +1743,10 @@
         ]
       }
     },
-    "/agents/me/heartbeat": {
+    "/api/agents/me/heartbeat": {
       "post": {
         "description": "Prove liveness and renew the listed task leases (each one independently).",
-        "operationId": "heartbeat_agents_me_heartbeat_post",
+        "operationId": "heartbeat_api_agents_me_heartbeat_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1734,10 +1790,10 @@
         ]
       }
     },
-    "/agents/me/leave": {
+    "/api/agents/me/leave": {
       "post": {
         "description": "Exit cleanly: the identity ends and its token is revoked.",
-        "operationId": "leave_agents_me_leave_post",
+        "operationId": "leave_api_agents_me_leave_post",
         "responses": {
           "200": {
             "content": {
@@ -1761,9 +1817,9 @@
         ]
       }
     },
-    "/agents/register": {
+    "/api/agents/register": {
       "post": {
-        "operationId": "register_agents_register_post",
+        "operationId": "register_api_agents_register_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1802,9 +1858,9 @@
         ]
       }
     },
-    "/agents/{agent_id}": {
+    "/api/agents/{agent_id}": {
       "get": {
-        "operationId": "get_agent_agents__agent_id__get",
+        "operationId": "get_agent_api_agents__agent_id__get",
         "parameters": [
           {
             "in": "path",
@@ -1849,10 +1905,10 @@
         ]
       }
     },
-    "/agents/{agent_id}/drain": {
+    "/api/agents/{agent_id}/drain": {
       "post": {
         "description": "Let the agent finish its current work, then claim nothing new.",
-        "operationId": "drain_agents__agent_id__drain_post",
+        "operationId": "drain_api_agents__agent_id__drain_post",
         "parameters": [
           {
             "in": "path",
@@ -1897,9 +1953,9 @@
         ]
       }
     },
-    "/artifacts/{artifact_id}/content": {
+    "/api/artifacts/{artifact_id}/content": {
       "get": {
-        "operationId": "download_artifact_artifacts__artifact_id__content_get",
+        "operationId": "download_artifact_api_artifacts__artifact_id__content_get",
         "parameters": [
           {
             "in": "path",
@@ -1937,10 +1993,10 @@
         ]
       }
     },
-    "/decisions": {
+    "/api/decisions": {
       "get": {
         "description": "The inbox: open decisions by default, oldest first.",
-        "operationId": "list_decisions_decisions_get",
+        "operationId": "list_decisions_api_decisions_get",
         "parameters": [
           {
             "in": "query",
@@ -1984,7 +2040,7 @@
                   "items": {
                     "$ref": "#/components/schemas/Decision"
                   },
-                  "title": "Response List Decisions Decisions Get",
+                  "title": "Response List Decisions Api Decisions Get",
                   "type": "array"
                 }
               }
@@ -2013,9 +2069,9 @@
         ]
       }
     },
-    "/decisions/{decision_id}": {
+    "/api/decisions/{decision_id}": {
       "get": {
-        "operationId": "get_decision_decisions__decision_id__get",
+        "operationId": "get_decision_api_decisions__decision_id__get",
         "parameters": [
           {
             "in": "path",
@@ -2060,10 +2116,10 @@
         ]
       }
     },
-    "/decisions/{decision_id}/answer": {
+    "/api/decisions/{decision_id}/answer": {
       "post": {
         "description": "Answer an open decision. Approvals take `approve`/`reject`, reviews\n`accept`/`reject` (with `text` as notes), questions their options or text.",
-        "operationId": "answer_decision_decisions__decision_id__answer_post",
+        "operationId": "answer_decision_api_decisions__decision_id__answer_post",
         "parameters": [
           {
             "in": "path",
@@ -2118,31 +2174,160 @@
         ]
       }
     },
-    "/healthz": {
+    "/api/events": {
       "get": {
-        "operationId": "healthz_healthz_get",
+        "description": "Event history, newest first. Page backwards with `before`.",
+        "operationId": "list_events_api_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "subject_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subject_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
+                  "items": {
+                    "$ref": "#/components/schemas/EventOut"
                   },
-                  "title": "Response Healthz Healthz Get",
-                  "type": "object"
+                  "title": "Response List Events Api Events Get",
+                  "type": "array"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
-        "summary": "Healthz"
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Events",
+        "tags": [
+          "events"
+        ]
       }
     },
-    "/task-kinds": {
+    "/api/events/stream": {
       "get": {
-        "operationId": "list_kinds_task_kinds_get",
+        "description": "Server-sent events. Reconnect with `Last-Event-ID` to resume without gaps.",
+        "operationId": "stream_events_api_events_stream_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "last-event-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Stream Events",
+        "tags": [
+          "events"
+        ]
+      }
+    },
+    "/api/task-kinds": {
+      "get": {
+        "operationId": "list_kinds_api_task_kinds_get",
         "responses": {
           "200": {
             "content": {
@@ -2151,7 +2336,7 @@
                   "items": {
                     "$ref": "#/components/schemas/TaskKind"
                   },
-                  "title": "Response List Kinds Task Kinds Get",
+                  "title": "Response List Kinds Api Task Kinds Get",
                   "type": "array"
                 }
               }
@@ -2170,9 +2355,9 @@
         ]
       }
     },
-    "/task-kinds/{name}": {
+    "/api/task-kinds/{name}": {
       "get": {
-        "operationId": "get_kind_task_kinds__name__get",
+        "operationId": "get_kind_api_task_kinds__name__get",
         "parameters": [
           {
             "in": "path",
@@ -2219,7 +2404,7 @@
       },
       "put": {
         "description": "Create or replace a kind. Existing tasks keep the values they were created\nwith; schemas apply to new tasks and to results submitted from now on.",
-        "operationId": "upsert_kind_task_kinds__name__put",
+        "operationId": "upsert_kind_api_task_kinds__name__put",
         "parameters": [
           {
             "in": "path",
@@ -2275,9 +2460,9 @@
         ]
       }
     },
-    "/tasks": {
+    "/api/tasks": {
       "get": {
-        "operationId": "list_tasks_tasks_get",
+        "operationId": "list_tasks_api_tasks_get",
         "parameters": [
           {
             "in": "query",
@@ -2314,7 +2499,7 @@
                   "items": {
                     "$ref": "#/components/schemas/Task"
                   },
-                  "title": "Response List Tasks Tasks Get",
+                  "title": "Response List Tasks Api Tasks Get",
                   "type": "array"
                 }
               }
@@ -2344,7 +2529,7 @@
       },
       "post": {
         "description": "Orchestrators and admins create any task; workers only subtasks of a task\nthey hold. Past the per-agent hourly limit, an agent's new tasks wait for\nhuman approval (a `policy` decision) instead of being refused.",
-        "operationId": "create_task_tasks_post",
+        "operationId": "create_task_api_tasks_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2388,10 +2573,10 @@
         ]
       }
     },
-    "/tasks/claim": {
+    "/api/tasks/claim": {
       "post": {
         "description": "Claim a ready task, long-polling up to `wait_s` seconds for one.",
-        "operationId": "claim_task_tasks_claim_post",
+        "operationId": "claim_task_api_tasks_claim_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2438,9 +2623,9 @@
         ]
       }
     },
-    "/tasks/{task_id}": {
+    "/api/tasks/{task_id}": {
       "get": {
-        "operationId": "get_task_tasks__task_id__get",
+        "operationId": "get_task_api_tasks__task_id__get",
         "parameters": [
           {
             "in": "path",
@@ -2485,9 +2670,9 @@
         ]
       }
     },
-    "/tasks/{task_id}/artifacts": {
+    "/api/tasks/{task_id}/artifacts": {
       "get": {
-        "operationId": "list_artifacts_tasks__task_id__artifacts_get",
+        "operationId": "list_artifacts_api_tasks__task_id__artifacts_get",
         "parameters": [
           {
             "in": "path",
@@ -2507,7 +2692,7 @@
                   "items": {
                     "$ref": "#/components/schemas/Artifact"
                   },
-                  "title": "Response List Artifacts Tasks  Task Id  Artifacts Get",
+                  "title": "Response List Artifacts Api Tasks  Task Id  Artifacts Get",
                   "type": "array"
                 }
               }
@@ -2537,7 +2722,7 @@
       },
       "post": {
         "description": "Upload the raw request body as an artifact of the attempt you hold.\n\nList the returned id in `result.artifacts` when completing the task.",
-        "operationId": "upload_artifact_tasks__task_id__artifacts_post",
+        "operationId": "upload_artifact_api_tasks__task_id__artifacts_post",
         "parameters": [
           {
             "in": "path",
@@ -2606,10 +2791,10 @@
         ]
       }
     },
-    "/tasks/{task_id}/ask": {
+    "/api/tasks/{task_id}/ask": {
       "post": {
         "description": "Ask a question about the task you hold. The task is blocked until it is\nanswered; the answer is added to the task spec under \"Clarifications\" and\nthe task returns to ready.",
-        "operationId": "ask_tasks__task_id__ask_post",
+        "operationId": "ask_api_tasks__task_id__ask_post",
         "parameters": [
           {
             "in": "path",
@@ -2664,9 +2849,9 @@
         ]
       }
     },
-    "/tasks/{task_id}/block": {
+    "/api/tasks/{task_id}/block": {
       "post": {
-        "operationId": "block_task_tasks__task_id__block_post",
+        "operationId": "block_task_api_tasks__task_id__block_post",
         "parameters": [
           {
             "in": "path",
@@ -2721,9 +2906,9 @@
         ]
       }
     },
-    "/tasks/{task_id}/cancel": {
+    "/api/tasks/{task_id}/cancel": {
       "post": {
-        "operationId": "cancel_task_tasks__task_id__cancel_post",
+        "operationId": "cancel_task_api_tasks__task_id__cancel_post",
         "parameters": [
           {
             "in": "path",
@@ -2768,9 +2953,9 @@
         ]
       }
     },
-    "/tasks/{task_id}/complete": {
+    "/api/tasks/{task_id}/complete": {
       "post": {
-        "operationId": "complete_task_tasks__task_id__complete_post",
+        "operationId": "complete_task_api_tasks__task_id__complete_post",
         "parameters": [
           {
             "in": "path",
@@ -2825,9 +3010,9 @@
         ]
       }
     },
-    "/tasks/{task_id}/fail": {
+    "/api/tasks/{task_id}/fail": {
       "post": {
-        "operationId": "fail_task_tasks__task_id__fail_post",
+        "operationId": "fail_task_api_tasks__task_id__fail_post",
         "parameters": [
           {
             "in": "path",
@@ -2882,10 +3067,10 @@
         ]
       }
     },
-    "/tasks/{task_id}/progress": {
+    "/api/tasks/{task_id}/progress": {
       "post": {
         "description": "Post a progress note (at most one per 10 s). Also renews the lease.",
-        "operationId": "report_progress_tasks__task_id__progress_post",
+        "operationId": "report_progress_api_tasks__task_id__progress_post",
         "parameters": [
           {
             "in": "path",
@@ -2940,9 +3125,9 @@
         ]
       }
     },
-    "/tasks/{task_id}/unblock": {
+    "/api/tasks/{task_id}/unblock": {
       "post": {
-        "operationId": "unblock_task_tasks__task_id__unblock_post",
+        "operationId": "unblock_task_api_tasks__task_id__unblock_post",
         "parameters": [
           {
             "in": "path",
@@ -2985,6 +3170,28 @@
         "tags": [
           "tasks"
         ]
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Healthz Healthz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Healthz"
       }
     }
   }

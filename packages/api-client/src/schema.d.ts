@@ -4,7 +4,7 @@
  */
 
 export interface paths {
-    "/admin/tokens": {
+    "/api/admin/tokens": {
         parameters: {
             query?: never;
             header?: never;
@@ -12,20 +12,20 @@ export interface paths {
             cookie?: never;
         };
         /** List Admin Tokens */
-        get: operations["list_admin_tokens_admin_tokens_get"];
+        get: operations["list_admin_tokens_api_admin_tokens_get"];
         put?: never;
         /**
          * Create Admin Token
          * @description Mint another admin token. The secret is shown only in this response.
          */
-        post: operations["create_admin_token_admin_tokens_post"];
+        post: operations["create_admin_token_api_admin_tokens_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/admin/tokens/{token_id}/revoke": {
+    "/api/admin/tokens/{token_id}/revoke": {
         parameters: {
             query?: never;
             header?: never;
@@ -35,14 +35,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Revoke Admin Token */
-        post: operations["revoke_admin_token_admin_tokens__token_id__revoke_post"];
+        post: operations["revoke_admin_token_api_admin_tokens__token_id__revoke_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/agents": {
+    "/api/agents": {
         parameters: {
             query?: never;
             header?: never;
@@ -50,7 +50,7 @@ export interface paths {
             cookie?: never;
         };
         /** List Agents */
-        get: operations["list_agents_agents_get"];
+        get: operations["list_agents_api_agents_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -59,7 +59,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/agents/bootstrap-tokens": {
+    "/api/agents/bootstrap-tokens": {
         parameters: {
             query?: never;
             header?: never;
@@ -72,14 +72,14 @@ export interface paths {
          * Create Bootstrap Token
          * @description Mint a one-time token an agent redeems at registration.
          */
-        post: operations["create_bootstrap_token_agents_bootstrap_tokens_post"];
+        post: operations["create_bootstrap_token_api_agents_bootstrap_tokens_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/agents/me/heartbeat": {
+    "/api/agents/me/heartbeat": {
         parameters: {
             query?: never;
             header?: never;
@@ -92,14 +92,14 @@ export interface paths {
          * Heartbeat
          * @description Prove liveness and renew the listed task leases (each one independently).
          */
-        post: operations["heartbeat_agents_me_heartbeat_post"];
+        post: operations["heartbeat_api_agents_me_heartbeat_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/agents/me/leave": {
+    "/api/agents/me/leave": {
         parameters: {
             query?: never;
             header?: never;
@@ -112,14 +112,14 @@ export interface paths {
          * Leave
          * @description Exit cleanly: the identity ends and its token is revoked.
          */
-        post: operations["leave_agents_me_leave_post"];
+        post: operations["leave_api_agents_me_leave_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/agents/register": {
+    "/api/agents/register": {
         parameters: {
             query?: never;
             header?: never;
@@ -129,14 +129,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Register */
-        post: operations["register_agents_register_post"];
+        post: operations["register_api_agents_register_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/agents/{agent_id}": {
+    "/api/agents/{agent_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -144,7 +144,7 @@ export interface paths {
             cookie?: never;
         };
         /** Get Agent */
-        get: operations["get_agent_agents__agent_id__get"];
+        get: operations["get_agent_api_agents__agent_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -153,7 +153,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/agents/{agent_id}/drain": {
+    "/api/agents/{agent_id}/drain": {
         parameters: {
             query?: never;
             header?: never;
@@ -166,14 +166,14 @@ export interface paths {
          * Drain
          * @description Let the agent finish its current work, then claim nothing new.
          */
-        post: operations["drain_agents__agent_id__drain_post"];
+        post: operations["drain_api_agents__agent_id__drain_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/artifacts/{artifact_id}/content": {
+    "/api/artifacts/{artifact_id}/content": {
         parameters: {
             query?: never;
             header?: never;
@@ -181,7 +181,7 @@ export interface paths {
             cookie?: never;
         };
         /** Download Artifact */
-        get: operations["download_artifact_artifacts__artifact_id__content_get"];
+        get: operations["download_artifact_api_artifacts__artifact_id__content_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -190,7 +190,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/decisions": {
+    "/api/decisions": {
         parameters: {
             query?: never;
             header?: never;
@@ -201,7 +201,7 @@ export interface paths {
          * List Decisions
          * @description The inbox: open decisions by default, oldest first.
          */
-        get: operations["list_decisions_decisions_get"];
+        get: operations["list_decisions_api_decisions_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -210,7 +210,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/decisions/{decision_id}": {
+    "/api/decisions/{decision_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -218,7 +218,7 @@ export interface paths {
             cookie?: never;
         };
         /** Get Decision */
-        get: operations["get_decision_decisions__decision_id__get"];
+        get: operations["get_decision_api_decisions__decision_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -227,7 +227,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/decisions/{decision_id}/answer": {
+    "/api/decisions/{decision_id}/answer": {
         parameters: {
             query?: never;
             header?: never;
@@ -241,7 +241,296 @@ export interface paths {
          * @description Answer an open decision. Approvals take `approve`/`reject`, reviews
          *     `accept`/`reject` (with `text` as notes), questions their options or text.
          */
-        post: operations["answer_decision_decisions__decision_id__answer_post"];
+        post: operations["answer_decision_api_decisions__decision_id__answer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Events
+         * @description Event history, newest first. Page backwards with `before`.
+         */
+        get: operations["list_events_api_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/events/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Events
+         * @description Server-sent events. Reconnect with `Last-Event-ID` to resume without gaps.
+         */
+        get: operations["stream_events_api_events_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/task-kinds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Kinds */
+        get: operations["list_kinds_api_task_kinds_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/task-kinds/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Kind */
+        get: operations["get_kind_api_task_kinds__name__get"];
+        /**
+         * Upsert Kind
+         * @description Create or replace a kind. Existing tasks keep the values they were created
+         *     with; schemas apply to new tasks and to results submitted from now on.
+         */
+        put: operations["upsert_kind_api_task_kinds__name__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Tasks */
+        get: operations["list_tasks_api_tasks_get"];
+        put?: never;
+        /**
+         * Create Task
+         * @description Orchestrators and admins create any task; workers only subtasks of a task
+         *     they hold. Past the per-agent hourly limit, an agent's new tasks wait for
+         *     human approval (a `policy` decision) instead of being refused.
+         */
+        post: operations["create_task_api_tasks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim Task
+         * @description Claim a ready task, long-polling up to `wait_s` seconds for one.
+         */
+        post: operations["claim_task_api_tasks_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Task */
+        get: operations["get_task_api_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Artifacts */
+        get: operations["list_artifacts_api_tasks__task_id__artifacts_get"];
+        put?: never;
+        /**
+         * Upload Artifact
+         * @description Upload the raw request body as an artifact of the attempt you hold.
+         *
+         *     List the returned id in `result.artifacts` when completing the task.
+         */
+        post: operations["upload_artifact_api_tasks__task_id__artifacts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask
+         * @description Ask a question about the task you hold. The task is blocked until it is
+         *     answered; the answer is added to the task spec under "Clarifications" and
+         *     the task returns to ready.
+         */
+        post: operations["ask_api_tasks__task_id__ask_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/block": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Block Task */
+        post: operations["block_task_api_tasks__task_id__block_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Task */
+        post: operations["cancel_task_api_tasks__task_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete Task */
+        post: operations["complete_task_api_tasks__task_id__complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/fail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fail Task */
+        post: operations["fail_task_api_tasks__task_id__fail_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report Progress
+         * @description Post a progress note (at most one per 10 s). Also renews the lease.
+         */
+        post: operations["report_progress_api_tasks__task_id__progress_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/unblock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Unblock Task */
+        post: operations["unblock_task_api_tasks__task_id__unblock_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -259,255 +548,6 @@ export interface paths {
         get: operations["healthz_healthz_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/task-kinds": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Kinds */
-        get: operations["list_kinds_task_kinds_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/task-kinds/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Kind */
-        get: operations["get_kind_task_kinds__name__get"];
-        /**
-         * Upsert Kind
-         * @description Create or replace a kind. Existing tasks keep the values they were created
-         *     with; schemas apply to new tasks and to results submitted from now on.
-         */
-        put: operations["upsert_kind_task_kinds__name__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Tasks */
-        get: operations["list_tasks_tasks_get"];
-        put?: never;
-        /**
-         * Create Task
-         * @description Orchestrators and admins create any task; workers only subtasks of a task
-         *     they hold. Past the per-agent hourly limit, an agent's new tasks wait for
-         *     human approval (a `policy` decision) instead of being refused.
-         */
-        post: operations["create_task_tasks_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Claim Task
-         * @description Claim a ready task, long-polling up to `wait_s` seconds for one.
-         */
-        post: operations["claim_task_tasks_claim_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/{task_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Task */
-        get: operations["get_task_tasks__task_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/{task_id}/artifacts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Artifacts */
-        get: operations["list_artifacts_tasks__task_id__artifacts_get"];
-        put?: never;
-        /**
-         * Upload Artifact
-         * @description Upload the raw request body as an artifact of the attempt you hold.
-         *
-         *     List the returned id in `result.artifacts` when completing the task.
-         */
-        post: operations["upload_artifact_tasks__task_id__artifacts_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/{task_id}/ask": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Ask
-         * @description Ask a question about the task you hold. The task is blocked until it is
-         *     answered; the answer is added to the task spec under "Clarifications" and
-         *     the task returns to ready.
-         */
-        post: operations["ask_tasks__task_id__ask_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/{task_id}/block": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Block Task */
-        post: operations["block_task_tasks__task_id__block_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/{task_id}/cancel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Cancel Task */
-        post: operations["cancel_task_tasks__task_id__cancel_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/{task_id}/complete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Complete Task */
-        post: operations["complete_task_tasks__task_id__complete_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/{task_id}/fail": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Fail Task */
-        post: operations["fail_task_tasks__task_id__fail_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/{task_id}/progress": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Report Progress
-         * @description Post a progress note (at most one per 10 s). Also renews the lease.
-         */
-        post: operations["report_progress_tasks__task_id__progress_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/{task_id}/unblock": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Unblock Task */
-        post: operations["unblock_task_tasks__task_id__unblock_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -583,12 +623,12 @@ export interface components {
              * Capabilities
              * @default []
              */
-            capabilities: string[];
+            capabilities?: string[];
             /**
              * Name
              * @default
              */
-            name: string;
+            name?: string;
         };
         /**
          * AgentState
@@ -626,7 +666,7 @@ export interface components {
             /** Attempt */
             attempt: number;
             /** @default any */
-            audience: components["schemas"]["Audience"];
+            audience?: components["schemas"]["Audience"];
             /** Options */
             options?: string[] | null;
             /** Question */
@@ -649,12 +689,12 @@ export interface components {
             /** Instance Id */
             instance_id?: string | null;
             /** @default worker */
-            role: components["schemas"]["Role"];
+            role?: components["schemas"]["Role"];
             /**
              * Ttl S
              * @default 3600
              */
-            ttl_s: number;
+            ttl_s?: number;
         };
         /** ClaimRequest */
         ClaimRequest: {
@@ -662,12 +702,12 @@ export interface components {
              * Capabilities
              * @default []
              */
-            capabilities: string[];
+            capabilities?: string[];
             /**
              * Wait S
              * @default 0
              */
-            wait_s: number;
+            wait_s?: number;
         };
         /** CompleteRequest */
         CompleteRequest: {
@@ -703,6 +743,8 @@ export interface components {
             state: components["schemas"]["DecisionState"];
             /** Subject Id */
             subject_id: string;
+            /** Subject Title */
+            subject_title?: string | null;
             /** Subject Type */
             subject_type: string;
         };
@@ -714,7 +756,7 @@ export interface components {
              * Text
              * @default
              */
-            text: string;
+            text?: string;
         };
         /**
          * DecisionKind
@@ -726,6 +768,28 @@ export interface components {
          * @enum {string}
          */
         DecisionState: "open" | "answered" | "cancelled";
+        /** EventOut */
+        EventOut: {
+            /** Actor */
+            actor: string;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Data */
+            data: {
+                [key: string]: unknown;
+            };
+            /** Id */
+            id: number;
+            /** Kind */
+            kind: string;
+            /** Subject Id */
+            subject_id: string;
+            /** Subject Type */
+            subject_type: string;
+        };
         /** FailRequest */
         FailRequest: {
             /** Attempt */
@@ -744,7 +808,7 @@ export interface components {
              * Leases
              * @default []
              */
-            leases: components["schemas"]["LeaseRef"][];
+            leases?: components["schemas"]["LeaseRef"][];
         };
         /** HeartbeatResponse */
         HeartbeatResponse: {
@@ -893,58 +957,58 @@ export interface components {
              * Acceptance
              * @default []
              */
-            acceptance: string[];
+            acceptance?: string[];
             /**
              * Depends On
              * @default []
              */
-            depends_on: string[];
+            depends_on?: string[];
             /**
              * Input
              * @default {}
              */
-            input: {
+            input?: {
                 [key: string]: unknown;
             };
             /**
              * Kind
              * @default generic
              */
-            kind: string;
+            kind?: string;
             /**
              * Lease Ttl S
              * @default 120
              */
-            lease_ttl_s: number;
+            lease_ttl_s?: number;
             /**
              * Max Attempts
              * @default 3
              */
-            max_attempts: number;
+            max_attempts?: number;
             /** Parent Id */
             parent_id?: string | null;
             /**
              * Priority
              * @default 0
              */
-            priority: number;
+            priority?: number;
             /**
              * Required Capabilities
              * @default []
              */
-            required_capabilities: string[];
+            required_capabilities?: string[];
             /**
              * Requires Approval
              * @default false
              */
-            requires_approval: boolean;
+            requires_approval?: boolean;
             /** @default none */
-            review: components["schemas"]["Review"];
+            review?: components["schemas"]["Review"];
             /**
              * Spec
              * @default
              */
-            spec: string;
+            spec?: string;
             /** Title */
             title: string;
         };
@@ -966,7 +1030,7 @@ export interface components {
              * Description
              * @default
              */
-            description: string;
+            description?: string;
             /** Input Schema */
             input_schema?: {
                 [key: string]: unknown;
@@ -996,7 +1060,7 @@ export interface components {
              * Description
              * @default
              */
-            description: string;
+            description?: string;
             /** Input Schema */
             input_schema?: {
                 [key: string]: unknown;
@@ -1015,7 +1079,7 @@ export interface components {
              * Artifacts
              * @default []
              */
-            artifacts: string[];
+            artifacts?: string[];
             /** Data */
             data?: {
                 [key: string]: unknown;
@@ -1065,7 +1129,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    list_admin_tokens_admin_tokens_get: {
+    list_admin_tokens_api_admin_tokens_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -1085,7 +1149,7 @@ export interface operations {
             };
         };
     };
-    create_admin_token_admin_tokens_post: {
+    create_admin_token_api_admin_tokens_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1118,7 +1182,7 @@ export interface operations {
             };
         };
     };
-    revoke_admin_token_admin_tokens__token_id__revoke_post: {
+    revoke_admin_token_api_admin_tokens__token_id__revoke_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1147,7 +1211,7 @@ export interface operations {
             };
         };
     };
-    list_agents_agents_get: {
+    list_agents_api_agents_get: {
         parameters: {
             query?: {
                 state?: components["schemas"]["AgentState"] | null;
@@ -1178,7 +1242,7 @@ export interface operations {
             };
         };
     };
-    create_bootstrap_token_agents_bootstrap_tokens_post: {
+    create_bootstrap_token_api_agents_bootstrap_tokens_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1211,7 +1275,7 @@ export interface operations {
             };
         };
     };
-    heartbeat_agents_me_heartbeat_post: {
+    heartbeat_api_agents_me_heartbeat_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1244,7 +1308,7 @@ export interface operations {
             };
         };
     };
-    leave_agents_me_leave_post: {
+    leave_api_agents_me_leave_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1264,7 +1328,7 @@ export interface operations {
             };
         };
     };
-    register_agents_register_post: {
+    register_api_agents_register_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1297,7 +1361,7 @@ export interface operations {
             };
         };
     };
-    get_agent_agents__agent_id__get: {
+    get_agent_api_agents__agent_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -1328,7 +1392,7 @@ export interface operations {
             };
         };
     };
-    drain_agents__agent_id__drain_post: {
+    drain_api_agents__agent_id__drain_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1359,7 +1423,7 @@ export interface operations {
             };
         };
     };
-    download_artifact_artifacts__artifact_id__content_get: {
+    download_artifact_api_artifacts__artifact_id__content_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -1388,7 +1452,7 @@ export interface operations {
             };
         };
     };
-    list_decisions_decisions_get: {
+    list_decisions_api_decisions_get: {
         parameters: {
             query?: {
                 state?: components["schemas"]["DecisionState"] | null;
@@ -1420,7 +1484,7 @@ export interface operations {
             };
         };
     };
-    get_decision_decisions__decision_id__get: {
+    get_decision_api_decisions__decision_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -1451,7 +1515,7 @@ export interface operations {
             };
         };
     };
-    answer_decision_decisions__decision_id__answer_post: {
+    answer_decision_api_decisions__decision_id__answer_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1486,9 +1550,14 @@ export interface operations {
             };
         };
     };
-    healthz_healthz_get: {
+    list_events_api_events_get: {
         parameters: {
-            query?: never;
+            query?: {
+                subject_type?: string | null;
+                subject_id?: string | null;
+                before?: number | null;
+                limit?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1501,14 +1570,50 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["EventOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    list_kinds_task_kinds_get: {
+    stream_events_api_events_stream_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "last-event-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_kinds_api_task_kinds_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -1528,7 +1633,7 @@ export interface operations {
             };
         };
     };
-    get_kind_task_kinds__name__get: {
+    get_kind_api_task_kinds__name__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -1559,7 +1664,7 @@ export interface operations {
             };
         };
     };
-    upsert_kind_task_kinds__name__put: {
+    upsert_kind_api_task_kinds__name__put: {
         parameters: {
             query?: never;
             header?: never;
@@ -1594,7 +1699,7 @@ export interface operations {
             };
         };
     };
-    list_tasks_tasks_get: {
+    list_tasks_api_tasks_get: {
         parameters: {
             query?: {
                 state?: components["schemas"]["TaskState"] | null;
@@ -1626,7 +1731,7 @@ export interface operations {
             };
         };
     };
-    create_task_tasks_post: {
+    create_task_api_tasks_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1659,7 +1764,7 @@ export interface operations {
             };
         };
     };
-    claim_task_tasks_claim_post: {
+    claim_task_api_tasks_claim_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1699,7 +1804,7 @@ export interface operations {
             };
         };
     };
-    get_task_tasks__task_id__get: {
+    get_task_api_tasks__task_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -1730,7 +1835,7 @@ export interface operations {
             };
         };
     };
-    list_artifacts_tasks__task_id__artifacts_get: {
+    list_artifacts_api_tasks__task_id__artifacts_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -1761,7 +1866,7 @@ export interface operations {
             };
         };
     };
-    upload_artifact_tasks__task_id__artifacts_post: {
+    upload_artifact_api_tasks__task_id__artifacts_post: {
         parameters: {
             query: {
                 attempt: number;
@@ -1799,7 +1904,7 @@ export interface operations {
             };
         };
     };
-    ask_tasks__task_id__ask_post: {
+    ask_api_tasks__task_id__ask_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1834,7 +1939,7 @@ export interface operations {
             };
         };
     };
-    block_task_tasks__task_id__block_post: {
+    block_task_api_tasks__task_id__block_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1869,7 +1974,7 @@ export interface operations {
             };
         };
     };
-    cancel_task_tasks__task_id__cancel_post: {
+    cancel_task_api_tasks__task_id__cancel_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1900,7 +2005,7 @@ export interface operations {
             };
         };
     };
-    complete_task_tasks__task_id__complete_post: {
+    complete_task_api_tasks__task_id__complete_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1935,7 +2040,7 @@ export interface operations {
             };
         };
     };
-    fail_task_tasks__task_id__fail_post: {
+    fail_task_api_tasks__task_id__fail_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1970,7 +2075,7 @@ export interface operations {
             };
         };
     };
-    report_progress_tasks__task_id__progress_post: {
+    report_progress_api_tasks__task_id__progress_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -2005,7 +2110,7 @@ export interface operations {
             };
         };
     };
-    unblock_task_tasks__task_id__unblock_post: {
+    unblock_task_api_tasks__task_id__unblock_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -2032,6 +2137,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    healthz_healthz_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
         };

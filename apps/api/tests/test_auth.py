@@ -90,9 +90,9 @@ ADMIN = {"Authorization": f"Bearer {PRESET}"}
 
 def agent(client: TestClient, role: str) -> dict[str, str]:
     boot = client.post(
-        "/agents/bootstrap-tokens", json={"role": role}, headers=ADMIN
+        "/api/agents/bootstrap-tokens", json={"role": role}, headers=ADMIN
     ).json()["token"]
-    token = client.post("/agents/register", json={"bootstrap_token": boot}).json()[
+    token = client.post("/api/agents/register", json={"bootstrap_token": boot}).json()[
         "token"
     ]
     return {"Authorization": f"Bearer {token}"}
@@ -100,50 +100,54 @@ def agent(client: TestClient, role: str) -> dict[str, str]:
 
 def test_scope_table(client: TestClient) -> None:
     worker, orch = agent(client, "worker"), agent(client, "orchestrator")
-    task_id = client.post("/tasks", json={"title": "t"}, headers=ADMIN).json()["id"]
-    worker_id = client.get("/agents?state=active", headers=ADMIN).json()[-1]["id"]
+    task_id = client.post("/api/tasks", json={"title": "t"}, headers=ADMIN).json()["id"]
+    worker_id = client.get("/api/agents?state=active", headers=ADMIN).json()[-1]["id"]
 
     def status(method: str, path: str, headers: dict[str, str], **kw) -> int:
         return client.request(method, path, headers=headers, **kw).status_code
 
     # Anonymous: only health and registration.
     assert status("GET", "/healthz", {}) == 200
-    assert status("GET", "/tasks", {}) == 401
-    assert status("POST", "/agents/register", {}, json={"bootstrap_token": "x"}) == 401
+    assert status("GET", "/api/tasks", {}) == 401
+    assert (
+        status("POST", "/api/agents/register", {}, json={"bootstrap_token": "x"}) == 401
+    )
 
     # Reads: any token.
     for who in (worker, orch, ADMIN):
-        assert status("GET", "/tasks", who) == 200
-        assert status("GET", "/agents", who) == 200
+        assert status("GET", "/api/tasks", who) == 200
+        assert status("GET", "/api/agents", who) == 200
 
     # Task management: orchestrator and admin, not workers.
-    assert status("POST", "/tasks", worker, json={"title": "x"}) == 403
-    assert status("POST", "/tasks", orch, json={"title": "x"}) == 201
-    assert status("POST", f"/tasks/{task_id}/cancel", worker) == 403
-    assert status("POST", f"/tasks/{task_id}/cancel", orch) == 200
-    assert status("POST", f"/agents/{worker_id}/drain", worker) == 403
-    assert status("POST", f"/agents/{worker_id}/drain", orch) == 200
+    assert status("POST", "/api/tasks", worker, json={"title": "x"}) == 403
+    assert status("POST", "/api/tasks", orch, json={"title": "x"}) == 201
+    assert status("POST", f"/api/tasks/{task_id}/cancel", worker) == 403
+    assert status("POST", f"/api/tasks/{task_id}/cancel", orch) == 200
+    assert status("POST", f"/api/agents/{worker_id}/drain", worker) == 403
+    assert status("POST", f"/api/agents/{worker_id}/drain", orch) == 200
 
     # Credentials: admin only.
     for who in (worker, orch):
-        assert status("POST", "/agents/bootstrap-tokens", who, json={}) == 403
-        assert status("GET", "/admin/tokens", who) == 403
-    assert status("POST", "/agents/bootstrap-tokens", ADMIN, json={}) == 201
+        assert status("POST", "/api/agents/bootstrap-tokens", who, json={}) == 403
+        assert status("GET", "/api/admin/tokens", who) == 403
+    assert status("POST", "/api/agents/bootstrap-tokens", ADMIN, json={}) == 201
 
     # Worker operations: agents only (orchestrators are agents too).
-    assert status("POST", "/tasks/claim", ADMIN, json={}) == 403
-    assert status("POST", "/tasks/claim", orch, json={}) in (200, 204)
+    assert status("POST", "/api/tasks/claim", ADMIN, json={}) == 403
+    assert status("POST", "/api/tasks/claim", orch, json={}) in (200, 204)
 
 
 def test_admin_token_management(client: TestClient) -> None:
-    issued = client.post("/admin/tokens", json={"label": "ops"}, headers=ADMIN).json()
+    issued = client.post(
+        "/api/admin/tokens", json={"label": "ops"}, headers=ADMIN
+    ).json()
     second = {"Authorization": f"Bearer {issued['token']}"}
-    assert client.get("/admin/tokens", headers=second).status_code == 200
-    labels = [t["label"] for t in client.get("/admin/tokens", headers=ADMIN).json()]
+    assert client.get("/api/admin/tokens", headers=second).status_code == 200
+    labels = [t["label"] for t in client.get("/api/admin/tokens", headers=ADMIN).json()]
     assert labels == ["preset", "ops"]
-    res = client.post(f"/admin/tokens/{issued['id']}/revoke", headers=ADMIN)
+    res = client.post(f"/api/admin/tokens/{issued['id']}/revoke", headers=ADMIN)
     assert res.status_code == 204
-    assert client.get("/admin/tokens", headers=second).status_code == 401
+    assert client.get("/api/admin/tokens", headers=second).status_code == 401
 
 
 def test_first_start_without_preset_logs_and_writes_token(
@@ -154,5 +158,5 @@ def test_first_start_without_preset_logs_and_writes_token(
     with TestClient(app) as c:
         token = (tmp_path / "admin-token").read_text().strip()
         headers = {"Authorization": f"Bearer {token}"}
-        assert c.get("/tasks", headers=headers).status_code == 200
+        assert c.get("/api/tasks", headers=headers).status_code == 200
     assert token in caplog.text

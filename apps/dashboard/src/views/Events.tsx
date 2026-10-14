@@ -1,0 +1,77 @@
+import { useEffect, useState } from "react";
+import { type ArgusEvent, api, call } from "../api";
+import { actor, relative, shortId } from "../format";
+import { useLive } from "../live";
+
+const MAX = 300;
+
+export function Events() {
+  const { subscribe } = useLive();
+  const [events, setEvents] = useState<ArgusEvent[]>([]);
+  const [filter, setFilter] = useState("");
+
+  useEffect(() => {
+    let loaded = false;
+    const early: ArgusEvent[] = [];
+    // Subscribe first, then load history, so nothing slips in between.
+    const unsubscribe = subscribe((event) => {
+      if (!loaded) early.push(event);
+      else setEvents((list) => [event, ...list].slice(0, MAX));
+    });
+    call(api.GET("/api/events", { params: { query: { limit: 200 } } })).then((history) => {
+      const seen = new Set(history.map((e) => e.id));
+      setEvents([...early.filter((e) => !seen.has(e.id)).reverse(), ...history]);
+      loaded = true;
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [subscribe]);
+
+  const shown = filter ? events.filter((e) => e.subject_type === filter) : events;
+  return (
+    <section>
+      <div className="toolbar">
+        <h2>Events</h2>
+        <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+          <option value="">All subjects</option>
+          <option value="task">Tasks</option>
+          <option value="agent">Agents</option>
+          <option value="decision">Decisions</option>
+          <option value="task_kind">Task kinds</option>
+        </select>
+      </div>
+      <EventList events={shown} />
+    </section>
+  );
+}
+
+export function EventList({ events }: { events: ArgusEvent[] }) {
+  if (events.length === 0) return <p className="muted">No events.</p>;
+  return (
+    <ol className="events">
+      {events.map((e) => (
+        <li key={e.id}>
+          <time dateTime={e.at} title={e.at}>
+            {relative(e.at)}
+          </time>
+          <span className="badge">{e.kind}</span>
+          <span className="small">
+            {e.subject_type} {shortId(e.subject_id)}
+          </span>
+          <span className="muted small">{describe(e)}</span>
+          <span className="muted small actor">{actor(e.actor)}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function describe(e: ArgusEvent): string {
+  const d = e.data as Record<string, unknown>;
+  if (typeof d.from === "string" && typeof d.to === "string") return `${d.from} → ${d.to}`;
+  if (typeof d.message === "string") return d.message;
+  if (typeof d.reason === "string") return d.reason;
+  if (typeof d.to === "string") return `→ ${d.to}`;
+  return "";
+}

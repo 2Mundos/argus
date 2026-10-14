@@ -11,6 +11,7 @@ class Settings:
     # Policy gate (3.10): tasks one agent may create per hour before further
     # tasks wait for human approval. 0 disables the gate.
     max_tasks_per_agent_hour: int = 100
+    dashboard_dir: Path | None = None
 
     @property
     def db_path(self) -> Path:
@@ -30,5 +31,8 @@ class Settings:
             ),
             max_tasks_per_agent_hour=int(
                 os.environ.get("ARGUS_MAX_TASKS_PER_AGENT_HOUR", 100)
+            ),
+            dashboard_dir=(
+                Path(d) if (d := os.environ.get("ARGUS_DASHBOARD_DIR")) else None
             ),
         )

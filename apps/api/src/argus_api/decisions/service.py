@@ -25,14 +25,14 @@ async def list_decisions(
     state: DecisionState | None = DecisionState.OPEN,
     subject_id: str | None = None,
 ) -> list[Decision]:
-    sql, params = "SELECT * FROM decisions WHERE 1 = 1", []
+    sql, params = store.SELECT + " WHERE 1 = 1", []
     if state is not None:
-        sql += " AND state = ?"
+        sql += " AND d.state = ?"
         params.append(state)
     if subject_id is not None:
-        sql += " AND subject_id = ?"
+        sql += " AND d.subject_id = ?"
         params.append(subject_id)
-    async with conn.execute(sql + " ORDER BY created_at, id", params) as cur:
+    async with conn.execute(sql + " ORDER BY d.created_at, d.id", params) as cur:
         return [store.to_decision(r) for r in await cur.fetchall()]
 
 

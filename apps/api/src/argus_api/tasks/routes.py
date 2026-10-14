@@ -6,7 +6,7 @@ from fastapi import APIRouter, Response, status
 from pydantic import BaseModel, Field
 
 from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
-from argus_api.events import Event
+from argus_api.events import Event, OverflowedError
 from argus_api.tasks import service
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -85,6 +85,8 @@ async def claim_task(
                     raise TimeoutError
                 async with asyncio.timeout(remaining):
                     await sub.next_matching(_became_ready)
+            except OverflowedError:
+                continue  # missed events: just try to claim again
             except TimeoutError:
                 return Response(status_code=status.HTTP_204_NO_CONTENT)
 

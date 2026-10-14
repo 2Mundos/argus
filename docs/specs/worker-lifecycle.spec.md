@@ -309,15 +309,24 @@ as a managed pool of size 1 uses the same model and comes later.
 
 ## 3.7 Interfaces
 
-- **REST** (FastAPI) is the source of truth; its OpenAPI schema generates the
-  dashboard client (`@argus/api-client`).
+- **REST** (FastAPI) under `/api` is the source of truth; its OpenAPI schema
+  generates the dashboard client (`@argus/api-client`). `/healthz` stays at the
+  root for probes; the dashboard is served at `/` by the same process.
 - **MCP endpoint** for agents, served by the same process: thin tools mapped
   1:1 onto REST operations (`claim_task`, `heartbeat`, `report_progress`,
   `complete_task`, `fail_task`, `ask`, `create_task`, `lease_account`,
   `account_exhausted`, `scale_pool`, …). LLM agents use tools far more reliably
   than hand-built HTTP calls. The MCP layer holds no state or logic of its own.
-- **SSE** stream (`GET /events/stream`) for the dashboard, fed by the in-process
-  event bus and resumable from the `events` table.
+- **SSE** stream (`GET /api/events/stream`) for the dashboard, fed by the
+  in-process event bus and resumable with `Last-Event-ID` from the `events`
+  table (replayed in batches until caught up). A subscriber that falls 1000
+  events behind is disconnected rather than buffered without bound, and
+  resumes on reconnect. `GET /api/events` pages history backwards.
+- **Dashboard** (React, built static, served by Argus): task board, task detail
+  with history and artifacts, agents, decision inbox, live event timeline. It
+  authenticates with an admin token and follows the stream with `fetch` (not
+  `EventSource`, which cannot send an `Authorization` header, so the token
+  never goes into a URL).
 - Every mutating call accepts an `Idempotency-Key` header; agents retry often.
 
 ## 3.8 NanoClaw runtime

@@ -14,7 +14,8 @@ one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md)
 ## Layout
 
 - `apps/api/` — FastAPI control-plane API (Python, `argus_api`).
-- `apps/dashboard/` — Operator dashboard (Vite + React + TypeScript).
+- `apps/dashboard/` — Operator dashboard (Vite + React + TypeScript), served by
+  the API process in production.
 - `packages/core/` — Shared domain types (Python, `argus_core`).
 - `docs/` — Specs and drafts. Spec first: nothing is built before it is written
   down in `docs/specs/` (see [`docs/README.md`](docs/README.md)).
@@ -27,8 +28,8 @@ Requires `uv`, [mise](https://mise.jdx.dev) (pins Python, Node, pnpm, uv, gitlea
 ```bash
 make setup        # uv sync + pnpm install
 make hooks        # enable the pre-push hook
-make dev-api      # http://localhost:8000 (state in ./data, override with ARGUS_DATA_DIR)
-make dev-dashboard # http://localhost:3000
+make dev-api      # API on :8000 under /api (state in ./data, override with ARGUS_DATA_DIR)
+make dev-dashboard # http://localhost:3000, proxies /api to :8000
 make check        # lint + typecheck + test (what CI runs)
 ```
 
@@ -36,7 +37,7 @@ make check        # lint + typecheck + test (what CI runs)
 
 ```bash
 docker build -f deploy/Dockerfile.api -t argus .
-docker run -p 8000:8000 -v argus-data:/data argus
+docker run -p 8000:8000 -v argus-data:/data argus   # dashboard at http://localhost:8000
 # First start prints the admin token and saves it to /data/admin-token;
 # or preset one with -e ARGUS_ADMIN_TOKEN=<32+ chars>.
 # Optional continuous backup: add -e LITESTREAM_REPLICA_URL=s3://bucket/argus

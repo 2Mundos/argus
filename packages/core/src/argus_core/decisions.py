@@ -40,6 +40,7 @@ class Decision(BaseModel):
     decided_by: str | None
     created_at: datetime
     decided_at: datetime | None
+    subject_title: str | None = None  # the task's title, for display
 
 
 class DecisionAnswer(BaseModel):

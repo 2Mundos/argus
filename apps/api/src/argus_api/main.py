@@ -1,12 +1,16 @@
 import asyncio
 import contextlib
 import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from argus_core.tasks import InvalidTransitionError
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
+from starlette.types import Scope
 
 from argus_api import reaper
 from argus_api.admin.routes import router as admin_router
@@ -19,6 +23,7 @@ from argus_api.db import Database, DataDirLock
 from argus_api.decisions.routes import router as decisions_router
 from argus_api.deps import get_db
 from argus_api.errors import DomainError
+from argus_api.eventlog.routes import router as events_router
 from argus_api.kinds.routes import router as kinds_router
 from argus_api.tasks.routes import router as tasks_router
 
@@ -61,12 +66,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 
 app = FastAPI(title="Argus", version="0.1.0", lifespan=lifespan)
-app.include_router(tasks_router)
-app.include_router(agents_router)
-app.include_router(admin_router)
-app.include_router(kinds_router)
-app.include_router(artifacts_router)
-app.include_router(decisions_router)
+
+# The API lives under /api; the dashboard is served at / by the same process.
+api = APIRouter(prefix="/api")
+for router in (
+    tasks_router,
+    agents_router,
+    admin_router,
+    kinds_router,
+    artifacts_router,
+    decisions_router,
+    events_router,
+):
+    api.include_router(router)
+app.include_router(api)
 
 
 @app.exception_handler(DomainError)
@@ -93,3 +106,28 @@ async def healthz(request: Request) -> dict[str, str]:
     async with get_db(request).read() as conn:
         await conn.execute("SELECT 1")
     return {"status": "ok"}
+
+
+# Mounted last: it matches every path the API did not. Unset in development,
+# where Vite serves the dashboard and proxies /api.
+class DashboardFiles(StaticFiles):
+    """index.html must be revalidated on every load so an upgrade takes effect at
+    once; Vite's content-hashed /assets/* never change, so they cache forever."""
+
+    def file_response(
+        self,
+        full_path: str | os.PathLike[str],
+        stat_result: os.stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        if scope["path"].startswith("/assets/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+if (dashboard := Settings.from_env().dashboard_dir) is not None:
+    app.mount("/", DashboardFiles(directory=dashboard, html=True), name="dashboard")

@@ -1,0 +1,192 @@
+import { type FormEvent, useState } from "react";
+import { api, call, type Task, type TaskKind, type TaskState } from "../api";
+import { relative, shortId } from "../format";
+import { useLiveData } from "../live";
+import { TaskDetail } from "./TaskDetail";
+
+const COLUMNS: { title: string; states: TaskState[] }[] = [
+  { title: "Waiting", states: ["awaiting_approval", "pending", "blocked"] },
+  { title: "Ready", states: ["ready"] },
+  { title: "Running", states: ["claimed"] },
+  { title: "In review", states: ["in_review"] },
+  { title: "Done", states: ["succeeded"] },
+  { title: "Failed / cancelled", states: ["failed", "cancelled"] },
+];
+
+export function Tasks() {
+  const [selected, setSelected] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const { data: tasks, error } = useLiveData(
+    () => call(api.GET("/api/tasks", { params: { query: { limit: 500 } } })),
+    [],
+  );
+
+  return (
+    <section>
+      <div className="toolbar">
+        <h2>Tasks</h2>
+        <button type="button" className="primary" onClick={() => setCreating(true)}>
+          New task
+        </button>
+      </div>
+      {error && <p className="error">{error.message}</p>}
+      <div className="board">
+        {COLUMNS.map((column) => {
+          const items = (tasks ?? []).filter((t) => column.states.includes(t.state));
+          return (
+            <div className="column" key={column.title}>
+              <h3>
+                {column.title} <span className="count">{items.length}</span>
+              </h3>
+              {items.map((task) => (
+                <TaskCard key={task.id} task={task} onOpen={() => setSelected(task.id)} />
+              ))}
+            </div>
+          );
+        })}
+      </div>
+      {creating && <NewTask onClose={() => setCreating(false)} />}
+      {selected && <TaskDetail taskId={selected} onClose={() => setSelected(null)} />}
+    </section>
+  );
+}
+
+function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
+  return (
+    <button type="button" className="task-card" onClick={onOpen}>
+      <span className="title">{task.title}</span>
+      <span className="meta">
+        <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
+        {task.kind !== "generic" && <span className="badge">{task.kind}</span>}
+        {task.priority !== 0 && <span className="badge">p{task.priority}</span>}
+        {task.attempt > 0 && <span className="muted">attempt {task.attempt}</span>}
+      </span>
+      {task.state === "claimed" && (
+        <span className="muted small">
+          {shortId(task.assignee_agent_id ?? "")} · lease {relative(task.lease_expires_at)}
+        </span>
+      )}
+      {task.progress_message && task.state === "claimed" && (
+        <span className="progress">
+          {task.progress_percent != null && (
+            <span className="bar">
+              <span style={{ width: `${task.progress_percent}%` }} />
+            </span>
+          )}
+          <span className="small">{task.progress_message}</span>
+        </span>
+      )}
+      {task.block_reason && task.state === "blocked" && (
+        <span className="small muted">{task.block_reason}</span>
+      )}
+    </button>
+  );
+}
+
+function NewTask({ onClose }: { onClose: () => void }) {
+  const { data: kinds } = useLiveData<TaskKind[]>(() => call(api.GET("/api/task-kinds")), []);
+  const [form, setForm] = useState({
+    title: "",
+    spec: "",
+    kind: "generic",
+    priority: 0,
+    capabilities: "",
+    requires_approval: false,
+    review: "none" as "none" | "human" | "orchestrator",
+  });
+  const [error, setError] = useState<string>();
+  const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
+    setForm((f) => ({ ...f, [key]: value }));
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    try {
+      const capabilities = form.capabilities
+        .split(",")
+        .map((c) => c.trim())
+        .filter(Boolean);
+      await call(
+        api.POST("/api/tasks", {
+          body: {
+            title: form.title,
+            spec: form.spec,
+            kind: form.kind,
+            priority: form.priority,
+            requires_approval: form.requires_approval,
+            review: form.review,
+            ...(capabilities.length ? { required_capabilities: capabilities } : {}),
+          },
+        }),
+      );
+      onClose();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  return (
+    <div className="overlay">
+      <form className="dialog" onSubmit={submit}>
+        <h2>New task</h2>
+        <label>
+          Title
+          <input value={form.title} onChange={(e) => set("title", e.target.value)} required />
+        </label>
+        <label>
+          Spec (Markdown)
+          <textarea rows={8} value={form.spec} onChange={(e) => set("spec", e.target.value)} />
+        </label>
+        <div className="row">
+          <label>
+            Kind
+            <select value={form.kind} onChange={(e) => set("kind", e.target.value)}>
+              {(kinds ?? [{ name: "generic" }]).map((k) => (
+                <option key={k.name}>{k.name}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Priority
+            <input
+              type="number"
+              value={form.priority}
+              onChange={(e) => set("priority", Number(e.target.value))}
+            />
+          </label>
+          <label>
+            Review
+            <select
+              value={form.review}
+              onChange={(e) => set("review", e.target.value as typeof form.review)}
+            >
+              <option value="none">none</option>
+              <option value="human">human</option>
+              <option value="orchestrator">orchestrator</option>
+            </select>
+          </label>
+        </div>
+        <label>
+          Required capabilities (comma-separated; empty uses the kind's default)
+          <input value={form.capabilities} onChange={(e) => set("capabilities", e.target.value)} />
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={form.requires_approval}
+            onChange={(e) => set("requires_approval", e.target.checked)}
+          />
+          Requires approval before it can start
+        </label>
+        {error && <p className="error">{error}</p>}
+        <div className="actions">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="primary">
+            Create
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
