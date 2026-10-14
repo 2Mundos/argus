@@ -1,12 +1,15 @@
 import asyncio
+from datetime import timedelta
 
 from argus_core.auth import Scope
-from argus_core.tasks import Task, TaskCreate, TaskResult, TaskState
+from argus_core.tasks import ClaimedTask, Task, TaskCreate, TaskResult, TaskState
 from fastapi import APIRouter, Response, status
 from pydantic import BaseModel, Field
 
+from argus_api.db import utcnow
 from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
 from argus_api.events import Event, OverflowedError
+from argus_api.knowledge import service as knowledge
 from argus_api.tasks import service
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -64,12 +67,12 @@ async def list_tasks(
 
 @router.post(
     "/claim",
-    response_model=Task,
+    response_model=ClaimedTask,
     responses={204: {"description": "No matching task became ready within wait_s"}},
 )
 async def claim_task(
-    body: ClaimRequest, db: DbDep, agent_id: AgentDep
-) -> Task | Response:
+    body: ClaimRequest, db: DbDep, agent_id: AgentDep, settings: SettingsDep
+) -> ClaimedTask | Response:
     """Claim a ready task, long-polling up to `wait_s` seconds for one."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + body.wait_s
@@ -78,7 +81,14 @@ async def claim_task(
             async with db.write() as tx:
                 task = await service.claim(tx, agent_id, body.capabilities)
             if task is not None:
-                return task
+                async with db.read() as conn:
+                    refs = await knowledge.refs_for_task(
+                        conn,
+                        task,
+                        now=utcnow(),
+                        stale_after=timedelta(days=settings.knowledge_stale_days),
+                    )
+                return ClaimedTask(**task.model_dump(), knowledge_refs=refs)
             remaining = deadline - loop.time()
             try:
                 if remaining <= 0:

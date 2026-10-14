@@ -16,6 +16,7 @@ from argus_api.db import Tx, ts
 from argus_api.decisions import store
 from argus_api.errors import ConflictError, ForbiddenError, ValidationFailedError
 from argus_api.events import record
+from argus_api.knowledge import service as knowledge
 from argus_api.tasks import service as tasks
 
 
@@ -101,7 +102,26 @@ async def _apply_answer(
             await tasks.add_clarification(
                 tx, task_id, decision.question, answer_text, caller.actor
             )
+            if body.save_to_knowledge is not None:
+                task = await tasks.get_task(tx.conn, task_id)
+                await knowledge.save_answer(
+                    tx,
+                    body.save_to_knowledge,
+                    question=decision.question,
+                    answer=answer_text,
+                    decision_id=decision.id,
+                    task_id=task_id,
+                    task_project=task.project,
+                    actor=caller.actor,
+                )
             await tasks.unblock(tx, task_id, caller.actor)
+        case DecisionKind.KNOWLEDGE:
+            await knowledge.resolve_proposal(
+                tx,
+                decision.subject_id,
+                accept=body.choice == "accept",
+                actor=caller.actor,
+            )
         case DecisionKind.APPROVAL | DecisionKind.POLICY:
             if body.choice == "approve":
                 await tasks.approve(tx, task_id, caller.actor)

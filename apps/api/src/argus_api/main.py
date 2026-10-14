@@ -25,6 +25,7 @@ from argus_api.deps import get_db
 from argus_api.errors import DomainError
 from argus_api.eventlog.routes import router as events_router
 from argus_api.kinds.routes import router as kinds_router
+from argus_api.knowledge.routes import router as knowledge_router
 from argus_api.tasks.routes import router as tasks_router
 
 log = logging.getLogger("argus")
@@ -77,6 +78,7 @@ for router in (
     artifacts_router,
     decisions_router,
     events_router,
+    knowledge_router,
 ):
     api.include_router(router)
 app.include_router(api)

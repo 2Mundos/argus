@@ -127,6 +127,8 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   `required_capabilities ⊆ agent.capabilities`, sets `claimed` and the assignee,
   increments `attempt` (initially zero), and sets the lease deadline to the
   current Argus time plus `lease_ttl`.
+- The claimed task comes with `knowledge_refs`: pinned and best-matching
+  knowledge pages ([knowledge](knowledge.spec.md) 3.4).
 - Claim long-polls (up to 30 s) when nothing is ready, so idle workers do not
   hammer the API. Waiters are woken by the in-process event bus
   (single-node 3.3).

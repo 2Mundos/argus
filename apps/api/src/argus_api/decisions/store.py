@@ -95,8 +95,10 @@ async def get(conn: aiosqlite.Connection, decision_id: str) -> Decision:
 
 
 SELECT = (
-    "SELECT d.*, t.title AS subject_title FROM decisions d"
+    "SELECT d.*, coalesce(t.title, kp.title) AS subject_title FROM decisions d"
     " LEFT JOIN tasks t ON d.subject_type = 'task' AND t.id = d.subject_id"
+    " LEFT JOIN knowledge_proposals kp"
+    "  ON d.subject_type = 'knowledge_proposal' AND kp.id = d.subject_id"
 )
 
 

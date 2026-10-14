@@ -5,12 +5,15 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from argus_core.knowledge import SaveToKnowledge
+
 
 class DecisionKind(StrEnum):
     QUESTION = "question"  # a worker asked; the answer goes back into the task
     APPROVAL = "approval"  # start gate for requires_approval tasks
     REVIEW = "review"  # review gate after completion
     POLICY = "policy"  # a policy limit was hit; approve to proceed
+    KNOWLEDGE = "knowledge"  # a worker proposed a knowledge change
 
 
 class Audience(StrEnum):
@@ -46,6 +49,7 @@ class Decision(BaseModel):
 class DecisionAnswer(BaseModel):
     choice: str | None = None  # required when the decision has options
     text: str = Field(default="", max_length=10_000)
+    save_to_knowledge: SaveToKnowledge | None = None  # questions only
 
 
 class Ask(BaseModel):

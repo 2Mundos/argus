@@ -4,10 +4,17 @@ import { LiveProvider, useLive } from "./live";
 import { Agents } from "./views/Agents";
 import { Events } from "./views/Events";
 import { Inbox } from "./views/Inbox";
+import { Knowledge } from "./views/Knowledge";
 import { Login } from "./views/Login";
 import { Tasks } from "./views/Tasks";
 
-const TABS = { tasks: "Tasks", agents: "Agents", inbox: "Inbox", events: "Events" } as const;
+const TABS = {
+  tasks: "Tasks",
+  agents: "Agents",
+  inbox: "Inbox",
+  knowledge: "Knowledge",
+  events: "Events",
+} as const;
 type Tab = keyof typeof TABS;
 
 function currentTab(): Tab {
@@ -62,6 +69,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
         {tab === "tasks" && <Tasks />}
         {tab === "agents" && <Agents />}
         {tab === "inbox" && <Inbox />}
+        {tab === "knowledge" && <Knowledge />}
         {tab === "events" && <Events />}
       </main>
     </div>

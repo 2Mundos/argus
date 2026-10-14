@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, call, type Decision } from "../api";
 import { actor, relative, shortId } from "../format";
 import { useLiveData } from "../live";
+import { Markdown } from "../Markdown";
 
 export function Inbox() {
   const { data: decisions, error } = useLiveData(() => call(api.GET("/api/decisions")), []);
@@ -21,6 +22,7 @@ export function Inbox() {
 
 function DecisionCard({ decision }: { decision: Decision }) {
   const [text, setText] = useState("");
+  const [saveTo, setSaveTo] = useState<string | null>(null); // null: don't save; "": new page
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
 
@@ -31,7 +33,11 @@ function DecisionCard({ decision }: { decision: Decision }) {
       await call(
         api.POST("/api/decisions/{decision_id}/answer", {
           params: { path: { decision_id: decision.id } },
-          body: { choice: choice ?? null, text },
+          body: {
+            choice: choice ?? null,
+            text,
+            save_to_knowledge: saveTo === null ? null : saveTo === "" ? {} : { page_id: saveTo },
+          },
         }),
       );
     } catch (err) {
@@ -47,16 +53,18 @@ function DecisionCard({ decision }: { decision: Decision }) {
       <header>
         <span className="badge">{decision.kind}</span>
         <span className="muted small">
-          for {decision.audience} · {decision.subject_type}{" "}
+          for {decision.audience} · {decision.subject_type.replace("knowledge_", "")}{" "}
           <strong>{decision.subject_title ?? shortId(decision.subject_id)}</strong> ·{" "}
           {relative(decision.created_at)} by {actor(decision.requested_by)}
         </span>
       </header>
       <p className="question">{decision.question}</p>
+      {decision.kind === "knowledge" && <ProposalPreview proposalId={decision.subject_id} />}
       <label>
         {textLabel} {decision.options ? "(optional)" : ""}
         <textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} />
       </label>
+      {decision.kind === "question" && <SaveToKnowledge value={saveTo} onChange={setSaveTo} />}
       {error && <p className="error">{error}</p>}
       <div className="actions left">
         {decision.options ? (
@@ -83,5 +91,54 @@ function DecisionCard({ decision }: { decision: Decision }) {
         )}
       </div>
     </article>
+  );
+}
+
+function ProposalPreview({ proposalId }: { proposalId: string }) {
+  const { data: proposal } = useLiveData(
+    () =>
+      call(
+        api.GET("/api/knowledge/proposals/{proposal_id}", {
+          params: { path: { proposal_id: proposalId } },
+        }),
+      ),
+    [proposalId],
+  );
+  if (!proposal) return null;
+  return (
+    <details className="proposal">
+      <summary>
+        Proposed {proposal.page_id ? "revision" : "page"}: <strong>{proposal.title}</strong>{" "}
+        <span className="muted small">in {proposal.project}</span>
+      </summary>
+      {proposal.summary && <p className="summary">{proposal.summary}</p>}
+      <Markdown>{proposal.body || "_Empty._"}</Markdown>
+    </details>
+  );
+}
+
+function SaveToKnowledge(props: { value: string | null; onChange: (v: string | null) => void }) {
+  const { data: pages } = useLiveData(() => call(api.GET("/api/knowledge/pages")), []);
+  return (
+    <div className="row">
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={props.value !== null}
+          onChange={(e) => props.onChange(e.target.checked ? "" : null)}
+        />
+        Also save the answer to knowledge
+      </label>
+      {props.value !== null && (
+        <select value={props.value} onChange={(e) => props.onChange(e.target.value)}>
+          <option value="">as a new page (in the task's project)</option>
+          {(pages ?? []).map((p) => (
+            <option key={p.id} value={p.id}>
+              append to: {p.title} ({p.project})
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
   );
 }

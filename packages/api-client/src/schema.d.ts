@@ -288,6 +288,230 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/knowledge/pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pages */
+        get: operations["list_pages_api_knowledge_pages_get"];
+        put?: never;
+        /**
+         * Create Page
+         * @description Create a page. Workers may be limited to proposing (see
+         *     ARGUS_KNOWLEDGE_WORKER_WRITES); the response says which happened.
+         */
+        post: operations["create_page_api_knowledge_pages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/knowledge/pages/{page_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Page */
+        get: operations["get_page_api_knowledge_pages__page_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/knowledge/pages/{page_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Archive Page */
+        post: operations["archive_page_api_knowledge_pages__page_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/knowledge/pages/{page_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore Page */
+        post: operations["restore_page_api_knowledge_pages__page_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/knowledge/pages/{page_id}/reviewed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark Reviewed
+         * @description Confirm the page is still right; resets its freshness.
+         */
+        post: operations["mark_reviewed_api_knowledge_pages__page_id__reviewed_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/knowledge/pages/{page_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Revisions */
+        get: operations["list_revisions_api_knowledge_pages__page_id__revisions_get"];
+        put?: never;
+        /**
+         * Edit Page
+         * @description Publish an edit. `base_revision_id` must be the page's current revision,
+         *     otherwise `409 knowledge_conflict`: re-read the page and apply the change again.
+         */
+        post: operations["edit_page_api_knowledge_pages__page_id__revisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/knowledge/pages/{page_id}/unarchive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Unarchive Page */
+        post: operations["unarchive_page_api_knowledge_pages__page_id__unarchive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/knowledge/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Proposals
+         * @description Proposals are resolved by answering their `knowledge` decision.
+         */
+        get: operations["list_proposals_api_knowledge_proposals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/knowledge/proposals/{proposal_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Proposal */
+        get: operations["get_proposal_api_knowledge_proposals__proposal_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/knowledge/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search
+         * @description Full-text search over active pages (all words must match; if nothing does,
+         *     any word may). Stale pages rank after fresh ones.
+         */
+        get: operations["search_api_knowledge_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Projects */
+        get: operations["list_projects_api_projects_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Upsert Project */
+        put: operations["upsert_project_api_projects__slug__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/task-kinds": {
         parameters: {
             query?: never;
@@ -709,6 +933,83 @@ export interface components {
              */
             wait_s?: number;
         };
+        /**
+         * ClaimedTask
+         * @description A claimed task plus knowledge worth reading first: pinned pages, then the
+         *     best matches for the task in its project (references only).
+         */
+        ClaimedTask: {
+            /** Acceptance */
+            acceptance: string[];
+            /** Assignee Agent Id */
+            assignee_agent_id: string | null;
+            /** Attempt */
+            attempt: number;
+            /** Block Reason */
+            block_reason: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Depends On */
+            depends_on: string[];
+            /** Error */
+            error: string | null;
+            /** Failures */
+            failures: number;
+            /** Id */
+            id: string;
+            /** Input */
+            input: {
+                [key: string]: unknown;
+            };
+            /** Kind */
+            kind: string;
+            /** Knowledge */
+            knowledge: string[];
+            /**
+             * Knowledge Refs
+             * @default []
+             */
+            knowledge_refs?: components["schemas"]["KnowledgeRef"][];
+            /** Lease Expires At */
+            lease_expires_at: string | null;
+            /** Lease Ttl S */
+            lease_ttl_s: number;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Priority */
+            priority: number;
+            /** Progress At */
+            progress_at: string | null;
+            /** Progress Message */
+            progress_message: string | null;
+            /** Progress Percent */
+            progress_percent: number | null;
+            /** Project */
+            project: string | null;
+            /** Required Capabilities */
+            required_capabilities: string[];
+            /** Requires Approval */
+            requires_approval: boolean;
+            result: components["schemas"]["TaskResult"] | null;
+            review: components["schemas"]["Review"];
+            /** Spec */
+            spec: string;
+            state: components["schemas"]["TaskState"];
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** CompleteRequest */
         CompleteRequest: {
             /** Attempt */
@@ -752,6 +1053,7 @@ export interface components {
         DecisionAnswer: {
             /** Choice */
             choice?: string | null;
+            save_to_knowledge?: components["schemas"]["SaveToKnowledge"] | null;
             /**
              * Text
              * @default
@@ -762,7 +1064,7 @@ export interface components {
          * DecisionKind
          * @enum {string}
          */
-        DecisionKind: "question" | "approval" | "review" | "policy";
+        DecisionKind: "question" | "approval" | "review" | "policy" | "knowledge";
         /**
          * DecisionState
          * @enum {string}
@@ -830,6 +1132,40 @@ export interface components {
             /** Token */
             token: string;
         };
+        /**
+         * KnowledgeRef
+         * @description A pointer delivered with a claim or a search: enough to decide whether to read.
+         */
+        KnowledgeRef: {
+            /** Page Id */
+            page_id: string;
+            /** Project */
+            project: string;
+            /** Stale */
+            stale: boolean;
+            /** Summary */
+            summary: string;
+            /** Title */
+            title: string;
+            /**
+             * Why
+             * @enum {string}
+             */
+            why: "pinned" | "match";
+        };
+        /**
+         * KnowledgeWrite
+         * @description Result of a create/edit: published directly, or proposed for review.
+         */
+        KnowledgeWrite: {
+            page?: components["schemas"]["Page"] | null;
+            proposal?: components["schemas"]["Proposal"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "published" | "proposed";
+        };
         /** LeaseRef */
         LeaseRef: {
             /** Attempt */
@@ -837,6 +1173,167 @@ export interface components {
             /** Task Id */
             task_id: string;
         };
+        /**
+         * Page
+         * @description A page with its current revision's content.
+         */
+        Page: {
+            /** Author */
+            author: string;
+            /** Body */
+            body: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Project */
+            project: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            /** Revision Id */
+            revision_id: string;
+            /** Revision Number */
+            revision_number: number;
+            /** Slug */
+            slug: string;
+            /** Sources */
+            sources: components["schemas"]["Source"][];
+            /** Stale */
+            stale: boolean;
+            state: components["schemas"]["PageState"];
+            /** Summary */
+            summary: string;
+            /** Tags */
+            tags: string[];
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** PageCreate */
+        PageCreate: {
+            /**
+             * Body
+             * @default
+             */
+            body?: string;
+            /**
+             * Project
+             * @default global
+             */
+            project?: string;
+            /**
+             * Reason
+             * @default
+             */
+            reason?: string;
+            /** Slug */
+            slug?: string | null;
+            /**
+             * Sources
+             * @default []
+             */
+            sources?: components["schemas"]["Source"][];
+            /**
+             * Summary
+             * @default
+             */
+            summary?: string;
+            /**
+             * Tags
+             * @default []
+             */
+            tags?: string[];
+            /** Title */
+            title: string;
+        };
+        /** PageEdit */
+        PageEdit: {
+            /** Base Revision Id */
+            base_revision_id: string;
+            /**
+             * Body
+             * @default
+             */
+            body?: string;
+            /**
+             * Reason
+             * @default
+             */
+            reason?: string;
+            /**
+             * Sources
+             * @default []
+             */
+            sources?: components["schemas"]["Source"][];
+            /**
+             * Summary
+             * @default
+             */
+            summary?: string;
+            /**
+             * Tags
+             * @default []
+             */
+            tags?: string[];
+            /** Title */
+            title: string;
+        };
+        /** PageListItem */
+        PageListItem: {
+            /** Id */
+            id: string;
+            /** Project */
+            project: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            /** Revision Number */
+            revision_number: number;
+            /** Slug */
+            slug: string;
+            /** Stale */
+            stale: boolean;
+            state: components["schemas"]["PageState"];
+            /** Summary */
+            summary: string;
+            /** Tags */
+            tags: string[];
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** PageRestore */
+        PageRestore: {
+            /** Base Revision Id */
+            base_revision_id: string;
+            /** Reason */
+            reason: string;
+            /** Revision Id */
+            revision_id: string;
+        };
+        /**
+         * PageState
+         * @enum {string}
+         */
+        PageState: "active" | "archived";
         /** ProgressRequest */
         ProgressRequest: {
             /** Attempt */
@@ -846,6 +1343,76 @@ export interface components {
             /** Percent */
             percent?: number | null;
         };
+        /** Project */
+        Project: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Description
+             * @default
+             */
+            description?: string;
+            /** Name */
+            name: string;
+            /** Slug */
+            slug: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ProjectUpsert */
+        ProjectUpsert: {
+            /**
+             * Description
+             * @default
+             */
+            description?: string;
+            /** Name */
+            name: string;
+        };
+        /** Proposal */
+        Proposal: {
+            /** Author */
+            author: string;
+            /** Base Revision Id */
+            base_revision_id: string | null;
+            /** Body */
+            body: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Page Id */
+            page_id: string | null;
+            /** Project */
+            project: string;
+            /** Reason */
+            reason: string;
+            /** Slug */
+            slug: string;
+            /** Sources */
+            sources: components["schemas"]["Source"][];
+            state: components["schemas"]["ProposalState"];
+            /** Summary */
+            summary: string;
+            /** Tags */
+            tags: string[];
+            /** Title */
+            title: string;
+        };
+        /**
+         * ProposalState
+         * @enum {string}
+         */
+        ProposalState: "open" | "accepted" | "rejected" | "withdrawn";
         /** Registration */
         Registration: {
             agent: components["schemas"]["Agent"];
@@ -882,11 +1449,81 @@ export interface components {
          * @enum {string}
          */
         Review: "none" | "human" | "orchestrator";
+        /** Revision */
+        Revision: {
+            /** Author */
+            author: string;
+            /** Body */
+            body: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Number */
+            number: number;
+            /** Page Id */
+            page_id: string;
+            /** Reason */
+            reason: string;
+            /** Sources */
+            sources: components["schemas"]["Source"][];
+            /** Summary */
+            summary: string;
+            /** Tags */
+            tags: string[];
+            /** Title */
+            title: string;
+        };
         /**
          * Role
          * @enum {string}
          */
         Role: "orchestrator" | "worker";
+        /**
+         * SaveToKnowledge
+         * @description When answering a question: keep the answer as knowledge too.
+         */
+        SaveToKnowledge: {
+            /** Page Id */
+            page_id?: string | null;
+            /** Project */
+            project?: string | null;
+            /** Title */
+            title?: string | null;
+        };
+        /** SearchHit */
+        SearchHit: {
+            /** Page Id */
+            page_id: string;
+            /** Project */
+            project: string;
+            /** Slug */
+            slug: string;
+            /** Snippet */
+            snippet: string;
+            /** Stale */
+            stale: boolean;
+            /** Summary */
+            summary: string;
+            /** Title */
+            title: string;
+        };
+        /**
+         * Source
+         * @description What justifies a revision: a task, decision, artifact, or URL.
+         */
+        Source: {
+            /** Ref */
+            ref: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "task" | "decision" | "artifact" | "url";
+        };
         /** Task */
         Task: {
             /** Acceptance */
@@ -918,6 +1555,8 @@ export interface components {
             };
             /** Kind */
             kind: string;
+            /** Knowledge */
+            knowledge: string[];
             /** Lease Expires At */
             lease_expires_at: string | null;
             /** Lease Ttl S */
@@ -934,6 +1573,8 @@ export interface components {
             progress_message: string | null;
             /** Progress Percent */
             progress_percent: number | null;
+            /** Project */
+            project: string | null;
             /** Required Capabilities */
             required_capabilities: string[];
             /** Requires Approval */
@@ -976,6 +1617,11 @@ export interface components {
              */
             kind?: string;
             /**
+             * Knowledge
+             * @default []
+             */
+            knowledge?: string[];
+            /**
              * Lease Ttl S
              * @default 120
              */
@@ -992,6 +1638,8 @@ export interface components {
              * @default 0
              */
             priority?: number;
+            /** Project */
+            project?: string | null;
             /**
              * Required Capabilities
              * @default []
@@ -1613,6 +2261,448 @@ export interface operations {
             };
         };
     };
+    list_pages_api_knowledge_pages_get: {
+        parameters: {
+            query?: {
+                project?: string | null;
+                include_archived?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PageListItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_page_api_knowledge_pages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PageCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeWrite"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_page_api_knowledge_pages__page_id__get: {
+        parameters: {
+            query?: {
+                revision?: number | null;
+            };
+            header?: never;
+            path: {
+                page_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_page_api_knowledge_pages__page_id__archive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                page_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_page_api_knowledge_pages__page_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                page_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PageRestore"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_reviewed_api_knowledge_pages__page_id__reviewed_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                page_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_revisions_api_knowledge_pages__page_id__revisions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                page_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Revision"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_page_api_knowledge_pages__page_id__revisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                page_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PageEdit"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeWrite"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unarchive_page_api_knowledge_pages__page_id__unarchive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                page_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_proposals_api_knowledge_proposals_get: {
+        parameters: {
+            query?: {
+                state?: components["schemas"]["ProposalState"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Proposal"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_proposal_api_knowledge_proposals__proposal_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Proposal"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_api_knowledge_search_get: {
+        parameters: {
+            query: {
+                q: string;
+                project?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchHit"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_projects_api_projects_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"][];
+                };
+            };
+        };
+    };
+    upsert_project_api_projects__slug__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_kinds_api_task_kinds_get: {
         parameters: {
             query?: never;
@@ -1783,7 +2873,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Task"];
+                    "application/json": components["schemas"]["ClaimedTask"];
                 };
             };
             /** @description No matching task became ready within wait_s */

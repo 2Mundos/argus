@@ -100,6 +100,7 @@ async def create_task(
     elif as_worker is not None:
         raise ForbiddenError("workers may only create subtasks (set parent_id)")
     body = _apply_kind_defaults(body, await kinds.get_kind(tx.conn, body.kind))
+    await _check_project_and_pins(tx.conn, body)
     deps = sorted(set(body.depends_on))
     dep_states = await _states(tx.conn, deps)
     if missing := set(deps) - dep_states.keys():
@@ -118,8 +119,8 @@ async def create_task(
     await tx.conn.execute(
         "INSERT INTO tasks (id, parent_id, kind, title, spec, acceptance, input,"
         " required_capabilities, priority, state, requires_approval, review,"
-        " lease_ttl_s, max_attempts, created_by, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " lease_ttl_s, max_attempts, project, created_by, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task_id,
             body.parent_id,
@@ -135,10 +136,15 @@ async def create_task(
             body.review,
             body.lease_ttl_s,
             body.max_attempts,
+            body.project,
             actor,
             now,
             now,
         ),
+    )
+    await tx.conn.executemany(
+        "INSERT INTO task_knowledge (task_id, page_id) VALUES (?, ?)",
+        [(task_id, p) for p in dict.fromkeys(body.knowledge)],
     )
     await tx.conn.executemany(
         "INSERT INTO task_deps (task_id, depends_on_id) VALUES (?, ?)",
@@ -604,6 +610,32 @@ def _apply_kind_defaults(body: TaskCreate, kind: TaskKind) -> TaskCreate:
     return body.model_copy(update=update)
 
 
+async def _check_project_and_pins(conn: aiosqlite.Connection, body: TaskCreate) -> None:
+    if body.project is not None:
+        async with conn.execute(
+            "SELECT 1 FROM projects WHERE slug = ?", (body.project,)
+        ) as cur:
+            if await cur.fetchone() is None:
+                raise NotFoundError(
+                    f"unknown project: {body.project}", code="unknown_project"
+                )
+    if body.knowledge:
+        found = set((await _states_of(conn, "knowledge_pages", body.knowledge)).keys())
+        if missing := sorted(set(body.knowledge) - found):
+            raise NotFoundError(f"knowledge page not found: {', '.join(missing)}")
+
+
+async def _states_of(
+    conn: aiosqlite.Connection, table: str, ids: list[str]
+) -> dict[str, str]:
+    marks = ",".join("?" * len(ids))
+    async with conn.execute(
+        f"SELECT id, state FROM {table} WHERE id IN ({marks})",  # noqa: S608
+        ids,
+    ) as cur:
+        return {r["id"]: r["state"] for r in await cur.fetchall()}
+
+
 async def _check_artifacts(
     conn: aiosqlite.Connection, task_id: str, artifact_ids: list[str]
 ) -> None:
@@ -667,6 +699,11 @@ async def _to_task(conn: aiosqlite.Connection, row: aiosqlite.Row) -> Task:
         data["result"] = json.loads(data["result"])
     data["requires_approval"] = bool(data["requires_approval"])
     data["depends_on"] = await _deps(conn, row["id"])
+    async with conn.execute(
+        "SELECT page_id FROM task_knowledge WHERE task_id = ? ORDER BY page_id",
+        (row["id"],),
+    ) as cur:
+        data["knowledge"] = [r[0] for r in await cur.fetchall()]
     return Task.model_validate(data)
 
 

@@ -215,6 +215,10 @@ nav a[aria-current="page"] {
 .toolbar h2 {
   flex: 1;
 }
+.toolbar select,
+.toolbar input {
+  width: auto;
+}
 
 .card {
   background: var(--surface);
@@ -484,5 +488,118 @@ th {
   }
   .events .actor {
     display: none;
+  }
+}
+
+/* -- markdown --------------------------------------------------------------- */
+
+.markdown {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  margin: 1.2em 0 0.4em;
+}
+.markdown h1 {
+  font-size: 1.3rem;
+}
+.markdown h2 {
+  font-size: 1.1rem;
+}
+.markdown code {
+  background: var(--surface-2);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+.markdown pre code {
+  background: none;
+  padding: 0;
+}
+.markdown table {
+  width: auto;
+}
+.markdown a {
+  color: var(--accent);
+}
+.markdown blockquote {
+  margin: 0;
+  padding-left: 0.9rem;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+.spec {
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  max-height: 420px;
+  overflow: auto;
+}
+.spec .markdown pre {
+  background: var(--surface);
+}
+
+/* -- knowledge ------------------------------------------------------------- */
+
+.knowledge .search {
+  width: min(320px, 100%);
+}
+.split {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+.page-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+.page-list button {
+  width: 100%;
+  display: grid;
+  gap: 0.15rem;
+  text-align: left;
+}
+.page-list button[aria-current="true"] {
+  border-color: var(--accent);
+}
+.page-list .title {
+  font-weight: 500;
+}
+.page,
+.editor {
+  display: grid;
+  gap: 0.75rem;
+}
+.page > button.link {
+  justify-self: start;
+}
+.summary {
+  margin: 0;
+  font-style: italic;
+  color: var(--muted);
+}
+.proposal {
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.8rem;
+}
+.proposal summary {
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .split {
+    grid-template-columns: 1fr;
   }
 }

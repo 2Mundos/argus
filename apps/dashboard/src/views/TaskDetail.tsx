@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, call, download } from "../api";
 import { bytes, relative, shortId } from "../format";
 import { useLiveData } from "../live";
+import { Markdown } from "../Markdown";
 import { EventList } from "./Events";
 
 export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () => void }) {
@@ -47,6 +48,18 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
               </dd>
               <dt>Kind</dt>
               <dd>{task.kind}</dd>
+              {task.project && (
+                <>
+                  <dt>Project</dt>
+                  <dd>{task.project}</dd>
+                </>
+              )}
+              {task.knowledge.length > 0 && (
+                <>
+                  <dt>Pinned pages</dt>
+                  <dd>{task.knowledge.map(shortId).join(", ")}</dd>
+                </>
+              )}
               <dt>Attempt</dt>
               <dd>
                 {task.attempt} (failures {task.failures}/{task.max_attempts})
@@ -91,11 +104,13 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
             {error && <p className="error">{error}</p>}
             {task.error && <p className="error">Last error: {task.error}</p>}
             <h3>Spec</h3>
-            <pre className="spec">{task.spec || "—"}</pre>
+            <div className="spec">
+              <Markdown>{task.spec || "_No spec._"}</Markdown>
+            </div>
             {task.result && (
               <>
                 <h3>Result</h3>
-                <p>{task.result.summary}</p>
+                <Markdown>{task.result.summary}</Markdown>
                 {task.result.data && <pre>{JSON.stringify(task.result.data, null, 2)}</pre>}
               </>
             )}

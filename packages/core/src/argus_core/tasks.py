@@ -10,6 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from argus_core.knowledge import KnowledgeRef
+
 
 class TaskState(StrEnum):
     AWAITING_APPROVAL = "awaiting_approval"
@@ -120,6 +122,8 @@ class TaskCreate(BaseModel):
     review: Review = Review.NONE
     parent_id: str | None = None
     depends_on: list[str] = []
+    project: str | None = None
+    knowledge: list[str] = []  # page ids pinned to the task, delivered on claim
     max_attempts: int = Field(default=3, ge=1, le=20)
     lease_ttl_s: int = Field(default=120, ge=10, le=3600)
 
@@ -150,6 +154,15 @@ class Task(BaseModel):
     progress_percent: int | None
     progress_at: datetime | None
     depends_on: list[str]
+    project: str | None
+    knowledge: list[str]
     created_by: str
     created_at: datetime
     updated_at: datetime
+
+
+class ClaimedTask(Task):
+    """A claimed task plus knowledge worth reading first: pinned pages, then the
+    best matches for the task in its project (references only)."""
+
+    knowledge_refs: list[KnowledgeRef] = []

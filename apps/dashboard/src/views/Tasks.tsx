@@ -85,10 +85,12 @@ function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
 
 function NewTask({ onClose }: { onClose: () => void }) {
   const { data: kinds } = useLiveData<TaskKind[]>(() => call(api.GET("/api/task-kinds")), []);
+  const { data: projects } = useLiveData(() => call(api.GET("/api/projects")), []);
   const [form, setForm] = useState({
     title: "",
     spec: "",
     kind: "generic",
+    project: "",
     priority: 0,
     capabilities: "",
     requires_approval: false,
@@ -111,6 +113,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
             title: form.title,
             spec: form.spec,
             kind: form.kind,
+            project: form.project || null,
             priority: form.priority,
             requires_approval: form.requires_approval,
             review: form.review,
@@ -142,6 +145,17 @@ function NewTask({ onClose }: { onClose: () => void }) {
             <select value={form.kind} onChange={(e) => set("kind", e.target.value)}>
               {(kinds ?? [{ name: "generic" }]).map((k) => (
                 <option key={k.name}>{k.name}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Project
+            <select value={form.project} onChange={(e) => set("project", e.target.value)}>
+              <option value="">none</option>
+              {(projects ?? []).map((p) => (
+                <option key={p.slug} value={p.slug}>
+                  {p.name}
+                </option>
               ))}
             </select>
           </label>

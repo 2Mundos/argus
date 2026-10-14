@@ -36,10 +36,12 @@ every new dependency is judged against it.
   one process, SQLite + Litestream, no required services
 - [Worker lifecycle and task coordination](specs/worker-lifecycle.spec.md) —
   tasks, leases, agents, provisioning, accounts, decisions, outputs
+- [Knowledge](specs/knowledge.spec.md) — projects and a versioned wiki shared by
+  agents and people, delivered with every claim
 
 ### Drafts
 
-- [Knowledge](drafts/2026-10-14.knowledge.draft.md) — a shared, versioned wiki
-  for agents and humans (proposal, open questions)
+- [Knowledge](drafts/2026-10-14.knowledge.draft.md) — superseded by the spec
+  above; kept as a record
 - [Worker lifecycle and task coordination](drafts/2026-10-14.worker-lifecycle.draft.md) —
   superseded by the spec above; kept as a record
