@@ -73,11 +73,13 @@ def container_spec(
         }
         if nc.account_providers:
             env["ARGUS_ACCOUNT_PROVIDERS"] = ",".join(nc.account_providers)
+        workdir = f"{nc.instances_root.rstrip('/')}/{instance_id}"
         mounts = [
             # Identical host and container paths: NanoClaw resolves the paths it
             # hands to Docker on the daemon's filesystem, not its own.
             Mount(nc.install_dir, nc.install_dir, "ro"),
-            Mount(nc.instances_root, nc.instances_root, "rw"),
+            # Only this instance's directory: hosts cannot see each other's state.
+            Mount(workdir, workdir, "rw", create_owner=nc.user),
             Mount(nc.docker_socket, "/var/run/docker.sock", "rw"),
         ]
         user, group_add = nc.user, list(nc.group_add)

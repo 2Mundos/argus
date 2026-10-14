@@ -390,12 +390,15 @@ async def test_nanoclaw_runtime_spec(
         )
     await tick(db, registry)
     [spec] = target.specs.values()
-    # Identical host and container paths for everything NanoClaw hands to Docker.
+    # Identical host and container paths for everything NanoClaw hands to Docker;
+    # only this instance's own directory, created for the host's user.
+    workdir = f"/srv/nc-i/{spec.instance_id}"
     assert [(m.host, m.container, m.mode) for m in spec.mounts] == [
         ("/opt/nanoclaw", "/opt/nanoclaw", "ro"),
-        ("/srv/nc-i", "/srv/nc-i", "rw"),
+        (workdir, workdir, "rw"),
         ("/var/run/docker.sock", "/var/run/docker.sock", "rw"),
     ]
+    assert spec.mounts[1].create_owner == "1000:1000"
     assert spec.env["CONTAINER_IMAGE"] == "nanoclaw-agent:1"
     assert spec.env["ARGUS_ACCOUNT_PROVIDERS"] == "anthropic"
     assert spec.env["ARGUS_NANOCLAW_INSTANCES_ROOT"] == "/srv/nc-i"

@@ -72,8 +72,10 @@ How it works and what to know:
 
 - **Identical paths.** NanoClaw hands bind-mount paths to Docker, which resolves
   them on the daemon's filesystem. Argus mounts `install_dir` (read-only),
-  `instances_root` and the Docker socket at the same absolute path inside the host
-  container.
+  the instance's own directory under `instances_root` and the Docker socket at the
+  same absolute path inside the host container. A host sees only its own
+  directory, never its siblings'. Argus creates it (owned by `user`) with a
+  one-shot container from the same image before starting the host.
 - **One working directory per instance** (`<instances_root>/<instance id>`): its
   own `data/`, `groups/`, `store/`; code and the files NanoClaw mounts into agents
   are symlinked from the install. Directories are kept after an instance ends.

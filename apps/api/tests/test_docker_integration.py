@@ -126,10 +126,19 @@ def test_scale_up_work_and_scale_down(argus: httpx.Client) -> None:
     argus.post(f"/pools/{POOL}/scale", json={"desired_replicas": 0})
     wait_for(lambda: not active_agents(), 60, "workers to drain and leave")
     wait_for(lambda: not docker_ps(), 60, "containers to be removed")
-    instances = argus.get(
-        "/instances", params={"pool": POOL, "include_terminated": True}
-    ).json()
-    assert [i["state"] for i in instances] == ["terminated", "terminated"]
+
+    def instances_now() -> list[dict]:
+        return argus.get(
+            "/instances", params={"pool": POOL, "include_terminated": True}
+        ).json()
+
+    # The reconciler records the end on its next tick, after the containers go.
+    wait_for(
+        lambda: [i["state"] for i in instances_now()] == ["terminated"] * 2,
+        30,
+        "instances to be recorded as terminated",
+    )
+    instances = instances_now()
     assert {i["exit_reason"] for i in instances} <= {"all agents left", "exited (0)"}
 
 

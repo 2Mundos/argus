@@ -12,6 +12,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 MANAGED_LABEL = "argus.managed"
@@ -32,6 +33,9 @@ class Mount:
     host: str
     container: str
     mode: Literal["ro", "rw"] = "rw"
+    # `uid:gid`: create the host directory with this owner before starting.
+    # Docker would otherwise create a missing source as root.
+    create_owner: str | None = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +162,9 @@ class DockerTarget:
             client.images.get(spec.image)
         except ImageNotFound:
             client.images.pull(spec.image)
+        for m in spec.mounts:
+            if m.create_owner:
+                self._prepare_dir(client, spec.image, m)
         try:
             client.containers.run(
                 spec.image,
@@ -180,6 +187,25 @@ class DockerTarget:
             if exc.status_code != 409:  # 409: created concurrently under our name
                 raise
         return spec.name
+
+    @staticmethod
+    def _prepare_dir(client: Any, image: str, mount: Mount) -> None:
+        """Create a bind-mount source on the daemon's filesystem, owned by the
+        user the instance runs as. A one-shot container does it because the
+        daemon may be remote; `mkdir -p` and `chown` make it idempotent."""
+        client.containers.run(
+            image,
+            entrypoint=["sh", "-c", 'mkdir -p "$1" && chown "$2" "$1"', "sh"],
+            command=[mount.host, mount.create_owner],
+            user="0:0",
+            volumes={
+                str(Path(mount.host).parent): {
+                    "bind": str(Path(mount.host).parent),
+                    "mode": "rw",
+                }
+            },
+            remove=True,
+        )
 
     def _stop(self, ref: str, grace: int) -> None:
         from docker.errors import NotFound
