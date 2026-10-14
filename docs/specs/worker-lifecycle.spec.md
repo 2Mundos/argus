@@ -441,10 +441,12 @@ HTTP admin API). See https://docs.nanoclaw.dev/concepts/architecture.
 Consequences for Argus:
 
 - **The unit Argus provisions is a NanoClaw host, not an agent container.**
-  One Argus instance = one NanoClaw host container (with access to a Docker
-  daemon: the socket on a Docker target, a DinD sidecar on Kubernetes). Each
-  NanoClaw agent group inside it registers with Argus as one agent, so one
-  instance can carry several agents (`pools.agents_per_instance`).
+  One Argus instance = one NanoClaw host container (with access to the Docker
+  daemon) running exactly **one** agent group, which registers with Argus as one
+  agent. **This is a decision, not a missing feature**: isolation is a goal, so
+  agents never share a NanoClaw host process, working directory, vault identity
+  or container namespace. `agents_per_instance` is therefore fixed at 1 for this
+  runtime (the pool validation enforces it); more capacity means more instances.
 - **Argus ships a NanoClaw channel** (`integrations/nanoclaw/argus.ts`,
   TypeScript, installed into a NanoClaw checkout by `install.sh`; NanoClaw has no
   plugin loader). It is a native channel adapter in the host process, modeled on

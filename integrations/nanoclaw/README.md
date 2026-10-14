@@ -80,7 +80,8 @@ How it works and what to know:
 - **Short `instances_root`** (at most 56 characters): NanoClaw binds Unix sockets
   under it and the OS limits socket paths to about 107 bytes; a longer path fails
   with a misleading `EADDRINUSE`. Argus rejects longer roots.
-- **One agent per instance** (`agents_per_instance` must be 1).
+- **One agent per instance, by design** (`agents_per_instance` must be 1): agents do
+  not share a host process, working directory or vault identity, for isolation.
 - **Descendants.** Agent containers carry NanoClaw's labels, not Argus's. Argus
   finds them by `nanoclaw-group-folder` (`argus-<pool>-<instance id prefix>`), stops
   them with their host, keeps the instance un-terminated until they are gone, and
@@ -133,7 +134,6 @@ credential store by design.
 
 ## Not done yet
 
-- Several agents per NanoClaw host (`agents_per_instance > 1`).
 - No token usage is reported back (NanoClaw does not expose it to the channel).
 - A task whose model call fails stays claimed while the host heartbeats, until
   Argus's wall-clock timeout (`timeout_s`, default 6 h; see the spec) expires the
