@@ -31,8 +31,10 @@ task's spec and clarifications are what one task needs.
 
 `projects` (`slug`, `name`, `description`) are a first-class scope, managed by
 orchestrators and admins (`PUT /api/projects/{slug}`). `global` exists by
-default for fleet-wide knowledge. Tasks have an optional `project`. No
-per-project permissions: any valid token reads every project.
+default for fleet-wide knowledge. **Every task belongs to a project**: it is
+required on creation, except that a subtask without one inherits its parent's
+(`422 project_required` otherwise). No per-project permissions: any valid token
+reads every project.
 
 ## 3.2 Pages and revisions
 
@@ -77,9 +79,11 @@ sources.
 ## 3.4 How agents use it
 
 - **On claim**: `POST /api/tasks/claim` returns `knowledge_refs`, at most five
-  references (id, project, title, summary, stale, why): pages pinned to the
-  task (`TaskCreate.knowledge`) first, then the best full-text matches for the
-  task's title in its project, then in `global`. References only, so the claim
+  references (id, project, title, summary, stale, why): pinned pages first,
+  then the best full-text matches for the task's title in its project, then in
+  `global`. Pages are pinned on the task (`TaskCreate.knowledge`) or on its kind
+  (`TaskKind.default_knowledge`, e.g. the deploy runbook for every `deploy`
+  task); kind pins merge with the task's own. References only, so the claim
   stays small and the agent decides what to read.
 - **Search**: `GET /api/knowledge/search?q=&project=` over title, summary, body,
   and tags (FTS5 with Porter stemming, ranked by bm25 weighted towards titles
@@ -100,9 +104,7 @@ would read as "nothing is known".
 
 # 4. Open Questions
 
-1. Should a task's project become required now that projects exist?
-2. Kind-level pinned pages (every task of a kind gets the same references)?
-3. Page types and templates (runbook, decision record) once usage shows a need.
+1. Page types and templates (runbook, decision record) once usage shows a need.
 
 # 5. Constraints
 

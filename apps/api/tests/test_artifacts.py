@@ -33,7 +33,7 @@ def worker(client: TestClient) -> dict[str, str]:
 
 @pytest.fixture
 def claimed(client: TestClient, worker: dict[str, str]) -> dict:
-    client.post("/api/tasks", json={"title": "t"}, headers=ADMIN)
+    client.post("/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN)
     return client.post("/api/tasks/claim", json={}, headers=worker).json()
 
 

@@ -122,6 +122,7 @@ class TaskCreate(BaseModel):
     review: Review = Review.NONE
     parent_id: str | None = None
     depends_on: list[str] = []
+    # Required; a subtask may omit it to inherit its parent's project.
     project: str | None = None
     knowledge: list[str] = []  # page ids pinned to the task, delivered on claim
     max_attempts: int = Field(default=3, ge=1, le=20)
@@ -154,7 +155,7 @@ class Task(BaseModel):
     progress_percent: int | None
     progress_at: datetime | None
     depends_on: list[str]
-    project: str | None
+    project: str
     knowledge: list[str]
     created_by: str
     created_at: datetime

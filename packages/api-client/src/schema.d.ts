@@ -992,7 +992,7 @@ export interface components {
             /** Progress Percent */
             progress_percent: number | null;
             /** Project */
-            project: string | null;
+            project: string;
             /** Required Capabilities */
             required_capabilities: string[];
             /** Requires Approval */
@@ -1574,7 +1574,7 @@ export interface components {
             /** Progress Percent */
             progress_percent: number | null;
             /** Project */
-            project: string | null;
+            project: string;
             /** Required Capabilities */
             required_capabilities: string[];
             /** Requires Approval */
@@ -1669,6 +1669,8 @@ export interface components {
             created_at: string;
             /** Default Capabilities */
             default_capabilities?: string[] | null;
+            /** Default Knowledge */
+            default_knowledge?: string[] | null;
             /** Default Lease Ttl S */
             default_lease_ttl_s?: number | null;
             /** Default Max Attempts */
@@ -1699,6 +1701,8 @@ export interface components {
         TaskKindUpsert: {
             /** Default Capabilities */
             default_capabilities?: string[] | null;
+            /** Default Knowledge */
+            default_knowledge?: string[] | null;
             /** Default Lease Ttl S */
             default_lease_ttl_s?: number | null;
             /** Default Max Attempts */

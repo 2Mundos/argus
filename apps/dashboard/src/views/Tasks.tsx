@@ -90,7 +90,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
     title: "",
     spec: "",
     kind: "generic",
-    project: "",
+    project: "global",
     priority: 0,
     capabilities: "",
     requires_approval: false,
@@ -113,7 +113,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
             title: form.title,
             spec: form.spec,
             kind: form.kind,
-            project: form.project || null,
+            project: form.project,
             priority: form.priority,
             requires_approval: form.requires_approval,
             review: form.review,
@@ -151,7 +151,6 @@ function NewTask({ onClose }: { onClose: () => void }) {
           <label>
             Project
             <select value={form.project} onChange={(e) => set("project", e.target.value)}>
-              <option value="">none</option>
               {(projects ?? []).map((p) => (
                 <option key={p.slug} value={p.slug}>
                   {p.name}

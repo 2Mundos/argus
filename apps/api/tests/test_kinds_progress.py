@@ -44,7 +44,9 @@ async def setup(db: Database) -> None:
 
 async def create(db: Database, **kw):
     async with db.write() as tx:
-        return await tasks.create_task(tx, TaskCreate(title="t", **kw), "admin:test")
+        return await tasks.create_task(
+            tx, TaskCreate(project="global", title="t", **kw), "admin:test"
+        )
 
 
 async def claim(db: Database, caps: list[str] | None = None):

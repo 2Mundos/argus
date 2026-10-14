@@ -100,7 +100,9 @@ def agent(client: TestClient, role: str) -> dict[str, str]:
 
 def test_scope_table(client: TestClient) -> None:
     worker, orch = agent(client, "worker"), agent(client, "orchestrator")
-    task_id = client.post("/api/tasks", json={"title": "t"}, headers=ADMIN).json()["id"]
+    task_id = client.post(
+        "/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN
+    ).json()["id"]
     worker_id = client.get("/api/agents?state=active", headers=ADMIN).json()[-1]["id"]
 
     def status(method: str, path: str, headers: dict[str, str], **kw) -> int:
@@ -119,8 +121,14 @@ def test_scope_table(client: TestClient) -> None:
         assert status("GET", "/api/agents", who) == 200
 
     # Task management: orchestrator and admin, not workers.
-    assert status("POST", "/api/tasks", worker, json={"title": "x"}) == 403
-    assert status("POST", "/api/tasks", orch, json={"title": "x"}) == 201
+    assert (
+        status("POST", "/api/tasks", worker, json={"project": "global", "title": "x"})
+        == 403
+    )
+    assert (
+        status("POST", "/api/tasks", orch, json={"project": "global", "title": "x"})
+        == 201
+    )
     assert status("POST", f"/api/tasks/{task_id}/cancel", worker) == 403
     assert status("POST", f"/api/tasks/{task_id}/cancel", orch) == 200
     assert status("POST", f"/api/agents/{worker_id}/drain", worker) == 403

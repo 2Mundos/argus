@@ -42,7 +42,9 @@ async def reap(db: Database) -> reaper.ReapResult:
 
 async def claim_one(db: Database, agent_id: str):
     async with db.write() as tx:
-        await tasks.create_task(tx, TaskCreate(title="t"), "human:test")
+        await tasks.create_task(
+            tx, TaskCreate(project="global", title="t"), "human:test"
+        )
         task = await tasks.claim(tx, agent_id, [])
     assert task is not None
     return task

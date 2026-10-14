@@ -12,7 +12,7 @@ from argus_api.db import Tx, ts
 from argus_api.errors import NotFoundError, ValidationFailedError
 from argus_api.events import record
 
-_JSON = ("input_schema", "result_schema", "default_capabilities")
+_JSON = ("input_schema", "result_schema", "default_capabilities", "default_knowledge")
 
 
 async def get_kind(conn: aiosqlite.Connection, name: str) -> TaskKind:
@@ -43,6 +43,15 @@ async def upsert_kind(tx: Tx, name: str, body: TaskKindUpsert, actor: str) -> Ta
                     code="invalid_schema",
                     details=[exc.message],
                 ) from exc
+    if body.default_knowledge:
+        marks = ",".join("?" * len(body.default_knowledge))
+        async with tx.conn.execute(
+            f"SELECT id FROM knowledge_pages WHERE id IN ({marks})",  # noqa: S608
+            body.default_knowledge,
+        ) as cur:
+            found = {r["id"] for r in await cur.fetchall()}
+        if missing := sorted(set(body.default_knowledge) - found):
+            raise NotFoundError(f"knowledge page not found: {', '.join(missing)}")
     now = ts(tx.now)
     values = (
         body.description,
@@ -52,18 +61,21 @@ async def upsert_kind(tx: Tx, name: str, body: TaskKindUpsert, actor: str) -> Ta
         body.default_lease_ttl_s,
         body.default_max_attempts,
         body.default_review,
+        _dump(body.default_knowledge),
     )
     await tx.conn.execute(
         "INSERT INTO task_kinds (name, description, input_schema, result_schema,"
         " default_capabilities, default_lease_ttl_s, default_max_attempts,"
-        " default_review, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " default_review, default_knowledge, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         " ON CONFLICT (name) DO UPDATE SET description = excluded.description,"
         " input_schema = excluded.input_schema, result_schema = excluded.result_schema,"
         " default_capabilities = excluded.default_capabilities,"
         " default_lease_ttl_s = excluded.default_lease_ttl_s,"
         " default_max_attempts = excluded.default_max_attempts,"
-        " default_review = excluded.default_review, updated_at = excluded.updated_at",
+        " default_review = excluded.default_review,"
+        " default_knowledge = excluded.default_knowledge,"
+        " updated_at = excluded.updated_at",
         (name, *values, now, now),
     )
     await record(tx, actor, "task_kind", name, "task_kind.upserted")

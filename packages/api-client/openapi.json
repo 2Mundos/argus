@@ -544,15 +544,8 @@
             "title": "Progress Percent"
           },
           "project": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Project"
+            "title": "Project",
+            "type": "string"
           },
           "required_capabilities": {
             "items": {
@@ -2015,15 +2008,8 @@
             "title": "Progress Percent"
           },
           "project": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Project"
+            "title": "Project",
+            "type": "string"
           },
           "required_capabilities": {
             "items": {
@@ -2235,6 +2221,20 @@
             ],
             "title": "Default Capabilities"
           },
+          "default_knowledge": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Knowledge"
+          },
           "default_lease_ttl_s": {
             "anyOf": [
               {
@@ -2333,6 +2333,20 @@
               }
             ],
             "title": "Default Capabilities"
+          },
+          "default_knowledge": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Knowledge"
           },
           "default_lease_ttl_s": {
             "anyOf": [

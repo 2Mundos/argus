@@ -5,7 +5,12 @@ from datetime import timedelta
 import pytest
 from api_support import DONE, FakeClock, insert_agent
 from argus_api.db import Database
-from argus_api.errors import ForbiddenError, LeaseConflictError, NotFoundError
+from argus_api.errors import (
+    ForbiddenError,
+    LeaseConflictError,
+    NotFoundError,
+    ValidationFailedError,
+)
 from argus_api.tasks import service
 from argus_core.auth import Scope
 from argus_core.tasks import (
@@ -28,7 +33,9 @@ async def agents(db: Database) -> None:
 
 async def create(db: Database, **kw) -> Task:
     async with db.write() as tx:
-        return await service.create_task(tx, TaskCreate(title="t", **kw), "human:test")
+        return await service.create_task(
+            tx, TaskCreate(project="global", title="t", **kw), "human:test"
+        )
 
 
 async def claim(db: Database, agent: str = A, caps: list[str] | None = None):
@@ -362,7 +369,9 @@ async def test_events_are_published_only_after_commit(db: Database) -> None:
     with db.bus.subscribe() as sub:
         with pytest.raises(RuntimeError):
             async with db.write() as tx:
-                await service.create_task(tx, TaskCreate(title="x"), "human:test")
+                await service.create_task(
+                    tx, TaskCreate(project="global", title="x"), "human:test"
+                )
                 raise RuntimeError("rollback")
         await create(db)
         async with asyncio.timeout(1):
@@ -412,12 +421,18 @@ async def test_worker_creates_subtasks_only_under_a_held_task(db: Database) -> N
     with pytest.raises(ForbiddenError):  # not held yet
         async with db.write() as tx:
             await service.create_task(
-                tx, TaskCreate(title="sub", parent_id=parent.id), "agent:a", as_worker=A
+                tx,
+                TaskCreate(project="global", title="sub", parent_id=parent.id),
+                "agent:a",
+                as_worker=A,
             )
     await claim(db, A)
     async with db.write() as tx:
         sub = await service.create_task(
-            tx, TaskCreate(title="sub", parent_id=parent.id), "agent:a", as_worker=A
+            tx,
+            TaskCreate(project="global", title="sub", parent_id=parent.id),
+            "agent:a",
+            as_worker=A,
         )
     assert sub.parent_id == parent.id
     for kwargs in ({"parent_id": None}, {"parent_id": parent.id}):
@@ -426,7 +441,20 @@ async def test_worker_creates_subtasks_only_under_a_held_task(db: Database) -> N
             async with db.write() as tx:
                 await service.create_task(
                     tx,
-                    TaskCreate(title="x", **kwargs),
+                    TaskCreate(project="global", title="x", **kwargs),
                     f"agent:{agent}",
                     as_worker=agent,
                 )
+
+
+async def test_project_is_required_and_subtasks_inherit_it(db: Database) -> None:
+    with pytest.raises(ValidationFailedError) as err:
+        async with db.write() as tx:
+            await service.create_task(tx, TaskCreate(title="x"), "admin:test")
+    assert err.value.code == "project_required"
+    parent = await create(db)
+    async with db.write() as tx:
+        sub = await service.create_task(
+            tx, TaskCreate(title="sub", parent_id=parent.id), "admin:test"
+        )
+    assert sub.project == parent.project == "global"

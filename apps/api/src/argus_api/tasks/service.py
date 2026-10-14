@@ -100,6 +100,13 @@ async def create_task(
     elif as_worker is not None:
         raise ForbiddenError("workers may only create subtasks (set parent_id)")
     body = _apply_kind_defaults(body, await kinds.get_kind(tx.conn, body.kind))
+    if body.project is None:
+        if body.parent_id is None:
+            raise ValidationFailedError(
+                "project is required (use 'global' for fleet-wide work)",
+                code="project_required",
+            )
+        body = body.model_copy(update={"project": parent["project"]})
     await _check_project_and_pins(tx.conn, body)
     deps = sorted(set(body.depends_on))
     dep_states = await _states(tx.conn, deps)
@@ -607,6 +614,10 @@ def _apply_kind_defaults(body: TaskCreate, kind: TaskKind) -> TaskCreate:
         for field, value in defaults.items()
         if value is not None and field not in body.model_fields_set
     }
+    if kind.default_knowledge:  # pins merge rather than replace
+        update["knowledge"] = list(
+            dict.fromkeys([*kind.default_knowledge, *body.knowledge])
+        )
     return body.model_copy(update=update)
 
 

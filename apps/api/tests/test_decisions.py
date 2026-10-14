@@ -35,7 +35,7 @@ async def agents(db: Database) -> None:
 async def create(db: Database, actor: str = "admin:test", limit=None, **kw):
     async with db.write() as tx:
         return await tasks.create_task(
-            tx, TaskCreate(title="t", **kw), actor, hourly_limit=limit
+            tx, TaskCreate(project="global", title="t", **kw), actor, hourly_limit=limit
         )
 
 
@@ -223,7 +223,9 @@ def test_inbox_over_http(client: TestClient) -> None:
     boot = client.post("/api/agents/bootstrap-tokens", json={}, headers=ADMIN_H).json()
     reg = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
     worker = {"Authorization": f"Bearer {reg.json()['token']}"}
-    task = client.post("/api/tasks", json={"title": "t"}, headers=ADMIN_H).json()
+    task = client.post(
+        "/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN_H
+    ).json()
     claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
 
     res = client.post(

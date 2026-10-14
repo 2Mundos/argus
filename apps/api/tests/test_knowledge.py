@@ -194,7 +194,7 @@ async def test_claim_refs_pinned_first_then_matches(
 async def test_task_project_and_pins_must_exist(db: Database) -> None:
     for body in (
         TaskCreate(title="x", project="nope"),
-        TaskCreate(title="x", knowledge=["nope"]),
+        TaskCreate(project="global", title="x", knowledge=["nope"]),
     ):
         with pytest.raises(NotFoundError):
             async with db.write() as tx:
@@ -207,7 +207,9 @@ async def test_task_project_and_pins_must_exist(db: Database) -> None:
 async def ask_and_answer(db: Database, save: SaveToKnowledge, **task_kw) -> None:
     await insert_agent(db, A)
     async with db.write() as tx:
-        await tasks.create_task(tx, TaskCreate(title="t", **task_kw), "admin:test")
+        await tasks.create_task(
+            tx, TaskCreate(project="global", title="t", **task_kw), "admin:test"
+        )
         task = await tasks.claim(tx, A, [])
         assert task is not None
         asked = await decisions.ask(
@@ -342,3 +344,29 @@ def test_publish_setting_lets_workers_publish(tmp_path, monkeypatch) -> None:
         ).json()
         assert res["status"] == "published"
         assert res["page"]["title"] == "Direct"
+
+
+async def test_kind_pins_merge_with_task_pins(db: Database, clock: FakeClock) -> None:
+    from argus_api.kinds import service as kinds
+    from argus_core.kinds import TaskKindUpsert
+
+    await insert_agent(db, A)
+    runbook = await create_page(db, title="Deploy runbook")
+    extra = await create_page(db, title="Release notes template")
+    async with db.write() as tx:
+        await kinds.upsert_kind(
+            tx, "deploy", TaskKindUpsert(default_knowledge=[runbook]), "admin:test"
+        )
+        task = await tasks.create_task(
+            tx,
+            TaskCreate(
+                project="global", title="Ship it", kind="deploy", knowledge=[extra]
+            ),
+            "admin:test",
+        )
+    assert task.knowledge == sorted([runbook, extra])
+    with pytest.raises(NotFoundError):
+        async with db.write() as tx:
+            await kinds.upsert_kind(
+                tx, "bad", TaskKindUpsert(default_knowledge=["nope"]), "admin:test"
+            )
