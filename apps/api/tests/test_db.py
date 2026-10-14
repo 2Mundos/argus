@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from api_support import FakeClock
 from argus_api.db import Database
 
 
@@ -52,13 +53,14 @@ async def test_writes_are_serialized(db: Database) -> None:
     assert all(p[0].split(":")[0] == p[1].split(":")[0] for p in pairs)
 
 
-async def test_tx_now_is_read_after_waiting_for_the_writer(db: Database) -> None:
+async def test_tx_now_is_read_after_waiting_for_the_writer(
+    db: Database, clock: FakeClock
+) -> None:
     async with db.write() as first:
         waiter = asyncio.create_task(_now_of_next_write(db))
-        await asyncio.sleep(0.05)
-        first_now = first.now
-    second_now = await waiter
-    assert (second_now - first_now).total_seconds() >= 0.05
+        await asyncio.sleep(0)  # the waiter is now queued on the writer
+        clock.advance(5)
+    assert (await waiter - first.now).total_seconds() == 5
 
 
 async def _now_of_next_write(db: Database):

@@ -48,4 +48,5 @@ python-version = "3.12"
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
+pythonpath = ["apps/api/tests"]
 asyncio_mode = "auto"

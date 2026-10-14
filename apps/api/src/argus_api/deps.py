@@ -3,9 +3,14 @@
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, Request
+from argus_core.agents import Role
+from fastapi import Depends, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from argus_api.agents import service as agents
 from argus_api.db import Database
+
+_bearer = HTTPBearer(auto_error=False)
 
 
 def get_db(request: Request) -> Database:
@@ -15,25 +20,34 @@ def get_db(request: Request) -> Database:
 @dataclass(frozen=True)
 class Caller:
     actor: str
-    agent_id: str | None
+    agent_id: str | None = None
+    role: Role | None = None
 
 
-def get_caller(
-    x_argus_agent: Annotated[str | None, Header()] = None,
+async def get_caller(
+    db: Annotated[Database, Depends(get_db)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
 ) -> Caller:
-    """TEMPORARY identity until token auth (worker lifecycle 3.6, build step 4).
+    """An agent authenticated by its bearer token, or an anonymous human.
 
-    Agents identify themselves with the `X-Argus-Agent` header; anyone else is an
-    anonymous human. Nothing here is authenticated yet.
+    Anonymous human access is TEMPORARY until admin auth and scopes
+    (worker lifecycle 3.6, build step 4). An invalid token is always a 401,
+    never a silent downgrade to anonymous.
     """
-    if x_argus_agent:
-        return Caller(actor=f"agent:{x_argus_agent}", agent_id=x_argus_agent)
-    return Caller(actor="human:anonymous", agent_id=None)
+    if credentials is None:
+        return Caller(actor="human:anonymous")
+    async with db.read() as conn:
+        identity = await agents.authenticate(conn, credentials.credentials)
+    return Caller(
+        actor=f"agent:{identity.agent_id}",
+        agent_id=identity.agent_id,
+        role=identity.role,
+    )
 
 
 def require_agent(caller: Annotated[Caller, Depends(get_caller)]) -> str:
     if caller.agent_id is None:
-        raise HTTPException(401, "this operation requires an agent identity")
+        raise HTTPException(401, "this operation requires an agent token")
     return caller.agent_id
 
 

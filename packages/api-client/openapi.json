@@ -1,6 +1,132 @@
 {
   "components": {
     "schemas": {
+      "Agent": {
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "claimed_tasks": {
+            "title": "Claimed Tasks",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "end_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Reason"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instance Id"
+          },
+          "last_heartbeat_at": {
+            "format": "date-time",
+            "title": "Last Heartbeat At",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AgentState"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "role",
+          "instance_id",
+          "capabilities",
+          "state",
+          "claimed_tasks",
+          "last_heartbeat_at",
+          "created_at",
+          "ended_at",
+          "end_reason"
+        ],
+        "title": "Agent",
+        "type": "object"
+      },
+      "AgentRegister": {
+        "properties": {
+          "bootstrap_token": {
+            "title": "Bootstrap Token",
+            "type": "string"
+          },
+          "capabilities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "name": {
+            "default": "",
+            "maxLength": 100,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bootstrap_token"
+        ],
+        "title": "AgentRegister",
+        "type": "object"
+      },
+      "AgentState": {
+        "description": "Stored state. Whether an active agent is busy or idle is derived from the\ntasks it holds, never stored, so it cannot drift.",
+        "enum": [
+          "active",
+          "draining",
+          "gone",
+          "lost"
+        ],
+        "title": "AgentState",
+        "type": "string"
+      },
       "BlockRequest": {
         "properties": {
           "attempt": {
@@ -18,6 +144,34 @@
           "reason"
         ],
         "title": "BlockRequest",
+        "type": "object"
+      },
+      "BootstrapTokenCreate": {
+        "properties": {
+          "instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instance Id"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role",
+            "default": "worker"
+          },
+          "ttl_s": {
+            "default": 3600,
+            "maximum": 604800.0,
+            "minimum": 60.0,
+            "title": "Ttl S",
+            "type": "integer"
+          }
+        },
+        "title": "BootstrapTokenCreate",
         "type": "object"
       },
       "ClaimRequest": {
@@ -92,6 +246,164 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HeartbeatRequest": {
+        "properties": {
+          "leases": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/LeaseRef"
+            },
+            "title": "Leases",
+            "type": "array"
+          }
+        },
+        "title": "HeartbeatRequest",
+        "type": "object"
+      },
+      "HeartbeatResponse": {
+        "properties": {
+          "heartbeat_interval_s": {
+            "title": "Heartbeat Interval S",
+            "type": "integer"
+          },
+          "rejected": {
+            "items": {
+              "$ref": "#/components/schemas/RejectedLease"
+            },
+            "title": "Rejected",
+            "type": "array"
+          },
+          "renewed": {
+            "items": {
+              "$ref": "#/components/schemas/RenewedLease"
+            },
+            "title": "Renewed",
+            "type": "array"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AgentState"
+          }
+        },
+        "required": [
+          "state",
+          "renewed",
+          "rejected",
+          "heartbeat_interval_s"
+        ],
+        "title": "HeartbeatResponse",
+        "type": "object"
+      },
+      "IssuedToken": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "expires_at"
+        ],
+        "title": "IssuedToken",
+        "type": "object"
+      },
+      "LeaseRef": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempt"
+        ],
+        "title": "LeaseRef",
+        "type": "object"
+      },
+      "Registration": {
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/Agent"
+          },
+          "heartbeat_interval_s": {
+            "title": "Heartbeat Interval S",
+            "type": "integer"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "token",
+          "heartbeat_interval_s"
+        ],
+        "title": "Registration",
+        "type": "object"
+      },
+      "RejectedLease": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempt",
+          "code",
+          "message"
+        ],
+        "title": "RejectedLease",
+        "type": "object"
+      },
+      "RenewedLease": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "lease_expires_at": {
+            "format": "date-time",
+            "title": "Lease Expires At",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempt",
+          "lease_expires_at"
+        ],
+        "title": "RenewedLease",
+        "type": "object"
+      },
       "Review": {
         "enum": [
           "none",
@@ -118,6 +430,14 @@
         ],
         "title": "ReviewRequest",
         "type": "object"
+      },
+      "Role": {
+        "enum": [
+          "orchestrator",
+          "worker"
+        ],
+        "title": "Role",
+        "type": "string"
       },
       "Task": {
         "properties": {
@@ -455,6 +775,12 @@
         "title": "ValidationError",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -463,6 +789,311 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/agents": {
+      "get": {
+        "operationId": "list_agents_agents_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Agent"
+                  },
+                  "title": "Response List Agents Agents Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Agents",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/agents/bootstrap-tokens": {
+      "post": {
+        "description": "Mint a one-time token an agent redeems at registration.",
+        "operationId": "create_bootstrap_token_agents_bootstrap_tokens_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BootstrapTokenCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedToken"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Bootstrap Token",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/agents/me/heartbeat": {
+      "post": {
+        "description": "Prove liveness and renew the listed task leases (each one independently).",
+        "operationId": "heartbeat_agents_me_heartbeat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeartbeatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Heartbeat",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/agents/me/leave": {
+      "post": {
+        "description": "Exit cleanly: the identity ends and its token is revoked.",
+        "operationId": "leave_agents_me_leave_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Leave",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/agents/register": {
+      "post": {
+        "operationId": "register_agents_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentRegister"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Registration"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/agents/{agent_id}": {
+      "get": {
+        "operationId": "get_agent_agents__agent_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Agent",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/agents/{agent_id}/drain": {
+      "post": {
+        "description": "Let the agent finish its current work, then claim nothing new.",
+        "operationId": "drain_agents__agent_id__drain_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Drain",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
     "/healthz": {
       "get": {
         "operationId": "healthz_healthz_get",
@@ -549,24 +1180,6 @@
       },
       "post": {
         "operationId": "create_task_tasks_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-argus-agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Argus-Agent"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -599,6 +1212,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Create Task",
         "tags": [
           "tasks"
@@ -609,24 +1227,6 @@
       "post": {
         "description": "Claim a ready task, long-polling up to `wait_s` seconds for one.",
         "operationId": "claim_task_tasks_claim_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-argus-agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Argus-Agent"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -662,6 +1262,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Claim Task",
         "tags": [
           "tasks"
@@ -722,22 +1327,6 @@
               "title": "Task Id",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-argus-agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Argus-Agent"
-            }
           }
         ],
         "responses": {
@@ -762,6 +1351,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Approve Task",
         "tags": [
           "tasks"
@@ -779,22 +1373,6 @@
             "schema": {
               "title": "Task Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-argus-agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Argus-Agent"
             }
           }
         ],
@@ -830,6 +1408,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Block Task",
         "tags": [
           "tasks"
@@ -847,22 +1430,6 @@
             "schema": {
               "title": "Task Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-argus-agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Argus-Agent"
             }
           }
         ],
@@ -888,6 +1455,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Cancel Task",
         "tags": [
           "tasks"
@@ -905,22 +1477,6 @@
             "schema": {
               "title": "Task Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-argus-agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Argus-Agent"
             }
           }
         ],
@@ -956,6 +1512,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Complete Task",
         "tags": [
           "tasks"
@@ -973,22 +1534,6 @@
             "schema": {
               "title": "Task Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-argus-agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Argus-Agent"
             }
           }
         ],
@@ -1024,6 +1569,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Fail Task",
         "tags": [
           "tasks"
@@ -1041,22 +1591,6 @@
             "schema": {
               "title": "Task Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-argus-agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Argus-Agent"
             }
           }
         ],
@@ -1092,6 +1626,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Review Task",
         "tags": [
           "tasks"
@@ -1109,22 +1648,6 @@
             "schema": {
               "title": "Task Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-argus-agent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Argus-Agent"
             }
           }
         ],
@@ -1150,6 +1673,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Unblock Task",
         "tags": [
           "tasks"

@@ -4,6 +4,137 @@
  */
 
 export interface paths {
+    "/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Agents */
+        get: operations["list_agents_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/bootstrap-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Bootstrap Token
+         * @description Mint a one-time token an agent redeems at registration.
+         */
+        post: operations["create_bootstrap_token_agents_bootstrap_tokens_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/me/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Heartbeat
+         * @description Prove liveness and renew the listed task leases (each one independently).
+         */
+        post: operations["heartbeat_agents_me_heartbeat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/me/leave": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Leave
+         * @description Exit cleanly: the identity ends and its token is revoked.
+         */
+        post: operations["leave_agents_me_leave_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register */
+        post: operations["register_agents_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/{agent_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent */
+        get: operations["get_agent_agents__agent_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/{agent_id}/drain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Drain
+         * @description Let the agent finish its current work, then claim nothing new.
+         */
+        post: operations["drain_agents__agent_id__drain_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -199,12 +330,75 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** Agent */
+        Agent: {
+            /** Capabilities */
+            capabilities: string[];
+            /** Claimed Tasks */
+            claimed_tasks: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** End Reason */
+            end_reason: string | null;
+            /** Ended At */
+            ended_at: string | null;
+            /** Id */
+            id: string;
+            /** Instance Id */
+            instance_id: string | null;
+            /**
+             * Last Heartbeat At
+             * Format: date-time
+             */
+            last_heartbeat_at: string;
+            /** Name */
+            name: string;
+            role: components["schemas"]["Role"];
+            state: components["schemas"]["AgentState"];
+        };
+        /** AgentRegister */
+        AgentRegister: {
+            /** Bootstrap Token */
+            bootstrap_token: string;
+            /**
+             * Capabilities
+             * @default []
+             */
+            capabilities: string[];
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+        };
+        /**
+         * AgentState
+         * @description Stored state. Whether an active agent is busy or idle is derived from the
+         *     tasks it holds, never stored, so it cannot drift.
+         * @enum {string}
+         */
+        AgentState: "active" | "draining" | "gone" | "lost";
         /** BlockRequest */
         BlockRequest: {
             /** Attempt */
             attempt: number;
             /** Reason */
             reason: string;
+        };
+        /** BootstrapTokenCreate */
+        BootstrapTokenCreate: {
+            /** Instance Id */
+            instance_id?: string | null;
+            /** @default worker */
+            role: components["schemas"]["Role"];
+            /**
+             * Ttl S
+             * @default 3600
+             */
+            ttl_s: number;
         };
         /** ClaimRequest */
         ClaimRequest: {
@@ -243,6 +437,72 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HeartbeatRequest */
+        HeartbeatRequest: {
+            /**
+             * Leases
+             * @default []
+             */
+            leases: components["schemas"]["LeaseRef"][];
+        };
+        /** HeartbeatResponse */
+        HeartbeatResponse: {
+            /** Heartbeat Interval S */
+            heartbeat_interval_s: number;
+            /** Rejected */
+            rejected: components["schemas"]["RejectedLease"][];
+            /** Renewed */
+            renewed: components["schemas"]["RenewedLease"][];
+            state: components["schemas"]["AgentState"];
+        };
+        /** IssuedToken */
+        IssuedToken: {
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Token */
+            token: string;
+        };
+        /** LeaseRef */
+        LeaseRef: {
+            /** Attempt */
+            attempt: number;
+            /** Task Id */
+            task_id: string;
+        };
+        /** Registration */
+        Registration: {
+            agent: components["schemas"]["Agent"];
+            /** Heartbeat Interval S */
+            heartbeat_interval_s: number;
+            /** Token */
+            token: string;
+        };
+        /** RejectedLease */
+        RejectedLease: {
+            /** Attempt */
+            attempt: number;
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Task Id */
+            task_id: string;
+        };
+        /** RenewedLease */
+        RenewedLease: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Lease Expires At
+             * Format: date-time
+             */
+            lease_expires_at: string;
+            /** Task Id */
+            task_id: string;
+        };
         /**
          * Review
          * @enum {string}
@@ -258,6 +518,11 @@ export interface components {
              */
             notes: string;
         };
+        /**
+         * Role
+         * @enum {string}
+         */
+        Role: "orchestrator" | "worker";
         /** Task */
         Task: {
             /** Acceptance */
@@ -407,6 +672,218 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_agents_agents_get: {
+        parameters: {
+            query?: {
+                state?: components["schemas"]["AgentState"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Agent"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_bootstrap_token_agents_bootstrap_tokens_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BootstrapTokenCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssuedToken"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    heartbeat_agents_me_heartbeat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HeartbeatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HeartbeatResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    leave_agents_me_leave_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Agent"];
+                };
+            };
+        };
+    };
+    register_agents_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentRegister"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Registration"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_agents__agent_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Agent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drain_agents__agent_id__drain_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Agent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     healthz_healthz_get: {
         parameters: {
             query?: never;
@@ -464,9 +941,7 @@ export interface operations {
     create_task_tasks_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-argus-agent"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -499,9 +974,7 @@ export interface operations {
     claim_task_tasks_claim_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-argus-agent"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -572,9 +1045,7 @@ export interface operations {
     approve_task_tasks__task_id__approve_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-argus-agent"?: string | null;
-            };
+            header?: never;
             path: {
                 task_id: string;
             };
@@ -605,9 +1076,7 @@ export interface operations {
     block_task_tasks__task_id__block_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-argus-agent"?: string | null;
-            };
+            header?: never;
             path: {
                 task_id: string;
             };
@@ -642,9 +1111,7 @@ export interface operations {
     cancel_task_tasks__task_id__cancel_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-argus-agent"?: string | null;
-            };
+            header?: never;
             path: {
                 task_id: string;
             };
@@ -675,9 +1142,7 @@ export interface operations {
     complete_task_tasks__task_id__complete_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-argus-agent"?: string | null;
-            };
+            header?: never;
             path: {
                 task_id: string;
             };
@@ -712,9 +1177,7 @@ export interface operations {
     fail_task_tasks__task_id__fail_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-argus-agent"?: string | null;
-            };
+            header?: never;
             path: {
                 task_id: string;
             };
@@ -749,9 +1212,7 @@ export interface operations {
     review_task_tasks__task_id__review_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-argus-agent"?: string | null;
-            };
+            header?: never;
             path: {
                 task_id: string;
             };
@@ -786,9 +1247,7 @@ export interface operations {
     unblock_task_tasks__task_id__unblock_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-argus-agent"?: string | null;
-            };
+            header?: never;
             path: {
                 task_id: string;
             };

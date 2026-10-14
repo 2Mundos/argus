@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 import aiosqlite
+from argus_core.agents import LIVE, AgentState
 from argus_core.tasks import (
     Action,
     Review,
@@ -21,7 +22,7 @@ from argus_core.tasks import (
 )
 
 from argus_api.db import Tx, ts
-from argus_api.errors import LeaseConflictError, NotFoundError
+from argus_api.errors import ConflictError, LeaseConflictError, NotFoundError
 from argus_api.events import record
 
 S = TaskState
@@ -113,6 +114,12 @@ async def create_task(tx: Tx, body: TaskCreate, actor: str) -> Task:
 
 async def claim(tx: Tx, agent_id: str, capabilities: list[str]) -> Task | None:
     """Claim the highest-priority, oldest ready task the agent is capable of."""
+    state = await _agent_state(tx.conn, agent_id)
+    if state is not AgentState.ACTIVE:
+        raise ConflictError(
+            f"agent {agent_id} is {state}; it may not claim new tasks",
+            code=f"agent_{state}",
+        )
     async with tx.conn.execute(
         "SELECT * FROM tasks t WHERE state = 'ready' AND NOT EXISTS ("
         "  SELECT 1 FROM json_each(t.required_capabilities) rc"
@@ -254,10 +261,18 @@ async def review(
 
 async def expire_leases(tx: Tx) -> list[str]:
     """Expire every lease past its deadline, whether or not its agent is alive."""
+    return await _expire_where(tx, "lease_expires_at <= ?", ts(tx.now))
+
+
+async def expire_agent_leases(tx: Tx, agent_id: str) -> list[str]:
+    """Expire every lease an agent holds, e.g. because it was lost or left."""
+    return await _expire_where(tx, "assignee_agent_id = ?", agent_id)
+
+
+async def _expire_where(tx: Tx, condition: str, param: str) -> list[str]:
     async with tx.conn.execute(
-        "SELECT * FROM tasks WHERE state = 'claimed' AND lease_expires_at <= ?"
-        " ORDER BY id",
-        (ts(tx.now),),
+        f"SELECT * FROM tasks WHERE state = 'claimed' AND {condition} ORDER BY id",  # noqa: S608
+        (param,),
     ) as cur:
         rows = await cur.fetchall()
     for row in rows:
@@ -277,6 +292,11 @@ async def expire_leases(tx: Tx) -> list[str]:
 
 async def _owned(tx: Tx, task_id: str, attempt: int, agent_id: str) -> aiosqlite.Row:
     """Check the caller holds the current, unexpired lease (3.3), inside `tx`."""
+    state = await _agent_state(tx.conn, agent_id)
+    if state not in LIVE:
+        raise LeaseConflictError(
+            f"agent {agent_id} is {state}; stop working", code=f"agent_{state}"
+        )
     row = await _row(tx.conn, task_id)
     if row["state"] != S.CLAIMED:
         raise LeaseConflictError(
@@ -383,6 +403,16 @@ async def _dependency_failed_event(
         "task.dependency_failed",
         {"dependency_id": dependency_id, "dependency_state": state},
     )
+
+
+async def _agent_state(conn: aiosqlite.Connection, agent_id: str) -> AgentState:
+    async with conn.execute(
+        "SELECT state FROM agents WHERE id = ?", (agent_id,)
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        raise NotFoundError(f"agent not found: {agent_id}")
+    return AgentState(row["state"])
 
 
 async def _row(conn: aiosqlite.Connection, task_id: str) -> aiosqlite.Row:

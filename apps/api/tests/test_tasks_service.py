@@ -1,10 +1,9 @@
 import asyncio
 import json
-from collections.abc import AsyncGenerator
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from datetime import timedelta
 
 import pytest
+from api_support import FakeClock, insert_agent
 from argus_api.db import Database
 from argus_api.errors import LeaseConflictError, NotFoundError
 from argus_api.tasks import service
@@ -14,27 +13,10 @@ from argus_core.tasks import TaskState as S
 A, B = "agent-a", "agent-b"
 
 
-class FakeClock:
-    def __init__(self) -> None:
-        self.now = datetime(2026, 1, 1, tzinfo=UTC)
-
-    def __call__(self) -> datetime:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += timedelta(seconds=seconds)
-
-
-@pytest.fixture
-def clock() -> FakeClock:
-    return FakeClock()
-
-
-@pytest.fixture
-async def db(tmp_path: Path, clock: FakeClock) -> AsyncGenerator[Database]:
-    database = await Database.open(tmp_path / "argus.db", readers=2, clock=clock)
-    yield database
-    await database.close()
+@pytest.fixture(autouse=True)
+async def agents(db: Database) -> None:
+    await insert_agent(db, A)
+    await insert_agent(db, B)
 
 
 async def create(db: Database, **kw) -> Task:

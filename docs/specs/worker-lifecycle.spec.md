@@ -55,7 +55,8 @@ documents.
   `created_at`, `terminated_at`, `exit_reason`.
 - **`agents`** — one registered agent identity: `id`, `role`
   (`orchestrator` | `worker`), `instance_id` (nullable: an orchestrator may run
-  outside Argus), `capabilities` (json), `state`, `last_heartbeat_at`.
+  outside Argus), `name`, `capabilities` (json), `state`, `last_heartbeat_at`,
+  `ended_at`, `end_reason`.
 - **`tasks`** — `id`, `parent_id`, `kind`, `title`, `spec` (Markdown),
   `acceptance` (json list), `input` (json), `required_capabilities` (json),
   `priority`, `state`, `requires_approval`, `review` (`none` | `human` |
@@ -155,10 +156,18 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
 
 ## 3.4 Agent liveness
 
-- Agent states: `registering → idle ⇄ busy → draining → gone`, plus `lost`.
-- An agent registers on boot with a one-time bootstrap token injected into its
-  container, and receives a long-lived agent token (3.6).
-- One heartbeat call (`POST /agents/{id}/heartbeat`) refreshes the agent and
+- Stored agent states: `active → draining → gone`, plus `lost` from either live
+  state. Whether an active agent is *busy* or *idle* is derived from the tasks it
+  holds (`claimed_tasks`), never stored, so it cannot drift from the tasks table.
+  The agent row is created at registration; there is no stored `registering`.
+- An agent registers on boot (`POST /agents/register`) with a one-time
+  bootstrap token injected into its container, and receives a long-lived agent
+  token (3.6). Bootstrap tokens expire (default 1 h) and cannot authenticate
+  any other request.
+- Only `active` agents may claim. `active` and `draining` agents may write to
+  tasks they hold; any other state fails the ownership check (3.3) with
+  `agent_<state>`.
+- One heartbeat call (`POST /agents/me/heartbeat`) refreshes the agent and
   renews the submitted list of `(task_id, attempt)` pairs using 3.3, plus its
   account leases (3.9). The response lists renewed leases with their deadlines
   and rejected pairs; a rejected pair does not renew that task or prevent other
@@ -176,8 +185,12 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
 - `lost` is irreversible for that identity. A late heartbeat cannot restore it,
   renew a lease, or authorize another claim; the old instance cannot register
   again. A replacement gets a new instance id and bootstrap token.
-- `draining`: the agent finishes its current task, claims nothing new, then
-  exits. Used for scale-down and for rolling a pool to a new image.
+- `draining` (`POST /agents/{id}/drain`): the agent finishes its current task,
+  claims nothing new, then exits with `POST /agents/me/leave`, which ends the
+  identity as `gone` with the same revocation and lease release as loss. Used
+  for scale-down and for rolling a pool to a new image.
+- Defaults: heartbeat every 30 s, `lost` after 90 s of silence, reaper pass
+  every 10 s.
 
 ## 3.5 Provisioning: desired state + reconciler
 
@@ -258,7 +271,9 @@ instance on the target. `logs()` streams live container logs for the dashboard
 
 ## 3.6 Auth and scopes
 
-Bearer tokens, hashed in SQLite. Three scopes:
+Bearer tokens (`argus_boot_…`, `argus_agent_…`), 256-bit random, stored as
+SHA-256 hashes in SQLite. An invalid token is always `401`, never a downgrade to
+anonymous access. Three scopes:
 
 | Scope | Can |
 | --- | --- |
