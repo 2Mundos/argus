@@ -23,3 +23,6 @@ node_modules/
 .idea/
 .vscode/
 .DS_Store
+
+# graft local graph cache (regenerable)
+/graft/

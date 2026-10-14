@@ -23,4 +23,7 @@ fails otherwise (`scripts/validate_docs.py`).
 
 - [Spec template](templates/spec.md)
 
+### Drafts
 
+- [Worker lifecycle and task coordination](drafts/2026-10-14.worker-lifecycle.draft.md) —
+  tasks, leases, agent liveness, provisioning
