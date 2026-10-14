@@ -1743,6 +1743,14 @@
       "NanoclawOptions-Input": {
         "description": "The `nanoclaw` runtime (docs/research/2026-10-14.nanoclaw-integration).\n\nNanoClaw bind-mounts paths from its own filesystem into agent containers, so\nevery path here is an absolute path **on the Docker host** and is mounted at\nthe identical path inside the NanoClaw host container.",
         "properties": {
+          "account_providers": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Account Providers",
+            "type": "array"
+          },
           "agent_image": {
             "minLength": 1,
             "title": "Agent Image",
@@ -1801,6 +1809,14 @@
       "NanoclawOptions-Output": {
         "description": "The `nanoclaw` runtime (docs/research/2026-10-14.nanoclaw-integration).\n\nNanoClaw bind-mounts paths from its own filesystem into agent containers, so\nevery path here is an absolute path **on the Docker host** and is mounted at\nthe identical path inside the NanoClaw host container.",
         "properties": {
+          "account_providers": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Account Providers",
+            "type": "array"
+          },
           "agent_image": {
             "minLength": 1,
             "title": "Agent Image",
@@ -1854,6 +1870,7 @@
           "agent_image",
           "onecli_url",
           "docker_socket",
+          "account_providers",
           "user",
           "group_add"
         ],

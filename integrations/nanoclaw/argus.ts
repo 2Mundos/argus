@@ -21,12 +21,24 @@
  *   ARGUS_AGENT_TOKEN         use an already-registered agent token instead
  *   ARGUS_CAPABILITIES        comma-separated capabilities to claim with
  *   ARGUS_AGENT_NAME          display name (default: the NanoClaw host name)
+ *   ARGUS_ACCOUNT_PROVIDERS   comma-separated providers (e.g. "anthropic"): turns on
+ *                             account leasing from Argus and OneCLI switching;
+ *                             without it the channel uses whatever credential
+ *                             the OneCLI vault already has
+ *   ONECLI_URL / ONECLI_API_KEY  how to reach the OneCLI vault (accounts only)
  *   ARGUS_EXIT_ON_DRAIN       "false" to keep the host running once Argus has
  *                             drained this agent (default: exit, so the
  *                             instance ends; only when ARGUS_INSTANCE_ID is set)
  */
 import { log } from "../log.js";
 import type { ChannelAdapter, ChannelDefaults, ChannelSetup, OutboundMessage } from "./adapter.js";
+import {
+  type AccountLease,
+  type ApplyTarget,
+  applyLease,
+  classifyFailure,
+  OneCliClient,
+} from "./argus-accounts.js";
 import { registerChannelAdapter } from "./channel-registry.js";
 
 export const PLATFORM_ID = "local";
@@ -47,6 +59,7 @@ const PROGRESS_MIN_INTERVAL_MS = 10_000; // Argus allows one progress note per 1
 const CLAIM_WAIT_S = 20;
 const MAX_PAGE_CHARS = 4000;
 const MAX_PAGES_INLINED = 3;
+const MAX_RESENDS = 3; // account switches for one attempt before giving up
 
 export interface ArgusConfig {
   url: string;
@@ -54,6 +67,13 @@ export interface ArgusConfig {
   agentToken?: string;
   capabilities: string[];
   name: string;
+  /** Account leasing from Argus into the OneCLI vault. Off when absent. */
+  accounts?: {
+    providers: string[];
+    onecli: OneCliClient;
+    /** Which OneCLI agent (the NanoClaw agent group) the credential is for. */
+    resolveTarget: () => Promise<ApplyTarget>;
+  };
   /** Called once, after Argus drained this agent, its work is done, and it left. */
   onDrained?: () => void;
   /** Test seams. */
@@ -178,6 +198,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let draining = false;
   let registered = false;
   let current: { id: string; attempt: number } | null = null;
+  let currentText: string | null = null; // what the agent was sent, to re-send after a switch
+  let resends = 0;
+  let account: { id: string; name: string } | null = null;
   let abortClaim: AbortController | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let loop: Promise<void> | null = null;
@@ -249,6 +272,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   function finishTask(): void {
     current = null;
+    currentText = null;
     pendingProgress = null;
     if (progressTimer) clearTimeout(progressTimer);
     progressTimer = null;
@@ -278,6 +302,69 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     return pages;
   }
 
+  async function injectTask(taskId: string, attempt: number, text: string): Promise<void> {
+    await setupCfg!.onInbound(PLATFORM_ID, null, {
+      id: `argus-${taskId}-${attempt}${resends ? `-r${resends}` : ""}`,
+      kind: "chat",
+      timestamp: new Date().toISOString(),
+      content: { text, sender: "argus", senderId: `argus:${PLATFORM_ID}` },
+    });
+  }
+
+  /**
+   * The agent's run failed. If the provider blocked it (rate limit / out of
+   * credits) and accounts are managed, report the account exhausted and move to
+   * the next one, then give the agent the task again; otherwise the attempt is
+   * a failure and Argus decides whether to retry.
+   */
+  async function handleFailure(
+    task: { id: string; attempt: number },
+    noticeText: string,
+  ): Promise<void> {
+    const f = classifyFailure(noticeText);
+    if (f.kind === "exhausted" && cfg.accounts && account) {
+      const exhausted = account;
+      account = null;
+      const { data } = await client.call("POST", `/accounts/${exhausted.id}/exhausted`, {
+        until: f.until,
+        reason: f.reason,
+        task_id: task.id,
+        attempt: task.attempt,
+      });
+      log.warn("Argus account exhausted", { account: exhausted.name, until: f.until });
+      if (data.lease) {
+        const lease = data.lease as AccountLease;
+        await applyLease(cfg.accounts.onecli, await cfg.accounts.resolveTarget(), lease);
+        account = { id: lease.account_id, name: lease.name };
+        log.info("Switched to another Argus account", { account: lease.name });
+        if (currentText && resends < MAX_RESENDS) {
+          resends += 1;
+          await injectTask(
+            task.id,
+            task.attempt,
+            `[Argus] The previous run hit a provider limit and the account was switched. ` +
+              `Please continue this task.\n\n${currentText}`,
+          );
+          return;
+        }
+      }
+      // No replacement (Argus blocked the task as no_account), or too many switches.
+      if (!data.task_blocked) {
+        await client.call("POST", `/tasks/${task.id}/fail`, {
+          attempt: task.attempt,
+          error: f.reason,
+        });
+      }
+      finishTask();
+      return;
+    }
+    await client.call("POST", `/tasks/${task.id}/fail`, {
+      attempt: task.attempt,
+      error: f.reason,
+    });
+    finishTask();
+  }
+
   async function runTask(task: ArgusTask): Promise<void> {
     current = { id: task.id, attempt: task.attempt };
     lastProgressAt = 0;
@@ -286,13 +373,43 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     });
     const pages = await inlinePages(task);
     log.info("Argus task claimed", { task: task.id, attempt: task.attempt });
-    await setupCfg!.onInbound(PLATFORM_ID, null, {
-      id: `argus-${task.id}-${task.attempt}`,
-      kind: "chat",
-      timestamp: new Date().toISOString(),
-      content: { text: renderTask(task, pages), sender: "argus", senderId: `argus:${PLATFORM_ID}` },
-    });
+    resends = 0;
+    currentText = renderTask(task, pages);
+    await injectTask(task.id, task.attempt, currentText);
     await finished;
+  }
+
+  /** Hold a leased account, applied to the vault, before claiming any work. */
+  async function ensureAccount(): Promise<boolean> {
+    const acc = cfg.accounts;
+    if (!acc || account) return true;
+    try {
+      const { data } = await client.call("POST", "/accounts/lease", { providers: acc.providers });
+      const lease = data as AccountLease;
+      try {
+        await applyLease(acc.onecli, await acc.resolveTarget(), lease);
+      } catch (err) {
+        // Do not sit on an account we cannot use: give it back, then retry later.
+        await client.call("POST", "/accounts/release").catch(() => undefined);
+        throw err;
+      }
+      account = { id: lease.account_id, name: lease.name };
+      log.info("Argus account leased and applied", {
+        account: lease.name,
+        provider: lease.provider,
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof ArgusError && err.code === "no_account") {
+        log.warn("No Argus account is usable right now; not claiming work", {
+          message: err.message,
+        });
+      } else {
+        log.warn("Could not lease/apply an account (will retry)", { err });
+      }
+      await sleep(5000);
+      return false;
+    }
   }
 
   async function claimLoop(): Promise<void> {
@@ -302,6 +419,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         await sleep(1000);
         continue;
       }
+      if (!(await ensureAccount())) continue;
       abortClaim = new AbortController();
       try {
         const { status, data } = await client.call(
@@ -417,9 +535,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         });
         return undefined;
       }
+      const isFailureNotice =
+        typeof content === "object" && content !== null && content.failureNotice === true;
       const d = parseReply(text);
       try {
-        if (d.kind === "complete") {
+        if (isFailureNotice) {
+          await handleFailure(task, text);
+        } else if (d.kind === "complete") {
           await client.call("POST", `/tasks/${task.id}/complete`, {
             attempt: task.attempt,
             result: { summary: d.text || "(no summary)" },
@@ -457,6 +579,37 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   return adapter;
 }
 
+function accountsFromEnv(): ArgusConfig["accounts"] {
+  const providers = (process.env.ARGUS_ACCOUNT_PROVIDERS ?? "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (providers.length === 0) return undefined;
+  return {
+    providers,
+    onecli: new OneCliClient(
+      process.env.ONECLI_URL?.trim() || "http://127.0.0.1:10254",
+      fetch,
+      process.env.ONECLI_API_KEY?.trim() || undefined,
+    ),
+    // The OneCLI agent NanoClaw uses is keyed by the agent group wired to this
+    // channel, read from NanoClaw's own database when first needed.
+    async resolveTarget(): Promise<ApplyTarget> {
+      const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
+        "../db/messaging-groups.js"
+      );
+      const { getAgentGroup } = await import("../db/agent-groups.js");
+      const mg = await getMessagingGroupByPlatform(CHANNEL_TYPE, PLATFORM_ID);
+      const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
+      const group = wiring ? await getAgentGroup(wiring.agent_group_id) : undefined;
+      if (!group) {
+        throw new Error("no agent group is wired to the argus channel (run init-argus-agent.ts)");
+      }
+      return { identifier: group.id, name: group.name };
+    },
+  };
+}
+
 export function fromEnv(): ChannelAdapter | null {
   const url = process.env.ARGUS_URL?.trim();
   if (!url) return null;
@@ -477,6 +630,7 @@ export function fromEnv(): ChannelAdapter | null {
       .map((c) => c.trim())
       .filter(Boolean),
     name: process.env.ARGUS_AGENT_NAME?.trim() || "nanoclaw",
+    accounts: accountsFromEnv(),
     // Under an Argus instance, a drained agent means this host should go: ask
     // NanoClaw to shut down through its own SIGTERM handling.
     onDrained:

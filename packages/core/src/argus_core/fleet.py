@@ -50,6 +50,9 @@ class NanoclawOptions(BaseModel):
     agent_image: str = Field(min_length=1)
     onecli_url: str = "http://host.docker.internal:10254"
     docker_socket: str = Field(default="/var/run/docker.sock", pattern=r"^/")
+    # Providers whose accounts Argus leases to this agent and switches in the
+    # OneCLI vault (e.g. ["anthropic"]). Empty: use the vault's own credential.
+    account_providers: list[str] = []
     user: str | None = None  # "uid:gid" to run the host container as
     group_add: list[str] = []  # e.g. the docker socket's group id
 

@@ -70,6 +70,8 @@ def container_spec(
             "ONECLI_URL": nc.onecli_url,
             "NO_PROXY": "host.docker.internal,127.0.0.1,localhost",
         }
+        if nc.account_providers:
+            env["ARGUS_ACCOUNT_PROVIDERS"] = ",".join(nc.account_providers)
         mounts = [
             # Identical host and container paths: NanoClaw resolves the paths it
             # hands to Docker on the daemon's filesystem, not its own.

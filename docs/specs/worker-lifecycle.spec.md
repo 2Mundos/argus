@@ -446,6 +446,13 @@ Consequences for Argus:
 
 ## 3.9 Account pool and fallback
 
+*Built for NanoClaw* (`integrations/nanoclaw/argus-accounts.ts`): the channel
+leases an account, writes its credential into the OneCLI vault as one secret per
+agent group (selective mode), reports exhaustion when the agent's failure notice
+carries the provider's `Rate limit`/`Out of credits` message, switches the secret's
+value to the next account, and re-sends the task. Details and limits in
+`integrations/nanoclaw/README.md`.
+
 Agents run on subscription or API accounts (Claude, Codex, Cursor, …) that hit
 usage limits. Argus owns the **account registry and leasing** (in SQLite) and
 the **credentials** (in a SOPS file, 3.9.1). The two are kept apart: the

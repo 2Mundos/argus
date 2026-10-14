@@ -1713,6 +1713,11 @@ export interface components {
          *     the identical path inside the NanoClaw host container.
          */
         "NanoclawOptions-Input": {
+            /**
+             * Account Providers
+             * @default []
+             */
+            account_providers?: string[];
             /** Agent Image */
             agent_image: string;
             /**
@@ -1746,6 +1751,11 @@ export interface components {
          *     the identical path inside the NanoClaw host container.
          */
         "NanoclawOptions-Output": {
+            /**
+             * Account Providers
+             * @default []
+             */
+            account_providers: string[];
             /** Agent Image */
             agent_image: string;
             /**

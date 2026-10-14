@@ -11,7 +11,9 @@ target="${1:?usage: install.sh /path/to/nanoclaw}"
 [ -f "$target/src/channels/index.ts" ] || { echo "not a NanoClaw checkout: $target" >&2; exit 1; }
 
 cp "$here/argus.ts" "$target/src/channels/argus.ts"
+cp "$here/argus-accounts.ts" "$target/src/channels/argus-accounts.ts"
 cp "$here/argus.test.ts" "$target/src/channels/argus.test.ts"
+cp "$here/argus-accounts.test.ts" "$target/src/channels/argus-accounts.test.ts"
 cp "$here/init-argus-agent.ts" "$target/scripts/init-argus-agent.ts"
 
 barrel="$target/src/channels/index.ts"

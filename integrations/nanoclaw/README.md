@@ -105,10 +105,34 @@ the channel leaves Argus, stops claiming, and signals the NanoClaw host to shut
 down (SIGTERM) so the instance ends. Under an Argus instance this is on by
 default; set `ARGUS_EXIT_ON_DRAIN=false` to keep the host running.
 
+## Accounts: leasing and switching
+
+With `ARGUS_ACCOUNT_PROVIDERS=anthropic` (pool option `account_providers`) the
+channel takes its credential from Argus's account pool instead of the one in the
+OneCLI vault:
+
+1. Before claiming work it leases an account (`POST /api/accounts/lease`) and
+   writes the credential into OneCLI: a secret `argus-<agent group id>` for
+   `api.anthropic.com`, assigned to that group's OneCLI agent in **selective** mode
+   so it is the only secret the agent can use. The credential reaches the vault
+   from the host process; the agent container never sees it.
+2. When a run is blocked by the provider (the agent's failure notice reads
+   `Rate limit …` / `Out of credits`, with the reset time when given), it reports
+   the account exhausted. Argus returns the next account (same provider first),
+   the channel `PATCH`es the vault secret's value, and re-sends the task to the
+   agent. A switch needs no restart: OneCLI applies a changed value to the next
+   request.
+3. With no replacement, Argus blocks the task as `no_account` and the channel
+   lets go of it; it leases again (and claims) once an account is usable.
+4. Any other failure notice now fails the attempt with its text, so Argus retries
+   it (up to `max_attempts`) instead of leaving it claimed.
+
+Credential document fields: `api_key`, or `oauth_token` for a subscription.
+The credential stays in OneCLI's vault after the agent leaves; the vault is the
+credential store by design.
+
 ## Not done yet
 
-- Account leasing and the OneCLI credential switch (verified to work on a running
-  process; not wired into the channel).
 - Several agents per NanoClaw host (`agents_per_instance > 1`).
 - No token usage is reported back (NanoClaw does not expose it to the channel).
 - A task whose model call fails stays claimed while the host heartbeats, until

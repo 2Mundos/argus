@@ -383,6 +383,7 @@ async def test_nanoclaw_runtime_spec(
                     agent_image="nanoclaw-agent:1",
                     user="1000:1000",
                     group_add=["999"],
+                    account_providers=["anthropic"],
                 ),
             ),
             "admin:test",
@@ -396,6 +397,7 @@ async def test_nanoclaw_runtime_spec(
         ("/var/run/docker.sock", "/var/run/docker.sock", "rw"),
     ]
     assert spec.env["CONTAINER_IMAGE"] == "nanoclaw-agent:1"
+    assert spec.env["ARGUS_ACCOUNT_PROVIDERS"] == "anthropic"
     assert spec.env["ARGUS_NANOCLAW_INSTANCES_ROOT"] == "/srv/nc-i"
     assert spec.env["ARGUS_BOOTSTRAP_TOKENS"].startswith("argus_boot_")
     assert (spec.user, spec.group_add) == ("1000:1000", ["999"])
