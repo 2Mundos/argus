@@ -4,9 +4,10 @@ import pytest
 from api_support import FakeClock
 from argus_api import reaper
 from argus_api.agents import service as agents
-from argus_api.agents.service import LOST_AFTER_S, InvalidTokenError
+from argus_api.agents.service import LOST_AFTER_S
+from argus_api.auth import authenticate as auth_authenticate
 from argus_api.db import Database
-from argus_api.errors import ConflictError, LeaseConflictError
+from argus_api.errors import ConflictError, LeaseConflictError, UnauthorizedError
 from argus_api.tasks import service as tasks
 from argus_core.agents import AgentRegister, AgentState, BootstrapTokenCreate, Role
 from argus_core.tasks import TaskCreate
@@ -31,7 +32,7 @@ async def register(db: Database, caps: list[str] | None = None, **kw):
 
 async def authenticate(db: Database, token: str):
     async with db.read() as conn:
-        return await agents.authenticate(conn, token)
+        return await auth_authenticate(conn, token)
 
 
 async def reap(db: Database) -> reaper.ReapResult:
@@ -69,7 +70,7 @@ async def test_bootstrap_token_is_single_use(db: Database) -> None:
     token = await bootstrap(db)
     async with db.write() as tx:
         await agents.register(tx, AgentRegister(bootstrap_token=token))
-    with pytest.raises(InvalidTokenError):
+    with pytest.raises(UnauthorizedError):
         async with db.write() as tx:
             await agents.register(tx, AgentRegister(bootstrap_token=token))
 
@@ -77,13 +78,13 @@ async def test_bootstrap_token_is_single_use(db: Database) -> None:
 async def test_bootstrap_token_expires(db: Database, clock: FakeClock) -> None:
     token = await bootstrap(db, ttl_s=60)
     clock.advance(60)
-    with pytest.raises(InvalidTokenError):
+    with pytest.raises(UnauthorizedError):
         async with db.write() as tx:
             await agents.register(tx, AgentRegister(bootstrap_token=token))
 
 
 async def test_bootstrap_token_cannot_authenticate_requests(db: Database) -> None:
-    with pytest.raises(InvalidTokenError):
+    with pytest.raises(UnauthorizedError):
         await authenticate(db, await bootstrap(db))
 
 
@@ -138,10 +139,10 @@ async def test_silent_agent_is_lost_and_everything_is_revoked(
     assert agent.end_reason == "heartbeat timeout"
     assert released.state is S.READY
     assert released.failures == 1
-    with pytest.raises(InvalidTokenError):
+    with pytest.raises(UnauthorizedError):
         await authenticate(db, reg.token)
     # The lost instance cannot register a replacement identity…
-    with pytest.raises(InvalidTokenError):
+    with pytest.raises(UnauthorizedError):
         async with db.write() as tx:
             await agents.register(tx, AgentRegister(bootstrap_token=spare_bootstrap))
     # …while other instances are unaffected.
@@ -209,7 +210,7 @@ async def test_leave_ends_identity_and_releases_tasks(db: Database) -> None:
     assert left.claimed_tasks == 0
     async with db.read() as conn:
         assert (await tasks.get_task(conn, task.id)).state is S.READY
-    with pytest.raises(InvalidTokenError):
+    with pytest.raises(UnauthorizedError):
         await authenticate(db, reg.token)
 
 

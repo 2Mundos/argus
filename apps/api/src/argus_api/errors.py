@@ -24,3 +24,13 @@ class ConflictError(DomainError):
 
 class LeaseConflictError(ConflictError):
     """The caller does not hold a valid lease on the task (worker lifecycle 3.3)."""
+
+
+class UnauthorizedError(DomainError):
+    status = 401
+    code = "invalid_token"
+
+
+class ForbiddenError(DomainError):
+    status = 403
+    code = "forbidden"

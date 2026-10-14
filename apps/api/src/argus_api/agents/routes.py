@@ -5,7 +5,7 @@ from fastapi import APIRouter, status
 from pydantic import BaseModel
 
 from argus_api.agents import service
-from argus_api.deps import AgentDep, CallerDep, DbDep
+from argus_api.deps import AdminDep, AgentDep, CallerDep, DbDep, ManagerDep
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -52,7 +52,7 @@ class HeartbeatResponse(BaseModel):
 
 @router.post("/bootstrap-tokens", status_code=status.HTTP_201_CREATED)
 async def create_bootstrap_token(
-    body: BootstrapTokenCreate, db: DbDep, caller: CallerDep
+    body: BootstrapTokenCreate, db: DbDep, caller: AdminDep
 ) -> IssuedToken:
     """Mint a one-time token an agent redeems at registration."""
     async with db.write() as tx:
@@ -72,7 +72,9 @@ async def register(body: AgentRegister, db: DbDep) -> Registration:
 
 
 @router.get("")
-async def list_agents(db: DbDep, state: AgentState | None = None) -> list[Agent]:
+async def list_agents(
+    db: DbDep, _: CallerDep, state: AgentState | None = None
+) -> list[Agent]:
     async with db.read() as conn:
         return await service.list_agents(conn, state=state)
 
@@ -102,13 +104,13 @@ async def leave(db: DbDep, agent_id: AgentDep) -> Agent:
 
 
 @router.get("/{agent_id}")
-async def get_agent(agent_id: str, db: DbDep) -> Agent:
+async def get_agent(agent_id: str, db: DbDep, _: CallerDep) -> Agent:
     async with db.read() as conn:
         return await service.get_agent(conn, agent_id)
 
 
 @router.post("/{agent_id}/drain")
-async def drain(agent_id: str, db: DbDep, caller: CallerDep) -> Agent:
+async def drain(agent_id: str, db: DbDep, caller: ManagerDep) -> Agent:
     """Let the agent finish its current work, then claim nothing new."""
     async with db.write() as tx:
         return await service.drain(tx, agent_id, caller.actor)

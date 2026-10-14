@@ -281,11 +281,31 @@ anonymous access. Three scopes:
 | `orchestrator` | Everything `worker` can, plus create/cancel any task, edit deps, answer `orchestrator` decisions, set `desired_replicas` up to `max_replicas`, drain agents. |
 | `admin` (human) | Everything, including pool and account definitions, `max_replicas`, killing instances, revoking tokens. |
 
-Tokens are scoped to one agent and revoked when the agent becomes `lost` or its
-instance terminates. Unused bootstrap tokens for that instance are also revoked;
-revocation does not wait for an unreachable container to stop. The orchestrator
-starts outside Argus with an admin-minted `orchestrator` token; running it as a
-managed pool of size 1 uses the same model and comes later.
+Every route requires a token except `GET /healthz` and `POST /agents/register`
+(which carries a bootstrap token in its body). Any valid token may read tasks
+and agents. Worker operations (claim, heartbeat, complete/fail/block, leave)
+need an *agent* token, which orchestrators also hold; admin tokens are not
+agents. Workers may create a task only as a subtask of one they currently hold.
+A task with `review: human` can only be reviewed with an admin token.
+
+Agent tokens are scoped to one agent and revoked when the agent becomes `lost`
+or `gone`, or its instance terminates. Unused bootstrap tokens for that instance
+are also revoked; revocation does not wait for an unreachable container to stop.
+
+**Admin tokens.** No users or passwords in v1 (single-node 3.5):
+
+- On first start with no live admin token, Argus generates one, writes it to
+  `/data/admin-token` (mode 0600), and logs it once.
+- `ARGUS_ADMIN_TOKEN` (at least 32 characters) presets one instead. It is
+  registered the first time Argus sees it; once revoked it stays revoked even if
+  the variable is still set.
+- Admins mint and revoke further admin tokens (`/admin/tokens`). Revoking the
+  last live admin token is refused, so an operator cannot lock themselves out.
+- Dashboard login or an authenticating proxy in front of Argus can come later.
+
+**The orchestrator** starts outside Argus: an admin mints a bootstrap token with
+`role: orchestrator` and the orchestrator registers like any agent. Running it
+as a managed pool of size 1 uses the same model and comes later.
 
 ## 3.7 Interfaces
 

@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import aiosqlite
 from argus_core.agents import LIVE, AgentState
+from argus_core.auth import Scope
 from argus_core.tasks import (
     Action,
     Review,
@@ -22,7 +23,12 @@ from argus_core.tasks import (
 )
 
 from argus_api.db import Tx, ts
-from argus_api.errors import ConflictError, LeaseConflictError, NotFoundError
+from argus_api.errors import (
+    ConflictError,
+    ForbiddenError,
+    LeaseConflictError,
+    NotFoundError,
+)
 from argus_api.events import record
 
 S = TaskState
@@ -58,9 +64,23 @@ async def list_tasks(
 # -- creation ----------------------------------------------------------------
 
 
-async def create_task(tx: Tx, body: TaskCreate, actor: str) -> Task:
+async def create_task(
+    tx: Tx, body: TaskCreate, actor: str, *, as_worker: str | None = None
+) -> Task:
+    """Create a task. `as_worker` (an agent id) limits creation to subtasks of a
+    task that agent currently holds (3.6)."""
     if body.parent_id is not None:
-        await _row(tx.conn, body.parent_id)
+        parent = await _row(tx.conn, body.parent_id)
+        if as_worker is not None and not (
+            parent["state"] == S.CLAIMED
+            and parent["assignee_agent_id"] == as_worker
+            and parent["lease_expires_at"] > ts(tx.now)
+        ):
+            raise ForbiddenError(
+                "workers may only create subtasks of a task they currently hold"
+            )
+    elif as_worker is not None:
+        raise ForbiddenError("workers may only create subtasks (set parent_id)")
     deps = sorted(set(body.depends_on))
     dep_states = await _states(tx.conn, deps)
     if missing := set(deps) - dep_states.keys():
@@ -240,9 +260,17 @@ async def approve(tx: Tx, task_id: str, actor: str) -> Task:
 
 
 async def review(
-    tx: Tx, task_id: str, actor: str, *, accept: bool, notes: str = ""
+    tx: Tx,
+    task_id: str,
+    actor: str,
+    reviewer: Scope,
+    *,
+    accept: bool,
+    notes: str = "",
 ) -> Task:
     row = await _row(tx.conn, task_id)
+    if row["review"] == Review.HUMAN and reviewer is not Scope.ADMIN:
+        raise ForbiddenError("this task requires human review")
     if accept:
         await _apply(tx, row, Action.ACCEPT, actor, data={"notes": notes})
     else:

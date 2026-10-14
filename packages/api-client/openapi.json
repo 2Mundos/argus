@@ -1,6 +1,88 @@
 {
   "components": {
     "schemas": {
+      "AdminToken": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "created_by",
+          "created_at",
+          "revoked_at"
+        ],
+        "title": "AdminToken",
+        "type": "object"
+      },
+      "AdminTokenCreate": {
+        "properties": {
+          "label": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "AdminTokenCreate",
+        "type": "object"
+      },
+      "AdminTokenIssued": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "token"
+        ],
+        "title": "AdminTokenIssued",
+        "type": "object"
+      },
       "Agent": {
         "properties": {
           "capabilities": {
@@ -789,6 +871,121 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/admin/tokens": {
+      "get": {
+        "operationId": "list_admin_tokens_admin_tokens_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminToken"
+                  },
+                  "title": "Response List Admin Tokens Admin Tokens Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Admin Tokens",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "description": "Mint another admin token. The secret is shown only in this response.",
+        "operationId": "create_admin_token_admin_tokens_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminTokenCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminTokenIssued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Admin Token",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/tokens/{token_id}/revoke": {
+      "post": {
+        "operationId": "revoke_admin_token_admin_tokens__token_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token_id",
+            "required": true,
+            "schema": {
+              "title": "Token Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Admin Token",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/agents": {
       "get": {
         "operationId": "list_agents_agents_get",
@@ -836,6 +1033,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Agents",
         "tags": [
           "agents"
@@ -1040,6 +1242,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Get Agent",
         "tags": [
           "agents"
@@ -1173,12 +1380,18 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Tasks",
         "tags": [
           "tasks"
         ]
       },
       "post": {
+        "description": "Orchestrators and admins create any task; workers only subtasks of a task\nthey hold.",
         "operationId": "create_task_tasks_post",
         "requestBody": {
           "content": {
@@ -1309,6 +1522,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Get Task",
         "tags": [
           "tasks"
@@ -1582,6 +1800,7 @@
     },
     "/tasks/{task_id}/review": {
       "post": {
+        "description": "Tasks with `review: human` need an admin; `orchestrator` tasks accept either.",
         "operationId": "review_task_tasks__task_id__review_post",
         "parameters": [
           {

@@ -5,8 +5,9 @@ from datetime import timedelta
 import pytest
 from api_support import FakeClock, insert_agent
 from argus_api.db import Database
-from argus_api.errors import LeaseConflictError, NotFoundError
+from argus_api.errors import ForbiddenError, LeaseConflictError, NotFoundError
 from argus_api.tasks import service
+from argus_core.auth import Scope
 from argus_core.tasks import InvalidTransitionError, Review, Task, TaskCreate
 from argus_core.tasks import TaskState as S
 
@@ -314,7 +315,7 @@ async def test_review_reject_requeues_without_counting_failure(db: Database) -> 
     assert done.result == {"ok": True}
     async with db.write() as tx:
         rejected = await service.review(
-            tx, task.id, "human:test", accept=False, notes="add tests"
+            tx, task.id, "admin:test", Scope.ADMIN, accept=False, notes="add tests"
         )
     assert rejected.state is S.READY
     assert rejected.failures == 0
@@ -326,7 +327,9 @@ async def test_review_reject_requeues_without_counting_failure(db: Database) -> 
     async with db.write() as tx:
         await service.complete(tx, A, task.id, c2.attempt, {})
     async with db.write() as tx:
-        accepted = await service.review(tx, task.id, "human:test", accept=True)
+        accepted = await service.review(
+            tx, task.id, "admin:test", Scope.ADMIN, accept=True
+        )
     assert accepted.state is S.SUCCEEDED
 
 
@@ -368,3 +371,53 @@ async def test_claimed_state_requires_assignee_at_the_database_level(
             await tx.conn.execute(
                 "UPDATE tasks SET state = 'claimed' WHERE id = ?", (task.id,)
             )
+
+
+async def test_human_review_requires_admin(db: Database) -> None:
+    task = await create(db, review=Review.HUMAN)
+    c = await claim(db)
+    assert c is not None
+    async with db.write() as tx:
+        await service.complete(tx, A, task.id, c.attempt, {})
+    with pytest.raises(ForbiddenError):
+        async with db.write() as tx:
+            await service.review(
+                tx, task.id, "agent:o", Scope.ORCHESTRATOR, accept=True
+            )
+
+
+async def test_orchestrator_review_accepts_orchestrator(db: Database) -> None:
+    task = await create(db, review=Review.ORCHESTRATOR)
+    c = await claim(db)
+    assert c is not None
+    async with db.write() as tx:
+        await service.complete(tx, A, task.id, c.attempt, {})
+        done = await service.review(
+            tx, task.id, "agent:o", Scope.ORCHESTRATOR, accept=True
+        )
+    assert done.state is S.SUCCEEDED
+
+
+async def test_worker_creates_subtasks_only_under_a_held_task(db: Database) -> None:
+    parent = await create(db)
+    with pytest.raises(ForbiddenError):  # not held yet
+        async with db.write() as tx:
+            await service.create_task(
+                tx, TaskCreate(title="sub", parent_id=parent.id), "agent:a", as_worker=A
+            )
+    await claim(db, A)
+    async with db.write() as tx:
+        sub = await service.create_task(
+            tx, TaskCreate(title="sub", parent_id=parent.id), "agent:a", as_worker=A
+        )
+    assert sub.parent_id == parent.id
+    for kwargs in ({"parent_id": None}, {"parent_id": parent.id}):
+        agent = A if kwargs["parent_id"] is None else B  # top-level, or not the holder
+        with pytest.raises(ForbiddenError):
+            async with db.write() as tx:
+                await service.create_task(
+                    tx,
+                    TaskCreate(title="x", **kwargs),
+                    f"agent:{agent}",
+                    as_worker=agent,
+                )

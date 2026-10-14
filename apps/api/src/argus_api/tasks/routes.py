@@ -1,11 +1,12 @@
 import asyncio
 from typing import Any
 
+from argus_core.auth import Scope
 from argus_core.tasks import Task, TaskCreate, TaskState
 from fastapi import APIRouter, Response, status
 from pydantic import BaseModel, Field
 
-from argus_api.deps import AgentDep, CallerDep, DbDep
+from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep
 from argus_api.events import Event
 from argus_api.tasks import service
 
@@ -39,13 +40,16 @@ class ReviewRequest(BaseModel):
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_task(body: TaskCreate, db: DbDep, caller: CallerDep) -> Task:
+    """Orchestrators and admins create any task; workers only subtasks of a task
+    they hold."""
+    as_worker = caller.agent_id if caller.scope is Scope.WORKER else None
     async with db.write() as tx:
-        return await service.create_task(tx, body, caller.actor)
+        return await service.create_task(tx, body, caller.actor, as_worker=as_worker)
 
 
 @router.get("")
 async def list_tasks(
-    db: DbDep, state: TaskState | None = None, limit: int = 100
+    db: DbDep, _: CallerDep, state: TaskState | None = None, limit: int = 100
 ) -> list[Task]:
     async with db.read() as conn:
         return await service.list_tasks(conn, state=state, limit=min(limit, 500))
@@ -83,7 +87,7 @@ def _became_ready(event: Event) -> bool:
 
 
 @router.get("/{task_id}")
-async def get_task(task_id: str, db: DbDep) -> Task:
+async def get_task(task_id: str, db: DbDep, _: CallerDep) -> Task:
     async with db.read() as conn:
         return await service.get_task(conn, task_id)
 
@@ -113,28 +117,34 @@ async def block_task(
 
 
 @router.post("/{task_id}/unblock")
-async def unblock_task(task_id: str, db: DbDep, caller: CallerDep) -> Task:
+async def unblock_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
     async with db.write() as tx:
         return await service.unblock(tx, task_id, caller.actor)
 
 
 @router.post("/{task_id}/cancel")
-async def cancel_task(task_id: str, db: DbDep, caller: CallerDep) -> Task:
+async def cancel_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
     async with db.write() as tx:
         return await service.cancel(tx, task_id, caller.actor)
 
 
 @router.post("/{task_id}/approve")
-async def approve_task(task_id: str, db: DbDep, caller: CallerDep) -> Task:
+async def approve_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
     async with db.write() as tx:
         return await service.approve(tx, task_id, caller.actor)
 
 
 @router.post("/{task_id}/review")
 async def review_task(
-    task_id: str, body: ReviewRequest, db: DbDep, caller: CallerDep
+    task_id: str, body: ReviewRequest, db: DbDep, caller: ManagerDep
 ) -> Task:
+    """Tasks with `review: human` need an admin; `orchestrator` tasks accept either."""
     async with db.write() as tx:
         return await service.review(
-            tx, task_id, caller.actor, accept=body.accept, notes=body.notes
+            tx,
+            task_id,
+            caller.actor,
+            caller.scope,
+            accept=body.accept,
+            notes=body.notes,
         )

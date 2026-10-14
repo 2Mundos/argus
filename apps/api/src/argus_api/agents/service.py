@@ -13,7 +13,6 @@ from argus_core.agents import (
     AgentRegister,
     AgentState,
     BootstrapTokenCreate,
-    Role,
 )
 
 from argus_api.agents.tokens import (
@@ -23,18 +22,13 @@ from argus_api.agents.tokens import (
     new_token,
 )
 from argus_api.db import Tx, ts
-from argus_api.errors import ConflictError, DomainError, NotFoundError
+from argus_api.errors import ConflictError, NotFoundError, UnauthorizedError
 from argus_api.events import record
 from argus_api.tasks import service as tasks
 from argus_api.tasks.service import RejectedLease, RenewedLease
 
 HEARTBEAT_INTERVAL_S = 30
 LOST_AFTER_S = 3 * HEARTBEAT_INTERVAL_S
-
-
-class InvalidTokenError(DomainError):
-    status = 401
-    code = "invalid_token"
 
 
 # -- reads -------------------------------------------------------------------------
@@ -57,26 +51,6 @@ async def list_agents(
         params.append(state)
     async with conn.execute(sql + " ORDER BY a.created_at DESC, a.id", params) as cur:
         return [_to_agent(r) for r in await cur.fetchall()]
-
-
-@dataclass(frozen=True)
-class Identity:
-    agent_id: str
-    role: Role
-
-
-async def authenticate(conn: aiosqlite.Connection, token: str) -> Identity:
-    """Resolve an agent bearer token; revoked, unknown, or non-agent tokens fail."""
-    async with conn.execute(
-        "SELECT t.agent_id, t.role FROM tokens t JOIN agents a ON a.id = t.agent_id"
-        " WHERE t.token_hash = ? AND t.kind = 'agent' AND t.revoked_at IS NULL"
-        " AND a.state IN ('active', 'draining')",
-        (hash_token(token),),
-    ) as cur:
-        row = await cur.fetchone()
-    if row is None:
-        raise InvalidTokenError("unknown, revoked, or ended agent token")
-    return Identity(row["agent_id"], Role(row["role"]))
 
 
 # -- registration --------------------------------------------------------------------
@@ -128,7 +102,7 @@ async def register(tx: Tx, body: AgentRegister) -> Registration:
         or boot["used_at"] is not None
         or boot["expires_at"] <= ts(tx.now)
     ):
-        raise InvalidTokenError("bootstrap token is unknown, used, expired, or revoked")
+        raise UnauthorizedError("bootstrap token is unknown, used, expired, or revoked")
 
     agent_id = str(uuid4())
     now = ts(tx.now)

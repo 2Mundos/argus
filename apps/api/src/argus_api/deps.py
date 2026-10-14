@@ -1,14 +1,14 @@
-"""FastAPI dependencies shared by routers."""
+"""FastAPI dependencies: database access and scope checks (worker lifecycle 3.6)."""
 
-from dataclasses import dataclass
 from typing import Annotated
 
-from argus_core.agents import Role
-from fastapi import Depends, HTTPException, Request
+from argus_core.auth import Scope
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from argus_api.agents import service as agents
+from argus_api.auth import Identity, authenticate
 from argus_api.db import Database
+from argus_api.errors import ForbiddenError, UnauthorizedError
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -17,40 +17,37 @@ def get_db(request: Request) -> Database:
     return request.app.state.db
 
 
-@dataclass(frozen=True)
-class Caller:
-    actor: str
-    agent_id: str | None = None
-    role: Role | None = None
-
-
 async def get_caller(
     db: Annotated[Database, Depends(get_db)],
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-) -> Caller:
-    """An agent authenticated by its bearer token, or an anonymous human.
-
-    Anonymous human access is TEMPORARY until admin auth and scopes
-    (worker lifecycle 3.6, build step 4). An invalid token is always a 401,
-    never a silent downgrade to anonymous.
-    """
+) -> Identity:
+    """Every route except /healthz and /agents/register needs a valid token."""
     if credentials is None:
-        return Caller(actor="human:anonymous")
+        raise UnauthorizedError("missing bearer token", code="missing_token")
     async with db.read() as conn:
-        identity = await agents.authenticate(conn, credentials.credentials)
-    return Caller(
-        actor=f"agent:{identity.agent_id}",
-        agent_id=identity.agent_id,
-        role=identity.role,
-    )
+        return await authenticate(conn, credentials.credentials)
 
 
-def require_agent(caller: Annotated[Caller, Depends(get_caller)]) -> str:
+def require(*scopes: Scope):
+    def check(caller: Annotated[Identity, Depends(get_caller)]) -> Identity:
+        if caller.scope not in scopes:
+            raise ForbiddenError(
+                f"requires scope {' or '.join(scopes)}; this token is {caller.scope}"
+            )
+        return caller
+
+    return Depends(check)
+
+
+def require_agent(caller: Annotated[Identity, Depends(get_caller)]) -> str:
+    """Worker operations need an agent identity (worker or orchestrator)."""
     if caller.agent_id is None:
-        raise HTTPException(401, "this operation requires an agent token")
+        raise ForbiddenError("requires an agent token; admin tokens are not agents")
     return caller.agent_id
 
 
 DbDep = Annotated[Database, Depends(get_db)]
-CallerDep = Annotated[Caller, Depends(get_caller)]
+CallerDep = Annotated[Identity, Depends(get_caller)]
 AgentDep = Annotated[str, Depends(require_agent)]
+ManagerDep = Annotated[Identity, require(Scope.ORCHESTRATOR, Scope.ADMIN)]
+AdminDep = Annotated[Identity, require(Scope.ADMIN)]

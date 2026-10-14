@@ -7,16 +7,21 @@ import pytest
 from argus_api.main import app
 from fastapi.testclient import TestClient
 
+ADMIN_TOKEN = "test-admin-token-" + "x" * 32
+NO_AUTH = {"Authorization": ""}
+
 
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
+    """A client authenticated as admin by default; pass headers to act as others."""
     monkeypatch.setenv("ARGUS_DATA_DIR", str(tmp_path))
-    with TestClient(app) as c:
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", ADMIN_TOKEN)
+    with TestClient(app, headers={"Authorization": f"Bearer {ADMIN_TOKEN}"}) as c:
         yield c
 
 
-def register(client: TestClient) -> dict[str, str]:
-    boot = client.post("/agents/bootstrap-tokens", json={}).json()["token"]
+def register(client: TestClient, role: str = "worker") -> dict[str, str]:
+    boot = client.post("/agents/bootstrap-tokens", json={"role": role}).json()["token"]
     res = client.post("/agents/register", json={"bootstrap_token": boot})
     assert res.status_code == 201
     return {"Authorization": f"Bearer {res.json()['token']}"}
@@ -32,7 +37,7 @@ def test_create_get_list(client: TestClient) -> None:
     assert res.status_code == 201
     task = res.json()
     assert task["state"] == "ready"
-    assert task["created_by"] == "human:anonymous"
+    assert task["created_by"] == "admin:preset"
     assert client.get(f"/tasks/{task['id']}").json()["title"] == "write docs"
     assert [t["id"] for t in client.get("/tasks?state=ready").json()] == [task["id"]]
     assert client.get("/tasks?state=failed").json() == []
@@ -75,7 +80,9 @@ def test_claim_long_poll_wakes_when_a_task_becomes_ready(
 
 
 def test_worker_operations_require_an_agent(client: TestClient) -> None:
-    assert client.post("/tasks/claim", json={}).status_code == 401
+    res = client.post("/tasks/claim", json={})  # admin token, but not an agent
+    assert res.status_code == 403
+    assert res.json()["detail"]["code"] == "forbidden"
 
 
 def test_invalid_token_is_401_not_anonymous(client: TestClient) -> None:

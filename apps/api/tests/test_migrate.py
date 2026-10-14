@@ -50,3 +50,23 @@ async def test_newer_database_is_refused(tmp_path: Path) -> None:
     await db.close()
     with pytest.raises(MigrationError, match="knows up to 1"):
         await Database.open(path, migrations=[one])
+
+
+async def test_0004_rebuild_keeps_existing_tokens(tmp_path: Path) -> None:
+    path = tmp_path / "argus.db"
+    migrations = load_migrations()
+    db = await Database.open(path, migrations=migrations[:3])
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "INSERT INTO tokens (id, token_hash, kind, role, created_by, created_at)"
+            " VALUES ('t1', 'h1', 'bootstrap', 'worker', 'x', 'now')"
+        )
+    await db.close()
+    db = await Database.open(path, migrations=migrations)
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT id, kind, label FROM tokens") as cur,
+    ):
+        rows = [tuple(r) for r in await cur.fetchall()]
+    await db.close()
+    assert rows == [("t1", "bootstrap", None)]
