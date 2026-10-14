@@ -1,0 +1,7 @@
+# Used only when LITESTREAM_REPLICA_URL is set (see deploy/entrypoint.sh).
+# Examples: s3://bucket/argus, sftp://user@host/backups/argus, file:///backups/argus
+# S3 credentials come from LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY.
+dbs:
+  - path: ${ARGUS_DATA_DIR}/argus.db
+    replicas:
+      - url: ${LITESTREAM_REPLICA_URL}

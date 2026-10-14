@@ -27,7 +27,17 @@ Requires `uv`, [mise](https://mise.jdx.dev) (pins Python, Node, pnpm, uv, gitlea
 ```bash
 make setup        # uv sync + pnpm install
 make hooks        # enable the pre-push hook
-make dev-api      # http://localhost:8000
+make dev-api      # http://localhost:8000 (state in ./data, override with ARGUS_DATA_DIR)
 make dev-dashboard # http://localhost:3000
 make check        # lint + typecheck + test (what CI runs)
 ```
+
+## Running the image
+
+```bash
+docker build -f deploy/Dockerfile.api -t argus .
+docker run -p 8000:8000 -v argus-data:/data argus
+# Optional continuous backup: add -e LITESTREAM_REPLICA_URL=s3://bucket/argus
+# (plus LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY)
+```
+

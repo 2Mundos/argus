@@ -17,6 +17,10 @@ Instructions for AI agents working in this repo.
 - **Spec first.** Behaviour changes start in `docs/specs/` (`topic.spec.md`, six-section
   template). Other docs are `YYYY-MM-DD.name.type.md`. Link every doc from `docs/README.md`.
 - **Negentropy.** Code is a liability; add only what is needed.
+- **Schema changes** are a new `apps/api/src/argus_api/db/migrations/NNNN_name.sql`
+  (next number, no gaps). Never edit a migration that has shipped. All writes go
+  through `Database.write()`; use `tx.now` for time, never a clock read elsewhere,
+  and make no network calls inside a write transaction.
 - **Ruff is the formatting authority** for Python, Biome for TS. `make format` fixes both.
 - TypeScript is `strict`; no `any` without a written justification.
 - The dashboard talks to the API only; never to workers or the database directly.

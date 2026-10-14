@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Argus control-plane API"
 requires-python = ">=3.12"
 dependencies = [
+    "aiosqlite>=0.22.1",
     "argus-core",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",

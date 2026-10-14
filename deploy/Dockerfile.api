@@ -8,8 +8,15 @@ RUN uv sync --frozen --no-dev --package argus-api
 
 FROM python:3.12-slim-bookworm
 WORKDIR /app
+COPY --from=litestream/litestream:0.5.17 /usr/local/bin/litestream /usr/local/bin/litestream
+COPY deploy/litestream.yml /etc/litestream.yml
+COPY deploy/entrypoint.sh /usr/local/bin/argus-entrypoint
 COPY --from=build /app /app
-ENV PATH="/app/.venv/bin:$PATH"
+# Created in the image so a fresh named volume inherits nobody's ownership.
+RUN mkdir /data && chown nobody:nogroup /data
+ENV PATH="/app/.venv/bin:$PATH" ARGUS_DATA_DIR=/data
+VOLUME /data
 USER nobody
 EXPOSE 8000
+ENTRYPOINT ["argus-entrypoint"]
 CMD ["uvicorn", "argus_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
