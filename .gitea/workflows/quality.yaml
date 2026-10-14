@@ -50,6 +50,12 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f deploy/Dockerfile.api -t argus:ci .
+
   docs:
     runs-on: ubuntu-latest
     steps:
