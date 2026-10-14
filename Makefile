@@ -41,14 +41,16 @@ test: ## Run Python and Node tests.
 build: ## Build the dashboard.
 	$(PNPM) build
 
-.PHONY: openapi openapi-check
+.PHONY: openapi openapi-check openapi-client-check
 openapi: ## Regenerate openapi.json and the TS client types from the API.
 	$(UV) run python scripts/export_openapi.py
 	$(PNPM) --filter @argus/api-client generate
-openapi-check: ## Fail if the committed OpenAPI contract / client types are stale.
+openapi-check: openapi-client-check ## Fail if openapi.json or the TS client types are stale (run `make openapi`).
 	$(UV) run python scripts/export_openapi.py --check
-	$(PNPM) --filter @argus/api-client generate
-	git diff --exit-code packages/api-client
+openapi-client-check: ## Fail if schema.d.ts does not match the committed openapi.json.
+	@tmp=$$(mktemp --suffix=.d.ts); trap 'rm -f "$$tmp"' EXIT; \
+	$(PNPM) --filter @argus/api-client exec openapi-typescript openapi.json -o "$$tmp" --silent; \
+	cmp -s "$$tmp" packages/api-client/src/schema.d.ts || { echo "schema.d.ts is stale: run \`make openapi\`"; exit 1; }
 
 .PHONY: audit
 audit: ## Audit dependencies for known vulnerabilities.

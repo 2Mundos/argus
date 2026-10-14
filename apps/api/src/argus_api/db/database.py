@@ -1,19 +1,28 @@
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 import aiosqlite
 
 from argus_api.db.migrate import Migration, load_migrations, migrate
+from argus_api.events import Event, EventBus
 
 _BUSY_TIMEOUT_MS = 5000
 
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def ts(dt: datetime) -> str:
+    """Fixed-width ISO-8601 UTC text: sorts and compares correctly as a string."""
+    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+Clock = Callable[[], datetime]
 
 
 @dataclass(frozen=True)
@@ -26,14 +35,20 @@ class Tx:
 
     conn: aiosqlite.Connection
     now: datetime
+    events: list[Event] = field(default_factory=list)
 
 
 class Database:
     """One serialized writer connection plus a pool of read-only connections."""
 
     def __init__(
-        self, writer: aiosqlite.Connection, readers: list[aiosqlite.Connection]
+        self,
+        writer: aiosqlite.Connection,
+        readers: list[aiosqlite.Connection],
+        clock: Clock = utcnow,
     ) -> None:
+        self.bus = EventBus()
+        self._clock = clock
         self._writer = writer
         self._write_lock = asyncio.Lock()
         self._readers: asyncio.Queue[aiosqlite.Connection] = asyncio.Queue()
@@ -48,6 +63,7 @@ class Database:
         *,
         readers: int = 4,
         migrations: list[Migration] | None = None,
+        clock: Clock = utcnow,
     ) -> "Database":
         path.parent.mkdir(parents=True, exist_ok=True)
         writer = await _connect(str(path))
@@ -66,7 +82,7 @@ class Database:
         except BaseException:
             await writer.close()
             raise
-        return cls(writer, pool)
+        return cls(writer, pool, clock)
 
     async def close(self) -> None:
         for r in self._all_readers:
@@ -75,15 +91,21 @@ class Database:
 
     @asynccontextmanager
     async def write(self) -> AsyncGenerator[Tx]:
-        """Run one write transaction; commit on success, roll back on any error."""
+        """Run one write transaction; commit on success, roll back on any error.
+
+        Events recorded in the transaction are published only after commit.
+        """
         async with self._write_lock:
             await self._writer.execute("BEGIN IMMEDIATE")
+            tx = Tx(self._writer, self._clock())
             try:
-                yield Tx(self._writer, utcnow())
+                yield tx
             except BaseException:
                 await self._writer.execute("ROLLBACK")
                 raise
             await self._writer.execute("COMMIT")
+        for event in tx.events:
+            self.bus.publish(event)
 
     @asynccontextmanager
     async def read(self) -> AsyncGenerator[aiosqlite.Connection]:

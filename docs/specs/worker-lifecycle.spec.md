@@ -59,8 +59,10 @@ documents.
 - **`tasks`** — `id`, `parent_id`, `kind`, `title`, `spec` (Markdown),
   `acceptance` (json list), `input` (json), `required_capabilities` (json),
   `priority`, `state`, `requires_approval`, `review` (`none` | `human` |
-  `orchestrator`), `assignee_agent_id`, `lease_expires_at`, `attempt`,
-  `max_attempts`, `result` (json), `error`, `created_by`, timestamps.
+  `orchestrator`), `assignee_agent_id`, `lease_expires_at`, `lease_ttl_s`,
+  `attempt`, `failures`, `max_attempts`, `result` (json), `error`,
+  `block_reason`, `created_by`, timestamps. A database `CHECK` enforces that an
+  assignee and lease exist exactly while the task is `claimed`.
 - **`task_deps`** — `(task_id, depends_on_id)`.
 - **`task_kinds`** — 3.11.
 - **`accounts`**, **`account_leases`** — 3.9.
@@ -80,7 +82,7 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
  awaiting_approval ───▶ pending ─────────────▶ ready ─────────────▶ claimed
                           │                     ▲                   │
                           │                     │ lease expired /   │ complete
-                          │                     │ fail, attempt<max │
+                          │                     │ fail, failures<max│
                           │                     ├───────────────────┤──▶ succeeded (review: none)
                           │                     │ review rejected   │──▶ in_review ──▶ succeeded
                           │                     └────── in_review ◀─┘
@@ -88,7 +90,7 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
                           │                     │ unblocked
                           │                  blocked ◀── needs input / no account
                           │
-                          │   fail / expire (attempt = max) ──▶ failed
+                          │   fail / expire (failures = max) ──▶ failed
                           └── cancel (any non-terminal state) ──▶ cancelled
 ```
 
@@ -107,7 +109,15 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   decision. Acceptance moves it to `succeeded`; rejection returns it to `ready`
   with the reviewer's notes appended to `spec`, without counting a failed
   attempt toward `max_attempts`.
+- Two counters, deliberately separate: `attempt` is bumped on every claim and
+  never decreases, because it fences stale writers (3.3); `failures` counts only
+  `fail` and lease expiry, and is what `max_attempts` limits. A task whose
+  `failures + 1` reaches `max_attempts` on a failure goes to `failed`. Review
+  rejections and unblocks lead to new claims (new `attempt`) without touching
+  `failures`.
 - Terminal states: `succeeded`, `failed`, `cancelled`.
+- The transition table is one pure function, `argus_core.tasks.transition`,
+  tested over every (state, action) pair.
 
 ## 3.3 Claiming: leases, not locks
 

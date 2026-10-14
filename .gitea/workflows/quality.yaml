@@ -44,7 +44,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Client types match the committed contract
-        run: pnpm --filter @argus/api-client generate && git diff --exit-code packages/api-client
+        run: make openapi-client-check
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test

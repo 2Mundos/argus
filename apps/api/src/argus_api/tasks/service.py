@@ -1,0 +1,427 @@
+"""Task operations. Every write takes an open `Tx` and records its events in it.
+
+See docs/specs/worker-lifecycle.spec.md 3.2 and 3.3.
+"""
+
+import json
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any
+from uuid import uuid4
+
+import aiosqlite
+from argus_core.tasks import (
+    Action,
+    Review,
+    Task,
+    TaskCreate,
+    TaskState,
+    TransitionContext,
+    transition,
+)
+
+from argus_api.db import Tx, ts
+from argus_api.errors import LeaseConflictError, NotFoundError
+from argus_api.events import record
+
+S = TaskState
+_JSON_FIELDS = ("acceptance", "input", "required_capabilities")
+
+
+# -- reads -------------------------------------------------------------------
+
+
+async def get_task(conn: aiosqlite.Connection, task_id: str) -> Task:
+    row = await _row(conn, task_id)
+    return await _to_task(conn, row)
+
+
+async def list_tasks(
+    conn: aiosqlite.Connection,
+    *,
+    state: TaskState | None = None,
+    limit: int = 100,
+) -> list[Task]:
+    sql = "SELECT * FROM tasks"
+    params: list[Any] = []
+    if state is not None:
+        sql += " WHERE state = ?"
+        params.append(state)
+    sql += " ORDER BY created_at DESC, id LIMIT ?"
+    params.append(limit)
+    async with conn.execute(sql, params) as cur:
+        rows = await cur.fetchall()
+    return [await _to_task(conn, r) for r in rows]
+
+
+# -- creation ----------------------------------------------------------------
+
+
+async def create_task(tx: Tx, body: TaskCreate, actor: str) -> Task:
+    if body.parent_id is not None:
+        await _row(tx.conn, body.parent_id)
+    deps = sorted(set(body.depends_on))
+    dep_states = await _states(tx.conn, deps)
+    if missing := set(deps) - dep_states.keys():
+        raise NotFoundError(f"dependency not found: {', '.join(sorted(missing))}")
+    deps_done = all(s is S.SUCCEEDED for s in dep_states.values())
+    if body.requires_approval:
+        state = S.AWAITING_APPROVAL
+    else:
+        state = S.READY if deps_done else S.PENDING
+
+    task_id = str(uuid4())
+    now = ts(tx.now)
+    await tx.conn.execute(
+        "INSERT INTO tasks (id, parent_id, kind, title, spec, acceptance, input,"
+        " required_capabilities, priority, state, requires_approval, review,"
+        " lease_ttl_s, max_attempts, created_by, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            task_id,
+            body.parent_id,
+            body.kind,
+            body.title,
+            body.spec,
+            json.dumps(body.acceptance),
+            json.dumps(body.input),
+            json.dumps(sorted(set(body.required_capabilities))),
+            body.priority,
+            state,
+            int(body.requires_approval),
+            body.review,
+            body.lease_ttl_s,
+            body.max_attempts,
+            actor,
+            now,
+            now,
+        ),
+    )
+    await tx.conn.executemany(
+        "INSERT INTO task_deps (task_id, depends_on_id) VALUES (?, ?)",
+        [(task_id, d) for d in deps],
+    )
+    await record(tx, actor, "task", task_id, "task.created", {"to": state})
+    for dep, dep_state in dep_states.items():
+        if dep_state in (S.FAILED, S.CANCELLED):
+            await _dependency_failed_event(tx, task_id, dep, dep_state)
+    return await get_task(tx.conn, task_id)
+
+
+# -- worker operations (require a valid lease) --------------------------------
+
+
+async def claim(tx: Tx, agent_id: str, capabilities: list[str]) -> Task | None:
+    """Claim the highest-priority, oldest ready task the agent is capable of."""
+    async with tx.conn.execute(
+        "SELECT * FROM tasks t WHERE state = 'ready' AND NOT EXISTS ("
+        "  SELECT 1 FROM json_each(t.required_capabilities) rc"
+        "  WHERE rc.value NOT IN (SELECT value FROM json_each(?)))"
+        " ORDER BY priority DESC, created_at, id LIMIT 1",
+        (json.dumps(capabilities),),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    attempt = row["attempt"] + 1
+    await _apply(
+        tx,
+        row,
+        Action.CLAIM,
+        f"agent:{agent_id}",
+        set_={
+            "assignee_agent_id": agent_id,
+            "attempt": attempt,
+            "lease_expires_at": _deadline(tx.now, row["lease_ttl_s"]),
+        },
+        data={"attempt": attempt, "agent_id": agent_id},
+    )
+    return await get_task(tx.conn, row["id"])
+
+
+@dataclass(frozen=True)
+class RenewedLease:
+    task_id: str
+    attempt: int
+    lease_expires_at: datetime
+
+
+@dataclass(frozen=True)
+class RejectedLease:
+    task_id: str
+    attempt: int
+    code: str
+    message: str
+
+
+async def renew(
+    tx: Tx, agent_id: str, leases: list[tuple[str, int]]
+) -> tuple[list[RenewedLease], list[RejectedLease]]:
+    """Extend each still-valid lease; a rejected pair never blocks the others."""
+    renewed: list[RenewedLease] = []
+    rejected: list[RejectedLease] = []
+    for task_id, attempt in leases:
+        try:
+            row = await _owned(tx, task_id, attempt, agent_id)
+        except (LeaseConflictError, NotFoundError) as exc:
+            rejected.append(RejectedLease(task_id, attempt, exc.code, exc.message))
+            continue
+        deadline = tx.now + timedelta(seconds=row["lease_ttl_s"])
+        await tx.conn.execute(
+            "UPDATE tasks SET lease_expires_at = ? WHERE id = ?",
+            (ts(deadline), task_id),
+        )
+        renewed.append(RenewedLease(task_id, attempt, deadline))
+    return renewed, rejected
+
+
+async def complete(
+    tx: Tx, agent_id: str, task_id: str, attempt: int, result: dict[str, Any]
+) -> Task:
+    row = await _owned(tx, task_id, attempt, agent_id)
+    await _apply(tx, row, Action.COMPLETE, f"agent:{agent_id}", set_={"result": result})
+    return await get_task(tx.conn, task_id)
+
+
+async def fail(tx: Tx, agent_id: str, task_id: str, attempt: int, error: str) -> Task:
+    row = await _owned(tx, task_id, attempt, agent_id)
+    await _apply(
+        tx,
+        row,
+        Action.FAIL,
+        f"agent:{agent_id}",
+        set_={"error": error, "failures": row["failures"] + 1},
+        data={"error": error},
+    )
+    return await get_task(tx.conn, task_id)
+
+
+async def block(tx: Tx, agent_id: str, task_id: str, attempt: int, reason: str) -> Task:
+    row = await _owned(tx, task_id, attempt, agent_id)
+    await _apply(
+        tx,
+        row,
+        Action.BLOCK,
+        f"agent:{agent_id}",
+        set_={"block_reason": reason},
+        data={"reason": reason},
+    )
+    return await get_task(tx.conn, task_id)
+
+
+# -- orchestrator / human operations --------------------------------------------
+
+
+async def unblock(tx: Tx, task_id: str, actor: str) -> Task:
+    row = await _row(tx.conn, task_id)
+    await _apply(tx, row, Action.UNBLOCK, actor, set_={"block_reason": None})
+    return await get_task(tx.conn, task_id)
+
+
+async def cancel(tx: Tx, task_id: str, actor: str) -> Task:
+    row = await _row(tx.conn, task_id)
+    await _apply(tx, row, Action.CANCEL, actor)
+    return await get_task(tx.conn, task_id)
+
+
+async def approve(tx: Tx, task_id: str, actor: str) -> Task:
+    row = await _row(tx.conn, task_id)
+    dep_states = await _states(tx.conn, await _deps(tx.conn, task_id))
+    deps_done = all(s is S.SUCCEEDED for s in dep_states.values())
+    await _apply(tx, row, Action.APPROVE, actor, deps_done=deps_done)
+    return await get_task(tx.conn, task_id)
+
+
+async def review(
+    tx: Tx, task_id: str, actor: str, *, accept: bool, notes: str = ""
+) -> Task:
+    row = await _row(tx.conn, task_id)
+    if accept:
+        await _apply(tx, row, Action.ACCEPT, actor, data={"notes": notes})
+    else:
+        # Rejection is not a failure: `failures` is untouched (3.2).
+        spec = row["spec"]
+        if notes:
+            spec += f"\n\n## Review notes (attempt {row['attempt']})\n\n{notes}"
+        await _apply(
+            tx, row, Action.REJECT, actor, set_={"spec": spec}, data={"notes": notes}
+        )
+    return await get_task(tx.conn, task_id)
+
+
+# -- system ---------------------------------------------------------------------
+
+
+async def expire_leases(tx: Tx) -> list[str]:
+    """Expire every lease past its deadline, whether or not its agent is alive."""
+    async with tx.conn.execute(
+        "SELECT * FROM tasks WHERE state = 'claimed' AND lease_expires_at <= ?"
+        " ORDER BY id",
+        (ts(tx.now),),
+    ) as cur:
+        rows = await cur.fetchall()
+    for row in rows:
+        await _apply(
+            tx,
+            row,
+            Action.EXPIRE,
+            "system",
+            set_={"failures": row["failures"] + 1},
+            data={"agent_id": row["assignee_agent_id"]},
+        )
+    return [r["id"] for r in rows]
+
+
+# -- internals ------------------------------------------------------------------
+
+
+async def _owned(tx: Tx, task_id: str, attempt: int, agent_id: str) -> aiosqlite.Row:
+    """Check the caller holds the current, unexpired lease (3.3), inside `tx`."""
+    row = await _row(tx.conn, task_id)
+    if row["state"] != S.CLAIMED:
+        raise LeaseConflictError(
+            f"task {task_id} is {row['state']}, not claimed", code="not_claimed"
+        )
+    if row["assignee_agent_id"] != agent_id:
+        raise LeaseConflictError(
+            f"task {task_id} is claimed by another agent", code="not_assignee"
+        )
+    if row["attempt"] != attempt:
+        raise LeaseConflictError(
+            f"attempt {attempt} of task {task_id} was superseded by attempt"
+            f" {row['attempt']}; stop working on it",
+            code="stale_attempt",
+        )
+    if row["lease_expires_at"] <= ts(tx.now):
+        raise LeaseConflictError(
+            f"lease on task {task_id} expired at {row['lease_expires_at']};"
+            " stop working on it",
+            code="lease_expired",
+        )
+    return row
+
+
+async def _apply(
+    tx: Tx,
+    row: aiosqlite.Row,
+    action: Action,
+    actor: str,
+    *,
+    set_: dict[str, Any] | None = None,
+    data: dict[str, Any] | None = None,
+    deps_done: bool = True,
+) -> TaskState:
+    """Validate and persist one transition, its event, and its knock-on effects."""
+    old = S(row["state"])
+    ctx = TransitionContext(
+        failures=row["failures"],
+        max_attempts=row["max_attempts"],
+        review=Review(row["review"]),
+        deps_done=deps_done,
+    )
+    new = transition(old, action, ctx)
+    fields: dict[str, Any] = {"state": new, "updated_at": ts(tx.now), **(set_ or {})}
+    if old is S.CLAIMED and new is not S.CLAIMED:
+        fields |= {"assignee_agent_id": None, "lease_expires_at": None}
+    if isinstance(fields.get("result"), dict):
+        fields["result"] = json.dumps(fields["result"])
+    assignments = ", ".join(f"{k} = ?" for k in fields)
+    await tx.conn.execute(
+        f"UPDATE tasks SET {assignments} WHERE id = ?",  # noqa: S608 - keys are code-controlled
+        (*fields.values(), row["id"]),
+    )
+    await record(
+        tx,
+        actor,
+        "task",
+        row["id"],
+        f"task.{action}",
+        {"from": old, "to": new, "attempt": row["attempt"], **(data or {})},
+    )
+    if new is S.SUCCEEDED:
+        await _promote_dependents(tx, row["id"])
+    elif new in (S.FAILED, S.CANCELLED):
+        await _flag_dependents(tx, row["id"], new)
+    return new
+
+
+async def _promote_dependents(tx: Tx, task_id: str) -> None:
+    async with tx.conn.execute(
+        "SELECT t.* FROM tasks t JOIN task_deps d ON d.task_id = t.id"
+        " WHERE d.depends_on_id = ? AND t.state = 'pending' AND NOT EXISTS ("
+        "  SELECT 1 FROM task_deps d2 JOIN tasks u ON u.id = d2.depends_on_id"
+        "  WHERE d2.task_id = t.id AND u.state != 'succeeded')"
+        " ORDER BY t.id",
+        (task_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    for row in rows:
+        await _apply(tx, row, Action.DEPS_SATISFIED, "system")
+
+
+async def _flag_dependents(tx: Tx, task_id: str, state: TaskState) -> None:
+    """Dependents of a failed/cancelled task stay put; the orchestrator decides."""
+    async with tx.conn.execute(
+        "SELECT t.id FROM tasks t JOIN task_deps d ON d.task_id = t.id"
+        " WHERE d.depends_on_id = ? AND t.state IN ('pending', 'awaiting_approval')"
+        " ORDER BY t.id",
+        (task_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    for row in rows:
+        await _dependency_failed_event(tx, row["id"], task_id, state)
+
+
+async def _dependency_failed_event(
+    tx: Tx, task_id: str, dependency_id: str, state: TaskState
+) -> None:
+    await record(
+        tx,
+        "system",
+        "task",
+        task_id,
+        "task.dependency_failed",
+        {"dependency_id": dependency_id, "dependency_state": state},
+    )
+
+
+async def _row(conn: aiosqlite.Connection, task_id: str) -> aiosqlite.Row:
+    async with conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        raise NotFoundError(f"task not found: {task_id}")
+    return row
+
+
+async def _states(conn: aiosqlite.Connection, ids: list[str]) -> dict[str, TaskState]:
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    async with conn.execute(
+        f"SELECT id, state FROM tasks WHERE id IN ({marks})",  # noqa: S608
+        ids,
+    ) as cur:
+        return {r["id"]: S(r["state"]) for r in await cur.fetchall()}
+
+
+async def _deps(conn: aiosqlite.Connection, task_id: str) -> list[str]:
+    async with conn.execute(
+        "SELECT depends_on_id FROM task_deps WHERE task_id = ? ORDER BY depends_on_id",
+        (task_id,),
+    ) as cur:
+        return [r[0] for r in await cur.fetchall()]
+
+
+async def _to_task(conn: aiosqlite.Connection, row: aiosqlite.Row) -> Task:
+    data = dict(row)
+    for f in _JSON_FIELDS:
+        data[f] = json.loads(data[f])
+    if data["result"] is not None:
+        data["result"] = json.loads(data["result"])
+    data["requires_approval"] = bool(data["requires_approval"])
+    data["depends_on"] = await _deps(conn, row["id"])
+    return Task.model_validate(data)
+
+
+def _deadline(now: datetime, ttl_s: int) -> str:
+    return ts(now + timedelta(seconds=ttl_s))
