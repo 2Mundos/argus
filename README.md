@@ -52,3 +52,18 @@ docker run -p 8000:8000 -v argus-data:/data argus   # dashboard at http://localh
 # (plus LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY)
 ```
 
+## Connecting agents (MCP)
+
+Argus serves an MCP endpoint at `/mcp`. Register an agent (mint a bootstrap
+token in the dashboard, then `POST /api/agents/register`) and give the MCP client
+its token, for example with Claude Code:
+
+```bash
+claude mcp add --transport http argus http://localhost:8000/mcp \
+  --header "Authorization: Bearer argus_agent_…"
+```
+
+The tools cover the whole loop: `claim_task`, `heartbeat`, `report_progress`,
+`complete_task`, `ask_question`, knowledge search and writes, and account leasing
+with quota fallback.
+

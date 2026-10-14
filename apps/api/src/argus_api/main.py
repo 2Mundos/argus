@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 from starlette.types import Scope
 
-from argus_api import reaper
+from argus_api import mcp_server, reaper
 from argus_api.accounts import service as accounts
 from argus_api.accounts.routes import router as accounts_router
 from argus_api.admin.routes import router as admin_router
@@ -85,7 +85,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             ),
         ]
         try:
-            yield
+            async with mcp_server.endpoint.running():
+                yield
         finally:
             for loop in loops:
                 loop.cancel()
@@ -113,6 +114,10 @@ for router in (
 ):
     api.include_router(router)
 app.include_router(api)
+
+mcp_server.bind(app)
+app.mount("/mcp", mcp_server.endpoint)
+app.add_middleware(mcp_server.SlashAlias)
 
 
 @app.exception_handler(DomainError)

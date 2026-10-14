@@ -355,11 +355,22 @@ as a managed pool of size 1 uses the same model and comes later.
 - **REST** (FastAPI) under `/api` is the source of truth; its OpenAPI schema
   generates the dashboard client (`@argus/api-client`). `/healthz` stays at the
   root for probes; the dashboard is served at `/` by the same process.
-- **MCP endpoint** for agents, served by the same process: thin tools mapped
-  1:1 onto REST operations (`claim_task`, `heartbeat`, `report_progress`,
-  `complete_task`, `fail_task`, `ask`, `create_task`, `lease_account`,
-  `account_exhausted`, `scale_pool`, …). LLM agents use tools far more reliably
-  than hand-built HTTP calls. The MCP layer holds no state or logic of its own.
+- **MCP endpoint** for agents at `/mcp` (streamable HTTP, stateless, JSON
+  responses), served by the same process. Agents connect with
+  `Authorization: Bearer <token>`. Each tool is a thin in-process call to the
+  REST API with the caller's own token, so scopes, validation, leases, and
+  error codes are identical to HTTP; REST errors come back as tool errors
+  (`409 stale_attempt: …`). The MCP layer holds no state or logic of its own.
+  Tools: `claim_task`, `heartbeat`, `get_task`, `report_progress`,
+  `complete_task`, `fail_task`, `ask_question`, `create_task`,
+  `upload_text_artifact`, `leave`; `search_knowledge`, `get_knowledge_page`,
+  `write_knowledge`; `lease_account`, `report_account_exhausted`; and for
+  orchestrators `list_tasks`, `cancel_task`, `list_agents`, `list_pools`,
+  `scale_pool`, `list_decisions`, `answer_decision`. The server's instructions
+  tell agents the working loop (claim, heartbeat, progress, complete; a 409
+  means stop). The SDK's DNS-rebinding check is disabled because agents reach
+  Argus by non-localhost names and every call needs a bearer token, which is what
+  that check protects against.
 - **SSE** stream (`GET /api/events/stream`) for the dashboard, fed by the
   in-process event bus and resumable with `Last-Event-ID` from the `events`
   table (replayed in batches until caught up). A subscriber that falls 1000
