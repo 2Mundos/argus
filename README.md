@@ -19,6 +19,8 @@ one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md)
 - `packages/core/` — Shared domain types (Python, `argus_core`).
 - `docs/` — Specs and drafts. Spec first: nothing is built before it is written
   down in `docs/specs/` (see [`docs/README.md`](docs/README.md)).
+- `examples/echo-worker/` — Minimal worker speaking the Argus API (reference and
+  integration-test image).
 - `deploy/` — Dockerfiles. `.gitea/` — CI.
 
 ## Development
@@ -43,6 +45,9 @@ docker run -p 8000:8000 -v argus-data:/data argus   # dashboard at http://localh
 # Provider accounts: mount an age key so Argus can read/write its SOPS file:
 #   -v ./age-key.txt:/keys/age.txt:ro -e SOPS_AGE_KEY_FILE=/keys/age.txt \
 #   -e SOPS_AGE_RECIPIENTS=age1...   (age-keygen -o age-key.txt)
+# Pools on the local Docker: give Argus the socket and tell containers where it is:
+#   -v /var/run/docker.sock:/var/run/docker.sock --group-add $(stat -c %g /var/run/docker.sock) \
+#   -e ARGUS_PUBLIC_URL=http://host.docker.internal:8000
 # Optional continuous backup: add -e LITESTREAM_REPLICA_URL=s3://bucket/argus
 # (plus LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY)
 ```

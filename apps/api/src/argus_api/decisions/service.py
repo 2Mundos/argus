@@ -16,6 +16,7 @@ from argus_api.db import Tx, ts
 from argus_api.decisions import store
 from argus_api.errors import ConflictError, ForbiddenError, ValidationFailedError
 from argus_api.events import record
+from argus_api.fleet import service as fleet
 from argus_api.knowledge import service as knowledge
 from argus_api.tasks import service as tasks
 
@@ -120,6 +121,14 @@ async def _apply_answer(
                 tx,
                 decision.subject_id,
                 accept=body.choice == "accept",
+                actor=caller.actor,
+            )
+        case DecisionKind.POLICY if decision.subject_type == "pool":
+            await fleet.apply_scale_decision(
+                tx,
+                decision.subject_id,
+                decision.payload or {},
+                approve=body.choice == "approve",
                 actor=caller.actor,
             )
         case DecisionKind.APPROVAL | DecisionKind.POLICY:

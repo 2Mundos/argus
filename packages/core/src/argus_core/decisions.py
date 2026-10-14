@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -44,6 +45,7 @@ class Decision(BaseModel):
     created_at: datetime
     decided_at: datetime | None
     subject_title: str | None = None  # the task's title, for display
+    payload: dict[str, Any] | None = None  # structured context, e.g. a requested scale
 
 
 class DecisionAnswer(BaseModel):

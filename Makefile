@@ -22,6 +22,10 @@ dev-api: ## Run the API with reload on :8000.
 dev-dashboard: ## Run the dashboard on :3000.
 	$(PNPM) dev
 
+.PHONY: test-docker
+test-docker: ## Run the real-Docker integration tests (needs a Docker daemon).
+	ARGUS_DOCKER_TESTS=1 $(UV) run pytest -q -p no:cacheprovider apps/api/tests/test_docker_integration.py
+
 .PHONY: lint format typecheck test build
 lint: ## Ruff + Biome + docs validation.
 	$(UV) run ruff check .

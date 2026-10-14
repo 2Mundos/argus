@@ -28,12 +28,13 @@ async def open_decision(
     options: list[str] | None,
     audience: Audience,
     requested_by: str,
+    payload: dict | None = None,
 ) -> str:
     decision_id = str(uuid4())
     await tx.conn.execute(
         "INSERT INTO decisions (id, subject_type, subject_id, kind, question, options,"
-        " audience, state, requested_by, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+        " audience, state, requested_by, created_at, payload)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)",
         (
             decision_id,
             subject_type,
@@ -44,6 +45,7 @@ async def open_decision(
             audience,
             requested_by,
             ts(tx.now),
+            json.dumps(payload) if payload is not None else None,
         ),
     )
     await record(
@@ -106,4 +108,5 @@ def to_decision(row: aiosqlite.Row) -> Decision:
     data = dict(row)
     if data["options"] is not None:
         data["options"] = json.loads(data["options"])
+    data["payload"] = json.loads(data["payload"]) if data.get("payload") else None
     return Decision.model_validate(data)

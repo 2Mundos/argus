@@ -28,8 +28,11 @@ COPY deploy/litestream.yml /etc/litestream.yml
 COPY deploy/entrypoint.sh /usr/local/bin/argus-entrypoint
 COPY --from=build /app /app
 COPY --from=dashboard /src/apps/dashboard/dist /app/dashboard
-# Created in the image so a fresh named volume inherits nobody's ownership.
-RUN mkdir /data && chown nobody:nogroup /data
+# ssh: remote Docker targets (DOCKER_HOST=ssh://…). The data dir is created in the
+# image so a fresh named volume inherits nobody's ownership.
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir /data && chown nobody:nogroup /data
 ENV PATH="/app/.venv/bin:$PATH" ARGUS_DATA_DIR=/data ARGUS_DASHBOARD_DIR=/app/dashboard
 VOLUME /data
 USER nobody

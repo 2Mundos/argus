@@ -7,11 +7,13 @@ import { Events } from "./views/Events";
 import { Inbox } from "./views/Inbox";
 import { Knowledge } from "./views/Knowledge";
 import { Login } from "./views/Login";
+import { Pools } from "./views/Pools";
 import { Tasks } from "./views/Tasks";
 
 const TABS = {
   tasks: "Tasks",
   agents: "Agents",
+  pools: "Pools",
   inbox: "Inbox",
   knowledge: "Knowledge",
   accounts: "Accounts",
@@ -70,6 +72,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
       <main>
         {tab === "tasks" && <Tasks />}
         {tab === "agents" && <Agents />}
+        {tab === "pools" && <Pools />}
         {tab === "inbox" && <Inbox />}
         {tab === "knowledge" && <Knowledge />}
         {tab === "accounts" && <Accounts />}

@@ -616,3 +616,54 @@ th {
   color: var(--danger);
   border-color: currentColor;
 }
+
+/* -- pools ------------------------------------------------------------------ */
+
+.pool {
+  margin-bottom: 1rem;
+  display: grid;
+  gap: 0.6rem;
+}
+.pool .toolbar {
+  margin-bottom: 0;
+}
+.pool h3 {
+  margin: 0;
+  flex: 1;
+}
+.scale {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.scale button {
+  width: 2rem;
+  padding: 0.25rem;
+}
+.row-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+.pool-ok,
+.instance-running {
+  color: var(--ok);
+  border-color: currentColor;
+}
+.pool-unreachable,
+.pool-failing {
+  color: var(--danger);
+  border-color: currentColor;
+}
+.instance-reserved,
+.instance-terminating {
+  color: var(--warn);
+  border-color: currentColor;
+}
+.dialog.wide {
+  width: min(1000px, calc(100% - 2rem));
+}
+.logs {
+  max-height: 60vh;
+  font-size: 12px;
+}

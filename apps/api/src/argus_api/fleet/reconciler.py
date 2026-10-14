@@ -1,0 +1,392 @@
+"""Converge each pool's instances to its desired replicas (worker lifecycle 3.5).
+
+Each pass, per pool:
+
+1. **Observe**: list the pool's containers on its target. If the target cannot be
+   queried, nothing about that pool changes this pass (status `unreachable`):
+   absence of evidence is never confirmation, and capacity stays reserved.
+2. **Decide** in one write transaction: confirm what the observation proves,
+   start terminations, reserve slots for new instances, drain idle ones.
+3. **Act** after commit: start and stop containers. A failed or ambiguous call
+   changes nothing; the next pass observes the outcome and acts again.
+
+Invariants:
+- An instance holds a capacity slot until the provider confirms it stopped or no
+  longer exists. Timeouts and stop acknowledgements are not confirmation.
+- Ending an instance and ending its agents (tasks released, tokens revoked)
+  happen in the same transaction.
+- Scale-down never stops a busy agent: idle instances are drained, and their
+  containers go away when their agents leave.
+"""
+
+import asyncio
+import logging
+from dataclasses import dataclass
+from datetime import timedelta
+from uuid import uuid4
+
+import aiosqlite
+from argus_core.agents import BootstrapTokenCreate, Role
+from argus_core.fleet import Pool
+
+from argus_api.agents import service as agents
+from argus_api.db import Database, Tx, ts
+from argus_api.events import record
+from argus_api.fleet import runtimes
+from argus_api.fleet import service as fleet
+from argus_api.fleet.targets import (
+    POOL_LABEL,
+    ProviderInstance,
+    Target,
+    TargetError,
+    TargetRegistry,
+    container_name,
+)
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FleetSettings:
+    argus_url: str | None  # how containers reach Argus; required to start anything
+    registration_timeout: timedelta = timedelta(minutes=5)
+    stop_grace: timedelta = timedelta(seconds=30)
+    start_backoff_max: timedelta = timedelta(minutes=5)
+
+
+@dataclass(frozen=True)
+class _Start:
+    instance_id: str
+
+
+@dataclass(frozen=True)
+class _Stop:
+    ref: str
+
+
+async def reconcile(
+    db: Database, targets: TargetRegistry, settings: FleetSettings
+) -> None:
+    async with db.read() as conn:
+        pools = await fleet.list_pools(conn)
+    for pool in pools:
+        try:
+            await reconcile_pool(db, pool.name, targets, settings)
+        except Exception:
+            log.exception("reconciling pool %s failed", pool.name)
+
+
+async def reconcile_pool(
+    db: Database, name: str, targets: TargetRegistry, settings: FleetSettings
+) -> None:
+    async with db.read() as conn:
+        pool = await fleet.get_pool(conn, name)
+    try:
+        target = targets.get(pool.target, pool.docker.host)
+        observed = {
+            p.instance_id: p for p in await target.list({POOL_LABEL: pool.name})
+        }
+    except TargetError as exc:
+        async with db.write() as tx:
+            await _set_status(tx, name, "unreachable", str(exc))
+        return
+
+    async with db.write() as tx:
+        actions = await _decide(tx, name, observed, settings)
+    for action in actions:
+        await _act(db, target, name, action, settings)
+
+
+async def _decide(
+    tx: Tx, name: str, observed: dict[str, ProviderInstance], settings: FleetSettings
+) -> list[_Start | _Stop]:
+    pool = await fleet.get_pool(tx.conn, name)
+    if pool.status == "unreachable":
+        await _set_status(tx, name, "ok", None)
+    actions: list[_Start | _Stop] = []
+    async with tx.conn.execute(
+        "SELECT * FROM instances WHERE pool = ? AND state != 'terminated'", (name,)
+    ) as cur:
+        instances = list(await cur.fetchall())
+
+    known = set()
+    for inst in instances:
+        known.add(inst["id"])
+        obs = observed.get(inst["id"])
+        state = inst["state"]
+        if state == "reserved":
+            if obs is not None and obs.status == "running":
+                await _mark_running(tx, inst["id"], obs.ref)
+            elif obs is not None and obs.status == "exited":
+                await confirm_terminated(
+                    tx, inst["id"], f"exited while starting ({obs.exit_code})"
+                )
+                actions.append(_Stop(obs.ref))  # remove the exited container
+            elif _start_due(inst, tx, settings):
+                actions.append(_Start(inst["id"]))
+        elif state == "running":
+            if obs is None or obs.status == "exited":
+                why = (
+                    "container vanished" if obs is None else f"exited ({obs.exit_code})"
+                )
+                await confirm_terminated(tx, inst["id"], why)
+                if obs is not None:
+                    actions.append(_Stop(obs.ref))  # remove the exited container
+            elif reason := await _why_terminate(tx.conn, inst, tx, settings):
+                await begin_terminating(tx, inst["id"], reason)
+                actions.append(_Stop(inst["provider_ref"]))
+        elif state == "terminating":
+            if obs is None or obs.status == "exited":
+                await confirm_terminated(
+                    tx, inst["id"], inst["exit_reason"] or "stopped"
+                )
+                if obs is not None:
+                    actions.append(_Stop(obs.ref))
+            else:
+                actions.append(_Stop(inst["provider_ref"]))
+
+    # Containers carrying this pool's label that Argus does not track as live:
+    # leftovers of terminated instances, or orphans. Stop them.
+    actions.extend(_Stop(o.ref) for i, o in observed.items() if i not in known)
+
+    actions.extend(await _scale(tx, pool, settings))
+    return actions
+
+
+async def _why_terminate(
+    conn: aiosqlite.Connection, inst: aiosqlite.Row, tx: Tx, settings: FleetSettings
+) -> str | None:
+    async with conn.execute(
+        "SELECT state, count(*) AS n FROM agents WHERE instance_id = ? GROUP BY state",
+        (inst["id"],),
+    ) as cur:
+        by_state = {r["state"]: r["n"] for r in await cur.fetchall()}
+    if by_state.get("lost"):
+        return "an agent of this instance was lost"
+    live = by_state.get("active", 0) + by_state.get("draining", 0)
+    if by_state and not live:
+        return "all agents left"
+    running_at = fleet.parse_ts(inst["running_at"])
+    if (
+        not by_state
+        and running_at
+        and tx.now - running_at > settings.registration_timeout
+    ):
+        return "no agent registered in time"
+    return None
+
+
+async def _scale(tx: Tx, pool: Pool, settings: FleetSettings) -> list[_Start | _Stop]:
+    async with tx.conn.execute(
+        "SELECT * FROM instances WHERE pool = ? AND state != 'terminated'"
+        " ORDER BY created_at DESC, id",
+        (pool.name,),
+    ) as cur:
+        live = list(await cur.fetchall())
+    desired = min(pool.desired_replicas, pool.max_replicas)
+    actions: list[_Start | _Stop] = []
+    if len(live) < desired:
+        if settings.argus_url is None:
+            await _set_status(
+                tx,
+                pool.name,
+                "failing",
+                "ARGUS_PUBLIC_URL is not set: containers cannot reach Argus",
+            )
+            return []
+        for _ in range(desired - len(live)):
+            instance_id = str(uuid4())
+            await tx.conn.execute(
+                "INSERT INTO instances (id, pool, provider_ref, state, created_at)"
+                " VALUES (?, ?, ?, 'reserved', ?)",
+                (instance_id, pool.name, container_name(instance_id), ts(tx.now)),
+            )
+            await record(
+                tx,
+                "system",
+                "instance",
+                instance_id,
+                "instance.reserved",
+                {"pool": pool.name},
+            )
+            actions.append(_Start(instance_id))
+        return actions
+
+    going = sum(1 for i in live if i["draining"] or i["state"] == "terminating")
+    excess = len(live) - desired - going
+    if excess <= 0:
+        return actions
+    # Cheapest first: instances with no container yet, then idle running ones.
+    for inst in [i for i in live if i["state"] == "reserved"]:
+        if excess == 0:
+            break
+        await begin_terminating(tx, inst["id"], "scaled down")
+        actions.append(_Stop(inst["provider_ref"]))
+        excess -= 1
+    for inst in [i for i in live if i["state"] == "running" and not i["draining"]]:
+        if excess == 0:
+            break
+        if await _busy(tx.conn, inst["id"]):
+            continue  # never interrupt work to scale down
+        await tx.conn.execute(
+            "UPDATE instances SET draining = 1 WHERE id = ?", (inst["id"],)
+        )
+        async with tx.conn.execute(
+            "SELECT id FROM agents WHERE instance_id = ? AND state = 'active'",
+            (inst["id"],),
+        ) as cur:
+            agent_ids = [r["id"] for r in await cur.fetchall()]
+        for agent_id in agent_ids:
+            await agents.drain(tx, agent_id, "system")
+        if not agent_ids:  # nothing registered yet: nothing to drain, just stop it
+            await begin_terminating(tx, inst["id"], "scaled down")
+            actions.append(_Stop(inst["provider_ref"]))
+        await record(tx, "system", "instance", inst["id"], "instance.draining")
+        excess -= 1
+    return actions
+
+
+async def _act(
+    db: Database,
+    target: Target,
+    pool_name: str,
+    action: _Start | _Stop,
+    settings: FleetSettings,
+) -> None:
+    if isinstance(action, _Stop):
+        try:
+            await target.stop(action.ref, grace=settings.stop_grace)
+        except TargetError as exc:
+            log.warning("stopping %s failed (will retry): %s", action.ref, exc)
+        return
+
+    # A fresh bootstrap token per attempt: Argus keeps only hashes, so a token
+    # cannot be re-sent; older unused ones for this instance are revoked.
+    async with db.write() as tx:
+        pool = await fleet.get_pool(tx.conn, pool_name)
+        await tx.conn.execute(
+            "UPDATE tokens SET revoked_at = ? WHERE revoked_at IS NULL AND kind = 'bootstrap'"
+            " AND used_at IS NULL AND instance_id = ?",
+            (ts(tx.now), action.instance_id),
+        )
+        tokens = [
+            (
+                await agents.create_bootstrap_token(
+                    tx,
+                    BootstrapTokenCreate(
+                        role=Role.WORKER, instance_id=action.instance_id
+                    ),
+                    "system",
+                )
+            ).token
+            for _ in range(pool.agents_per_instance)
+        ]
+        await tx.conn.execute(
+            "UPDATE instances SET start_attempts = start_attempts + 1, last_start_at = ?"
+            " WHERE id = ?",
+            (ts(tx.now), action.instance_id),
+        )
+    assert settings.argus_url is not None
+    try:
+        spec = runtimes.container_spec(
+            pool, action.instance_id, tokens, settings.argus_url
+        )
+        ref = await target.start(spec)
+    except TargetError as exc:
+        # Possibly ambiguous: the next pass looks the instance up by name before
+        # starting again, so this can never create a second container.
+        async with db.write() as tx:
+            await tx.conn.execute(
+                "UPDATE instances SET last_error = ? WHERE id = ?",
+                (str(exc), action.instance_id),
+            )
+            await _set_status(tx, pool_name, "failing", str(exc))
+        return
+    async with db.write() as tx:
+        async with tx.conn.execute(
+            "SELECT state FROM instances WHERE id = ?", (action.instance_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if row is not None and row["state"] == "reserved":
+            await _mark_running(tx, action.instance_id, ref)
+        if pool.status == "failing":
+            await _set_status(tx, pool_name, "ok", None)
+
+
+async def begin_terminating(tx: Tx, instance_id: str, reason: str) -> None:
+    """Request the stop; its agents end now, its slot only when confirmed."""
+    await tx.conn.execute(
+        "UPDATE instances SET state = 'terminating', terminating_at = ?, exit_reason = ?"
+        " WHERE id = ? AND state IN ('reserved', 'running')",
+        (ts(tx.now), reason, instance_id),
+    )
+    await agents.end_instance(tx, instance_id, f"instance terminating: {reason}")
+    await record(
+        tx,
+        "system",
+        "instance",
+        instance_id,
+        "instance.terminating",
+        {"reason": reason},
+    )
+
+
+async def confirm_terminated(tx: Tx, instance_id: str, reason: str) -> None:
+    """The provider confirmed the container is gone: free the slot."""
+    await tx.conn.execute(
+        "UPDATE instances SET state = 'terminated', terminated_at = ?,"
+        " exit_reason = coalesce(exit_reason, ?) WHERE id = ?",
+        (ts(tx.now), reason, instance_id),
+    )
+    await agents.end_instance(tx, instance_id, f"instance terminated: {reason}")
+    await record(
+        tx, "system", "instance", instance_id, "instance.terminated", {"reason": reason}
+    )
+
+
+async def _mark_running(tx: Tx, instance_id: str, ref: str) -> None:
+    await tx.conn.execute(
+        "UPDATE instances SET state = 'running', provider_ref = ?, running_at = ?,"
+        " last_error = NULL WHERE id = ?",
+        (ref, ts(tx.now), instance_id),
+    )
+    await record(tx, "system", "instance", instance_id, "instance.running")
+
+
+def _start_due(inst: aiosqlite.Row, tx: Tx, settings: FleetSettings) -> bool:
+    """Retry starts with exponential backoff (5 s, 10 s, … up to the max)."""
+    last = fleet.parse_ts(inst["last_start_at"])
+    if last is None:
+        return True
+    delay = min(
+        timedelta(seconds=5 * 2 ** max(inst["start_attempts"] - 1, 0)),
+        settings.start_backoff_max,
+    )
+    return tx.now - last >= delay
+
+
+async def _busy(conn: aiosqlite.Connection, instance_id: str) -> bool:
+    async with conn.execute(
+        "SELECT 1 FROM tasks t JOIN agents a ON a.id = t.assignee_agent_id"
+        " WHERE a.instance_id = ? AND t.state = 'claimed' LIMIT 1",
+        (instance_id,),
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
+async def _set_status(tx: Tx, name: str, status: str, error: str | None) -> None:
+    await tx.conn.execute(
+        "UPDATE pools SET status = ?, last_error = ? WHERE name = ?",
+        (status, error, name),
+    )
+
+
+async def run(
+    db: Database,
+    targets: TargetRegistry,
+    settings: FleetSettings,
+    interval: float = 5.0,
+) -> None:
+    while True:
+        await reconcile(db, targets, settings)
+        await asyncio.sleep(interval)

@@ -14,6 +14,8 @@ export type Revision = components["schemas"]["Revision"];
 export type Proposal = components["schemas"]["Proposal"];
 export type SearchHit = components["schemas"]["SearchHit"];
 export type Account = components["schemas"]["Account"];
+export type Pool = components["schemas"]["Pool"];
+export type Instance = components["schemas"]["Instance"];
 
 const TOKEN_KEY = "argus.token";
 
@@ -92,6 +94,14 @@ export async function download(path: string, filename: string): Promise<void> {
   const a = Object.assign(document.createElement("a"), { href: url, download: filename });
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/** GET a plain-text endpoint with auth (e.g. container logs). */
+export async function fetchText(path: string): Promise<string> {
+  const res = await fetch(path, { headers: { Authorization: `Bearer ${currentToken}` } });
+  if (res.status === 401) onUnauthorized();
+  if (!res.ok) throw new ApiError(res.status, "error", await res.text());
+  return res.text();
 }
 
 export function token(): string | null {

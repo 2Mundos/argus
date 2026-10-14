@@ -19,6 +19,9 @@ class Settings:
     secrets_file: Path | None = None  # default: <data_dir>/secrets.sops.yaml
     sops_bin: str = "sops"
     account_cooldown_minutes: int = 60  # when a provider gives no reset time
+    # How containers Argus starts reach it, e.g. http://host.docker.internal:8000.
+    public_url: str | None = None
+    reconcile_interval_s: float = 5.0
 
     @property
     def db_path(self) -> Path:
@@ -56,6 +59,8 @@ class Settings:
             account_cooldown_minutes=int(
                 os.environ.get("ARGUS_ACCOUNT_COOLDOWN_MINUTES", 60)
             ),
+            public_url=os.environ.get("ARGUS_PUBLIC_URL") or None,
+            reconcile_interval_s=float(os.environ.get("ARGUS_RECONCILE_INTERVAL_S", 5)),
             dashboard_dir=(
                 Path(d) if (d := os.environ.get("ARGUS_DASHBOARD_DIR")) else None
             ),

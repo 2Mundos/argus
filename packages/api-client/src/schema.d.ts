@@ -449,6 +449,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/instances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Instances */
+        get: operations["list_instances_api_instances_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/instances/{instance_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Instance */
+        get: operations["get_instance_api_instances__instance_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/instances/{instance_id}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Instance Logs
+         * @description The container's recent output, read live from the target (not stored).
+         */
+        get: operations["instance_logs_api_instances__instance_id__logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/instances/{instance_id}/terminate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Terminate Instance
+         * @description Stop an instance now: its agents end immediately (tasks released); its slot
+         *     frees once the provider confirms the container is gone.
+         */
+        post: operations["terminate_instance_api_instances__instance_id__terminate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/knowledge/pages": {
         parameters: {
             query?: never;
@@ -633,6 +708,66 @@ export interface paths {
         get: operations["search_api_knowledge_search_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pools */
+        get: operations["list_pools_api_pools_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pools/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Pool */
+        get: operations["get_pool_api_pools__name__get"];
+        /**
+         * Upsert Pool
+         * @description Create or replace a pool definition, including its replica cap (admin only).
+         *     The reconciler converges instances to it within seconds.
+         */
+        put: operations["upsert_pool_api_pools__name__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pools/{name}/scale": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Scale Pool
+         * @description Set desired replicas. Orchestrators may scale up to `max_replicas`; asking
+         *     for more opens a decision for a human (`decision_id`) instead of failing.
+         */
+        post: operations["scale_pool_api_pools__name__scale_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1321,6 +1456,10 @@ export interface components {
             kind: components["schemas"]["DecisionKind"];
             /** Options */
             options: string[] | null;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            } | null;
             /** Question */
             question: string;
             /** Requested By */
@@ -1354,6 +1493,30 @@ export interface components {
          * @enum {string}
          */
         DecisionState: "open" | "answered" | "cancelled";
+        /** DockerOptions */
+        "DockerOptions-Input": {
+            /**
+             * Extra Hosts
+             * @default []
+             */
+            extra_hosts?: string[];
+            /** Host */
+            host?: string | null;
+            /** Network */
+            network?: string | null;
+        };
+        /** DockerOptions */
+        "DockerOptions-Output": {
+            /**
+             * Extra Hosts
+             * @default []
+             */
+            extra_hosts: string[];
+            /** Host */
+            host: string | null;
+            /** Network */
+            network: string | null;
+        };
         /** EventOut */
         EventOut: {
             /** Actor */
@@ -1431,6 +1594,53 @@ export interface components {
             renewed: components["schemas"]["RenewedLease"][];
             state: components["schemas"]["AgentState"];
         };
+        /** Instance */
+        Instance: {
+            /** Agents */
+            agents: components["schemas"]["InstanceAgent"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Draining */
+            draining: boolean;
+            /** Exit Reason */
+            exit_reason: string | null;
+            /** Id */
+            id: string;
+            /** Last Error */
+            last_error: string | null;
+            /** Pool */
+            pool: string;
+            /** Provider Ref */
+            provider_ref: string;
+            /** Running At */
+            running_at: string | null;
+            /** Start Attempts */
+            start_attempts: number;
+            state: components["schemas"]["InstanceState"];
+            /** Terminated At */
+            terminated_at: string | null;
+            /** Terminating At */
+            terminating_at: string | null;
+        };
+        /** InstanceAgent */
+        InstanceAgent: {
+            /** Claimed Tasks */
+            claimed_tasks: number;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** State */
+            state: string;
+        };
+        /**
+         * InstanceState
+         * @enum {string}
+         */
+        InstanceState: "reserved" | "running" | "terminating" | "terminated";
         /** IssuedToken */
         IssuedToken: {
             /**
@@ -1651,6 +1861,114 @@ export interface components {
          * @enum {string}
          */
         PageState: "active" | "archived";
+        /** Pool */
+        Pool: {
+            /**
+             * Agents Per Instance
+             * @default 1
+             */
+            agents_per_instance: number;
+            /**
+             * Capabilities
+             * @default []
+             */
+            capabilities: string[];
+            /** Cpus */
+            cpus: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Desired Replicas
+             * @default 0
+             */
+            desired_replicas: number;
+            /**
+             * @default {
+             *       "extra_hosts": []
+             *     }
+             */
+            docker: components["schemas"]["DockerOptions-Output"];
+            /**
+             * Env
+             * @default {}
+             */
+            env: {
+                [key: string]: string;
+            };
+            /** Image */
+            image: string;
+            /** Last Error */
+            last_error: string | null;
+            /** Live Instances */
+            live_instances: number;
+            /** Max Replicas */
+            max_replicas: number;
+            /** Memory Mb */
+            memory_mb: number | null;
+            /** Name */
+            name: string;
+            /** @default plain */
+            runtime: components["schemas"]["RuntimeKind"];
+            status: components["schemas"]["PoolStatus"];
+            /** @default docker */
+            target: components["schemas"]["TargetKind"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * PoolStatus
+         * @enum {string}
+         */
+        PoolStatus: "ok" | "unreachable" | "failing";
+        /** PoolUpsert */
+        PoolUpsert: {
+            /**
+             * Agents Per Instance
+             * @default 1
+             */
+            agents_per_instance?: number;
+            /**
+             * Capabilities
+             * @default []
+             */
+            capabilities?: string[];
+            /** Cpus */
+            cpus?: number | null;
+            /**
+             * Desired Replicas
+             * @default 0
+             */
+            desired_replicas?: number;
+            /**
+             * @default {
+             *       "extra_hosts": []
+             *     }
+             */
+            docker?: components["schemas"]["DockerOptions-Input"];
+            /**
+             * Env
+             * @default {}
+             */
+            env?: {
+                [key: string]: string;
+            };
+            /** Image */
+            image: string;
+            /** Max Replicas */
+            max_replicas: number;
+            /** Memory Mb */
+            memory_mb?: number | null;
+            /** @default plain */
+            runtime?: components["schemas"]["RuntimeKind"];
+            /** @default docker */
+            target?: components["schemas"]["TargetKind"];
+        };
         /** ProgressRequest */
         ProgressRequest: {
             /** Attempt */
@@ -1800,6 +2118,11 @@ export interface components {
          */
         Role: "orchestrator" | "worker";
         /**
+         * RuntimeKind
+         * @enum {string}
+         */
+        RuntimeKind: "plain" | "nanoclaw";
+        /**
          * SaveToKnowledge
          * @description When answering a question: keep the answer as knowledge too.
          */
@@ -1810,6 +2133,17 @@ export interface components {
             project?: string | null;
             /** Title */
             title?: string | null;
+        };
+        /** ScaleRequest */
+        ScaleRequest: {
+            /** Desired Replicas */
+            desired_replicas: number;
+        };
+        /** ScaleResult */
+        ScaleResult: {
+            /** Decision Id */
+            decision_id?: string | null;
+            pool: components["schemas"]["Pool"];
         };
         /** SearchHit */
         SearchHit: {
@@ -1846,6 +2180,11 @@ export interface components {
              */
             type: "task" | "decision" | "artifact" | "url";
         };
+        /**
+         * TargetKind
+         * @enum {string}
+         */
+        TargetKind: "docker" | "kubernetes";
         /** Task */
         Task: {
             /** Acceptance */
@@ -2930,6 +3269,133 @@ export interface operations {
             };
         };
     };
+    list_instances_api_instances_get: {
+        parameters: {
+            query?: {
+                pool?: string | null;
+                include_terminated?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instance"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_instance_api_instances__instance_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instance"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    instance_logs_api_instances__instance_id__logs_get: {
+        parameters: {
+            query?: {
+                tail?: number;
+            };
+            header?: never;
+            path: {
+                instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    terminate_instance_api_instances__instance_id__terminate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instance"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_pages_api_knowledge_pages_get: {
         parameters: {
             query?: {
@@ -3304,6 +3770,127 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchHit"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_pools_api_pools_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pool"][];
+                };
+            };
+        };
+    };
+    get_pool_api_pools__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pool"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_pool_api_pools__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PoolUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pool"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scale_pool_api_pools__name__scale_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScaleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScaleResult"];
                 };
             };
             /** @description Validation Error */

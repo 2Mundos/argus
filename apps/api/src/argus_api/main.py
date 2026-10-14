@@ -26,6 +26,10 @@ from argus_api.decisions.routes import router as decisions_router
 from argus_api.deps import get_db
 from argus_api.errors import DomainError
 from argus_api.eventlog.routes import router as events_router
+from argus_api.fleet import reconciler
+from argus_api.fleet.reconciler import FleetSettings
+from argus_api.fleet.routes import router as fleet_router
+from argus_api.fleet.targets import TargetRegistry
 from argus_api.kinds.routes import router as kinds_router
 from argus_api.knowledge.routes import router as knowledge_router
 from argus_api.secrets import open_store
@@ -67,13 +71,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 settings.data_dir / "admin-token",
                 generated,
             )
-        reaper_task = asyncio.create_task(reaper.run(db))
+        app.state.targets = TargetRegistry()
+        app.state.fleet = FleetSettings(argus_url=settings.public_url)
+        loops = [
+            asyncio.create_task(reaper.run(db)),
+            asyncio.create_task(
+                reconciler.run(
+                    db,
+                    app.state.targets,
+                    app.state.fleet,
+                    settings.reconcile_interval_s,
+                )
+            ),
+        ]
         try:
             yield
         finally:
-            reaper_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await reaper_task
+            for loop in loops:
+                loop.cancel()
+            for loop in loops:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await loop
             await db.close()
 
 
@@ -91,6 +109,7 @@ for router in (
     events_router,
     knowledge_router,
     accounts_router,
+    fleet_router,
 ):
     api.include_router(router)
 app.include_router(api)

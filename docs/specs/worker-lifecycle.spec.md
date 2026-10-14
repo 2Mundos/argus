@@ -233,7 +233,48 @@ instances and converges:
   human-only action (guards against a runaway orchestrator).
 
 The reconciler is an asyncio task in the Argus process (single-node 3.1); the
-startup lock file guarantees there is only one.
+startup lock file guarantees there is only one. As built:
+
+- **Instance states**: `reserved` (slot taken, container not confirmed) →
+  `running` → `terminating` → `terminated`. Only a provider listing that no
+  longer shows the container (or shows it exited) moves an instance to
+  `terminated`.
+- **Each pass, per pool** (every `ARGUS_RECONCILE_INTERVAL_S`, default 5 s):
+  observe (list the pool's labeled containers), decide in one write
+  transaction, then act (start/stop) after commit. If the target cannot be
+  listed, the pool is marked `unreachable` and nothing about it changes that
+  pass.
+- **Starts**: containers are named `argus-<instance id>`, so a start is looked up
+  before it is retried and can never produce a second container. Each attempt
+  mints fresh bootstrap tokens (Argus stores only hashes) and revokes the
+  previous unused ones. Failed starts retry with exponential backoff (5 s
+  doubling, max 5 min) and mark the pool `failing` with the error. Nothing
+  starts without `ARGUS_PUBLIC_URL` (how containers reach Argus).
+- **Terminations** are begun when an agent of the instance is lost, when all its
+  agents have left, when no agent registers within 5 minutes of the container
+  running, on scale-down of an instance that has no agent yet, or by an admin
+  (`POST /api/instances/{id}/terminate`). Exited containers are removed after
+  they are confirmed. Containers carrying the pool's label that Argus does not
+  track as live are stopped as orphans.
+- **Scale-down** drops reserved instances first, then drains idle running
+  instances (their agents go `draining`, leave, and the container then goes);
+  instances with a claimed task are skipped.
+- **Scaling API**: `POST /api/pools/{name}/scale`. Up to `max_replicas`,
+  orchestrators and admins scale directly; above it an admin raises the cap
+  along with it, while an orchestrator's request opens a `policy` decision for a
+  human (approve raises the cap and scales). Pool definitions, including the cap,
+  are admin-only (`PUT /api/pools/{name}`).
+- **Logs**: `GET /api/instances/{id}/logs?tail=N` reads the container's recent
+  output live from the target; nothing is stored. Following logs in real time is
+  a later addition.
+
+**The `plain` runtime contract.** Argus starts the pool's image with:
+`ARGUS_URL`, `ARGUS_BOOTSTRAP_TOKENS` (comma-separated, one per agent),
+`ARGUS_INSTANCE_ID`, `ARGUS_POOL`, `ARGUS_CAPABILITIES`, plus the pool's `env`,
+and labels `argus.managed`, `argus.pool`, `argus.instance_id`. The image
+registers, heartbeats, claims, and leaves when drained or sent SIGTERM.
+`examples/echo-worker` is the reference implementation (standard library only)
+and the image the Docker integration test scales (`make test-docker`).
 
 Provisioning has two independent axes, so N targets × M runtimes do not need
 N×M implementations:

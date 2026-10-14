@@ -199,6 +199,25 @@ async def mark_lost(tx: Tx) -> list[str]:
     return ids
 
 
+async def end_instance(tx: Tx, instance_id: str, reason: str) -> list[str]:
+    """An instance is going away: its live agents are lost (tasks released,
+    tokens revoked) and its unused bootstrap tokens revoked, in this transaction."""
+    async with tx.conn.execute(
+        "SELECT id FROM agents WHERE instance_id = ? AND state IN ('active', 'draining')"
+        " ORDER BY id",
+        (instance_id,),
+    ) as cur:
+        ids = [r["id"] for r in await cur.fetchall()]
+    for agent_id in ids:
+        await _end(tx, agent_id, AgentState.LOST, reason, "system")
+    await tx.conn.execute(
+        "UPDATE tokens SET revoked_at = ? WHERE revoked_at IS NULL AND kind = 'bootstrap'"
+        " AND used_at IS NULL AND instance_id = ?",
+        (ts(tx.now), instance_id),
+    )
+    return ids
+
+
 async def _end(
     tx: Tx, agent_id: str, state: AgentState, reason: str, actor: str
 ) -> None:

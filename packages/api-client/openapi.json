@@ -1029,6 +1029,18 @@
             ],
             "title": "Options"
           },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
           "question": {
             "title": "Question",
             "type": "string"
@@ -1131,6 +1143,83 @@
         ],
         "title": "DecisionState",
         "type": "string"
+      },
+      "DockerOptions-Input": {
+        "properties": {
+          "extra_hosts": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Extra Hosts",
+            "type": "array"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "network": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Network"
+          }
+        },
+        "title": "DockerOptions",
+        "type": "object"
+      },
+      "DockerOptions-Output": {
+        "properties": {
+          "extra_hosts": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Extra Hosts",
+            "type": "array"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "network": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Network"
+          }
+        },
+        "required": [
+          "host",
+          "network",
+          "extra_hosts"
+        ],
+        "title": "DockerOptions",
+        "type": "object"
       },
       "EventOut": {
         "properties": {
@@ -1337,6 +1426,158 @@
         ],
         "title": "HeartbeatResponse",
         "type": "object"
+      },
+      "Instance": {
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/InstanceAgent"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "draining": {
+            "title": "Draining",
+            "type": "boolean"
+          },
+          "exit_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Reason"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "pool": {
+            "title": "Pool",
+            "type": "string"
+          },
+          "provider_ref": {
+            "title": "Provider Ref",
+            "type": "string"
+          },
+          "running_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Running At"
+          },
+          "start_attempts": {
+            "title": "Start Attempts",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/InstanceState"
+          },
+          "terminated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminated At"
+          },
+          "terminating_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminating At"
+          }
+        },
+        "required": [
+          "id",
+          "pool",
+          "provider_ref",
+          "state",
+          "draining",
+          "start_attempts",
+          "last_error",
+          "exit_reason",
+          "agents",
+          "created_at",
+          "running_at",
+          "terminating_at",
+          "terminated_at"
+        ],
+        "title": "Instance",
+        "type": "object"
+      },
+      "InstanceAgent": {
+        "properties": {
+          "claimed_tasks": {
+            "title": "Claimed Tasks",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "state",
+          "claimed_tasks"
+        ],
+        "title": "InstanceAgent",
+        "type": "object"
+      },
+      "InstanceState": {
+        "enum": [
+          "reserved",
+          "running",
+          "terminating",
+          "terminated"
+        ],
+        "title": "InstanceState",
+        "type": "string"
       },
       "IssuedToken": {
         "properties": {
@@ -1796,6 +2037,240 @@
         "title": "PageState",
         "type": "string"
       },
+      "Pool": {
+        "properties": {
+          "agents_per_instance": {
+            "default": 1,
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Agents Per Instance",
+            "type": "integer"
+          },
+          "capabilities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "cpus": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpus"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "desired_replicas": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Desired Replicas",
+            "type": "integer"
+          },
+          "docker": {
+            "$ref": "#/components/schemas/DockerOptions-Output",
+            "default": {
+              "extra_hosts": []
+            }
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Env",
+            "type": "object"
+          },
+          "image": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Image",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "live_instances": {
+            "title": "Live Instances",
+            "type": "integer"
+          },
+          "max_replicas": {
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Max Replicas",
+            "type": "integer"
+          },
+          "memory_mb": {
+            "anyOf": [
+              {
+                "minimum": 16.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Mb"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeKind",
+            "default": "plain"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PoolStatus"
+          },
+          "target": {
+            "$ref": "#/components/schemas/TargetKind",
+            "default": "docker"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "runtime",
+          "image",
+          "capabilities",
+          "agents_per_instance",
+          "desired_replicas",
+          "max_replicas",
+          "env",
+          "cpus",
+          "memory_mb",
+          "docker",
+          "name",
+          "status",
+          "last_error",
+          "live_instances",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "Pool",
+        "type": "object"
+      },
+      "PoolStatus": {
+        "enum": [
+          "ok",
+          "unreachable",
+          "failing"
+        ],
+        "title": "PoolStatus",
+        "type": "string"
+      },
+      "PoolUpsert": {
+        "properties": {
+          "agents_per_instance": {
+            "default": 1,
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Agents Per Instance",
+            "type": "integer"
+          },
+          "capabilities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "cpus": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpus"
+          },
+          "desired_replicas": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Desired Replicas",
+            "type": "integer"
+          },
+          "docker": {
+            "$ref": "#/components/schemas/DockerOptions-Input",
+            "default": {
+              "extra_hosts": []
+            }
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Env",
+            "type": "object"
+          },
+          "image": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Image",
+            "type": "string"
+          },
+          "max_replicas": {
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Max Replicas",
+            "type": "integer"
+          },
+          "memory_mb": {
+            "anyOf": [
+              {
+                "minimum": 16.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Mb"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeKind",
+            "default": "plain"
+          },
+          "target": {
+            "$ref": "#/components/schemas/TargetKind",
+            "default": "docker"
+          }
+        },
+        "required": [
+          "image",
+          "max_replicas"
+        ],
+        "title": "PoolUpsert",
+        "type": "object"
+      },
       "ProgressRequest": {
         "properties": {
           "attempt": {
@@ -2155,6 +2630,14 @@
         "title": "Role",
         "type": "string"
       },
+      "RuntimeKind": {
+        "enum": [
+          "plain",
+          "nanoclaw"
+        ],
+        "title": "RuntimeKind",
+        "type": "string"
+      },
       "SaveToKnowledge": {
         "description": "When answering a question: keep the answer as knowledge too.",
         "properties": {
@@ -2193,6 +2676,43 @@
           }
         },
         "title": "SaveToKnowledge",
+        "type": "object"
+      },
+      "ScaleRequest": {
+        "properties": {
+          "desired_replicas": {
+            "minimum": 0.0,
+            "title": "Desired Replicas",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "desired_replicas"
+        ],
+        "title": "ScaleRequest",
+        "type": "object"
+      },
+      "ScaleResult": {
+        "properties": {
+          "decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
+          },
+          "pool": {
+            "$ref": "#/components/schemas/Pool"
+          }
+        },
+        "required": [
+          "pool"
+        ],
+        "title": "ScaleResult",
         "type": "object"
       },
       "SearchHit": {
@@ -2277,6 +2797,14 @@
         ],
         "title": "Source",
         "type": "object"
+      },
+      "TargetKind": {
+        "enum": [
+          "docker",
+          "kubernetes"
+        ],
+        "title": "TargetKind",
+        "type": "string"
       },
       "Task": {
         "properties": {
@@ -4419,6 +4947,229 @@
         ]
       }
     },
+    "/api/instances": {
+      "get": {
+        "operationId": "list_instances_api_instances_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pool",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pool"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_terminated",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Terminated",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Instance"
+                  },
+                  "title": "Response List Instances Api Instances Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Instances",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/instances/{instance_id}": {
+      "get": {
+        "operationId": "get_instance_api_instances__instance_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Instance"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Instance",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/instances/{instance_id}/logs": {
+      "get": {
+        "description": "The container's recent output, read live from the target (not stored).",
+        "operationId": "instance_logs_api_instances__instance_id__logs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tail",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 5000,
+              "minimum": 1,
+              "title": "Tail",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Instance Logs",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/instances/{instance_id}/terminate": {
+      "post": {
+        "description": "Stop an instance now: its agents end immediately (tasks released); its slot\nfrees once the provider confirms the container is gone.",
+        "operationId": "terminate_instance_api_instances__instance_id__terminate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Instance"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Terminate Instance",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
     "/api/knowledge/pages": {
       "get": {
         "operationId": "list_pages_api_knowledge_pages_get",
@@ -5087,6 +5838,200 @@
         "summary": "Search",
         "tags": [
           "knowledge"
+        ]
+      }
+    },
+    "/api/pools": {
+      "get": {
+        "operationId": "list_pools_api_pools_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Pool"
+                  },
+                  "title": "Response List Pools Api Pools Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Pools",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/pools/{name}": {
+      "get": {
+        "operationId": "get_pool_api_pools__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pool"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Pool",
+        "tags": [
+          "fleet"
+        ]
+      },
+      "put": {
+        "description": "Create or replace a pool definition, including its replica cap (admin only).\nThe reconciler converges instances to it within seconds.",
+        "operationId": "upsert_pool_api_pools__name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PoolUpsert"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pool"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upsert Pool",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/pools/{name}/scale": {
+      "post": {
+        "description": "Set desired replicas. Orchestrators may scale up to `max_replicas`; asking\nfor more opens a decision for a human (`decision_id`) instead of failing.",
+        "operationId": "scale_pool_api_pools__name__scale_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScaleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScaleResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Scale Pool",
+        "tags": [
+          "fleet"
         ]
       }
     },
