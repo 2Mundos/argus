@@ -20,6 +20,10 @@ RUN uv sync --frozen --no-dev --package argus-api
 FROM python:3.12-slim-trixie
 WORKDIR /app
 COPY --from=litestream/litestream:0.5.17 /usr/local/bin/litestream /usr/local/bin/litestream
+# sops decrypts/encrypts the credentials file (age support is built in).
+ADD --chmod=755 --checksum=sha256:e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b \
+    https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64 \
+    /usr/local/bin/sops
 COPY deploy/litestream.yml /etc/litestream.yml
 COPY deploy/entrypoint.sh /usr/local/bin/argus-entrypoint
 COPY --from=build /app /app

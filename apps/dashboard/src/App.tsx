@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { handleUnauthorized, setToken, token } from "./api";
 import { LiveProvider, useLive } from "./live";
+import { Accounts } from "./views/Accounts";
 import { Agents } from "./views/Agents";
 import { Events } from "./views/Events";
 import { Inbox } from "./views/Inbox";
@@ -13,6 +14,7 @@ const TABS = {
   agents: "Agents",
   inbox: "Inbox",
   knowledge: "Knowledge",
+  accounts: "Accounts",
   events: "Events",
 } as const;
 type Tab = keyof typeof TABS;
@@ -70,6 +72,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
         {tab === "agents" && <Agents />}
         {tab === "inbox" && <Inbox />}
         {tab === "knowledge" && <Knowledge />}
+        {tab === "accounts" && <Accounts />}
         {tab === "events" && <Events />}
       </main>
     </div>

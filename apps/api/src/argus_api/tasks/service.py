@@ -271,6 +271,7 @@ async def complete(
     kind = await kinds.get_kind(tx.conn, row["kind"])
     kinds.validate(kind.result_schema, result.data, "result.data")
     await _check_artifacts(tx.conn, task_id, result.artifacts)
+    await _record_result_usage(tx, agent_id, task_id, result)
     await _apply(
         tx,
         row,
@@ -645,6 +646,36 @@ async def _states_of(
         ids,
     ) as cur:
         return {r["id"]: r["state"] for r in await cur.fetchall()}
+
+
+async def _record_result_usage(
+    tx: Tx, agent_id: str, task_id: str, result: TaskResult
+) -> None:
+    """Usage reported in the result counts against its account (recorded only)."""
+    usage = result.usage
+    if usage is None or usage.account_id is None:
+        return
+    async with tx.conn.execute(
+        "SELECT 1 FROM accounts WHERE id = ?", (usage.account_id,)
+    ) as cur:
+        if await cur.fetchone() is None:
+            raise ValidationFailedError(
+                "result.usage.account_id is not a known account",
+                details=[usage.account_id],
+            )
+    await tx.conn.execute(
+        "INSERT INTO account_usage (account_id, agent_id, task_id, input_tokens,"
+        " output_tokens, cost_usd, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            usage.account_id,
+            agent_id,
+            task_id,
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cost_usd,
+            ts(tx.now),
+        ),
+    )
 
 
 async def _check_artifacts(

@@ -374,58 +374,67 @@ usage limits. Argus owns the **account registry and leasing** (in SQLite) and
 the **credentials** (in a SOPS file, 3.9.1). The two are kept apart: the
 database never holds a secret.
 
-- **`accounts`**: `id`, `provider` (`anthropic` | `openai` | `cursor` | …),
-  `kind` (`api_key` | `subscription`), `secret_ref` (a key into the secrets
-  file, `sops:<name>`; never the secret itself), `priority`, `state`
-  (`available` | `exhausted` | `disabled`),
-  `exhausted_until`, `labels`.
-- **Leasing**: an agent session leases one account
-  (`POST /accounts/lease {providers: [...]}`), choosing the highest-priority
-  `available` account among the providers its runtime supports. Leases follow
-  the agent's heartbeat like task leases do.
-- **Fallback**: when a provider call fails with a quota or rate-limit error, the
-  agent (or the NanoClaw module watching the session) calls
-  `POST /accounts/{id}/exhausted {until}`. Argus marks it exhausted until the
-  reported reset time (or a per-provider default), and the caller gets the next
-  account. Fallback first prefers another account of the same provider, then
-  another provider if the runtime supports it. An account returns to
-  `available` automatically when `exhausted_until` passes.
-- **No accounts left**: the agent's task goes `blocked` with reason
-  `no_account`, and every waiting agent is visible on the dashboard with the
-  earliest reset time. Tasks are unblocked automatically when an account frees.
-- **Usage is recorded, not enforced**: agents report tokens/cost per task and
-  account (the `usage` field of the result envelope, 3.11, plus interim
-  reports); Argus aggregates per account, pool, and task.
+- **`accounts`**: `id`, `name`, `provider` (`anthropic` | `openai` | `cursor` |
+  …), `kind` (`api_key` | `subscription`), `secret_ref` (`sops:<name>`, a key
+  into the secrets file; never the secret itself), `priority`, `max_leases`
+  (concurrent leases allowed; empty = unlimited), `state` (`available` |
+  `exhausted` | `disabled`), `exhausted_until`, `disabled_reason`, `labels`.
+  Admins register accounts (`POST /api/accounts`) either with the credential,
+  which Argus writes to the SOPS file as `account-<id>`, or with a `secret_ref`
+  to an entry already there.
+- **Leasing** (`POST /api/accounts/lease {providers}`, most preferred first):
+  Argus picks the highest-priority usable account among those providers (the
+  agent's provider order breaks ties, then the least-leased account) and returns
+  it **with its credential**. That response is how a plain-runtime worker gets
+  the secret; the NanoClaw module instead loads it into the gateway (3.8). An
+  agent holds at most one lease; leasing again replaces it, and leases end when
+  the agent is lost or leaves (or on `POST /api/accounts/release`).
+- **Fallback**: on a quota or rate-limit error the leasing agent reports
+  `POST /api/accounts/{id}/exhausted {until?, reason, task_id?, attempt?}`.
+  Argus marks it exhausted until the reported reset time (or
+  `ARGUS_ACCOUNT_COOLDOWN_MINUTES`, default 60) and immediately leases the next
+  account, **same provider first**, then the agent's other providers. Accounts
+  return to `available` on their own when the reset time passes (reaper).
+- **No accounts left**: the response carries no lease and the earliest reset
+  time; the given task is blocked with reason `no_account`. Such tasks return to
+  `ready` as soon as any account becomes usable again (recovery, a new account,
+  re-enabling, or a secrets reload), and whoever claims them leases afresh.
+- **Usage is recorded, not enforced**: `result.usage.account_id` on completion,
+  plus interim `POST /api/accounts/{id}/usage`. Accounts list usage for the last
+  24 h and in total.
 
 Check each provider's terms before pooling subscription accounts for automated
 use; some consumer plans restrict it.
 
 ### 3.9.1 Credential store: SOPS + age
 
-- Credentials live in one SOPS-encrypted YAML file, `/data/secrets.sops.yaml`,
-  encrypted to one or more **age** recipients. Each top-level key is a
-  `secret_ref` name holding that account's material (an API key, or a
-  subscription's OAuth access/refresh tokens and expiry).
-- Argus decrypts the file into memory at startup with the age identity from
-  `SOPS_AGE_KEY_FILE` (or `SOPS_AGE_KEY`). Plaintext is never written to disk or
-  logged, and never returned by the API: the dashboard shows only which keys
-  exist and when each was last updated.
-- **Argus is the only writer** (single-node 3.1). Adding or rotating an account
-  from the dashboard, and persisting **refreshed OAuth tokens** for
-  subscription accounts, update the in-memory copy, re-encrypt with `sops` to a
-  temporary file in the same directory, `fsync`, and atomically rename it over
-  the original. Writes are serialized by the same in-process discipline as the
-  database writer. A token refresh that cannot be persisted fails loudly: the
-  account is marked `disabled` with the reason, rather than silently keeping a
-  token that will be lost on restart.
-- Editing the file by hand (`sops /data/secrets.sops.yaml`) is supported while
-  Argus is stopped, or followed by `POST /admin/secrets/reload` (which refuses
-  if the file changed since Argus last wrote it and Argus has unsaved changes).
+- Credentials live in one SOPS-encrypted YAML file (`ARGUS_SECRETS_FILE`,
+  default `/data/secrets.sops.yaml`), encrypted to one or more **age**
+  recipients. Each top-level key is a secret name holding that account's
+  material (an API key, or a subscription's OAuth tokens).
+- Argus decrypts the file into memory at startup with the age identity sops
+  finds (`SOPS_AGE_KEY_FILE` or `SOPS_AGE_KEY`). Plaintext is never written to
+  disk, logged, or returned by the API except in a lease response to the agent
+  holding the lease.
+- **Argus is the only writer.** Each change runs `sops set --value-stdin` (or
+  `unset`) on a temporary copy in the same directory, which is fsynced and
+  renamed over the original; values reach sops over stdin, never on the command
+  line. The first write creates the file, which needs `SOPS_AGE_RECIPIENTS`
+  (the public key(s)); without it, writes fail with
+  `secret_store_not_configured`.
+- **Credential updates** (`PUT /api/accounts/{id}/credential`, e.g. refreshed
+  OAuth tokens) are allowed for the agent holding a lease on that account, or an
+  admin. If the write fails, the account is **disabled** with the reason, rather
+  than keeping a token that would be lost on restart.
+- Editing the file by hand (`sops /data/secrets.sops.yaml`) is supported;
+  `POST /api/admin/secrets/reload` re-reads it.
+- At startup and on reload, accounts whose secret is missing are disabled
+  automatically, and re-enabled automatically once it is back. Accounts an admin
+  disabled stay disabled. A store that cannot be decrypted is logged, never
+  fatal.
 - Because the file is encrypted, it can be backed up anywhere or committed to a
   private config repository. Losing the age identity means losing the
   credentials; the operator keeps a second recipient key offline.
-- At startup, every `sops:` reference in `accounts` must resolve; unresolved
-  accounts are marked `disabled` with a reason instead of preventing startup.
 
 ## 3.10 Decision requests (human in the loop)
 

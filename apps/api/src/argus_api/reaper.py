@@ -4,6 +4,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
+from argus_api.accounts import service as accounts
 from argus_api.agents import service as agents
 from argus_api.db import Database, Tx
 from argus_api.tasks import service as tasks
@@ -17,6 +18,7 @@ REAP_INTERVAL_S = 10.0
 class ReapResult:
     expired_tasks: list[str]
     lost_agents: list[str]
+    recovered_accounts: list[str]
 
 
 async def reap(tx: Tx) -> ReapResult:
@@ -24,7 +26,8 @@ async def reap(tx: Tx) -> ReapResult:
     # expires too. Then lost agents release whatever leases they still hold.
     expired = await tasks.expire_leases(tx)
     lost = await agents.mark_lost(tx)
-    return ReapResult(expired, lost)
+    recovered = await accounts.recover(tx)
+    return ReapResult(expired, lost, recovered)
 
 
 async def run(db: Database, interval: float = REAP_INTERVAL_S) -> None:

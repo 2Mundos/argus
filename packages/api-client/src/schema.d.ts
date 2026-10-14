@@ -4,6 +4,167 @@
  */
 
 export interface paths {
+    "/api/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Accounts */
+        get: operations["list_accounts_api_accounts_get"];
+        put?: never;
+        /**
+         * Create Account
+         * @description Register an account. A `credential` is written to the SOPS file first
+         *     (as `account-<id>`); the registry row only ever holds the reference.
+         */
+        post: operations["create_account_api_accounts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/lease": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Lease Account
+         * @description Lease the best usable account among `providers` (most preferred first),
+         *     with its credential. One lease per agent; it ends when the agent does.
+         *     `409 no_account` when none is usable.
+         */
+        post: operations["lease_account_api_accounts_lease_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Release Account */
+        post: operations["release_account_api_accounts_release_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Account */
+        get: operations["get_account_api_accounts__account_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Account */
+        patch: operations["update_account_api_accounts__account_id__patch"];
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Credential
+         * @description Replace the credential (e.g. refreshed OAuth tokens). Allowed for the agent
+         *     holding a lease on the account, or an admin. If it cannot be persisted, the
+         *     account is disabled rather than left with a token that would be lost.
+         */
+        put: operations["update_credential_api_accounts__account_id__credential_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/exhausted": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report Exhausted
+         * @description Report that the leased account hit a quota. Returns the next account to use
+         *     (same provider first), or none: then the given task is blocked as
+         *     `no_account` and returns to ready when an account frees up.
+         */
+        post: operations["report_exhausted_api_accounts__account_id__exhausted_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Report Usage */
+        post: operations["report_usage_api_accounts__account_id__usage_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/secrets/reload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reload Secrets
+         * @description Re-read the SOPS file after editing it by hand (`sops secrets.sops.yaml`),
+         *     then re-check every account's secret reference.
+         */
+        post: operations["reload_secrets_api_admin_secrets_reload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/tokens": {
         parameters: {
             query?: never;
@@ -782,6 +943,119 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * Account
+         * @description Registry entry. Never contains the credential.
+         */
+        Account: {
+            /** Active Leases */
+            active_leases: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Disabled Reason */
+            disabled_reason: string | null;
+            /** Exhausted Until */
+            exhausted_until: string | null;
+            /** Id */
+            id: string;
+            kind: components["schemas"]["AccountKind"];
+            /** Labels */
+            labels: {
+                [key: string]: string;
+            };
+            /** Max Leases */
+            max_leases: number | null;
+            /** Name */
+            name: string;
+            /** Priority */
+            priority: number;
+            /** Provider */
+            provider: string;
+            /** Secret Ref */
+            secret_ref: string;
+            state: components["schemas"]["AccountState"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            usage_24h: components["schemas"]["argus_core__accounts__Usage"];
+            usage_total: components["schemas"]["argus_core__accounts__Usage"];
+        };
+        /** AccountCreate */
+        AccountCreate: {
+            /** Credential */
+            credential?: {
+                [key: string]: unknown;
+            } | null;
+            /** @default api_key */
+            kind?: components["schemas"]["AccountKind"];
+            /**
+             * Labels
+             * @default {}
+             */
+            labels?: {
+                [key: string]: string;
+            };
+            /** Max Leases */
+            max_leases?: number | null;
+            /** Name */
+            name: string;
+            /**
+             * Priority
+             * @default 0
+             */
+            priority?: number;
+            /** Provider */
+            provider: string;
+            /** Secret Ref */
+            secret_ref?: string | null;
+        };
+        /**
+         * AccountKind
+         * @enum {string}
+         */
+        AccountKind: "api_key" | "subscription";
+        /**
+         * AccountLease
+         * @description What a leasing agent receives, including the credential to use.
+         */
+        AccountLease: {
+            /** Account Id */
+            account_id: string;
+            /** Credential */
+            credential: {
+                [key: string]: unknown;
+            };
+            kind: components["schemas"]["AccountKind"];
+            /** Lease Id */
+            lease_id: string;
+            /** Name */
+            name: string;
+            /** Provider */
+            provider: string;
+        };
+        /**
+         * AccountState
+         * @enum {string}
+         */
+        AccountState: "available" | "exhausted" | "disabled";
+        /** AccountUpdate */
+        AccountUpdate: {
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Labels */
+            labels?: {
+                [key: string]: string;
+            } | null;
+            /** Max Leases */
+            max_leases?: number | null;
+            /** Priority */
+            priority?: number | null;
+        };
         /** AdminToken */
         AdminToken: {
             /**
@@ -997,7 +1271,7 @@ export interface components {
             required_capabilities: string[];
             /** Requires Approval */
             requires_approval: boolean;
-            result: components["schemas"]["TaskResult"] | null;
+            result: components["schemas"]["TaskResult-Output"] | null;
             review: components["schemas"]["Review"];
             /** Spec */
             spec: string;
@@ -1014,7 +1288,17 @@ export interface components {
         CompleteRequest: {
             /** Attempt */
             attempt: number;
-            result: components["schemas"]["TaskResult"];
+            result: components["schemas"]["TaskResult-Input"];
+        };
+        /**
+         * CredentialUpdate
+         * @description E.g. refreshed OAuth tokens for a subscription account.
+         */
+        CredentialUpdate: {
+            /** Credential */
+            credential: {
+                [key: string]: unknown;
+            };
         };
         /** Decision */
         Decision: {
@@ -1092,12 +1376,37 @@ export interface components {
             /** Subject Type */
             subject_type: string;
         };
+        /** ExhaustedReport */
+        ExhaustedReport: {
+            /** Attempt */
+            attempt?: number | null;
+            /**
+             * Reason
+             * @default
+             */
+            reason?: string;
+            /** Task Id */
+            task_id?: string | null;
+            /** Until */
+            until?: string | null;
+        };
         /** FailRequest */
         FailRequest: {
             /** Attempt */
             attempt: number;
             /** Error */
             error: string;
+        };
+        /** FallbackResult */
+        FallbackResult: {
+            /** Earliest Reset */
+            earliest_reset?: string | null;
+            lease: components["schemas"]["AccountLease"] | null;
+            /**
+             * Task Blocked
+             * @default false
+             */
+            task_blocked?: boolean;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1172,6 +1481,14 @@ export interface components {
             attempt: number;
             /** Task Id */
             task_id: string;
+        };
+        /**
+         * LeaseRequest
+         * @description Providers the agent's runtime can use, most preferred first.
+         */
+        LeaseRequest: {
+            /** Providers */
+            providers: string[];
         };
         /**
          * Page
@@ -1511,6 +1828,11 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** SecretsReloaded */
+        SecretsReloaded: {
+            /** Secrets */
+            secrets: number;
+        };
         /**
          * Source
          * @description What justifies a revision: a task, decision, artifact, or URL.
@@ -1579,7 +1901,7 @@ export interface components {
             required_capabilities: string[];
             /** Requires Approval */
             requires_approval: boolean;
-            result: components["schemas"]["TaskResult"] | null;
+            result: components["schemas"]["TaskResult-Output"] | null;
             review: components["schemas"]["Review"];
             /** Spec */
             spec: string;
@@ -1726,7 +2048,7 @@ export interface components {
          * TaskResult
          * @description The one result envelope every task completes with (3.11).
          */
-        TaskResult: {
+        "TaskResult-Input": {
             /**
              * Artifacts
              * @default []
@@ -1738,7 +2060,25 @@ export interface components {
             } | null;
             /** Summary */
             summary: string;
-            usage?: components["schemas"]["Usage"] | null;
+            usage?: components["schemas"]["Usage-Input"] | null;
+        };
+        /**
+         * TaskResult
+         * @description The one result envelope every task completes with (3.11).
+         */
+        "TaskResult-Output": {
+            /**
+             * Artifacts
+             * @default []
+             */
+            artifacts?: string[];
+            /** Data */
+            data?: {
+                [key: string]: unknown;
+            } | null;
+            /** Summary */
+            summary: string;
+            usage?: components["schemas"]["argus_core__tasks__Usage"] | null;
         };
         /**
          * TaskState
@@ -1749,7 +2089,7 @@ export interface components {
          * Usage
          * @description What the work cost, as reported by the agent. Recorded, never enforced.
          */
-        Usage: {
+        "Usage-Input": {
             /** Account Id */
             account_id?: string | null;
             /** Cost Usd */
@@ -1758,6 +2098,17 @@ export interface components {
             input_tokens?: number | null;
             /** Output Tokens */
             output_tokens?: number | null;
+        };
+        /** UsageReport */
+        UsageReport: {
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /** Input Tokens */
+            input_tokens?: number | null;
+            /** Output Tokens */
+            output_tokens?: number | null;
+            /** Task Id */
+            task_id?: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -1772,6 +2123,29 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /** Usage */
+        argus_core__accounts__Usage: {
+            /** Cost Usd */
+            cost_usd: number;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+        };
+        /**
+         * Usage
+         * @description What the work cost, as reported by the agent. Recorded, never enforced.
+         */
+        argus_core__tasks__Usage: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /** Input Tokens */
+            input_tokens?: number | null;
+            /** Output Tokens */
+            output_tokens?: number | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -1781,6 +2155,297 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_accounts_api_accounts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Account"][];
+                };
+            };
+        };
+    };
+    create_account_api_accounts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Account"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lease_account_api_accounts_lease_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LeaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountLease"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_account_api_accounts_release_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_account_api_accounts__account_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Account"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_account_api_accounts__account_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Account"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_credential_api_accounts__account_id__credential_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    report_exhausted_api_accounts__account_id__exhausted_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExhaustedReport"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FallbackResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    report_usage_api_accounts__account_id__usage_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageReport"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reload_secrets_api_admin_secrets_reload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretsReloaded"];
+                };
+            };
+        };
+    };
     list_admin_tokens_api_admin_tokens_get: {
         parameters: {
             query?: never;

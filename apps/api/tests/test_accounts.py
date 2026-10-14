@@ -1,0 +1,355 @@
+from collections.abc import Generator
+from datetime import timedelta
+from pathlib import Path
+
+import pytest
+from api_support import FakeClock, insert_agent
+from argus_api.accounts import service as accounts
+from argus_api.accounts.service import NoAccountError
+from argus_api.db import Database, ts
+from argus_api.errors import ConflictError, ForbiddenError
+from argus_api.main import app
+from argus_api.reaper import reap
+from argus_api.secrets import MemorySecretStore, SecretStoreError
+from argus_api.tasks import service as tasks
+from argus_core.accounts import (
+    AccountCreate,
+    AccountState,
+    AccountUpdate,
+    ExhaustedReport,
+    UsageReport,
+)
+from argus_core.tasks import TaskCreate, TaskResult, Usage
+from argus_core.tasks import TaskState as S
+from fastapi.testclient import TestClient
+
+A, B = "agent-a", "agent-b"
+
+
+@pytest.fixture
+def store() -> MemorySecretStore:
+    return MemorySecretStore()
+
+
+@pytest.fixture(autouse=True)
+async def agents(db: Database) -> None:
+    await insert_agent(db, A)
+    await insert_agent(db, B)
+
+
+async def add(
+    db: Database, store: MemorySecretStore, name: str, provider: str, **kw
+) -> str:
+    await store.put(name, {"api_key": f"key-{name}"})
+    async with db.write() as tx:
+        account = await accounts.create_account(
+            tx,
+            name,
+            AccountCreate(
+                name=name, provider=provider, secret_ref=f"sops:{name}", **kw
+            ),
+            f"sops:{name}",
+            "admin:test",
+            store,
+        )
+    return account.id
+
+
+async def lease(db: Database, store, agent=A, providers=("anthropic", "openai")):
+    async with db.write() as tx:
+        return await accounts.lease(tx, agent, list(providers), store)
+
+
+async def get(db: Database, account_id: str, clock: FakeClock):
+    async with db.read() as conn:
+        return await accounts.get_account(conn, account_id, clock.now)
+
+
+async def exhaust(db: Database, store, account_id: str, agent=A, **kw):
+    async with db.write() as tx:
+        return await accounts.exhausted(
+            tx, agent, account_id, ExhaustedReport(**kw), store
+        )
+
+
+# -- leasing --------------------------------------------------------------------------
+
+
+async def test_lease_prefers_priority_then_provider_order(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "openai-1", "openai", priority=5)
+    await add(db, store, "claude-1", "anthropic", priority=5)
+    await add(db, store, "claude-low", "anthropic", priority=0)
+    got = await lease(db, store)
+    assert got.name == "claude-1"  # same priority: the agent's preferred provider
+    assert got.credential == {"api_key": "key-claude-1"}
+
+
+async def test_max_leases_and_least_used(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "solo", "anthropic", priority=1, max_leases=1)
+    await add(db, store, "shared", "anthropic")
+    assert (await lease(db, store, A)).name == "solo"
+    assert (await lease(db, store, B)).name == "shared"  # solo is full
+
+
+async def test_one_lease_per_agent(
+    db: Database, store: MemorySecretStore, clock
+) -> None:
+    first = await add(db, store, "solo", "anthropic", max_leases=1)
+    await lease(db, store, A)
+    await lease(db, store, A)  # replacing its own lease frees the slot
+    assert (await get(db, first, clock)).active_leases == 1
+
+
+async def test_no_account(db: Database, store: MemorySecretStore) -> None:
+    with pytest.raises(NoAccountError):
+        await lease(db, store)
+
+
+# -- exhaustion and fallback ---------------------------------------------------------------
+
+
+async def test_fallback_prefers_the_same_provider(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c1 = await add(db, store, "claude-1", "anthropic", priority=9)
+    await add(db, store, "openai-1", "openai", priority=5)
+    await add(db, store, "claude-2", "anthropic", priority=1)
+    assert (await lease(db, store)).account_id == c1
+    result = await exhaust(db, store, c1, until=clock.now + timedelta(hours=5))
+    assert result.lease is not None
+    assert result.lease.name == "claude-2"  # same provider beats higher-priority openai
+    exhausted = await get(db, c1, clock)
+    assert exhausted.state is AccountState.EXHAUSTED
+    assert exhausted.exhausted_until == clock.now + timedelta(hours=5)
+
+
+async def test_default_cooldown_without_reset_time(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c1 = await add(db, store, "claude-1", "anthropic")
+    await lease(db, store)
+    await exhaust(db, store, c1)
+    assert (await get(db, c1, clock)).exhausted_until == clock.now + timedelta(hours=1)
+
+
+async def test_nothing_left_blocks_task_until_an_account_recovers(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c1 = await add(db, store, "claude-1", "anthropic")
+    async with db.write() as tx:
+        await tasks.create_task(
+            tx, TaskCreate(project="global", title="t"), "admin:test"
+        )
+        task = await tasks.claim(tx, A, [])
+    assert task is not None
+    await lease(db, store)
+    reset = clock.now + timedelta(minutes=30)
+    result = await exhaust(
+        db, store, c1, until=reset, task_id=task.id, attempt=task.attempt
+    )
+    assert (result.lease, result.earliest_reset, result.task_blocked) == (
+        None,
+        reset,
+        True,
+    )
+    async with db.read() as conn:
+        blocked = await tasks.get_task(conn, task.id)
+    assert (blocked.state, blocked.block_reason) == (S.BLOCKED, "no_account")
+
+    clock.advance(30 * 60)
+    async with db.write() as tx:
+        result = await reap(tx)
+    assert result.recovered_accounts == [c1]
+    async with db.read() as conn:
+        assert (await tasks.get_task(conn, task.id)).state is S.READY
+
+
+async def test_exhausted_requires_holding_the_lease(
+    db: Database, store: MemorySecretStore
+) -> None:
+    c1 = await add(db, store, "claude-1", "anthropic")
+    with pytest.raises(ConflictError) as err:
+        await exhaust(db, store, c1)
+    assert err.value.code == "not_leased"
+
+
+async def test_lost_agent_releases_its_lease(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c1 = await add(db, store, "solo", "anthropic", max_leases=1)
+    await lease(db, store, A)
+    with pytest.raises(NoAccountError):  # the only slot is A's
+        await lease(db, store, B)
+    clock.advance(91)
+    async with db.write() as tx:
+        await tx.conn.execute(  # B stays alive; A goes silent
+            "UPDATE agents SET last_heartbeat_at = ? WHERE id = ?", (ts(clock.now), B)
+        )
+        await reap(tx)
+    assert (await get(db, c1, clock)).active_leases == 0
+    assert (await lease(db, store, B)).account_id == c1
+
+
+# -- secrets reconciliation and admin controls ------------------------------------------------
+
+
+async def test_missing_secret_disables_and_its_return_reenables(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c1 = await add(db, store, "claude-1", "anthropic")
+    await store.delete("claude-1")
+    async with db.write() as tx:
+        await accounts.reconcile_secrets(tx, store)
+    gone = await get(db, c1, clock)
+    assert gone.state is AccountState.DISABLED
+    assert gone.disabled_reason == "secret not found: sops:claude-1"
+    await store.put("claude-1", {"api_key": "new"})
+    async with db.write() as tx:
+        await accounts.reconcile_secrets(tx, store)
+    assert (await get(db, c1, clock)).state is AccountState.AVAILABLE
+
+
+async def test_admin_disable_is_not_undone_by_reconcile(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c1 = await add(db, store, "claude-1", "anthropic")
+    async with db.write() as tx:
+        await accounts.update_account(
+            tx, c1, AccountUpdate(enabled=False), "admin:test"
+        )
+        await accounts.reconcile_secrets(tx, store)
+    assert (await get(db, c1, clock)).state is AccountState.DISABLED
+    with pytest.raises(NoAccountError):
+        await lease(db, store)
+
+
+# -- usage and credentials ----------------------------------------------------------------------
+
+
+async def test_usage_from_results_and_reports(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c1 = await add(db, store, "claude-1", "anthropic")
+    async with db.write() as tx:
+        await tasks.create_task(
+            tx, TaskCreate(project="global", title="t"), "admin:test"
+        )
+        task = await tasks.claim(tx, A, [])
+        assert task is not None
+        await accounts.record_usage(
+            tx, c1, A, UsageReport(input_tokens=100, cost_usd=0.5)
+        )
+        await tasks.complete(
+            tx,
+            A,
+            task.id,
+            task.attempt,
+            TaskResult(
+                summary="done",
+                usage=Usage(
+                    account_id=c1, input_tokens=20, output_tokens=7, cost_usd=0.25
+                ),
+            ),
+        )
+    account = await get(db, c1, clock)
+    assert (account.usage_total.input_tokens, account.usage_total.output_tokens) == (
+        120,
+        7,
+    )
+    assert account.usage_total.cost_usd == pytest.approx(0.75)
+    clock.advance(timedelta(days=2).total_seconds())
+    assert (await get(db, c1, clock)).usage_24h.input_tokens == 0
+
+
+async def test_only_the_lease_holder_may_replace_a_credential(
+    db: Database, store: MemorySecretStore
+) -> None:
+    c1 = await add(db, store, "claude-1", "anthropic")
+    await lease(db, store, A)
+    async with db.read() as conn:
+        assert await accounts.secret_name_for_update(conn, c1, A) == "claude-1"
+        assert (
+            await accounts.secret_name_for_update(conn, c1, None) == "claude-1"
+        )  # admin
+        with pytest.raises(ForbiddenError):
+            await accounts.secret_name_for_update(conn, c1, B)
+
+
+# -- HTTP -----------------------------------------------------------------------------------------
+
+ADMIN_TOKEN = "test-admin-token-" + "a" * 32
+ADMIN = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+
+
+class FailingStore(MemorySecretStore):
+    async def put(self, name: str, value: dict) -> None:
+        if name.startswith("account-") and "refresh" in value:
+            raise SecretStoreError("disk full")
+        await super().put(name, value)
+
+
+@pytest.fixture
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
+    monkeypatch.setenv("ARGUS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", ADMIN_TOKEN)
+    with TestClient(app) as c:
+        app.state.secrets = FailingStore()
+        yield c
+
+
+def register(client: TestClient) -> dict[str, str]:
+    boot = client.post("/api/agents/bootstrap-tokens", json={}, headers=ADMIN).json()
+    reg = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
+    return {"Authorization": f"Bearer {reg.json()['token']}"}
+
+
+def test_accounts_over_http(client: TestClient) -> None:
+    res = client.post(
+        "/api/accounts",
+        json={
+            "name": "claude-1",
+            "provider": "anthropic",
+            "credential": {"api_key": "sk-x"},
+        },
+        headers=ADMIN,
+    )
+    assert res.status_code == 201
+    account = res.json()
+    assert account["secret_ref"] == f"sops:account-{account['id']}"
+    assert "sk-x" not in res.text
+    assert "sk-x" not in client.get("/api/accounts", headers=ADMIN).text
+
+    worker = register(client)
+    assert client.get("/api/accounts", headers=worker).status_code == 403
+    leased = client.post(
+        "/api/accounts/lease", json={"providers": ["anthropic"]}, headers=worker
+    ).json()
+    assert leased["credential"] == {"api_key": "sk-x"}
+
+    # A credential that cannot be persisted disables the account loudly.
+    res = client.put(
+        f"/api/accounts/{account['id']}/credential",
+        json={"credential": {"api_key": "sk-y", "refresh": "r"}},
+        headers=worker,
+    )
+    assert res.status_code == 503
+    after = client.get(f"/api/accounts/{account['id']}", headers=ADMIN).json()
+    assert after["state"] == "disabled"
+    assert after["disabled_reason"].startswith("credential write failed")
+
+
+def test_create_needs_exactly_one_secret_source(client: TestClient) -> None:
+    for body in (
+        {"name": "x", "provider": "anthropic"},
+        {
+            "name": "x",
+            "provider": "anthropic",
+            "credential": {},
+            "secret_ref": "sops:x",
+        },
+    ):
+        assert client.post("/api/accounts", json=body, headers=ADMIN).status_code == 422

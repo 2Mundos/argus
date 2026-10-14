@@ -13,6 +13,8 @@ from starlette.responses import Response
 from starlette.types import Scope
 
 from argus_api import reaper
+from argus_api.accounts import service as accounts
+from argus_api.accounts.routes import router as accounts_router
 from argus_api.admin.routes import router as admin_router
 from argus_api.agents.routes import router as agents_router
 from argus_api.artifacts.routes import router as artifacts_router
@@ -26,6 +28,7 @@ from argus_api.errors import DomainError
 from argus_api.eventlog.routes import router as events_router
 from argus_api.kinds.routes import router as kinds_router
 from argus_api.knowledge.routes import router as knowledge_router
+from argus_api.secrets import open_store
 from argus_api.tasks.routes import router as tasks_router
 
 log = logging.getLogger("argus")
@@ -42,6 +45,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.artifacts = LocalArtifactStore(
             settings.artifacts_dir, settings.artifact_max_bytes
         )
+        secrets, secrets_error = await open_store(
+            settings.secrets_path, settings.sops_bin
+        )
+        if secrets_error:
+            log.error("secret store unavailable: %s", secrets_error)
+        app.state.secrets = secrets
         try:
             async with db.write() as tx:
                 generated = await ensure_admin_token(
@@ -50,6 +59,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         except BaseException:
             await db.close()
             raise
+        async with db.write() as tx:
+            await accounts.reconcile_secrets(tx, secrets)
         if generated:
             log.warning(
                 "Created the initial admin token (also saved to %s): %s",
@@ -79,6 +90,7 @@ for router in (
     decisions_router,
     events_router,
     knowledge_router,
+    accounts_router,
 ):
     api.include_router(router)
 app.include_router(api)

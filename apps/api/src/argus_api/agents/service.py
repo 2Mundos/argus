@@ -15,6 +15,7 @@ from argus_core.agents import (
     BootstrapTokenCreate,
 )
 
+from argus_api.accounts import service as accounts
 from argus_api.agents.tokens import (
     AGENT_PREFIX,
     BOOTSTRAP_PREFIX,
@@ -224,6 +225,7 @@ async def _end(
         (now, agent_id, instance_id, instance_id),
     )
     released = await tasks.expire_agent_leases(tx, agent_id)
+    await accounts.release(tx, agent_id, state)
     await record(
         tx,
         actor,

@@ -603,3 +603,16 @@ th {
     grid-template-columns: 1fr;
   }
 }
+
+.account-available {
+  color: var(--ok);
+  border-color: currentColor;
+}
+.account-exhausted {
+  color: var(--warn);
+  border-color: currentColor;
+}
+.account-disabled {
+  color: var(--danger);
+  border-color: currentColor;
+}

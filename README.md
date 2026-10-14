@@ -40,6 +40,9 @@ docker build -f deploy/Dockerfile.api -t argus .
 docker run -p 8000:8000 -v argus-data:/data argus   # dashboard at http://localhost:8000
 # First start prints the admin token and saves it to /data/admin-token;
 # or preset one with -e ARGUS_ADMIN_TOKEN=<32+ chars>.
+# Provider accounts: mount an age key so Argus can read/write its SOPS file:
+#   -v ./age-key.txt:/keys/age.txt:ro -e SOPS_AGE_KEY_FILE=/keys/age.txt \
+#   -e SOPS_AGE_RECIPIENTS=age1...   (age-keygen -o age-key.txt)
 # Optional continuous backup: add -e LITESTREAM_REPLICA_URL=s3://bucket/argus
 # (plus LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY)
 ```

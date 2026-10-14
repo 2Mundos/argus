@@ -4,7 +4,8 @@ from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
 
 from argus_api import auth
-from argus_api.deps import AdminDep, DbDep
+from argus_api.accounts import service as accounts
+from argus_api.deps import AdminDep, DbDep, SecretsDep
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -46,3 +47,19 @@ async def list_admin_tokens(db: DbDep, _: AdminDep) -> list[AdminToken]:
 async def revoke_admin_token(token_id: str, db: DbDep, _: AdminDep) -> None:
     async with db.write() as tx:
         await auth.revoke_admin_token(tx, token_id)
+
+
+class SecretsReloaded(BaseModel):
+    secrets: int
+
+
+@router.post("/secrets/reload")
+async def reload_secrets(
+    db: DbDep, _: AdminDep, secrets: SecretsDep
+) -> SecretsReloaded:
+    """Re-read the SOPS file after editing it by hand (`sops secrets.sops.yaml`),
+    then re-check every account's secret reference."""
+    await secrets.reload()
+    async with db.write() as tx:
+        await accounts.reconcile_secrets(tx, secrets)
+    return SecretsReloaded(secrets=len(secrets.names()))

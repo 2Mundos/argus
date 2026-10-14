@@ -13,6 +13,7 @@ export type PageListItem = components["schemas"]["PageListItem"];
 export type Revision = components["schemas"]["Revision"];
 export type Proposal = components["schemas"]["Proposal"];
 export type SearchHit = components["schemas"]["SearchHit"];
+export type Account = components["schemas"]["Account"];
 
 const TOKEN_KEY = "argus.token";
 

@@ -1,6 +1,304 @@
 {
   "components": {
     "schemas": {
+      "Account": {
+        "description": "Registry entry. Never contains the credential.",
+        "properties": {
+          "active_leases": {
+            "title": "Active Leases",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Reason"
+          },
+          "exhausted_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exhausted Until"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AccountKind"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "object"
+          },
+          "max_leases": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Leases"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "secret_ref": {
+            "title": "Secret Ref",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AccountState"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "usage_24h": {
+            "$ref": "#/components/schemas/argus_core__accounts__Usage"
+          },
+          "usage_total": {
+            "$ref": "#/components/schemas/argus_core__accounts__Usage"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "provider",
+          "kind",
+          "secret_ref",
+          "priority",
+          "max_leases",
+          "state",
+          "exhausted_until",
+          "disabled_reason",
+          "labels",
+          "active_leases",
+          "usage_24h",
+          "usage_total",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "Account",
+        "type": "object"
+      },
+      "AccountCreate": {
+        "properties": {
+          "credential": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AccountKind",
+            "default": "api_key"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Labels",
+            "type": "object"
+          },
+          "max_leases": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Leases"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "priority": {
+            "default": 0,
+            "title": "Priority",
+            "type": "integer"
+          },
+          "provider": {
+            "maxLength": 50,
+            "minLength": 1,
+            "pattern": "^[a-z0-9_-]+$",
+            "title": "Provider",
+            "type": "string"
+          },
+          "secret_ref": {
+            "anyOf": [
+              {
+                "pattern": "^sops:[A-Za-z0-9_-]{1,128}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secret Ref"
+          }
+        },
+        "required": [
+          "name",
+          "provider"
+        ],
+        "title": "AccountCreate",
+        "type": "object"
+      },
+      "AccountKind": {
+        "enum": [
+          "api_key",
+          "subscription"
+        ],
+        "title": "AccountKind",
+        "type": "string"
+      },
+      "AccountLease": {
+        "description": "What a leasing agent receives, including the credential to use.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "credential": {
+            "additionalProperties": true,
+            "title": "Credential",
+            "type": "object"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AccountKind"
+          },
+          "lease_id": {
+            "title": "Lease Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lease_id",
+          "account_id",
+          "name",
+          "provider",
+          "kind",
+          "credential"
+        ],
+        "title": "AccountLease",
+        "type": "object"
+      },
+      "AccountState": {
+        "enum": [
+          "available",
+          "exhausted",
+          "disabled"
+        ],
+        "title": "AccountState",
+        "type": "string"
+      },
+      "AccountUpdate": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labels"
+          },
+          "max_leases": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Leases"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          }
+        },
+        "title": "AccountUpdate",
+        "type": "object"
+      },
       "AdminToken": {
         "properties": {
           "created_at": {
@@ -561,7 +859,7 @@
           "result": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/TaskResult"
+                "$ref": "#/components/schemas/TaskResult-Output"
               },
               {
                 "type": "null"
@@ -630,7 +928,7 @@
             "type": "integer"
           },
           "result": {
-            "$ref": "#/components/schemas/TaskResult"
+            "$ref": "#/components/schemas/TaskResult-Input"
           }
         },
         "required": [
@@ -638,6 +936,21 @@
           "result"
         ],
         "title": "CompleteRequest",
+        "type": "object"
+      },
+      "CredentialUpdate": {
+        "description": "E.g. refreshed OAuth tokens for a subscription account.",
+        "properties": {
+          "credential": {
+            "additionalProperties": true,
+            "title": "Credential",
+            "type": "object"
+          }
+        },
+        "required": [
+          "credential"
+        ],
+        "title": "CredentialUpdate",
         "type": "object"
       },
       "Decision": {
@@ -864,6 +1177,52 @@
         "title": "EventOut",
         "type": "object"
       },
+      "ExhaustedReport": {
+        "properties": {
+          "attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Reason",
+            "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Until"
+          }
+        },
+        "title": "ExhaustedReport",
+        "type": "object"
+      },
       "FailRequest": {
         "properties": {
           "attempt": {
@@ -881,6 +1240,42 @@
           "error"
         ],
         "title": "FailRequest",
+        "type": "object"
+      },
+      "FallbackResult": {
+        "properties": {
+          "earliest_reset": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earliest Reset"
+          },
+          "lease": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountLease"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task_blocked": {
+            "default": false,
+            "title": "Task Blocked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "lease"
+        ],
+        "title": "FallbackResult",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1059,6 +1454,24 @@
           "attempt"
         ],
         "title": "LeaseRef",
+        "type": "object"
+      },
+      "LeaseRequest": {
+        "description": "Providers the agent's runtime can use, most preferred first.",
+        "properties": {
+          "providers": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Providers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "providers"
+        ],
+        "title": "LeaseRequest",
         "type": "object"
       },
       "Page": {
@@ -1825,6 +2238,19 @@
         "title": "SearchHit",
         "type": "object"
       },
+      "SecretsReloaded": {
+        "properties": {
+          "secrets": {
+            "title": "Secrets",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "secrets"
+        ],
+        "title": "SecretsReloaded",
+        "type": "object"
+      },
       "Source": {
         "description": "What justifies a revision: a task, decision, artifact, or URL.",
         "properties": {
@@ -2025,7 +2451,7 @@
           "result": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/TaskResult"
+                "$ref": "#/components/schemas/TaskResult-Output"
               },
               {
                 "type": "null"
@@ -2417,7 +2843,7 @@
         "title": "TaskKindUpsert",
         "type": "object"
       },
-      "TaskResult": {
+      "TaskResult-Input": {
         "description": "The one result envelope every task completes with (3.11).",
         "properties": {
           "artifacts": {
@@ -2449,7 +2875,53 @@
           "usage": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Usage"
+                "$ref": "#/components/schemas/Usage-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "title": "TaskResult",
+        "type": "object"
+      },
+      "TaskResult-Output": {
+        "description": "The one result envelope every task completes with (3.11).",
+        "properties": {
+          "artifacts": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "summary": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/argus_core__tasks__Usage"
               },
               {
                 "type": "null"
@@ -2478,7 +2950,7 @@
         "title": "TaskState",
         "type": "string"
       },
-      "Usage": {
+      "Usage-Input": {
         "description": "What the work cost, as reported by the agent. Recorded, never enforced.",
         "properties": {
           "account_id": {
@@ -2532,6 +3004,59 @@
         "title": "Usage",
         "type": "object"
       },
+      "UsageReport": {
+        "properties": {
+          "cost_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          }
+        },
+        "title": "UsageReport",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -2571,6 +3096,83 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "argus_core__accounts__Usage": {
+        "properties": {
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cost_usd"
+        ],
+        "title": "Usage",
+        "type": "object"
+      },
+      "argus_core__tasks__Usage": {
+        "description": "What the work cost, as reported by the agent. Recorded, never enforced.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          }
+        },
+        "title": "Usage",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -2586,6 +3188,435 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/accounts": {
+      "get": {
+        "operationId": "list_accounts_api_accounts_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Account"
+                  },
+                  "title": "Response List Accounts Api Accounts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Accounts",
+        "tags": [
+          "accounts"
+        ]
+      },
+      "post": {
+        "description": "Register an account. A `credential` is written to the SOPS file first\n(as `account-<id>`); the registry row only ever holds the reference.",
+        "operationId": "create_account_api_accounts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Account",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/lease": {
+      "post": {
+        "description": "Lease the best usable account among `providers` (most preferred first),\nwith its credential. One lease per agent; it ends when the agent does.\n`409 no_account` when none is usable.",
+        "operationId": "lease_account_api_accounts_lease_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountLease"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Lease Account",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/release": {
+      "post": {
+        "operationId": "release_account_api_accounts_release_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Release Account",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}": {
+      "get": {
+        "operationId": "get_account_api_accounts__account_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Account",
+        "tags": [
+          "accounts"
+        ]
+      },
+      "patch": {
+        "operationId": "update_account_api_accounts__account_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Account",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/credential": {
+      "put": {
+        "description": "Replace the credential (e.g. refreshed OAuth tokens). Allowed for the agent\nholding a lease on the account, or an admin. If it cannot be persisted, the\naccount is disabled rather than left with a token that would be lost.",
+        "operationId": "update_credential_api_accounts__account_id__credential_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Credential",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/exhausted": {
+      "post": {
+        "description": "Report that the leased account hit a quota. Returns the next account to use\n(same provider first), or none: then the given task is blocked as\n`no_account` and returns to ready when an account frees up.",
+        "operationId": "report_exhausted_api_accounts__account_id__exhausted_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExhaustedReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FallbackResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Report Exhausted",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/usage": {
+      "post": {
+        "operationId": "report_usage_api_accounts__account_id__usage_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Report Usage",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/admin/secrets/reload": {
+      "post": {
+        "description": "Re-read the SOPS file after editing it by hand (`sops secrets.sops.yaml`),\nthen re-check every account's secret reference.",
+        "operationId": "reload_secrets_api_admin_secrets_reload_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretsReloaded"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reload Secrets",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/admin/tokens": {
       "get": {
         "operationId": "list_admin_tokens_api_admin_tokens_get",

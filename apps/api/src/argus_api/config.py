@@ -16,10 +16,17 @@ class Settings:
     # Workers either propose knowledge changes for review, or publish directly.
     knowledge_worker_writes: Literal["propose", "publish"] = "propose"
     knowledge_stale_days: int = 30
+    secrets_file: Path | None = None  # default: <data_dir>/secrets.sops.yaml
+    sops_bin: str = "sops"
+    account_cooldown_minutes: int = 60  # when a provider gives no reset time
 
     @property
     def db_path(self) -> Path:
         return self.data_dir / "argus.db"
+
+    @property
+    def secrets_path(self) -> Path:
+        return self.secrets_file or self.data_dir / "secrets.sops.yaml"
 
     @property
     def artifacts_dir(self) -> Path:
@@ -42,6 +49,13 @@ class Settings:
                 else "propose"
             ),
             knowledge_stale_days=int(os.environ.get("ARGUS_KNOWLEDGE_STALE_DAYS", 30)),
+            secrets_file=(
+                Path(f) if (f := os.environ.get("ARGUS_SECRETS_FILE")) else None
+            ),
+            sops_bin=os.environ.get("ARGUS_SOPS_BIN", "sops"),
+            account_cooldown_minutes=int(
+                os.environ.get("ARGUS_ACCOUNT_COOLDOWN_MINUTES", 60)
+            ),
             dashboard_dir=(
                 Path(d) if (d := os.environ.get("ARGUS_DASHBOARD_DIR")) else None
             ),
