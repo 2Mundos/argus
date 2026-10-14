@@ -44,7 +44,11 @@ def tool(client: TestClient, token: str | None, name: str, /, **arguments) -> di
     result = rpc(client, token, "tools/call", {"name": name, "arguments": arguments})
     text = result["content"][0]["text"] if result["content"] else ""
     if result["isError"]:
-        return {"error": text.split(": ", 1)[1] if text.startswith("Error executing") else text}
+        return {
+            "error": text.split(": ", 1)[1]
+            if text.startswith("Error executing")
+            else text
+        }
     if "structuredContent" in result:
         return result["structuredContent"].get("result", result["structuredContent"])
     return json.loads(text)
