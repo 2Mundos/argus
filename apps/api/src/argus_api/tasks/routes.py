@@ -1,8 +1,7 @@
 import asyncio
-from typing import Any
 
 from argus_core.auth import Scope
-from argus_core.tasks import Task, TaskCreate, TaskState
+from argus_core.tasks import Task, TaskCreate, TaskResult, TaskState
 from fastapi import APIRouter, Response, status
 from pydantic import BaseModel, Field
 
@@ -20,7 +19,13 @@ class ClaimRequest(BaseModel):
 
 class CompleteRequest(BaseModel):
     attempt: int
-    result: dict[str, Any] = {}
+    result: TaskResult
+
+
+class ProgressRequest(BaseModel):
+    attempt: int
+    message: str = Field(min_length=1, max_length=2000)
+    percent: int | None = Field(default=None, ge=0, le=100)
 
 
 class FailRequest(BaseModel):
@@ -98,6 +103,17 @@ async def complete_task(
 ) -> Task:
     async with db.write() as tx:
         return await service.complete(tx, agent_id, task_id, body.attempt, body.result)
+
+
+@router.post("/{task_id}/progress")
+async def report_progress(
+    task_id: str, body: ProgressRequest, db: DbDep, agent_id: AgentDep
+) -> Task:
+    """Post a progress note (at most one per 10 s). Also renews the lease."""
+    async with db.write() as tx:
+        return await service.report_progress(
+            tx, agent_id, task_id, body.attempt, body.message, body.percent
+        )
 
 
 @router.post("/{task_id}/fail")

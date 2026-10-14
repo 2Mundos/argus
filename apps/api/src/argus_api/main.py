@@ -11,11 +11,14 @@ from fastapi.responses import JSONResponse
 from argus_api import reaper
 from argus_api.admin.routes import router as admin_router
 from argus_api.agents.routes import router as agents_router
+from argus_api.artifacts.routes import router as artifacts_router
+from argus_api.artifacts.store import LocalArtifactStore
 from argus_api.auth import ensure_admin_token
 from argus_api.config import Settings
 from argus_api.db import Database, DataDirLock
 from argus_api.deps import get_db
 from argus_api.errors import DomainError
+from argus_api.kinds.routes import router as kinds_router
 from argus_api.tasks.routes import router as tasks_router
 
 log = logging.getLogger("argus")
@@ -28,6 +31,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     with DataDirLock(settings.data_dir):
         db = await Database.open(settings.db_path)
         app.state.db = db
+        app.state.artifacts = LocalArtifactStore(
+            settings.artifacts_dir, settings.artifact_max_bytes
+        )
         try:
             async with db.write() as tx:
                 generated = await ensure_admin_token(
@@ -56,11 +62,13 @@ app = FastAPI(title="Argus", version="0.1.0", lifespan=lifespan)
 app.include_router(tasks_router)
 app.include_router(agents_router)
 app.include_router(admin_router)
+app.include_router(kinds_router)
+app.include_router(artifacts_router)
 
 
 @app.exception_handler(DomainError)
 async def domain_error(_: Request, exc: DomainError) -> JSONResponse:
-    return _error(exc.status, exc.code, exc.message)
+    return _error(exc.status, exc.code, exc.message, exc.details)
 
 
 @app.exception_handler(InvalidTransitionError)
@@ -68,8 +76,13 @@ async def invalid_transition(_: Request, exc: InvalidTransitionError) -> JSONRes
     return _error(409, "invalid_transition", str(exc))
 
 
-def _error(status: int, code: str, message: str) -> JSONResponse:
-    return JSONResponse({"detail": {"code": code, "message": message}}, status)
+def _error(
+    status: int, code: str, message: str, details: list[str] | None = None
+) -> JSONResponse:
+    body: dict[str, object] = {"code": code, "message": message}
+    if details:
+        body["details"] = details
+    return JSONResponse({"detail": body}, status)
 
 
 @app.get("/healthz")

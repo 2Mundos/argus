@@ -5,9 +5,12 @@ class DomainError(Exception):
     status = 400
     code = "bad_request"
 
-    def __init__(self, message: str, *, code: str | None = None) -> None:
+    def __init__(
+        self, message: str, *, code: str | None = None, details: list[str] | None = None
+    ) -> None:
         super().__init__(message)
         self.message = message
+        self.details = details or []
         if code:
             self.code = code
 
@@ -34,3 +37,20 @@ class UnauthorizedError(DomainError):
 class ForbiddenError(DomainError):
     status = 403
     code = "forbidden"
+
+
+class ValidationFailedError(DomainError):
+    """Input or result does not match its kind's schema; `details` lists why."""
+
+    status = 422
+    code = "validation_failed"
+
+
+class TooLargeError(DomainError):
+    status = 413
+    code = "too_large"
+
+
+class RateLimitedError(DomainError):
+    status = 429
+    code = "rate_limited"

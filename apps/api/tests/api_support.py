@@ -3,6 +3,9 @@
 from datetime import UTC, datetime, timedelta
 
 from argus_api.db import Database, ts
+from argus_core.tasks import TaskResult
+
+DONE = TaskResult(summary="done")
 
 
 class FakeClock:

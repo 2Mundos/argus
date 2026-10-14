@@ -446,18 +446,23 @@ optional integration (single-node 3.5).
   default lease, and default review policy. A kind without schemas is
   free-form, so ad-hoc work never waits on a schema being written. Unknown kinds
   are rejected; `generic` exists by default.
+- Kind defaults fill only fields the creator left unset; explicit values win.
+  Kinds are managed with `PUT /task-kinds/{name}` by orchestrators and admins;
+  schemas are checked as JSON Schema (draft 2020-12) when saved.
 - Every result uses one envelope, validated server-side:
-  `{summary: str, data: object | null, artifacts: [ArtifactRef], usage: Usage}`.
-  `data` is validated against the kind's schema when one exists; a failing
-  result is rejected with the validation errors so the agent can retry.
+  `{summary: str, data: object | null, artifacts: [artifact id], usage: Usage}`.
+  `data` is validated against the kind's schema when one exists, and every
+  listed artifact must have been uploaded for this task. A failing input or
+  result is rejected with `422 validation_failed` and a `details` list naming
+  each violation, so the agent can fix it and retry.
 
 ## 3.12 Progress, logs, and artifacts
 
 | Output | Example | Home |
 | --- | --- | --- |
-| Progress notes | "tests written, fixing 2 failures" | `events` (`kind = progress`), shown live on the dashboard. A progress post is a worker write (3.3) and also renews the lease. Rate-limited per task (one per 10 s). |
+| Progress notes | "tests written, fixing 2 failures" | `POST /tasks/{id}/progress` with a message and optional percent. Latest note on the task row, history in `events` (`task.progress`), shown live on the dashboard. A progress post is a worker write (3.3) and also renews the lease. Rate-limited per task (one per 10 s, `429` otherwise). |
 | Container logs | agent stdout/stderr | Not stored. The dashboard streams them live from the target (`Target.logs`) while the container exists. |
-| Artifacts | files, diffs, reports, transcripts | Local filesystem under `/data/artifacts/tasks/<task_id>/<attempt>/`, uploaded through the API with a size limit (single-node 3.4); `result.artifacts` holds the references. |
+| Artifacts | files, diffs, reports, transcripts | `POST /tasks/{id}/artifacts?attempt=&name=` with the raw body, by the lease holder, before completing; listed by id in `result.artifacts`. Stored under `/data/artifacts/tasks/<task_id>/<attempt>/<name>`, immutable, with size (`ARGUS_ARTIFACT_MAX_BYTES`, default 100 MB) and SHA-256 recorded. Bytes are staged to a temporary file outside the write transaction; a short transaction then checks the lease, records the row, and renames the file into place (single-node 3.4). |
 
 # 4. Open Questions
 

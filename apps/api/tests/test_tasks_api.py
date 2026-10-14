@@ -120,7 +120,9 @@ def test_errors_have_actionable_codes(
     task = client.post("/tasks", json={"title": "x"}).json()
     client.post("/tasks/claim", json={}, headers=agent)
     res = client.post(
-        f"/tasks/{task['id']}/complete", json={"attempt": 7}, headers=agent
+        f"/tasks/{task['id']}/complete",
+        json={"attempt": 7, "result": {"summary": "x"}},
+        headers=agent,
     )
     assert res.status_code == 409
     assert res.json()["detail"]["code"] == "stale_attempt"

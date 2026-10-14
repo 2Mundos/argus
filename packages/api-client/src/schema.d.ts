@@ -173,6 +173,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/artifacts/{artifact_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Artifact */
+        get: operations["download_artifact_artifacts__artifact_id__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -183,6 +200,45 @@ export interface paths {
         /** Healthz */
         get: operations["healthz_healthz_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/task-kinds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Kinds */
+        get: operations["list_kinds_task_kinds_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/task-kinds/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Kind */
+        get: operations["get_kind_task_kinds__name__get"];
+        /**
+         * Upsert Kind
+         * @description Create or replace a kind. Existing tasks keep the values they were created
+         *     with; schemas apply to new tasks and to results submitted from now on.
+         */
+        put: operations["upsert_kind_task_kinds__name__put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -266,6 +322,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tasks/{task_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Artifacts */
+        get: operations["list_artifacts_tasks__task_id__artifacts_get"];
+        put?: never;
+        /**
+         * Upload Artifact
+         * @description Upload the raw request body as an artifact of the attempt you hold.
+         *
+         *     List the returned id in `result.artifacts` when completing the task.
+         */
+        post: operations["upload_artifact_tasks__task_id__artifacts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tasks/{task_id}/block": {
         parameters: {
             query?: never;
@@ -328,6 +407,26 @@ export interface paths {
         put?: never;
         /** Fail Task */
         post: operations["fail_task_tasks__task_id__fail_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{task_id}/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report Progress
+         * @description Post a progress note (at most one per 10 s). Also renews the lease.
+         */
+        post: operations["report_progress_tasks__task_id__progress_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -454,6 +553,30 @@ export interface components {
          * @enum {string}
          */
         AgentState: "active" | "draining" | "gone" | "lost";
+        /** Artifact */
+        Artifact: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Id */
+            id: string;
+            /** Media Type */
+            media_type: string;
+            /** Name */
+            name: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size */
+            size: number;
+            /** Task Id */
+            task_id: string;
+        };
         /** BlockRequest */
         BlockRequest: {
             /** Attempt */
@@ -490,13 +613,7 @@ export interface components {
         CompleteRequest: {
             /** Attempt */
             attempt: number;
-            /**
-             * Result
-             * @default {}
-             */
-            result: {
-                [key: string]: unknown;
-            };
+            result: components["schemas"]["TaskResult"];
         };
         /** FailRequest */
         FailRequest: {
@@ -544,6 +661,15 @@ export interface components {
             attempt: number;
             /** Task Id */
             task_id: string;
+        };
+        /** ProgressRequest */
+        ProgressRequest: {
+            /** Attempt */
+            attempt: number;
+            /** Message */
+            message: string;
+            /** Percent */
+            percent?: number | null;
         };
         /** Registration */
         Registration: {
@@ -637,14 +763,17 @@ export interface components {
             parent_id: string | null;
             /** Priority */
             priority: number;
+            /** Progress At */
+            progress_at: string | null;
+            /** Progress Message */
+            progress_message: string | null;
+            /** Progress Percent */
+            progress_percent: number | null;
             /** Required Capabilities */
             required_capabilities: string[];
             /** Requires Approval */
             requires_approval: boolean;
-            /** Result */
-            result: {
-                [key: string]: unknown;
-            } | null;
+            result: components["schemas"]["TaskResult"] | null;
             review: components["schemas"]["Review"];
             /** Spec */
             spec: string;
@@ -718,11 +847,101 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** TaskKind */
+        TaskKind: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Default Capabilities */
+            default_capabilities?: string[] | null;
+            /** Default Lease Ttl S */
+            default_lease_ttl_s?: number | null;
+            /** Default Max Attempts */
+            default_max_attempts?: number | null;
+            default_review?: components["schemas"]["Review"] | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Input Schema */
+            input_schema?: {
+                [key: string]: unknown;
+            } | null;
+            /** Name */
+            name: string;
+            /** Result Schema */
+            result_schema?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** TaskKindUpsert */
+        TaskKindUpsert: {
+            /** Default Capabilities */
+            default_capabilities?: string[] | null;
+            /** Default Lease Ttl S */
+            default_lease_ttl_s?: number | null;
+            /** Default Max Attempts */
+            default_max_attempts?: number | null;
+            default_review?: components["schemas"]["Review"] | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Input Schema */
+            input_schema?: {
+                [key: string]: unknown;
+            } | null;
+            /** Result Schema */
+            result_schema?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * TaskResult
+         * @description The one result envelope every task completes with (3.11).
+         */
+        TaskResult: {
+            /**
+             * Artifacts
+             * @default []
+             */
+            artifacts: string[];
+            /** Data */
+            data?: {
+                [key: string]: unknown;
+            } | null;
+            /** Summary */
+            summary: string;
+            usage?: components["schemas"]["Usage"] | null;
+        };
         /**
          * TaskState
          * @enum {string}
          */
         TaskState: "awaiting_approval" | "pending" | "ready" | "claimed" | "blocked" | "in_review" | "succeeded" | "failed" | "cancelled";
+        /**
+         * Usage
+         * @description What the work cost, as reported by the agent. Recorded, never enforced.
+         */
+        Usage: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /** Input Tokens */
+            input_tokens?: number | null;
+            /** Output Tokens */
+            output_tokens?: number | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -1039,6 +1258,35 @@ export interface operations {
             };
         };
     };
+    download_artifact_artifacts__artifact_id__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     healthz_healthz_get: {
         parameters: {
             query?: never;
@@ -1057,6 +1305,92 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+        };
+    };
+    list_kinds_task_kinds_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskKind"][];
+                };
+            };
+        };
+    };
+    get_kind_task_kinds__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskKind"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_kind_task_kinds__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskKindUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskKind"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1228,6 +1562,75 @@ export interface operations {
             };
         };
     };
+    list_artifacts_tasks__task_id__artifacts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Artifact"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_artifact_tasks__task_id__artifacts_post: {
+        parameters: {
+            query: {
+                attempt: number;
+                name: string;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": unknown;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Artifact"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     block_task_tasks__task_id__block_post: {
         parameters: {
             query?: never;
@@ -1341,6 +1744,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["FailRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    report_progress_tasks__task_id__progress_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProgressRequest"];
             };
         };
         responses: {

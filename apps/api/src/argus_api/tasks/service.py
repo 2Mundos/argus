@@ -12,11 +12,13 @@ from uuid import uuid4
 import aiosqlite
 from argus_core.agents import LIVE, AgentState
 from argus_core.auth import Scope
+from argus_core.kinds import TaskKind
 from argus_core.tasks import (
     Action,
     Review,
     Task,
     TaskCreate,
+    TaskResult,
     TaskState,
     TransitionContext,
     transition,
@@ -28,8 +30,11 @@ from argus_api.errors import (
     ForbiddenError,
     LeaseConflictError,
     NotFoundError,
+    RateLimitedError,
+    ValidationFailedError,
 )
 from argus_api.events import record
+from argus_api.kinds import service as kinds
 
 S = TaskState
 _JSON_FIELDS = ("acceptance", "input", "required_capabilities")
@@ -81,6 +86,7 @@ async def create_task(
             )
     elif as_worker is not None:
         raise ForbiddenError("workers may only create subtasks (set parent_id)")
+    body = _apply_kind_defaults(body, await kinds.get_kind(tx.conn, body.kind))
     deps = sorted(set(body.depends_on))
     dep_states = await _states(tx.conn, deps)
     if missing := set(deps) - dep_states.keys():
@@ -203,10 +209,64 @@ async def renew(
 
 
 async def complete(
-    tx: Tx, agent_id: str, task_id: str, attempt: int, result: dict[str, Any]
+    tx: Tx, agent_id: str, task_id: str, attempt: int, result: TaskResult
 ) -> Task:
+    """Complete with the result envelope; `data` must match the kind's result
+    schema and every listed artifact must belong to this task (3.11)."""
     row = await _owned(tx, task_id, attempt, agent_id)
-    await _apply(tx, row, Action.COMPLETE, f"agent:{agent_id}", set_={"result": result})
+    kind = await kinds.get_kind(tx.conn, row["kind"])
+    kinds.validate(kind.result_schema, result.data, "result.data")
+    await _check_artifacts(tx.conn, task_id, result.artifacts)
+    await _apply(
+        tx,
+        row,
+        Action.COMPLETE,
+        f"agent:{agent_id}",
+        set_={"result": result.model_dump_json(exclude_none=True)},
+    )
+    return await get_task(tx.conn, task_id)
+
+
+PROGRESS_MIN_INTERVAL_S = 10
+
+
+async def report_progress(
+    tx: Tx,
+    agent_id: str,
+    task_id: str,
+    attempt: int,
+    message: str,
+    percent: int | None = None,
+) -> Task:
+    """Record a progress note. It is a worker write, so it also renews the lease."""
+    row = await _owned(tx, task_id, attempt, agent_id)
+    if row["progress_at"] is not None:
+        last = datetime.fromisoformat(row["progress_at"])
+        wait = PROGRESS_MIN_INTERVAL_S - (tx.now - last).total_seconds()
+        if wait > 0:
+            raise RateLimitedError(
+                f"at most one progress note per {PROGRESS_MIN_INTERVAL_S} s;"
+                f" retry in {wait:.1f} s"
+            )
+    await tx.conn.execute(
+        "UPDATE tasks SET progress_message = ?, progress_percent = ?, progress_at = ?,"
+        " lease_expires_at = ? WHERE id = ?",
+        (
+            message,
+            percent,
+            ts(tx.now),
+            _deadline(tx.now, row["lease_ttl_s"]),
+            task_id,
+        ),
+    )
+    await record(
+        tx,
+        f"agent:{agent_id}",
+        "task",
+        task_id,
+        "task.progress",
+        {"attempt": attempt, "message": message, "percent": percent},
+    )
     return await get_task(tx.conn, task_id)
 
 
@@ -318,6 +378,11 @@ async def _expire_where(tx: Tx, condition: str, param: str) -> list[str]:
 # -- internals ------------------------------------------------------------------
 
 
+async def check_lease(tx: Tx, task_id: str, attempt: int, agent_id: str) -> None:
+    """Public ownership check for writes owned by other modules (artifacts)."""
+    await _owned(tx, task_id, attempt, agent_id)
+
+
 async def _owned(tx: Tx, task_id: str, attempt: int, agent_id: str) -> aiosqlite.Row:
     """Check the caller holds the current, unexpired lease (3.3), inside `tx`."""
     state = await _agent_state(tx.conn, agent_id)
@@ -371,8 +436,6 @@ async def _apply(
     fields: dict[str, Any] = {"state": new, "updated_at": ts(tx.now), **(set_ or {})}
     if old is S.CLAIMED and new is not S.CLAIMED:
         fields |= {"assignee_agent_id": None, "lease_expires_at": None}
-    if isinstance(fields.get("result"), dict):
-        fields["result"] = json.dumps(fields["result"])
     assignments = ", ".join(f"{k} = ?" for k in fields)
     await tx.conn.execute(
         f"UPDATE tasks SET {assignments} WHERE id = ?",  # noqa: S608 - keys are code-controlled
@@ -431,6 +494,41 @@ async def _dependency_failed_event(
         "task.dependency_failed",
         {"dependency_id": dependency_id, "dependency_state": state},
     )
+
+
+def _apply_kind_defaults(body: TaskCreate, kind: TaskKind) -> TaskCreate:
+    """Fill fields the creator left unset from the kind; validate the input."""
+    kinds.validate(kind.input_schema, body.input, "input")
+    defaults = {
+        "required_capabilities": kind.default_capabilities,
+        "lease_ttl_s": kind.default_lease_ttl_s,
+        "max_attempts": kind.default_max_attempts,
+        "review": kind.default_review,
+    }
+    update = {
+        field: value
+        for field, value in defaults.items()
+        if value is not None and field not in body.model_fields_set
+    }
+    return body.model_copy(update=update)
+
+
+async def _check_artifacts(
+    conn: aiosqlite.Connection, task_id: str, artifact_ids: list[str]
+) -> None:
+    if not artifact_ids:
+        return
+    marks = ",".join("?" * len(artifact_ids))
+    async with conn.execute(
+        f"SELECT id FROM artifacts WHERE task_id = ? AND id IN ({marks})",  # noqa: S608
+        (task_id, *artifact_ids),
+    ) as cur:
+        found = {r["id"] for r in await cur.fetchall()}
+    if missing := [a for a in artifact_ids if a not in found]:
+        raise ValidationFailedError(
+            "result lists artifacts that were not uploaded for this task",
+            details=missing,
+        )
 
 
 async def _agent_state(conn: aiosqlite.Connection, agent_id: str) -> AgentState:

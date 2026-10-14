@@ -1,7 +1,7 @@
 import asyncio
 
 import pytest
-from api_support import FakeClock
+from api_support import DONE, FakeClock
 from argus_api import reaper
 from argus_api.agents import service as agents
 from argus_api.agents.service import LOST_AFTER_S
@@ -177,7 +177,7 @@ async def test_lost_agent_cannot_write_even_before_its_task_is_reassigned(
         )
     with pytest.raises(LeaseConflictError) as err:
         async with db.write() as tx:
-            await tasks.complete(tx, reg.agent.id, task.id, task.attempt, {})
+            await tasks.complete(tx, reg.agent.id, task.id, task.attempt, DONE)
     assert err.value.code == "agent_lost"
 
 
@@ -194,7 +194,7 @@ async def test_draining_agent_finishes_work_but_claims_nothing_new(
     assert drained.state is AgentState.DRAINING
     assert drained.claimed_tasks == 1
     async with db.write() as tx:
-        await tasks.complete(tx, reg.agent.id, task.id, task.attempt, {})
+        await tasks.complete(tx, reg.agent.id, task.id, task.attempt, DONE)
     with pytest.raises(ConflictError) as err:
         async with db.write() as tx:
             await tasks.claim(tx, reg.agent.id, [])

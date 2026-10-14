@@ -3,12 +3,18 @@ import json
 from datetime import timedelta
 
 import pytest
-from api_support import FakeClock, insert_agent
+from api_support import DONE, FakeClock, insert_agent
 from argus_api.db import Database
 from argus_api.errors import ForbiddenError, LeaseConflictError, NotFoundError
 from argus_api.tasks import service
 from argus_core.auth import Scope
-from argus_core.tasks import InvalidTransitionError, Review, Task, TaskCreate
+from argus_core.tasks import (
+    InvalidTransitionError,
+    Review,
+    Task,
+    TaskCreate,
+    TaskResult,
+)
 from argus_core.tasks import TaskState as S
 
 A, B = "agent-a", "agent-b"
@@ -66,7 +72,7 @@ async def test_task_with_unfinished_dep_is_pending_until_dep_succeeds(
     assert claimed is not None
     assert claimed.id == dep.id
     async with db.write() as tx:
-        await service.complete(tx, A, dep.id, claimed.attempt, {})
+        await service.complete(tx, A, dep.id, claimed.attempt, DONE)
     assert (await get(db, task.id)).state is S.READY
 
 
@@ -76,7 +82,7 @@ async def test_dependents_wait_for_all_deps(db: Database) -> None:
     c = await claim(db)
     assert c is not None
     async with db.write() as tx:
-        await service.complete(tx, A, c.id, c.attempt, {})
+        await service.complete(tx, A, c.id, c.attempt, DONE)
     assert (await get(db, task.id)).state is S.PENDING
 
 
@@ -152,7 +158,7 @@ async def test_write_after_expiry_before_reaping_is_rejected(
     clock.advance(60)  # deadline reached; the reaper has not run
     with pytest.raises(LeaseConflictError) as err:
         async with db.write() as tx:
-            await service.complete(tx, A, c.id, c.attempt, {})
+            await service.complete(tx, A, c.id, c.attempt, DONE)
     assert err.value.code == "lease_expired"
     assert (await get(db, c.id)).state is S.CLAIMED  # unchanged
 
@@ -171,7 +177,7 @@ async def test_stale_attempt_after_reassignment_is_rejected(
     assert second.attempt == first.attempt + 1
     with pytest.raises(LeaseConflictError) as err:
         async with db.write() as tx:
-            await service.complete(tx, A, first.id, first.attempt, {})
+            await service.complete(tx, A, first.id, first.attempt, DONE)
     assert err.value.code == "stale_attempt"
 
 
@@ -181,7 +187,7 @@ async def test_other_agent_cannot_write(db: Database) -> None:
     assert c is not None
     with pytest.raises(LeaseConflictError) as err:
         async with db.write() as tx:
-            await service.complete(tx, B, c.id, c.attempt, {})
+            await service.complete(tx, B, c.id, c.attempt, DONE)
     assert err.value.code == "not_assignee"
 
 
@@ -195,7 +201,7 @@ async def test_expiry_while_waiting_for_the_writer(
 
     async def worker_write() -> None:
         async with db.write() as tx:
-            await service.complete(tx, A, c.id, c.attempt, {})
+            await service.complete(tx, A, c.id, c.attempt, DONE)
 
     async with db.write():  # someone else holds the writer…
         pending = asyncio.create_task(worker_write())
@@ -310,9 +316,12 @@ async def test_review_reject_requeues_without_counting_failure(db: Database) -> 
     c = await claim(db)
     assert c is not None
     async with db.write() as tx:
-        done = await service.complete(tx, A, task.id, c.attempt, {"ok": True})
+        done = await service.complete(
+            tx, A, task.id, c.attempt, TaskResult(summary="ok", data={"ok": True})
+        )
     assert done.state is S.IN_REVIEW
-    assert done.result == {"ok": True}
+    assert done.result is not None
+    assert done.result.data == {"ok": True}
     async with db.write() as tx:
         rejected = await service.review(
             tx, task.id, "admin:test", Scope.ADMIN, accept=False, notes="add tests"
@@ -325,7 +334,7 @@ async def test_review_reject_requeues_without_counting_failure(db: Database) -> 
     assert c2 is not None
     assert c2.attempt == 2
     async with db.write() as tx:
-        await service.complete(tx, A, task.id, c2.attempt, {})
+        await service.complete(tx, A, task.id, c2.attempt, DONE)
     async with db.write() as tx:
         accepted = await service.review(
             tx, task.id, "admin:test", Scope.ADMIN, accept=True
@@ -341,7 +350,7 @@ async def test_every_transition_writes_one_event(db: Database) -> None:
     c = await claim(db)
     assert c is not None
     async with db.write() as tx:
-        await service.complete(tx, A, task.id, c.attempt, {})
+        await service.complete(tx, A, task.id, c.attempt, DONE)
     assert [k for k, _ in await events(db, task.id)] == [
         "task.created",
         "task.claim",
@@ -378,7 +387,7 @@ async def test_human_review_requires_admin(db: Database) -> None:
     c = await claim(db)
     assert c is not None
     async with db.write() as tx:
-        await service.complete(tx, A, task.id, c.attempt, {})
+        await service.complete(tx, A, task.id, c.attempt, DONE)
     with pytest.raises(ForbiddenError):
         async with db.write() as tx:
             await service.review(
@@ -391,7 +400,7 @@ async def test_orchestrator_review_accepts_orchestrator(db: Database) -> None:
     c = await claim(db)
     assert c is not None
     async with db.write() as tx:
-        await service.complete(tx, A, task.id, c.attempt, {})
+        await service.complete(tx, A, task.id, c.attempt, DONE)
         done = await service.review(
             tx, task.id, "agent:o", Scope.ORCHESTRATOR, accept=True
         )

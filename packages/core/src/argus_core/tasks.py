@@ -90,6 +90,24 @@ def transition(state: TaskState, action: Action, ctx: TransitionContext) -> Task
     raise InvalidTransitionError(state, action)
 
 
+class Usage(BaseModel):
+    """What the work cost, as reported by the agent. Recorded, never enforced."""
+
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0)
+    account_id: str | None = None
+
+
+class TaskResult(BaseModel):
+    """The one result envelope every task completes with (3.11)."""
+
+    summary: str = Field(min_length=1, max_length=10_000)
+    data: dict[str, Any] | None = None
+    artifacts: list[str] = []  # artifact ids uploaded for this task
+    usage: Usage | None = None
+
+
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     spec: str = ""
@@ -125,9 +143,12 @@ class Task(BaseModel):
     attempt: int
     failures: int
     max_attempts: int
-    result: dict[str, Any] | None
+    result: TaskResult | None
     error: str | None
     block_reason: str | None
+    progress_message: str | None
+    progress_percent: int | None
+    progress_at: datetime | None
     depends_on: list[str]
     created_by: str
     created_at: datetime
