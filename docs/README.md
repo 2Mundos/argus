@@ -45,3 +45,8 @@ every new dependency is judged against it.
   above; kept as a record
 - [Worker lifecycle and task coordination](drafts/2026-10-14.worker-lifecycle.draft.md) —
   superseded by the spec above; kept as a record
+
+### Research
+
+- [NanoClaw integration spike](research/2026-10-14.nanoclaw-integration.research.md) —
+  channels, credentials, drivers (partial)
