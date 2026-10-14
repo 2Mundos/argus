@@ -19,6 +19,8 @@ one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md)
 - `packages/core/` — Shared domain types (Python, `argus_core`).
 - `docs/` — Specs and drafts. Spec first: nothing is built before it is written
   down in `docs/specs/` (see [`docs/README.md`](docs/README.md)).
+- `integrations/nanoclaw/` — NanoClaw channel that makes a NanoClaw agent group an
+  Argus worker (installed into a NanoClaw checkout).
 - `examples/echo-worker/` — Minimal worker speaking the Argus API (reference and
   integration-test image).
 - `deploy/` — Dockerfiles. `.gitea/` — CI.

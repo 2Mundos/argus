@@ -400,19 +400,23 @@ Consequences for Argus:
   daemon: the socket on a Docker target, a DinD sidecar on Kubernetes). Each
   NanoClaw agent group inside it registers with Argus as one agent, so one
   instance can carry several agents (`pools.agents_per_instance`).
-- **Argus ships a NanoClaw module** (`integrations/nanoclaw`, TypeScript),
-  baked into an image built `FROM` the NanoClaw base. It uses the module and
-  channel extension points (`onHostStart`, channel registry):
-  1. On host start, redeems the bootstrap token and registers its agent groups.
-  2. Long-polls `POST /tasks/claim` per idle agent group, deterministically (in
-     code, not an LLM loop that burns tokens polling).
-  3. Writes the claimed task as an inbound message, which wakes the agent
-     container.
-  4. Heartbeats Argus while the session's `/workspace/.heartbeat` is fresh;
-     maps NanoClaw's own stale-container kill to a task failure.
-- **Agents talk back through the Argus MCP endpoint** (3.7), added to each agent
-  group as a user MCP server. The module scopes the agent's token to the task it
-  holds.
+- **Argus ships a NanoClaw channel** (`integrations/nanoclaw/argus.ts`,
+  TypeScript, installed into a NanoClaw checkout by `install.sh`; NanoClaw has no
+  plugin loader). It is a native channel adapter in the host process, modeled on
+  NanoClaw's CLI channel, and keeps the agent's Argus token host-side:
+  1. Registers with its bootstrap token and heartbeats, renewing the lease on the
+     task it holds.
+  2. Long-polls `POST /api/tasks/claim` in code (no LLM loop burns tokens
+     polling), one task at a time.
+  3. Injects the claimed task (spec, acceptance, pinned knowledge bodies,
+     reply instructions) as an inbound message, waking the agent container.
+  4. Turns replies into Argus calls: a plain reply is a progress note;
+     `COMPLETE:`/`FAIL:`/`ASK:` prefixes complete, fail, or ask. A 409 drops the
+     reply and moves on.
+- **MCP is the alternative reply path**: the Argus MCP endpoint (3.7) can be added
+  to an agent group as a user MCP server for richer tools (knowledge, accounts),
+  at the cost of giving the agent container an Argus token, which the channel's
+  text protocol avoids.
 - **Credentials never enter agent containers.** Argus is the source of truth
   for credentials (3.9). When a session leases an account, the module loads
   that credential into NanoClaw's gateway, which injects it at the HTTPS layer;
