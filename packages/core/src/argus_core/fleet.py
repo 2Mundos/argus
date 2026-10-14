@@ -24,6 +24,9 @@ class DockerOptions(BaseModel):
     host: str | None = None  # None: the Argus process's DOCKER_HOST / local socket
     network: str | None = None
     extra_hosts: list[str] = []  # e.g. "host.docker.internal:host-gateway"
+    # OCI runtime for the container, e.g. "sysbox-runc". For the nanoclaw runtime
+    # it replaces the shared Docker socket with a daemon inside the instance.
+    runtime: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_.-]*$")
 
 
 IN_CLUSTER = "in-cluster"
@@ -70,6 +73,10 @@ class NanoclawOptions(BaseModel):
     agent_image: str = Field(min_length=1)
     onecli_url: str = "http://host.docker.internal:10254"
     docker_socket: str = Field(default="/var/run/docker.sock", pattern=r"^/")
+    # A `docker save` archive on the Docker host, loaded into the instance's own
+    # daemon when `docker.runtime` is set (that daemon starts without images).
+    # Absent: `agent_image` is pulled from its registry.
+    agent_image_archive: str | None = Field(default=None, pattern=r"^/")
     # Providers whose accounts Argus leases to this agent and switches in the
     # OneCLI vault (e.g. ["anthropic"]). Empty: use the vault's own credential.
     account_providers: list[str] = []
@@ -106,6 +113,13 @@ class PoolUpsert(BaseModel):
                 raise ValueError("the nanoclaw runtime needs the `nanoclaw` options")
             if self.agents_per_instance != 1:
                 raise ValueError("the nanoclaw runtime runs one agent per instance")
+            if self.docker.runtime and (self.nanoclaw.user or self.nanoclaw.group_add):
+                raise ValueError(
+                    "with docker.runtime the host runs as root inside its sandbox:"
+                    " leave nanoclaw.user and nanoclaw.group_add empty"
+                )
+        elif self.docker.runtime and self.target == TargetKind.KUBERNETES:
+            raise ValueError("docker.runtime applies to the docker target")
         return self
 
 

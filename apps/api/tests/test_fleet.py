@@ -510,3 +510,52 @@ async def test_exits_after_a_drain_are_not_crashes(
     assert len(target.started) == 5
     async with db.read() as conn:
         assert (await fleet.get_pool(conn, "web")).status == "ok"
+
+
+def _sandboxed_pool(**nanoclaw: object) -> PoolUpsert:
+    from argus_core.fleet import DockerOptions, NanoclawOptions
+
+    return PoolUpsert(
+        runtime="nanoclaw",
+        image="argus-nanoclaw-host:dev",
+        max_replicas=2,
+        docker=DockerOptions(runtime="sysbox-runc"),
+        nanoclaw=NanoclawOptions(
+            install_dir="/opt/nanoclaw",
+            instances_root="/srv/nc-i",
+            agent_image="nanoclaw-agent:1",
+            **nanoclaw,  # type: ignore[arg-type]
+        ),
+    )
+
+
+def test_sandboxed_nanoclaw_has_no_docker_socket() -> None:
+    from datetime import UTC, datetime
+
+    from argus_api.fleet.runtimes import container_spec
+    from argus_core.fleet import Pool
+
+    now = datetime.now(UTC)
+    upsert = _sandboxed_pool(agent_image_archive="/srv/agent.tar")
+    pool = Pool(
+        name="sbx",
+        status="ok",
+        last_error=None,
+        live_instances=0,
+        created_at=now,
+        updated_at=now,
+        **upsert.model_dump(),
+    )
+    spec = container_spec(pool, "i-1", ["argus_boot_x"], "http://argus")
+    assert spec.runtime == "sysbox-runc"
+    assert all("docker.sock" not in m.container for m in spec.mounts)
+    assert ("/srv/agent.tar", "/srv/agent.tar", "ro") in [
+        (m.host, m.container, m.mode) for m in spec.mounts
+    ]
+    assert spec.env["ARGUS_NANOCLAW_INNER_DOCKER"] == "1"
+    assert spec.user is None and spec.group_add == []
+
+
+def test_sandboxed_nanoclaw_runs_as_root_in_its_sandbox() -> None:
+    with pytest.raises(ValueError, match=r"docker\.runtime"):
+        _sandboxed_pool(user="1000:1000")

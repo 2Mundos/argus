@@ -74,15 +74,26 @@ def container_spec(
         if nc.account_providers:
             env["ARGUS_ACCOUNT_PROVIDERS"] = ",".join(nc.account_providers)
         workdir = f"{nc.instances_root.rstrip('/')}/{instance_id}"
+        sandboxed = pool.docker.runtime is not None
         mounts = [
             # Identical host and container paths: NanoClaw resolves the paths it
             # hands to Docker on the daemon's filesystem, not its own.
             Mount(nc.install_dir, nc.install_dir, "ro"),
             # Only this instance's directory: hosts cannot see each other's state.
             Mount(workdir, workdir, "rw", create_owner=nc.user),
-            Mount(nc.docker_socket, "/var/run/docker.sock", "rw"),
         ]
-        user, group_add = nc.user, list(nc.group_add)
+        if sandboxed:
+            # No host socket: the instance runs its own daemon inside the sandbox
+            # runtime, so a compromised host cannot reach the real Docker host.
+            env["ARGUS_NANOCLAW_INNER_DOCKER"] = "1"
+            if nc.agent_image_archive:
+                env["ARGUS_NANOCLAW_AGENT_IMAGE_ARCHIVE"] = nc.agent_image_archive
+                mounts.append(
+                    Mount(nc.agent_image_archive, nc.agent_image_archive, "ro")
+                )
+        else:
+            mounts.append(Mount(nc.docker_socket, "/var/run/docker.sock", "rw"))
+            user, group_add = nc.user, list(nc.group_add)
     elif pool.runtime != "plain":
         raise TargetError(f"runtime {pool.runtime!r} is not supported")
     return ContainerSpec(
@@ -101,6 +112,7 @@ def container_spec(
         mounts=mounts,
         user=user,
         group_add=group_add,
+        runtime=pool.docker.runtime,
         kubernetes=(
             KubernetesPlacement(
                 namespace=pool.kubernetes.namespace,

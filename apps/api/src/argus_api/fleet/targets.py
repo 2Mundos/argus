@@ -59,6 +59,7 @@ class ContainerSpec:
     mounts: list[Mount] = field(default_factory=list)
     user: str | None = None
     group_add: list[str] = field(default_factory=list)
+    runtime: str | None = None  # OCI runtime (Docker target), e.g. sysbox-runc
     kubernetes: KubernetesPlacement | None = None
 
     @property
@@ -182,6 +183,7 @@ class DockerTarget:
                 or None,
                 user=spec.user,
                 group_add=spec.group_add or None,
+                runtime=spec.runtime,
             )
         except APIError as exc:
             if exc.status_code != 409:  # 409: created concurrently under our name

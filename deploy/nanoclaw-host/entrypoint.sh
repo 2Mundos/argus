@@ -25,6 +25,24 @@ mkdir -p "$WORK/data" "$WORK/groups" "$WORK/store"
 for shared in container templates package.json; do
   ln -sfn "$INSTALL/$shared" "$WORK/$shared"
 done
+# Sandboxed mode (pool docker.runtime, e.g. sysbox): no host socket; run a
+# private daemon and give it the agent image.
+if [ "${ARGUS_NANOCLAW_INNER_DOCKER:-}" = "1" ]; then
+  dockerd >/var/log/dockerd.log 2>&1 &
+  n=0
+  until docker info >/dev/null 2>&1; do
+    n=$((n + 1))
+    [ "$n" -le 60 ] || { echo "inner dockerd did not start:" >&2; tail -20 /var/log/dockerd.log >&2; exit 70; }
+    sleep 1
+  done
+  if ! docker image inspect "${CONTAINER_IMAGE:?}" >/dev/null 2>&1; then
+    if [ -n "${ARGUS_NANOCLAW_AGENT_IMAGE_ARCHIVE:-}" ]; then
+      docker load -i "$ARGUS_NANOCLAW_AGENT_IMAGE_ARCHIVE" >/dev/null
+    else
+      docker pull "$CONTAINER_IMAGE" >/dev/null
+    fi
+  fi
+fi
 cd "$WORK"
 
 # Upgrade tripwire: stamp a marker only for a fresh working directory, never

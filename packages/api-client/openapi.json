@@ -1265,6 +1265,18 @@
               }
             ],
             "title": "Network"
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9][a-z0-9_.-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime"
           }
         },
         "title": "DockerOptions",
@@ -1301,12 +1313,25 @@
               }
             ],
             "title": "Network"
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9][a-z0-9_.-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime"
           }
         },
         "required": [
           "host",
           "network",
-          "extra_hosts"
+          "extra_hosts",
+          "runtime"
         ],
         "title": "DockerOptions",
         "type": "object"
@@ -1970,6 +1995,18 @@
             "title": "Agent Image",
             "type": "string"
           },
+          "agent_image_archive": {
+            "anyOf": [
+              {
+                "pattern": "^/",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Image Archive"
+          },
           "docker_socket": {
             "default": "/var/run/docker.sock",
             "pattern": "^/",
@@ -2036,6 +2073,18 @@
             "title": "Agent Image",
             "type": "string"
           },
+          "agent_image_archive": {
+            "anyOf": [
+              {
+                "pattern": "^/",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Image Archive"
+          },
           "docker_socket": {
             "default": "/var/run/docker.sock",
             "pattern": "^/",
@@ -2084,6 +2133,7 @@
           "agent_image",
           "onecli_url",
           "docker_socket",
+          "agent_image_archive",
           "account_providers",
           "user",
           "group_add"

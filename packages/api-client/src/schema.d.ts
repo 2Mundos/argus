@@ -1571,6 +1571,8 @@ export interface components {
             host?: string | null;
             /** Network */
             network?: string | null;
+            /** Runtime */
+            runtime?: string | null;
         };
         /** DockerOptions */
         "DockerOptions-Output": {
@@ -1583,6 +1585,8 @@ export interface components {
             host: string | null;
             /** Network */
             network: string | null;
+            /** Runtime */
+            runtime: string | null;
         };
         /** EventOut */
         EventOut: {
@@ -1850,6 +1854,8 @@ export interface components {
             account_providers?: string[];
             /** Agent Image */
             agent_image: string;
+            /** Agent Image Archive */
+            agent_image_archive?: string | null;
             /**
              * Docker Socket
              * @default /var/run/docker.sock
@@ -1888,6 +1894,8 @@ export interface components {
             account_providers: string[];
             /** Agent Image */
             agent_image: string;
+            /** Agent Image Archive */
+            agent_image_archive: string | null;
             /**
              * Docker Socket
              * @default /var/run/docker.sock

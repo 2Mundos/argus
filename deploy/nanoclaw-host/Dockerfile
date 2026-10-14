@@ -10,7 +10,11 @@ FROM node:22-trixie-slim
 
 # The docker CLI (static binary) — NanoClaw's Docker driver shells out to it.
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
+# docker.io (dockerd, containerd, runc) and iptables are for the sandboxed mode:
+# under a runtime such as sysbox the instance runs its own daemon instead of
+# using the Docker host's socket.
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+        docker.io iptables \
     && rm -rf /var/lib/apt/lists/*
 
 COPY entrypoint.sh /usr/local/bin/argus-nanoclaw-entrypoint
