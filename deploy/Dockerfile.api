@@ -17,13 +17,25 @@ COPY apps/api apps/api
 COPY packages/core packages/core
 RUN uv sync --frozen --no-dev --package argus-api
 
+# One stage per architecture so each download keeps its own pinned checksum;
+# `sops` below picks the one for the platform being built.
+FROM scratch AS sops-amd64
+ADD --checksum=sha256:e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b \
+    https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64 /sops
+
+FROM scratch AS sops-arm64
+ADD --checksum=sha256:53b0abacd38ef1b12a66d6c100956691b9cefce018d91f81e73ddf7438b94d77 \
+    https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.arm64 /sops
+
+ARG TARGETARCH
+FROM sops-${TARGETARCH} AS sops
+
 FROM python:3.12-slim-trixie
 WORKDIR /app
 COPY --from=litestream/litestream:0.5.17 /usr/local/bin/litestream /usr/local/bin/litestream
-# sops decrypts/encrypts the credentials file (age support is built in).
-ADD --chmod=755 --checksum=sha256:e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b \
-    https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64 \
-    /usr/local/bin/sops
+# sops decrypts/encrypts the credentials file (age support is built in); the
+# binary matching the build platform comes from the stage selected below.
+COPY --from=sops --chmod=755 /sops /usr/local/bin/sops
 COPY deploy/litestream.yml /etc/litestream.yml
 COPY deploy/entrypoint.sh /usr/local/bin/argus-entrypoint
 COPY --from=build /app /app

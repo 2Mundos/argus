@@ -61,7 +61,11 @@ def argus(tmp_path_factory: pytest.TempPathFactory) -> Generator[httpx.Client]:
     os.environ |= {
         "ARGUS_DATA_DIR": str(tmp_path_factory.mktemp("argus")),
         "ARGUS_ADMIN_TOKEN": TOKEN,
-        "ARGUS_PUBLIC_URL": f"http://host.docker.internal:{port}",
+        # How worker containers/pods reach this process: host.docker.internal on
+        # Docker Desktop; on Linux CI, the Docker network's gateway address.
+        "ARGUS_PUBLIC_URL": (
+            f"http://{os.environ.get('ARGUS_IT_HOST', 'host.docker.internal')}:{port}"
+        ),
         "ARGUS_RECONCILE_INTERVAL_S": "1",
     }
     from argus_api.main import app
@@ -237,6 +241,11 @@ def test_kubernetes_target_scales_runs_work_and_cleans_up(argus: httpx.Client) -
             capture_output=True,
         )
     api = client.CoreV1Api(config.new_client_from_config(context=K8S_CONTEXT))
+    try:  # the namespace is the test's to create on a throwaway cluster
+        api.create_namespace({"metadata": {"name": K8S_NAMESPACE}})
+    except Exception as exc:
+        if getattr(exc, "status", None) != 409:
+            raise
     pool = "it-k8s"
 
     def pods() -> list[str]:

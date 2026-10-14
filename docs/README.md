@@ -36,6 +36,8 @@ every new dependency is judged against it.
   one process, SQLite + Litestream, no required services
 - [Worker lifecycle and task coordination](specs/worker-lifecycle.spec.md) —
   tasks, leases, agents, provisioning, accounts, decisions, outputs
+- [Operations](specs/operations.spec.md) — health, readiness, Prometheus metrics,
+  and the System view
 - [Knowledge](specs/knowledge.spec.md) — projects and a versioned wiki shared by
   agents and people, delivered with every claim
 

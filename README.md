@@ -54,6 +54,27 @@ docker run -p 8000:8000 -v argus-data:/data argus   # dashboard at http://localh
 # (plus LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY)
 ```
 
+## Operating it
+
+| Endpoint | Auth | Use |
+| --- | --- | --- |
+| `GET /healthz` | none | liveness: the process is up |
+| `GET /readyz` | none | readiness: `503` when the database writer is wedged, a loop stalled, or the disk is full (`degraded` is still `200`) |
+| `GET /api/metrics` | admin token | Prometheus text: tasks, agents, pools, accounts, queue age, loop health, DB and disk size |
+| `GET /api/system` | any token | the same facts as JSON; the dashboard's System tab |
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: argus
+    metrics_path: /api/metrics
+    authorization: { credentials: argus_admin_… }   # an admin token labeled "prometheus"
+    static_configs: [{ targets: ["argus:8000"] }]
+```
+
+A good first alert is `argus_task_oldest_ready_age_seconds` growing while
+`argus_agents{state="active"}` is 0, or `argus_pool_status{status!="ok"} == 1`.
+
 ## Workers on Kubernetes
 
 A pool with `target: kubernetes` runs each instance as a Pod. Give it an explicit

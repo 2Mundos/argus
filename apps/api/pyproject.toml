@@ -23,3 +23,8 @@ module-name = "argus_api"
 
 [tool.uv.sources]
 argus-core = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "prometheus-client>=0.26.0",
+]

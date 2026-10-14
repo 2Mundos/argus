@@ -714,6 +714,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Metrics
+         * @description Prometheus text format; needs an admin token (`authorization` in the scrape config).
+         */
+        get: operations["metrics_api_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/pools": {
         parameters: {
             query?: never;
@@ -801,6 +821,26 @@ export interface paths {
         get?: never;
         /** Upsert Project */
         put: operations["upsert_project_api_projects__slug__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * System
+         * @description Readiness plus the numbers /metrics reports, as JSON for the dashboard.
+         */
+        get: operations["system_api_system_get"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1120,6 +1160,15 @@ export interface components {
             usage_24h: components["schemas"]["argus_core__accounts__Usage"];
             usage_total: components["schemas"]["argus_core__accounts__Usage"];
         };
+        /** AccountCount */
+        AccountCount: {
+            /** Count */
+            count: number;
+            /** Provider */
+            provider: string;
+            /** State */
+            state: string;
+        };
         /** AccountCreate */
         AccountCreate: {
             /** Credential */
@@ -1329,6 +1378,13 @@ export interface components {
              */
             ttl_s?: number;
         };
+        /** CheckOut */
+        CheckOut: {
+            /** Detail */
+            detail?: string | null;
+            /** Status */
+            status: string;
+        };
         /** ClaimRequest */
         ClaimRequest: {
             /**
@@ -1438,6 +1494,13 @@ export interface components {
             credential: {
                 [key: string]: unknown;
             };
+        };
+        /** DatabaseOut */
+        DatabaseOut: {
+            /** Main Bytes */
+            main_bytes: number;
+            /** Wal Bytes */
+            wal_bytes: number;
         };
         /** Decision */
         Decision: {
@@ -1758,6 +1821,19 @@ export interface components {
             /** Providers */
             providers: string[];
         };
+        /** LoopOut */
+        LoopOut: {
+            /** Errors Total */
+            errors_total: number;
+            /** Last Duration S */
+            last_duration_s: number | null;
+            /** Last Success Age S */
+            last_success_age_s: number | null;
+            /** Passes Total */
+            passes_total: number;
+            /** Status */
+            status: string;
+        };
         /**
          * NanoclawOptions
          * @description The `nanoclaw` runtime (docs/research/2026-10-14.nanoclaw-integration).
@@ -2057,6 +2133,19 @@ export interface components {
              */
             updated_at: string;
         };
+        /** PoolOut */
+        PoolOut: {
+            /** Desired */
+            desired: number;
+            /** Live */
+            live: number;
+            /** Max */
+            max: number;
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+        };
         /**
          * PoolStatus
          * @enum {string}
@@ -2186,6 +2275,15 @@ export interface components {
          * @enum {string}
          */
         ProposalState: "open" | "accepted" | "rejected" | "withdrawn";
+        /** ReadinessOut */
+        ReadinessOut: {
+            /** Checks */
+            checks: {
+                [key: string]: components["schemas"]["CheckOut"];
+            };
+            /** Status */
+            status: string;
+        };
         /** Registration */
         Registration: {
             agent: components["schemas"]["Agent"];
@@ -2317,6 +2415,39 @@ export interface components {
              * @enum {string}
              */
             type: "task" | "decision" | "artifact" | "url";
+        };
+        /** SystemSummary */
+        SystemSummary: {
+            /** Accounts */
+            accounts: components["schemas"]["AccountCount"][];
+            /** Agents */
+            agents: {
+                [key: string]: number;
+            };
+            database: components["schemas"]["DatabaseOut"];
+            /** Decisions Open */
+            decisions_open: number;
+            /** Disk Free Bytes */
+            disk_free_bytes: number;
+            /** Events Total */
+            events_total: number;
+            /** Loops */
+            loops: {
+                [key: string]: components["schemas"]["LoopOut"];
+            };
+            /** Oldest Ready Age S */
+            oldest_ready_age_s: number;
+            /** Pools */
+            pools: components["schemas"]["PoolOut"][];
+            readiness: components["schemas"]["ReadinessOut"];
+            /** Tasks */
+            tasks: {
+                [key: string]: number;
+            };
+            /** Uptime S */
+            uptime_s: number;
+            /** Version */
+            version: string;
         };
         /**
          * TargetKind
@@ -3931,6 +4062,26 @@ export interface operations {
             };
         };
     };
+    metrics_api_metrics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
     list_pools_api_pools_get: {
         parameters: {
             query?: never;
@@ -4103,6 +4254,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    system_api_system_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemSummary"];
                 };
             };
         };

@@ -21,6 +21,7 @@ Invariants:
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import uuid4
@@ -43,6 +44,7 @@ from argus_api.fleet.targets import (
     TargetRegistry,
     container_name,
 )
+from argus_api.ops import LoopStats
 
 log = logging.getLogger(__name__)
 
@@ -468,7 +470,16 @@ async def run(
     targets: TargetRegistry,
     settings: FleetSettings,
     interval: float = 5.0,
+    stats: LoopStats | None = None,
 ) -> None:
     while True:
-        await reconcile(db, targets, settings)
+        started = time.monotonic()
+        ok = True
+        try:
+            await reconcile(db, targets, settings)
+        except Exception:  # a whole pass failing (not one pool) must not end the loop
+            log.exception("reconcile pass failed")
+            ok = False
+        if stats:
+            stats.record(time.monotonic() - started, ok=ok)
         await asyncio.sleep(interval)

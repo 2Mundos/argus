@@ -8,6 +8,7 @@ import { Inbox } from "./views/Inbox";
 import { Knowledge } from "./views/Knowledge";
 import { Login } from "./views/Login";
 import { Pools } from "./views/Pools";
+import { System } from "./views/System";
 import { Tasks } from "./views/Tasks";
 
 const TABS = {
@@ -18,6 +19,7 @@ const TABS = {
   knowledge: "Knowledge",
   accounts: "Accounts",
   events: "Events",
+  system: "System",
 } as const;
 type Tab = keyof typeof TABS;
 
@@ -77,6 +79,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
         {tab === "knowledge" && <Knowledge />}
         {tab === "accounts" && <Accounts />}
         {tab === "events" && <Events />}
+        {tab === "system" && <System />}
       </main>
     </div>
   );

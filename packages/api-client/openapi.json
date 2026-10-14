@@ -113,6 +113,29 @@
         "title": "Account",
         "type": "object"
       },
+      "AccountCount": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "state",
+          "count"
+        ],
+        "title": "AccountCount",
+        "type": "object"
+      },
       "AccountCreate": {
         "properties": {
           "credential": {
@@ -656,6 +679,30 @@
         "title": "BootstrapTokenCreate",
         "type": "object"
       },
+      "CheckOut": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "CheckOut",
+        "type": "object"
+      },
       "ClaimRequest": {
         "properties": {
           "capabilities": {
@@ -976,6 +1023,24 @@
           "credential"
         ],
         "title": "CredentialUpdate",
+        "type": "object"
+      },
+      "DatabaseOut": {
+        "properties": {
+          "main_bytes": {
+            "title": "Main Bytes",
+            "type": "integer"
+          },
+          "wal_bytes": {
+            "title": "Wal Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "main_bytes",
+          "wal_bytes"
+        ],
+        "title": "DatabaseOut",
         "type": "object"
       },
       "Decision": {
@@ -1842,6 +1907,53 @@
         "title": "LeaseRequest",
         "type": "object"
       },
+      "LoopOut": {
+        "properties": {
+          "errors_total": {
+            "title": "Errors Total",
+            "type": "integer"
+          },
+          "last_duration_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Duration S"
+          },
+          "last_success_age_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success Age S"
+          },
+          "passes_total": {
+            "title": "Passes Total",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "last_success_age_s",
+          "last_duration_s",
+          "errors_total",
+          "passes_total"
+        ],
+        "title": "LoopOut",
+        "type": "object"
+      },
       "NanoclawOptions-Input": {
         "description": "The `nanoclaw` runtime (docs/research/2026-10-14.nanoclaw-integration).\n\nNanoClaw bind-mounts paths from its own filesystem into agent containers, so\nevery path here is an absolute path **on the Docker host** and is mounted at\nthe identical path inside the NanoClaw host container.",
         "properties": {
@@ -2459,6 +2571,39 @@
         "title": "Pool",
         "type": "object"
       },
+      "PoolOut": {
+        "properties": {
+          "desired": {
+            "title": "Desired",
+            "type": "integer"
+          },
+          "live": {
+            "title": "Live",
+            "type": "integer"
+          },
+          "max": {
+            "title": "Max",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "desired",
+          "max",
+          "live",
+          "status"
+        ],
+        "title": "PoolOut",
+        "type": "object"
+      },
       "PoolStatus": {
         "enum": [
           "ok",
@@ -2774,6 +2919,27 @@
         ],
         "title": "ProposalState",
         "type": "string"
+      },
+      "ReadinessOut": {
+        "properties": {
+          "checks": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CheckOut"
+            },
+            "title": "Checks",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "checks"
+        ],
+        "title": "ReadinessOut",
+        "type": "object"
       },
       "Registration": {
         "properties": {
@@ -3102,6 +3268,92 @@
           "ref"
         ],
         "title": "Source",
+        "type": "object"
+      },
+      "SystemSummary": {
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/AccountCount"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "agents": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Agents",
+            "type": "object"
+          },
+          "database": {
+            "$ref": "#/components/schemas/DatabaseOut"
+          },
+          "decisions_open": {
+            "title": "Decisions Open",
+            "type": "integer"
+          },
+          "disk_free_bytes": {
+            "title": "Disk Free Bytes",
+            "type": "integer"
+          },
+          "events_total": {
+            "title": "Events Total",
+            "type": "integer"
+          },
+          "loops": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LoopOut"
+            },
+            "title": "Loops",
+            "type": "object"
+          },
+          "oldest_ready_age_s": {
+            "title": "Oldest Ready Age S",
+            "type": "number"
+          },
+          "pools": {
+            "items": {
+              "$ref": "#/components/schemas/PoolOut"
+            },
+            "title": "Pools",
+            "type": "array"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/ReadinessOut"
+          },
+          "tasks": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Tasks",
+            "type": "object"
+          },
+          "uptime_s": {
+            "title": "Uptime S",
+            "type": "number"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "uptime_s",
+          "readiness",
+          "tasks",
+          "oldest_ready_age_s",
+          "agents",
+          "pools",
+          "accounts",
+          "decisions_open",
+          "events_total",
+          "database",
+          "disk_free_bytes",
+          "loops"
+        ],
+        "title": "SystemSummary",
         "type": "object"
       },
       "TargetKind": {
@@ -6211,6 +6463,33 @@
         ]
       }
     },
+    "/api/metrics": {
+      "get": {
+        "description": "Prometheus text format; needs an admin token (`authorization` in the scrape config).",
+        "operationId": "metrics_api_metrics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Metrics",
+        "tags": [
+          "operations"
+        ]
+      }
+    },
     "/api/pools": {
       "get": {
         "operationId": "list_pools_api_pools_get",
@@ -6490,6 +6769,33 @@
         "summary": "Upsert Project",
         "tags": [
           "knowledge"
+        ]
+      }
+    },
+    "/api/system": {
+      "get": {
+        "description": "Readiness plus the numbers /metrics reports, as JSON for the dashboard.",
+        "operationId": "system_api_system_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "System",
+        "tags": [
+          "operations"
         ]
       }
     },

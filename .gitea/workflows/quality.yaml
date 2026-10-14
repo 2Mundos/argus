@@ -75,6 +75,30 @@ jobs:
       - run: uv sync --all-packages --group dev --frozen
       - run: make test-docker
 
+  # Real Kubernetes: a throwaway kind cluster, so the test never touches a shared
+  # cluster. Manual until verified on the runner (needs Docker and outbound
+  # network). Pods reach the test's Argus through the kind network's gateway.
+  kubernetes-integration:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - run: command -v uv >/dev/null || { curl -LsSf https://astral.sh/uv/install.sh | sh; echo "$HOME/.local/bin" >> "$GITHUB_PATH"; }
+      - run: uv sync --all-packages --group dev --frozen
+      - name: Install kind (checksum pinned)
+        run: |
+          curl -sSfL -o /usr/local/bin/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  /usr/local/bin/kind" | sha256sum -c -
+          chmod +x /usr/local/bin/kind
+      - run: kind create cluster --name argus-it --wait 180s
+      - name: Run the Kubernetes integration test
+        run: |
+          gateway="$(docker network inspect kind --format '{{range .IPAM.Config}}{{println .Gateway}}{{end}}' | grep -E '^[0-9.]+$' | head -1)"
+          ARGUS_IT_HOST="$gateway" ARGUS_K8S_CONTEXT=kind-argus-it ARGUS_KIND_CLUSTER=argus-it make test-k8s
+      - name: Delete the cluster
+        if: always()
+        run: kind delete cluster --name argus-it
+
   docs:
     runs-on: ubuntu-latest
     steps:

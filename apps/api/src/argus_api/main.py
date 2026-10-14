@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -32,6 +33,9 @@ from argus_api.fleet.routes import router as fleet_router
 from argus_api.fleet.targets import TargetRegistry
 from argus_api.kinds.routes import router as kinds_router
 from argus_api.knowledge.routes import router as knowledge_router
+from argus_api.ops import LoopStats
+from argus_api.ops_routes import probes as probes_router
+from argus_api.ops_routes import router as ops_router
 from argus_api.secrets import open_store
 from argus_api.tasks.routes import router as tasks_router
 
@@ -73,14 +77,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             )
         app.state.targets = TargetRegistry()
         app.state.fleet = FleetSettings(argus_url=settings.public_url)
+        app.state.secrets_ok = secrets_error is None
+        app.state.started_at = time.monotonic()
+        app.state.loops = {
+            "reaper": LoopStats("reaper", reaper.REAP_INTERVAL_S),
+            "reconciler": LoopStats("reconciler", settings.reconcile_interval_s),
+        }
         loops = [
-            asyncio.create_task(reaper.run(db)),
+            asyncio.create_task(reaper.run(db, stats=app.state.loops["reaper"])),
             asyncio.create_task(
                 reconciler.run(
                     db,
                     app.state.targets,
                     app.state.fleet,
                     settings.reconcile_interval_s,
+                    app.state.loops["reconciler"],
                 )
             ),
         ]
@@ -111,9 +122,11 @@ for router in (
     knowledge_router,
     accounts_router,
     fleet_router,
+    ops_router,
 ):
     api.include_router(router)
 app.include_router(api)
+app.include_router(probes_router)
 
 mcp_server.bind(app)
 app.mount("/mcp", mcp_server.endpoint)

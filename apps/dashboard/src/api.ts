@@ -15,6 +15,7 @@ export type Proposal = components["schemas"]["Proposal"];
 export type SearchHit = components["schemas"]["SearchHit"];
 export type Account = components["schemas"]["Account"];
 export type Pool = components["schemas"]["Pool"];
+export type SystemSummary = components["schemas"]["SystemSummary"];
 export type Instance = components["schemas"]["Instance"];
 
 const TOKEN_KEY = "argus.token";

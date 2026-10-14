@@ -667,3 +667,27 @@ th {
   max-height: 60vh;
   font-size: 12px;
 }
+
+/* -- system ----------------------------------------------------------------- */
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.stat {
+  display: grid;
+  min-width: 6.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.stat .n {
+  font-size: 1.35rem;
+  font-weight: 600;
+}
+
+.system table {
+  max-width: 760px;
+}
