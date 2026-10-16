@@ -8,6 +8,8 @@ from contextlib import asynccontextmanager
 
 from argus_core.tasks import InvalidTransitionError
 from fastapi import APIRouter, FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
@@ -15,6 +17,7 @@ from starlette.types import Scope
 
 from argus_api import mcp_server, reaper
 from argus_api.accounts import service as accounts
+from argus_api.accounts.claude_login import ClaudeLoginManager
 from argus_api.accounts.codex_login import CodexLoginManager
 from argus_api.accounts.routes import router as accounts_router
 from argus_api.admin.routes import router as admin_router
@@ -88,6 +91,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             else None
         )
         app.state.codex_login = CodexLoginManager(db, secrets, settings)
+        app.state.claude_login = ClaudeLoginManager(db, secrets, settings)
         app.state.targets = TargetRegistry()
         app.state.fleet = FleetSettings(argus_url=settings.public_url)
         app.state.secrets_ok = secrets_error is None
@@ -113,6 +117,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 yield
         finally:
             await app.state.codex_login.shutdown()
+            await app.state.claude_login.shutdown()
             for loop in loops:
                 loop.cancel()
             for loop in loops:
@@ -151,6 +156,16 @@ app.add_middleware(mcp_server.SlashAlias)
 @app.exception_handler(DomainError)
 async def domain_error(_: Request, exc: DomainError) -> JSONResponse:
     return _error(exc.status, exc.code, exc.message, exc.details)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_invalid(_: Request, exc: RequestValidationError) -> JSONResponse:
+    """FastAPI's 422, without the offending input: a body can hold a secret."""
+    errors = [
+        {k: v for k, v in e.items() if k not in ("input", "ctx", "url")}
+        for e in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
 
 
 @app.exception_handler(InvalidTransitionError)

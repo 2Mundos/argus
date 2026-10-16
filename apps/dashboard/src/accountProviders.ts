@@ -49,8 +49,9 @@ export function nativeAuthNotice(providerId: string): string | undefined {
   }
   if (providerId === "anthropic") {
     return (
-      "This JSON account is for Argus task leasing. Claude Code login in a worker " +
-      "is separate and is not created by this form."
+      "This JSON account is for Argus task leasing. Use “Add Claude account” to import a " +
+      "credential or sign in with a dedicated login, and “Renew credential” on an existing " +
+      "account. A Claude Code login inside a worker is separate."
     );
   }
   return undefined;

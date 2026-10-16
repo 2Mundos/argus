@@ -1,7 +1,7 @@
 from datetime import timedelta
 from uuid import uuid4
 
-from argus_core import codex_auth
+from argus_core import claude_auth, codex_auth
 from argus_core.accounts import (
     Account,
     AccountCreate,
@@ -34,15 +34,22 @@ from argus_api.secrets import SecretStoreError
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
 
-def check_openai_credential(provider: str, credential: dict | None) -> str | None:
-    """An `openai` login must be a Codex auth.json (codex accounts spec 3). Returns
-    the account kind it implies; errors name fields, never values."""
-    if provider != codex_auth.PROVIDER or credential is None:
+def check_credential(provider: str, credential: dict | None) -> tuple[str, str] | None:
+    """Validate a provider's login document; returns the (kind, mode) it implies,
+    or None for providers whose documents are not checked. Errors name fields,
+    never values."""
+    if credential is None:
         return None
     try:
-        return codex_auth.validate(credential).kind
-    except codex_auth.CodexAuthError as exc:
-        raise ValidationFailedError(f"invalid openai credential: {exc}") from None
+        if provider == claude_auth.PROVIDER:
+            found = claude_auth.validate(credential)
+        elif provider == codex_auth.PROVIDER:
+            found = codex_auth.validate(credential)
+        else:
+            return None
+    except (claude_auth.ClaudeAuthError, codex_auth.CodexAuthError) as exc:
+        raise ValidationFailedError(f"invalid {provider} credential: {exc}") from None
+    return found.kind, found.mode
 
 
 @router.get("")
@@ -58,8 +65,8 @@ async def create_account(
     """Register an account. A `credential` is written to the SOPS file first
     (as `account-<id>`); the registry row only ever holds the reference."""
     account_id = str(uuid4())
-    if kind := check_openai_credential(body.provider, body.credential):
-        body = body.model_copy(update={"kind": kind})
+    if checked := check_credential(body.provider, body.credential):
+        body = body.model_copy(update={"kind": checked[0]})
     secret_ref = body.secret_ref
     if body.credential is not None:
         name = f"account-{account_id}"
@@ -112,6 +119,72 @@ async def cancel_codex_login(
 ) -> CodexLogin:
     return CodexLogin(
         **await request.app.state.codex_login.cancel(login_id, caller.token_id)
+    )
+
+
+class ClaudeLoginStart(BaseModel):
+    name: str | None = Field(default=None, max_length=100)
+    renew_account_id: str | None = Field(default=None, max_length=64)
+
+
+class ClaudeLoginCode(BaseModel):
+    """The code the sign-in page shows. Sensitive: never echoed or logged."""
+
+    code: str
+
+
+class ClaudeLogin(BaseModel):
+    """A dedicated Claude login in progress. The link is shown only while
+    `pending`, only to the token that started it."""
+
+    login_id: str
+    state: str
+    phase: str | None
+    url: str | None
+    expires_in_s: int
+    account_id: str | None
+    error: str | None
+
+
+@router.post("/claude-login", status_code=status.HTTP_201_CREATED)
+async def start_claude_login(
+    body: ClaudeLoginStart, request: Request, caller: AdminDep
+) -> ClaudeLogin:
+    """Start the official client's `setup-token` login for a new `anthropic`
+    account, or to renew `renew_account_id` (claude accounts spec 3)."""
+    manager = request.app.state.claude_login
+    return ClaudeLogin(
+        **await manager.start(
+            caller.token_id, caller.actor, body.name, body.renew_account_id
+        )
+    )
+
+
+@router.get("/claude-login/{login_id}")
+async def get_claude_login(
+    login_id: str, request: Request, caller: AdminDep
+) -> ClaudeLogin:
+    return ClaudeLogin(**request.app.state.claude_login.get(login_id, caller.token_id))
+
+
+@router.post("/claude-login/{login_id}/code")
+async def send_claude_login_code(
+    login_id: str, body: ClaudeLoginCode, request: Request, caller: AdminDep
+) -> ClaudeLogin:
+    """Hand the sign-in page's code to the waiting client, once."""
+    return ClaudeLogin(
+        **await request.app.state.claude_login.submit_code(
+            login_id, caller.token_id, body.code
+        )
+    )
+
+
+@router.delete("/claude-login/{login_id}")
+async def cancel_claude_login(
+    login_id: str, request: Request, caller: AdminDep
+) -> ClaudeLogin:
+    return ClaudeLogin(
+        **await request.app.state.claude_login.cancel(login_id, caller.token_id)
     )
 
 
@@ -196,10 +269,14 @@ async def update_credential(
     async with db.read() as conn:
         name = await service.secret_name_for_update(conn, account_id, caller.agent_id)
         account = await service.get_account(conn, account_id, utcnow())
-    check_openai_credential(account.provider, body.credential)
+    checked = check_credential(account.provider, body.credential)
     try:
         await secrets.put(name, body.credential)
     except SecretStoreError as exc:
         async with db.write() as tx:
             await service.disable_for_write_failure(tx, account_id, exc.message)
         raise
+    if checked and caller.agent_id is None:
+        # An admin renewal: the kind follows the credential, nothing else changes.
+        async with db.write() as tx:
+            await service.credential_renewed(tx, account_id, *checked, caller.actor)

@@ -26,6 +26,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/claude-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Claude Login
+         * @description Start the official client's `setup-token` login for a new `anthropic`
+         *     account, or to renew `renew_account_id` (claude accounts spec 3).
+         */
+        post: operations["start_claude_login_api_accounts_claude_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/claude-login/{login_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Claude Login */
+        get: operations["get_claude_login_api_accounts_claude_login__login_id__get"];
+        put?: never;
+        post?: never;
+        /** Cancel Claude Login */
+        delete: operations["cancel_claude_login_api_accounts_claude_login__login_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/claude-login/{login_id}/code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send Claude Login Code
+         * @description Hand the sign-in page's code to the waiting client, once.
+         */
+        post: operations["send_claude_login_code_api_accounts_claude_login__login_id__code_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/codex-login": {
         parameters: {
             query?: never;
@@ -1815,6 +1874,42 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /**
+         * ClaudeLogin
+         * @description A dedicated Claude login in progress. The link is shown only while
+         *     `pending`, only to the token that started it.
+         */
+        ClaudeLogin: {
+            /** Account Id */
+            account_id: string | null;
+            /** Error */
+            error: string | null;
+            /** Expires In S */
+            expires_in_s: number;
+            /** Login Id */
+            login_id: string;
+            /** Phase */
+            phase: string | null;
+            /** State */
+            state: string;
+            /** Url */
+            url: string | null;
+        };
+        /**
+         * ClaudeLoginCode
+         * @description The code the sign-in page shows. Sensitive: never echoed or logged.
+         */
+        ClaudeLoginCode: {
+            /** Code */
+            code: string;
+        };
+        /** ClaudeLoginStart */
+        ClaudeLoginStart: {
+            /** Name */
+            name?: string | null;
+            /** Renew Account Id */
+            renew_account_id?: string | null;
         };
         /**
          * CodexLogin
@@ -3723,6 +3818,136 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Account"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_claude_login_api_accounts_claude_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaudeLoginStart"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaudeLogin"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_claude_login_api_accounts_claude_login__login_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                login_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaudeLogin"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_claude_login_api_accounts_claude_login__login_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                login_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaudeLogin"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_claude_login_code_api_accounts_claude_login__login_id__code_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                login_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaudeLoginCode"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaudeLogin"];
                 };
             };
             /** @description Validation Error */

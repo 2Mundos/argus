@@ -10,11 +10,14 @@ import {
 import { type Account, api, call } from "../api";
 import { relative } from "../format";
 import { useLiveData } from "../live";
+import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
 
 export function Accounts() {
   const [adding, setAdding] = useState(false);
   const [addingCodex, setAddingCodex] = useState(false);
+  // A Claude wizard: new (`{}`) or renewing the given account.
+  const [claude, setClaude] = useState<{ renew?: Account }>();
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
   const { data: accounts, error: loadError } = useLiveData(
@@ -55,6 +58,9 @@ export function Accounts() {
         </button>
         <button type="button" onClick={() => setAddingCodex(true)}>
           Add Codex account
+        </button>
+        <button type="button" onClick={() => setClaude({})}>
+          Add Claude account
         </button>
         <button type="button" className="primary" onClick={() => setAdding(true)}>
           Add account
@@ -104,6 +110,16 @@ export function Accounts() {
                 <button type="button" className="link" onClick={() => toggle(a)}>
                   {a.state === "disabled" ? "Enable" : "Disable"}
                 </button>
+                {a.provider === "anthropic" && (
+                  <button
+                    type="button"
+                    className="link"
+                    aria-label={`Renew credential of ${a.name}`}
+                    onClick={() => setClaude({ renew: a })}
+                  >
+                    Renew credential
+                  </button>
+                )}
               </td>
             </tr>
           ))}
@@ -117,6 +133,16 @@ export function Accounts() {
         </tbody>
       </table>
       {adding && <AddAccount onClose={() => setAdding(false)} />}
+      {claude && (
+        <ClaudeAccount
+          renew={claude.renew}
+          onClose={() => setClaude(undefined)}
+          onDone={() => {
+            setNotice(claude.renew ? `Renewed “${claude.renew.name}”.` : "Claude account added.");
+            setClaude(undefined);
+          }}
+        />
+      )}
       {addingCodex && (
         <CodexAccount
           onClose={() => setAddingCodex(false)}

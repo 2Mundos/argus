@@ -334,6 +334,27 @@ async def secret_name_for_update(
     return name
 
 
+async def credential_renewed(
+    tx: Tx, account_id: str, kind: str, mode: str, actor: str
+) -> None:
+    """The account's credential was replaced by an admin. Name, priority, leases,
+    labels and enabled/disabled state stay; the derived kind follows the new
+    credential. The event names the credential's type, never a value."""
+    row = await _row(tx.conn, account_id)
+    await tx.conn.execute(
+        "UPDATE accounts SET kind = ?, updated_at = ? WHERE id = ?",
+        (kind, ts(tx.now), account_id),
+    )
+    await record(
+        tx,
+        actor,
+        "account",
+        account_id,
+        "account.credential_renewed",
+        {"mode": mode, "kind_changed": row["kind"] != kind},
+    )
+
+
 async def disable_for_write_failure(tx: Tx, account_id: str, error: str) -> None:
     """A refreshed credential that cannot be persisted must not be silently kept."""
     await _disable(tx, account_id, f"credential write failed: {error}", auto=False)

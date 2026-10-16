@@ -14,6 +14,7 @@ export type Revision = components["schemas"]["Revision"];
 export type Proposal = components["schemas"]["Proposal"];
 export type SearchHit = components["schemas"]["SearchHit"];
 export type Account = components["schemas"]["Account"];
+export type ClaudeLogin = components["schemas"]["ClaudeLogin"];
 export type Pool = components["schemas"]["Pool"];
 export type SystemSummary = components["schemas"]["SystemSummary"];
 export type Instance = components["schemas"]["Instance"];

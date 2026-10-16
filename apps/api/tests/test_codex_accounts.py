@@ -473,12 +473,12 @@ async def test_cancel_before_persistence_wins_and_creates_nothing(
 async def test_failed_persistence_leaves_no_secret(
     db: Database, secrets, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from argus_api.accounts import codex_login
+    from argus_api.accounts import service
 
     async def boom(*_a, **_k):
         raise RuntimeError("db down")
 
-    monkeypatch.setattr(codex_login.service, "create_account", boom)
+    monkeypatch.setattr(service, "create_account", boom)
     mgr, go = manager(db, secrets, tmp_path)
     started = await mgr.start("tok-1", "admin:one", None)
     session = mgr._sessions[started["login_id"]]
@@ -519,9 +519,9 @@ async def test_stopping_a_login_stops_the_clients_descendants(
     mode: str,
     how: str,
 ) -> None:
-    from argus_api.accounts import codex_login
+    from argus_api.accounts import login_base
 
-    monkeypatch.setattr(codex_login, "_TERM_GRACE_S", 0.3)
+    monkeypatch.setattr(login_base, "_TERM_GRACE_S", 0.3)
     now = [0.0]
     mgr, _ = manager(db, secrets, tmp_path, mode=mode, clock=lambda: now[0])
     started = await mgr.start("tok-1", "admin:one", None)
