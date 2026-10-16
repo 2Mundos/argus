@@ -77,6 +77,7 @@ class _Session:
     container: str | None = None
     pgid: int | None = None  # the process group this manager created, never another
     commit: asyncio.Task[None] | None = None  # set while the account is being persisted
+    cleanup: asyncio.Task[None] | None = None  # the one teardown in flight, if any
 
 
 def _signal_group(pgid: int, sig: int) -> bool:
@@ -226,6 +227,20 @@ class CodexLoginManager:
                 await s.task
 
     async def _kill(self, s: _Session) -> None:
+        """Tear the session's client down. One teardown runs at a time and every
+        caller waits for it to finish (container removed included); it is shielded,
+        so cancelling a caller never abandons a half-done `docker rm`."""
+        task = s.cleanup
+        if task is None:
+            task = s.cleanup = asyncio.create_task(self._teardown(s))
+            self._cleanups.add(task)
+            task.add_done_callback(self._cleanups.discard)
+            task.add_done_callback(
+                lambda t: setattr(s, "cleanup", None) if s.cleanup is t else None
+            )
+        await asyncio.shield(task)
+
+    async def _teardown(self, s: _Session) -> None:
         proc, s.proc = s.proc, None
         pgid, s.pgid = s.pgid, None
         if proc is not None:

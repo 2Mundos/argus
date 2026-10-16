@@ -580,6 +580,59 @@ async def test_docker_mode_removes_exactly_its_container(
         await mgr.shutdown()
 
 
+async def test_every_cleanup_caller_waits_for_the_one_container_removal(
+    db: Database, secrets, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `docker rm` is slow and logs only when it finishes. Cancel, the run task's own
+    # cleanup and a second caller all race on it: each must return only after the
+    # removal completed, and exactly one `rm` may run.
+    codex, _ = fake_codex(tmp_path, "tree")
+    log = tmp_path / "docker.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys, time\n"
+        "if sys.argv[1] == 'run':\n"
+        f"    open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "    home = sys.argv[sys.argv.index('-v') + 1].split(':')[0]\n"
+        f"    os.execve({codex!r}, [{codex!r}], {{'CODEX_HOME': home}})\n"
+        "time.sleep(0.6)\n"
+        f"open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+    )
+    docker.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    mgr = CodexLoginManager(
+        db, secrets, Settings(data_dir=tmp_path, codex_login_image="img:pinned")
+    )
+    started = await mgr.start("tok-1", "admin:one", None)
+    child = int((tmp_path / "child.pid").read_text())
+    session = mgr._sessions[started["login_id"]]
+    name = f"argus-codex-login-{started['login_id'][:12]}"
+
+    def removals() -> list[list[str]]:
+        calls = [json.loads(line) for line in log.read_text().splitlines()]
+        return [c for c in calls if c[0] == "rm"]
+
+    try:
+        first = asyncio.create_task(mgr.cancel(started["login_id"], "tok-1"))
+        await asyncio.sleep(0.05)  # the first teardown is now waiting on `docker rm`
+        second = asyncio.create_task(mgr._kill(session))
+        await asyncio.wait_for(second, 10)
+        assert removals() == [["rm", "-f", name]]  # the late caller waited for it
+        await asyncio.wait_for(first, 10)
+        assert removals() == [["rm", "-f", name]]
+        assert await _gone(child)
+        # A caller cancelled mid-removal does not abandon it.
+        await mgr.shutdown()
+        assert len(removals()) == 1
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(child, signal.SIGKILL)
+        await mgr.shutdown()
+
+
 @pytest.mark.parametrize(
     "url,ok",
     [
