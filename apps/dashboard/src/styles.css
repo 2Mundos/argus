@@ -140,6 +140,15 @@ label {
   font-size: 12.5px;
   color: var(--muted);
 }
+/* Radios and checkboxes are not text fields: the generic `input { width: 100% }`
+   above made a radio inside a flex/grid row as wide as its container. */
+input[type="radio"],
+input[type="checkbox"] {
+  width: auto;
+  flex: none;
+  padding: 0;
+  margin: 0;
+}
 label.check {
   display: flex;
   align-items: center;
@@ -203,6 +212,8 @@ nav a[aria-current="page"] {
 }
 .shell > main {
   padding: 1rem;
+  /* A wide table scrolls inside the page instead of widening it (narrow screens). */
+  overflow-x: auto;
 }
 
 .toolbar {
@@ -690,4 +701,184 @@ th {
 
 .system table {
   max-width: 760px;
+}
+
+/* -- guided worker form --------------------------------------------------- */
+
+.guided fieldset {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem 0.75rem;
+}
+.guided legend {
+  padding: 0 0.3rem;
+  font-weight: 600;
+}
+.guided .choices {
+  display: grid;
+  gap: 0.5rem;
+}
+.guided .choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.guided .choice:hover {
+  border-color: var(--accent);
+}
+.guided .choice:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.guided .choice:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.guided .choice input {
+  margin-top: 0.2rem;
+}
+.guided .choice-text {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.guided .choice-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+}
+.guided .warning {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  color: var(--danger);
+}
+.guided .blocked {
+  margin: 0 0 0.5rem;
+}
+.guided .notes {
+  margin: 0 0 0.5rem;
+  padding-left: 1.1rem;
+}
+.guided details {
+  margin: 0.5rem 0;
+}
+.guided summary {
+  cursor: pointer;
+}
+
+/* Home */
+.home-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.verdict-ok {
+  color: var(--ok);
+}
+.verdict-degraded {
+  color: var(--warn);
+}
+.verdict-failing {
+  color: var(--danger);
+}
+.verdict-unknown {
+  color: var(--muted);
+}
+.home-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.75rem;
+}
+.home-group h4,
+.home-groups .card h4 {
+  margin: 0 0 0.5rem;
+}
+.home-groups .stat {
+  min-width: 5.5rem;
+}
+.attention {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+.attention li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+.attention .sev-label {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.attention .sev-critical {
+  border-left-color: var(--danger);
+}
+.attention .sev-attention {
+  border-left-color: var(--warn);
+}
+.attention .sev-info {
+  border-left-color: var(--muted);
+}
+.counts {
+  margin: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+.counts div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.counts dt {
+  overflow-wrap: anywhere;
+}
+.counts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.home-details {
+  margin-top: 1rem;
+}
+.home-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.25rem 0;
+}
+.home-details summary:focus-visible,
+.home a:focus-visible,
+.home button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.home .table-wrap {
+  overflow-x: auto;
+}
+@media (max-width: 720px) {
+  .home-groups {
+    grid-template-columns: 1fr;
+  }
 }

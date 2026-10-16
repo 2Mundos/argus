@@ -2,9 +2,11 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+LeaseRole = Literal["engine", "executor"]
 
 
 class AccountKind(StrEnum):
@@ -75,6 +77,9 @@ class LeaseRequest(BaseModel):
     """Providers the agent's runtime can use, most preferred first."""
 
     providers: list[str] = Field(min_length=1)
+    # `engine`: the account the worker's harness runs on; `executor`: the one a
+    # CLI it delegates to uses. One active lease per role.
+    role: LeaseRole = "engine"
 
 
 class AccountLease(BaseModel):
@@ -85,12 +90,15 @@ class AccountLease(BaseModel):
     name: str
     provider: str
     kind: AccountKind
+    role: LeaseRole = "engine"
     credential: dict[str, Any]
 
 
 class ExhaustedReport(BaseModel):
     until: datetime | None = None  # the provider's reset time, if known
     reason: str = Field(default="", max_length=2000)
+    # Which of the agent's leases hit the limit (it may hold one account twice).
+    role: LeaseRole = "engine"
     # The task the agent was working on: blocked as `no_account` if nothing is left.
     task_id: str | None = None
     attempt: int | None = None

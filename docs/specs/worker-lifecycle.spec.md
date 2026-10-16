@@ -406,7 +406,9 @@ as a managed pool of size 1 uses the same model and comes later.
   `upload_text_artifact`, `leave`; `search_knowledge`, `get_knowledge_page`,
   `write_knowledge`; `lease_account`, `report_account_exhausted`; and for
   orchestrators `list_tasks`, `cancel_task`, `list_agents`, `list_pools`,
-  `scale_pool`, `list_decisions`, `answer_decision`. The server's instructions
+  `scale_pool`, `get_fleet_capabilities`, `launch_worker`, `list_worker_templates`,
+  `create_worker` (see
+  [worker launch](worker-launch.spec.md)), `list_decisions`, `answer_decision`. The server's instructions
   tell agents the working loop (claim, heartbeat, progress, complete; a 409
   means stop). The SDK's DNS-rebinding check is disabled because agents reach
   Argus by non-localhost names and every call needs a bearer token, which is what
@@ -466,6 +468,22 @@ Consequences for Argus:
   4. Turns replies into Argus calls: a plain reply is a progress note;
      `COMPLETE:`/`FAIL:`/`ASK:` prefixes complete, fail, or ask. A 409 drops the
      reply and moves on.
+  **Results of any length.** `result.summary` holds at most 10 000 characters. A
+  `COMPLETE:` reply within that is sent as the summary. A longer one is never
+  truncated silently or dropped: the channel uploads the **whole** text as the
+  artifact `result-attempt-<n>.md` (UTF-8, `text/markdown`; existing artifact
+  contract, bound to the attempt it holds), then completes with a bounded summary:
+  the beginning of the response, a note giving the artifact id, size and SHA-256, and
+  `result.artifacts = [id]`. A retried delivery reuses the artifact already uploaded
+  for the attempt (same SHA-256; a different body under the same name gets a
+  `-<sha8>` name), so it never duplicates one. Errors are classified: a lost lease
+  (409) drops the reply; transient failures (network, 5xx, 429) are retried; a
+  permanent rejection (other 4xx) fails the attempt with the reason instead of
+  leaving the task claimed forever. **Attachments:** files the agent attaches to any
+  reply while a task is held (NanoClaw's outbox) are uploaded the same way, under
+  their own sanitized names, and listed in the completion's `result.artifacts`; one
+  that cannot be stored is named in the summary instead of vanishing. Error text is always the server's real message
+  (validation errors included), never `[object Object]`.
 - **MCP is the alternative reply path**: the Argus MCP endpoint (3.7) can be added
   to an agent group as a user MCP server for richer tools (knowledge, accounts),
   at the cost of giving the agent container an Argus token, which the channel's
@@ -475,6 +493,9 @@ Consequences for Argus:
   that credential into NanoClaw's gateway, which injects it at the HTTPS layer;
   the gateway is a sink, not a second store. Raw secrets never travel through
   task payloads.
+  An `anthropic` credential document is read as `api_key`, `oauth_token`, or Claude
+  Code's own `claudeAiOauth.accessToken`; an access token already past its
+  `expiresAt` is refused (the channel does not refresh OAuth tokens), never applied.
 
 ## 3.9 Account pool and fallback
 
@@ -503,8 +524,11 @@ database never holds a secret.
   agent's provider order breaks ties, then the least-leased account) and returns
   it **with its credential**. That response is how a plain-runtime worker gets
   the secret; the NanoClaw module instead loads it into the gateway (3.8). An
-  agent holds at most one lease; leasing again replaces it, and leases end when
-  the agent is lost or leaves (or on `POST /api/accounts/release`).
+  agent holds at most one lease per role (`engine`, the default: the account its
+  harness runs on; `executor`: the account a CLI it delegates to uses, see
+  [codex accounts](codex-accounts.spec.md)); leasing again replaces the lease of
+  that role, and leases end when the agent is lost or leaves (or on
+  `POST /api/accounts/release`, optionally for one `role`).
 - **Fallback**: on a quota or rate-limit error the leasing agent reports
   `POST /api/accounts/{id}/exhausted {until?, reason, task_id?, attempt?}`.
   Argus marks it exhausted until the reported reset time (or

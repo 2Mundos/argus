@@ -14,7 +14,15 @@ from argus_api.decisions import store as decisions
 from argus_api.errors import ConflictError, NotFoundError
 from argus_api.events import record
 
-_CONFIG_FIELDS = ("env", "cpus", "memory_mb", "docker", "kubernetes", "nanoclaw")
+_CONFIG_FIELDS = (
+    "env",
+    "cpus",
+    "memory_mb",
+    "docker",
+    "kubernetes",
+    "nanoclaw",
+    "template",
+)
 
 
 async def get_pool(conn: aiosqlite.Connection, name: str) -> Pool:
@@ -64,6 +72,27 @@ async def upsert_pool(tx: Tx, name: str, body: PoolUpsert, actor: str) -> Pool:
     return await get_pool(tx.conn, name)
 
 
+async def create_pool(tx: Tx, name: str, body: PoolUpsert, actor: str) -> Pool:
+    """Insert a new pool; an existing name is a conflict, never a silent replace,
+    so a retried or concurrent create cannot double the workers (worker launch 3)."""
+    async with tx.conn.execute("SELECT 1 FROM pools WHERE name = ?", (name,)) as cur:
+        if await cur.fetchone() is not None:
+            raise ConflictError(
+                f"pool {name!r} already exists; launch a worker in it instead",
+                code="pool_exists",
+            )
+    pool = await upsert_pool(tx, name, body, actor)
+    await record(
+        tx,
+        actor,
+        "pool",
+        name,
+        "pool.created",
+        {"template": body.template, "desired": body.desired_replicas},
+    )
+    return pool
+
+
 async def scale(
     tx: Tx, name: str, desired: int, actor: str, scope: Scope
 ) -> tuple[Pool, str | None]:
@@ -89,6 +118,33 @@ async def scale(
         return pool, decision_id
     await _set_replicas(tx, name, desired, max(desired, pool.max_replicas), actor)
     return await get_pool(tx.conn, name), None
+
+
+async def launch(tx: Tx, name: str, expected_desired: int | None, actor: str) -> Pool:
+    """Ask for one more instance (worker launch 3). Only desired state changes;
+    the reconciler starts it. Bounded by the cap and, when given, guarded by the
+    caller's view of `desired_replicas` so a repeated submit adds one worker."""
+    pool = await get_pool(tx.conn, name)
+    if expected_desired is not None and pool.desired_replicas != expected_desired:
+        raise ConflictError(
+            f"pool {name!r} now wants {pool.desired_replicas} replicas, not"
+            f" {expected_desired}: someone else changed it (or this was already"
+            " submitted)",
+            code="stale_pool",
+        )
+    desired = pool.desired_replicas + 1
+    if desired > pool.max_replicas:
+        raise ConflictError(
+            f"pool {name!r} is at its cap of {pool.max_replicas} replicas;"
+            " scale_pool asks for more",
+            code="pool_at_capacity",
+        )
+    await tx.conn.execute(
+        "UPDATE pools SET desired_replicas = ?, updated_at = ? WHERE name = ?",
+        (desired, ts(tx.now), name),
+    )
+    await record(tx, actor, "pool", name, "pool.launch_requested", {"desired": desired})
+    return await get_pool(tx.conn, name)
 
 
 async def apply_scale_decision(

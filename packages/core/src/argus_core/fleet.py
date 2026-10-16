@@ -98,6 +98,7 @@ class PoolUpsert(BaseModel):
     docker: DockerOptions = DockerOptions()
     kubernetes: KubernetesOptions | None = None  # required for the kubernetes target
     nanoclaw: NanoclawOptions | None = None  # required for the nanoclaw runtime
+    template: str | None = Field(default=None, max_length=40)  # worker launch 3
 
     @model_validator(mode="after")
     def consistent(self) -> "PoolUpsert":
@@ -180,3 +181,140 @@ class Instance(BaseModel):
     running_at: datetime | None
     terminating_at: datetime | None
     terminated_at: datetime | None
+
+
+class Check(BaseModel):
+    """One measured fact about a pool's readiness. `ok` is None when it could not
+    be verified from here (`detail` says why); only False blocks a launch."""
+
+    name: str
+    ok: bool | None
+    detail: str
+
+
+class TargetCapability(BaseModel):
+    kind: TargetKind
+    location: str | None  # Docker host / kube context (None: the local default)
+    available: bool
+    error: str | None
+    version: str | None
+    runtimes: list[str]  # OCI runtimes the daemon offers
+    cpus: float | None
+    memory_mb: int | None
+
+
+class PoolCapability(BaseModel):
+    name: str
+    target: TargetKind
+    runtime: RuntimeKind
+    launchable: bool
+    free_slots: int
+    checks: list[Check]
+    blockers: list[str]
+
+
+class FleetCapabilities(BaseModel):
+    public_url_configured: bool
+    targets: list[TargetCapability]
+    pools: list[PoolCapability]
+
+
+class LaunchRequest(BaseModel):
+    # Compare-and-set against the pool's desired_replicas: guards double submits.
+    expected_desired_replicas: int | None = Field(default=None, ge=0)
+
+
+class LaunchResult(BaseModel):
+    pool: Pool
+    requested: bool  # always True on success: the reconciler starts it next pass
+    desired_replicas: int
+
+
+# -- Guided onboarding: templates (worker launch 3) ---------------------------------
+
+TEMPLATE_DEFAULT_MAX_REPLICAS = 3
+TEMPLATE_MAX_QUANTITY = 20
+
+
+class NodeOption(BaseModel):
+    id: str  # "local", or a configured Docker host
+    label: str
+    default: bool
+    available: bool
+    error: str | None
+    version: str | None
+    runtimes: list[str]
+    cpus: float | None
+    memory_mb: int | None
+    shares_filesystem: bool  # host paths can be checked from this process
+
+
+class ImageChoice(BaseModel):
+    image: str
+    capabilities: list[str]
+    source: str  # "label" (on the node's daemon) or "config" (operator list)
+
+
+class Readiness(BaseModel):
+    node: str
+    ready: bool
+    checks: list[Check]
+    missing: list[str]  # what to fix, for every check that is not verified true
+    images: list[ImageChoice]  # argus-worker only: the offered images
+
+
+class TemplateDefaults(BaseModel):
+    name: str  # suggested, unique among existing pools
+    quantity: int
+    max_replicas: int
+    capabilities: list[str]
+    extra_hosts: list[str]
+
+
+class WorkerTemplate(BaseModel):
+    id: str
+    name: str
+    description: str
+    runtime: RuntimeKind
+    notes: list[str]  # security and behaviour the user should know
+    # Set when using the template accepts a security risk: shown before submit and
+    # to be acknowledged by the person choosing it.
+    warning: str | None
+    setup: list[str]  # what must exist on the node, always shown
+    defaults: TemplateDefaults
+    readiness: list[Readiness]  # one per node
+    ready: bool  # ready on at least one node
+
+
+class TemplateCatalog(BaseModel):
+    public_url_configured: bool
+    default_node: str
+    nodes: list[NodeOption]
+    templates: list[WorkerTemplate]
+    pools: int  # how many pools exist (0: a fresh install)
+
+
+class AdvancedOptions(BaseModel):
+    """Admin-only overrides on top of a template's defaults."""
+
+    capabilities: list[str] | None = None
+    env: dict[str, str] | None = None
+    extra_hosts: list[str] | None = None
+    max_replicas: int | None = Field(default=None, ge=1, le=1000)
+
+
+class CreateWorkerRequest(BaseModel):
+    template: str = Field(min_length=1, max_length=40)
+    node: str = Field(default="local", min_length=1, max_length=300)
+    # Required: the pool name is the idempotency key, so a retry cannot create a
+    # second pool. The catalog suggests a free one.
+    name: str = Field(pattern=POOL_NAME_PATTERN)
+    quantity: int = Field(default=1, ge=1, le=TEMPLATE_MAX_QUANTITY)
+    image: str | None = Field(default=None, max_length=500)  # argus-worker only
+    advanced: AdvancedOptions | None = None
+
+
+class CreateWorkerResult(BaseModel):
+    pool: Pool
+    requested: int
+    desired_replicas: int

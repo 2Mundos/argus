@@ -479,3 +479,142 @@ async def answer_decision(
         f"/decisions/{decision_id}/answer",
         json={"choice": choice, "text": text},
     )
+
+
+@server.tool()
+async def get_fleet_capabilities(ctx: Context) -> dict:
+    """What this node can actually run, measured now: each target's reachability,
+    OCI runtimes and resources, and per pool whether a worker can be launched
+    (`launchable`, `blockers`, per-check detail; ok=null means unverified)."""
+    return await _call(ctx, "GET", "/fleet/capabilities")
+
+
+@server.tool()
+async def launch_worker(
+    ctx: Context, pool: str, expected_desired_replicas: int | None = None
+) -> dict:
+    """Request one more worker from a pool (adds 1 to its desired replicas, up to
+    its cap). The result means *requested*, not running: poll list_pools or
+    get_fleet_capabilities. Pass the pool's current desired_replicas as
+    expected_desired_replicas so a retry cannot launch twice (409 stale_pool)."""
+    return await _call(
+        ctx,
+        "POST",
+        f"/pools/{pool}/launch",
+        json={"expected_desired_replicas": expected_desired_replicas},
+    )
+
+
+@server.tool()
+async def list_worker_templates(ctx: Context) -> dict:
+    """The worker templates this node supports, per node: `ready`, or `missing`
+    (what to set up). Only a ready template can be created. Read-only. Defaults
+    (suggested pool name, quantity 1, cap) are in each template's `defaults`."""
+    return await _call(ctx, "GET", "/fleet/templates")
+
+
+@server.tool()
+async def create_worker(
+    ctx: Context,
+    template: str,
+    name: str,
+    node: str = "local",
+    quantity: int = 1,
+    image: str | None = None,
+    advanced: dict | None = None,
+) -> dict:
+    """Create a pool from a ready template and request `quantity` workers (default
+    1). `name` is required and is the idempotency key: repeating a call is 409
+    pool_exists, never a second worker (take a free name from `defaults.name` in
+    list_worker_templates). Image, runtime, and options come from the template; `image` is only for
+    argus-worker and must be one it offers. `advanced` (capabilities, env,
+    extra_hosts, max_replicas) is admin only. The result means *requested*, not running: follow
+    it with list_pools. A name that exists is 409 pool_exists (use launch_worker)."""
+    return await _call(
+        ctx,
+        "POST",
+        "/fleet/workers",
+        json={
+            "template": template,
+            "node": node,
+            "name": name,
+            "quantity": quantity,
+            "image": image,
+            "advanced": advanced,
+        },
+    )
+
+
+# -- engines and the local model ---------------------------------------------------------
+
+
+@server.tool()
+async def list_engines(ctx: Context) -> dict:
+    """Engines, delegated CLI executors (claude, codex, opencode, cursor-agent) and the
+    local model. Each entry separates model provider, harness, executor and account, and
+    reports `readiness` as three facts (installed, authenticated, validated; ok=null is
+    unknown). `usable` is true only when all three hold. Read-only."""
+    return await _call(ctx, "GET", "/engines")
+
+
+@server.tool()
+async def route_task(
+    ctx: Context,
+    summary: str,
+    simple: bool = False,
+    low_risk: bool = False,
+    criteria_deterministic: bool = False,
+    multi_file: bool = False,
+    touches_sensitive: bool = False,
+    is_code: bool = False,
+    input_chars: int | None = None,
+    output_tokens: int = 512,
+) -> dict:
+    """Decide where a task should run: the local model, or codex/claude. The local model is
+    chosen only if the task is simple, low risk, has deterministic acceptance criteria,
+    is not multi-file or sensitive, and `input_chars` (everything the model would see:
+    instructions, tool schemas, history, inputs) provably fits. Unknown size never goes
+    local. Needs the orchestrator or admin scope. The decision and its reason are recorded."""
+    return await _call(
+        ctx,
+        "POST",
+        "/engines/route",
+        json={
+            "summary": summary,
+            "simple": simple,
+            "low_risk": low_risk,
+            "criteria_deterministic": criteria_deterministic,
+            "multi_file": multi_file,
+            "touches_sensitive": touches_sensitive,
+            "is_code": is_code,
+            "input_chars": input_chars,
+            "output_tokens": output_tokens,
+        },
+    )
+
+
+@server.tool()
+async def run_local(
+    ctx: Context,
+    prompt: str,
+    system: str | None = None,
+    criteria: dict | None = None,
+    max_output_tokens: int = 512,
+    max_attempts: int = 1,
+) -> dict:
+    """Run one bounded completion on the local model (no tools, no side effects) and
+    check it against `criteria` ({json_schema, must_contain, equals, max_chars}).
+    `verdict` is `accepted` (use `text`) or `escalate`: then do the work with
+    `escalate_to` yourself. Cost is unknown (null), not zero. Use route_task first."""
+    return await _call(
+        ctx,
+        "POST",
+        "/engines/local/run",
+        json={
+            "prompt": prompt,
+            "system": system,
+            "criteria": criteria or {},
+            "max_output_tokens": max_output_tokens,
+            "max_attempts": max_attempts,
+        },
+    )

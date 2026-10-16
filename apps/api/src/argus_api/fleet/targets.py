@@ -9,6 +9,7 @@ creating a second one.
 import asyncio
 import builtins
 import json
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -91,7 +92,38 @@ class LabeledContainer:
     running: bool
 
 
+@dataclass(frozen=True)
+class TargetInfo:
+    """What a probe of the target measured."""
+
+    version: str | None = None
+    runtimes: list[str] = field(default_factory=list)
+    cpus: float | None = None
+    memory_mb: int | None = None
+    # True only if the daemon provably uses this process's filesystem (a local
+    # unix socket, not a VM such as Docker Desktop): then host paths can be checked.
+    shares_filesystem: bool = False
+
+
+@dataclass(frozen=True)
+class LabeledImage:
+    tag: str
+    labels: dict[str, str]
+
+
 class Target(Protocol):
+    async def probe(self) -> TargetInfo:
+        """Read-only reachability check; raises TargetError when unreachable."""
+        ...
+
+    async def image_present(self, image: str) -> bool | None:
+        """Whether the image is already on the target; None: cannot tell."""
+        ...
+
+    async def labeled_images(self, key: str) -> builtins.list[LabeledImage]:
+        """Installed images carrying label `key` (one entry per tag)."""
+        ...
+
     async def start(self, spec: ContainerSpec) -> str: ...
     async def stop(self, ref: str, *, grace: timedelta) -> None: ...
     async def list(self, labels: Mapping[str, str]) -> list[ProviderInstance]: ...
@@ -138,6 +170,48 @@ class DockerTarget:
 
     async def logs(self, ref: str, *, tail: int) -> str:
         return await self._call(self._logs, ref, tail)
+
+    async def probe(self) -> TargetInfo:
+        return await self._call(self._probe)
+
+    async def image_present(self, image: str) -> bool | None:
+        return await self._call(self._image_present, image)
+
+    async def labeled_images(self, key: str) -> builtins.list[LabeledImage]:
+        return await self._call(self._labeled_images, key)
+
+    def _labeled_images(self, key: str) -> builtins.list[LabeledImage]:
+        found = self._docker().images.list(filters={"label": [key]})
+        return [
+            LabeledImage(tag, dict(img.labels or {}))
+            for img in found
+            for tag in img.tags
+        ]
+
+    def _probe(self) -> TargetInfo:
+        client = self._docker()
+        client.ping()
+        info = client.info()
+        effective = self.host or os.environ.get("DOCKER_HOST")
+        local = (effective is None or effective.startswith("unix://")) and (
+            "desktop" not in str(info.get("OperatingSystem", "")).lower()
+        )
+        return TargetInfo(
+            shares_filesystem=local,
+            version=info.get("ServerVersion"),
+            runtimes=sorted(info.get("Runtimes") or {}),
+            cpus=info.get("NCPU"),
+            memory_mb=(info.get("MemTotal") or 0) // (1024 * 1024) or None,
+        )
+
+    def _image_present(self, image: str) -> bool:
+        from docker.errors import ImageNotFound
+
+        try:
+            self._docker().images.get(image)
+        except ImageNotFound:
+            return False
+        return True
 
     async def _call(self, fn, *args):
         from docker.errors import DockerException
@@ -344,6 +418,19 @@ class KubernetesTarget:
             for p in pods
             if key in (p.metadata.labels or {})
         ]
+
+    async def probe(self) -> TargetInfo:
+        try:
+            await self._call(self._api().list_namespaced_pod, self.namespace, limit=1)
+        except _KubeError as exc:
+            raise TargetError(str(exc)) from exc
+        return TargetInfo()
+
+    async def image_present(self, image: str) -> bool | None:
+        return None  # nodes pull on demand; the cluster's cache is not visible
+
+    async def labeled_images(self, key: str) -> builtins.list[LabeledImage]:
+        return []
 
     async def _list_pods(self, selector: str) -> Any:
         try:

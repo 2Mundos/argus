@@ -19,24 +19,90 @@ export interface AccountLease {
   provider: string;
   kind: string;
   credential: Record<string, unknown>;
+  /** `engine` (default): the harness's account; `executor`: a delegated CLI's. */
+  role?: "engine" | "executor";
 }
 
 /** How a provider's account becomes a OneCLI secret. */
 interface ProviderMapping {
   type: string;
-  host: string;
+  /** The host the secret is injected for; may depend on the credential (API key vs login). */
+  host: string | ((credential: Record<string, unknown>) => string);
+  /** NanoClaw provider (the harness) that runs on this provider's accounts. */
+  engine: string;
+  /** Appended to the OneCLI secret name; empty for the first provider. */
+  secretSuffix: string;
   /** The secret value out of an Argus credential document. */
   pick(credential: Record<string, unknown>): string | null;
+  /** True when the credential is known to be past its own expiry (never logs a value). */
+  expired?(credential: Record<string, unknown>, now: number): boolean;
 }
 
 const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+/** Claude Code's own credentials file: `{ claudeAiOauth: { accessToken, expiresAt, … } }`. */
+function claudeAiOauth(
+  c: Record<string, unknown>,
+): { accessToken?: unknown; expiresAt?: unknown } | null {
+  const o = c.claudeAiOauth;
+  return o && typeof o === "object" ? (o as Record<string, unknown>) : null;
+}
+
+/** Epoch milliseconds or an ISO date, whichever the document holds; null if neither. */
+function expiryMs(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim()) {
+    const t = /^\d+$/.test(v.trim()) ? Number(v) : Date.parse(v);
+    return Number.isFinite(t) ? t : null;
+  }
+  return null;
+}
+
+/** Codex `auth.json` of a ChatGPT login: a token set. */
+function chatgptLogin(c: Record<string, unknown>): boolean {
+  const t = c.tokens;
+  return (
+    c.auth_mode === "chatgpt" &&
+    !!t &&
+    typeof t === "object" &&
+    ["id_token", "access_token", "refresh_token"].every((k) =>
+      text((t as Record<string, unknown>)[k]),
+    )
+  );
+}
 
 export const PROVIDERS: Record<string, ProviderMapping> = {
   // An API key, or a subscription's OAuth token; OneCLI tells them apart.
   anthropic: {
     type: "anthropic",
     host: "api.anthropic.com",
-    pick: (c) => text(c.api_key) ?? text(c.oauth_token) ?? text(c.token),
+    engine: "claude",
+    secretSuffix: "",
+    pick: (c) =>
+      text(c.api_key) ??
+      text(c.oauth_token) ??
+      text(c.token) ??
+      text(claudeAiOauth(c)?.accessToken),
+    // Only the Claude Code access token expires on its own: never apply one that has.
+    expired: (c, now) => {
+      if (text(c.api_key) ?? text(c.oauth_token) ?? text(c.token)) return false;
+      const at = expiryMs(claudeAiOauth(c)?.expiresAt);
+      return at !== null && at <= now;
+    },
+  },
+  // Codex: a ChatGPT login (the whole auth.json, which OneCLI keeps fresh and
+  // serves to the container as a sentinel file) or an API key.
+  openai: {
+    type: "openai",
+    host: (c) => (chatgptLogin(c) ? "chatgpt.com" : "api.openai.com"),
+    engine: "codex",
+    secretSuffix: "-openai",
+    pick: (c) =>
+      chatgptLogin(c)
+        ? JSON.stringify(c)
+        : c.auth_mode === "apikey"
+          ? text(c.OPENAI_API_KEY)
+          : null,
   },
 };
 
@@ -85,22 +151,44 @@ export interface ApplyTarget {
   name: string;
 }
 
-/** Make `lease` the one credential this agent group can use. Idempotent. */
-export async function applyLease(
-  onecli: OneCliClient,
-  target: ApplyTarget,
-  lease: AccountLease,
-): Promise<void> {
+/** Validate a lease and turn its credential into what OneCLI stores. */
+function secretFor(lease: AccountLease): {
+  mapping: ProviderMapping;
+  value: string;
+  host: string;
+} {
   const mapping = PROVIDERS[lease.provider];
   if (!mapping) {
     throw new Error(
       `provider ${JSON.stringify(lease.provider)} cannot be applied to OneCLI (known: ${Object.keys(PROVIDERS).join(", ")})`,
     );
   }
+  if (mapping.expired?.(lease.credential, Date.now())) {
+    throw new Error(
+      `account ${lease.name} has an expired ${lease.provider} access token: renew it in Argus (the channel does not refresh OAuth tokens)`,
+    );
+  }
   const value = mapping.pick(lease.credential);
   if (!value) {
     throw new Error(`account ${lease.name} has no usable credential field for ${lease.provider}`);
   }
+  const host = typeof mapping.host === "function" ? mapping.host(lease.credential) : mapping.host;
+  return { mapping, value, host };
+}
+
+/**
+ * Make `leases` exactly the credentials this agent group can use (first lease =
+ * the engine's). Idempotent. A secret of an earlier lease that is not in the
+ * list is unassigned, so a released lease leaves no usable residual secret.
+ * Returns the NanoClaw provider (engine) that runs on the first lease's account.
+ */
+export async function applyLeases(
+  onecli: OneCliClient,
+  target: ApplyTarget,
+  leases: AccountLease[],
+): Promise<string> {
+  if (leases.length === 0) throw new Error("applyLeases needs at least one lease");
+  const prepared = leases.map((l) => ({ lease: l, ...secretFor(l) }));
 
   const agents: Array<{ id: string; identifier: string }> = await onecli.call("GET", "/agents");
   let agent = agents.find((a) => a.identifier === target.identifier);
@@ -109,37 +197,78 @@ export async function applyLease(
     identifier: target.identifier,
   });
 
-  const secretName = `argus-${target.identifier}`;
   const secrets: Array<{ id: string; name: string }> = await onecli.call("GET", "/secrets");
-  let secret = secrets.find((s) => s.name === secretName);
-  if (secret) {
-    await onecli.call("PATCH", `/secrets/${secret.id}`, { value });
-  } else {
-    secret = await onecli.call("POST", "/secrets", {
-      name: secretName,
-      type: mapping.type,
-      value,
-      hostPattern: mapping.host,
-    });
+  const ids: string[] = [];
+  const done = new Set<string>();
+  for (const { mapping, value, host } of prepared) {
+    const secretName = `argus-${target.identifier}${mapping.secretSuffix}`;
+    if (done.has(secretName)) continue; // one account per provider: the first lease wins
+    done.add(secretName);
+    let secret = secrets.find((s) => s.name === secretName);
+    if (secret) {
+      // A credential-dependent host (API key vs login) may change with the value.
+      await onecli.call(
+        "PATCH",
+        `/secrets/${secret.id}`,
+        typeof mapping.host === "function" ? { value, hostPattern: host } : { value },
+      );
+    } else {
+      secret = await onecli.call("POST", "/secrets", {
+        name: secretName,
+        type: mapping.type,
+        value,
+        hostPattern: host,
+      });
+    }
+    ids.push(secret!.id);
   }
-  await onecli.call("PUT", `/agents/${agent!.id}/secrets`, { secretIds: [secret!.id] });
+  await onecli.call("PUT", `/agents/${agent!.id}/secrets`, { secretIds: ids });
   await onecli.call("PATCH", `/agents/${agent!.id}/secret-mode`, { mode: "selective" });
+  return prepared[0]!.mapping.engine;
 }
+
+/** The single-lease form of `applyLeases`. */
+export const applyLease = (
+  onecli: OneCliClient,
+  target: ApplyTarget,
+  lease: AccountLease,
+): Promise<string> => applyLeases(onecli, target, [lease]);
 
 export type FailureKind =
   | { kind: "exhausted"; reason: string; until?: string }
   | { kind: "failed"; reason: string };
 
 /**
- * Classify the text of an agent failure notice. NanoClaw's runner puts the
- * provider's own message there when a run was blocked ("Rate limit [five_hour]
- * (resets 2026-10-15T01:00:00.000Z)", "Out of credits"); anything else is a
- * plain failure. Matching is anchored: only those two provider messages count.
+ * Quota messages by the provider whose run they end. Matching is anchored at
+ * the start of the notice (after the runner's own "Reconnecting… n/m:" or
+ * "Error:" prefix): a model that merely talks about limits never counts.
  */
-export function classifyFailure(noticeText: string): FailureKind {
+const QUOTA_NOTICES: Array<{ provider: string; pattern: RegExp }> = [
+  // Claude Code: "Rate limit [five_hour] (resets …)", "Out of credits".
+  { provider: "anthropic", pattern: /^(rate limit|out of credits)\b/i },
+  // Codex / ChatGPT: the error code, or the app's own sentence.
+  {
+    provider: "openai",
+    pattern:
+      /^(usage_limit_reached|insufficient_quota|you(?:'|\u2019)ve hit your usage limit|you have hit your usage limit)/i,
+  },
+];
+
+/**
+ * Classify the text of an agent failure notice. NanoClaw's runner puts the
+ * provider's own message there when a run was blocked; anything else is a plain
+ * failure. With `provider` (the engine account's), only that provider's quota
+ * messages count, so a limit of another provider's account (a delegated
+ * executor's, say) never exhausts the engine lease.
+ */
+export function classifyFailure(noticeText: string, provider?: string): FailureKind {
   const t = noticeText.trim();
-  if (/^(rate limit|out of credits)\b/i.test(t)) {
-    const m = /\(resets ([^)]+)\)/i.exec(t);
+  const body = t.replace(/^(?:error:\s*|reconnecting\.{3}\s*\d+\/\d+:\s*)/i, "");
+  const hit = QUOTA_NOTICES.find(
+    (q) => q.pattern.test(body) && (!provider || q.provider === provider),
+  );
+  if (hit) {
+    const m = /\(resets ([^)]+)\)/i.exec(body);
     const when = m ? new Date(m[1]!) : null;
     return {
       kind: "exhausted",

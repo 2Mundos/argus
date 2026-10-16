@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import { createArgusAdapter } from "./argus.js";
-import { type AccountLease, applyLease, classifyFailure, OneCliClient } from "./argus-accounts.js";
+import {
+  type AccountLease,
+  applyLease,
+  applyLeases,
+  classifyFailure,
+  OneCliClient,
+} from "./argus-accounts.js";
 
 // -- fakes ------------------------------------------------------------------------
 
@@ -128,7 +134,11 @@ const task = () => ({
   knowledge_refs: [],
 });
 
-function harness(w: ReturnType<typeof world>, withAccounts = true) {
+function harness(
+  w: ReturnType<typeof world>,
+  withAccounts = true,
+  extra: Partial<NonNullable<Parameters<typeof createArgusAdapter>[0]["accounts"]>> = {},
+) {
   const inbound: any[] = [];
   const setup = {
     onInbound: vi.fn(async (_p: string, _t: string | null, m: any) => void inbound.push(m)),
@@ -148,6 +158,7 @@ function harness(w: ReturnType<typeof world>, withAccounts = true) {
           providers: ["anthropic"],
           onecli: new OneCliClient("http://onecli.test", w.fetchImpl),
           resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
+          ...extra,
         }
       : undefined,
   });
@@ -170,6 +181,54 @@ afterEach(async () => {
 const failure = (text: string) => ({ kind: "chat", content: { text, failureNotice: true } });
 
 // -- classification and mapping -------------------------------------------------------
+
+describe("anthropic credential documents", () => {
+  const apply = async (credential: Record<string, unknown>) => {
+    const w = world({ leases: [] });
+    await applyLease(
+      new OneCliClient("http://onecli.test", w.fetchImpl),
+      { identifier: "g", name: "G" },
+      lease("x", "", { credential }),
+    );
+    return w.onecli.secrets;
+  };
+
+  it("accepts Claude Code's claudeAiOauth.accessToken", async () => {
+    const secrets = await apply({
+      claudeAiOauth: { accessToken: "tok-123", expiresAt: Date.now() + 3_600_000 },
+    });
+    expect(secrets.map((s) => s.value)).toEqual(["tok-123"]);
+  });
+
+  it("prefers a flat api_key over the nested document", async () => {
+    expect((await apply({ api_key: "k", claudeAiOauth: { accessToken: "t" } }))[0]?.value).toBe(
+      "k",
+    );
+  });
+
+  it("refuses an expired access token without echoing any value", async () => {
+    const err = await apply({
+      claudeAiOauth: { accessToken: "tok-secret", expiresAt: Date.now() - 1000 },
+    }).catch((e) => e);
+    expect(String(err.message)).toMatch(/expired anthropic access token/);
+    expect(String(err.message)).not.toMatch(/tok-secret/);
+  });
+
+  it("an expiry beside a flat token does not matter, and ISO dates work", async () => {
+    expect(
+      (await apply({ oauth_token: "long-lived", claudeAiOauth: { expiresAt: 1 } }))[0]?.value,
+    ).toBe("long-lived");
+    const err = await apply({
+      claudeAiOauth: { accessToken: "t", expiresAt: "2001-01-01T00:00:00Z" },
+    }).catch((e) => e);
+    expect(String(err.message)).toMatch(/expired/);
+  });
+
+  it("still reports a document with no usable field", async () => {
+    const err = await apply({ claudeAiOauth: { refreshToken: "r" } }).catch((e) => e);
+    expect(String(err.message)).toMatch(/no usable credential field/);
+  });
+});
 
 describe("classifyFailure", () => {
   it("recognizes the provider's blocked-run messages and the reset time", () => {
@@ -374,5 +433,233 @@ describe("channel with accounts", () => {
     await h.adapter.deliver("local", null, failure("Rate limit"));
     expect(w.calls.some((c) => c.who === "onecli" || c.path.startsWith("/accounts"))).toBe(false);
     expect(w.calls.find((c) => c.path === "/tasks/t1/fail")!.body.error).toBe("Rate limit");
+  });
+});
+
+// -- codex accounts (docs/specs/codex-accounts.spec.md) --------------------------------
+
+const chatgpt = {
+  auth_mode: "chatgpt",
+  OPENAI_API_KEY: null,
+  tokens: {
+    id_token: "id-SECRET",
+    access_token: "access-SECRET",
+    refresh_token: "refresh-SECRET",
+    account_id: "acct",
+  },
+  last_refresh: "2026-01-01T00:00:00Z",
+};
+const codexLease = (over: Partial<AccountLease> = {}) =>
+  lease("codex-1", "", { provider: "openai", kind: "subscription", credential: chatgpt, ...over });
+
+describe("openai (Codex) credential documents", () => {
+  const target = { identifier: "g", name: "G" };
+
+  it("gives OneCLI the whole ChatGPT auth.json as an openai secret for chatgpt.com", async () => {
+    const w = world({ leases: [] });
+    const engine = await applyLease(
+      new OneCliClient("http://onecli.test", w.fetchImpl),
+      target,
+      codexLease(),
+    );
+    expect(engine).toBe("codex");
+    const [secret] = w.onecli.secrets;
+    expect(secret).toMatchObject({
+      name: "argus-g-openai",
+      type: "openai",
+      hostPattern: "chatgpt.com",
+    });
+    expect(JSON.parse(secret!.value)).toEqual(chatgpt);
+  });
+
+  it("maps an API-key document to api.openai.com", async () => {
+    const w = world({ leases: [] });
+    await applyLease(
+      new OneCliClient("http://onecli.test", w.fetchImpl),
+      target,
+      codexLease({ kind: "api_key", credential: { auth_mode: "apikey", OPENAI_API_KEY: "sk-1" } }),
+    );
+    expect(w.onecli.secrets[0]).toMatchObject({ value: "sk-1", hostPattern: "api.openai.com" });
+  });
+
+  it("refuses an incomplete login without echoing a value", async () => {
+    const w = world({ leases: [] });
+    const bad = { auth_mode: "chatgpt", tokens: { access_token: "access-SECRET" } };
+    let message = "";
+    try {
+      await applyLease(
+        new OneCliClient("http://onecli.test", w.fetchImpl),
+        target,
+        codexLease({ credential: bad }),
+      );
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(/no usable credential/);
+    expect(message).not.toContain("SECRET");
+    expect(w.onecli.secrets).toEqual([]);
+  });
+
+  it("assigns exactly the secrets of the leases held", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const claude = lease("claude-1", "sk-ant", { role: "executor" });
+    expect(await applyLeases(onecli, target, [codexLease(), claude])).toBe("codex");
+    const agent = w.onecli.agents[0]!;
+    const byId = (id: string) => w.onecli.secrets.find((s) => s.id === id)!.name;
+    expect(agent.secrets.map(byId).sort()).toEqual(["argus-g", "argus-g-openai"]);
+    expect(agent.secretMode).toBe("selective");
+    // The executor lease ends: its secret stays stored but is no longer assigned.
+    await applyLeases(onecli, target, [codexLease()]);
+    expect(agent.secrets.map(byId)).toEqual(["argus-g-openai"]);
+    // Same provider twice (one account in both roles): one secret, the first wins.
+    await applyLeases(onecli, target, [lease("a", "k1"), lease("b", "k2", { role: "executor" })]);
+    expect(agent.secrets.map(byId)).toEqual(["argus-g"]);
+    expect(w.onecli.secrets.find((s) => s.name === "argus-g")!.value).toBe("k1");
+  });
+});
+
+describe("engine and executor leases in the channel", () => {
+  it("leases an anthropic executor next to a Codex engine and selects the harness", async () => {
+    const w = world({
+      leases: [codexLease(), lease("claude-1", "sk-ant", { role: "executor" })],
+      tasks: [task()],
+    });
+    const selectEngine = vi.fn(async () => true);
+    const { adapter, setup } = harness(w, true, {
+      providers: ["openai", "anthropic"],
+      selectEngine,
+    });
+    live.push(adapter);
+    await adapter.setup(setup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    const leaseCalls = w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body);
+    expect(leaseCalls).toEqual([
+      { providers: ["openai", "anthropic"] },
+      { providers: ["anthropic"], role: "executor" },
+    ]);
+    expect(selectEngine).toHaveBeenCalledWith("codex");
+    const selected = w.calls.find((c) => c.path === "/engines/selected")!.body;
+    expect(selected).toEqual({
+      engine: "codex",
+      provider: "openai",
+      account_id: "a-codex-1",
+      reason: "lease",
+    });
+    expect(JSON.stringify(w.calls.filter((c) => c.who === "argus"))).not.toContain("SECRET");
+    expect(w.onecli.agents[0]!.secrets).toHaveLength(2);
+  });
+
+  it("takes no executor lease when the engine is already the executor's provider", async () => {
+    const w = world({ leases: [lease("claude-1", "sk-ant")], tasks: [task()] });
+    const selectEngine = vi.fn(async () => false);
+    const { adapter, setup } = harness(w, true, {
+      providers: ["openai", "anthropic"],
+      selectEngine,
+    });
+    live.push(adapter);
+    await adapter.setup(setup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    expect(w.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(1);
+    expect(selectEngine).toHaveBeenCalledWith("claude");
+    expect(w.onecli.agents[0]!.secrets).toHaveLength(1);
+  });
+
+  it("still serves Codex when no executor account is usable, and holds no residual secret", async () => {
+    const w = world({ leases: [codexLease(), "no_account"], tasks: [task()] });
+    const { adapter, setup } = harness(w, true, { providers: ["openai", "anthropic"] });
+    live.push(adapter);
+    await adapter.setup(setup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    const agent = w.onecli.agents[0]!;
+    expect(agent.secrets).toHaveLength(1);
+    expect(w.onecli.secrets.find((s) => s.id === agent.secrets[0])!.name).toBe(
+      "argus-ag-group-1-openai",
+    );
+    expect(w.calls.some((c) => c.path === "/accounts/release")).toBe(true);
+  });
+});
+
+describe("an unusable executor account", () => {
+  it("is dropped without taking the Codex engine down", async () => {
+    const expired = lease("claude-old", "", {
+      role: "executor",
+      credential: { claudeAiOauth: { accessToken: "t-SECRET", expiresAt: Date.now() - 1000 } },
+    });
+    const w = world({ leases: [codexLease(), expired], tasks: [task()] });
+    const { adapter, setup } = harness(w, true, { providers: ["openai", "anthropic"] });
+    live.push(adapter);
+    await adapter.setup(setup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    const agent = w.onecli.agents[0]!;
+    expect(agent.secrets).toHaveLength(1);
+    expect(w.onecli.secrets.find((s) => s.id === agent.secrets[0])!.name).toMatch(/-openai$/);
+    expect(w.calls.some((c) => c.path === "/accounts/release")).toBe(true);
+    expect(JSON.stringify(w.calls)).not.toContain("t-SECRET");
+  });
+});
+
+describe("classifyFailure for Codex and by provider", () => {
+  it.each([
+    "usage_limit_reached",
+    "You've hit your usage limit. Try again later.",
+    "You\u2019ve hit your usage limit",
+    "insufficient_quota: You exceeded your current quota",
+    "Reconnecting... 2/5: usage_limit_reached",
+    "Error: insufficient_quota",
+  ])("treats %j as a quota end for an openai engine", (text) => {
+    expect(classifyFailure(text, "openai").kind).toBe("exhausted");
+    expect(classifyFailure(text).kind).toBe("exhausted");
+  });
+
+  it("does not take innocent text or mid-sentence mentions for quota", () => {
+    for (const text of [
+      "I checked the docs: the API returns usage_limit_reached when full",
+      "Progress: the quota page says insufficient_quota is a 429",
+      "Reconnecting... 2/5: selected workspace missing from routing discovery",
+      "The agent run failed. Check the logs for details.",
+    ]) {
+      expect(classifyFailure(text, "openai").kind).toBe("failed");
+    }
+  });
+
+  it("counts only the engine provider's own messages", () => {
+    expect(classifyFailure("Rate limit [five_hour]", "openai").kind).toBe("failed");
+    expect(classifyFailure("Out of credits", "openai").kind).toBe("failed");
+    expect(classifyFailure("usage_limit_reached", "anthropic").kind).toBe("failed");
+    expect(classifyFailure("Rate limit [five_hour]", "anthropic").kind).toBe("exhausted");
+  });
+});
+
+describe("a limit of the executor's provider leaves the Codex engine lease alone", () => {
+  it("fails the attempt instead of exhausting the openai account", async () => {
+    const w = world({
+      leases: [codexLease(), lease("claude-1", "sk-ant", { role: "executor" })],
+      tasks: [task()],
+    });
+    const h = harness(w, true, { providers: ["openai", "anthropic"] });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    await h.adapter.deliver(
+      "local",
+      null,
+      failure("Rate limit [five_hour] (resets 2026-10-15T01:00:00.000Z)"),
+    );
+    await until(() => w.calls.some((c) => /\/tasks\/t1\/fail$/.test(c.path)));
+    expect(w.calls.some((c) => /\/accounts\/[^/]+\/exhausted$/.test(c.path))).toBe(false);
+  });
+
+  it("reports an openai quota error as exhausted for the engine role", async () => {
+    const w = world({ leases: [codexLease(), "no_account"], tasks: [task()] });
+    const h = harness(w, true, { providers: ["openai", "anthropic"] });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    await h.adapter.deliver("local", null, failure("usage_limit_reached"));
+    await until(() => w.calls.some((c) => /\/exhausted$/.test(c.path)));
+    const call = w.calls.find((c) => /\/exhausted$/.test(c.path))!;
+    expect(call.path).toBe("/accounts/a-codex-1/exhausted");
+    expect(call.body).toMatchObject({ role: "engine", reason: "usage_limit_reached" });
   });
 });

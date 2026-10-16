@@ -30,12 +30,14 @@
  *                             drained this agent (default: exit, so the
  *                             instance ends; only when ARGUS_INSTANCE_ID is set)
  */
+import { createHash } from "node:crypto";
+
 import { log } from "../log.js";
 import type { ChannelAdapter, ChannelDefaults, ChannelSetup, OutboundMessage } from "./adapter.js";
 import {
   type AccountLease,
   type ApplyTarget,
-  applyLease,
+  applyLeases,
   classifyFailure,
   OneCliClient,
 } from "./argus-accounts.js";
@@ -55,6 +57,9 @@ const ARGUS_DEFAULTS: ChannelDefaults = {
   mentions: "never",
 };
 
+/** `TaskResult.summary` max_length, counted in characters (Unicode code points). */
+export const SUMMARY_MAX_CHARS = 10_000;
+const PROGRESS_MAX_CHARS = 2000;
 const PROGRESS_MIN_INTERVAL_MS = 10_000; // Argus allows one progress note per 10 s
 const CLAIM_WAIT_S = 20;
 const MAX_PAGE_CHARS = 4000;
@@ -73,6 +78,18 @@ export interface ArgusConfig {
     onecli: OneCliClient;
     /** Which OneCLI agent (the NanoClaw agent group) the credential is for. */
     resolveTarget: () => Promise<ApplyTarget>;
+    /**
+     * Run the worker's loop on the harness that fits the leased account (codex
+     * accounts spec 3): called after a lease is applied, with the NanoClaw
+     * provider name. Resolves true when the harness changed.
+     */
+    selectEngine?: (engine: string) => Promise<boolean>;
+    /**
+     * Providers for the `executor` lease: the account a CLI the worker delegates
+     * to (argus-delegate) uses, held next to the engine's. Taken only when the
+     * engine's account is of another provider. Default: anthropic.
+     */
+    executorProviders?: string[];
   };
   /** Called once, after Argus drained this agent, its work is done, and it left. */
   onDrained?: () => void;
@@ -144,7 +161,7 @@ export function renderTask(task: ArgusTask, pages: Map<string, string>): string 
   return lines.join("\n");
 }
 
-class ArgusError extends Error {
+export class ArgusError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
@@ -152,40 +169,160 @@ class ArgusError extends Error {
   ) {
     super(message);
   }
+
+  /** A rejection retrying cannot fix (invalid input): 4xx other than auth, timeout, conflict, rate limit. */
+  get permanent(): boolean {
+    return (
+      this.status >= 400 && this.status < 500 && ![401, 408, 409, 425, 429].includes(this.status)
+    );
+  }
+}
+
+/**
+ * The server's real error, whatever shape it has: `{detail:{code,message}}` (domain
+ * errors), `{detail:[{loc,msg}]}` (request validation), `{detail:"text"}`, or no JSON
+ * body at all. Never `[object Object]`.
+ */
+export function describeError(
+  data: unknown,
+  statusText: string,
+  raw = "",
+): { code: string; message: string } {
+  const detail = (data as { detail?: unknown } | null)?.detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map((e) => {
+      const loc = Array.isArray(e?.loc) ? e.loc.slice(1).join(".") : "";
+      return `${loc ? `${loc}: ` : ""}${e?.msg ?? JSON.stringify(e)}`;
+    });
+    return { code: "validation_failed", message: parts.join("; ") || statusText };
+  }
+  if (detail && typeof detail === "object") {
+    const d = detail as { code?: unknown; message?: unknown };
+    return {
+      code: typeof d.code === "string" ? d.code : "error",
+      message: typeof d.message === "string" ? d.message : JSON.stringify(detail).slice(0, 300),
+    };
+  }
+  if (typeof detail === "string") return { code: "error", message: detail };
+  return { code: "error", message: raw.trim().slice(0, 200) || statusText };
 }
 
 class ArgusClient {
   token = "";
   constructor(private readonly cfg: ArgusConfig) {}
 
-  async call(
+  private async send(
     method: string,
     path: string,
-    body?: unknown,
-    signal?: AbortSignal,
+    init: { body?: RequestInit["body"]; contentType: string; signal?: AbortSignal },
   ): Promise<{ status: number; data: any }> {
     const doFetch = this.cfg.fetch ?? fetch;
     const res = await doFetch(this.cfg.url.replace(/\/$/, "") + "/api" + path, {
       method,
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": init.contentType,
         ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal,
+      body: init.body,
+      signal: init.signal,
     });
     const text = await res.text();
-    const data = text ? JSON.parse(text) : null;
+    let data: any = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null; // a proxy's HTML error page, say: handled below by status
+    }
     if (res.status >= 400) {
-      const d = data?.detail;
-      throw new ArgusError(
-        res.status,
-        d?.code ?? "error",
-        d?.message ?? String(d ?? res.statusText),
-      );
+      const { code, message } = describeError(data, res.statusText, text);
+      throw new ArgusError(res.status, code, message);
     }
     return { status: res.status, data };
   }
+
+  call(
+    method: string,
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<{ status: number; data: any }> {
+    return this.send(method, path, {
+      body: body === undefined ? undefined : JSON.stringify(body),
+      contentType: "application/json",
+      signal,
+    });
+  }
+
+  /** Upload raw bytes as an artifact of the attempt this agent holds. */
+  upload(taskId: string, attempt: number, name: string, bytes: Uint8Array, mediaType: string) {
+    const q = `attempt=${attempt}&name=${encodeURIComponent(name)}`;
+    return this.send("POST", `/tasks/${taskId}/artifacts?${q}`, {
+      body: bytes as unknown as RequestInit["body"],
+      contentType: mediaType,
+    });
+  }
+}
+
+const chars = (s: string): string[] => Array.from(s);
+
+/**
+ * The part of `text` that fits `budget` characters, cut back to a line break when
+ * one is near the end (so the summary does not stop mid-sentence), by code point.
+ */
+/** An Argus artifact name from an agent's file name: [A-Za-z0-9._-], starting alphanumeric, at most 200. */
+export function artifactName(filename: string): string {
+  const base = filename.split(/[\\/]/).pop() ?? "";
+  const clean = base
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^[._-]+/, "");
+  return cutKeepingExtension(clean, 200) || "attachment";
+}
+
+/** `name` cut to `max` characters in its stem, so a (short) extension always survives. */
+function cutKeepingExtension(name: string, max: number): string {
+  if (name.length <= max) return name;
+  const { stem, ext } = splitExtension(name);
+  return stem.slice(0, max - ext.length) + ext;
+}
+
+/** The extension (with its dot) when there is a sensible one: not leading, at most 20 characters. */
+function splitExtension(name: string): { stem: string; ext: string } {
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 && name.length - dot <= 20 ? name.slice(dot) : "";
+  return { stem: ext ? name.slice(0, dot) : name, ext };
+}
+
+/**
+ * `name` with `-<sha8>` before its extension (or at the end when it has none), still a
+ * valid artifact name: at most 200 characters, so a long stem is cut, never the extension.
+ */
+export function withHashSuffix(name: string, sha: string): string {
+  const suffix = `-${sha.slice(0, 8)}`;
+  const { stem, ext } = splitExtension(name);
+  return stem.slice(0, 200 - suffix.length - ext.length) + suffix + ext;
+}
+
+const MEDIA_TYPES: Record<string, string> = {
+  md: "text/markdown; charset=utf-8",
+  txt: "text/plain; charset=utf-8",
+  json: "application/json",
+  csv: "text/csv; charset=utf-8",
+  html: "text/html; charset=utf-8",
+  pdf: "application/pdf",
+  png: "image/png",
+};
+export const mediaTypeFor = (name: string): string =>
+  MEDIA_TYPES[name.split(".").pop()?.toLowerCase() ?? ""] ?? "application/octet-stream";
+
+export function headWithin(text: string, budget: number): string {
+  const cps = chars(text);
+  if (cps.length <= budget) return text;
+  let head = cps.slice(0, budget).join("");
+  const nl = head.lastIndexOf("\n");
+  if (nl > head.length * 0.8) head = head.slice(0, nl);
+  return head.trimEnd();
 }
 
 export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
@@ -199,8 +336,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let registered = false;
   let current: { id: string; attempt: number } | null = null;
   let currentText: string | null = null; // what the agent was sent, to re-send after a switch
+  // Artifacts uploaded for the task in flight (agent attachments), by artifact id,
+  // and attachments that could not be stored, for the completion to report.
+  let attached = new Map<string, { name: string; sha: string }>();
+  let attachFailures: string[] = [];
   let resends = 0;
-  let account: { id: string; name: string } | null = null;
+  let account: { id: string; name: string; provider: string } | null = null;
+  let executor: { id: string; name: string } | null = null;
   let abortClaim: AbortController | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let loop: Promise<void> | null = null;
@@ -273,6 +415,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   function finishTask(): void {
     current = null;
     currentText = null;
+    attached = new Map();
+    attachFailures = [];
     pendingProgress = null;
     if (progressTimer) clearTimeout(progressTimer);
     progressTimer = null;
@@ -321,21 +465,22 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     task: { id: string; attempt: number },
     noticeText: string,
   ): Promise<void> {
-    const f = classifyFailure(noticeText);
+    const f = classifyFailure(noticeText, account?.provider);
     if (f.kind === "exhausted" && cfg.accounts && account) {
       const exhausted = account;
       account = null;
       const { data } = await client.call("POST", `/accounts/${exhausted.id}/exhausted`, {
         until: f.until,
         reason: f.reason,
+        role: "engine",
         task_id: task.id,
         attempt: task.attempt,
       });
       log.warn("Argus account exhausted", { account: exhausted.name, until: f.until });
       if (data.lease) {
         const lease = data.lease as AccountLease;
-        await applyLease(cfg.accounts.onecli, await cfg.accounts.resolveTarget(), lease);
-        account = { id: lease.account_id, name: lease.name };
+        await applyAndSelect(cfg.accounts, lease, "exhausted");
+        account = { id: lease.account_id, name: lease.name, provider: lease.provider };
         log.info("Switched to another Argus account", { account: lease.name });
         if (currentText && resends < MAX_RESENDS) {
           resends += 1;
@@ -379,6 +524,66 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     await finished;
   }
 
+  /**
+   * Apply the engine lease, plus an executor lease when the engine is of another
+   * provider than the executor's, so the vault holds exactly the accounts the
+   * agent holds. Then move the harness to the engine's provider and report it.
+   */
+  async function applyAndSelect(
+    acc: NonNullable<ArgusConfig["accounts"]>,
+    lease: AccountLease,
+    reason: "lease" | "exhausted",
+  ): Promise<void> {
+    const executorProviders = acc.executorProviders ?? ["anthropic"];
+    const held: AccountLease[] = [lease];
+    if (executorProviders.length > 0 && !executorProviders.includes(lease.provider)) {
+      try {
+        const { data } = await client.call("POST", "/accounts/lease", {
+          providers: executorProviders,
+          role: "executor",
+        });
+        held.push({ ...(data as AccountLease), role: "executor" });
+      } catch (err) {
+        if (!(err instanceof ArgusError && err.code === "no_account")) throw err;
+        log.warn("No executor account is usable; delegation to a CLI will be blocked", {
+          message: err.message,
+        });
+      }
+    }
+    if (held.length === 1) {
+      // Not needed (or none available): do not keep an executor lease around.
+      await client.call("POST", "/accounts/release?role=executor").catch(() => undefined);
+    }
+    const target = await acc.resolveTarget();
+    let engine: string;
+    try {
+      engine = await applyLeases(acc.onecli, target, held);
+    } catch (err) {
+      if (held.length < 2) throw err;
+      // An unusable executor account (expired token, no credential field) must
+      // not take the engine down with it: serve without it and say so.
+      log.warn("The executor account cannot be applied; continuing without it", {
+        account: held[1]!.name,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      held.pop();
+      await client.call("POST", "/accounts/release?role=executor").catch(() => undefined);
+      engine = await applyLeases(acc.onecli, target, held);
+    }
+    executor = held[1] ? { id: held[1].account_id, name: held[1].name } : null;
+    const changed = (await acc.selectEngine?.(engine)) ?? false;
+    if (changed) log.info("Engine selected for the leased account", { engine, reason });
+    // Best effort: the audit event must not block work.
+    await client
+      .call("POST", "/engines/selected", {
+        engine,
+        provider: lease.provider,
+        account_id: lease.account_id,
+        reason,
+      })
+      .catch((err) => log.warn("Could not report the engine selection", { err }));
+  }
+
   /** Hold a leased account, applied to the vault, before claiming any work. */
   async function ensureAccount(): Promise<boolean> {
     const acc = cfg.accounts;
@@ -387,13 +592,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const { data } = await client.call("POST", "/accounts/lease", { providers: acc.providers });
       const lease = data as AccountLease;
       try {
-        await applyLease(acc.onecli, await acc.resolveTarget(), lease);
+        await applyAndSelect(acc, lease, "lease");
       } catch (err) {
         // Do not sit on an account we cannot use: give it back, then retry later.
         await client.call("POST", "/accounts/release").catch(() => undefined);
         throw err;
       }
-      account = { id: lease.account_id, name: lease.name };
+      account = { id: lease.account_id, name: lease.name, provider: lease.provider };
       log.info("Argus account leased and applied", {
         account: lease.name,
         provider: lease.provider,
@@ -444,6 +649,104 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
+  /**
+   * Complete with `text`. Within the summary limit it is the summary; beyond it the
+   * whole text is attached as an artifact and the summary is a bounded head that says
+   * so. Nothing is truncated silently, and a retry reuses the artifact it uploaded.
+   */
+  async function completeWithResult(
+    t: { id: string; attempt: number },
+    text: string,
+  ): Promise<void> {
+    const extra = [...attached.keys()];
+    const missing = attachFailures.length ? `\n\n[Not stored: ${attachFailures.join("; ")}]` : "";
+    if (chars(text + missing).length <= SUMMARY_MAX_CHARS) {
+      await client.call("POST", `/tasks/${t.id}/complete`, {
+        attempt: t.attempt,
+        result: { summary: text + missing, ...(extra.length ? { artifacts: extra } : {}) },
+      });
+      return;
+    }
+    const bytes = new TextEncoder().encode(text);
+    const sha = createHash("sha256").update(bytes).digest("hex");
+    const artifactId = await ensureArtifact(t, `result-attempt-${t.attempt}.md`, bytes, sha);
+    const note =
+      `\n\n[The full response (${chars(text).length} characters, ${bytes.length} bytes, ` +
+      `sha256 ${sha.slice(0, 16)}…) is attached as artifact ${artifactId}.]`;
+    const tail = note + missing;
+    const summary = `${headWithin(text, SUMMARY_MAX_CHARS - chars(tail).length - 1)}…${tail}`;
+    await client.call("POST", `/tasks/${t.id}/complete`, {
+      attempt: t.attempt,
+      result: { summary, artifacts: [...new Set([artifactId, ...extra])] },
+    });
+  }
+
+  async function ensureArtifact(
+    t: { id: string; attempt: number },
+    name: string,
+    bytes: Uint8Array,
+    sha: string,
+    mediaType = "text/markdown; charset=utf-8",
+  ): Promise<string> {
+    // Artifact names are unique per (task, attempt) and immutable: a name that is
+    // taken is reused only if it holds these very bytes, else a hashed name is used.
+    const store = async (n: string): Promise<{ id: string; stored: boolean }> => {
+      try {
+        return {
+          id: (await client.upload(t.id, t.attempt, n, bytes, mediaType)).data.id,
+          stored: true,
+        };
+      } catch (err) {
+        if (!(err instanceof ArgusError) || err.status !== 409 || err.code !== "artifact_exists") {
+          throw err;
+        }
+        const { data } = await client.call("GET", `/tasks/${t.id}/artifacts`);
+        const have = (
+          data as Array<{ id: string; name: string; attempt: number; sha256: string }>
+        ).find((a) => a.attempt === t.attempt && a.name === n);
+        if (!have) throw err;
+        if (have.sha256 !== sha) return { id: "", stored: false };
+        return { id: have.id, stored: false };
+      }
+    };
+    const first = await store(name);
+    if (first.id) return first.id;
+    const other = withHashSuffix(name, sha);
+    const second = await store(other);
+    if (second.id) return second.id;
+    throw new ArgusError(
+      422,
+      "artifact_name_taken",
+      `artifact ${other} already exists for this attempt with different content`,
+    );
+  }
+
+  /** Upload the files the agent attached to a reply as artifacts of the attempt. */
+  async function attachFiles(
+    t: { id: string; attempt: number },
+    files: Array<{ filename: string; data: Buffer | Uint8Array }>,
+  ): Promise<void> {
+    for (const f of files) {
+      const bytes = new Uint8Array(f.data);
+      const sha = createHash("sha256").update(bytes).digest("hex");
+      let name = artifactName(f.filename);
+      const same = [...attached.values()].find((a) => a.name === name);
+      if (same?.sha === sha) continue; // this very file was already stored (a re-delivery)
+      if (same) name = withHashSuffix(name, sha);
+      try {
+        attached.set(await ensureArtifact(t, name, bytes, sha, mediaTypeFor(name)), { name, sha });
+      } catch (err) {
+        if (!(err instanceof ArgusError) || !err.permanent) throw err; // transient: retried
+        log.error("Argus refused an attachment", {
+          name,
+          status: err.status,
+          message: err.message,
+        });
+        attachFailures.push(`${name} (${err.status} ${err.code}: ${err.message})`.slice(0, 300));
+      }
+    }
+  }
+
   async function sendProgress(text: string): Promise<void> {
     const task = current;
     if (!task) return;
@@ -451,12 +754,16 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     try {
       await client.call("POST", `/tasks/${task.id}/progress`, {
         attempt: task.attempt,
-        message: text.slice(0, 2000),
+        message: chars(text).slice(0, PROGRESS_MAX_CHARS).join(""),
       });
     } catch (err) {
       if (err instanceof ArgusError && err.status === 429)
         pendingProgress = text; // retry on the timer
-      else log.warn("Argus progress note failed", { err });
+      else
+        log.warn("Argus progress note failed", {
+          permanent: err instanceof ArgusError ? err.permanent : false,
+          err: err instanceof Error ? err.message : String(err),
+        });
     }
   }
 
@@ -521,6 +828,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     ): Promise<string | undefined> {
       if (platformId !== PLATFORM_ID) return undefined;
       const task = current;
+      if (task && message.files?.length) await attachFiles(task, message.files);
       const content = message.content as Record<string, unknown> | string | undefined;
       const text =
         typeof content === "string"
@@ -542,10 +850,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         if (isFailureNotice) {
           await handleFailure(task, text);
         } else if (d.kind === "complete") {
-          await client.call("POST", `/tasks/${task.id}/complete`, {
-            attempt: task.attempt,
-            result: { summary: d.text || "(no summary)" },
-          });
+          await completeWithResult(task, d.text || "(no summary)");
           finishTask();
         } else if (d.kind === "fail") {
           await client.call("POST", `/tasks/${task.id}/fail`, {
@@ -569,8 +874,25 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             code: err.code,
           });
           finishTask();
+        } else if (err instanceof ArgusError && err.permanent) {
+          // Retrying cannot fix it: say so on the task instead of leaving it claimed forever.
+          log.error("Argus rejected the reply permanently; failing the attempt", {
+            task: task.id,
+            status: err.status,
+            code: err.code,
+            message: err.message,
+          });
+          await client.call("POST", `/tasks/${task.id}/fail`, {
+            attempt: task.attempt,
+            error:
+              `The worker's reply could not be delivered (${err.status} ${err.code}): ${err.message}`.slice(
+                0,
+                2000,
+              ),
+          });
+          finishTask();
         } else {
-          throw err; // let the delivery retry path handle transient failures
+          throw err; // transient (network, 5xx, 429): the delivery retry path handles it
         }
       }
       return undefined;
@@ -585,6 +907,21 @@ function accountsFromEnv(): ArgusConfig["accounts"] {
     .map((p) => p.trim())
     .filter(Boolean);
   if (providers.length === 0) return undefined;
+  // The OneCLI agent NanoClaw uses is keyed by the agent group wired to this
+  // channel, read from NanoClaw's own database when first needed.
+  async function resolveTarget(): Promise<ApplyTarget> {
+    const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
+      "../db/messaging-groups.js"
+    );
+    const { getAgentGroup } = await import("../db/agent-groups.js");
+    const mg = await getMessagingGroupByPlatform(CHANNEL_TYPE, PLATFORM_ID);
+    const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
+    const group = wiring ? await getAgentGroup(wiring.agent_group_id) : undefined;
+    if (!group) {
+      throw new Error("no agent group is wired to the argus channel (run init-argus-agent.ts)");
+    }
+    return { identifier: group.id, name: group.name };
+  }
   return {
     providers,
     onecli: new OneCliClient(
@@ -592,20 +929,34 @@ function accountsFromEnv(): ArgusConfig["accounts"] {
       fetch,
       process.env.ONECLI_API_KEY?.trim() || undefined,
     ),
-    // The OneCLI agent NanoClaw uses is keyed by the agent group wired to this
-    // channel, read from NanoClaw's own database when first needed.
-    async resolveTarget(): Promise<ApplyTarget> {
-      const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
-        "../db/messaging-groups.js"
+    resolveTarget,
+    // Follow the leased account's provider: the group's config and its sessions'
+    // pinned provider both name the harness, and a running container is stopped
+    // so the next turn starts on the new one.
+    async selectEngine(engine: string): Promise<boolean> {
+      const { identifier: groupId } = await resolveTarget();
+      const { getContainerConfig, updateContainerConfigScalars } = await import(
+        "../db/container-configs.js"
       );
-      const { getAgentGroup } = await import("../db/agent-groups.js");
-      const mg = await getMessagingGroupByPlatform(CHANNEL_TYPE, PLATFORM_ID);
-      const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
-      const group = wiring ? await getAgentGroup(wiring.agent_group_id) : undefined;
-      if (!group) {
-        throw new Error("no agent group is wired to the argus channel (run init-argus-agent.ts)");
+      const { getSessionsByAgentGroup, updateSession } = await import("../db/sessions.js");
+      const { killContainer } = await import("../container-runner.js");
+      let changed = false;
+      const config = await getContainerConfig(groupId);
+      if (!config) throw new Error(`agent group ${groupId} has no container config`);
+      if ((config.provider ?? "claude").toLowerCase() !== engine) {
+        await updateContainerConfigScalars(groupId, { provider: engine });
+        changed = true;
       }
-      return { identifier: group.id, name: group.name };
+      for (const session of await getSessionsByAgentGroup(groupId)) {
+        const current = (session.agent_provider || config.provider || "claude").toLowerCase();
+        if (current === engine && session.agent_provider === engine) continue;
+        await updateSession(session.id, { agent_provider: engine });
+        if (current !== engine) {
+          killContainer(session.id, "argus: engine follows the leased account");
+          changed = true;
+        }
+      }
+      return changed;
     },
   };
 }

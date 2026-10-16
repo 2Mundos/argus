@@ -1,10 +1,20 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
+import {
+  CUSTOM_PROVIDER_PATTERN,
+  localBrokerNotice,
+  nativeAuthNotice,
+  PROVIDER_PICK_CUSTOM,
+  providerOptionsFromCatalog,
+  validateProviderId,
+} from "../accountProviders";
 import { type Account, api, call } from "../api";
 import { relative } from "../format";
 import { useLiveData } from "../live";
+import { CodexAccount } from "./CodexAccount";
 
 export function Accounts() {
   const [adding, setAdding] = useState(false);
+  const [addingCodex, setAddingCodex] = useState(false);
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
   const { data: accounts, error: loadError } = useLiveData(
@@ -42,6 +52,9 @@ export function Accounts() {
         <h2>Accounts</h2>
         <button type="button" onClick={reload}>
           Reload secrets file
+        </button>
+        <button type="button" onClick={() => setAddingCodex(true)}>
+          Add Codex account
         </button>
         <button type="button" className="primary" onClick={() => setAdding(true)}>
           Add account
@@ -104,6 +117,15 @@ export function Accounts() {
         </tbody>
       </table>
       {adding && <AddAccount onClose={() => setAdding(false)} />}
+      {addingCodex && (
+        <CodexAccount
+          onClose={() => setAddingCodex(false)}
+          onDone={() => {
+            setAddingCodex(false);
+            setNotice("Codex account added.");
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -116,9 +138,16 @@ function usage(u: Account["usage_24h"]): string {
 }
 
 function AddAccount({ onClose }: { onClose: () => void }) {
+  const {
+    data: catalog,
+    error: catalogError,
+    reload: reloadCatalog,
+  } = useLiveData(() => call(api.GET("/api/engines")), []);
+  const providerOptions = catalog ? providerOptionsFromCatalog(catalog) : [];
+  const [providerPick, setProviderPick] = useState("");
+  const [customProvider, setCustomProvider] = useState("");
   const [form, setForm] = useState({
     name: "",
-    provider: "anthropic",
     kind: "api_key" as "api_key" | "subscription",
     priority: 0,
     maxLeases: "",
@@ -128,9 +157,28 @@ function AddAccount({ onClose }: { onClose: () => void }) {
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
+  useEffect(() => {
+    if (providerPick || providerOptions.length === 0) return;
+    const first = providerOptions[0];
+    if (first) setProviderPick(first.id);
+  }, [providerOptions, providerPick]);
+
+  const resolvedProvider =
+    providerPick === PROVIDER_PICK_CUSTOM ? customProvider.trim() : providerPick;
+  const authNotice = nativeAuthNotice(resolvedProvider);
+
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(undefined);
+    if (catalogError) {
+      setError("Provider catalogue is unavailable. Retry loading or use a custom id.");
+      return;
+    }
+    const providerErr = validateProviderId(resolvedProvider);
+    if (providerErr) {
+      setError(providerErr);
+      return;
+    }
     let credential: Record<string, unknown>;
     try {
       credential = JSON.parse(form.credential);
@@ -143,7 +191,7 @@ function AddAccount({ onClose }: { onClose: () => void }) {
         api.POST("/api/accounts", {
           body: {
             name: form.name,
-            provider: form.provider,
+            provider: resolvedProvider,
             kind: form.kind,
             priority: form.priority,
             max_leases: form.maxLeases ? Number(form.maxLeases) : null,
@@ -161,6 +209,15 @@ function AddAccount({ onClose }: { onClose: () => void }) {
     <div className="overlay">
       <form className="dialog" onSubmit={submit}>
         <h2>Add account</h2>
+        <p className="muted small">{localBrokerNotice()}</p>
+        {catalogError && (
+          <p className="error">
+            Could not load provider catalogue: {catalogError.message}
+            <button type="button" className="link" onClick={() => reloadCatalog()}>
+              Retry
+            </button>
+          </p>
+        )}
         <div className="row">
           <label>
             Name
@@ -168,13 +225,36 @@ function AddAccount({ onClose }: { onClose: () => void }) {
           </label>
           <label>
             Provider
-            <input
-              value={form.provider}
-              onChange={(e) => set("provider", e.target.value)}
-              pattern="[a-z0-9_-]+"
-              required
-            />
+            <select
+              aria-label="Provider"
+              value={providerPick}
+              onChange={(e) => setProviderPick(e.target.value)}
+              disabled={providerOptions.length === 0 && !catalogError}
+            >
+              {providerOptions.length === 0 && !catalogError && (
+                <option value="">Loading catalogue…</option>
+              )}
+              {providerOptions.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+              <option value={PROVIDER_PICK_CUSTOM}>Other (custom id)…</option>
+            </select>
           </label>
+          {providerPick === PROVIDER_PICK_CUSTOM && (
+            <label>
+              Custom provider id
+              <input
+                aria-label="Custom provider id"
+                value={customProvider}
+                onChange={(e) => setCustomProvider(e.target.value)}
+                pattern={CUSTOM_PROVIDER_PATTERN}
+                maxLength={50}
+                required
+              />
+            </label>
+          )}
           <label>
             Kind
             <select
@@ -205,6 +285,7 @@ function AddAccount({ onClose }: { onClose: () => void }) {
             />
           </label>
         </div>
+        {authNotice && <p className="small muted">{authNotice}</p>}
         <label>
           Credential (JSON; stored encrypted, never shown again)
           <textarea

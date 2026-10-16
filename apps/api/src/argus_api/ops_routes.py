@@ -7,7 +7,9 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from argus_api import ops
-from argus_api.deps import AdminDep, CallerDep, DbDep, SettingsDep
+from argus_api import overview as overview_module
+from argus_api.deps import AdminDep, CallerDep, DbDep, ManagerDep, SettingsDep
+from argus_api.overview import Overview
 
 # Probes sit outside /api (like /healthz); the rest live under it.
 probes = APIRouter(tags=["operations"])
@@ -142,3 +144,9 @@ async def system(
             for name, st in _loops(request).items()
         },
     )
+
+
+@router.get("/overview")
+async def overview(db: DbDep, _: ManagerDep) -> Overview:
+    """Fleet-wide totals per state for the Home view (orchestrator or admin)."""
+    return await overview_module.overview(db)

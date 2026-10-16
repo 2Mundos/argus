@@ -26,6 +26,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/codex-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Codex Login
+         * @description Start the official client's device-code login for a new `openai` account
+         *     (codex accounts spec 3). On success the account appears in the registry.
+         */
+        post: operations["start_codex_login_api_accounts_codex_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/codex-login/{login_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Codex Login */
+        get: operations["get_codex_login_api_accounts_codex_login__login_id__get"];
+        put?: never;
+        post?: never;
+        /** Cancel Codex Login */
+        delete: operations["cancel_codex_login_api_accounts_codex_login__login_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/lease": {
         parameters: {
             query?: never;
@@ -57,7 +96,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Release Account */
+        /**
+         * Release Account
+         * @description End the agent's leases: one `role`, or all of them.
+         */
         post: operations["release_account_api_accounts_release_post"];
         delete?: never;
         options?: never;
@@ -409,6 +451,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/engines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Engines
+         * @description Engines, executors and the local model: axes, auth methods and the three
+         *     readiness facts (installed, authenticated, validated). Read-only.
+         */
+        get: operations["list_engines_api_engines_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/engines/local/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Local
+         * @description One bounded completion on the local model, checked against `criteria`.
+         *     No tools act, so retrying or escalating duplicates no effect. An answer that
+         *     fails the criteria returns `verdict: escalate`; Argus does not start the
+         *     escalated work, the caller does.
+         */
+        post: operations["run_local_api_engines_local_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/engines/route": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Route Task
+         * @description Where should this task run? Deterministic; the decision is recorded.
+         */
+        post: operations["route_task_api_engines_route_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/engines/selected": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Engine Selected
+         * @description A worker's channel switched its harness to follow a leased account
+         *     (codex accounts spec 3). Recorded for the audit trail; credentials never ride here.
+         */
+        post: operations["engine_selected_api_engines_selected_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/events": {
         parameters: {
             query?: never;
@@ -443,6 +570,69 @@ export interface paths {
         get: operations["stream_events_api_events_stream_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Capabilities
+         * @description What this node can run right now, measured from its targets (read-only).
+         */
+        get: operations["fleet_capabilities_api_fleet_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Worker Templates
+         * @description The worker templates Argus supports, per node: ready, or exactly what is
+         *     missing. Read-only; nothing is created by looking.
+         */
+        get: operations["worker_templates_api_fleet_templates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/workers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Worker
+         * @description Create a pool from a template and request its first workers, in one
+         *     confirmed call. The pool is rebuilt server-side from the template; refusals
+         *     happen before anything is written. Success means *requested*.
+         */
+        post: operations["create_worker_api_fleet_workers_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -734,6 +924,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Overview
+         * @description Fleet-wide totals per state for the Home view (orchestrator or admin).
+         */
+        get: operations["overview_api_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/pools": {
         parameters: {
             query?: never;
@@ -767,6 +977,28 @@ export interface paths {
          */
         put: operations["upsert_pool_api_pools__name__put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pools/{name}/launch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Launch Worker
+         * @description Request one more worker from the pool. Refused (nothing changes) when the
+         *     node cannot start it now. Success means *requested*: the reconciler starts
+         *     the instance next pass; follow it in `/instances`.
+         */
+        post: operations["launch_worker_api_pools__name__launch_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1221,6 +1453,12 @@ export interface components {
             name: string;
             /** Provider */
             provider: string;
+            /**
+             * Role
+             * @default engine
+             * @enum {string}
+             */
+            role?: "engine" | "executor";
         };
         /**
          * AccountState
@@ -1239,6 +1477,46 @@ export interface components {
             max_leases?: number | null;
             /** Priority */
             priority?: number | null;
+        };
+        /** AccountsOverview */
+        AccountsOverview: {
+            /** By Provider */
+            by_provider: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** By State */
+            by_state: {
+                [key: string]: number;
+            };
+            /** Next Reset At */
+            next_reset_at: string | null;
+            /** Quota Measured */
+            quota_measured: boolean;
+            /** Total */
+            total: number;
+        };
+        /**
+         * AccountsSummary
+         * @description Registry accounts behind an engine, by state. Counts only.
+         */
+        AccountsSummary: {
+            /**
+             * Available
+             * @default 0
+             */
+            available: number;
+            /**
+             * Disabled
+             * @default 0
+             */
+            disabled: number;
+            /**
+             * Exhausted
+             * @default 0
+             */
+            exhausted: number;
         };
         /** AdminToken */
         AdminToken: {
@@ -1267,6 +1545,22 @@ export interface components {
             id: string;
             /** Token */
             token: string;
+        };
+        /**
+         * AdvancedOptions
+         * @description Admin-only overrides on top of a template's defaults.
+         */
+        AdvancedOptions: {
+            /** Capabilities */
+            capabilities?: string[] | null;
+            /** Env */
+            env?: {
+                [key: string]: string;
+            } | null;
+            /** Extra Hosts */
+            extra_hosts?: string[] | null;
+            /** Max Replicas */
+            max_replicas?: number | null;
         };
         /** Agent */
         Agent: {
@@ -1319,6 +1613,23 @@ export interface components {
          * @enum {string}
          */
         AgentState: "active" | "draining" | "gone" | "lost";
+        /** AgentsOverview */
+        AgentsOverview: {
+            /** By Role */
+            by_role: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** By State */
+            by_state: {
+                [key: string]: number;
+            };
+            /** Holding Claims */
+            holding_claims: number;
+            /** Lost On Unfinished Instance */
+            lost_on_unfinished_instance: number;
+        };
         /** Artifact */
         Artifact: {
             /** Attempt */
@@ -1359,6 +1670,19 @@ export interface components {
          * @enum {string}
          */
         Audience: "human" | "orchestrator" | "any";
+        /** Axes */
+        Axes: {
+            /** Account Provider */
+            account_provider: string | null;
+            /** Executor */
+            executor: string | null;
+            /** Harness */
+            harness: string;
+            /** Model */
+            model: string | null;
+            /** Model Provider */
+            model_provider: string;
+        };
         /** BlockRequest */
         BlockRequest: {
             /** Attempt */
@@ -1377,6 +1701,19 @@ export interface components {
              * @default 3600
              */
             ttl_s?: number;
+        };
+        /**
+         * Check
+         * @description One measured fact about a pool's readiness. `ok` is None when it could not
+         *     be verified from here (`detail` says why); only False blocks a launch.
+         */
+        Check: {
+            /** Detail */
+            detail: string;
+            /** Name */
+            name: string;
+            /** Ok */
+            ok: boolean | null;
         };
         /** CheckOut */
         CheckOut: {
@@ -1479,11 +1816,65 @@ export interface components {
              */
             updated_at: string;
         };
+        /**
+         * CodexLogin
+         * @description A dedicated Codex login in progress. The code and link are shown only
+         *     while `pending`, only to the token that started it.
+         */
+        CodexLogin: {
+            /** Account Id */
+            account_id: string | null;
+            /** Error */
+            error: string | null;
+            /** Expires In S */
+            expires_in_s: number;
+            /** Login Id */
+            login_id: string;
+            /** State */
+            state: string;
+            /** User Code */
+            user_code: string | null;
+            /** Verification Url */
+            verification_url: string | null;
+        };
+        /** CodexLoginStart */
+        CodexLoginStart: {
+            /** Name */
+            name?: string | null;
+        };
         /** CompleteRequest */
         CompleteRequest: {
             /** Attempt */
             attempt: number;
             result: components["schemas"]["TaskResult-Input"];
+        };
+        /** CreateWorkerRequest */
+        CreateWorkerRequest: {
+            advanced?: components["schemas"]["AdvancedOptions"] | null;
+            /** Image */
+            image?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Node
+             * @default local
+             */
+            node?: string;
+            /**
+             * Quantity
+             * @default 1
+             */
+            quantity?: number;
+            /** Template */
+            template: string;
+        };
+        /** CreateWorkerResult */
+        CreateWorkerResult: {
+            /** Desired Replicas */
+            desired_replicas: number;
+            pool: components["schemas"]["Pool"];
+            /** Requested */
+            requested: number;
         };
         /**
          * CredentialUpdate
@@ -1494,6 +1885,25 @@ export interface components {
             credential: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * Criteria
+         * @description Deterministic acceptance checks for a local answer.
+         */
+        Criteria: {
+            /** Equals */
+            equals?: string | null;
+            /** Json Schema */
+            json_schema?: {
+                [key: string]: unknown;
+            } | null;
+            /** Max Chars */
+            max_chars?: number | null;
+            /**
+             * Must Contain
+             * @default []
+             */
+            must_contain?: string[];
         };
         /** DatabaseOut */
         DatabaseOut: {
@@ -1560,6 +1970,21 @@ export interface components {
          * @enum {string}
          */
         DecisionState: "open" | "answered" | "cancelled";
+        /** DecisionsOverview */
+        DecisionsOverview: {
+            /** By State */
+            by_state: {
+                [key: string]: number;
+            };
+            /** Open By Audience */
+            open_by_audience: {
+                [key: string]: number;
+            };
+            /** Open By Kind */
+            open_by_kind: {
+                [key: string]: number;
+            };
+        };
         /** DockerOptions */
         "DockerOptions-Input": {
             /**
@@ -1587,6 +2012,73 @@ export interface components {
             network: string | null;
             /** Runtime */
             runtime: string | null;
+        };
+        /** EngineCatalog */
+        EngineCatalog: {
+            /** Engines */
+            engines: components["schemas"]["EngineEntry"][];
+            local: components["schemas"]["LocalModelInfo"] | null;
+        };
+        /** EngineEntry */
+        EngineEntry: {
+            accounts: components["schemas"]["AccountsSummary"] | null;
+            /** Auth Methods */
+            auth_methods: string[];
+            axes: components["schemas"]["Axes"];
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /**
+             * @default {
+             *       "authenticated": {
+             *         "detail": "not checked"
+             *       },
+             *       "installed": {
+             *         "detail": "not checked"
+             *       },
+             *       "validated": {
+             *         "detail": "not checked"
+             *       }
+             *     }
+             */
+            readiness: components["schemas"]["argus_core__engines__Readiness"];
+            role: components["schemas"]["EngineRole"];
+            /**
+             * Usable
+             * @default false
+             */
+            usable: boolean;
+            /** Version */
+            version: string | null;
+        };
+        /**
+         * EngineRole
+         * @enum {string}
+         */
+        EngineRole: "orchestrator" | "code_executor" | "executor" | "local";
+        /** EngineSelected */
+        EngineSelected: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Engine
+             * @enum {string}
+             */
+            engine: "codex" | "claude";
+            /** Provider */
+            provider: string;
+            /**
+             * Reason
+             * @default lease
+             * @enum {string}
+             */
+            reason?: "lease" | "exhausted";
         };
         /** EventOut */
         EventOut: {
@@ -1619,10 +2111,31 @@ export interface components {
              * @default
              */
             reason?: string;
+            /**
+             * Role
+             * @default engine
+             * @enum {string}
+             */
+            role?: "engine" | "executor";
             /** Task Id */
             task_id?: string | null;
             /** Until */
             until?: string | null;
+        };
+        /**
+         * Fact
+         * @description One readiness fact: true, false, or unknown (None) with its evidence.
+         */
+        Fact: {
+            /** At */
+            at: string | null;
+            /**
+             * Detail
+             * @default not checked
+             */
+            detail: string;
+            /** Ok */
+            ok: boolean | null;
         };
         /** FailRequest */
         FailRequest: {
@@ -1641,6 +2154,15 @@ export interface components {
              * @default false
              */
             task_blocked?: boolean;
+        };
+        /** FleetCapabilities */
+        FleetCapabilities: {
+            /** Pools */
+            pools: components["schemas"]["PoolCapability"][];
+            /** Public Url Configured */
+            public_url_configured: boolean;
+            /** Targets */
+            targets: components["schemas"]["TargetCapability"][];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1664,6 +2186,15 @@ export interface components {
             /** Renewed */
             renewed: components["schemas"]["RenewedLease"][];
             state: components["schemas"]["AgentState"];
+        };
+        /** ImageChoice */
+        ImageChoice: {
+            /** Capabilities */
+            capabilities: string[];
+            /** Image */
+            image: string;
+            /** Source */
+            source: string;
         };
         /** Instance */
         Instance: {
@@ -1712,6 +2243,15 @@ export interface components {
          * @enum {string}
          */
         InstanceState: "reserved" | "running" | "terminating" | "terminated";
+        /** InstancesOverview */
+        InstancesOverview: {
+            /** By State */
+            by_state: {
+                [key: string]: number;
+            };
+            /** Draining */
+            draining: number;
+        };
         /** IssuedToken */
         IssuedToken: {
             /**
@@ -1721,6 +2261,17 @@ export interface components {
             expires_at: string;
             /** Token */
             token: string;
+        };
+        /** KnowledgeOverview */
+        KnowledgeOverview: {
+            /** Pages By State */
+            pages_by_state: {
+                [key: string]: number;
+            };
+            /** Proposals By State */
+            proposals_by_state: {
+                [key: string]: number;
+            };
         };
         /**
          * KnowledgeRef
@@ -1810,6 +2361,19 @@ export interface components {
             /** Service Account */
             service_account: string | null;
         };
+        /** LaunchRequest */
+        LaunchRequest: {
+            /** Expected Desired Replicas */
+            expected_desired_replicas?: number | null;
+        };
+        /** LaunchResult */
+        LaunchResult: {
+            /** Desired Replicas */
+            desired_replicas: number;
+            pool: components["schemas"]["Pool"];
+            /** Requested */
+            requested: boolean;
+        };
         /** LeaseRef */
         LeaseRef: {
             /** Attempt */
@@ -1824,6 +2388,81 @@ export interface components {
         LeaseRequest: {
             /** Providers */
             providers: string[];
+            /**
+             * Role
+             * @default engine
+             * @enum {string}
+             */
+            role?: "engine" | "executor";
+        };
+        /** LocalAttempt */
+        LocalAttempt: {
+            /** Completion Tokens */
+            completion_tokens: number | null;
+            /** Failures */
+            failures: string[];
+            /** Finish Reason */
+            finish_reason: string | null;
+            /** Latency Ms */
+            latency_ms: number;
+            /** Prompt Tokens */
+            prompt_tokens: number | null;
+            /** Text */
+            text: string | null;
+        };
+        /**
+         * LocalModelInfo
+         * @description Measured from the server, never configured.
+         */
+        LocalModelInfo: {
+            /** Error */
+            error: string | null;
+            /** Model */
+            model: string | null;
+            /** N Ctx */
+            n_ctx: number | null;
+            /** Reachable */
+            reachable: boolean;
+            /** Slots */
+            slots: number | null;
+        };
+        /** LocalRunRequest */
+        LocalRunRequest: {
+            /**
+             * @default {
+             *       "must_contain": []
+             *     }
+             */
+            criteria?: components["schemas"]["Criteria"];
+            /**
+             * Max Attempts
+             * @default 1
+             */
+            max_attempts?: number;
+            /**
+             * Max Output Tokens
+             * @default 512
+             */
+            max_output_tokens?: number;
+            /** Prompt */
+            prompt: string;
+            /** System */
+            system?: string | null;
+        };
+        /** LocalRunResult */
+        LocalRunResult: {
+            /** Attempts */
+            attempts: components["schemas"]["LocalAttempt"][];
+            /** Cost */
+            cost: null;
+            /** Escalate To */
+            escalate_to: string | null;
+            /** Model */
+            model: string;
+            /** Text */
+            text: string | null;
+            /** Verdict */
+            verdict: string;
         };
         /** LoopOut */
         LoopOut: {
@@ -1917,6 +2556,47 @@ export interface components {
             onecli_url: string;
             /** User */
             user: string | null;
+        };
+        /** NodeOption */
+        NodeOption: {
+            /** Available */
+            available: boolean;
+            /** Cpus */
+            cpus: number | null;
+            /** Default */
+            default: boolean;
+            /** Error */
+            error: string | null;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Memory Mb */
+            memory_mb: number | null;
+            /** Runtimes */
+            runtimes: string[];
+            /** Shares Filesystem */
+            shares_filesystem: boolean;
+            /** Version */
+            version: string | null;
+        };
+        /** Overview */
+        Overview: {
+            accounts: components["schemas"]["AccountsOverview"];
+            agents: components["schemas"]["AgentsOverview"];
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            decisions: components["schemas"]["DecisionsOverview"];
+            instances: components["schemas"]["InstancesOverview"];
+            knowledge: components["schemas"]["KnowledgeOverview"];
+            pools: components["schemas"]["PoolsOverview"];
+            /** Tasks */
+            tasks: {
+                [key: string]: number;
+            };
         };
         /**
          * Page
@@ -2135,11 +2815,43 @@ export interface components {
             status: components["schemas"]["PoolStatus"];
             /** @default docker */
             target: components["schemas"]["TargetKind"];
+            /** Template */
+            template: string | null;
             /**
              * Updated At
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** PoolCapability */
+        PoolCapability: {
+            /** Blockers */
+            blockers: string[];
+            /** Checks */
+            checks: components["schemas"]["Check"][];
+            /** Free Slots */
+            free_slots: number;
+            /** Launchable */
+            launchable: boolean;
+            /** Name */
+            name: string;
+            runtime: components["schemas"]["RuntimeKind"];
+            target: components["schemas"]["TargetKind"];
+        };
+        /** PoolItem */
+        PoolItem: {
+            /** Desired */
+            desired: number;
+            /** Live */
+            live: number;
+            /** Max */
+            max: number;
+            /** Name */
+            name: string;
+            /** Running */
+            running: number;
+            /** Status */
+            status: string;
         };
         /** PoolOut */
         PoolOut: {
@@ -2203,6 +2915,27 @@ export interface components {
             runtime?: components["schemas"]["RuntimeKind"];
             /** @default docker */
             target?: components["schemas"]["TargetKind"];
+            /** Template */
+            template?: string | null;
+        };
+        /** PoolsOverview */
+        PoolsOverview: {
+            /** By Status */
+            by_status: {
+                [key: string]: number;
+            };
+            /** Desired */
+            desired: number;
+            /** Items */
+            items: components["schemas"]["PoolItem"][];
+            /** Live */
+            live: number;
+            /** Max */
+            max: number;
+            /** Running */
+            running: number;
+            /** Total */
+            total: number;
         };
         /** ProgressRequest */
         ProgressRequest: {
@@ -2361,6 +3094,73 @@ export interface components {
          * @enum {string}
          */
         Role: "orchestrator" | "worker";
+        /** RouteDecision */
+        RouteDecision: {
+            /** Blocked */
+            blocked: string | null;
+            /** Context Tokens */
+            context_tokens: number | null;
+            /** Escalate To */
+            escalate_to: string | null;
+            /** Estimated Input Tokens */
+            estimated_input_tokens: number | null;
+            /** Executor */
+            executor: string | null;
+            /** Fallback From */
+            fallback_from: string | null;
+            /** Local Considered */
+            local_considered: boolean;
+            /** Local Rejections */
+            local_rejections: string[];
+            /** Model */
+            model: string | null;
+            /** Reason */
+            reason: string;
+            /** Target */
+            target: string;
+        };
+        /** RouteRequest */
+        RouteRequest: {
+            /**
+             * Criteria Deterministic
+             * @default false
+             */
+            criteria_deterministic?: boolean;
+            /** Input Chars */
+            input_chars?: number | null;
+            /**
+             * Is Code
+             * @default false
+             */
+            is_code?: boolean;
+            /**
+             * Low Risk
+             * @default false
+             */
+            low_risk?: boolean;
+            /**
+             * Multi File
+             * @default false
+             */
+            multi_file?: boolean;
+            /**
+             * Output Tokens
+             * @default 512
+             */
+            output_tokens?: number;
+            /**
+             * Simple
+             * @default false
+             */
+            simple?: boolean;
+            /** Summary */
+            summary: string;
+            /**
+             * Touches Sensitive
+             * @default false
+             */
+            touches_sensitive?: boolean;
+        };
         /**
          * RuntimeKind
          * @enum {string}
@@ -2456,6 +3256,24 @@ export interface components {
             uptime_s: number;
             /** Version */
             version: string;
+        };
+        /** TargetCapability */
+        TargetCapability: {
+            /** Available */
+            available: boolean;
+            /** Cpus */
+            cpus: number | null;
+            /** Error */
+            error: string | null;
+            kind: components["schemas"]["TargetKind"];
+            /** Location */
+            location: string | null;
+            /** Memory Mb */
+            memory_mb: number | null;
+            /** Runtimes */
+            runtimes: string[];
+            /** Version */
+            version: string | null;
         };
         /**
          * TargetKind
@@ -2711,6 +3529,32 @@ export interface components {
          * @enum {string}
          */
         TaskState: "awaiting_approval" | "pending" | "ready" | "claimed" | "blocked" | "in_review" | "succeeded" | "failed" | "cancelled";
+        /** TemplateCatalog */
+        TemplateCatalog: {
+            /** Default Node */
+            default_node: string;
+            /** Nodes */
+            nodes: components["schemas"]["NodeOption"][];
+            /** Pools */
+            pools: number;
+            /** Public Url Configured */
+            public_url_configured: boolean;
+            /** Templates */
+            templates: components["schemas"]["WorkerTemplate"][];
+        };
+        /** TemplateDefaults */
+        TemplateDefaults: {
+            /** Capabilities */
+            capabilities: string[];
+            /** Extra Hosts */
+            extra_hosts: string[];
+            /** Max Replicas */
+            max_replicas: number;
+            /** Name */
+            name: string;
+            /** Quantity */
+            quantity: number;
+        };
         /**
          * Usage
          * @description What the work cost, as reported by the agent. Recorded, never enforced.
@@ -2749,6 +3593,27 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /** WorkerTemplate */
+        WorkerTemplate: {
+            defaults: components["schemas"]["TemplateDefaults"];
+            /** Description */
+            description: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Notes */
+            notes: string[];
+            /** Readiness */
+            readiness: components["schemas"]["argus_core__fleet__Readiness"][];
+            /** Ready */
+            ready: boolean;
+            runtime: components["schemas"]["RuntimeKind"];
+            /** Setup */
+            setup: string[];
+            /** Warning */
+            warning: string | null;
+        };
         /** Usage */
         argus_core__accounts__Usage: {
             /** Cost Usd */
@@ -2757,6 +3622,43 @@ export interface components {
             input_tokens: number;
             /** Output Tokens */
             output_tokens: number;
+        };
+        /**
+         * Readiness
+         * @description Installed != authenticated != validated; usable only if all three hold.
+         */
+        argus_core__engines__Readiness: {
+            /**
+             * @default {
+             *       "detail": "not checked"
+             *     }
+             */
+            authenticated: components["schemas"]["Fact"];
+            /**
+             * @default {
+             *       "detail": "not checked"
+             *     }
+             */
+            installed: components["schemas"]["Fact"];
+            /**
+             * @default {
+             *       "detail": "not checked"
+             *     }
+             */
+            validated: components["schemas"]["Fact"];
+        };
+        /** Readiness */
+        argus_core__fleet__Readiness: {
+            /** Checks */
+            checks: components["schemas"]["Check"][];
+            /** Images */
+            images: components["schemas"]["ImageChoice"][];
+            /** Missing */
+            missing: string[];
+            /** Node */
+            node: string;
+            /** Ready */
+            ready: boolean;
         };
         /**
          * Usage
@@ -2834,6 +3736,101 @@ export interface operations {
             };
         };
     };
+    start_codex_login_api_accounts_codex_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodexLoginStart"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodexLogin"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_codex_login_api_accounts_codex_login__login_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                login_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodexLogin"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_codex_login_api_accounts_codex_login__login_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                login_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodexLogin"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     lease_account_api_accounts_lease_post: {
         parameters: {
             query?: never;
@@ -2869,7 +3866,9 @@ export interface operations {
     };
     release_account_api_accounts_release_post: {
         parameters: {
-            query?: never;
+            query?: {
+                role?: ("engine" | "executor") | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2882,6 +3881,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
@@ -3493,6 +4501,123 @@ export interface operations {
             };
         };
     };
+    list_engines_api_engines_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EngineCatalog"];
+                };
+            };
+        };
+    };
+    run_local_api_engines_local_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LocalRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalRunResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    route_task_api_engines_route_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RouteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RouteDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    engine_selected_api_engines_selected_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EngineSelected"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_events_api_events_get: {
         parameters: {
             query?: {
@@ -3544,6 +4669,79 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_capabilities_api_fleet_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetCapabilities"];
+                };
+            };
+        };
+    };
+    worker_templates_api_fleet_templates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateCatalog"];
+                };
+            };
+        };
+    };
+    create_worker_api_fleet_workers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWorkerRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateWorkerResult"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -4090,6 +5288,26 @@ export interface operations {
             };
         };
     };
+    overview_api_overview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Overview"];
+                };
+            };
+        };
+    };
     list_pools_api_pools_get: {
         parameters: {
             query?: never;
@@ -4163,6 +5381,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Pool"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    launch_worker_api_pools__name__launch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LaunchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaunchResult"];
                 };
             };
             /** @description Validation Error */
