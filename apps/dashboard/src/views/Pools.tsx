@@ -2,24 +2,26 @@ import { type FormEvent, useState } from "react";
 import { api, call, fetchText, type Instance, type Pool } from "../api";
 import { relative, shortId } from "../format";
 import { useLiveData } from "../live";
+import { NewWorker } from "./GuidedWorker";
 
 export function Pools() {
   const [editing, setEditing] = useState<Pool | "new" | null>(null);
+  const [guided, setGuided] = useState(false);
   const { data: pools, error } = useLiveData(() => call(api.GET("/api/pools")), []);
   return (
     <section>
       <div className="toolbar">
         <h2>Pools</h2>
-        <button type="button" className="primary" onClick={() => setEditing("new")}>
-          New pool
+        <button type="button" className="primary" onClick={() => setGuided((g) => !g)}>
+          New worker
+        </button>
+        <button type="button" onClick={() => setEditing("new")}>
+          New pool (advanced)
         </button>
       </div>
       {error && <p className="error">{error.message}</p>}
-      {pools?.length === 0 && (
-        <p className="muted">
-          No pools yet. A pool runs N containers of an image that speaks the Argus API; set
-          ARGUS_PUBLIC_URL so they can reach Argus.
-        </p>
+      {(guided || pools?.length === 0) && (
+        <NewWorker onCancel={guided ? () => setGuided(false) : undefined} />
       )}
       {(pools ?? []).map((pool) => (
         <PoolCard key={pool.name} pool={pool} onEdit={() => setEditing(pool)} />
@@ -177,7 +179,7 @@ function Logs({ instance, onClose }: { instance: Instance; onClose: () => void }
   );
 }
 
-function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void }) {
+export function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void }) {
   const [form, setForm] = useState({
     name: pool?.name ?? "",
     image: pool?.image ?? "",
@@ -227,6 +229,7 @@ function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void }) {
                   cpus: pool.cpus,
                   memory_mb: pool.memory_mb,
                   nanoclaw: pool.nanoclaw,
+                  template: pool.template,
                 }
               : { target: form.target }),
             // Kubernetes placement is edited here too (a docker pool has none).
@@ -244,7 +247,12 @@ function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void }) {
             desired_replicas: form.desired,
             max_replicas: form.max,
             env,
-            docker: { host: form.dockerHost || null, extra_hosts: list(form.extraHosts) },
+            // Keep what the form does not show (e.g. the sandbox runtime, network).
+            docker: {
+              ...(pool?.docker ?? {}),
+              host: form.dockerHost || null,
+              extra_hosts: list(form.extraHosts),
+            },
           },
         }),
       );
@@ -257,7 +265,7 @@ function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void }) {
   return (
     <div className="overlay">
       <form className="dialog" onSubmit={submit}>
-        <h2>{pool ? `Edit pool ${pool.name}` : "New pool"}</h2>
+        <h2>{pool ? `Edit pool ${pool.name}` : "New pool (advanced)"}</h2>
         <div className="row">
           <label>
             Name

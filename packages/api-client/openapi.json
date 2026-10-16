@@ -246,6 +246,15 @@
           "provider": {
             "title": "Provider",
             "type": "string"
+          },
+          "role": {
+            "default": "engine",
+            "enum": [
+              "engine",
+              "executor"
+            ],
+            "title": "Role",
+            "type": "string"
           }
         },
         "required": [
@@ -320,6 +329,83 @@
           }
         },
         "title": "AccountUpdate",
+        "type": "object"
+      },
+      "AccountsOverview": {
+        "properties": {
+          "by_provider": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "title": "By Provider",
+            "type": "object"
+          },
+          "by_state": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By State",
+            "type": "object"
+          },
+          "next_reset_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Reset At"
+          },
+          "quota_measured": {
+            "title": "Quota Measured",
+            "type": "boolean"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "by_state",
+          "total",
+          "by_provider",
+          "next_reset_at",
+          "quota_measured"
+        ],
+        "title": "AccountsOverview",
+        "type": "object"
+      },
+      "AccountsSummary": {
+        "description": "Registry accounts behind an engine, by state. Counts only.",
+        "properties": {
+          "available": {
+            "default": 0,
+            "title": "Available",
+            "type": "integer"
+          },
+          "disabled": {
+            "default": 0,
+            "title": "Disabled",
+            "type": "integer"
+          },
+          "exhausted": {
+            "default": 0,
+            "title": "Exhausted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "available",
+          "exhausted",
+          "disabled"
+        ],
+        "title": "AccountsSummary",
         "type": "object"
       },
       "AdminToken": {
@@ -402,6 +488,68 @@
           "token"
         ],
         "title": "AdminTokenIssued",
+        "type": "object"
+      },
+      "AdvancedOptions": {
+        "description": "Admin-only overrides on top of a template's defaults.",
+        "properties": {
+          "capabilities": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capabilities"
+          },
+          "env": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Env"
+          },
+          "extra_hosts": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra Hosts"
+          },
+          "max_replicas": {
+            "anyOf": [
+              {
+                "maximum": 1000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Replicas"
+          }
+        },
+        "title": "AdvancedOptions",
         "type": "object"
       },
       "Agent": {
@@ -530,6 +678,43 @@
         "title": "AgentState",
         "type": "string"
       },
+      "AgentsOverview": {
+        "properties": {
+          "by_role": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "title": "By Role",
+            "type": "object"
+          },
+          "by_state": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By State",
+            "type": "object"
+          },
+          "holding_claims": {
+            "title": "Holding Claims",
+            "type": "integer"
+          },
+          "lost_on_unfinished_instance": {
+            "title": "Lost On Unfinished Instance",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "by_state",
+          "by_role",
+          "holding_claims",
+          "lost_on_unfinished_instance"
+        ],
+        "title": "AgentsOverview",
+        "type": "object"
+      },
       "Artifact": {
         "properties": {
           "attempt": {
@@ -632,6 +817,60 @@
         "title": "Audience",
         "type": "string"
       },
+      "Axes": {
+        "properties": {
+          "account_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Provider"
+          },
+          "executor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executor"
+          },
+          "harness": {
+            "title": "Harness",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "model_provider": {
+            "title": "Model Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_provider",
+          "model",
+          "harness",
+          "executor",
+          "account_provider"
+        ],
+        "title": "Axes",
+        "type": "object"
+      },
       "BlockRequest": {
         "properties": {
           "attempt": {
@@ -677,6 +916,37 @@
           }
         },
         "title": "BootstrapTokenCreate",
+        "type": "object"
+      },
+      "Check": {
+        "description": "One measured fact about a pool's readiness. `ok` is None when it could not\nbe verified from here (`detail` says why); only False blocks a launch.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          }
+        },
+        "required": [
+          "name",
+          "ok",
+          "detail"
+        ],
+        "title": "Check",
         "type": "object"
       },
       "CheckOut": {
@@ -993,6 +1263,96 @@
         "title": "ClaimedTask",
         "type": "object"
       },
+      "CodexLogin": {
+        "description": "A dedicated Codex login in progress. The code and link are shown only\nwhile `pending`, only to the token that started it.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expires_in_s": {
+            "title": "Expires In S",
+            "type": "integer"
+          },
+          "login_id": {
+            "title": "Login Id",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "user_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Code"
+          },
+          "verification_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Url"
+          }
+        },
+        "required": [
+          "login_id",
+          "state",
+          "verification_url",
+          "user_code",
+          "expires_in_s",
+          "account_id",
+          "error"
+        ],
+        "title": "CodexLogin",
+        "type": "object"
+      },
+      "CodexLoginStart": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "CodexLoginStart",
+        "type": "object"
+      },
       "CompleteRequest": {
         "properties": {
           "attempt": {
@@ -1010,6 +1370,85 @@
         "title": "CompleteRequest",
         "type": "object"
       },
+      "CreateWorkerRequest": {
+        "properties": {
+          "advanced": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdvancedOptions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "image": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image"
+          },
+          "name": {
+            "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+            "title": "Name",
+            "type": "string"
+          },
+          "node": {
+            "default": "local",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Node",
+            "type": "string"
+          },
+          "quantity": {
+            "default": 1,
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Quantity",
+            "type": "integer"
+          },
+          "template": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template",
+          "name"
+        ],
+        "title": "CreateWorkerRequest",
+        "type": "object"
+      },
+      "CreateWorkerResult": {
+        "properties": {
+          "desired_replicas": {
+            "title": "Desired Replicas",
+            "type": "integer"
+          },
+          "pool": {
+            "$ref": "#/components/schemas/Pool"
+          },
+          "requested": {
+            "title": "Requested",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pool",
+          "requested",
+          "desired_replicas"
+        ],
+        "title": "CreateWorkerResult",
+        "type": "object"
+      },
       "CredentialUpdate": {
         "description": "E.g. refreshed OAuth tokens for a subscription account.",
         "properties": {
@@ -1023,6 +1462,57 @@
           "credential"
         ],
         "title": "CredentialUpdate",
+        "type": "object"
+      },
+      "Criteria": {
+        "description": "Deterministic acceptance checks for a local answer.",
+        "properties": {
+          "equals": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Equals"
+          },
+          "json_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Json Schema"
+          },
+          "max_chars": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Chars"
+          },
+          "must_contain": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Must Contain",
+            "type": "array"
+          }
+        },
+        "title": "Criteria",
         "type": "object"
       },
       "DatabaseOut": {
@@ -1234,6 +1724,38 @@
         "title": "DecisionState",
         "type": "string"
       },
+      "DecisionsOverview": {
+        "properties": {
+          "by_state": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By State",
+            "type": "object"
+          },
+          "open_by_audience": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Open By Audience",
+            "type": "object"
+          },
+          "open_by_kind": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Open By Kind",
+            "type": "object"
+          }
+        },
+        "required": [
+          "by_state",
+          "open_by_kind",
+          "open_by_audience"
+        ],
+        "title": "DecisionsOverview",
+        "type": "object"
+      },
       "DockerOptions-Input": {
         "properties": {
           "extra_hosts": {
@@ -1336,6 +1858,167 @@
         "title": "DockerOptions",
         "type": "object"
       },
+      "EngineCatalog": {
+        "properties": {
+          "engines": {
+            "items": {
+              "$ref": "#/components/schemas/EngineEntry"
+            },
+            "title": "Engines",
+            "type": "array"
+          },
+          "local": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LocalModelInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "engines",
+          "local"
+        ],
+        "title": "EngineCatalog",
+        "type": "object"
+      },
+      "EngineEntry": {
+        "properties": {
+          "accounts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountsSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "auth_methods": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Auth Methods",
+            "type": "array"
+          },
+          "axes": {
+            "$ref": "#/components/schemas/Axes"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "title": "Notes",
+            "type": "string"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/argus_core__engines__Readiness",
+            "default": {
+              "authenticated": {
+                "detail": "not checked"
+              },
+              "installed": {
+                "detail": "not checked"
+              },
+              "validated": {
+                "detail": "not checked"
+              }
+            }
+          },
+          "role": {
+            "$ref": "#/components/schemas/EngineRole"
+          },
+          "usable": {
+            "default": false,
+            "title": "Usable",
+            "type": "boolean"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "role",
+          "axes",
+          "auth_methods",
+          "version",
+          "readiness",
+          "accounts",
+          "usable",
+          "notes"
+        ],
+        "title": "EngineEntry",
+        "type": "object"
+      },
+      "EngineRole": {
+        "enum": [
+          "orchestrator",
+          "code_executor",
+          "executor",
+          "local"
+        ],
+        "title": "EngineRole",
+        "type": "string"
+      },
+      "EngineSelected": {
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "engine": {
+            "enum": [
+              "codex",
+              "claude"
+            ],
+            "title": "Engine",
+            "type": "string"
+          },
+          "provider": {
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Provider",
+            "type": "string"
+          },
+          "reason": {
+            "default": "lease",
+            "enum": [
+              "lease",
+              "exhausted"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "engine",
+          "provider",
+          "account_id"
+        ],
+        "title": "EngineSelected",
+        "type": "object"
+      },
       "EventOut": {
         "properties": {
           "actor": {
@@ -1400,6 +2083,15 @@
             "title": "Reason",
             "type": "string"
           },
+          "role": {
+            "default": "engine",
+            "enum": [
+              "engine",
+              "executor"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
           "task_id": {
             "anyOf": [
               {
@@ -1425,6 +2117,46 @@
           }
         },
         "title": "ExhaustedReport",
+        "type": "object"
+      },
+      "Fact": {
+        "description": "One readiness fact: true, false, or unknown (None) with its evidence.",
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "detail": {
+            "default": "not checked",
+            "title": "Detail",
+            "type": "string"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          }
+        },
+        "required": [
+          "ok",
+          "detail",
+          "at"
+        ],
+        "title": "Fact",
         "type": "object"
       },
       "FailRequest": {
@@ -1480,6 +2212,35 @@
           "lease"
         ],
         "title": "FallbackResult",
+        "type": "object"
+      },
+      "FleetCapabilities": {
+        "properties": {
+          "pools": {
+            "items": {
+              "$ref": "#/components/schemas/PoolCapability"
+            },
+            "title": "Pools",
+            "type": "array"
+          },
+          "public_url_configured": {
+            "title": "Public Url Configured",
+            "type": "boolean"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/TargetCapability"
+            },
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "public_url_configured",
+          "targets",
+          "pools"
+        ],
+        "title": "FleetCapabilities",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1540,6 +2301,32 @@
           "heartbeat_interval_s"
         ],
         "title": "HeartbeatResponse",
+        "type": "object"
+      },
+      "ImageChoice": {
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "image": {
+            "title": "Image",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "image",
+          "capabilities",
+          "source"
+        ],
+        "title": "ImageChoice",
         "type": "object"
       },
       "Instance": {
@@ -1694,6 +2481,27 @@
         "title": "InstanceState",
         "type": "string"
       },
+      "InstancesOverview": {
+        "properties": {
+          "by_state": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By State",
+            "type": "object"
+          },
+          "draining": {
+            "title": "Draining",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "by_state",
+          "draining"
+        ],
+        "title": "InstancesOverview",
+        "type": "object"
+      },
       "IssuedToken": {
         "properties": {
           "expires_at": {
@@ -1711,6 +2519,30 @@
           "expires_at"
         ],
         "title": "IssuedToken",
+        "type": "object"
+      },
+      "KnowledgeOverview": {
+        "properties": {
+          "pages_by_state": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Pages By State",
+            "type": "object"
+          },
+          "proposals_by_state": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Proposals By State",
+            "type": "object"
+          }
+        },
+        "required": [
+          "pages_by_state",
+          "proposals_by_state"
+        ],
+        "title": "KnowledgeOverview",
         "type": "object"
       },
       "KnowledgeRef": {
@@ -1896,6 +2728,46 @@
         "title": "KubernetesOptions",
         "type": "object"
       },
+      "LaunchRequest": {
+        "properties": {
+          "expected_desired_replicas": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Desired Replicas"
+          }
+        },
+        "title": "LaunchRequest",
+        "type": "object"
+      },
+      "LaunchResult": {
+        "properties": {
+          "desired_replicas": {
+            "title": "Desired Replicas",
+            "type": "integer"
+          },
+          "pool": {
+            "$ref": "#/components/schemas/Pool"
+          },
+          "requested": {
+            "title": "Requested",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pool",
+          "requested",
+          "desired_replicas"
+        ],
+        "title": "LaunchResult",
+        "type": "object"
+      },
       "LeaseRef": {
         "properties": {
           "attempt": {
@@ -1924,12 +2796,254 @@
             "minItems": 1,
             "title": "Providers",
             "type": "array"
+          },
+          "role": {
+            "default": "engine",
+            "enum": [
+              "engine",
+              "executor"
+            ],
+            "title": "Role",
+            "type": "string"
           }
         },
         "required": [
           "providers"
         ],
         "title": "LeaseRequest",
+        "type": "object"
+      },
+      "LocalAttempt": {
+        "properties": {
+          "completion_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completion Tokens"
+          },
+          "failures": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failures",
+            "type": "array"
+          },
+          "finish_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finish Reason"
+          },
+          "latency_ms": {
+            "title": "Latency Ms",
+            "type": "integer"
+          },
+          "prompt_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Tokens"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "required": [
+          "text",
+          "finish_reason",
+          "prompt_tokens",
+          "completion_tokens",
+          "latency_ms",
+          "failures"
+        ],
+        "title": "LocalAttempt",
+        "type": "object"
+      },
+      "LocalModelInfo": {
+        "description": "Measured from the server, never configured.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "n_ctx": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "N Ctx"
+          },
+          "reachable": {
+            "title": "Reachable",
+            "type": "boolean"
+          },
+          "slots": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slots"
+          }
+        },
+        "required": [
+          "reachable",
+          "model",
+          "n_ctx",
+          "slots",
+          "error"
+        ],
+        "title": "LocalModelInfo",
+        "type": "object"
+      },
+      "LocalRunRequest": {
+        "properties": {
+          "criteria": {
+            "$ref": "#/components/schemas/Criteria",
+            "default": {
+              "must_contain": []
+            }
+          },
+          "max_attempts": {
+            "default": 1,
+            "maximum": 2.0,
+            "minimum": 1.0,
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "max_output_tokens": {
+            "default": 512,
+            "maximum": 8192.0,
+            "minimum": 1.0,
+            "title": "Max Output Tokens",
+            "type": "integer"
+          },
+          "prompt": {
+            "maxLength": 200000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "system": {
+            "anyOf": [
+              {
+                "maxLength": 50000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "LocalRunRequest",
+        "type": "object"
+      },
+      "LocalRunResult": {
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/LocalAttempt"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "cost": {
+            "title": "Cost",
+            "type": "null"
+          },
+          "escalate_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Escalate To"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "verdict": {
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "model",
+          "attempts",
+          "text",
+          "escalate_to",
+          "cost"
+        ],
+        "title": "LocalRunResult",
         "type": "object"
       },
       "LoopOut": {
@@ -2139,6 +3253,141 @@
           "group_add"
         ],
         "title": "NanoclawOptions",
+        "type": "object"
+      },
+      "NodeOption": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "cpus": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpus"
+          },
+          "default": {
+            "title": "Default",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "memory_mb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Mb"
+          },
+          "runtimes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Runtimes",
+            "type": "array"
+          },
+          "shares_filesystem": {
+            "title": "Shares Filesystem",
+            "type": "boolean"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "default",
+          "available",
+          "error",
+          "version",
+          "runtimes",
+          "cpus",
+          "memory_mb",
+          "shares_filesystem"
+        ],
+        "title": "NodeOption",
+        "type": "object"
+      },
+      "Overview": {
+        "properties": {
+          "accounts": {
+            "$ref": "#/components/schemas/AccountsOverview"
+          },
+          "agents": {
+            "$ref": "#/components/schemas/AgentsOverview"
+          },
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "decisions": {
+            "$ref": "#/components/schemas/DecisionsOverview"
+          },
+          "instances": {
+            "$ref": "#/components/schemas/InstancesOverview"
+          },
+          "knowledge": {
+            "$ref": "#/components/schemas/KnowledgeOverview"
+          },
+          "pools": {
+            "$ref": "#/components/schemas/PoolsOverview"
+          },
+          "tasks": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Tasks",
+            "type": "object"
+          }
+        },
+        "required": [
+          "as_of",
+          "tasks",
+          "agents",
+          "pools",
+          "instances",
+          "accounts",
+          "decisions",
+          "knowledge"
+        ],
+        "title": "Overview",
         "type": "object"
       },
       "Page": {
@@ -2591,6 +3840,18 @@
             "$ref": "#/components/schemas/TargetKind",
             "default": "docker"
           },
+          "template": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -2611,6 +3872,7 @@
           "docker",
           "kubernetes",
           "nanoclaw",
+          "template",
           "name",
           "status",
           "last_error",
@@ -2619,6 +3881,91 @@
           "updated_at"
         ],
         "title": "Pool",
+        "type": "object"
+      },
+      "PoolCapability": {
+        "properties": {
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/Check"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "free_slots": {
+            "title": "Free Slots",
+            "type": "integer"
+          },
+          "launchable": {
+            "title": "Launchable",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeKind"
+          },
+          "target": {
+            "$ref": "#/components/schemas/TargetKind"
+          }
+        },
+        "required": [
+          "name",
+          "target",
+          "runtime",
+          "launchable",
+          "free_slots",
+          "checks",
+          "blockers"
+        ],
+        "title": "PoolCapability",
+        "type": "object"
+      },
+      "PoolItem": {
+        "properties": {
+          "desired": {
+            "title": "Desired",
+            "type": "integer"
+          },
+          "live": {
+            "title": "Live",
+            "type": "integer"
+          },
+          "max": {
+            "title": "Max",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "running": {
+            "title": "Running",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "desired",
+          "max",
+          "live",
+          "running"
+        ],
+        "title": "PoolItem",
         "type": "object"
       },
       "PoolOut": {
@@ -2763,6 +4110,18 @@
           "target": {
             "$ref": "#/components/schemas/TargetKind",
             "default": "docker"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template"
           }
         },
         "required": [
@@ -2770,6 +4129,55 @@
           "max_replicas"
         ],
         "title": "PoolUpsert",
+        "type": "object"
+      },
+      "PoolsOverview": {
+        "properties": {
+          "by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Status",
+            "type": "object"
+          },
+          "desired": {
+            "title": "Desired",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PoolItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "live": {
+            "title": "Live",
+            "type": "integer"
+          },
+          "max": {
+            "title": "Max",
+            "type": "integer"
+          },
+          "running": {
+            "title": "Running",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "by_status",
+          "total",
+          "desired",
+          "max",
+          "live",
+          "running",
+          "items"
+        ],
+        "title": "PoolsOverview",
         "type": "object"
       },
       "ProgressRequest": {
@@ -3152,6 +4560,183 @@
         "title": "Role",
         "type": "string"
       },
+      "RouteDecision": {
+        "properties": {
+          "blocked": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked"
+          },
+          "context_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Tokens"
+          },
+          "escalate_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Escalate To"
+          },
+          "estimated_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Input Tokens"
+          },
+          "executor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executor"
+          },
+          "fallback_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback From"
+          },
+          "local_considered": {
+            "title": "Local Considered",
+            "type": "boolean"
+          },
+          "local_rejections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Local Rejections",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "reason",
+          "local_considered",
+          "local_rejections",
+          "estimated_input_tokens",
+          "context_tokens",
+          "model",
+          "blocked",
+          "fallback_from",
+          "executor",
+          "escalate_to"
+        ],
+        "title": "RouteDecision",
+        "type": "object"
+      },
+      "RouteRequest": {
+        "properties": {
+          "criteria_deterministic": {
+            "default": false,
+            "title": "Criteria Deterministic",
+            "type": "boolean"
+          },
+          "input_chars": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Chars"
+          },
+          "is_code": {
+            "default": false,
+            "title": "Is Code",
+            "type": "boolean"
+          },
+          "low_risk": {
+            "default": false,
+            "title": "Low Risk",
+            "type": "boolean"
+          },
+          "multi_file": {
+            "default": false,
+            "title": "Multi File",
+            "type": "boolean"
+          },
+          "output_tokens": {
+            "default": 512,
+            "minimum": 1.0,
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "simple": {
+            "default": false,
+            "title": "Simple",
+            "type": "boolean"
+          },
+          "summary": {
+            "maxLength": 2000,
+            "title": "Summary",
+            "type": "string"
+          },
+          "touches_sensitive": {
+            "default": false,
+            "title": "Touches Sensitive",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "title": "RouteRequest",
+        "type": "object"
+      },
       "RuntimeKind": {
         "enum": [
           "plain",
@@ -3404,6 +4989,91 @@
           "loops"
         ],
         "title": "SystemSummary",
+        "type": "object"
+      },
+      "TargetCapability": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "cpus": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpus"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TargetKind"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "memory_mb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Mb"
+          },
+          "runtimes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Runtimes",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "kind",
+          "location",
+          "available",
+          "error",
+          "version",
+          "runtimes",
+          "cpus",
+          "memory_mb"
+        ],
+        "title": "TargetCapability",
         "type": "object"
       },
       "TargetKind": {
@@ -4150,6 +5820,84 @@
         "title": "TaskState",
         "type": "string"
       },
+      "TemplateCatalog": {
+        "properties": {
+          "default_node": {
+            "title": "Default Node",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/NodeOption"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "pools": {
+            "title": "Pools",
+            "type": "integer"
+          },
+          "public_url_configured": {
+            "title": "Public Url Configured",
+            "type": "boolean"
+          },
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/WorkerTemplate"
+            },
+            "title": "Templates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "public_url_configured",
+          "default_node",
+          "nodes",
+          "templates",
+          "pools"
+        ],
+        "title": "TemplateCatalog",
+        "type": "object"
+      },
+      "TemplateDefaults": {
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "extra_hosts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Extra Hosts",
+            "type": "array"
+          },
+          "max_replicas": {
+            "title": "Max Replicas",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "quantity",
+          "max_replicas",
+          "capabilities",
+          "extra_hosts"
+        ],
+        "title": "TemplateDefaults",
+        "type": "object"
+      },
       "Usage-Input": {
         "description": "What the work cost, as reported by the agent. Recorded, never enforced.",
         "properties": {
@@ -4297,6 +6045,78 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "WorkerTemplate": {
+        "properties": {
+          "defaults": {
+            "$ref": "#/components/schemas/TemplateDefaults"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "readiness": {
+            "items": {
+              "$ref": "#/components/schemas/argus_core__fleet__Readiness"
+            },
+            "title": "Readiness",
+            "type": "array"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeKind"
+          },
+          "setup": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Setup",
+            "type": "array"
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "runtime",
+          "notes",
+          "warning",
+          "setup",
+          "defaults",
+          "readiness",
+          "ready"
+        ],
+        "title": "WorkerTemplate",
+        "type": "object"
+      },
       "argus_core__accounts__Usage": {
         "properties": {
           "cost_usd": {
@@ -4318,6 +6138,78 @@
           "cost_usd"
         ],
         "title": "Usage",
+        "type": "object"
+      },
+      "argus_core__engines__Readiness": {
+        "description": "Installed != authenticated != validated; usable only if all three hold.",
+        "properties": {
+          "authenticated": {
+            "$ref": "#/components/schemas/Fact",
+            "default": {
+              "detail": "not checked"
+            }
+          },
+          "installed": {
+            "$ref": "#/components/schemas/Fact",
+            "default": {
+              "detail": "not checked"
+            }
+          },
+          "validated": {
+            "$ref": "#/components/schemas/Fact",
+            "default": {
+              "detail": "not checked"
+            }
+          }
+        },
+        "required": [
+          "installed",
+          "authenticated",
+          "validated"
+        ],
+        "title": "Readiness",
+        "type": "object"
+      },
+      "argus_core__fleet__Readiness": {
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/Check"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/ImageChoice"
+            },
+            "title": "Images",
+            "type": "array"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "node",
+          "ready",
+          "checks",
+          "missing",
+          "images"
+        ],
+        "title": "Readiness",
         "type": "object"
       },
       "argus_core__tasks__Usage": {
@@ -4463,6 +6355,145 @@
         ]
       }
     },
+    "/api/accounts/codex-login": {
+      "post": {
+        "description": "Start the official client's device-code login for a new `openai` account\n(codex accounts spec 3). On success the account appears in the registry.",
+        "operationId": "start_codex_login_api_accounts_codex_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodexLoginStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexLogin"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Start Codex Login",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/codex-login/{login_id}": {
+      "delete": {
+        "operationId": "cancel_codex_login_api_accounts_codex_login__login_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "login_id",
+            "required": true,
+            "schema": {
+              "title": "Login Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexLogin"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Codex Login",
+        "tags": [
+          "accounts"
+        ]
+      },
+      "get": {
+        "operationId": "get_codex_login_api_accounts_codex_login__login_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "login_id",
+            "required": true,
+            "schema": {
+              "title": "Login Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexLogin"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Codex Login",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
     "/api/accounts/lease": {
       "post": {
         "description": "Lease the best usable account among `providers` (most preferred first),\nwith its credential. One lease per agent; it ends when the agent does.\n`409 no_account` when none is usable.",
@@ -4512,10 +6543,43 @@
     },
     "/api/accounts/release": {
       "post": {
+        "description": "End the agent's leases: one `role`, or all of them.",
         "operationId": "release_account_api_accounts_release_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "engine",
+                    "executor"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Role"
+            }
+          }
+        ],
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -5468,6 +7532,167 @@
         ]
       }
     },
+    "/api/engines": {
+      "get": {
+        "description": "Engines, executors and the local model: axes, auth methods and the three\nreadiness facts (installed, authenticated, validated). Read-only.",
+        "operationId": "list_engines_api_engines_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineCatalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Engines",
+        "tags": [
+          "engines"
+        ]
+      }
+    },
+    "/api/engines/local/run": {
+      "post": {
+        "description": "One bounded completion on the local model, checked against `criteria`.\nNo tools act, so retrying or escalating duplicates no effect. An answer that\nfails the criteria returns `verdict: escalate`; Argus does not start the\nescalated work, the caller does.",
+        "operationId": "run_local_api_engines_local_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalRunResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Run Local",
+        "tags": [
+          "engines"
+        ]
+      }
+    },
+    "/api/engines/route": {
+      "post": {
+        "description": "Where should this task run? Deterministic; the decision is recorded.",
+        "operationId": "route_task_api_engines_route_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteDecision"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Route Task",
+        "tags": [
+          "engines"
+        ]
+      }
+    },
+    "/api/engines/selected": {
+      "post": {
+        "description": "A worker's channel switched its harness to follow a leased account\n(codex accounts spec 3). Recorded for the audit trail; credentials never ride here.",
+        "operationId": "engine_selected_api_engines_selected_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineSelected"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Engine Selected",
+        "tags": [
+          "engines"
+        ]
+      }
+    },
     "/api/events": {
       "get": {
         "description": "Event history, newest first. Page backwards with `before`.",
@@ -5616,6 +7841,107 @@
         "summary": "Stream Events",
         "tags": [
           "events"
+        ]
+      }
+    },
+    "/api/fleet/capabilities": {
+      "get": {
+        "description": "What this node can run right now, measured from its targets (read-only).",
+        "operationId": "fleet_capabilities_api_fleet_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetCapabilities"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Fleet Capabilities",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/fleet/templates": {
+      "get": {
+        "description": "The worker templates Argus supports, per node: ready, or exactly what is\nmissing. Read-only; nothing is created by looking.",
+        "operationId": "worker_templates_api_fleet_templates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateCatalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Worker Templates",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/fleet/workers": {
+      "post": {
+        "description": "Create a pool from a template and request its first workers, in one\nconfirmed call. The pool is rebuilt server-side from the template; refusals\nhappen before anything is written. Success means *requested*.",
+        "operationId": "create_worker_api_fleet_workers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateWorkerResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Worker",
+        "tags": [
+          "fleet"
         ]
       }
     },
@@ -6540,6 +8866,33 @@
         ]
       }
     },
+    "/api/overview": {
+      "get": {
+        "description": "Fleet-wide totals per state for the Home view (orchestrator or admin).",
+        "operationId": "overview_api_overview_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Overview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Overview",
+        "tags": [
+          "operations"
+        ]
+      }
+    },
     "/api/pools": {
       "get": {
         "operationId": "list_pools_api_pools_get",
@@ -6670,6 +9023,65 @@
           }
         ],
         "summary": "Upsert Pool",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/pools/{name}/launch": {
+      "post": {
+        "description": "Request one more worker from the pool. Refused (nothing changes) when the\nnode cannot start it now. Success means *requested*: the reconciler starts\nthe instance next pass; follow it in `/instances`.",
+        "operationId": "launch_worker_api_pools__name__launch_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LaunchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaunchResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Launch Worker",
         "tags": [
           "fleet"
         ]

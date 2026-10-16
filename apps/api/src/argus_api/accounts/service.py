@@ -17,6 +17,7 @@ from argus_core.accounts import (
     AccountUpdate,
     ExhaustedReport,
     FallbackResult,
+    LeaseRole,
     Usage,
     UsageReport,
 )
@@ -161,12 +162,17 @@ async def reconcile_secrets(tx: Tx, store: SecretStore) -> None:
 
 
 async def lease(
-    tx: Tx, agent_id: str, providers: list[str], store: SecretStore
+    tx: Tx,
+    agent_id: str,
+    providers: list[str],
+    store: SecretStore,
+    role: LeaseRole = "engine",
 ) -> AccountLease:
-    """Lease the best usable account among `providers` (one lease per agent: any
-    previous lease of this agent is released). Raises NoAccountError."""
-    await release(tx, agent_id, "replaced")
-    result = await _try_lease(tx, agent_id, providers, store)
+    """Lease the best usable account among `providers`. An agent holds one lease
+    per role (`engine`: its harness; `executor`: a delegated CLI); a new lease
+    replaces the previous one of the same role. Raises NoAccountError."""
+    await release(tx, agent_id, "replaced", role)
+    result = await _try_lease(tx, agent_id, providers, store, role=role)
     if result is None:
         reset = await earliest_reset(tx, providers)
         raise NoAccountError(
@@ -187,12 +193,13 @@ async def exhausted(
     """The agent hit a quota on its leased account: mark it exhausted, then fall
     back to another account, same provider first. With nothing left, the agent's
     task (if given) is blocked as `no_account` and resumes when one frees up."""
-    held = await _active_lease(tx.conn, agent_id)
-    if held is None or held["account_id"] != account_id:
+    held = await _lease_on(tx.conn, agent_id, account_id, report.role)
+    if held is None:
         raise ConflictError(
             f"agent {agent_id} does not hold a lease on account {account_id}",
             code="not_leased",
         )
+    role = held["role"]
     account = await _row(tx.conn, account_id)
     until = (
         report.until if report.until and report.until > tx.now else tx.now + cooldown
@@ -210,13 +217,15 @@ async def exhausted(
         "account.exhausted",
         {"until": until.isoformat(), "reason": report.reason},
     )
-    await release(tx, agent_id, "exhausted")
+    await release(tx, agent_id, "exhausted", role)
     requested: list[str] = json.loads(held["providers"])
     preference = [
         account["provider"],
         *(p for p in requested if p != account["provider"]),
     ]
-    next_lease = await _try_lease(tx, agent_id, preference, store, provider_first=True)
+    next_lease = await _try_lease(
+        tx, agent_id, preference, store, provider_first=True, role=role
+    )
     if next_lease is not None:
         return FallbackResult(lease=next_lease)
     blocked = False
@@ -230,11 +239,14 @@ async def exhausted(
     )
 
 
-async def release(tx: Tx, agent_id: str, reason: str) -> None:
+async def release(
+    tx: Tx, agent_id: str, reason: str, role: LeaseRole | None = None
+) -> None:
+    """End the agent's active leases: one role, or all of them."""
     await tx.conn.execute(
         "UPDATE account_leases SET released_at = ?, release_reason = ?"
-        " WHERE agent_id = ? AND released_at IS NULL",
-        (ts(tx.now), reason, agent_id),
+        " WHERE agent_id = ? AND released_at IS NULL AND (? IS NULL OR role = ?)",
+        (ts(tx.now), reason, agent_id, role, role),
     )
 
 
@@ -314,12 +326,8 @@ async def secret_name_for_update(
     """The secret an agent (holding a lease on this account) or an admin
     (`agent_id=None`) may overwrite, e.g. with refreshed OAuth tokens."""
     row = await _row(conn, account_id)
-    if agent_id is not None:
-        held = await _active_lease(conn, agent_id)
-        if held is None or held["account_id"] != account_id:
-            raise ForbiddenError(
-                "only the agent holding a lease may update its credential"
-            )
+    if agent_id is not None and await _lease_on(conn, agent_id, account_id) is None:
+        raise ForbiddenError("only the agent holding a lease may update its credential")
     name = ref_name(row["secret_ref"])
     if name is None:
         raise ConflictError(f"account {account_id} has no writable secret reference")
@@ -341,6 +349,7 @@ async def _try_lease(
     store: SecretStore,
     *,
     provider_first: bool = False,
+    role: LeaseRole = "engine",
 ) -> AccountLease | None:
     """Pick by priority across providers (provider order breaks ties), or, when
     falling back, by provider order first so an agent stays on the same provider."""
@@ -381,9 +390,9 @@ async def _try_lease(
             )
         lease_id = str(uuid4())
         await tx.conn.execute(
-            "INSERT INTO account_leases (id, account_id, agent_id, providers, leased_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (lease_id, row["id"], agent_id, json.dumps(providers), ts(tx.now)),
+            "INSERT INTO account_leases (id, account_id, agent_id, providers, leased_at,"
+            " role) VALUES (?, ?, ?, ?, ?, ?)",
+            (lease_id, row["id"], agent_id, json.dumps(providers), ts(tx.now), role),
         )
         await record(
             tx,
@@ -391,7 +400,7 @@ async def _try_lease(
             "account",
             row["id"],
             "account.leased",
-            {"agent_id": agent_id},
+            {"agent_id": agent_id, "role": role},
         )
         return AccountLease(
             lease_id=lease_id,
@@ -399,6 +408,7 @@ async def _try_lease(
             name=row["name"],
             provider=row["provider"],
             kind=row["kind"],
+            role=role,
             credential=credential,
         )
     return None
@@ -415,12 +425,17 @@ async def _disable(tx: Tx, account_id: str, reason: str, *, auto: bool = True) -
     )
 
 
-async def _active_lease(
-    conn: aiosqlite.Connection, agent_id: str
+async def _lease_on(
+    conn: aiosqlite.Connection,
+    agent_id: str,
+    account_id: str,
+    role: LeaseRole | None = None,
 ) -> aiosqlite.Row | None:
+    """The agent's active lease on this account (of `role`, or any role)."""
     async with conn.execute(
-        "SELECT * FROM account_leases WHERE agent_id = ? AND released_at IS NULL",
-        (agent_id,),
+        "SELECT * FROM account_leases WHERE agent_id = ? AND account_id = ?"
+        " AND released_at IS NULL AND (? IS NULL OR role = ?)",
+        (agent_id, account_id, role, role),
     ) as cur:
         return await cur.fetchone()
 

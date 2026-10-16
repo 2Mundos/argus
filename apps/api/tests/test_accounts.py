@@ -292,6 +292,75 @@ class FailingStore(MemorySecretStore):
         await super().put(name, value)
 
 
+async def lease_role(db, store, role, providers, agent=A):
+    async with db.write() as tx:
+        return await accounts.lease(tx, agent, list(providers), store, role)
+
+
+async def active(db: Database, agent=A) -> list[tuple[str, str]]:
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT role, account_id FROM account_leases"
+            " WHERE agent_id = ? AND released_at IS NULL ORDER BY role",
+            (agent,),
+        ) as cur,
+    ):
+        return [(r["role"], r["account_id"]) for r in await cur.fetchall()]
+
+
+async def test_engine_and_executor_leases_coexist(db: Database, store) -> None:
+    codex = await add(db, store, "codex-1", "openai")
+    claude = await add(db, store, "claude-1", "anthropic")
+    engine = await lease_role(db, store, "engine", ["openai", "anthropic"])
+    executor = await lease_role(db, store, "executor", ["anthropic"])
+    assert (engine.account_id, engine.role) == (codex, "engine")
+    assert (executor.account_id, executor.role) == (claude, "executor")
+    assert await active(db) == [("engine", codex), ("executor", claude)]
+    # Re-leasing a role replaces only that role.
+    await lease_role(db, store, "engine", ["openai"])
+    assert await active(db) == [("engine", codex), ("executor", claude)]
+    async with db.write() as tx:
+        await accounts.release(tx, A, "released", "executor")
+    assert await active(db) == [("engine", codex)]
+    async with db.write() as tx:
+        await accounts.release(tx, A, "released")
+    assert await active(db) == []
+
+
+async def test_executor_exhaustion_stays_in_its_role(db: Database, store) -> None:
+    await add(db, store, "codex-1", "openai", priority=5)
+    c1 = await add(db, store, "claude-1", "anthropic", priority=2)
+    c2 = await add(db, store, "claude-2", "anthropic", priority=1)
+    engine = await lease_role(db, store, "engine", ["openai", "anthropic"])
+    executor = await lease_role(db, store, "executor", ["anthropic"])
+    assert executor.account_id == c1
+    async with db.write() as tx:
+        result = await accounts.exhausted(
+            tx, A, c1, ExhaustedReport(reason="limit", role="executor"), store
+        )
+    assert result.lease and (result.lease.account_id, result.lease.role) == (
+        c2,
+        "executor",
+    )
+    assert ("engine", engine.account_id) in await active(db)
+    assert ("executor", c2) in await active(db)
+
+
+async def test_agents_lease_independently_and_credentials_follow_the_lease(
+    db: Database, store
+) -> None:
+    claude = await add(db, store, "claude-1", "anthropic")
+    await lease_role(db, store, "executor", ["anthropic"], agent=A)
+    await lease_role(db, store, "executor", ["anthropic"], agent=B)
+    assert await active(db, A) == [("executor", claude)]
+    assert await active(db, B) == [("executor", claude)]
+    async with db.read() as conn:
+        assert await accounts.secret_name_for_update(conn, claude, A) == "claude-1"
+        with pytest.raises(ForbiddenError):
+            await accounts.secret_name_for_update(conn, claude, "agent-x")
+
+
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
     monkeypatch.setenv("ARGUS_DATA_DIR", str(tmp_path))
@@ -353,3 +422,17 @@ def test_create_needs_exactly_one_secret_source(client: TestClient) -> None:
         },
     ):
         assert client.post("/api/accounts", json=body, headers=ADMIN).status_code == 422
+
+
+async def test_one_account_held_in_both_roles_exhausts_per_role(
+    db: Database, store
+) -> None:
+    only = await add(db, store, "claude-1", "anthropic")
+    await lease_role(db, store, "engine", ["anthropic"])
+    await lease_role(db, store, "executor", ["anthropic"])
+    async with db.write() as tx:
+        result = await accounts.exhausted(
+            tx, A, only, ExhaustedReport(reason="limit", role="executor"), store
+        )
+    assert result.lease is None
+    assert await active(db) == [("engine", only)]

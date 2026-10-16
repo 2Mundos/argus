@@ -40,6 +40,11 @@ Without `ARGUS_URL` the channel is simply off.
 
 ## Run it as an Argus runtime (`nanoclaw`)
 
+For the guided `nanoclaw` template, `integrations/nanoclaw/provision.sh` does the
+user-owned preparation below (pinned commit, build, agent image archive) and
+prints the `ARGUS_NANOCLAW_*` environment; see
+[the node setup runbook](../../docs/runbooks/2026-10-16.nanoclaw-worker-setup.ref.md).
+
 Argus can start NanoClaw hosts for you: a pool with `runtime: nanoclaw` runs the
 image from [`deploy/nanoclaw-host`](../../deploy/nanoclaw-host) (Node + the docker
 CLI + an entrypoint), which runs a NanoClaw checkout **bind-mounted from the
@@ -160,7 +165,17 @@ OneCLI vault:
 4. Any other failure notice now fails the attempt with its text, so Argus retries
    it (up to `max_attempts`) instead of leaving it claimed.
 
-Credential document fields: `api_key`, or `oauth_token` for a subscription.
+Results: a `COMPLETE:` longer than Argus's 10 000-character summary limit is attached
+whole as the artifact `result-attempt-<n>.md` and summarized (never truncated
+silently); files the agent attaches to any reply are uploaded as artifacts too and
+listed in the completion; permanent rejections fail the attempt with the real reason
+instead of leaving it claimed. See worker lifecycle spec 3.8.
+
+Credential document fields: `api_key`, or `oauth_token` for a subscription; the
+shape of Claude Code's own credentials file, `claudeAiOauth.accessToken`, is also
+accepted. That access token is short-lived: if its `expiresAt` has passed the lease
+is refused with a clear message (no value is logged) and the account must be
+renewed in Argus, because the channel does not refresh OAuth tokens.
 The credential stays in OneCLI's vault after the agent leaves; the vault is the
 credential store by design.
 

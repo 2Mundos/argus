@@ -309,3 +309,465 @@ describe("Argus channel", () => {
     }
   });
 });
+
+// -- results of any length and real error messages -----------------------------------
+
+import { createHash } from "node:crypto";
+import {
+  artifactName,
+  describeError,
+  headWithin,
+  SUMMARY_MAX_CHARS,
+  withHashSuffix,
+} from "./argus.js";
+
+/** Like fakeArgus, with an artifact store and scriptable failures on /complete. */
+function resultArgus(
+  opts: { completeFailures?: Array<Response | "network">; uploadFailures?: Response[] } = {},
+) {
+  const calls: Call[] = [];
+  const artifacts: Array<{
+    id: string;
+    name: string;
+    attempt: number;
+    sha256: string;
+    bytes: Uint8Array;
+  }> = [];
+  const failures = [...(opts.completeFailures ?? [])];
+  const uploadFailures = [...(opts.uploadFailures ?? [])];
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    const u = new URL(url);
+    const path = u.pathname.replace(/^\/api/, "");
+    const isBytes = path.endsWith("/artifacts") && init.method === "POST";
+    const body = !isBytes && init.body ? JSON.parse(init.body as string) : undefined;
+    calls.push({ method: init.method ?? "GET", path: path + u.search, body });
+    if (path === "/agents/register") {
+      return json(201, { token: "t", agent: { id: "agent-1" }, heartbeat_interval_s: 1 });
+    }
+    if (path === "/agents/me/heartbeat")
+      return json(200, { state: "active", renewed: [], rejected: [] });
+    if (path === "/agents/me/leave") return json(200, {});
+    if (path === "/tasks/claim") {
+      return new Promise<Response>((_, reject) =>
+        init.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        ),
+      );
+    }
+    if (isBytes) {
+      if (uploadFailures.length) return uploadFailures.shift()!;
+      const name = u.searchParams.get("name") as string;
+      const bytes = new Uint8Array(init.body as ArrayBuffer);
+      const attempt = Number(u.searchParams.get("attempt"));
+      // The server's rule (artifacts/service.py): unique per (task, attempt, name),
+      // answered with 409 `artifact_exists`.
+      if (artifacts.some((a) => a.name === name && a.attempt === attempt)) {
+        return json(409, {
+          detail: {
+            code: "artifact_exists",
+            message: `artifact '${name}' already exists for attempt ${attempt}`,
+          },
+        });
+      }
+      const a = {
+        id: `art-${artifacts.length + 1}`,
+        name,
+        attempt,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        bytes,
+      };
+      artifacts.push(a);
+      return json(201, { id: a.id, name, sha256: a.sha256, size: bytes.length });
+    }
+    if (path.endsWith("/artifacts") && init.method === "GET") return json(200, artifacts);
+    if (path.endsWith("/complete") && failures.length) {
+      const f = failures.shift()!;
+      if (f === "network") throw new TypeError("fetch failed");
+      return f;
+    }
+    return json(200, {});
+  }) as unknown as typeof fetch;
+  return { calls, fetchImpl, artifacts };
+}
+
+async function inFlight(fake: ReturnType<typeof resultArgus>, over = {}) {
+  const tasks = [task(over)];
+  const base = fake.fetchImpl;
+  const wrapped = (async (url: string, init: RequestInit) => {
+    const path = new URL(url).pathname.replace(/^\/api/, "");
+    if (path === "/tasks/claim" && tasks.length) {
+      fake.calls.push({ method: "POST", path, body: undefined });
+      return new Response(JSON.stringify(tasks.shift()), { status: 200 });
+    }
+    return base(url, init);
+  }) as unknown as typeof fetch;
+  const h = harness({ calls: fake.calls, fetchImpl: wrapped } as ReturnType<typeof fakeArgus>);
+  live.push(h.adapter as any);
+  await h.adapter.setup(h.setup);
+  await until(() => h.inbound.length === 1);
+  return h;
+}
+
+const reply = (h: Awaited<ReturnType<typeof inFlight>>, text: string) =>
+  h.adapter.deliver("local", null, { kind: "chat", content: { text } });
+const completes = (fake: ReturnType<typeof resultArgus>) =>
+  fake.calls.filter((c) => c.path.endsWith("/complete"));
+
+describe("results of any length", () => {
+  it("a short COMPLETE is sent as the summary, with no artifact (legacy behaviour)", async () => {
+    const fake = resultArgus();
+    const h = await inFlight(fake);
+    await reply(h, "COMPLETE: argus-onecli-smoke-ok");
+    expect(completes(fake)).toHaveLength(1);
+    expect(completes(fake)[0]?.body.result).toEqual({ summary: "argus-onecli-smoke-ok" });
+    expect(fake.artifacts).toHaveLength(0);
+  });
+
+  it("a response of exactly the limit stays a plain summary", async () => {
+    const fake = resultArgus();
+    const h = await inFlight(fake);
+    await reply(h, `COMPLETE: ${"a".repeat(SUMMARY_MAX_CHARS)}`);
+    expect(completes(fake)[0]?.body.result.summary).toHaveLength(SUMMARY_MAX_CHARS);
+    expect(fake.artifacts).toHaveLength(0);
+  });
+
+  it("an oversized multibyte response is attached whole and summarized within the limit", async () => {
+    const fake = resultArgus();
+    const h = await inFlight(fake);
+    const body = `# Título\n${"Especificação funcional ação é ü 日本語 😀 ".repeat(900)}\nFIM`;
+    await reply(h, `COMPLETE: ${body}`);
+    const [a] = fake.artifacts;
+    expect(fake.artifacts).toHaveLength(1);
+    expect(new TextDecoder().decode(a?.bytes)).toBe(body); // the whole text, byte for byte
+    expect(a?.name).toBe("result-attempt-1.md");
+    const result = completes(fake)[0]?.body.result;
+    expect(Array.from(result.summary).length).toBeLessThanOrEqual(SUMMARY_MAX_CHARS);
+    expect(result.artifacts).toEqual([a?.id]);
+    expect(result.summary.startsWith("# Título")).toBe(true);
+    expect(result.summary).toContain(a?.id);
+    expect(result.summary).toContain(createHash("sha256").update(body).digest("hex").slice(0, 16));
+    // The first call to the API after the upload was the complete, with the lease's attempt.
+    expect(completes(fake)[0]?.body.attempt).toBe(1);
+  });
+
+  it("never splits a surrogate pair at the cut", () => {
+    const head = headWithin("😀".repeat(50), 7);
+    expect(Array.from(head)).toHaveLength(7);
+    expect(head).toBe("😀".repeat(7));
+  });
+
+  it("a transient failure on complete is retried without a second artifact", async () => {
+    const fake = resultArgus({
+      completeFailures: ["network", new Response("<html>bad gateway</html>", { status: 502 })],
+    });
+    const h = await inFlight(fake);
+    const text = `COMPLETE: ${"x".repeat(SUMMARY_MAX_CHARS + 500)}`;
+    await expect(reply(h, text)).rejects.toThrow(); // the host's delivery retry path gets it
+    await expect(reply(h, text)).rejects.toThrow(/Bad Gateway|<html>|502/i);
+    await reply(h, text); // third attempt succeeds
+    expect(fake.artifacts).toHaveLength(1); // reused, not duplicated
+    expect(completes(fake)).toHaveLength(3);
+    expect(completes(fake)[2]?.body.result.artifacts).toEqual(["art-1"]);
+    expect(fake.calls.some((c) => c.path.endsWith("/fail"))).toBe(false);
+  });
+
+  it("a different body under the same artifact name gets its own name", async () => {
+    const fake = resultArgus();
+    const h = await inFlight(fake);
+    fake.artifacts.push({
+      id: "art-old",
+      name: "result-attempt-1.md",
+      attempt: 1,
+      sha256: "0".repeat(64),
+      bytes: new Uint8Array(),
+    });
+    await reply(h, `COMPLETE: ${"y".repeat(SUMMARY_MAX_CHARS + 1)}`);
+    expect(fake.artifacts).toHaveLength(2);
+    expect(fake.artifacts[1]?.name).toMatch(/^result-attempt-1-[0-9a-f]{8}\.md$/);
+  });
+
+  it("a permanent rejection fails the attempt with the real reason, not claimed forever", async () => {
+    const detail = [
+      {
+        loc: ["body", "result", "summary"],
+        msg: "String should have at most 10000 characters",
+        type: "string_too_long",
+      },
+    ];
+    const fake = resultArgus({
+      completeFailures: [new Response(JSON.stringify({ detail }), { status: 422 })],
+    });
+    const h = await inFlight(fake);
+    await reply(h, "COMPLETE: short but the server says no");
+    const fail = fake.calls.find((c) => c.path.endsWith("/fail"));
+    expect(fail?.body.error).toMatch(
+      /422 validation_failed.*result\.summary: String should have at most 10000/,
+    );
+    expect(fail?.body.error).not.toMatch(/\[object Object\]/);
+    // The task is released from this worker: a later reply finds nothing in flight.
+    await reply(h, "COMPLETE: stray");
+    expect(completes(fake)).toHaveLength(1);
+  });
+});
+
+const withFile = (
+  h: Awaited<ReturnType<typeof inFlight>>,
+  text: string,
+  filename: string,
+  data: string,
+) =>
+  h.adapter.deliver("local", null, {
+    kind: "chat",
+    content: { text },
+    files: [{ filename, data: Buffer.from(data, "utf8") }],
+  });
+
+describe("files the agent attaches", () => {
+  it("are uploaded as artifacts and listed in the completion, whatever message carried them", async () => {
+    const fake = resultArgus();
+    const h = await inFlight(fake);
+    const doc = "# Especificação\nconteúdo 日本語 😀\n";
+    await withFile(h, "Segue o documento em anexo.", "Relatório final (v2).md", doc); // a progress note
+    expect(completes(fake)).toHaveLength(0);
+    expect(fake.artifacts).toHaveLength(1);
+    expect(fake.artifacts[0]?.name).toBe("Relatorio-final-v2-.md");
+    expect(new TextDecoder().decode(fake.artifacts[0]?.bytes)).toBe(doc);
+    await reply(h, "COMPLETE: entregue");
+    expect(completes(fake)[0]?.body.result).toEqual({ summary: "entregue", artifacts: ["art-1"] });
+  });
+
+  it("a file-only message (no text) is stored, not dropped", async () => {
+    const fake = resultArgus();
+    const h = await inFlight(fake);
+    await h.adapter.deliver("local", null, {
+      kind: "chat",
+      content: {},
+      files: [{ filename: "a.txt", data: Buffer.from("hi") }],
+    });
+    expect(fake.artifacts.map((a) => a.name)).toEqual(["a.txt"]);
+  });
+
+  it("a transient upload failure is retried and never duplicates the artifact", async () => {
+    const fake = resultArgus({ uploadFailures: [new Response("oops", { status: 503 })] });
+    const h = await inFlight(fake);
+    await expect(withFile(h, "anexo", "n.md", "x")).rejects.toThrow();
+    await withFile(h, "anexo", "n.md", "x");
+    await withFile(h, "anexo", "n.md", "x"); // delivered again: reused (same sha)
+    expect(fake.artifacts).toHaveLength(1);
+  });
+
+  it("an attachment the server refuses permanently is named in the summary; the task still completes", async () => {
+    const fake = resultArgus({
+      uploadFailures: [
+        new Response(
+          JSON.stringify({ detail: { code: "too_large", message: "artifact exceeds the limit" } }),
+          { status: 413 },
+        ),
+      ],
+    });
+    const h = await inFlight(fake);
+    await withFile(h, "anexo", "big.bin", "x");
+    await reply(h, "COMPLETE: pronto");
+    const result = completes(fake)[0]?.body.result;
+    expect(result.summary).toMatch(
+      /^pronto\n\n\[Not stored: big\.bin \(413 too_large: artifact exceeds the limit\)\]$/,
+    );
+    expect(result.artifacts).toBeUndefined();
+  });
+
+  it("an oversized response plus an attachment lists both artifacts", async () => {
+    const fake = resultArgus();
+    const h = await inFlight(fake);
+    await withFile(h, "anexo", "extra.json", "{}");
+    await reply(h, `COMPLETE: ${"z".repeat(SUMMARY_MAX_CHARS + 10)}`);
+    expect(completes(fake)[0]?.body.result.artifacts.sort()).toEqual(["art-1", "art-2"]);
+    expect(fake.artifacts.map((a) => a.name)).toEqual(["extra.json", "result-attempt-1.md"]);
+  });
+
+  it("sanitizes names to what Argus accepts", () => {
+    expect(artifactName("../../etc/.passwd")).toBe("passwd");
+    expect(artifactName("___")).toBe("attachment");
+    expect(artifactName("a b.md")).toBe("a-b.md");
+    expect(artifactName(`${"n".repeat(300)}.md`)).toHaveLength(200);
+  });
+});
+
+const SHA_A = createHash("sha256").update("a").digest("hex");
+const fullSha = (data: string) => createHash("sha256").update(data).digest("hex");
+const sha8 = (data: string) => fullSha(data).slice(0, 8);
+const seed = (
+  fake: ReturnType<typeof resultArgus>,
+  name: string,
+  data: string,
+  attempt = 1,
+  id = `seed-${fake.artifacts.length + 1}`,
+) =>
+  fake.artifacts.push({
+    id,
+    name,
+    attempt,
+    sha256: createHash("sha256").update(data).digest("hex"),
+    bytes: new TextEncoder().encode(data),
+  });
+const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/; // artifacts/service.py _NAME
+
+describe("withHashSuffix", () => {
+  it("goes before the extension, or at the end without one", () => {
+    expect(withHashSuffix("report.md", SHA_A)).toBe(`report-${SHA_A.slice(0, 8)}.md`);
+    expect(withHashSuffix("notes.txt", SHA_A)).toBe(`notes-${SHA_A.slice(0, 8)}.txt`);
+    expect(withHashSuffix("data.json", SHA_A)).toBe(`data-${SHA_A.slice(0, 8)}.json`);
+    expect(withHashSuffix("Makefile", SHA_A)).toBe(`Makefile-${SHA_A.slice(0, 8)}`);
+    expect(withHashSuffix("a.tar.gz", SHA_A)).toBe(`a.tar-${SHA_A.slice(0, 8)}.gz`);
+  });
+
+  it("stays a valid name of at most 200 characters, keeping the extension", () => {
+    for (const name of [`${"n".repeat(200)}`, `${"n".repeat(196)}.md`, `${"n".repeat(190)}.json`]) {
+      const out = withHashSuffix(name, SHA_A);
+      expect(out.length).toBeLessThanOrEqual(200);
+      expect(SERVER_NAME.test(out)).toBe(true);
+      expect(
+        out.endsWith(
+          `-${SHA_A.slice(0, 8)}${name.includes(".") ? name.slice(name.lastIndexOf(".")) : ""}`,
+        ),
+      ).toBe(true);
+    }
+    expect(withHashSuffix(artifactName(`${"x".repeat(300)}.txt`), SHA_A)).toHaveLength(200);
+  });
+});
+
+describe("artifact name collisions", () => {
+  // One conflicting body per extension kind; each pair: what the server already holds vs the new bytes.
+  const kinds: Array<[string, string]> = [
+    ["notes.md", "# a"],
+    ["notes.txt", "texto"],
+    ["data.json", "{}"],
+    ["README", "sem extensão"],
+  ];
+
+  for (const [name, body] of kinds) {
+    it(`${name}: different content under a taken name is stored under a hashed name, byte for byte`, async () => {
+      const fake = resultArgus();
+      const h = await inFlight(fake);
+      seed(fake, name, "old body", 1, "art-old");
+      const fresh = `${body} ação 日本語 😀`;
+      await withFile(h, "anexo", name, fresh);
+      const added = fake.artifacts.filter((a) => a.id !== "art-old");
+      expect(added).toHaveLength(1);
+      expect(added[0]?.name).toBe(withHashSuffix(name, fullSha(fresh)));
+      expect(added[0]?.name).not.toBe(name);
+      expect(new TextDecoder().decode(added[0]?.bytes)).toBe(fresh);
+      expect(fake.artifacts.find((a) => a.id === "art-old")?.name).toBe(name); // the old one is untouched
+    });
+
+    it(`${name}: delivering the same content again reuses the artifact (no duplicate)`, async () => {
+      const fake = resultArgus();
+      const h = await inFlight(fake);
+      await withFile(h, "anexo", name, body);
+      await withFile(h, "anexo", name, body);
+      expect(fake.artifacts).toHaveLength(1);
+    });
+  }
+
+  it("after a restart (nothing remembered) identical content found on the server is reused", async () => {
+    const fake = resultArgus();
+    seed(fake, "notes.txt", "same", 1, "art-have");
+    const h = await inFlight(fake);
+    await withFile(h, "anexo", "notes.txt", "same");
+    expect(fake.artifacts).toHaveLength(1);
+    await reply(h, "COMPLETE: ok");
+    expect(completes(fake)[0]?.body.result.artifacts).toEqual(["art-have"]);
+  });
+
+  it("a long name is cut in the stem, never the extension, and stays valid on the server", async () => {
+    const fake = resultArgus();
+    const h = await inFlight(fake);
+    const long = `${"l".repeat(300)}.json`;
+    const base = artifactName(long);
+    expect(base).toHaveLength(200);
+    seed(fake, base, "old");
+    await withFile(h, "anexo", long, "new");
+    const added = fake.artifacts[1];
+    expect(added?.name).toHaveLength(200);
+    expect(SERVER_NAME.test(added?.name ?? "")).toBe(true);
+    expect(added?.name).toBe(withHashSuffix(base, fullSha("new")));
+    expect(added?.name.endsWith(`-${sha8("new")}.json`)).toBe(true);
+  });
+
+  it("only the current attempt counts: a same-named artifact of an earlier attempt is not reused", async () => {
+    const fake = resultArgus();
+    seed(fake, "notes.txt", "same", 0, "art-attempt-0"); // the identical bytes, but another attempt
+    const h = await inFlight(fake); // attempt 1
+    await withFile(h, "anexo", "notes.txt", "same");
+    expect(fake.artifacts).toHaveLength(2);
+    const mine = fake.artifacts[1];
+    expect(mine?.attempt).toBe(1);
+    expect(mine?.name).toBe("notes.txt"); // free under attempt 1: no hashed name needed
+    await reply(h, "COMPLETE: ok");
+    expect(completes(fake)[0]?.body.result.artifacts).toEqual([mine?.id]);
+  });
+
+  it("the hashed-name fallback does not pick up an earlier attempt's artifact either", async () => {
+    const fake = resultArgus();
+    const h = await inFlight(fake); // attempt 1
+    const hashed = withHashSuffix("notes.txt", fullSha("new"));
+    seed(fake, "notes.txt", "old", 1, "art-conflict"); // forces the fallback
+    seed(fake, hashed, "new", 0, "art-attempt-0"); // same name and bytes, earlier attempt
+    seed(fake, hashed, "new", 1, "art-attempt-1"); // the one that must be reused
+    await withFile(h, "anexo", "notes.txt", "new");
+    expect(fake.artifacts).toHaveLength(3); // nothing new was stored
+    await reply(h, "COMPLETE: ok");
+    expect(completes(fake)[0]?.body.result.artifacts).toEqual(["art-attempt-1"]);
+  });
+
+  it("a hashed name taken by different content fails permanently with a clear reason", async () => {
+    const fake = resultArgus();
+    const h = await inFlight(fake);
+    const hashed = withHashSuffix("notes.txt", fullSha("new"));
+    seed(fake, "notes.txt", "old", 1, "art-1");
+    seed(fake, hashed, "something else", 1, "art-2");
+    await withFile(h, "anexo", "notes.txt", "new"); // recorded, not thrown: the task can still complete
+    await reply(h, "COMPLETE: ok");
+    expect(completes(fake)[0]?.body.result.summary).toMatch(
+      /Not stored: notes\.txt \(422 artifact_name_taken/,
+    );
+  });
+
+  it("the oversized result uses the same helper (result-attempt-1.md conflict -> hashed .md)", async () => {
+    const fake = resultArgus();
+    const h = await inFlight(fake);
+    seed(fake, "result-attempt-1.md", "other", 1, "art-old");
+    const text = "w".repeat(SUMMARY_MAX_CHARS + 5);
+    await reply(h, `COMPLETE: ${text}`);
+    const added = fake.artifacts.find((a) => a.id !== "art-old");
+    expect(added?.name).toBe(`result-attempt-1-${sha8(text)}.md`);
+    expect(new TextDecoder().decode(added?.bytes)).toBe(text);
+  });
+});
+
+describe("describeError", () => {
+  it("renders domain errors, validation lists, strings and bodies without JSON", () => {
+    expect(
+      describeError({ detail: { code: "stale_attempt", message: "superseded" } }, "Conflict"),
+    ).toEqual({
+      code: "stale_attempt",
+      message: "superseded",
+    });
+    expect(
+      describeError(
+        {
+          detail: [
+            { loc: ["body", "a"], msg: "bad" },
+            { loc: ["body", "b", "c"], msg: "worse" },
+          ],
+        },
+        "x",
+      ),
+    ).toEqual({ code: "validation_failed", message: "a: bad; b.c: worse" });
+    expect(describeError({ detail: "plain" }, "x")).toEqual({ code: "error", message: "plain" });
+    expect(describeError(null, "Bad Gateway", "<html>oops</html>").message).toBe(
+      "<html>oops</html>",
+    );
+    expect(describeError({ detail: { weird: true } }, "x").message).toBe('{"weird":true}');
+  });
+});

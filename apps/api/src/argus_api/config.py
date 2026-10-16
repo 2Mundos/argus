@@ -25,6 +25,37 @@ class Settings:
     # How containers Argus starts reach it, e.g. http://host.docker.internal:8000.
     public_url: str | None = None
     reconcile_interval_s: float = 5.0
+    # Worker templates (worker launch 3). Nothing here has a personal default: a
+    # template that needs a value is simply not ready until it is set.
+    nanoclaw_install_dir: str | None = None
+    nanoclaw_instances_root: str | None = None
+    nanoclaw_agent_image: str | None = None
+    nanoclaw_host_image: str = "argus-nanoclaw-host:dev"
+    nanoclaw_docker_runtime: str | None = None
+    nanoclaw_agent_image_archive: str | None = None
+    nanoclaw_allow_docker_socket: bool = False
+    nanoclaw_docker_socket: str = "/var/run/docker.sock"
+    nanoclaw_user: str | None = None
+    nanoclaw_group_add: tuple[str, ...] = ()
+    # What a guided NanoClaw worker inherits so it joins the operator's gateway
+    # and account policy; unset keeps the pool defaults (no accounts, default URL).
+    nanoclaw_onecli_url: str | None = None
+    nanoclaw_account_providers: tuple[str, ...] = ()  # most preferred first
+    nanoclaw_network: str | None = None  # Docker network that reaches the gateway
+    worker_images: tuple[str, ...] = ()  # trusted `argus-worker` images
+    docker_hosts: tuple[str, ...] = ()  # extra Docker nodes the guided flow may use
+    # Local model (engines spec). Off unless a URL is set; one allowed model.
+    local_model_url: str | None = None
+    local_model: str | None = None
+    local_max_input_fraction: float = 0.5  # of the served context
+    local_output_reserve: int = 2048
+    local_chat_template_overhead: int = 512
+    local_timeout_s: float = 120.0
+    engines_ledger: Path | None = None  # default: <data_dir>/engines-ledger.json
+    # Dedicated Codex login (codex accounts spec 3): the pinned official client,
+    # either as an image (run with docker) or a binary path. Off when neither is set.
+    codex_login_image: str | None = None
+    codex_bin: str | None = None
 
     @property
     def db_path(self) -> Path:
@@ -33,6 +64,10 @@ class Settings:
     @property
     def secrets_path(self) -> Path:
         return self.secrets_file or self.data_dir / "secrets.sops.yaml"
+
+    @property
+    def engines_ledger_path(self) -> Path:
+        return self.engines_ledger or self.data_dir / "engines-ledger.json"
 
     @property
     def artifacts_dir(self) -> Path:
@@ -65,7 +100,53 @@ class Settings:
             ),
             public_url=os.environ.get("ARGUS_PUBLIC_URL") or None,
             reconcile_interval_s=float(os.environ.get("ARGUS_RECONCILE_INTERVAL_S", 5)),
+            nanoclaw_install_dir=os.environ.get("ARGUS_NANOCLAW_INSTALL_DIR") or None,
+            nanoclaw_instances_root=os.environ.get("ARGUS_NANOCLAW_INSTANCES_ROOT")
+            or None,
+            nanoclaw_agent_image=os.environ.get("ARGUS_NANOCLAW_AGENT_IMAGE") or None,
+            nanoclaw_host_image=os.environ.get("ARGUS_NANOCLAW_HOST_IMAGE")
+            or "argus-nanoclaw-host:dev",
+            nanoclaw_docker_runtime=os.environ.get("ARGUS_NANOCLAW_DOCKER_RUNTIME")
+            or None,
+            nanoclaw_agent_image_archive=os.environ.get(
+                "ARGUS_NANOCLAW_AGENT_IMAGE_ARCHIVE"
+            )
+            or None,
+            nanoclaw_allow_docker_socket=os.environ.get(
+                "ARGUS_NANOCLAW_ALLOW_DOCKER_SOCKET"
+            )
+            == "true",
+            nanoclaw_docker_socket=os.environ.get("ARGUS_NANOCLAW_DOCKER_SOCKET")
+            or "/var/run/docker.sock",
+            nanoclaw_user=os.environ.get("ARGUS_NANOCLAW_USER") or None,
+            nanoclaw_group_add=_csv("ARGUS_NANOCLAW_GROUP_ADD"),
+            nanoclaw_onecli_url=os.environ.get("ARGUS_NANOCLAW_ONECLI_URL") or None,
+            nanoclaw_account_providers=_csv("ARGUS_NANOCLAW_ACCOUNT_PROVIDERS"),
+            nanoclaw_network=os.environ.get("ARGUS_NANOCLAW_NETWORK") or None,
+            worker_images=_csv("ARGUS_WORKER_IMAGES"),
+            docker_hosts=_csv("ARGUS_FLEET_DOCKER_HOSTS"),
+            local_model_url=os.environ.get("ARGUS_LOCAL_MODEL_URL") or None,
+            local_model=os.environ.get("ARGUS_LOCAL_MODEL") or None,
+            local_max_input_fraction=float(
+                os.environ.get("ARGUS_LOCAL_MAX_INPUT_FRACTION", 0.5)
+            ),
+            local_output_reserve=int(
+                os.environ.get("ARGUS_LOCAL_OUTPUT_RESERVE", 2048)
+            ),
+            local_chat_template_overhead=int(
+                os.environ.get("ARGUS_LOCAL_CHAT_TEMPLATE_OVERHEAD", 512)
+            ),
+            local_timeout_s=float(os.environ.get("ARGUS_LOCAL_TIMEOUT_S", 120)),
+            engines_ledger=(
+                Path(f) if (f := os.environ.get("ARGUS_ENGINES_LEDGER")) else None
+            ),
+            codex_login_image=os.environ.get("ARGUS_CODEX_LOGIN_IMAGE") or None,
+            codex_bin=os.environ.get("ARGUS_CODEX_BIN") or None,
             dashboard_dir=(
                 Path(d) if (d := os.environ.get("ARGUS_DASHBOARD_DIR")) else None
             ),
         )
+
+
+def _csv(name: str) -> tuple[str, ...]:
+    return tuple(x.strip() for x in os.environ.get(name, "").split(",") if x.strip())

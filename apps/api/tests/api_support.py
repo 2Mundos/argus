@@ -40,6 +40,10 @@ class FakeTarget:
         self.containers: dict[str, dict] = {}
         self.specs: dict[str, ContainerSpec] = {}
         self.reachable = True
+        self.runtimes: list[str] = ["runc"]
+        self.shares_filesystem = False
+        self.labeled: dict[str, dict[str, str]] = {}  # image tag -> labels
+        self.images: set[str] | None = None  # None: presence cannot be told
         self.fail_start = False
         self.ambiguous_start = False  # creates the container, then reports failure
         self.fail_stop = False
@@ -54,6 +58,28 @@ class FakeTarget:
 
         if not self.reachable:
             raise TargetError("unreachable")
+
+    async def probe(self):
+        from argus_api.fleet.targets import TargetInfo
+
+        self._check()
+        return TargetInfo(
+            version="test",
+            runtimes=self.runtimes,
+            cpus=4,
+            memory_mb=8192,
+            shares_filesystem=self.shares_filesystem,
+        )
+
+    async def labeled_images(self, key):
+        from argus_api.fleet.targets import LabeledImage
+
+        self._check()
+        return [LabeledImage(t, labels) for t, labels in self.labeled.items()]
+
+    async def image_present(self, image):
+        self._check()
+        return image in self.images if self.images is not None else None
 
     async def start(self, spec):
         from argus_api.fleet.targets import TargetError

@@ -1,0 +1,239 @@
+from typing import Any, Literal
+
+from argus_core.accounts import AccountState
+from argus_core.criteria_safe import criteria_is_effective
+from argus_core.engines import (
+    AccountsSummary,
+    EngineCatalog,
+    LocalAttempt,
+    LocalRunRequest,
+    LocalRunResult,
+    RouteDecision,
+    RouteRequest,
+)
+from fastapi import APIRouter, Request
+from pydantic import BaseModel, Field
+
+from argus_api import events
+from argus_api.accounts import service as accounts_service
+from argus_api.db import utcnow
+from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
+from argus_api.engines import catalog as catalog_mod
+from argus_api.engines import router as routing
+from argus_api.engines.local import LocalModel, build_chat_completion_payload
+from argus_api.engines.local_readiness import local_identity, validated_from_events
+from argus_api.errors import DomainError
+
+router = APIRouter(tags=["engines"])
+
+
+class LocalModelNotConfiguredError(DomainError):
+    status = 409
+    code = "local_model_not_configured"
+
+
+def _local(request: Request) -> LocalModel | None:
+    return request.app.state.local_model
+
+
+async def _account_summaries(db: DbDep) -> dict[str, AccountsSummary]:
+    """Registry counts per provider; an exhausted account past its reset counts
+    as available, as the lease logic treats it."""
+    now = utcnow()
+    out: dict[str, AccountsSummary] = {}
+    async with db.read() as conn:
+        listed = await accounts_service.list_accounts(conn, now)
+    for a in listed:
+        s = out.setdefault(a.provider, AccountsSummary())
+        if a.state is AccountState.DISABLED:
+            s.disabled += 1
+        elif a.state is AccountState.EXHAUSTED and (
+            a.exhausted_until is None or a.exhausted_until > now
+        ):
+            s.exhausted += 1
+        else:
+            s.available += 1
+    return out
+
+
+async def _catalog(request: Request, settings: Any, db: DbDep) -> EngineCatalog:
+    local = _local(request)
+    info = await local.probe() if local else None
+    model = local.model if local else None
+    identity = None
+    event_validated = None
+    if local is not None and model is not None and info is not None:
+        identity = local_identity(local.url, model, info.n_ctx)
+        event_validated = await validated_from_events(db, identity)
+    return catalog_mod.build(
+        catalog_mod.read_ledger(settings.engines_ledger_path),
+        info,
+        model,
+        local_identity=identity,
+        local_validated_event=event_validated,
+        accounts=await _account_summaries(db),
+    )
+
+
+@router.get("/engines")
+async def list_engines(
+    request: Request, settings: SettingsDep, db: DbDep, _: CallerDep
+) -> EngineCatalog:
+    """Engines, executors and the local model: axes, auth methods and the three
+    readiness facts (installed, authenticated, validated). Read-only."""
+    return await _catalog(request, settings, db)
+
+
+@router.post("/engines/route")
+async def route_task(
+    body: RouteRequest,
+    request: Request,
+    db: DbDep,
+    settings: SettingsDep,
+    caller: ManagerDep,
+) -> RouteDecision:
+    """Where should this task run? Deterministic; the decision is recorded."""
+    decision = routing.route(
+        body,
+        await _catalog(request, settings, db),
+        max_input_fraction=settings.local_max_input_fraction,
+        output_reserve=settings.local_output_reserve,
+        chat_template_overhead=settings.local_chat_template_overhead,
+    )
+    async with db.write() as tx:
+        await events.record(
+            tx,
+            caller.actor,
+            "engine",
+            decision.target,
+            "engine.routed",
+            {
+                "summary": body.summary[:200],
+                "target": decision.target,
+                "reason": decision.reason,
+                "model": decision.model,
+                "estimated_input_tokens": decision.estimated_input_tokens,
+                "context_tokens": decision.context_tokens,
+                "blocked": decision.blocked,
+                "fallback_from": decision.fallback_from,
+            },
+        )
+    return decision
+
+
+class EngineSelected(BaseModel):
+    engine: Literal["codex", "claude"]
+    provider: str = Field(min_length=1, max_length=50)
+    account_id: str = Field(min_length=1, max_length=64)
+    reason: Literal["lease", "exhausted"] = "lease"
+
+
+@router.post("/engines/selected", status_code=204)
+async def engine_selected(body: EngineSelected, db: DbDep, agent_id: AgentDep) -> None:
+    """A worker's channel switched its harness to follow a leased account
+    (codex accounts spec 3). Recorded for the audit trail; credentials never ride here."""
+    async with db.write() as tx:
+        await events.record(
+            tx,
+            f"agent:{agent_id}",
+            "engine",
+            body.engine,
+            "engine.selected",
+            body.model_dump(),
+        )
+
+
+@router.post("/engines/local/run")
+async def run_local(
+    body: LocalRunRequest,
+    request: Request,
+    db: DbDep,
+    settings: SettingsDep,
+    caller: CallerDep,
+) -> LocalRunResult:
+    """One bounded completion on the local model, checked against `criteria`.
+    No tools act, so retrying or escalating duplicates no effect. An answer that
+    fails the criteria returns `verdict: escalate`; Argus does not start the
+    escalated work, the caller does."""
+    local = _local(request)
+    if local is None:
+        raise LocalModelNotConfiguredError(
+            "no local model: set ARGUS_LOCAL_MODEL_URL and ARGUS_LOCAL_MODEL"
+        )
+    info = await local.probe()
+    payload = build_chat_completion_payload(body, local.model)
+    est = routing.estimate_local_run_input_tokens(
+        body,
+        local.model,
+        payload,
+        chat_template_overhead=settings.local_chat_template_overhead,
+    )
+    fits, budget, reserve = routing.input_fits_context(
+        estimated_input=est,
+        max_output_tokens=body.max_output_tokens,
+        n_ctx=info.n_ctx,
+        max_input_fraction=settings.local_max_input_fraction,
+        output_reserve=settings.local_output_reserve,
+    )
+    if info.n_ctx is None:
+        result = LocalRunResult(
+            verdict="escalate",
+            model=local.model,
+            attempts=[
+                LocalAttempt(
+                    text=None,
+                    finish_reason=None,
+                    prompt_tokens=None,
+                    completion_tokens=None,
+                    latency_ms=0,
+                    failures=["served context size unknown"],
+                )
+            ],
+            text=None,
+            escalate_to="codex",
+        )
+    elif not fits:
+        result = LocalRunResult(
+            verdict="escalate",
+            model=local.model,
+            attempts=[
+                LocalAttempt(
+                    text=None,
+                    finish_reason=None,
+                    prompt_tokens=None,
+                    completion_tokens=None,
+                    latency_ms=0,
+                    failures=[
+                        f"does not fit: {est} input + {reserve} output reserve > "
+                        f"{budget} ({settings.local_max_input_fraction:.0%} of {info.n_ctx})"
+                    ],
+                )
+            ],
+            text=None,
+            escalate_to="codex",
+        )
+    else:
+        result = await local.run(body, escalate_to="codex")
+    last = result.attempts[-1] if result.attempts else None
+    vid = local_identity(local.url, local.model, info.n_ctx)
+    async with db.write() as tx:
+        await events.record(
+            tx,
+            caller.actor,
+            "engine",
+            "local",
+            "engine.local_run",
+            {
+                "verdict": result.verdict,
+                "model": result.model,
+                "attempts": len(result.attempts),
+                "prompt_tokens": last.prompt_tokens if last else None,
+                "completion_tokens": last.completion_tokens if last else None,
+                "latency_ms": sum(a.latency_ms for a in result.attempts),
+                "failures": last.failures if last else [],
+                "cost": None,
+                "validation_identity": vid,
+                "criteria_effective": criteria_is_effective(body.criteria),
+            },
+        )
+    return result

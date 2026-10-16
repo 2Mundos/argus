@@ -15,6 +15,7 @@ from starlette.types import Scope
 
 from argus_api import mcp_server, reaper
 from argus_api.accounts import service as accounts
+from argus_api.accounts.codex_login import CodexLoginManager
 from argus_api.accounts.routes import router as accounts_router
 from argus_api.admin.routes import router as admin_router
 from argus_api.agents.routes import router as agents_router
@@ -25,6 +26,8 @@ from argus_api.config import Settings
 from argus_api.db import Database, DataDirLock
 from argus_api.decisions.routes import router as decisions_router
 from argus_api.deps import get_db
+from argus_api.engines.local import LocalModel
+from argus_api.engines.routes import router as engines_router
 from argus_api.errors import DomainError
 from argus_api.eventlog.routes import router as events_router
 from argus_api.fleet import reconciler
@@ -75,6 +78,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 settings.data_dir / "admin-token",
                 generated,
             )
+        app.state.local_model = (
+            LocalModel(
+                settings.local_model_url,
+                settings.local_model,
+                timeout_s=settings.local_timeout_s,
+            )
+            if settings.local_model_url and settings.local_model
+            else None
+        )
+        app.state.codex_login = CodexLoginManager(db, secrets, settings)
         app.state.targets = TargetRegistry()
         app.state.fleet = FleetSettings(argus_url=settings.public_url)
         app.state.secrets_ok = secrets_error is None
@@ -99,6 +112,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             async with mcp_server.endpoint.running():
                 yield
         finally:
+            await app.state.codex_login.shutdown()
             for loop in loops:
                 loop.cancel()
             for loop in loops:
@@ -122,6 +136,7 @@ for router in (
     knowledge_router,
     accounts_router,
     fleet_router,
+    engines_router,
     ops_router,
 ):
     api.include_router(router)
