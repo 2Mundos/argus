@@ -175,10 +175,11 @@ test("actual harness hook applies config, stops stale containers and pins policy
 test("channel installer is idempotent and includes source and built policy assets", (t) => {
   const target = mkdtempSync(path.join(os.tmpdir(), "argus-install-"));
   t.after(() => rmSync(target, { recursive: true, force: true }));
-  for (const dir of ["src/channels", "src/gateway-providers", "scripts"]) {
+  for (const dir of ["src/channels", "src/gateway-providers", "scripts", "container"]) {
     mkdirSync(path.join(target, dir), { recursive: true });
   }
   writeFileSync(path.join(target, "src/channels/index.ts"), "// fake NanoClaw barrel\n");
+  writeFileSync(path.join(target, "container/Dockerfile"), "FROM scratch\n# ---- ncl CLI wrapper\n");
   for (let i = 0; i < 2; i++) {
     const result = spawnSync("bash", [new URL("./install.sh", import.meta.url).pathname, target], {
       encoding: "utf8",

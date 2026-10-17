@@ -490,7 +490,9 @@ The operator registers the Gitea account through Argus's account registry
 (provider `gitea`, kind `api_key`, credential fields `username` and `token`).
 The username is required for Git smart-HTTP Basic authentication. The registry
 validates both fields, writes the credential to the SOPS-backed secret store,
-and keeps only the `sops:` reference in the database row. Configure the
+and keeps only the `sops:` reference in the database row. The dashboard's
+Add account dialog offers `gitea` with username and token fields (the token is a
+password input and is never shown again). Configure the
 matching project URL in the NanoClaw pool's `nanoclaw.repositories` map.
 The NanoClaw host writes two `generic` secrets to OneCLI 1.42, both scoped to the exact Gitea host:
 the REST secret matches only `/api/v1/repos/{owner}/{repository}/*` and injects

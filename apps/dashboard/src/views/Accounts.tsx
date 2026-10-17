@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import {
   CUSTOM_PROVIDER_PATTERN,
+  GITEA_PROVIDER,
   localBrokerNotice,
   nativeAuthNotice,
   PROVIDER_PICK_CUSTOM,
@@ -178,6 +179,8 @@ function AddAccount({ onClose }: { onClose: () => void }) {
     priority: 0,
     maxLeases: "",
     credential: '{\n  "api_key": ""\n}',
+    giteaUsername: "",
+    giteaToken: "",
   });
   const [error, setError] = useState<string>();
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
@@ -192,6 +195,7 @@ function AddAccount({ onClose }: { onClose: () => void }) {
   const resolvedProvider =
     providerPick === PROVIDER_PICK_CUSTOM ? customProvider.trim() : providerPick;
   const authNotice = nativeAuthNotice(resolvedProvider);
+  const isGitea = resolvedProvider === GITEA_PROVIDER;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -206,11 +210,15 @@ function AddAccount({ onClose }: { onClose: () => void }) {
       return;
     }
     let credential: Record<string, unknown>;
-    try {
-      credential = JSON.parse(form.credential);
-    } catch {
-      setError("The credential must be a JSON object.");
-      return;
+    if (isGitea) {
+      credential = { username: form.giteaUsername.trim(), token: form.giteaToken };
+    } else {
+      try {
+        credential = JSON.parse(form.credential);
+      } catch {
+        setError("The credential must be a JSON object.");
+        return;
+      }
     }
     try {
       await call(
@@ -312,16 +320,42 @@ function AddAccount({ onClose }: { onClose: () => void }) {
           </label>
         </div>
         {authNotice && <p className="small muted">{authNotice}</p>}
-        <label>
-          Credential (JSON; stored encrypted, never shown again)
-          <textarea
-            rows={5}
-            value={form.credential}
-            onChange={(e) => set("credential", e.target.value)}
-            spellCheck={false}
-            autoComplete="off"
-          />
-        </label>
+        {isGitea ? (
+          <div className="row">
+            <label>
+              Gitea username
+              <input
+                aria-label="Gitea username"
+                value={form.giteaUsername}
+                onChange={(e) => set("giteaUsername", e.target.value)}
+                autoComplete="off"
+                required
+              />
+            </label>
+            <label>
+              Gitea token (stored encrypted, never shown again)
+              <input
+                type="password"
+                aria-label="Gitea token"
+                value={form.giteaToken}
+                onChange={(e) => set("giteaToken", e.target.value)}
+                autoComplete="off"
+                required
+              />
+            </label>
+          </div>
+        ) : (
+          <label>
+            Credential (JSON; stored encrypted, never shown again)
+            <textarea
+              rows={5}
+              value={form.credential}
+              onChange={(e) => set("credential", e.target.value)}
+              spellCheck={false}
+              autoComplete="off"
+            />
+          </label>
+        )}
         {error && <p className="error">{error}</p>}
         <div className="actions">
           <button type="button" onClick={onClose}>
