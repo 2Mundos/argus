@@ -10,7 +10,7 @@ content-derived revisions and attempt evidence. No deployment is performed.
 
 Changing accounts, authenticating, switching providers on model failure, or
 claiming a provider actually served a model without provider evidence. No new
-service or dependency and no dashboard-specific policy editor.
+service or dependency.
 
 # 3. Decisions Made
 
@@ -56,8 +56,21 @@ the caller must run gates and explicitly request the next model on rejection.
 # 4. Open Questions
 
 Provider-observed model IDs are not uniformly exposed by CLIs. They remain
-unknown rather than being inferred from the model sent in argv. A dedicated UI
-can follow; the existing pool env editor/API is the configuration surface now.
+unknown rather than being inferred from the model sent in argv. 
+
+# 4a. Operator surface
+
+`GET /api/models` (any token) returns the effective policy, `revision`, `source`
+(`env` | `file` | `defaults`), the file `path`, `env_overrides` and `file_revision`.
+`PUT /api/models` (admin; both maps) validates with the rules above, answers 422
+naming the problem (`invalid model chain: implementation.codex`) and otherwise
+atomically writes `data/model-policy.json`. `DELETE /api/models` (admin) removes it,
+restoring the defaults. Precedence is `ARGUS_MODEL_POLICY`, then the file, then the
+defaults; when the env var is set it wins and the response says so. The NanoClaw
+host reads the file named by `ARGUS_MODEL_POLICY_PATH`. The API checks the shape of
+a model ID only, never its availability. The revision is computed identically by
+the API and `model-policy.mjs`; `model-policy.fixture.json` is read by both test
+suites. The Engines view edits chains through these routes.
 
 # 5. Constraints
 

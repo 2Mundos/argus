@@ -40,6 +40,7 @@ from argus_api.fleet.routes import router as fleet_router
 from argus_api.fleet.targets import TargetRegistry
 from argus_api.kinds.routes import router as kinds_router
 from argus_api.knowledge.routes import router as knowledge_router
+from argus_api.model_policy import router as models_router
 from argus_api.ops import LoopStats
 from argus_api.ops_routes import probes as probes_router
 from argus_api.ops_routes import router as ops_router
@@ -144,6 +145,7 @@ for router in (
     accounts_router,
     fleet_router,
     engines_router,
+    models_router,
     ops_router,
 ):
     api.include_router(router)

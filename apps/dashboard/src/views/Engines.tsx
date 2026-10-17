@@ -1,5 +1,6 @@
 import { type EngineEntry, fetchEngineCatalog, readinessLabel } from "../engines";
 import { useLiveData } from "../live";
+import { ModelPreferences } from "./ModelPreferences";
 
 /** Engines, executors and the local model — from GET /api/engines (read-only). */
 export function Engines() {
@@ -53,6 +54,7 @@ export function Engines() {
           )}
         </tbody>
       </table>
+      <ModelPreferences />
     </section>
   );
 }

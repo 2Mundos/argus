@@ -1,0 +1,43 @@
+[
+  {
+    "name": "defaults",
+    "policy": {
+      "harness": {
+        "codex": ["gpt-6-luna"],
+        "claude": ["claude-sonnet-5-5", "claude-opus-5-5"]
+      },
+      "implementation": {
+        "codex": ["gpt-6-luna"],
+        "claude": ["claude-sonnet-5-5", "claude-opus-5-5"]
+      }
+    },
+    "canonical": "{\"harness\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6-luna\"]},\"implementation\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6-luna\"]}}",
+    "revision": "2bf27458e8604c2a912e620cd6cbd4ed519c725b6b1476d95e7d4c335dd32c80"
+  },
+  {
+    "name": "unsorted keys",
+    "policy": {
+      "implementation": {
+        "claude": ["sonnet", "opus"],
+        "codex": ["sol-6.1"]
+      },
+      "harness": {
+        "codex": ["luna", "sol"],
+        "claude": ["sonnet", "opus"]
+      }
+    },
+    "canonical": "{\"harness\":{\"claude\":[\"sonnet\",\"opus\"],\"codex\":[\"luna\",\"sol\"]},\"implementation\":{\"claude\":[\"sonnet\",\"opus\"],\"codex\":[\"sol-6.1\"]}}",
+    "revision": "c2648128890106f262b4f5464210c2928a3fb66cd027a28de35d82732b62c1b8"
+  },
+  {
+    "name": "empty scope",
+    "policy": {
+      "harness": {},
+      "implementation": {
+        "agent": ["vendor/model:v1.2_x"]
+      }
+    },
+    "canonical": "{\"harness\":{},\"implementation\":{\"agent\":[\"vendor/model:v1.2_x\"]}}",
+    "revision": "3f70fd3c619b53604f12d50760f70a7e06611d12ac98376b765eb9e99f6b3c7f"
+  }
+]

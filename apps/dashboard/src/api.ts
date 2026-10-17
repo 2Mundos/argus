@@ -24,6 +24,7 @@ export type FleetCapabilities = components["schemas"]["FleetCapabilities"];
 export type FleetHealth = components["schemas"]["FleetHealth"];
 export type Overview = components["schemas"]["Overview"];
 export type EngineCatalog = components["schemas"]["EngineCatalog"];
+export type ModelPolicy = components["schemas"]["ModelPolicy"];
 export type TemplateCatalog = components["schemas"]["TemplateCatalog"];
 export type WorkerTemplate = components["schemas"]["WorkerTemplate"];
 export type CreateWorkerRequest = components["schemas"]["CreateWorkerRequest"];

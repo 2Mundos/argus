@@ -46,9 +46,16 @@ export function loadPolicy(e = process.env, snapshotFile) {
       throw new Error("model policy snapshot revision mismatch");
     return snapshot;
   }
+  // Precedence: ARGUS_MODEL_POLICY, then the file the manager API writes
+  // (ARGUS_MODEL_POLICY_PATH, i.e. its data/model-policy.json), then the defaults.
+  const file = e.ARGUS_MODEL_POLICY_PATH;
   const raw = e.ARGUS_MODEL_POLICY
     ? JSON.parse(e.ARGUS_MODEL_POLICY)
-    : JSON.parse(fs.readFileSync(new URL("./model-policy.defaults.json", import.meta.url), "utf8"));
+    : file && fs.existsSync(file)
+      ? JSON.parse(fs.readFileSync(file, "utf8"))
+      : JSON.parse(
+          fs.readFileSync(new URL("./model-policy.defaults.json", import.meta.url), "utf8"),
+        );
   return policySnapshot(raw);
 }
 

@@ -90,3 +90,29 @@ test("a workspace snapshot wins over process env and tampering is refused", (t) 
   fs.writeFileSync(file, JSON.stringify(snapshot));
   assert.throws(() => loadPolicy({}, file), /revision mismatch/);
 });
+
+test("policy file sits between env and defaults", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "policy-"));
+  const file = path.join(dir, "model-policy.json");
+  assert.equal(loadPolicy({ ARGUS_MODEL_POLICY_PATH: file }).policy.harness.codex[0], "gpt-6-luna");
+  fs.writeFileSync(file, JSON.stringify(policy));
+  const env = { ARGUS_MODEL_POLICY_PATH: file };
+  assert.equal(loadPolicy(env).revision, policySnapshot(policy).revision);
+  const other = { harness: { codex: ["env-model"] }, implementation: {} };
+  const winner = loadPolicy({ ...env, ARGUS_MODEL_POLICY: JSON.stringify(other) });
+  assert.equal(winner.policy.harness.codex[0], "env-model");
+  fs.writeFileSync(file, "{broken");
+  assert.throws(() => loadPolicy(env));
+});
+
+test("revisions match the fixture shared with the manager API", () => {
+  const cases = JSON.parse(
+    fs.readFileSync(new URL("./model-policy.fixture.json", import.meta.url), "utf8"),
+  );
+  assert.ok(cases.length >= 3);
+  for (const c of cases) {
+    const snapshot = policySnapshot(c.policy);
+    assert.equal(JSON.stringify(snapshot.policy), c.canonical, c.name);
+    assert.equal(snapshot.revision, c.revision, c.name);
+  }
+});
