@@ -509,7 +509,9 @@ deployment version is not configured in this repository and must be confirmed du
 provisioning.
 Both patterns are repository-specific, and the worker's API helper separately enforces its exact
 URL allowlist. Prefer the repo-limited bot identity when available; this deployment's personal PAT
-is explicitly accepted with the compensating controls above. Do not use a manager token.
+is explicitly accepted only through SOPS and exact OneCLI host/path injection for the allowlisted
+repository. Argus admin/API tokens and Hermes/model-provider credentials are forbidden for
+repository access.
 For repository identity, configuration may use either `/owner/repository` or
 `/owner/repository.git`. Normalize exactly one terminal `.git` from the
 repository component for REST API paths and allowlist comparisons; pass the
