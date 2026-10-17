@@ -48,7 +48,9 @@ export function ModelPreferences() {
       adopt(next);
       setDone(
         `${verb}: revision ${next.revision.slice(0, 8)}, source ${sourceLabel(next.source)}.${
-          next.env_overrides ? " ARGUS_MODEL_POLICY still wins, so nothing changed in effect." : ""
+          next.env_overrides
+            ? " ARGUS_MODEL_POLICY still wins, so nothing changed in effect."
+            : " Applies to instances started from now on."
         }`,
       );
     } catch (e) {
@@ -82,6 +84,9 @@ export function ModelPreferences() {
             <code title={policy.revision}>{policy.revision.slice(0, 8)}</code>
             {policy.source === "defaults" && " · repository defaults, no file saved"}
             {policy.source === "file" && <span className="muted"> · {policy.path}</span>}
+          </p>
+          <p className="small muted">
+            Instances get the policy when they start; running instances keep theirs until replaced.
           </p>
           {policy.env_overrides && (
             <p className="error" role="alert">

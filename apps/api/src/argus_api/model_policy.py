@@ -58,11 +58,15 @@ def validate(raw: Any) -> Policy:
     return policy
 
 
+def canonical(policy: Policy) -> str:
+    """Sorted engines, scopes in fixed order, no whitespace. Model IDs are ASCII, so
+    this equals JS `JSON.stringify` byte for byte."""
+    return json.dumps(validate(policy), separators=(",", ":"), ensure_ascii=True)
+
+
 def revision(policy: Policy) -> str:
-    """SHA-256 of the canonical JSON: sorted engines, scopes in fixed order, no
-    whitespace. Model IDs are ASCII, so this equals JS `JSON.stringify` byte for byte."""
-    canonical = json.dumps(validate(policy), separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    """SHA-256 of the canonical JSON."""
+    return hashlib.sha256(canonical(policy).encode()).hexdigest()
 
 
 class ModelPolicy(BaseModel):
@@ -116,6 +120,14 @@ def _read(path: Path) -> ModelPolicy:
             else None
         ),
     )
+
+
+def effective_env(path: Path) -> tuple[str, str]:
+    """(canonical JSON, revision) of the policy `GET /api/models` reports, for the
+    ARGUS_MODEL_POLICY of a new instance. Raises ValidationFailedError if it is invalid."""
+    policy = _read(path)
+    plain: Policy = {"harness": policy.harness, "implementation": policy.implementation}
+    return canonical(plain), policy.revision
 
 
 def _write(path: Path, policy: Policy) -> None:

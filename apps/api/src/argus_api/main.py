@@ -94,7 +94,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.codex_login = CodexLoginManager(db, secrets, settings)
         app.state.claude_login = ClaudeLoginManager(db, secrets, settings)
         app.state.targets = TargetRegistry()
-        app.state.fleet = FleetSettings(argus_url=settings.public_url)
+        app.state.fleet = FleetSettings(
+            argus_url=settings.public_url,
+            model_policy_path=settings.model_policy_path,
+        )
         app.state.secrets_ok = secrets_error is None
         app.state.started_at = time.monotonic()
         app.state.quota = QuotaProber(db, secrets, settings)
