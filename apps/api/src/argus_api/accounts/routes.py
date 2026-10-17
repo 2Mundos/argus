@@ -140,6 +140,9 @@ class ClaudeLogin(BaseModel):
     login_id: str
     state: str
     phase: str | None
+    attempts: int
+    max_attempts: int
+    refusal: str | None
     url: str | None
     expires_in_s: int
     account_id: str | None

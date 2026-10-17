@@ -48,6 +48,11 @@ describe("checkClaudeCredential", () => {
       [JSON.stringify({ api_key: API, oauth_token: OAT }), /only one of/],
       [JSON.stringify({ api_key: OAT }), /use oauth_token/],
       [JSON.stringify({ oauth_token: API }), /use api_key/],
+      [
+        JSON.stringify({ oauth_token: `${"A".repeat(48)}#${"B".repeat(43)}` }),
+        /sign-in page shows/,
+      ],
+      [JSON.stringify({ oauth_token: "z".repeat(92) }), /oauth_token is not a token/],
       [JSON.stringify({ api_key: "has space" }), /whitespace/],
       [JSON.stringify({ claudeAiOauth: { accessToken: OAT } }), /missing: refreshToken/],
       [login({ expiresAt: 1000 }), /in the past/],

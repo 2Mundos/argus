@@ -40,6 +40,7 @@ FAKE = """\
 #!{python}
 import json, os, subprocess, sys, time
 mode = {mode!r}
+CODE_OK = {code!r}
 report = {report!r}
 with open(report, "w") as f:
     json.dump({{"env": dict(os.environ), "cwd": os.getcwd(), "isatty": sys.stdin.isatty()}}, f)
@@ -62,7 +63,34 @@ if mode in ("hang", "tree", "stubborn", "badurl"):
 if mode == "immediate":
     sys.stdout.write("Your OAuth token:\\n\\x1b[32m" + {token!r} + "\\x1b[0m\\nStore it safely\\n")
     sys.exit(0)
-line = sys.stdin.readline().rstrip("\\r\\n")
+if mode == "raw":
+    import tty
+    tty.setraw(0)
+    # Say when the raw read is armed: in canonical mode a CR ends the line and the
+    # read would return the code without it, which says nothing about the manager.
+    open({ready!r}, "w").write("1")
+    open({received!r}, "w").write(repr(os.read(0, 4096)))
+    sys.stdout.write("OAuth error: Request failed with status code 400\\n"); sys.stdout.flush()
+    time.sleep(60)
+if mode in ("retry", "stubborn_oauth", "silent", "no_token"):
+    tries = []
+    while True:
+        line = sys.stdin.readline().rstrip("\\r\\n")
+        tries.append(line)
+        open({received!r}, "w").write("\\n".join(tries))
+        if mode == "silent":
+            sys.exit(1)
+        if mode == "no_token":
+            sys.stdout.write("\\x1b[32m✓ Long-lived authentication token created successfully!\\n")
+            sys.stdout.write("Your OAuth token (valid for 1 year):\\nnot-a-token\\n"); sys.stdout.flush()
+            sys.exit(0)
+        if mode == "retry" and len(tries) == 2:
+            break
+        sys.stdout.write("OAuth error: Request failed with status code 400 Press Enter to retry.\\n")
+        sys.stdout.flush()
+    line = CODE_OK
+else:
+    line = sys.stdin.readline().rstrip("\\r\\n")
 open({received!r}, "w").write(line)
 if mode == "reject" or line != {code!r}:
     sys.stdout.write("Invalid code. Authentication failed: " + line + "\\n"); sys.stdout.flush()
@@ -105,6 +133,7 @@ def fake_claude(
             mode=mode,
             report=str(tmp_path / "report.json"),
             received=str(tmp_path / "received"),
+            ready=str(tmp_path / "ready"),
             pids=str(tmp_path / "child.pid"),
             go=str(go),
             token=token,
@@ -283,6 +312,49 @@ def test_renewing_over_rest_keeps_settings_and_syncs_the_kind(
     assert bad.status_code == 422 and TOKEN not in bad.text
 
 
+@pytest.mark.parametrize(
+    ("credential", "needle"),
+    [
+        ({"oauth_token": "A" * 48 + "#" + "B" * 43}, "sign-in page shows"),
+        ({"oauth_token": "z" * 92}, "oauth_token is not a token"),
+    ],
+)
+def test_a_value_that_is_not_a_token_is_refused_and_stores_nothing(
+    client: TestClient, credential, needle
+) -> None:
+    created = client.post(
+        "/api/accounts",
+        json={
+            "name": "main",
+            "provider": "anthropic",
+            "credential": {"api_key": API_KEY},
+        },
+        headers=ADMIN,
+    ).json()
+    ref = created["secret_ref"].removeprefix("sops:")
+    before = app.state.secrets.get(ref)
+
+    res = client.put(
+        f"/api/accounts/{created['id']}/credential",
+        json={"credential": credential},
+        headers=ADMIN,
+    )
+    assert res.status_code == 422 and needle in res.text
+    assert credential["oauth_token"] not in res.text
+    assert app.state.secrets.get(ref) == before == {"api_key": API_KEY}
+    after = client.get(f"/api/accounts/{created['id']}", headers=ADMIN).json()
+    assert after["secret_ref"] == created["secret_ref"]
+
+    count = len(client.get("/api/accounts", headers=ADMIN).json())
+    res = client.post(
+        "/api/accounts",
+        json={"name": "new", "provider": "anthropic", "credential": credential},
+        headers=ADMIN,
+    )
+    assert res.status_code == 422 and needle in res.text
+    assert len(client.get("/api/accounts", headers=ADMIN).json()) == count
+
+
 # -- the dedicated login -------------------------------------------------------------
 
 
@@ -459,14 +531,13 @@ async def test_malformed_codes_are_refused_without_echo(
     await mgr.shutdown()
 
 
-async def test_only_one_code_per_login(db: Database, secrets, tmp_path: Path) -> None:
+async def test_no_code_is_taken_once_the_login_is_over(
+    db: Database, secrets, tmp_path: Path
+) -> None:
     mgr, go = manager(db, secrets, tmp_path)
     go.unlink()
     started = await mgr.start("tok-1", "admin:one", None)
     await mgr.submit_code(started["login_id"], "tok-1", CODE)
-    with pytest.raises(ConflictError) as err:
-        await mgr.submit_code(started["login_id"], "tok-1", CODE)
-    assert err.value.code == "login_not_waiting_for_code"
     go.write_text("")
     assert (await settle(mgr, started["login_id"]))["state"] == "completed"
     with pytest.raises(ConflictError) as err:
@@ -481,10 +552,99 @@ async def test_a_refused_code_fails_the_login_without_leaking_output(
     started = await mgr.start("tok-1", "admin:one", None)
     await mgr.submit_code(started["login_id"], "tok-1", CODE)
     view = await settle(mgr, started["login_id"])
-    assert view["state"] == "failed" and view["error"] == "login_rejected"
+    assert view["state"] == "failed" and view["error"] == "code_invalid"
     assert CODE not in json.dumps(view)  # the client echoed it; we do not
     assert secrets.names() == set() and await account_count(db) == 0
     assert homes(tmp_path) == set()
+
+
+async def test_a_client_that_leaves_silently_after_a_code_is_login_rejected(
+    db: Database, secrets, tmp_path: Path
+) -> None:
+    mgr, _ = manager(db, secrets, tmp_path, mode="silent")
+    started = await mgr.start("tok-1", "admin:one", None)
+    await mgr.submit_code(started["login_id"], "tok-1", CODE)
+    view = await settle(mgr, started["login_id"])
+    assert view["state"] == "failed" and view["error"] == "login_rejected"
+    assert secrets.names() == set() and await account_count(db) == 0
+
+
+async def test_a_refused_code_can_be_followed_by_another(
+    db: Database, secrets, tmp_path: Path
+) -> None:
+    mgr, _ = manager(db, secrets, tmp_path, mode="retry")
+    started = await mgr.start("tok-1", "admin:one", None)
+    login_id = started["login_id"]
+    assert started["attempts"] == 0 and started["max_attempts"] == 3
+    await mgr.submit_code(login_id, "tok-1", "wrong-code")
+    for _ in range(100):  # the client refuses but stays alive
+        view = mgr.get(login_id, "tok-1")
+        if view["refusal"]:
+            break
+        await asyncio.sleep(0.02)
+    assert view["state"] == "pending" and view["phase"] == "waiting_for_code"
+    assert view["refusal"] == "oauth_400" and view["attempts"] == 1
+    assert "wrong-code" not in json.dumps(view)
+    view = await mgr.submit_code(login_id, "tok-1", CODE)
+    assert view["attempts"] == 2 and view["refusal"] is None
+    view = await settle(mgr, login_id)
+    assert view["state"] == "completed", view
+    assert view["attempts"] == 2
+    assert (tmp_path / "received").read_text() == CODE
+    row = await account_row(db, view["account_id"])
+    assert secrets.get(row["secret_ref"].removeprefix("sops:")) == {
+        "oauth_token": TOKEN
+    }
+
+
+async def test_success_without_a_recognisable_token_is_token_not_found(
+    db: Database, secrets, tmp_path: Path
+) -> None:
+    mgr, _ = manager(db, secrets, tmp_path, mode="no_token")
+    started = await mgr.start("tok-1", "admin:one", None)
+    await mgr.submit_code(started["login_id"], "tok-1", CODE)
+    view = await settle(mgr, started["login_id"])
+    assert view["state"] == "failed" and view["error"] == "token_not_found"
+    assert secrets.names() == set() and await account_count(db) == 0
+
+
+async def test_the_number_of_codes_is_limited(
+    db: Database, secrets, tmp_path: Path
+) -> None:
+    mgr, _ = manager(db, secrets, tmp_path, mode="stubborn_oauth")
+    started = await mgr.start("tok-1", "admin:one", None)
+    login_id = started["login_id"]
+    for n in range(1, 4):
+        view = await mgr.submit_code(login_id, "tok-1", f"code{n}")
+        assert view["attempts"] == n
+        for _ in range(100):
+            if mgr.get(login_id, "tok-1")["refusal"]:
+                break
+            await asyncio.sleep(0.02)
+    with pytest.raises(ConflictError) as err:
+        await mgr.submit_code(login_id, "tok-1", "code4")
+    assert err.value.code == "login_attempts_exhausted"
+    assert mgr.get(login_id, "tok-1")["attempts"] == 3
+    await mgr.shutdown()
+
+
+async def test_the_code_and_enter_arrive_in_one_write(
+    db: Database, secrets, tmp_path: Path
+) -> None:
+    mgr, _ = manager(db, secrets, tmp_path, mode="raw")
+    started = await mgr.start("tok-1", "admin:one", None)
+    for _ in range(100):  # the client must be reading raw before the code is sent
+        if (tmp_path / "ready").exists():
+            break
+        await asyncio.sleep(0.02)
+    assert (tmp_path / "ready").exists()
+    await mgr.submit_code(started["login_id"], "tok-1", CODE)
+    for _ in range(100):
+        if (tmp_path / "received").exists() and (tmp_path / "received").read_text():
+            break
+        await asyncio.sleep(0.02)
+    assert (tmp_path / "received").read_text() == repr(CODE.encode() + b"\r")
+    await mgr.shutdown()
 
 
 async def test_a_token_printed_without_a_code_is_still_taken(

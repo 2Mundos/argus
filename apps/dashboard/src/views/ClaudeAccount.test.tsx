@@ -280,6 +280,23 @@ describe("dedicated login path", () => {
     expect(document.body.textContent).not.toContain(CODE);
   });
 
+  it("explains a refused code and takes another", async () => {
+    render(<ClaudeAccount onClose={vi.fn()} onDone={vi.fn()} />);
+    await start();
+    mock.codeResult = pending({ refusal: "oauth_400", attempts: 1, max_attempts: 3 });
+    const input = () => screen.getByLabelText("Code from the sign-in page") as HTMLInputElement;
+    fireEvent.change(input(), { target: { value: CODE } });
+    fireEvent.click(screen.getByRole("button", { name: "Send code" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("expired or was already used");
+    expect(alert.textContent).toContain("1 of 3 tries used");
+    expect(document.body.textContent).toContain("including the part after #");
+    expect(document.body.textContent).not.toContain(CODE);
+    fireEvent.change(input(), { target: { value: "Other-code#st" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send code" }));
+    await waitFor(() => expect(mock.posts.filter((p) => p.path.endsWith("/code"))).toHaveLength(2));
+  });
+
   it("refuses a malformed code locally and does not send it", async () => {
     render(<ClaudeAccount onClose={vi.fn()} onDone={vi.fn()} />);
     await start();

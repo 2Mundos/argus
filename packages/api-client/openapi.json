@@ -1277,6 +1277,10 @@
             ],
             "title": "Account Id"
           },
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
           "error": {
             "anyOf": [
               {
@@ -1296,6 +1300,10 @@
             "title": "Login Id",
             "type": "string"
           },
+          "max_attempts": {
+            "title": "Max Attempts",
+            "type": "integer"
+          },
           "phase": {
             "anyOf": [
               {
@@ -1306,6 +1314,17 @@
               }
             ],
             "title": "Phase"
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal"
           },
           "state": {
             "title": "State",
@@ -1327,6 +1346,9 @@
           "login_id",
           "state",
           "phase",
+          "attempts",
+          "max_attempts",
+          "refusal",
           "url",
           "expires_in_s",
           "account_id",
@@ -10369,6 +10391,54 @@
           }
         ],
         "summary": "Report Progress",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/retry": {
+      "post": {
+        "description": "Return a `failed` task to `ready` with a fresh window of attempts (409 otherwise).",
+        "operationId": "retry_task_api_tasks__task_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Retry Task",
         "tags": [
           "tasks"
         ]
