@@ -347,6 +347,23 @@ def test_nanoclaw_options_validation() -> None:
 
     ok = {"install_dir": "/opt/nc", "agent_image": "img:1"}
     NanoclawOptions(instances_root="/srv/nc-i", **ok)
+    NanoclawOptions(
+        instances_root="/srv/nc-i",
+        repositories={"argus": "https://git.example.test/team/argus"},
+        **ok,
+    )
+    with pytest.raises(ValidationError):
+        NanoclawOptions(
+            instances_root="/srv/nc-i",
+            repositories={"argus": "http://git.example.test/team/argus"},
+            **ok,
+        )
+    with pytest.raises(ValidationError):
+        NanoclawOptions(
+            instances_root="/srv/nc-i",
+            repositories={"argus": "https://git.example.test/team/argus/extra"},
+            **ok,
+        )
     with pytest.raises(ValidationError):  # a socket path would exceed the OS limit
         NanoclawOptions(instances_root="/" + "x" * 60, **ok)
     with pytest.raises(ValidationError):  # must be absolute
@@ -384,6 +401,7 @@ async def test_nanoclaw_runtime_spec(
                     user="1000:1000",
                     group_add=["999"],
                     account_providers=["anthropic"],
+                    repositories={"argus": "https://git.example.test/team/argus"},
                 ),
             ),
             "admin:test",
@@ -401,6 +419,10 @@ async def test_nanoclaw_runtime_spec(
     assert spec.mounts[1].create_owner == "1000:1000"
     assert spec.env["CONTAINER_IMAGE"] == "nanoclaw-agent:1"
     assert spec.env["ARGUS_ACCOUNT_PROVIDERS"] == "anthropic"
+    assert (
+        spec.env["ARGUS_REPOSITORIES_JSON"]
+        == '{"argus": "https://git.example.test/team/argus"}'
+    )
     assert spec.env["ARGUS_NANOCLAW_INSTANCES_ROOT"] == "/srv/nc-i"
     assert spec.env["ARGUS_BOOTSTRAP_TOKENS"].startswith("argus_boot_")
     assert (spec.user, spec.group_add) == ("1000:1000", ["999"])

@@ -20,7 +20,7 @@ export interface AccountLease {
   kind: string;
   credential: Record<string, unknown>;
   /** `engine` (default): the harness's account; `executor`: a delegated CLI's. */
-  role?: "engine" | "executor";
+  role?: "engine" | "executor" | "repository";
 }
 
 /** How a provider's account becomes a OneCLI secret. */
@@ -151,6 +151,107 @@ export class OneCliClient {
     }
     return data;
   }
+}
+
+/** Apply only a repository credential; never return it to the task/agent. */
+export async function applyRepositoryLease(
+  onecli: OneCliClient,
+  target: ApplyTarget,
+  lease: AccountLease,
+  repositoryUrl: string,
+  allowedRepositories: string[],
+  activeLeases: AccountLease[],
+): Promise<void> {
+  if (lease.role !== "repository" || lease.provider !== "gitea")
+    throw new Error("repository lease must use the gitea provider and repository role");
+  const url = new URL(repositoryUrl);
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash)
+    throw new Error("repository URL must be a plain HTTPS URL");
+  const key = `${url.origin}${url.pathname.replace(/\/$/, "")}`;
+  const allowed = allowedRepositories.some((raw) => {
+    const candidate = new URL(raw);
+    return (
+      candidate.protocol === "https:" &&
+      !candidate.username &&
+      !candidate.password &&
+      !candidate.search &&
+      !candidate.hash &&
+      `${candidate.origin}${candidate.pathname.replace(/\/$/, "")}` === key
+    );
+  });
+  if (!allowed) throw new Error("repository URL is not in the configured allowlist");
+  const token = text(lease.credential.token) ?? text(lease.credential.access_token);
+  if (!token) throw new Error("gitea account has no token field");
+  try {
+    const agents: Array<{ id: string; identifier: string }> = await onecli.call("GET", "/agents");
+    let agent = agents.find((a) => a.identifier === target.identifier);
+    agent ??= await onecli.call("POST", "/agents", {
+      name: target.name,
+      identifier: target.identifier,
+    });
+    const secretName = `argus-${target.identifier}-repository`;
+    const secrets: Array<{ id: string; name: string }> = await onecli.call("GET", "/secrets");
+    let secret = secrets.find((s) => s.name === secretName);
+    const ownerAndRepo = url.pathname.split("/").filter(Boolean);
+    const secretBody = {
+      value: `token ${token}`,
+      hostPattern: url.host,
+      pathPattern: `/api/v1/repos/${ownerAndRepo.map(encodeURIComponent).join("/")}/*`,
+      headerName: "Authorization",
+    };
+    if (secret) {
+      await onecli.call("PATCH", `/secrets/${secret.id}`, { type: "generic", ...secretBody });
+    } else {
+      secret = await onecli.call("POST", "/secrets", {
+        name: secretName,
+        type: "generic",
+        ...secretBody,
+      });
+    }
+    await reconcileSecretAssignments(onecli, agent!.id, target.identifier, [
+      ...activeLeases,
+      lease,
+    ]);
+  } catch {
+    // OneCLI error responses can contain request details. Never propagate them
+    // where a caller might log the repository credential.
+    throw new Error("could not apply repository credential to OneCLI");
+  }
+}
+
+/** Unassign the repository secret so a released lease is no longer usable. */
+export async function releaseRepositoryLease(
+  onecli: OneCliClient,
+  target: ApplyTarget,
+  activeLeases: AccountLease[],
+): Promise<void> {
+  const agents: Array<{ id: string; identifier: string }> = await onecli.call("GET", "/agents");
+  const agent = agents.find((a) => a.identifier === target.identifier);
+  if (!agent) return;
+  await reconcileSecretAssignments(onecli, agent.id, target.identifier, activeLeases);
+}
+
+/** Reconcile the complete currently-held lease set; GET /agents has no assignments. */
+async function reconcileSecretAssignments(
+  onecli: OneCliClient,
+  agentId: string,
+  identifier: string,
+  leases: AccountLease[],
+): Promise<void> {
+  const secrets: Array<{ id: string; name: string }> = await onecli.call("GET", "/secrets");
+  const names = new Set<string>();
+  for (const lease of leases) {
+    if (lease.role === "repository") continue;
+    const mapping = PROVIDERS[lease.provider];
+    if (!mapping) throw new Error("unsupported active lease provider");
+    names.add(`argus-${identifier}${mapping.secretSuffix}`);
+  }
+  const repositoryName = `argus-${identifier}-repository`;
+  if (leases.some((lease) => lease.role === "repository")) names.add(repositoryName);
+  const secretIds = [...names].map((name) => secrets.find((secret) => secret.name === name)?.id);
+  if (secretIds.some((id) => !id)) throw new Error("active lease secret is missing from OneCLI");
+  await onecli.call("PUT", `/agents/${agentId}/secrets`, { secretIds });
+  await onecli.call("PATCH", `/agents/${agentId}/secret-mode`, { mode: "selective" });
 }
 
 export interface ApplyTarget {

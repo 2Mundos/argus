@@ -45,6 +45,13 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
             found = claude_auth.validate(credential)
         elif provider == codex_auth.PROVIDER:
             found = codex_auth.validate(credential)
+        elif provider == "gitea":
+            token = credential.get("token")
+            if not isinstance(token, str) or not token.strip():
+                raise ValidationFailedError(
+                    "invalid gitea credential: required field token"
+                )
+            return "api_key", "token"
         else:
             return None
     except (claude_auth.ClaudeAuthError, codex_auth.CodexAuthError) as exc:
@@ -210,7 +217,8 @@ async def lease_account(
     body: LeaseRequest, db: DbDep, agent_id: AgentDep, secrets: SecretsDep
 ) -> AccountLease:
     """Lease the best usable account among `providers` (most preferred first),
-    with its credential. One lease per agent; it ends when the agent does.
+    with its credential. One active lease per role; it ends when released or
+    replaced.
     `409 no_account` when none is usable."""
     async with db.write() as tx:
         return await service.lease(tx, agent_id, body.providers, secrets, body.role)

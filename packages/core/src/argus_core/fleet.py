@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -80,8 +81,30 @@ class NanoclawOptions(BaseModel):
     # Providers whose accounts Argus leases to this agent and switches in the
     # OneCLI vault (e.g. ["anthropic"]). Empty: use the vault's own credential.
     account_providers: list[str] = []
+    # Explicit project -> HTTPS repository allowlist; values are not secrets.
+    repositories: dict[str, str] = {}
     user: str | None = None  # "uid:gid" to run the host container as
     group_add: list[str] = []  # e.g. the docker socket's group id
+
+    @model_validator(mode="after")
+    def validate_repositories(self) -> "NanoclawOptions":
+        for project, raw in self.repositories.items():
+            parsed = urlsplit(raw)
+            parts = [part for part in parsed.path.split("/") if part]
+            if (
+                not project
+                or parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+                or len(parts) != 2
+            ):
+                raise ValueError(
+                    "repositories must map project names to HTTPS owner/repository URLs"
+                )
+        return self
 
 
 class PoolUpsert(BaseModel):

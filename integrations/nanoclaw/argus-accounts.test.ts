@@ -5,8 +5,10 @@ import {
   type AccountLease,
   applyLease,
   applyLeases,
+  applyRepositoryLease,
   classifyFailure,
   OneCliClient,
+  releaseRepositoryLease,
 } from "./argus-accounts.js";
 
 // -- fakes ------------------------------------------------------------------------
@@ -23,11 +25,46 @@ const lease = (name: string, key: string, over: Partial<AccountLease> = {}): Acc
   ...over,
 });
 
+describe("repository lease vault mapping", () => {
+  it("assigns a generic Authorization secret for only the allowlisted Gitea host and unassigns on release", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const target = { identifier: "group-r", name: "repo worker" };
+    await applyRepositoryLease(
+      onecli,
+      target,
+      lease("repo", "dummy-gitea-token", {
+        provider: "gitea",
+        role: "repository",
+        credential: { token: "dummy-gitea-token" },
+      }),
+      "https://git.example.test/org/project",
+      ["https://git.example.test/org/project"],
+      [],
+    );
+    const secretCall = w.calls.find((call) => call.path === "/secrets" && call.method === "POST")!;
+    expect(secretCall.body).toMatchObject({
+      type: "generic",
+      value: "token dummy-gitea-token",
+      hostPattern: "git.example.test",
+      pathPattern: "/api/v1/repos/org/project/*",
+      headerName: "Authorization",
+    });
+    expect(JSON.stringify(w.calls.filter((call) => call.who === "argus"))).not.toContain(
+      "dummy-gitea-token",
+    );
+    await releaseRepositoryLease(onecli, target, []);
+    expect(w.onecli.agents[0]!.secrets).toEqual([]);
+  });
+});
+
 /** One fetch for both services, recording calls and holding OneCLI state. */
 function world(opts: {
   leases: Array<AccountLease | "no_account">;
   tasks?: any[];
   exhaustedResponse?: (n: number) => any;
+  heartbeatIntervalS?: number;
+  rejectHeartbeat?: boolean;
 }) {
   const calls: Call[] = [];
   const leases = [...opts.leases];
@@ -90,10 +127,18 @@ function world(opts: {
     const path = u.pathname.replace(/^\/api/, "");
     calls.push({ who: "argus", method, path, body });
     if (path === "/agents/register") {
-      return json(201, { token: "t", agent: { id: "ag" }, heartbeat_interval_s: 30 });
+      return json(201, {
+        token: "t",
+        agent: { id: "ag" },
+        heartbeat_interval_s: opts.heartbeatIntervalS ?? 30,
+      });
     }
     if (path === "/agents/me/heartbeat")
-      return json(200, { state: "active", renewed: [], rejected: [] });
+      return json(200, {
+        state: "active",
+        renewed: [],
+        rejected: opts.rejectHeartbeat ? [{ task_id: "t1" }] : [],
+      });
     if (path === "/agents/me/leave") return json(200, {});
     if (path === "/accounts/lease") {
       const next = leases.shift();
@@ -129,6 +174,7 @@ const task = () => ({
   title: "Write the report",
   spec: "Do it.",
   project: "global",
+  required_capabilities: [] as string[],
   attempt: 1,
   acceptance: [],
   knowledge_refs: [],
@@ -672,5 +718,117 @@ describe("a limit of the executor's provider leaves the Codex engine lease alone
     const call = w.calls.find((c) => /\/exhausted$/.test(c.path))!;
     expect(call.path).toBe("/accounts/a-codex-1/exhausted");
     expect(call.body).toMatchObject({ role: "engine", reason: "usage_limit_reached" });
+  });
+});
+
+describe("task-scoped repository auth", () => {
+  it("leases only for repository:write, keeps the secret out of the agent message, and releases after completion", async () => {
+    const repoLease = lease("repo", "dummy-gitea-token", {
+      provider: "gitea",
+      role: "repository",
+      credential: { token: "dummy-gitea-token" },
+    });
+    const codeTask = { ...task(), required_capabilities: ["repository:write"] };
+    const w = world({
+      leases: [lease("engine", "dummy-engine-key"), repoLease],
+      tasks: [codeTask],
+    });
+    const h = harness(w, true, { repositories: { global: "https://git.example.test/org/repo" } });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    expect(h.inbound[0]).toContain("Repository (allowlisted): https://git.example.test/org/repo");
+    expect(h.inbound[0]).not.toContain("dummy-gitea-token");
+    expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
+      { providers: ["anthropic"] },
+      { providers: ["gitea"], role: "repository" },
+    ]);
+    await h.adapter.deliver("local", null, {
+      text: `COMPLETE: ${JSON.stringify({
+        summary: "PR opened",
+        data: {
+          delivery: {
+            repository: "https://git.example.test/org/repo",
+            head_sha: "head-1",
+            ci_status: "success",
+          },
+        },
+      })}`,
+    } as any);
+    const completed = w.calls.find((c) => c.path === "/tasks/t1/complete")!;
+    expect(completed.body.result.data.delivery.head_sha).toBe("head-1");
+    await until(() => w.calls.some((c) => c.path === "/accounts/release?role=repository"));
+    expect(w.calls.filter((c) => c.path === "/accounts/release?role=repository")).toHaveLength(1);
+  });
+
+  it("does not acquire repository credentials for existing non-repository tasks", async () => {
+    const w = world({ leases: [lease("engine", "dummy-engine-key")], tasks: [task()] });
+    const h = harness(w, true, { repositories: { global: "https://git.example.test/org/repo" } });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    expect(w.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(1);
+    expect(h.inbound[0]).not.toContain("Repository (allowlisted)");
+  });
+
+  it.each([
+    ["FAIL: cannot continue", "/tasks/t1/fail"],
+    ["ASK: need a decision", "/tasks/t1/ask"],
+  ])("releases repository access after %s", async (reply, endpoint) => {
+    const w = world({
+      leases: [
+        lease("engine", "dummy-engine-key"),
+        lease("repo", "dummy-gitea-token", {
+          provider: "gitea",
+          role: "repository",
+          credential: { token: "dummy-gitea-token" },
+        }),
+      ],
+      tasks: [{ ...task(), required_capabilities: ["repository:write"] }],
+    });
+    const h = harness(w, true, { repositories: { global: "https://git.example.test/org/repo" } });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    await h.adapter.deliver("local", null, { text: reply } as any);
+    await until(() => w.calls.some((call) => call.path === "/accounts/release?role=repository"));
+    expect(w.calls.some((call) => call.path === endpoint)).toBe(true);
+  });
+
+  it("releases repository access when heartbeat reports lease loss", async () => {
+    const w = world({
+      leases: [
+        lease("engine", "dummy-engine-key"),
+        lease("repo", "dummy-gitea-token", {
+          provider: "gitea",
+          role: "repository",
+          credential: { token: "dummy-gitea-token" },
+        }),
+      ],
+      tasks: [{ ...task(), required_capabilities: ["repository:write"] }],
+      heartbeatIntervalS: 1,
+      rejectHeartbeat: true,
+    });
+    const h = harness(w, true, { repositories: { global: "https://git.example.test/org/repo" } });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    await until(() => w.calls.some((call) => call.path === "/accounts/release?role=repository"));
+  });
+
+  it("fails closed before requesting Gitea access without a known base lease set", async () => {
+    const w = world({
+      leases: [],
+      tasks: [{ ...task(), required_capabilities: ["repository:write"] }],
+    });
+    const h = harness(w, true, {
+      providers: [],
+      repositories: { global: "https://git.example.test/org/repo" },
+    });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((call) => call.path === "/tasks/t1/fail"));
+    expect(w.calls.some((call) => call.path === "/accounts/lease")).toBe(false);
+    expect(h.inbound).toHaveLength(0);
   });
 });

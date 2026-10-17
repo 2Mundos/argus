@@ -55,6 +55,7 @@ JS
 
 # 3. image: the Cursor agent, argus-delegate, and a version smoke that fails the build
 cp "$here/install-cursor-agent.sh" "$here/argus-delegate.mjs" "$target/container/"
+cp "$here/../gitea-api.mjs" "$target/container/"
 if ! grep -q "Argus specialist CLIs" "$target/container/Dockerfile"; then
   python3 - "$target/container/Dockerfile" <<'PY'
 import sys
@@ -67,9 +68,11 @@ block = '''# ---- Argus specialist CLIs ----------------------------------------
 # worker uses to hand work to any of the four. The smoke fails the build if a CLI
 # does not run, so "in the image" is proven, not assumed. Authentication is NOT
 # part of the image: each worker logs in with the vendor client.
-COPY install-cursor-agent.sh argus-delegate.mjs /tmp/argus-engines/
+COPY install-cursor-agent.sh argus-delegate.mjs gitea-api.mjs /tmp/argus-engines/
 RUN sh /tmp/argus-engines/install-cursor-agent.sh \\
  && install -m 0755 /tmp/argus-engines/argus-delegate.mjs /usr/local/bin/argus-delegate \\
+ && npm install --prefix /usr/local/lib/argus-gitea --omit=dev --no-audit --no-fund undici@8.12.2 \\
+ && install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api \\
  && rm -rf /tmp/argus-engines \\
  && claude --version && codex --version && opencode --version && agent --version
 
@@ -78,4 +81,20 @@ assert marker in s
 open(p, "w").write(s.replace(marker, block + marker, 1))
 PY
 fi
+# Older already-patched NanoClaw checkouts need the same additions, too.
+python3 - "$target/container/Dockerfile" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace(
+    "COPY install-cursor-agent.sh argus-delegate.mjs /tmp/argus-engines/",
+    "COPY install-cursor-agent.sh argus-delegate.mjs gitea-api.mjs /tmp/argus-engines/",
+)
+needle = " && install -m 0755 /tmp/argus-engines/argus-delegate.mjs /usr/local/bin/argus-delegate \\\n"
+if needle in s and "argus-gitea-api" not in s:
+    s = s.replace(needle, needle + " && npm install --prefix /usr/local/lib/argus-gitea --omit=dev --no-audit --no-fund undici@8.12.2 \\\n && install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api \\\n", 1)
+assert "gitea-api.mjs /tmp/argus-engines/" in s
+assert "argus-gitea-api" in s
+open(p, "w").write(s)
+PY
 echo "engines overlay applied to $target"

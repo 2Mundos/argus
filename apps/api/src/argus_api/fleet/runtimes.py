@@ -1,5 +1,7 @@
 """Runtimes: *what* runs in the container and how it is wired to Argus (3.5)."""
 
+import json
+
 from argus_core.fleet import Pool
 
 from argus_api.fleet.targets import (
@@ -69,6 +71,7 @@ def container_spec(
             "CONTAINER_IMAGE": nc.agent_image,
             "NANOCLAW_GATEWAY_PROVIDER": "onecli",
             "ONECLI_URL": nc.onecli_url,
+            "ARGUS_REPOSITORIES_JSON": json.dumps(nc.repositories, sort_keys=True),
             "NO_PROXY": "host.docker.internal,127.0.0.1,localhost",
         }
         if nc.account_providers:
