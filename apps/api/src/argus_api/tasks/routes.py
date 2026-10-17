@@ -157,6 +157,13 @@ async def unblock_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
         return await service.unblock(tx, task_id, caller.actor)
 
 
+@router.post("/{task_id}/retry")
+async def retry_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
+    """Return a `failed` task to `ready` with a fresh window of attempts (409 otherwise)."""
+    async with db.write() as tx:
+        return await service.retry(tx, task_id, caller.actor)
+
+
 @router.post("/{task_id}/cancel")
 async def cancel_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
     async with db.write() as tx:

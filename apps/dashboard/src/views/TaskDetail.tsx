@@ -7,6 +7,7 @@ import { EventList } from "./Events";
 
 export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () => void }) {
   const [error, setError] = useState<string>();
+  const [confirmingRetry, setConfirmingRetry] = useState(false);
   const { data } = useLiveData(
     () =>
       Promise.all([
@@ -18,12 +19,15 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
   );
   const [task, artifacts, events] = data ?? [];
 
-  async function act(action: "cancel" | "unblock") {
+  async function act(action: "cancel" | "unblock" | "retry") {
     setError(undefined);
+    setConfirmingRetry(false);
     try {
       const path = { task_id: taskId };
       if (action === "cancel")
         await call(api.POST("/api/tasks/{task_id}/cancel", { params: { path } }));
+      else if (action === "retry")
+        await call(api.POST("/api/tasks/{task_id}/retry", { params: { path } }));
       else await call(api.POST("/api/tasks/{task_id}/unblock", { params: { path } }));
     } catch (err) {
       setError((err as Error).message);
@@ -101,6 +105,24 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                   Unblock
                 </button>
               )}
+              {task.state === "failed" &&
+                (confirmingRetry ? (
+                  <>
+                    <span className="muted small">
+                      Reset attempts ({task.attempt}/{task.max_attempts} used) and run it again?
+                    </span>
+                    <button type="button" className="primary" onClick={() => act("retry")}>
+                      Confirm retry
+                    </button>
+                    <button type="button" onClick={() => setConfirmingRetry(false)}>
+                      Keep failed
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" onClick={() => setConfirmingRetry(true)}>
+                    Retry
+                  </button>
+                ))}
               {!["succeeded", "failed", "cancelled"].includes(task.state) && (
                 <button type="button" className="danger" onClick={() => act("cancel")}>
                   Cancel task

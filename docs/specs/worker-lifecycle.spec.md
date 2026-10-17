@@ -117,6 +117,16 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   rejections and unblocks lead to new claims (new `attempt`) without touching
   `failures`.
 - Terminal states: `succeeded`, `failed`, `cancelled`.
+- `POST /tasks/{id}/retry` (manager scope) is the one way out of `failed`, for
+  when the environment changed and the work did not (provider quota, a
+  credential, a missing binary). It is deliberately not a `transition` action:
+  workers can never trigger it. Any other state answers 409 `task_not_failed`
+  (`task is claimed, not failed`). It resets `attempt` and `failures` to 0 (the
+  latter is what `max_attempts` limits), clears `error`, the assignee, lease,
+  deadline and progress, keeps `max_attempts`, and returns the task to `ready`.
+  Each retry is an explicit operator act and writes `task.retried` with the
+  actor, the `previous_attempts` it discarded (which may exceed `max_attempts`)
+  and the previous error, truncated to 500 characters.
 - The transition table is one pure function, `argus_core.tasks.transition`,
   tested over every (state, action) pair.
 
