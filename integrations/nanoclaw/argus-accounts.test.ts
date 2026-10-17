@@ -13,7 +13,7 @@ import {
 
 // -- fakes ------------------------------------------------------------------------
 
-type Call = { who: "argus" | "onecli"; method: string; path: string; body: any };
+type Call = { who: "argus" | "onecli"; method: string; path: string; body: any; search?: string };
 
 const lease = (name: string, key: string, over: Partial<AccountLease> = {}): AccountLease => ({
   lease_id: `l-${name}`,
@@ -138,7 +138,7 @@ function world(opts: {
       return json(404, { error: "unknown" });
     }
     const path = u.pathname.replace(/^\/api/, "");
-    calls.push({ who: "argus", method, path, body });
+    calls.push({ who: "argus", method, path, body, search: u.search });
     if (path === "/agents/register") {
       return json(201, {
         token: "t",
@@ -223,6 +223,9 @@ function harness(
   });
   return { adapter, setup, inbound };
 }
+
+const isRepositoryRelease = (c: Call) =>
+  c.path === "/accounts/release" && c.search === "?role=repository";
 
 const until = async (cond: () => boolean, ms = 3000) => {
   const start = Date.now();
@@ -754,30 +757,33 @@ describe("task-scoped repository auth", () => {
       live.push(h.adapter);
       await h.adapter.setup(h.setup);
       await until(() => h.inbound.length > 0);
-      expect(h.inbound[0]).toContain(
+      expect(h.inbound[0].content.text).toContain(
         "Repository (allowlisted): https://git.example.test/org/repo.git",
       );
-      expect(h.inbound[0]).not.toContain("dummy-gitea-token");
+      expect(h.inbound[0].content.text).not.toContain("dummy-gitea-token");
       expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
         { providers: ["anthropic"] },
         { providers: ["gitea"], role: "repository" },
       ]);
       await h.adapter.deliver("local", null, {
-        text: `COMPLETE: ${JSON.stringify({
-          summary: "PR opened",
-          data: {
-            delivery: {
-              repository: "https://git.example.test/org/repo",
-              head_sha: "head-1",
-              ci_status: "success",
+        kind: "chat",
+        content: {
+          text: `COMPLETE: ${JSON.stringify({
+            summary: "PR opened",
+            data: {
+              delivery: {
+                repository: "https://git.example.test/org/repo",
+                head_sha: "head-1",
+                ci_status: "success",
+              },
             },
-          },
-        })}`,
-      } as any);
+          })}`,
+        },
+      });
       const completed = w.calls.find((c) => c.path === "/tasks/t1/complete")!;
       expect(completed.body.result.data.delivery.head_sha).toBe("head-1");
-      await until(() => w.calls.some((c) => c.path === "/accounts/release?role=repository"));
-      expect(w.calls.filter((c) => c.path === "/accounts/release?role=repository")).toHaveLength(1);
+      await until(() => w.calls.some((c) => isRepositoryRelease(c)));
+      expect(w.calls.filter((c) => isRepositoryRelease(c))).toHaveLength(1);
     },
   );
 
@@ -788,7 +794,7 @@ describe("task-scoped repository auth", () => {
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
     expect(w.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(1);
-    expect(h.inbound[0]).not.toContain("Repository (allowlisted)");
+    expect(h.inbound[0].content.text).not.toContain("Repository (allowlisted)");
   });
 
   it.each([
@@ -810,8 +816,8 @@ describe("task-scoped repository auth", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
-    await h.adapter.deliver("local", null, { text: reply } as any);
-    await until(() => w.calls.some((call) => call.path === "/accounts/release?role=repository"));
+    await h.adapter.deliver("local", null, { kind: "chat", content: { text: reply } });
+    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
     expect(w.calls.some((call) => call.path === endpoint)).toBe(true);
   });
 
@@ -833,7 +839,7 @@ describe("task-scoped repository auth", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
-    await until(() => w.calls.some((call) => call.path === "/accounts/release?role=repository"));
+    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
   });
 
   it("fails closed before requesting Gitea access without a known base lease set", async () => {
