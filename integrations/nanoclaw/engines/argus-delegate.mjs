@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawn, spawnSync } from "node:child_process";
 // Non-interactive delegation to a specialist CLI (docs/specs/engines.spec.md).
 //
 //   argus-delegate EXECUTOR [--cwd DIR] [--timeout SECONDS] [--prompt-file F]
@@ -15,12 +16,11 @@
 // Model retries follow a pinned policy; it never switches executor or provider, and it never reads the
 // content of a credential: it only checks that one is present.
 import { randomUUID } from "node:crypto";
-import { loadPolicy, selectModel } from "./model-policy.mjs";
-import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { loadPolicy, selectModel } from "./model-policy.mjs";
 
 export const EXECUTORS = ["claude", "codex", "opencode", "agent"];
 const KILL_GRACE_MS = 5000;
@@ -256,9 +256,18 @@ export async function main(argv, e = process.env) {
   let snapshot;
   let selection;
   try {
-    snapshot = loadPolicy(e, e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json");
-    selection = selectModel(snapshot, "implementation", executor, opts.modelAttempt ?? 1,
-      opts.fallbackReason, opts.model);
+    snapshot = loadPolicy(
+      e,
+      e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json",
+    );
+    selection = selectModel(
+      snapshot,
+      "implementation",
+      executor,
+      opts.modelAttempt ?? 1,
+      opts.fallbackReason,
+      opts.model,
+    );
   } catch (err) {
     finish(64, { ...identity, error: "model_policy_invalid", detail: err.message });
   }
@@ -288,21 +297,54 @@ export async function main(argv, e = process.env) {
   const attempts = [];
   let outcome;
   do {
-    outcome = await runAttempt(executor, opts, e, identity, version, cwd, prompt,
-      snapshot, selection, deadline);
+    outcome = await runAttempt(
+      executor,
+      opts,
+      e,
+      identity,
+      version,
+      cwd,
+      prompt,
+      snapshot,
+      selection,
+      deadline,
+    );
     attempts.push(outcome.report);
-    if (outcome.exit === 0 || !selection.has_next || outcome.report.timed_out ||
-      outcome.report.signal || outcome.report.interrupted || outcome.report.exit_code === 127 ||
+    if (
+      outcome.exit === 0 ||
+      !selection.has_next ||
+      outcome.report.timed_out ||
+      outcome.report.signal ||
+      outcome.report.interrupted ||
+      outcome.report.exit_code === 127 ||
       /quota|rate.?limit|out of credits|unauthori[sz]ed|authentication|invalid.?api.?key|insufficient.*(credit|balance)/i.test(
-        outcome.report.tail + " " + outcome.report.stderr_tail)) break;
-    selection = selectModel(snapshot, "implementation", executor, selection.model_attempt + 1,
-      outcome.report.executor_error?.kind || "executor_failed");
+        outcome.report.tail + " " + outcome.report.stderr_tail,
+      )
+    )
+      break;
+    selection = selectModel(
+      snapshot,
+      "implementation",
+      executor,
+      selection.model_attempt + 1,
+      outcome.report.executor_error?.kind || "executor_failed",
+    );
   } while (Date.now() < deadline);
   finish(outcome.exit, { ...outcome.report, attempts });
 }
 
-async function runAttempt(executor, opts, e, identity, version, cwd, prompt,
-  snapshot, selection, deadline) {
+async function runAttempt(
+  executor,
+  opts,
+  e,
+  identity,
+  version,
+  cwd,
+  prompt,
+  snapshot,
+  selection,
+  deadline,
+) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const out = path.resolve(opts.out || path.join(cwd, ".argus-delegate"));
   fs.mkdirSync(out, { recursive: true });
@@ -347,11 +389,17 @@ async function runAttempt(executor, opts, e, identity, version, cwd, prompt,
     killTree("SIGTERM");
     hardKill = setTimeout(() => killTree("SIGKILL"), KILL_GRACE_MS);
   };
-  const timer = setTimeout(() => {
-    timedOut = true;
+  const timer = setTimeout(
+    () => {
+      timedOut = true;
+      stop();
+    },
+    Math.max(1, deadline - Date.now()),
+  );
+  const interrupt = () => {
+    interrupted = true;
     stop();
-  }, Math.max(1, deadline - Date.now()));
-  const interrupt = () => { interrupted = true; stop(); };
+  };
   for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, interrupt);
 
   const { code, signal } = await new Promise((resolve) => {

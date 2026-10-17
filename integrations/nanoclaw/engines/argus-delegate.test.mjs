@@ -254,9 +254,12 @@ test("usage errors exit 64", async (t) => {
 
 test("editable chains retry CLI failures with per-attempt durable evidence", async (t) => {
   const s = sandbox(t);
-  s.fake("claude", `if [ "$1" = "--version" ]; then echo v; exit 0; fi
+  s.fake(
+    "claude",
+    `if [ "$1" = "--version" ]; then echo v; exit 0; fi
 cat >/dev/null
-case "$*" in *sonnet*) echo '{"is_error":true,"result":"context exceeded"}';; *) echo '{"result":"ok"}';; esac`);
+case "$*" in *sonnet*) echo '{"is_error":true,"result":"context exceeded"}';; *) echo '{"result":"ok"}';; esac`,
+  );
   const policy = { harness: { codex: ["luna"] }, implementation: { claude: ["sonnet", "opus"] } };
   const { code, report } = await run(["claude", "--cwd", s.work], {
     env: { ...s.env, ANTHROPIC_API_KEY: "x", ARGUS_MODEL_POLICY: JSON.stringify(policy) },
@@ -277,8 +280,11 @@ case "$*" in *sonnet*) echo '{"is_error":true,"result":"context exceeded"}';; *)
 
 test("explicit model pins; failed verification retries are reasoned and task-linked", async (t) => {
   const s = sandbox(t);
-  s.fake("claude", `if [ "$1" = "--version" ]; then echo v; exit 0; fi
-cat >/dev/null; echo '{"is_error":true,"result":"failed"}'`);
+  s.fake(
+    "claude",
+    `if [ "$1" = "--version" ]; then echo v; exit 0; fi
+cat >/dev/null; echo '{"is_error":true,"result":"failed"}'`,
+  );
   const pinned = await run(["claude", "--cwd", s.work, "--model", "custom"], {
     env: { ...s.env, ANTHROPIC_API_KEY: "x" },
   });
@@ -286,13 +292,18 @@ cat >/dev/null; echo '{"is_error":true,"result":"failed"}'`);
   assert.equal(pinned.report.attempts.length, 1);
   assert.equal(pinned.report.requested_model, "custom");
   const { policySnapshot } = await import("./model-policy.mjs");
-  const snapshot = policySnapshot({ harness: {}, implementation: { claude: ["sonnet", "opus"] } },
-    { task_id: "task1", attempt: 3 });
+  const snapshot = policySnapshot(
+    { harness: {}, implementation: { claude: ["sonnet", "opus"] } },
+    { task_id: "task1", attempt: 3 },
+  );
   const file = path.join(s.work, "policy.json");
   fs.writeFileSync(file, JSON.stringify(snapshot));
-  const retry = await run(["claude", "--cwd", s.work, "--model-attempt", "2", "--fallback-reason", "verification_failed"], {
-    env: { ...s.env, ANTHROPIC_API_KEY: "x", ARGUS_MODEL_POLICY_FILE: file },
-  });
+  const retry = await run(
+    ["claude", "--cwd", s.work, "--model-attempt", "2", "--fallback-reason", "verification_failed"],
+    {
+      env: { ...s.env, ANTHROPIC_API_KEY: "x", ARGUS_MODEL_POLICY_FILE: file },
+    },
+  );
   assert.equal(retry.report.configured_model, "opus");
   assert.equal(retry.report.fallback_reason, "verification_failed");
   assert.deepEqual(retry.report.task, { task_id: "task1", attempt: 3 });
@@ -304,9 +315,16 @@ test("invalid policies and invalid retry requests fail before CLI execution", as
   const marker = path.join(s.dir, "ran");
   s.fake("claude", `touch ${marker}; exit 0`);
   const env = { ...s.env, ANTHROPIC_API_KEY: "x" };
-  for (const args of [["--model-attempt", "0"], ["--model-attempt", "2"], ["--model-attempt", "NaN"]]) {
+  for (const args of [
+    ["--model-attempt", "0"],
+    ["--model-attempt", "2"],
+    ["--model-attempt", "NaN"],
+  ]) {
     assert.equal((await run(["claude", "--cwd", s.work, ...args], { env })).code, 64);
   }
-  assert.equal((await run(["claude", "--cwd", s.work], { env: { ...env, ARGUS_MODEL_POLICY: "{}" } })).code, 64);
+  assert.equal(
+    (await run(["claude", "--cwd", s.work], { env: { ...env, ARGUS_MODEL_POLICY: "{}" } })).code,
+    64,
+  );
   assert.equal(fs.existsSync(marker), false);
 });

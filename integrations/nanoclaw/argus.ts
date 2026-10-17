@@ -33,13 +33,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import {
-  type ModelSelection,
-  loadPolicy,
-  policySnapshot,
-  selectHarnessModel,
-} from "./model-policy.mjs";
-
 import { log } from "../log.js";
 import type { ChannelAdapter, ChannelDefaults, ChannelSetup, OutboundMessage } from "./adapter.js";
 import {
@@ -50,6 +43,12 @@ import {
   OneCliClient,
 } from "./argus-accounts.js";
 import { registerChannelAdapter } from "./channel-registry.js";
+import {
+  loadPolicy,
+  type ModelSelection,
+  policySnapshot,
+  selectHarnessModel,
+} from "./model-policy.mjs";
 
 export const PLATFORM_ID = "local";
 export const CHANNEL_TYPE = "argus";

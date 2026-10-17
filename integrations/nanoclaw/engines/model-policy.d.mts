@@ -21,7 +21,16 @@ export interface ModelSelection {
 export function validatePolicy(raw: unknown): ModelPolicy;
 export function policySnapshot(raw: unknown, context?: PolicySnapshot["context"]): PolicySnapshot;
 export function loadPolicy(e?: NodeJS.ProcessEnv, snapshotFile?: string): PolicySnapshot;
-export function selectModel(snapshot: PolicySnapshot, scope: "harness" | "implementation", engine: string,
-  attempt?: number, reason?: string | null, override?: string): ModelSelection;
-export function selectHarnessModel(snapshot: PolicySnapshot, engine: string,
-  task: { spec: string; failures?: number }): ModelSelection;
+export function selectModel(
+  snapshot: PolicySnapshot,
+  scope: "harness" | "implementation",
+  engine: string,
+  attempt?: number,
+  reason?: string | null,
+  override?: string,
+): ModelSelection;
+export function selectHarnessModel(
+  snapshot: PolicySnapshot,
+  engine: string,
+  task: { spec: string; failures?: number },
+): ModelSelection;

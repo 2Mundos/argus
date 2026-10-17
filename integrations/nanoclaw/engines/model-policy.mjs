@@ -14,10 +14,16 @@ export function validatePolicy(raw) {
     for (const name of Object.keys(raw[scope]).sort()) {
       const chain = raw[scope][name];
       if (
-        !engines.has(name) || !Array.isArray(chain) || chain.length < 1 || chain.length > 10 ||
-        chain.some((m) => typeof m !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(m)) ||
+        !engines.has(name) ||
+        !Array.isArray(chain) ||
+        chain.length < 1 ||
+        chain.length > 10 ||
+        chain.some(
+          (m) => typeof m !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(m),
+        ) ||
         new Set(chain).size !== chain.length
-      ) throw new Error(`invalid model chain: ${scope}.${name}`);
+      )
+        throw new Error(`invalid model chain: ${scope}.${name}`);
       policy[scope][name] = [...chain];
     }
   }
@@ -36,7 +42,8 @@ export function loadPolicy(e = process.env, snapshotFile) {
   if (snapshotFile && fs.existsSync(snapshotFile)) {
     const saved = JSON.parse(fs.readFileSync(snapshotFile, "utf8"));
     const snapshot = policySnapshot(saved.policy, saved.context);
-    if (snapshot.revision !== saved.revision) throw new Error("model policy snapshot revision mismatch");
+    if (snapshot.revision !== saved.revision)
+      throw new Error("model policy snapshot revision mismatch");
     return snapshot;
   }
   const raw = e.ARGUS_MODEL_POLICY
@@ -46,7 +53,8 @@ export function loadPolicy(e = process.env, snapshotFile) {
 }
 
 export function selectModel(snapshot, scope, engine, attempt = 1, reason = null, override) {
-  if (!Number.isSafeInteger(attempt) || attempt < 1) throw new Error("model attempt must be positive");
+  if (!Number.isSafeInteger(attempt) || attempt < 1)
+    throw new Error("model attempt must be positive");
   if (attempt > 1 && !reason) throw new Error("model fallback requires a reason");
   const chain = snapshot.policy[scope]?.[engine] ?? [];
   const index = override ? 0 : Math.min(attempt - 1, Math.max(0, chain.length - 1));
@@ -54,9 +62,13 @@ export function selectModel(snapshot, scope, engine, attempt = 1, reason = null,
   if (override && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(override))
     throw new Error("invalid model override");
   return {
-    scope, policy_engine: engine, requested_model: override ?? chain[0] ?? null,
-    configured_model: model, resolved_model: null,
-    policy_revision: snapshot.revision, model_attempt: attempt,
+    scope,
+    policy_engine: engine,
+    requested_model: override ?? chain[0] ?? null,
+    configured_model: model,
+    resolved_model: null,
+    policy_revision: snapshot.revision,
+    model_attempt: attempt,
     fallback_reason: index > 0 ? reason : null,
     has_next: !override && index + 1 < chain.length,
   };
@@ -65,6 +77,11 @@ export function selectModel(snapshot, scope, engine, attempt = 1, reason = null,
 export function selectHarnessModel(snapshot, engine, task) {
   const reviews = (task.spec.match(/^## Review notes \(attempt /gm) ?? []).length;
   const failures = task.failures ?? 0;
-  return selectModel(snapshot, "harness", engine, failures + reviews + 1,
-    reviews ? "verification_rejected" : failures ? "previous_task_failure" : null);
+  return selectModel(
+    snapshot,
+    "harness",
+    engine,
+    failures + reviews + 1,
+    reviews ? "verification_rejected" : failures ? "previous_task_failure" : null,
+  );
 }

@@ -18,7 +18,7 @@ service or dependency and no dashboard-specific policy editor.
 configuration. Missing means the checked-in default; malformed means fail closed.
 The policy has `harness` and `implementation` maps, each mapping an engine to
 an ordered nonempty list. Model IDs are opaque CLI IDs, not availability claims.
-Defaults: Codex harness `gpt-6-luna`, Codex implementation `gpt-6.1-sol`, Claude
+Defaults: Codex harness `gpt-6-luna`, Codex implementation `gpt-6-luna` (the account's own configured model — the default is a placeholder, edit it), Claude
 `claude-sonnet-5-5` then `claude-opus-5-5`. Operators must use IDs their provider
 supports; no alias rewriting. Other executors keep their native default unless
 configured. Revisions are SHA-256 of canonical policy content.

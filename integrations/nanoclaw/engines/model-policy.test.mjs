@@ -12,8 +12,10 @@ const policy = {
 
 test("separate scopes, stable content hash, bounded fallback and pinned override", () => {
   const a = policySnapshot(policy);
-  const b = policySnapshot({ implementation: { claude: ["sonnet", "opus"], codex: ["sol-6.1"] },
-    harness: { claude: ["sonnet", "opus"], codex: ["luna", "sol"] } });
+  const b = policySnapshot({
+    implementation: { claude: ["sonnet", "opus"], codex: ["sol-6.1"] },
+    harness: { claude: ["sonnet", "opus"], codex: ["luna", "sol"] },
+  });
   assert.equal(a.revision, b.revision);
   assert.equal(selectModel(a, "harness", "codex").configured_model, "luna");
   assert.equal(selectModel(a, "implementation", "codex").configured_model, "sol-6.1");
@@ -31,11 +33,17 @@ test("separate scopes, stable content hash, bounded fallback and pinned override
 });
 
 test("rejects malformed policy instead of silently choosing a native default", () => {
-  for (const raw of [null, {}, [], { ...policy, extra: {} },
+  for (const raw of [
+    null,
+    {},
+    [],
+    { ...policy, extra: {} },
     { harness: [], implementation: {} },
-    ...[[], ["same", "same"], ["--bad"], ["bad\nmodel"], [42], Array(11).fill("x")]
-      .map((chain) => ({ harness: { codex: chain }, implementation: {} })),
-    { harness: { typo: ["x"] }, implementation: {} }]) {
+    ...[[], ["same", "same"], ["--bad"], ["bad\nmodel"], [42], Array(11).fill("x")].map(
+      (chain) => ({ harness: { codex: chain }, implementation: {} }),
+    ),
+    { harness: { typo: ["x"] }, implementation: {} },
+  ]) {
     assert.throws(() => policySnapshot(raw));
   }
   assert.throws(() => loadPolicy({ ARGUS_MODEL_POLICY: "not json" }));
@@ -45,16 +53,30 @@ test("rejects malformed policy instead of silently choosing a native default", (
 
 test("questions do not escalate harness; failures and review rejection do", () => {
   const snapshot = policySnapshot(policy);
-  assert.equal(selectHarnessModel(snapshot, "claude", { spec: "question answered", failures: 0 }).configured_model, "sonnet");
-  assert.equal(selectHarnessModel(snapshot, "claude", { spec: "", failures: 1 }).fallback_reason, "previous_task_failure");
-  assert.equal(selectHarnessModel(snapshot, "claude", { spec: "## Review notes (attempt 1)\nfail" }).configured_model, "opus");
+  assert.equal(
+    selectHarnessModel(snapshot, "claude", { spec: "question answered", failures: 0 })
+      .configured_model,
+    "sonnet",
+  );
+  assert.equal(
+    selectHarnessModel(snapshot, "claude", { spec: "", failures: 1 }).fallback_reason,
+    "previous_task_failure",
+  );
+  assert.equal(
+    selectHarnessModel(snapshot, "claude", { spec: "## Review notes (attempt 1)\nfail" })
+      .configured_model,
+    "opus",
+  );
 });
 
 test("shipped defaults reflect operator requirements", () => {
   const snapshot = loadPolicy({});
   assert.equal(selectModel(snapshot, "harness", "codex").configured_model, "gpt-6-luna");
-  assert.equal(selectModel(snapshot, "implementation", "codex").configured_model, "gpt-6.1-sol");
-  assert.equal(selectModel(snapshot, "implementation", "claude", 2, "failed").configured_model, "claude-opus-5-5");
+  assert.equal(selectModel(snapshot, "implementation", "codex").configured_model, "gpt-6-luna");
+  assert.equal(
+    selectModel(snapshot, "implementation", "claude", 2, "failed").configured_model,
+    "claude-opus-5-5",
+  );
 });
 
 test("a workspace snapshot wins over process env and tampering is refused", (t) => {
