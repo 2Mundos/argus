@@ -70,3 +70,5 @@ every new dependency is judged against it.
 
 - [Preferred models](specs/model-selection.spec.md)
 - [Model policy operation](runbooks/2026-10-17.model-selection.ref.md)
+- [Project agent images](runbooks/2026-10-17.project-agent-images.ref.md) —
+  base × tools × project layers, building and pointing a pool at one
