@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-LeaseRole = Literal["engine", "executor"]
+LeaseRole = Literal["engine", "executor", "repository"]
 
 
 class AccountKind(StrEnum):

@@ -251,7 +251,8 @@
             "default": "engine",
             "enum": [
               "engine",
-              "executor"
+              "executor",
+              "repository"
             ],
             "title": "Role",
             "type": "string"
@@ -2225,7 +2226,8 @@
             "default": "engine",
             "enum": [
               "engine",
-              "executor"
+              "executor",
+              "repository"
             ],
             "title": "Role",
             "type": "string"
@@ -2939,7 +2941,8 @@
             "default": "engine",
             "enum": [
               "engine",
-              "executor"
+              "executor",
+              "repository"
             ],
             "title": "Role",
             "type": "string"
@@ -3289,6 +3292,14 @@
             "title": "Onecli Url",
             "type": "string"
           },
+          "repositories": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Repositories",
+            "type": "object"
+          },
           "user": {
             "anyOf": [
               {
@@ -3367,6 +3378,14 @@
             "title": "Onecli Url",
             "type": "string"
           },
+          "repositories": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Repositories",
+            "type": "object"
+          },
           "user": {
             "anyOf": [
               {
@@ -3387,6 +3406,7 @@
           "docker_socket",
           "agent_image_archive",
           "account_providers",
+          "repositories",
           "user",
           "group_add"
         ],
@@ -6831,7 +6851,7 @@
     },
     "/api/accounts/lease": {
       "post": {
-        "description": "Lease the best usable account among `providers` (most preferred first),\nwith its credential. One lease per agent; it ends when the agent does.\n`409 no_account` when none is usable.",
+        "description": "Lease the best usable account among `providers` (most preferred first),\nwith its credential. One active lease per role; it ends when released or\nreplaced.\n`409 no_account` when none is usable.",
         "operationId": "lease_account_api_accounts_lease_post",
         "requestBody": {
           "content": {
@@ -6890,7 +6910,8 @@
                 {
                   "enum": [
                     "engine",
-                    "executor"
+                    "executor",
+                    "repository"
                   ],
                   "type": "string"
                 },

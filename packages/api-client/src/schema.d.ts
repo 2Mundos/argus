@@ -136,7 +136,8 @@ export interface paths {
         /**
          * Lease Account
          * @description Lease the best usable account among `providers` (most preferred first),
-         *     with its credential. One lease per agent; it ends when the agent does.
+         *     with its credential. One active lease per role; it ends when released or
+         *     replaced.
          *     `409 no_account` when none is usable.
          */
         post: operations["lease_account_api_accounts_lease_post"];
@@ -1537,7 +1538,7 @@ export interface components {
              * @default engine
              * @enum {string}
              */
-            role?: "engine" | "executor";
+            role?: "engine" | "executor" | "repository";
         };
         /**
          * AccountState
@@ -2237,7 +2238,7 @@ export interface components {
              * @default engine
              * @enum {string}
              */
-            role?: "engine" | "executor";
+            role?: "engine" | "executor" | "repository";
             /** Task Id */
             task_id?: string | null;
             /** Until */
@@ -2514,7 +2515,7 @@ export interface components {
              * @default engine
              * @enum {string}
              */
-            role?: "engine" | "executor";
+            role?: "engine" | "executor" | "repository";
         };
         /** LocalAttempt */
         LocalAttempt: {
@@ -2635,6 +2636,13 @@ export interface components {
              * @default http://host.docker.internal:10254
              */
             onecli_url?: string;
+            /**
+             * Repositories
+             * @default {}
+             */
+            repositories?: {
+                [key: string]: string;
+            };
             /** User */
             user?: string | null;
         };
@@ -2675,6 +2683,13 @@ export interface components {
              * @default http://host.docker.internal:10254
              */
             onecli_url: string;
+            /**
+             * Repositories
+             * @default {}
+             */
+            repositories: {
+                [key: string]: string;
+            };
             /** User */
             user: string | null;
         };
@@ -4118,7 +4133,7 @@ export interface operations {
     release_account_api_accounts_release_post: {
         parameters: {
             query?: {
-                role?: ("engine" | "executor") | null;
+                role?: ("engine" | "executor" | "repository") | null;
             };
             header?: never;
             path?: never;
