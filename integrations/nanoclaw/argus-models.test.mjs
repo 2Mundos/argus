@@ -179,7 +179,10 @@ test("channel installer is idempotent and includes source and built policy asset
     mkdirSync(path.join(target, dir), { recursive: true });
   }
   writeFileSync(path.join(target, "src/channels/index.ts"), "// fake NanoClaw barrel\n");
-  writeFileSync(path.join(target, "container/Dockerfile"), "FROM scratch\n# ---- ncl CLI wrapper\n");
+  writeFileSync(
+    path.join(target, "container/Dockerfile"),
+    "FROM scratch\n# ---- ncl CLI wrapper\n",
+  );
   for (let i = 0; i < 2; i++) {
     const result = spawnSync("bash", [new URL("./install.sh", import.meta.url).pathname, target], {
       encoding: "utf8",
