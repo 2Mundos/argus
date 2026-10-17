@@ -56,6 +56,9 @@ class Settings:
     # either as an image (run with docker) or a binary path. Off when neither is set.
     codex_login_image: str | None = None
     codex_bin: str | None = None
+    # Dedicated Claude login (claude accounts spec 3): `claude setup-token`, same shape.
+    claude_login_image: str | None = None
+    claude_bin: str | None = None
 
     @property
     def db_path(self) -> Path:
@@ -142,6 +145,8 @@ class Settings:
             ),
             codex_login_image=os.environ.get("ARGUS_CODEX_LOGIN_IMAGE") or None,
             codex_bin=os.environ.get("ARGUS_CODEX_BIN") or None,
+            claude_login_image=os.environ.get("ARGUS_CLAUDE_LOGIN_IMAGE") or None,
+            claude_bin=os.environ.get("ARGUS_CLAUDE_BIN") or None,
             dashboard_dir=(
                 Path(d) if (d := os.environ.get("ARGUS_DASHBOARD_DIR")) else None
             ),

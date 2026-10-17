@@ -1263,6 +1263,122 @@
         "title": "ClaimedTask",
         "type": "object"
       },
+      "ClaudeLogin": {
+        "description": "A dedicated Claude login in progress. The link is shown only while\n`pending`, only to the token that started it.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expires_in_s": {
+            "title": "Expires In S",
+            "type": "integer"
+          },
+          "login_id": {
+            "title": "Login Id",
+            "type": "string"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "login_id",
+          "state",
+          "phase",
+          "url",
+          "expires_in_s",
+          "account_id",
+          "error"
+        ],
+        "title": "ClaudeLogin",
+        "type": "object"
+      },
+      "ClaudeLoginCode": {
+        "description": "The code the sign-in page shows. Sensitive: never echoed or logged.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "ClaudeLoginCode",
+        "type": "object"
+      },
+      "ClaudeLoginStart": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "renew_account_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Renew Account Id"
+          }
+        },
+        "title": "ClaudeLoginStart",
+        "type": "object"
+      },
       "CodexLogin": {
         "description": "A dedicated Codex login in progress. The code and link are shown only\nwhile `pending`, only to the token that started it.",
         "properties": {
@@ -6350,6 +6466,203 @@
           }
         ],
         "summary": "Create Account",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/claude-login": {
+      "post": {
+        "description": "Start the official client's `setup-token` login for a new `anthropic`\naccount, or to renew `renew_account_id` (claude accounts spec 3).",
+        "operationId": "start_claude_login_api_accounts_claude_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaudeLoginStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaudeLogin"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Start Claude Login",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/claude-login/{login_id}": {
+      "delete": {
+        "operationId": "cancel_claude_login_api_accounts_claude_login__login_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "login_id",
+            "required": true,
+            "schema": {
+              "title": "Login Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaudeLogin"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Claude Login",
+        "tags": [
+          "accounts"
+        ]
+      },
+      "get": {
+        "operationId": "get_claude_login_api_accounts_claude_login__login_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "login_id",
+            "required": true,
+            "schema": {
+              "title": "Login Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaudeLogin"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Claude Login",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/claude-login/{login_id}/code": {
+      "post": {
+        "description": "Hand the sign-in page's code to the waiting client, once.",
+        "operationId": "send_claude_login_code_api_accounts_claude_login__login_id__code_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "login_id",
+            "required": true,
+            "schema": {
+              "title": "Login Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaudeLoginCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaudeLogin"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Send Claude Login Code",
         "tags": [
           "accounts"
         ]

@@ -44,6 +44,8 @@ every new dependency is judged against it.
   who runs the worker loop vs. who gets delegated work; real readiness; local routing
 - [Codex accounts](specs/codex-accounts.spec.md) — import or generate a ChatGPT
   login as an Argus account; engine selection and fallback between engines
+- [Claude accounts](specs/claude-accounts.spec.md) — import, generate with a
+  dedicated login, or renew an Anthropic credential as an Argus account
 - [Knowledge](specs/knowledge.spec.md) — projects and a versioned wiki shared by
   agents and people, delivered with every claim
 - [Home](specs/home.spec.md) — the default dashboard tab: what needs attention,
