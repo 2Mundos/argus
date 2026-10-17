@@ -10,6 +10,11 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 target="${1:?usage: install.sh /path/to/nanoclaw}"
 [ -f "$target/src/channels/index.ts" ] || { echo "not a NanoClaw checkout: $target" >&2; exit 1; }
 
+mkdir -p "$target/dist/channels"
+for dir in "$target/src/channels" "$target/dist/channels"; do
+  cp "$here/engines/model-policy.mjs" "$here/engines/model-policy.defaults.json" "$dir/"
+done
+cp "$here/engines/model-policy.d.mts" "$target/src/channels/"
 cp "$here/argus.ts" "$target/src/channels/argus.ts"
 cp "$here/argus-accounts.ts" "$target/src/channels/argus-accounts.ts"
 cp "$here/argus.test.ts" "$target/src/channels/argus.test.ts"

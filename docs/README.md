@@ -67,3 +67,6 @@ every new dependency is judged against it.
 
 - [NanoClaw integration spike](research/2026-10-14.nanoclaw-integration.research.md) —
   channels, credentials, drivers
+
+- [Preferred models](specs/model-selection.spec.md)
+- [Model policy operation](runbooks/2026-10-17.model-selection.ref.md)

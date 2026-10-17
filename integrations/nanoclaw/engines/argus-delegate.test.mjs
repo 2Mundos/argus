@@ -208,6 +208,7 @@ test("claude exit 0 with is_error is a delegate failure", async (t) => {
   assert.equal(code, 1);
   assert.equal(report.executor_error?.kind, "is_error");
   assert.match(report.executor_error?.detail, /quota/);
+  assert.equal(report.attempts.length, 1, "quota must not escalate to a more expensive model");
 });
 
 test("agent empty JSON result is an invalid execution", async (t) => {
@@ -249,4 +250,63 @@ test("usage errors exit 64", async (t) => {
   const s = sandbox(t);
   assert.equal((await run(["nonsense"], { env: s.env })).code, 64);
   assert.equal((await run(["claude", "--timeout", "0"], { env: s.env })).code, 64);
+});
+
+test("editable chains retry CLI failures with per-attempt durable evidence", async (t) => {
+  const s = sandbox(t);
+  s.fake("claude", `if [ "$1" = "--version" ]; then echo v; exit 0; fi
+cat >/dev/null
+case "$*" in *sonnet*) echo '{"is_error":true,"result":"context exceeded"}';; *) echo '{"result":"ok"}';; esac`);
+  const policy = { harness: { codex: ["luna"] }, implementation: { claude: ["sonnet", "opus"] } };
+  const { code, report } = await run(["claude", "--cwd", s.work], {
+    env: { ...s.env, ANTHROPIC_API_KEY: "x", ARGUS_MODEL_POLICY: JSON.stringify(policy) },
+  });
+  assert.equal(code, 0);
+  assert.equal(report.engine, "codex");
+  assert.equal(report.attempts.length, 2);
+  assert.equal(report.attempts[0].configured_model, "sonnet");
+  assert.equal(report.attempts[1].configured_model, "opus");
+  assert.equal(report.attempts[1].fallback_reason, "is_error");
+  for (const attempt of report.attempts) {
+    assert.equal(attempt.requested_model, "sonnet");
+    assert.equal(attempt.resolved_model, null);
+    assert.match(attempt.policy_revision, /^[a-f0-9]{64}$/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(attempt.report_file, "utf8")), attempt);
+  }
+});
+
+test("explicit model pins; failed verification retries are reasoned and task-linked", async (t) => {
+  const s = sandbox(t);
+  s.fake("claude", `if [ "$1" = "--version" ]; then echo v; exit 0; fi
+cat >/dev/null; echo '{"is_error":true,"result":"failed"}'`);
+  const pinned = await run(["claude", "--cwd", s.work, "--model", "custom"], {
+    env: { ...s.env, ANTHROPIC_API_KEY: "x" },
+  });
+  assert.equal(pinned.code, 1);
+  assert.equal(pinned.report.attempts.length, 1);
+  assert.equal(pinned.report.requested_model, "custom");
+  const { policySnapshot } = await import("./model-policy.mjs");
+  const snapshot = policySnapshot({ harness: {}, implementation: { claude: ["sonnet", "opus"] } },
+    { task_id: "task1", attempt: 3 });
+  const file = path.join(s.work, "policy.json");
+  fs.writeFileSync(file, JSON.stringify(snapshot));
+  const retry = await run(["claude", "--cwd", s.work, "--model-attempt", "2", "--fallback-reason", "verification_failed"], {
+    env: { ...s.env, ANTHROPIC_API_KEY: "x", ARGUS_MODEL_POLICY_FILE: file },
+  });
+  assert.equal(retry.report.configured_model, "opus");
+  assert.equal(retry.report.fallback_reason, "verification_failed");
+  assert.deepEqual(retry.report.task, { task_id: "task1", attempt: 3 });
+  assert.equal(retry.report.attempts.length, 1);
+});
+
+test("invalid policies and invalid retry requests fail before CLI execution", async (t) => {
+  const s = sandbox(t);
+  const marker = path.join(s.dir, "ran");
+  s.fake("claude", `touch ${marker}; exit 0`);
+  const env = { ...s.env, ANTHROPIC_API_KEY: "x" };
+  for (const args of [["--model-attempt", "0"], ["--model-attempt", "2"], ["--model-attempt", "NaN"]]) {
+    assert.equal((await run(["claude", "--cwd", s.work, ...args], { env })).code, 64);
+  }
+  assert.equal((await run(["claude", "--cwd", s.work], { env: { ...env, ARGUS_MODEL_POLICY: "{}" } })).code, 64);
+  assert.equal(fs.existsSync(marker), false);
 });

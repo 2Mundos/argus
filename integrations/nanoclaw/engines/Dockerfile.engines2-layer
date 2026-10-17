@@ -1,3 +1,4 @@
 # Thin layer: refreshed argus-delegate only (parent image unchanged).
 FROM argus-nanoclaw-agent:8fbacc91b6e2-engines1
 COPY --chmod=0755 argus-delegate.mjs /usr/local/bin/argus-delegate
+COPY model-policy.mjs model-policy.defaults.json /usr/local/bin/

@@ -31,6 +31,14 @@
  *                             instance ends; only when ARGUS_INSTANCE_ID is set)
  */
 import { createHash } from "node:crypto";
+import { mkdir, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
+import {
+  type ModelSelection,
+  loadPolicy,
+  policySnapshot,
+  selectHarnessModel,
+} from "./model-policy.mjs";
 
 import { log } from "../log.js";
 import type { ChannelAdapter, ChannelDefaults, ChannelSetup, OutboundMessage } from "./adapter.js";
@@ -91,6 +99,8 @@ export interface ArgusConfig {
      */
     executorProviders?: string[];
   };
+  /** Apply a pinned policy before starting a task; absent only in test adapters. */
+  selectModels?: (task: ArgusTask) => Promise<ModelSelection>;
   /** Called once, after Argus drained this agent, its work is done, and it left. */
   onDrained?: () => void;
   /** Test seams. */
@@ -108,12 +118,14 @@ interface KnowledgeRef {
   stale: boolean;
 }
 
-interface ArgusTask {
+export interface ArgusTask {
   id: string;
   title: string;
   spec: string;
   project: string;
   attempt: number;
+  failures?: number;
+  error?: string | null;
   acceptance: string[];
   knowledge_refs: KnowledgeRef[];
 }
@@ -152,6 +164,9 @@ export function renderTask(task: ArgusTask, pages: Map<string, string>): string 
     }
   }
   lines.push(
+    "",
+    "Model policy: argus-model-policy.json pins this task policy for argus-delegate. Attach delegate JSON reports as task artifacts.",
+    "After a failed verification/context limit, retry with --model-attempt N --fallback-reason REASON; --model pins an override.",
     "",
     "How to respond: send short progress updates as normal messages. When you are done, reply with a",
     'message starting with "COMPLETE:" followed by a summary of what you did. If you cannot do it,',
@@ -335,6 +350,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let draining = false;
   let registered = false;
   let current: { id: string; attempt: number } | null = null;
+  let currentClaim: ArgusTask | null = null;
   let currentText: string | null = null; // what the agent was sent, to re-send after a switch
   // Artifacts uploaded for the task in flight (agent attachments), by artifact id,
   // and attachments that could not be stored, for the completion to report.
@@ -414,6 +430,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   function finishTask(): void {
     current = null;
+    currentClaim = null;
     currentText = null;
     attached = new Map();
     attachFailures = [];
@@ -482,6 +499,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         await applyAndSelect(cfg.accounts, lease, "exhausted");
         account = { id: lease.account_id, name: lease.name, provider: lease.provider };
         log.info("Switched to another Argus account", { account: lease.name });
+        if (currentClaim) await prepareModels(currentClaim);
         if (currentText && resends < MAX_RESENDS) {
           resends += 1;
           await injectTask(
@@ -510,12 +528,32 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     finishTask();
   }
 
+  async function prepareModels(task: ArgusTask): Promise<void> {
+    if (!cfg.selectModels) return;
+    const selection = await cfg.selectModels(task);
+    const bytes = new TextEncoder().encode(JSON.stringify(selection, null, 2));
+    const sha = createHash("sha256").update(bytes).digest("hex");
+    const name = `model-policy-attempt-${task.attempt}.json`;
+    attached.set(await ensureArtifact(task, name, bytes, sha, "application/json"), { name, sha });
+  }
+
   async function runTask(task: ArgusTask): Promise<void> {
     current = { id: task.id, attempt: task.attempt };
     lastProgressAt = 0;
     const finished = new Promise<void>((resolve) => {
       taskDone = resolve;
     });
+    currentClaim = task;
+    try {
+      await prepareModels(task);
+    } catch (err) {
+      await client.call("POST", `/tasks/${task.id}/fail`, {
+        attempt: task.attempt,
+        error: `model policy could not be applied/recorded: ${String(err)}`,
+      });
+      finishTask();
+      return;
+    }
     const pages = await inlinePages(task);
     log.info("Argus task claimed", { task: task.id, attempt: task.attempt });
     resends = 0;
@@ -961,6 +999,47 @@ function accountsFromEnv(): ArgusConfig["accounts"] {
   };
 }
 
+export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
+  // Validate once at host startup. A pool update cannot mutate an in-flight policy.
+  const snapshot = loadPolicy();
+  return async (task) => {
+    const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
+      "../db/messaging-groups.js"
+    );
+    const { getAgentGroup } = await import("../db/agent-groups.js");
+    const { getContainerConfig, updateContainerConfigScalars } = await import(
+      "../db/container-configs.js"
+    );
+    const { getSessionsByAgentGroup } = await import("../db/sessions.js");
+    const { killContainer } = await import("../container-runner.js");
+    const mg = await getMessagingGroupByPlatform(CHANNEL_TYPE, PLATFORM_ID);
+    const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
+    const group = wiring ? await getAgentGroup(wiring.agent_group_id) : undefined;
+    if (!group) throw new Error("no Argus group for model policy");
+    const config = await getContainerConfig(group.id);
+    if (!config) throw new Error("no container config for model policy");
+    const engine = (config.provider || "claude").toLowerCase();
+    const selection = selectHarnessModel(snapshot, engine, task);
+    if (selection.configured_model && config.model !== selection.configured_model) {
+      await updateContainerConfigScalars(group.id, { model: selection.configured_model });
+      for (const session of await getSessionsByAgentGroup(group.id)) {
+        killContainer(session.id, "argus: model policy changed");
+      }
+    }
+    const pinned = policySnapshot(snapshot.policy, { task_id: task.id, attempt: task.attempt });
+    const dir = path.resolve("groups", group.folder);
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, "argus-model-policy.json");
+    await writeFile(file + ".tmp", JSON.stringify(pinned) + "\n");
+    await rename(file + ".tmp", file);
+    return {
+      ...selection,
+      configured_model: selection.configured_model ?? config.model ?? null,
+      policy: snapshot.policy,
+    };
+  };
+}
+
 export function fromEnv(): ChannelAdapter | null {
   const url = process.env.ARGUS_URL?.trim();
   if (!url) return null;
@@ -982,6 +1061,7 @@ export function fromEnv(): ChannelAdapter | null {
       .filter(Boolean),
     name: process.env.ARGUS_AGENT_NAME?.trim() || "nanoclaw",
     accounts: accountsFromEnv(),
+    selectModels: modelsFromEnv(),
     // Under an Argus instance, a drained agent means this host should go: ask
     // NanoClaw to shut down through its own SIGTERM handling.
     onDrained:

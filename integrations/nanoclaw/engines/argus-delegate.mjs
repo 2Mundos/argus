@@ -3,6 +3,7 @@
 //
 //   argus-delegate EXECUTOR [--cwd DIR] [--timeout SECONDS] [--prompt-file F]
 //                  [--out DIR] [--model M] [--read-only]
+//                  [--model-attempt N --fallback-reason REASON]
 //
 // EXECUTOR is claude | codex | opencode | agent. The prompt comes from stdin or
 // --prompt-file. The last line on stdout is one JSON object: the identity of the
@@ -11,8 +12,10 @@
 // allowed, 78 no credentials (nothing was run, nothing else was tried), 124
 // timeout, 127 executor not installed.
 //
-// It never falls back to another executor or provider, and it never reads the
+// Model retries follow a pinned policy; it never switches executor or provider, and it never reads the
 // content of a credential: it only checks that one is present.
+import { randomUUID } from "node:crypto";
+import { loadPolicy, selectModel } from "./model-policy.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -182,6 +185,8 @@ function parseArgs(argv) {
     else if (a === "--prompt-file") opts.promptFile = val();
     else if (a === "--out") opts.out = val();
     else if (a === "--model") opts.model = val();
+    else if (a === "--model-attempt") opts.modelAttempt = Number(val());
+    else if (a === "--fallback-reason") opts.fallbackReason = val();
     else if (a === "--read-only") opts.readOnly = true;
     else if (a.startsWith("--")) throw new Error(`unknown option ${a}`);
     else rest.push(a);
@@ -248,6 +253,16 @@ export async function main(argv, e = process.env) {
   if (!EXECUTORS.includes(executor))
     finish(64, { ...identity, error: "usage", detail: "unknown executor", executors: EXECUTORS });
 
+  let snapshot;
+  let selection;
+  try {
+    snapshot = loadPolicy(e, e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json");
+    selection = selectModel(snapshot, "implementation", executor, opts.modelAttempt ?? 1,
+      opts.fallbackReason, opts.model);
+  } catch (err) {
+    finish(64, { ...identity, error: "model_policy_invalid", detail: err.message });
+  }
+
   const roots = (e.ARGUS_DELEGATE_ROOTS || "/workspace").split(":").filter(Boolean);
   const cwd = authorizedCwd(opts.cwd || process.cwd(), roots);
   if (!cwd)
@@ -269,14 +284,36 @@ export async function main(argv, e = process.env) {
   if (!prompt.trim()) finish(64, { ...identity, error: "usage", detail: "empty prompt" });
   if (opts.readOnly) prompt = `${READ_ONLY_PROMPT_PREFIX}\n\n${prompt}`;
 
+  const deadline = Date.now() + opts.timeout * 1000;
+  const attempts = [];
+  let outcome;
+  do {
+    outcome = await runAttempt(executor, opts, e, identity, version, cwd, prompt,
+      snapshot, selection, deadline);
+    attempts.push(outcome.report);
+    if (outcome.exit === 0 || !selection.has_next || outcome.report.timed_out ||
+      outcome.report.signal || outcome.report.interrupted || outcome.report.exit_code === 127 ||
+      /quota|rate.?limit|out of credits|unauthori[sz]ed|authentication|invalid.?api.?key|insufficient.*(credit|balance)/i.test(
+        outcome.report.tail + " " + outcome.report.stderr_tail)) break;
+    selection = selectModel(snapshot, "implementation", executor, selection.model_attempt + 1,
+      outcome.report.executor_error?.kind || "executor_failed");
+  } while (Date.now() < deadline);
+  finish(outcome.exit, { ...outcome.report, attempts });
+}
+
+async function runAttempt(executor, opts, e, identity, version, cwd, prompt,
+  snapshot, selection, deadline) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const out = path.resolve(opts.out || path.join(cwd, ".argus-delegate"));
   fs.mkdirSync(out, { recursive: true });
-  const base = path.join(out, `${executor}-${stamp}`);
+  const base = path.join(out, `${executor}-${stamp}-${randomUUID().slice(0, 8)}`);
+  const reportFile = `${base}.json`;
+  const evidence = { ...selection, task: snapshot.context, policy: snapshot.policy };
+  fs.writeFileSync(reportFile, JSON.stringify({ ...evidence, status: "started" }) + "\n");
   const lastMessageFile = `${base}.last-message.txt`;
   const cmd = buildCommand(
     executor,
-    { cwd, model: opts.model, readOnly: opts.readOnly, lastMessageFile },
+    { cwd, model: selection.configured_model, readOnly: opts.readOnly, lastMessageFile },
     e,
   );
   const args = cmd.promptVia === "argv" ? [...cmd.args, prompt] : cmd.args;
@@ -304,6 +341,7 @@ export async function main(argv, e = process.env) {
     }
   };
   let timedOut = false;
+  let interrupted = false;
   let hardKill;
   const stop = () => {
     killTree("SIGTERM");
@@ -312,13 +350,15 @@ export async function main(argv, e = process.env) {
   const timer = setTimeout(() => {
     timedOut = true;
     stop();
-  }, opts.timeout * 1000);
-  for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, stop);
+  }, Math.max(1, deadline - Date.now()));
+  const interrupt = () => { interrupted = true; stop(); };
+  for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, interrupt);
 
   const { code, signal } = await new Promise((resolve) => {
     child.on("error", (err) => resolve({ code: 127, signal: String(err.code || err.message) }));
     child.on("close", (c, s) => resolve({ code: c, signal: s }));
   });
+  for (const sig of ["SIGTERM", "SIGINT"]) process.off(sig, interrupt);
   clearTimeout(timer);
   clearTimeout(hardKill);
   killTree("SIGKILL"); // grandchildren that outlived the CLI
@@ -331,22 +371,29 @@ export async function main(argv, e = process.env) {
   const tailSource = fs.existsSync(lastMessageFile) ? lastMessageFile : stdoutFile;
   const tail = fs.readFileSync(tailSource, "utf8").slice(-TAIL_CHARS);
   const jsonFail = !timedOut && code === 0 ? executorJsonFailure(executor, stdoutText) : null;
-  const exit = timedOut ? 124 : jsonFail || code !== 0 ? 1 : 0;
-  finish(exit, {
+  const exit = timedOut ? 124 : interrupted || jsonFail || code !== 0 ? 1 : 0;
+  const report = {
     ...identity,
+    ...evidence,
+    report_file: reportFile,
+    status: "finished",
     version,
-    model: opts.model ?? null,
+    model: selection.configured_model,
     cwd,
     read_only: opts.readOnly,
     read_only_enforcement: cmd.readOnlyEnforcement ?? "unknown",
     exit_code: code,
     signal,
     timed_out: timedOut,
+    interrupted,
     duration_ms: Date.now() - started,
     artifacts,
     tail,
+    stderr_tail: fs.readFileSync(stderrFile, "utf8").slice(-TAIL_CHARS),
     ...(jsonFail ? { executor_error: jsonFail } : {}),
-  });
+  };
+  fs.writeFileSync(reportFile, JSON.stringify(report, null, 2) + "\n");
+  return { exit, report };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

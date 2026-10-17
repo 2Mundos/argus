@@ -116,6 +116,8 @@ if [ "$ENGINES" = 1 ]; then "$here/engines/install-engines.sh" "$SRC"; fi
   cd "$SRC"
   pnpm rebuild better-sqlite3   # pnpm skips native builds by default
   pnpm run build
+  # tsc does not emit imported JS assets; restore them even if build cleaned dist.
+  "$here/install.sh" "$SRC" >/dev/null
   pnpm exec vitest run src/channels/argus.test.ts src/gateway-providers/onecli.test.ts src/gateway-providers/onecli-files.test.ts src/gateway-providers/gateway-provider-registry.test.ts
 )
 
