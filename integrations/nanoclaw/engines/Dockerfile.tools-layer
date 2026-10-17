@@ -1,5 +1,8 @@
 # Argus tools layer: the agent image NanoClaw builds has no ssh or rsync, so a
-# worker cannot clone over ssh or sync files. Built by apply-tools-layer.sh.
+# worker cannot clone over ssh or sync files. It also carries the Argus bin
+# assets (argus-delegate and its model policy), so an image built from any BASE
+# gets the current ones instead of whatever an older hand-built layer left
+# behind. Built by apply-tools-layer.sh.
 ARG BASE
 FROM ${BASE}
 USER root
@@ -7,5 +10,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends openssh-client rsync \
  && rm -rf /var/lib/apt/lists/* \
  && for b in ssh ssh-keygen ssh-keyscan rsync git; do command -v "$b" || exit 1; done
+COPY --chmod=0755 argus-delegate.mjs /usr/local/bin/argus-delegate
+COPY --chmod=0644 model-policy.mjs model-policy.defaults.json /usr/local/bin/
 USER node
-LABEL dev.argus.tools-layer="openssh-client rsync"
+LABEL dev.argus.tools-layer="openssh-client rsync argus-delegate model-policy"
