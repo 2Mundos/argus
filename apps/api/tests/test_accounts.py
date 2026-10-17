@@ -347,6 +347,24 @@ async def test_executor_exhaustion_stays_in_its_role(db: Database, store) -> Non
     assert ("executor", c2) in await active(db)
 
 
+async def test_repository_lease_is_independent_and_released_without_exposing_secret(
+    db: Database, store
+) -> None:
+    engine_id = await add(db, store, "engine-account", "anthropic")
+    repo_id = await add(db, store, "repo-account", "gitea")
+    await lease_role(db, store, "engine", ["anthropic"])
+    repository = await lease_role(db, store, "repository", ["gitea"])
+    assert await active(db) == [("engine", engine_id), ("repository", repo_id)]
+    assert repository.role == "repository"
+    assert (
+        "key-repo-account"
+        not in (await get(db, repo_id, FakeClock())).model_dump_json()
+    )
+    async with db.write() as tx:
+        await accounts.release(tx, A, "released", "repository")
+    assert await active(db) == [("engine", engine_id)]
+
+
 async def test_agents_lease_independently_and_credentials_follow_the_lease(
     db: Database, store
 ) -> None:
@@ -422,6 +440,49 @@ def test_create_needs_exactly_one_secret_source(client: TestClient) -> None:
         },
     ):
         assert client.post("/api/accounts", json=body, headers=ADMIN).status_code == 422
+
+
+def test_gitea_service_credential_is_sops_backed_and_leased_only_to_repository_role(
+    client: TestClient,
+) -> None:
+    token = "dummy-gitea-service-token"
+    created = client.post(
+        "/api/accounts",
+        json={
+            "name": "repository-writer",
+            "provider": "gitea",
+            "credential": {"username": "argus-writer", "token": token},
+        },
+        headers=ADMIN,
+    )
+    assert created.status_code == 201
+    assert created.json()["secret_ref"].startswith("sops:account-")
+    assert token not in created.text
+    assert token not in client.get("/api/accounts", headers=ADMIN).text
+    worker = register(client)
+    leased = client.post(
+        "/api/accounts/lease",
+        json={"providers": ["gitea"], "role": "repository"},
+        headers=worker,
+    )
+    assert leased.status_code == 200
+    assert leased.json()["role"] == "repository"
+    assert leased.json()["credential"] == {"username": "argus-writer", "token": token}
+
+
+@pytest.mark.parametrize(
+    "credential", [{"token": "dummy"}, {"username": "bad:user", "token": "dummy"}]
+)
+def test_gitea_account_requires_valid_basic_auth_username(
+    client: TestClient, credential
+) -> None:
+    response = client.post(
+        "/api/accounts",
+        json={"name": "repo-writer", "provider": "gitea", "credential": credential},
+        headers=ADMIN,
+    )
+    assert response.status_code == 422
+    assert "dummy" not in response.text
 
 
 async def test_one_account_held_in_both_roles_exhausts_per_role(

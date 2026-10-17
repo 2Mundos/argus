@@ -45,6 +45,27 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
             found = claude_auth.validate(credential)
         elif provider == codex_auth.PROVIDER:
             found = codex_auth.validate(credential)
+        elif provider == "gitea":
+            token = credential.get("token")
+            username = credential.get("username")
+            if (
+                not isinstance(token, str)
+                or not token.strip()
+                or "\r" in token
+                or "\n" in token
+            ):
+                raise ValidationFailedError(
+                    "invalid gitea credential: required field token"
+                )
+            if (
+                not isinstance(username, str)
+                or not username.strip()
+                or any(char in username for char in (":", "\r", "\n"))
+            ):
+                raise ValidationFailedError(
+                    "invalid gitea credential: required valid field username"
+                )
+            return "api_key", "token"
         else:
             return None
     except (claude_auth.ClaudeAuthError, codex_auth.CodexAuthError) as exc:
@@ -65,6 +86,10 @@ async def create_account(
     """Register an account. A `credential` is written to the SOPS file first
     (as `account-<id>`); the registry row only ever holds the reference."""
     account_id = str(uuid4())
+    if body.provider == "gitea" and body.credential is None:
+        raise ValidationFailedError(
+            "invalid gitea credential: username and token must be validated at registration"
+        )
     if checked := check_credential(body.provider, body.credential):
         body = body.model_copy(update={"kind": checked[0]})
     secret_ref = body.secret_ref
@@ -210,7 +235,8 @@ async def lease_account(
     body: LeaseRequest, db: DbDep, agent_id: AgentDep, secrets: SecretsDep
 ) -> AccountLease:
     """Lease the best usable account among `providers` (most preferred first),
-    with its credential. One lease per agent; it ends when the agent does.
+    with its credential. One active lease per role; it ends when released or
+    replaced.
     `409 no_account` when none is usable."""
     async with db.write() as tx:
         return await service.lease(tx, agent_id, body.providers, secrets, body.role)

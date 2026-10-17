@@ -39,8 +39,11 @@ import {
   type AccountLease,
   type ApplyTarget,
   applyLeases,
+  applyRepositoryLease,
   classifyFailure,
+  normalizeRepositoryUrl,
   OneCliClient,
+  releaseRepositoryLease,
 } from "./argus-accounts.js";
 import { registerChannelAdapter } from "./channel-registry.js";
 import {
@@ -97,6 +100,8 @@ export interface ArgusConfig {
      * engine's account is of another provider. Default: anthropic.
      */
     executorProviders?: string[];
+    /** Explicit project -> HTTPS repository allowlist from this pool. */
+    repositories?: Record<string, string>;
   };
   /** Apply a pinned policy before starting a task; absent only in test adapters. */
   selectModels?: (task: ArgusTask) => Promise<ModelSelection>;
@@ -122,6 +127,8 @@ export interface ArgusTask {
   title: string;
   spec: string;
   project: string;
+  required_capabilities?: string[];
+  repository_url?: string;
   attempt: number;
   failures?: number;
   error?: string | null;
@@ -130,6 +137,27 @@ export interface ArgusTask {
 }
 
 export type Directive = { kind: "complete" | "fail" | "ask" | "progress"; text: string };
+
+/** Preserve an explicit structured result envelope emitted by the worker. */
+function completionPayload(text: string): { summary: string; data?: Record<string, unknown> } {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const record = value as Record<string, unknown>;
+      if (typeof record.summary === "string") {
+        return {
+          summary: record.summary,
+          ...(record.data && typeof record.data === "object" && !Array.isArray(record.data)
+            ? { data: record.data as Record<string, unknown> }
+            : {}),
+        };
+      }
+    }
+  } catch {
+    // Plain-text completions retain their established behavior.
+  }
+  return { summary: text };
+}
 
 /** Interpret an agent reply. Directives are matched at the start, case-insensitively. */
 export function parseReply(raw: string): Directive {
@@ -144,6 +172,12 @@ export function renderTask(task: ArgusTask, pages: Map<string, string>): string 
   const lines = [
     `[Argus task] ${task.title}`,
     `Project: ${task.project} · Task: ${task.id} · Attempt: ${task.attempt}`,
+    ...(task.repository_url
+      ? [
+          `Repository (allowlisted): ${task.repository_url}`,
+          "Use /usr/local/bin/argus-gitea-api for repository API access; do not handle credentials, add auth headers, or merge pull requests.",
+        ]
+      : []),
     "",
     task.spec.trim() || "(no further description)",
   ];
@@ -358,6 +392,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let resends = 0;
   let account: { id: string; name: string; provider: string } | null = null;
   let executor: { id: string; name: string } | null = null;
+  let activeAccountLeases: AccountLease[] = [];
+  let repositoryTarget: ApplyTarget | null = null;
+  let repositoryLeaseHeld = false;
+  let activeRepositoryLease: AccountLease | null = null;
+  let activeRepositoryUrl: string | null = null;
+  let activeRepositoryAllowlist: string[] = [];
+  let repositoryAssignmentReconciled = false;
   let abortClaim: AbortController | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let loop: Promise<void> | null = null;
@@ -553,12 +594,72 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       finishTask();
       return;
     }
-    const pages = await inlinePages(task);
-    log.info("Argus task claimed", { task: task.id, attempt: task.attempt });
-    resends = 0;
-    currentText = renderTask(task, pages);
-    await injectTask(task.id, task.attempt, currentText);
-    await finished;
+    try {
+      if (task.required_capabilities?.includes("repository:write")) {
+        const acc = cfg.accounts;
+        const repositoryUrl = acc?.repositories?.[task.project];
+        if (!acc || !repositoryUrl)
+          throw new Error("repository is not configured for this task project");
+        if (activeAccountLeases.length === 0)
+          throw new Error("cannot safely reconcile repository access without active base leases");
+        const normalizedRepository = normalizeRepositoryUrl(repositoryUrl);
+        const { data } = await client.call("POST", "/accounts/lease", {
+          providers: ["gitea"],
+          role: "repository",
+        });
+        const lease = data as AccountLease;
+        repositoryLeaseHeld = true;
+        activeRepositoryLease = lease;
+        activeRepositoryUrl = normalizedRepository.cloneUrl;
+        activeRepositoryAllowlist = Object.values(acc.repositories ?? {});
+        repositoryTarget = await acc.resolveTarget();
+        await applyRepositoryLease(
+          acc.onecli,
+          repositoryTarget,
+          lease,
+          normalizedRepository.cloneUrl,
+          activeRepositoryAllowlist,
+          activeAccountLeases,
+        );
+        task.repository_url = normalizedRepository.cloneUrl;
+      }
+      const pages = await inlinePages(task);
+      log.info("Argus task claimed", { task: task.id, attempt: task.attempt });
+      resends = 0;
+      currentText = renderTask(task, pages);
+      await injectTask(task.id, task.attempt, currentText);
+      await finished;
+    } catch {
+      await client
+        .call("POST", `/tasks/${task.id}/fail`, {
+          attempt: task.attempt,
+          error: "worker repository credential unavailable or repository is not allowlisted",
+        })
+        .catch(() => undefined);
+      finishTask();
+    } finally {
+      if (repositoryLeaseHeld && cfg.accounts) {
+        repositoryLeaseHeld = false;
+        activeRepositoryLease = null;
+        activeRepositoryUrl = null;
+        activeRepositoryAllowlist = [];
+        if (repositoryTarget) {
+          try {
+            await releaseRepositoryLease(
+              cfg.accounts.onecli,
+              repositoryTarget,
+              activeAccountLeases,
+            );
+            repositoryAssignmentReconciled = true;
+          } catch {
+            repositoryAssignmentReconciled = false;
+            log.warn("Could not remove repository credential assignment; task claiming is blocked");
+          }
+          repositoryTarget = null;
+        }
+        await client.call("POST", "/accounts/release?role=repository").catch(() => undefined);
+      }
+    }
   }
 
   /**
@@ -608,6 +709,18 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       engine = await applyLeases(acc.onecli, target, held);
     }
     executor = held[1] ? { id: held[1].account_id, name: held[1].name } : null;
+    activeAccountLeases = [...held];
+    if (activeRepositoryLease && activeRepositoryUrl) {
+      await applyRepositoryLease(
+        acc.onecli,
+        target,
+        activeRepositoryLease,
+        activeRepositoryUrl,
+        activeRepositoryAllowlist,
+        activeAccountLeases,
+      );
+    }
+    repositoryAssignmentReconciled = true;
     const changed = (await acc.selectEngine?.(engine)) ?? false;
     if (changed) log.info("Engine selected for the leased account", { engine, reason });
     // Best effort: the audit event must not block work.
@@ -624,7 +737,18 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   /** Hold a leased account, applied to the vault, before claiming any work. */
   async function ensureAccount(): Promise<boolean> {
     const acc = cfg.accounts;
-    if (!acc || account) return true;
+    if (!acc) return true;
+    if (!repositoryAssignmentReconciled && activeAccountLeases.length > 0) {
+      try {
+        await releaseRepositoryLease(acc.onecli, await acc.resolveTarget(), activeAccountLeases);
+        repositoryAssignmentReconciled = true;
+      } catch {
+        log.warn("Could not reconcile a stale repository credential assignment");
+        await sleep(5000);
+        return false;
+      }
+    }
+    if (acc.providers.length === 0 || account) return true;
     try {
       const { data } = await client.call("POST", "/accounts/lease", { providers: acc.providers });
       const lease = data as AccountLease;
@@ -694,13 +818,18 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   async function completeWithResult(
     t: { id: string; attempt: number },
     text: string,
+    data?: Record<string, unknown>,
   ): Promise<void> {
     const extra = [...attached.keys()];
     const missing = attachFailures.length ? `\n\n[Not stored: ${attachFailures.join("; ")}]` : "";
     if (chars(text + missing).length <= SUMMARY_MAX_CHARS) {
       await client.call("POST", `/tasks/${t.id}/complete`, {
         attempt: t.attempt,
-        result: { summary: text + missing, ...(extra.length ? { artifacts: extra } : {}) },
+        result: {
+          summary: text + missing,
+          ...(data ? { data } : {}),
+          ...(extra.length ? { artifacts: extra } : {}),
+        },
       });
       return;
     }
@@ -714,7 +843,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     const summary = `${headWithin(text, SUMMARY_MAX_CHARS - chars(tail).length - 1)}…${tail}`;
     await client.call("POST", `/tasks/${t.id}/complete`, {
       attempt: t.attempt,
-      result: { summary, artifacts: [...new Set([artifactId, ...extra])] },
+      result: {
+        summary,
+        ...(data ? { data } : {}),
+        artifacts: [...new Set([artifactId, ...extra])],
+      },
     });
   }
 
@@ -887,7 +1020,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         if (isFailureNotice) {
           await handleFailure(task, text);
         } else if (d.kind === "complete") {
-          await completeWithResult(task, d.text || "(no summary)");
+          const result = completionPayload(d.text);
+          await completeWithResult(task, result.summary || "(no summary)", result.data);
           finishTask();
         } else if (d.kind === "fail") {
           await client.call("POST", `/tasks/${task.id}/fail`, {
@@ -943,7 +1077,23 @@ function accountsFromEnv(): ArgusConfig["accounts"] {
     .split(",")
     .map((p) => p.trim())
     .filter(Boolean);
-  if (providers.length === 0) return undefined;
+  let repositories: Record<string, string> = {};
+  const repositoriesJson = process.env.ARGUS_REPOSITORIES_JSON?.trim();
+  if (repositoriesJson) {
+    try {
+      const parsed: unknown = JSON.parse(repositoriesJson);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        repositories = Object.fromEntries(
+          Object.entries(parsed).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        );
+      }
+    } catch {
+      throw new Error("ARGUS_REPOSITORIES_JSON must be a JSON project-to-URL object");
+    }
+  }
+  if (providers.length === 0 && Object.keys(repositories).length === 0) return undefined;
   // The OneCLI agent NanoClaw uses is keyed by the agent group wired to this
   // channel, read from NanoClaw's own database when first needed.
   async function resolveTarget(): Promise<ApplyTarget> {
@@ -961,6 +1111,7 @@ function accountsFromEnv(): ArgusConfig["accounts"] {
   }
   return {
     providers,
+    repositories,
     onecli: new OneCliClient(
       process.env.ONECLI_URL?.trim() || "http://127.0.0.1:10254",
       fetch,

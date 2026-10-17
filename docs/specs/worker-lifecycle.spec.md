@@ -27,6 +27,17 @@ Actors:
 | Worker agent | Claims tasks it can do, works on them, reports results. |
 | Human (dashboard) | Watches everything; answers decisions; can create/cancel tasks, scale pools, kill instances. |
 | Argus | Holds the state, enforces the rules below, runs the reconciler and reaper. |
+| NanoClaw worker (execution/delivery plane) | Dispatches implementation agents, maintains the task's isolated checkout and branch, runs project gates, commits, creates/updates its PR, monitors CI on the exact head, fixes findings, and returns structured completion to Argus. |
+
+Argus is the control plane: it owns task creation/coordination, assignment and
+leases, task states/progress/results, retry/cancel/block/unblock, and worker
+and pool lifecycle/health. It may display or retain worker-reported delivery
+metadata, but is not the central repository or PR operator. These boundaries do
+not alter the task/lease semantics below. A task-result `review` gate and the
+PR's own CI/review are distinct; neither implies the other. PR status must be
+tied to the exact reported head SHA. Merge remains with a human or existing
+repository policy unless separately authorized; this spec grants no automatic
+merge authority.
 
 # 2. Non-Goals
 
@@ -449,6 +460,82 @@ injecting them at the HTTPS layer (OneCLI Agent Vault or Iron Proxy), has a
 pluggable provider interface (Claude Code by default), supports user-added MCP
 servers, and is administered locally by the `ncl` CLI over a Unix socket (no
 HTTP admin API). See https://docs.nanoclaw.dev/concepts/architecture.
+
+For repository-backed tasks, NanoClaw is the execution/delivery plane. A task
+completion should include worker-reported repository, branch, base/head SHA,
+commit(s), PR number/URL/state, project-gate results, and CI/review status tied
+to that exact head. These are observations reported to Argus, not independently
+verified by the control plane. Non-code tasks need not carry PR metadata.
+
+### Repository credentials and Gitea delivery
+
+Repository access is separate from engine and executor accounts. A distinct
+Argus `repository` account lease is requested only for tasks requiring the
+`repository:write` capability. Pools configure a project-to-HTTPS
+`owner/repository` allowlist; NanoClaw rejects an unconfigured project, host,
+or repository before applying the lease. The account provider is `gitea` and
+must be a dedicated service credential whose upstream permissions are limited
+to the configured repository. After the task, NanoClaw unassigns the OneCLI
+secret and releases the `repository` lease. Tasks without this capability do
+not acquire the credential and retain existing behavior.
+
+The operator registers the dedicated Gitea service account through Argus's account registry
+(provider `gitea`, kind `api_key`, credential fields `username` and `token`). The username is the
+service-account login used for Git smart-HTTP Basic authentication; both fields are required and
+validated. The registry
+writes it to the SOPS-backed secret store; the database row contains only the
+`sops:` reference. Configure the matching project URL in the NanoClaw pool's
+`nanoclaw.repositories` map. Do not reuse a personal token or engine account.
+The NanoClaw host writes two `generic` secrets to OneCLI 1.42, both scoped to the exact Gitea host:
+the REST secret matches only `/api/v1/repos/{owner}/{repository}/*` and injects
+`Authorization: token <PAT>`; the Git smart-HTTP secret matches only
+`/{owner}/{repository}.git/*` and injects `Authorization: Basic <base64(username:PAT)>`.
+The latter is created only in the trusted host-side lease mapper and is stored only in OneCLI's
+encrypted secret store. Base64 is encoding, not encryption: neither form may enter task data,
+agent/model state, logs, process arguments or artifacts. The official API contract documents the
+`token` scheme, while Gitea's Git-over-HTTP flow uses Basic with the service username and PAT as
+password ([Gitea 1.26 API authentication](https://docs.gitea.com/api/1.26/)); the target
+deployment version is not configured in this repository and must be confirmed during operator
+provisioning.
+Both patterns are repository-specific, and the upstream identity must also be restricted to that
+single configured repository. The worker's API helper separately enforces its exact URL allowlist.
+Do not use a manager token or broad human PAT.
+For repository identity, configuration may use either `/owner/repository` or
+`/owner/repository.git`. Normalize exactly one terminal `.git` from the
+repository component for REST API paths and allowlist comparisons; pass the
+worker a canonical HTTPS clone URL ending in one `.git`. The REST rule uses
+`/api/v1/repos/{owner}/{repository}/*`; the Git rule uses the exact normalized
+remote prefix `/{owner}/{repository}.git/*`. Never derive either rule from the
+un-normalized suffix or use a broad `repository*` match. Thus both configured
+forms yield the same REST identity and Git remote, while lookalike repositories
+remain rejected by exact normalized allowlist comparison.
+OneCLI's documented generic-secret field is `injectionConfig`, and its path
+matcher supports a single pattern with `*` wildcard forms ([OneCLI 1.42 secret
+service](https://github.com/onecli/onecli/blob/v1.42.0/packages/api/src/services/secret-service.ts),
+[path-matching contract](https://trybrowzer.com/docs/onecli/credential-injection/injection-modes-reference#path-matching)).
+It reconciles the complete currently-held engine/executor/repository lease set (including both
+repository secrets)
+because OneCLI's set-secrets endpoint replaces assignments, and the
+agent-list endpoint does not report assignments.
+Repository-write pools must also configure managed engine account providers so
+the worker has a known base lease set; it fails closed rather than changing
+OneCLI assignments when that set is unavailable.
+The host retains OneCLI
+admin access; the agent container has only the existing egress-proxy route,
+never the OneCLI admin API or raw token. Git/REST use HTTPS through the proxy,
+not SSH credentials. The worker API helper has no token parameter, verifies an
+exact repository allowlist, supports PR create/read/update and CI status reads
+tied to the PR head SHA. A retry of PR creation returns an existing open PR for
+the same source branch and base rather than creating a duplicate. It has no
+merge operation and uses an Undici proxy
+dispatcher for Node fetch (no direct-network fallback). The image overlay
+installs this helper and its pinned Undici dependency. Configure the same
+project-to-repository allowlist in the worker container as
+`ARGUS_REPOSITORIES_JSON`; without it the helper fails closed.
+
+The secret must not appear in task spec/result, model prompt, agent
+environment/files, process arguments, logs, or artifacts. Argus receives only
+non-secret delivery metadata. Merge remains human/repository-policy controlled.
 
 Consequences for Argus:
 

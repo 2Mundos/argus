@@ -20,7 +20,7 @@ export interface AccountLease {
   kind: string;
   credential: Record<string, unknown>;
   /** `engine` (default): the harness's account; `executor`: a delegated CLI's. */
-  role?: "engine" | "executor";
+  role?: "engine" | "executor" | "repository";
 }
 
 /** How a provider's account becomes a OneCLI secret. */
@@ -41,6 +41,52 @@ interface ProviderMapping {
 }
 
 const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+export interface NormalizedRepositoryUrl {
+  origin: string;
+  host: string;
+  owner: string;
+  repo: string;
+  apiPath: string;
+  gitPathPattern: string;
+  cloneUrl: string;
+}
+
+/** Normalize repo and repo.git URLs to one API identity and one Git remote. */
+export function normalizeRepositoryUrl(raw: string): NormalizedRepositoryUrl {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("repository URL is invalid");
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    url.pathname.endsWith("/")
+  )
+    throw new Error("repository URL must be a plain HTTPS repository URL");
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length !== 2 || !parts.every((part) => /^[A-Za-z0-9_.-]+$/.test(part)))
+    throw new Error("repository URL must identify exactly owner/repository");
+  const [owner, rawRepo] = parts;
+  const repo = rawRepo.endsWith(".git") ? rawRepo.slice(0, -4) : rawRepo;
+  if (!repo) throw new Error("repository name must not be empty");
+  const apiPath = `/api/v1/repos/${owner}/${repo}`;
+  const gitPath = `/${owner}/${repo}.git`;
+  return {
+    origin: url.origin,
+    host: url.host,
+    owner,
+    repo,
+    apiPath,
+    gitPathPattern: `${gitPath}/*`,
+    cloneUrl: `${url.origin}${gitPath}`,
+  };
+}
 
 /** Claude Code's own credentials file: `{ claudeAiOauth: { accessToken, expiresAt, … } }`. */
 function claudeAiOauth(
@@ -153,6 +199,117 @@ export class OneCliClient {
   }
 }
 
+/** Apply only a repository credential; never return it to the task/agent. */
+export async function applyRepositoryLease(
+  onecli: OneCliClient,
+  target: ApplyTarget,
+  lease: AccountLease,
+  repositoryUrl: string,
+  allowedRepositories: string[],
+  activeLeases: AccountLease[],
+): Promise<void> {
+  if (lease.role !== "repository" || lease.provider !== "gitea")
+    throw new Error("repository lease must use the gitea provider and repository role");
+  const repository = normalizeRepositoryUrl(repositoryUrl);
+  const key = `${repository.origin}/${repository.owner}/${repository.repo}`;
+  const allowed = allowedRepositories.some((raw) => {
+    try {
+      const candidate = normalizeRepositoryUrl(raw);
+      return `${candidate.origin}/${candidate.owner}/${candidate.repo}` === key;
+    } catch {
+      return false;
+    }
+  });
+  if (!allowed) throw new Error("repository URL is not in the configured allowlist");
+  const token = text(lease.credential.token) ?? text(lease.credential.access_token);
+  if (!token) throw new Error("gitea account has no token field");
+  const username = text(lease.credential.username);
+  if (!username || /[:\r\n]/.test(username) || /[\r\n]/.test(token))
+    throw new Error("gitea account requires a valid username and token");
+  try {
+    const agents: Array<{ id: string; identifier: string }> = await onecli.call("GET", "/agents");
+    let agent = agents.find((a) => a.identifier === target.identifier);
+    agent ??= await onecli.call("POST", "/agents", {
+      name: target.name,
+      identifier: target.identifier,
+    });
+    const secrets: Array<{ id: string; name: string }> = await onecli.call("GET", "/secrets");
+    const secretBodies = [
+      {
+        name: `argus-${target.identifier}-repository-rest`,
+        value: token,
+        hostPattern: repository.host,
+        pathPattern: `${repository.apiPath}/*`,
+        injectionConfig: { headerName: "Authorization", valueFormat: "token {value}" },
+      },
+      {
+        name: `argus-${target.identifier}-repository-git`,
+        // Gitea smart-HTTP uses Basic auth. Build this only in the trusted host;
+        // OneCLI persists it in its encrypted secret store.
+        value: Buffer.from(`${username}:${token}`, "utf8").toString("base64"),
+        hostPattern: repository.host,
+        pathPattern: repository.gitPathPattern,
+        injectionConfig: { headerName: "Authorization", valueFormat: "Basic {value}" },
+      },
+    ];
+    for (const secretBody of secretBodies) {
+      let secret = secrets.find((s) => s.name === secretBody.name);
+      if (secret) {
+        await onecli.call("PATCH", `/secrets/${secret.id}`, { type: "generic", ...secretBody });
+      } else {
+        secret = await onecli.call("POST", "/secrets", { type: "generic", ...secretBody });
+      }
+    }
+    await reconcileSecretAssignments(onecli, agent!.id, target.identifier, [
+      ...activeLeases,
+      lease,
+    ]);
+  } catch {
+    // OneCLI error responses can contain request details. Never propagate them
+    // where a caller might log the repository credential.
+    throw new Error("could not apply repository credential to OneCLI");
+  }
+}
+
+/** Unassign the repository secret so a released lease is no longer usable. */
+export async function releaseRepositoryLease(
+  onecli: OneCliClient,
+  target: ApplyTarget,
+  activeLeases: AccountLease[],
+): Promise<void> {
+  const agents: Array<{ id: string; identifier: string }> = await onecli.call("GET", "/agents");
+  const agent = agents.find((a) => a.identifier === target.identifier);
+  if (!agent) return;
+  await reconcileSecretAssignments(onecli, agent.id, target.identifier, activeLeases);
+}
+
+/** Reconcile the complete currently-held lease set; GET /agents has no assignments. */
+async function reconcileSecretAssignments(
+  onecli: OneCliClient,
+  agentId: string,
+  identifier: string,
+  leases: AccountLease[],
+): Promise<void> {
+  const secrets: Array<{ id: string; name: string }> = await onecli.call("GET", "/secrets");
+  const names = new Set<string>();
+  for (const lease of leases) {
+    if (lease.role === "repository") continue;
+    const mapping = PROVIDERS[lease.provider];
+    if (!mapping) throw new Error("unsupported active lease provider");
+    names.add(`argus-${identifier}${mapping.secretSuffix}`);
+  }
+  const repositoryNames = [
+    `argus-${identifier}-repository-rest`,
+    `argus-${identifier}-repository-git`,
+  ];
+  if (leases.some((lease) => lease.role === "repository"))
+    repositoryNames.forEach((name) => names.add(name));
+  const secretIds = [...names].map((name) => secrets.find((secret) => secret.name === name)?.id);
+  if (secretIds.some((id) => !id)) throw new Error("active lease secret is missing from OneCLI");
+  await onecli.call("PUT", `/agents/${agentId}/secrets`, { secretIds });
+  await onecli.call("PATCH", `/agents/${agentId}/secret-mode`, { mode: "selective" });
+}
+
 export interface ApplyTarget {
   /** The OneCLI agent identifier NanoClaw uses: the agent group id. */
   identifier: string;
@@ -202,7 +359,9 @@ export async function applyLeases(
   leases: AccountLease[],
 ): Promise<string> {
   if (leases.length === 0) throw new Error("applyLeases needs at least one lease");
-  const prepared = leases.map((l) => ({ lease: l, ...secretFor(l) }));
+  const prepared = leases
+    .filter((lease) => lease.role !== "repository")
+    .map((l) => ({ lease: l, ...secretFor(l) }));
 
   const agents: Array<{ id: string; identifier: string }> = await onecli.call("GET", "/agents");
   let agent = agents.find((a) => a.identifier === target.identifier);
@@ -235,6 +394,14 @@ export async function applyLeases(
       });
     }
     ids.push(secret!.id);
+  }
+  if (leases.some((lease) => lease.role === "repository")) {
+    for (const suffix of ["rest", "git"]) {
+      const name = `argus-${target.identifier}-repository-${suffix}`;
+      const secret = secrets.find((item) => item.name === name);
+      if (!secret) throw new Error("active repository lease secret is missing from OneCLI");
+      ids.push(secret.id);
+    }
   }
   await onecli.call("PUT", `/agents/${agent!.id}/secrets`, { secretIds: ids });
   await onecli.call("PATCH", `/agents/${agent!.id}/secret-mode`, { mode: "selective" });
