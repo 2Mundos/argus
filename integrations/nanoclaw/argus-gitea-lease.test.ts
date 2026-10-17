@@ -22,12 +22,15 @@ describe("dedicated Gitea repository lease", () => {
       if (path === "/agents" && init.method === "GET") return Response.json(agents);
       if (path === "/secrets" && init.method === "GET") return Response.json(secrets);
       if (path === "/secrets" && init.method === "POST") {
-        const secret = { id: "sec-repository", ...body };
+        const secret = {
+          id: `sec-${body.name.endsWith("-git") ? "repository-git" : "repository-rest"}`,
+          ...body,
+        };
         secrets.push(secret);
         return Response.json(secret);
       }
-      if (path === "/secrets/sec-repository" && init.method === "PATCH") {
-        Object.assign(secrets.find((secret) => secret.id === "sec-repository")!, body);
+      if (path.startsWith("/secrets/sec-repository-") && init.method === "PATCH") {
+        Object.assign(secrets.find((secret) => secret.id === path.split("/").at(-1))!, body);
         return Response.json({ success: true });
       }
       if (path === "/agents/ag-1/secrets" && init.method === "PUT") {
@@ -45,7 +48,7 @@ describe("dedicated Gitea repository lease", () => {
       provider: "gitea",
       kind: "api_key",
       role: "repository",
-      credential: { token: "dummy-only" },
+      credential: { username: "service-user", token: "dummy-only" },
     };
     const engineLease: AccountLease = {
       lease_id: "eng-lease",
@@ -74,43 +77,60 @@ describe("dedicated Gitea repository lease", () => {
       ["https://git.example.test/team/repo"],
       active,
     );
-    const createCall = calls.find((call) => call.path === "/secrets" && call.method === "POST")!;
-    expect(createCall.body).toEqual({
-      name: "argus-group-1-repository",
+    const createCalls = calls.filter((call) => call.path === "/secrets" && call.method === "POST");
+    expect(createCalls).toHaveLength(2);
+    const restSecret = createCalls.find((call) => call.body.name.endsWith("-rest"))!.body;
+    const gitSecret = createCalls.find((call) => call.body.name.endsWith("-git"))!.body;
+    expect(restSecret).toEqual({
+      name: "argus-group-1-repository-rest",
       type: "generic",
       value: "dummy-only",
       hostPattern: "git.example.test",
-      pathPattern: "*",
+      pathPattern: "/api/v1/repos/team/repo/*",
       injectionConfig: { headerName: "Authorization", valueFormat: "token {value}" },
     });
-    expect(createCall.body).not.toHaveProperty("headerName");
-    expect(assigned).toEqual(["sec-engine", "sec-executor", "sec-repository"]);
+    expect(gitSecret).toEqual({
+      name: "argus-group-1-repository-git",
+      type: "generic",
+      value: Buffer.from("service-user:dummy-only").toString("base64"),
+      hostPattern: "git.example.test",
+      pathPattern: "/team/repo.git/*",
+      injectionConfig: { headerName: "Authorization", valueFormat: "Basic {value}" },
+    });
+    expect(assigned).toEqual([
+      "sec-engine",
+      "sec-executor",
+      "sec-repository-rest",
+      "sec-repository-git",
+    ]);
 
     await applyRepositoryLease(
       onecli,
       target,
-      { ...lease, credential: { token: "dummy-updated" } },
+      { ...lease, credential: { username: "service-user", token: "dummy-updated" } },
       "https://git.example.test/team/repo",
       ["https://git.example.test/team/repo"],
       active,
     );
-    const updateCall = calls.find(
-      (call) => call.path === "/secrets/sec-repository" && call.method === "PATCH",
-    )!;
-    expect(updateCall.body).toEqual({
-      type: "generic",
-      value: "dummy-updated",
-      hostPattern: "git.example.test",
-      pathPattern: "*",
-      injectionConfig: { headerName: "Authorization", valueFormat: "token {value}" },
-    });
-    expect(secrets.find((s) => s.id === "sec-repository")?.value).toBe("dummy-updated");
-    expect(assigned).toEqual(["sec-engine", "sec-executor", "sec-repository"]);
+    expect(secrets.find((s) => s.id === "sec-repository-rest")?.value).toBe("dummy-updated");
+    expect(secrets.find((s) => s.id === "sec-repository-git")?.value).toBe(
+      Buffer.from("service-user:dummy-updated").toString("base64"),
+    );
+    expect(assigned).toEqual([
+      "sec-engine",
+      "sec-executor",
+      "sec-repository-rest",
+      "sec-repository-git",
+    ]);
     await releaseRepositoryLease(onecli, target, active);
     expect(assigned).toEqual(["sec-engine", "sec-executor"]);
-    expect(calls.some((call) => call.body?.secretIds?.includes("sec-repository") === false)).toBe(
-      true,
-    );
+    expect(
+      calls.some(
+        (call) =>
+          call.body?.secretIds?.includes("sec-repository-rest") === false &&
+          call.body?.secretIds?.includes("sec-repository-git") === false,
+      ),
+    ).toBe(true);
   });
 
   it("rejects an unconfigured repository before sending any OneCLI request", async () => {

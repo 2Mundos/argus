@@ -36,25 +36,33 @@ describe("repository lease vault mapping", () => {
       lease("repo", "dummy-gitea-token", {
         provider: "gitea",
         role: "repository",
-        credential: { token: "dummy-gitea-token" },
+        credential: { username: "service-user", token: "dummy-gitea-token" },
       }),
       "https://git.example.test/org/project",
       ["https://git.example.test/org/project"],
       [],
     );
-    const secretCall = w.calls.find((call) => call.path === "/secrets" && call.method === "POST")!;
-    expect(secretCall.body).toEqual({
-      name: "argus-group-r-repository",
+    const secretCalls = w.calls.filter(
+      (call) => call.path === "/secrets" && call.method === "POST",
+    );
+    const restSecret = secretCalls.find((call) => call.body.name.endsWith("-rest"))!;
+    const gitSecret = secretCalls.find((call) => call.body.name.endsWith("-git"))!;
+    expect(restSecret.body).toEqual({
+      name: "argus-group-r-repository-rest",
       type: "generic",
       value: "dummy-gitea-token",
       hostPattern: "git.example.test",
-      pathPattern: "*",
-      injectionConfig: {
-        headerName: "Authorization",
-        valueFormat: "token {value}",
-      },
+      pathPattern: "/api/v1/repos/org/project/*",
+      injectionConfig: { headerName: "Authorization", valueFormat: "token {value}" },
     });
-    expect(secretCall.body).not.toHaveProperty("headerName");
+    expect(gitSecret.body).toEqual({
+      name: "argus-group-r-repository-git",
+      type: "generic",
+      value: Buffer.from("service-user:dummy-gitea-token").toString("base64"),
+      hostPattern: "git.example.test",
+      pathPattern: "/org/project.git/*",
+      injectionConfig: { headerName: "Authorization", valueFormat: "Basic {value}" },
+    });
     expect(JSON.stringify(w.calls.filter((call) => call.who === "argus"))).not.toContain(
       "dummy-gitea-token",
     );
@@ -731,7 +739,7 @@ describe("task-scoped repository auth", () => {
     const repoLease = lease("repo", "dummy-gitea-token", {
       provider: "gitea",
       role: "repository",
-      credential: { token: "dummy-gitea-token" },
+      credential: { username: "service-user", token: "dummy-gitea-token" },
     });
     const codeTask = { ...task(), required_capabilities: ["repository:write"] };
     const w = world({
@@ -786,7 +794,7 @@ describe("task-scoped repository auth", () => {
         lease("repo", "dummy-gitea-token", {
           provider: "gitea",
           role: "repository",
-          credential: { token: "dummy-gitea-token" },
+          credential: { username: "service-user", token: "dummy-gitea-token" },
         }),
       ],
       tasks: [{ ...task(), required_capabilities: ["repository:write"] }],
@@ -807,7 +815,7 @@ describe("task-scoped repository auth", () => {
         lease("repo", "dummy-gitea-token", {
           provider: "gitea",
           role: "repository",
-          credential: { token: "dummy-gitea-token" },
+          credential: { username: "service-user", token: "dummy-gitea-token" },
         }),
       ],
       tasks: [{ ...task(), required_capabilities: ["repository:write"] }],

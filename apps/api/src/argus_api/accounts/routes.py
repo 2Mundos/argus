@@ -47,9 +47,23 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
             found = codex_auth.validate(credential)
         elif provider == "gitea":
             token = credential.get("token")
-            if not isinstance(token, str) or not token.strip():
+            username = credential.get("username")
+            if (
+                not isinstance(token, str)
+                or not token.strip()
+                or "\r" in token
+                or "\n" in token
+            ):
                 raise ValidationFailedError(
                     "invalid gitea credential: required field token"
+                )
+            if (
+                not isinstance(username, str)
+                or not username.strip()
+                or any(char in username for char in (":", "\r", "\n"))
+            ):
+                raise ValidationFailedError(
+                    "invalid gitea credential: required valid field username"
                 )
             return "api_key", "token"
         else:
@@ -72,6 +86,10 @@ async def create_account(
     """Register an account. A `credential` is written to the SOPS file first
     (as `account-<id>`); the registry row only ever holds the reference."""
     account_id = str(uuid4())
+    if body.provider == "gitea" and body.credential is None:
+        raise ValidationFailedError(
+            "invalid gitea credential: username and token must be validated at registration"
+        )
     if checked := check_credential(body.provider, body.credential):
         body = body.model_copy(update={"kind": checked[0]})
     secret_ref = body.secret_ref

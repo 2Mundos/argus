@@ -479,29 +479,33 @@ to the configured repository. After the task, NanoClaw unassigns the OneCLI
 secret and releases the `repository` lease. Tasks without this capability do
 not acquire the credential and retain existing behavior.
 
-The operator registers the dedicated account through Argus's account registry
-(provider `gitea`, kind `api_key`, credential field `token`). The registry
+The operator registers the dedicated Gitea service account through Argus's account registry
+(provider `gitea`, kind `api_key`, credential fields `username` and `token`). The username is the
+service-account login used for Git smart-HTTP Basic authentication; both fields are required and
+validated. The registry
 writes it to the SOPS-backed secret store; the database row contains only the
 `sops:` reference. Configure the matching project URL in the NanoClaw pool's
 `nanoclaw.repositories` map. Do not reuse a personal token or engine account.
-The NanoClaw host writes the lease to OneCLI 1.42 as a `generic` secret whose
-value is the raw token and whose `injectionConfig` is
-`{headerName: "Authorization", valueFormat: "token {value}"}`. The secret uses
-the exact Gitea host and `pathPattern: "*"`. OneCLI accepts one path-pattern
-string (not a union/OR list); its wildcard matcher cannot express both the
-`/api/v1/repos/{owner}/{repository}/…` REST routes and the
-`/{owner}/{repository}.git/…` smart-HTTP routes in one precise rule. The
-catch-all is therefore deliberately host-scoped, not a repository boundary:
-the same authorization header is injected for REST and smart-HTTP Git requests,
-and the upstream Gitea service identity/token must be restricted to the single
-configured repository. The worker's API helper separately enforces its exact
-repository URL allowlist; direct Git HTTPS access relies on the upstream
-repository-only permission. Do not use a manager token or broad human PAT.
+The NanoClaw host writes two `generic` secrets to OneCLI 1.42, both scoped to the exact Gitea host:
+the REST secret matches only `/api/v1/repos/{owner}/{repository}/*` and injects
+`Authorization: token <PAT>`; the Git smart-HTTP secret matches only
+`/{owner}/{repository}.git/*` and injects `Authorization: Basic <base64(username:PAT)>`.
+The latter is created only in the trusted host-side lease mapper and is stored only in OneCLI's
+encrypted secret store. Base64 is encoding, not encryption: neither form may enter task data,
+agent/model state, logs, process arguments or artifacts. The official API contract documents the
+`token` scheme, while Gitea's Git-over-HTTP flow uses Basic with the service username and PAT as
+password ([Gitea 1.26 API authentication](https://docs.gitea.com/api/1.26/)); the target
+deployment version is not configured in this repository and must be confirmed during operator
+provisioning.
+Both patterns are repository-specific, and the upstream identity must also be restricted to that
+single configured repository. The worker's API helper separately enforces its exact URL allowlist.
+Do not use a manager token or broad human PAT.
 OneCLI's documented generic-secret field is `injectionConfig`, and its path
 matcher supports a single pattern with `*` wildcard forms ([OneCLI 1.42 secret
 service](https://github.com/onecli/onecli/blob/v1.42.0/packages/api/src/services/secret-service.ts),
 [path-matching contract](https://trybrowzer.com/docs/onecli/credential-injection/injection-modes-reference#path-matching)).
-It reconciles the complete currently-held engine/executor/repository lease set
+It reconciles the complete currently-held engine/executor/repository lease set (including both
+repository secrets)
 because OneCLI's set-secrets endpoint replaces assignments, and the
 agent-list endpoint does not report assignments.
 Repository-write pools must also configure managed engine account providers so

@@ -11,6 +11,44 @@ import { ProxyAgent } from "undici";
 import { createGatewayFetch, GiteaApi } from "./gitea-api.mjs";
 
 describe("credential-free Gitea API helper", () => {
+  it("isolates REST token and Git Basic injection to exact host and path rules in a local proxy", async () => {
+    const token = "dummy-token";
+    const basic = Buffer.from(`service-user:${token}`).toString("base64");
+    const received = [];
+    const proxy = createHttpServer((request, response) => {
+      const path = request.url;
+      const host = request.headers["x-target-host"];
+      const authorization =
+        host === "git.example.test" && path.startsWith("/api/v1/repos/team/project/")
+          ? `token ${token}`
+          : host === "git.example.test" && path.startsWith("/team/project.git/")
+            ? `Basic ${basic}`
+            : undefined;
+      received.push({ host, path, authorization });
+      response.end("ok");
+    });
+    await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    const port = proxy.address().port;
+    try {
+      for (const [host, path] of [
+        ["git.example.test", "/api/v1/repos/team/project/issues"],
+        ["git.example.test", "/team/project.git/git-receive-pack"],
+        ["git.example.test", "/api/v1/repos/team/other/issues"],
+        ["elsewhere.test", "/team/project.git/git-receive-pack"],
+      ]) {
+        await fetch(`http://127.0.0.1:${port}${path}`, {
+          headers: { "X-Target-Host": host },
+        });
+      }
+      assert.deepEqual(
+        received.map(({ authorization }) => authorization),
+        [`token ${token}`, `Basic ${basic}`, undefined, undefined],
+      );
+    } finally {
+      await new Promise((resolve) => proxy.close(resolve));
+    }
+  });
+
   it("creates and reads PRs/status through the mocked gateway without caller credentials", async () => {
     const calls = [];
     let pullRequest;
