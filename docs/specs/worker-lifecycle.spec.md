@@ -484,11 +484,26 @@ The operator registers the dedicated account through Argus's account registry
 writes it to the SOPS-backed secret store; the database row contains only the
 `sops:` reference. Configure the matching project URL in the NanoClaw pool's
 `nanoclaw.repositories` map. Do not reuse a personal token or engine account.
-The NanoClaw host writes the lease to OneCLI as a `generic` secret with the
-exact Gitea host pattern, `/api/v1/repos/{owner}/{repository}/*` path pattern,
-and `Authorization` header. It reconciles the complete currently-held
-engine/executor/repository lease set because OneCLI's set-secrets endpoint
-replaces assignments, and the agent-list endpoint does not report assignments.
+The NanoClaw host writes the lease to OneCLI 1.42 as a `generic` secret whose
+value is the raw token and whose `injectionConfig` is
+`{headerName: "Authorization", valueFormat: "token {value}"}`. The secret uses
+the exact Gitea host and `pathPattern: "*"`. OneCLI accepts one path-pattern
+string (not a union/OR list); its wildcard matcher cannot express both the
+`/api/v1/repos/{owner}/{repository}/…` REST routes and the
+`/{owner}/{repository}.git/…` smart-HTTP routes in one precise rule. The
+catch-all is therefore deliberately host-scoped, not a repository boundary:
+the same authorization header is injected for REST and smart-HTTP Git requests,
+and the upstream Gitea service identity/token must be restricted to the single
+configured repository. The worker's API helper separately enforces its exact
+repository URL allowlist; direct Git HTTPS access relies on the upstream
+repository-only permission. Do not use a manager token or broad human PAT.
+OneCLI's documented generic-secret field is `injectionConfig`, and its path
+matcher supports a single pattern with `*` wildcard forms ([OneCLI 1.42 secret
+service](https://github.com/onecli/onecli/blob/v1.42.0/packages/api/src/services/secret-service.ts),
+[path-matching contract](https://trybrowzer.com/docs/onecli/credential-injection/injection-modes-reference#path-matching)).
+It reconciles the complete currently-held engine/executor/repository lease set
+because OneCLI's set-secrets endpoint replaces assignments, and the
+agent-list endpoint does not report assignments.
 Repository-write pools must also configure managed engine account providers so
 the worker has a known base lease set; it fails closed rather than changing
 OneCLI assignments when that set is unavailable.

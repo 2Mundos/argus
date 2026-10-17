@@ -26,6 +26,10 @@ describe("dedicated Gitea repository lease", () => {
         secrets.push(secret);
         return Response.json(secret);
       }
+      if (path === "/secrets/sec-repository" && init.method === "PATCH") {
+        Object.assign(secrets.find((secret) => secret.id === "sec-repository")!, body);
+        return Response.json({ success: true });
+      }
       if (path === "/agents/ag-1/secrets" && init.method === "PUT") {
         assigned = body.secretIds;
         return Response.json({ success: true });
@@ -70,12 +74,37 @@ describe("dedicated Gitea repository lease", () => {
       ["https://git.example.test/team/repo"],
       active,
     );
-    expect(secrets.find((s) => s.id === "sec-repository")).toMatchObject({
+    const createCall = calls.find((call) => call.path === "/secrets" && call.method === "POST")!;
+    expect(createCall.body).toEqual({
+      name: "argus-group-1-repository",
       type: "generic",
-      value: "token dummy-only",
+      value: "dummy-only",
       hostPattern: "git.example.test",
-      headerName: "Authorization",
+      pathPattern: "*",
+      injectionConfig: { headerName: "Authorization", valueFormat: "token {value}" },
     });
+    expect(createCall.body).not.toHaveProperty("headerName");
+    expect(assigned).toEqual(["sec-engine", "sec-executor", "sec-repository"]);
+
+    await applyRepositoryLease(
+      onecli,
+      target,
+      { ...lease, credential: { token: "dummy-updated" } },
+      "https://git.example.test/team/repo",
+      ["https://git.example.test/team/repo"],
+      active,
+    );
+    const updateCall = calls.find(
+      (call) => call.path === "/secrets/sec-repository" && call.method === "PATCH",
+    )!;
+    expect(updateCall.body).toEqual({
+      type: "generic",
+      value: "dummy-updated",
+      hostPattern: "git.example.test",
+      pathPattern: "*",
+      injectionConfig: { headerName: "Authorization", valueFormat: "token {value}" },
+    });
+    expect(secrets.find((s) => s.id === "sec-repository")?.value).toBe("dummy-updated");
     expect(assigned).toEqual(["sec-engine", "sec-executor", "sec-repository"]);
     await releaseRepositoryLease(onecli, target, active);
     expect(assigned).toEqual(["sec-engine", "sec-executor"]);

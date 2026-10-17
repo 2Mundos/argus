@@ -43,13 +43,18 @@ describe("repository lease vault mapping", () => {
       [],
     );
     const secretCall = w.calls.find((call) => call.path === "/secrets" && call.method === "POST")!;
-    expect(secretCall.body).toMatchObject({
+    expect(secretCall.body).toEqual({
+      name: "argus-group-r-repository",
       type: "generic",
-      value: "token dummy-gitea-token",
+      value: "dummy-gitea-token",
       hostPattern: "git.example.test",
-      pathPattern: "/api/v1/repos/org/project/*",
-      headerName: "Authorization",
+      pathPattern: "*",
+      injectionConfig: {
+        headerName: "Authorization",
+        valueFormat: "token {value}",
+      },
     });
+    expect(secretCall.body).not.toHaveProperty("headerName");
     expect(JSON.stringify(w.calls.filter((call) => call.who === "argus"))).not.toContain(
       "dummy-gitea-token",
     );

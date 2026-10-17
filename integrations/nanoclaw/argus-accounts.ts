@@ -192,12 +192,17 @@ export async function applyRepositoryLease(
     const secretName = `argus-${target.identifier}-repository`;
     const secrets: Array<{ id: string; name: string }> = await onecli.call("GET", "/secrets");
     let secret = secrets.find((s) => s.name === secretName);
-    const ownerAndRepo = url.pathname.split("/").filter(Boolean);
     const secretBody = {
-      value: `token ${token}`,
+      value: token,
       hostPattern: url.host,
-      pathPattern: `/api/v1/repos/${ownerAndRepo.map(encodeURIComponent).join("/")}/*`,
-      headerName: "Authorization",
+      // OneCLI 1.42 accepts one pathPattern, not an OR-list. The host remains
+      // exact; `*` lets the same credential cover REST and smart-HTTP Git.
+      // Its upstream service identity must therefore be repository-restricted.
+      pathPattern: "*",
+      injectionConfig: {
+        headerName: "Authorization",
+        valueFormat: "token {value}",
+      },
     };
     if (secret) {
       await onecli.call("PATCH", `/secrets/${secret.id}`, { type: "generic", ...secretBody });
