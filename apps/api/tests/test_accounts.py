@@ -382,27 +382,27 @@ def test_accounts_over_http(client: TestClient) -> None:
         json={
             "name": "claude-1",
             "provider": "anthropic",
-            "credential": {"api_key": "sk-x"},
+            "credential": {"api_key": "sk-ant-api03-fake"},
         },
         headers=ADMIN,
     )
     assert res.status_code == 201
     account = res.json()
     assert account["secret_ref"] == f"sops:account-{account['id']}"
-    assert "sk-x" not in res.text
-    assert "sk-x" not in client.get("/api/accounts", headers=ADMIN).text
+    assert "sk-ant-api03-fake" not in res.text
+    assert "sk-ant-api03-fake" not in client.get("/api/accounts", headers=ADMIN).text
 
     worker = register(client)
     assert client.get("/api/accounts", headers=worker).status_code == 403
     leased = client.post(
         "/api/accounts/lease", json={"providers": ["anthropic"]}, headers=worker
     ).json()
-    assert leased["credential"] == {"api_key": "sk-x"}
+    assert leased["credential"] == {"api_key": "sk-ant-api03-fake"}
 
     # A credential that cannot be persisted disables the account loudly.
     res = client.put(
         f"/api/accounts/{account['id']}/credential",
-        json={"credential": {"api_key": "sk-y", "refresh": "r"}},
+        json={"credential": {"api_key": "sk-ant-api03-y", "refresh": "r"}},
         headers=worker,
     )
     assert res.status_code == 503

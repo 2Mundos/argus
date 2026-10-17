@@ -237,8 +237,10 @@ function TokenCredential({ renew, onClose, onDone }: Shared) {
   return (
     <form onSubmit={submit}>
       <p className="muted small">
-        A subscription token from <code>claude setup-token</code>, or an Anthropic API key. Say
-        which one it is: the account kind follows the type.
+        A subscription token from <code>claude setup-token</code> (it starts with{" "}
+        <code>sk-ant-oat</code>), or an Anthropic API key. Say which one it is: the account kind
+        follows the type. The code the sign-in page shows goes in the <b>Sign in with Claude</b>{" "}
+        step, not here.
       </p>
       <NameField renew={renew} name={name} setName={setName} />
       <label>

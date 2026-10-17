@@ -216,12 +216,23 @@ describe("anthropic credential documents", () => {
 
   it("an expiry beside a flat token does not matter, and ISO dates work", async () => {
     expect(
-      (await apply({ oauth_token: "long-lived", claudeAiOauth: { expiresAt: 1 } }))[0]?.value,
-    ).toBe("long-lived");
+      (await apply({ oauth_token: "sk-ant-oat01-long-lived", claudeAiOauth: { expiresAt: 1 } }))[0]
+        ?.value,
+    ).toBe("sk-ant-oat01-long-lived");
     const err = await apply({
       claudeAiOauth: { accessToken: "t", expiresAt: "2001-01-01T00:00:00Z" },
     }).catch((e) => e);
     expect(String(err.message)).toMatch(/expired/);
+  });
+
+  it("refuses an oauth_token or token that is not an sk-ant-oat token, naming no value", async () => {
+    const fake = `${"A".repeat(48)}#${"B".repeat(43)}`;
+    for (const credential of [{ oauth_token: fake }, { token: fake }]) {
+      const err = await apply(credential).catch((e) => e);
+      expect(String(err.message)).toMatch(/not a token.*renew it in Argus/);
+      expect(String(err.message)).not.toContain(fake);
+    }
+    expect((await apply({ oauth_token: "sk-ant-oat01-fake" }))[0]?.value).toBe("sk-ant-oat01-fake");
   });
 
   it("still reports a document with no usable field", async () => {

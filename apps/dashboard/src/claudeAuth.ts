@@ -11,6 +11,7 @@ export type TokenType = "oauth_token" | "api_key";
 
 const OAUTH_PREFIX = "sk-ant-oat";
 const API_PREFIX = "sk-ant-api";
+const SIGN_IN_CODE = /^[A-Za-z0-9_-]{20,}#[A-Za-z0-9_-]{20,}$/;
 const MAX_TOKEN = 4096;
 const KEYS = ["api_key", "oauth_token", "claudeAiOauth"] as const;
 const filled = (v: unknown): v is string => typeof v === "string" && v.trim() !== "";
@@ -51,16 +52,29 @@ export function checkClaudeCredential(text: string, now = Date.now()): ClaudeChe
   if (present[0] === "api_key") {
     const bad = tokenError(d.api_key, "api_key");
     if (bad) return { ok: false, error: bad };
-    return String(d.api_key).startsWith(OAUTH_PREFIX)
-      ? { ok: false, error: "api_key holds an OAuth token; use oauth_token." }
-      : { ok: true, mode: "api_key", kind: "api_key" };
+    const key = String(d.api_key);
+    if (key.startsWith(OAUTH_PREFIX)) {
+      return { ok: false, error: "api_key holds an OAuth token; use oauth_token." };
+    }
+    return key.startsWith(API_PREFIX)
+      ? { ok: true, mode: "api_key", kind: "api_key" }
+      : { ok: false, error: `api_key is not an Anthropic API key; it starts with ${API_PREFIX}.` };
   }
   if (present[0] === "oauth_token") {
     const bad = tokenError(d.oauth_token, "oauth_token");
     if (bad) return { ok: false, error: bad };
-    return String(d.oauth_token).startsWith(API_PREFIX)
-      ? { ok: false, error: "oauth_token holds an API key; use api_key." }
-      : { ok: true, mode: "oauth_token", kind: "subscription" };
+    const token = String(d.oauth_token);
+    if (token.startsWith(API_PREFIX)) {
+      return { ok: false, error: "oauth_token holds an API key; use api_key." };
+    }
+    if (token.startsWith(OAUTH_PREFIX))
+      return { ok: true, mode: "oauth_token", kind: "subscription" };
+    return {
+      ok: false,
+      error: SIGN_IN_CODE.test(token)
+        ? `oauth_token holds the code the sign-in page shows, not a token: that code goes in the Sign in with Claude step. The token comes from claude setup-token and starts with ${OAUTH_PREFIX}.`
+        : `oauth_token is not a token: it must hold the token claude setup-token prints, which starts with ${OAUTH_PREFIX}.`,
+    };
   }
   const o = d.claudeAiOauth;
   if (!o || typeof o !== "object" || Array.isArray(o)) {

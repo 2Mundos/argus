@@ -36,6 +36,8 @@ interface ProviderMapping {
   pick(credential: Record<string, unknown>): string | null;
   /** True when the credential is known to be past its own expiry (never logs a value). */
   expired?(credential: Record<string, unknown>, now: number): boolean;
+  /** True when the picked value cannot be this provider's token (never logs a value). */
+  malformed?(credential: Record<string, unknown>): boolean;
 }
 
 const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
@@ -88,6 +90,13 @@ export const PROVIDERS: Record<string, ProviderMapping> = {
       if (text(c.api_key) ?? text(c.oauth_token) ?? text(c.token)) return false;
       const at = expiryMs(claudeAiOauth(c)?.expiresAt);
       return at !== null && at <= now;
+    },
+    // A subscription token is `sk-ant-oat…`; anything else there (say, the sign-in
+    // page's `code#state`) would only surface as a 401 in the middle of a run.
+    malformed: (c) => {
+      if (text(c.api_key)) return false;
+      const token = text(c.oauth_token) ?? text(c.token);
+      return token !== null && !token.startsWith("sk-ant-oat");
     },
   },
   // Codex: a ChatGPT login (the whole auth.json, which OneCLI keeps fresh and
@@ -166,6 +175,11 @@ function secretFor(lease: AccountLease): {
   if (mapping.expired?.(lease.credential, Date.now())) {
     throw new Error(
       `account ${lease.name} has an expired ${lease.provider} access token: renew it in Argus (the channel does not refresh OAuth tokens)`,
+    );
+  }
+  if (mapping.malformed?.(lease.credential)) {
+    throw new Error(
+      `account ${lease.name} holds an ${lease.provider} credential that is not a token (expected sk-ant-oat…): renew it in Argus with the token from \`claude setup-token\``,
     );
   }
   const value = mapping.pick(lease.credential);

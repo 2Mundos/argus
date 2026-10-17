@@ -6,6 +6,10 @@ from argus_core import claude_auth
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 OAT = "sk-ant-" + "oat01-" + "x" * 40
 API = "sk-ant-" + "api03-" + "y" * 40
+SIGN_IN_CODE = (
+    "A" * 48 + "#" + "B" * 43
+)  # the sign-in page's code#state, obviously fake
+NOT_A_TOKEN = "z" * 92
 
 
 def oauth(**over):
@@ -44,6 +48,9 @@ def test_accepted_shapes_derive_the_kind(doc, mode, kind) -> None:
         ({"api_key": "has space"}, "whitespace"),
         ({"api_key": OAT}, "use oauth_token"),
         ({"oauth_token": API}, "use api_key"),
+        ({"oauth_token": SIGN_IN_CODE}, "code the sign-in page shows, not a token"),
+        ({"oauth_token": NOT_A_TOKEN}, "oauth_token is not a token"),
+        ({"api_key": NOT_A_TOKEN}, "api_key is not an Anthropic API key"),
         ({"oauth_token": "x" * 5000}, "too long"),
         ({"claudeAiOauth": "nope"}, "must be an object"),
         (oauth(refreshToken=""), "missing: refreshToken"),
@@ -57,5 +64,19 @@ def test_rejections_name_fields_and_never_values(doc, message) -> None:
     with pytest.raises(claude_auth.ClaudeAuthError) as err:
         claude_auth.validate(doc, now=NOW)
     assert message in str(err.value)
-    for secret in (OAT, API, "a" * 30, "r" * 30, "has space"):
+    for secret in (
+        OAT,
+        API,
+        SIGN_IN_CODE,
+        NOT_A_TOKEN,
+        "a" * 30,
+        "r" * 30,
+        "has space",
+    ):
         assert secret not in str(err.value)
+
+
+def test_sign_in_code_message_points_at_the_sign_in_step_and_setup_token() -> None:
+    with pytest.raises(claude_auth.ClaudeAuthError) as err:
+        claude_auth.validate({"oauth_token": SIGN_IN_CODE})
+    assert "sign-in step" in str(err.value) and "claude setup-token" in str(err.value)

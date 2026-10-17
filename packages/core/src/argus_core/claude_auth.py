@@ -1,6 +1,7 @@
 """Shape of an Anthropic account credential (claude accounts spec 3). Validation
 never echoes a value: errors name fields only."""
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -10,6 +11,7 @@ PROVIDER = "anthropic"
 MAX_TOKEN_LEN = 4096
 _OAUTH_PREFIX = "sk-ant-oat"
 _API_PREFIX = "sk-ant-api"
+_SIGN_IN_CODE = re.compile(r"^[A-Za-z0-9_-]{20,}#[A-Za-z0-9_-]{20,}$")
 _KEYS = ("api_key", "oauth_token", "claudeAiOauth")
 
 
@@ -66,12 +68,29 @@ def validate(doc: dict[str, Any], *, now: datetime | None = None) -> ClaudeAuthS
         raise ClaudeAuthError(f"give only one of: {', '.join(present)}")
     key = present[0]
     if key == "api_key":
-        if _token(doc, "api_key", "api_key").startswith(_OAUTH_PREFIX):
+        value = _token(doc, "api_key", "api_key")
+        if value.startswith(_OAUTH_PREFIX):
             raise ClaudeAuthError("api_key holds an OAuth token; use oauth_token")
+        if not value.startswith(_API_PREFIX):
+            raise ClaudeAuthError(
+                f"api_key is not an Anthropic API key; it starts with {_API_PREFIX}"
+            )
         return ClaudeAuthSummary(mode="api_key", kind="api_key")
     if key == "oauth_token":
-        if _token(doc, "oauth_token", "oauth_token").startswith(_API_PREFIX):
+        value = _token(doc, "oauth_token", "oauth_token")
+        if value.startswith(_API_PREFIX):
             raise ClaudeAuthError("oauth_token holds an API key; use api_key")
+        if not value.startswith(_OAUTH_PREFIX):
+            if _SIGN_IN_CODE.match(value):
+                raise ClaudeAuthError(
+                    "oauth_token holds the code the sign-in page shows, not a token: "
+                    "that code belongs in the sign-in step; the token comes from "
+                    f"`claude setup-token` and starts with {_OAUTH_PREFIX}"
+                )
+            raise ClaudeAuthError(
+                "oauth_token is not a token: it must hold the token "
+                f"`claude setup-token` prints, which starts with {_OAUTH_PREFIX}"
+            )
         return ClaudeAuthSummary(mode="oauth_token", kind="subscription")
     oauth = doc["claudeAiOauth"]
     if not isinstance(oauth, dict):

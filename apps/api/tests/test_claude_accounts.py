@@ -312,6 +312,49 @@ def test_renewing_over_rest_keeps_settings_and_syncs_the_kind(
     assert bad.status_code == 422 and TOKEN not in bad.text
 
 
+@pytest.mark.parametrize(
+    ("credential", "needle"),
+    [
+        ({"oauth_token": "A" * 48 + "#" + "B" * 43}, "sign-in page shows"),
+        ({"oauth_token": "z" * 92}, "oauth_token is not a token"),
+    ],
+)
+def test_a_value_that_is_not_a_token_is_refused_and_stores_nothing(
+    client: TestClient, credential, needle
+) -> None:
+    created = client.post(
+        "/api/accounts",
+        json={
+            "name": "main",
+            "provider": "anthropic",
+            "credential": {"api_key": API_KEY},
+        },
+        headers=ADMIN,
+    ).json()
+    ref = created["secret_ref"].removeprefix("sops:")
+    before = app.state.secrets.get(ref)
+
+    res = client.put(
+        f"/api/accounts/{created['id']}/credential",
+        json={"credential": credential},
+        headers=ADMIN,
+    )
+    assert res.status_code == 422 and needle in res.text
+    assert credential["oauth_token"] not in res.text
+    assert app.state.secrets.get(ref) == before == {"api_key": API_KEY}
+    after = client.get(f"/api/accounts/{created['id']}", headers=ADMIN).json()
+    assert after["secret_ref"] == created["secret_ref"]
+
+    count = len(client.get("/api/accounts", headers=ADMIN).json())
+    res = client.post(
+        "/api/accounts",
+        json={"name": "new", "provider": "anthropic", "credential": credential},
+        headers=ADMIN,
+    )
+    assert res.status_code == 422 and needle in res.text
+    assert len(client.get("/api/accounts", headers=ADMIN).json()) == count
+
+
 # -- the dedicated login -------------------------------------------------------------
 
 
