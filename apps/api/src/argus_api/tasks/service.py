@@ -373,6 +373,48 @@ async def unblock(tx: Tx, task_id: str, actor: str) -> Task:
     return await get_task(tx.conn, task_id)
 
 
+_RETRY_ERROR_MAX = 500
+
+
+async def retry(tx: Tx, task_id: str, actor: str) -> Task:
+    """Give a `failed` task a fresh window of attempts (`max_attempts` is kept).
+
+    Not a state-machine action: `failed` is terminal for the workers' transitions,
+    and only an operator may leave it. `failures` is reset with `attempt` because
+    `failures` is what `max_attempts` limits (3.2).
+    """
+    row = await _row(tx.conn, task_id)
+    if row["state"] != S.FAILED:
+        raise ConflictError(
+            f"task is {row['state']}, not failed", code="task_not_failed"
+        )
+    await tx.conn.execute(
+        "UPDATE tasks SET state = ?, attempt = 0, failures = 0, error = NULL,"
+        " assignee_agent_id = NULL, lease_expires_at = NULL, timeout_at = NULL,"
+        " progress_message = NULL, progress_percent = NULL, progress_at = NULL,"
+        " block_reason = NULL, updated_at = ? WHERE id = ?",
+        (S.READY, ts(tx.now), task_id),
+    )
+    error = row["error"] or ""
+    await record(
+        tx,
+        actor,
+        "task",
+        task_id,
+        "task.retried",
+        {
+            "from": S.FAILED,
+            "to": S.READY,
+            "task_id": task_id,
+            "previous_attempts": row["attempt"],
+            "max_attempts": row["max_attempts"],
+            "previous_error": error[:_RETRY_ERROR_MAX]
+            + ("…" if len(error) > _RETRY_ERROR_MAX else ""),
+        },
+    )
+    return await get_task(tx.conn, task_id)
+
+
 async def add_clarification(
     tx: Tx, task_id: str, question: str, answer: str, actor: str
 ) -> None:
