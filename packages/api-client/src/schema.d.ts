@@ -1883,14 +1883,20 @@ export interface components {
         ClaudeLogin: {
             /** Account Id */
             account_id: string | null;
+            /** Attempts */
+            attempts: number;
             /** Error */
             error: string | null;
             /** Expires In S */
             expires_in_s: number;
             /** Login Id */
             login_id: string;
+            /** Max Attempts */
+            max_attempts: number;
             /** Phase */
             phase: string | null;
+            /** Refusal */
+            refusal: string | null;
             /** State */
             state: string;
             /** Url */

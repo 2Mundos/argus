@@ -63,7 +63,11 @@ let the operator **renew** an existing one without recreating it:
     pastes it **into the Argus page** (never into chat), and `POST …/code` writes
     exactly those bytes plus Enter to the client's terminal. The code is
     1–2048 characters of `[A-Za-z0-9._~#%+/=-]`, never logged, echoed or placed
-    in an event or a validation error; one code per session;
+    in an event or a validation error. It is written with its Enter in a single
+    write, like a paste. The client may refuse a code and keep waiting, so up to 3
+    codes are accepted per session while it is `pending` and the client is alive
+    (`attempts` / `max_attempts` in the view; the 4th gets
+    `login_attempts_exhausted`);
   - the client then prints the token. Only a private parser reads it; it is
     stored as `{"oauth_token": …}` and appears nowhere else;
   - at most 2 sessions, 15 minutes each, one per starting token; the whole
@@ -72,7 +76,13 @@ let the operator **renew** an existing one without recreating it:
     teardown;
   - stdout/stderr and raw terminal bytes are never logged or returned; only the
     fixed states (`pending`, `completed`, `failed`, `cancelled`, `expired`), a
-    `phase` (`waiting_for_code`, `finishing`) and fixed reason codes.
+    `phase` (`waiting_for_code`, `finishing`) and fixed reason codes. The client's
+    output is classified by fixed markers into a closed code: `oauth_<status>`
+    (its "OAuth error … status code NNN"; only the number), `code_invalid`,
+    `token_not_found` (it reported success but no token was recognised; nothing is
+    stored), `login_rejected` (it left after a code with no known marker),
+    `client_exited`, `no_url`. While a refusal leaves the login `pending`, it is
+    shown as `refusal`.
 - **Shared with Codex**: sessions, ownership, TTL, limits, teardown and the
   commit that cancel/expiry cannot interrupt live in one base
   (`accounts/login_base.py`); Codex behaviour is unchanged.

@@ -41,7 +41,7 @@ MAX_CODE_LEN = 2048
 _CODE = re.compile(r"[A-Za-z0-9._~#%+/=-]+")
 _MAX_OUTPUT = 128 * 1024
 _RESULT_TIMEOUT_S = 90.0  # from the code to the token, else the code was refused
-_ENTER_DELAY_S = 0.1
+MAX_ATTEMPTS = 3  # codes the client is given per login
 _COLUMNS = 1000  # wide enough that the client never wraps the link or the token
 
 _ANSI = re.compile(
@@ -51,6 +51,12 @@ _ANSI = re.compile(
 )
 _URL = re.compile(r"https://[^\s\"'<>\x00-\x1f]+(?=\s)")
 _TOKEN = re.compile(r"sk-ant-oat\d{0,4}-[A-Za-z0-9_-]{40,}(?=[^A-Za-z0-9_-]|$)")
+# Fixed markers of the client's own messages. The TUI separates words with cursor
+# moves, so spaces are optional. Only the matched marker is ever turned into a
+# code (plus the three-digit status); no output is kept or returned.
+_OAUTH_ERROR = re.compile(r"OAuth\s*error:?.*?status\s*code\s*(\d{3})", re.S)
+_CODE_INVALID = re.compile(r"Invalid\s*code|Authentication\s*failed", re.I)
+_SUCCESS = re.compile(r"Long-lived\s*authentication\s*token\s*created\s*successfully")
 
 __all__ = ["ClaudeLoginManager", "LoginState", "LoginUnavailableError", "url_allowed"]
 
@@ -63,7 +69,10 @@ class LoginUnavailableError(ConflictError):
 class _Session(LoginSession):
     renew_id: str | None = None
     url: str | None = None
-    code_sent: bool = False
+    attempts: int = 0  # codes handed to the client
+    awaiting: bool = False  # the last code has no verdict yet
+    refusal: str | None = None  # why the client turned the last code down
+    mark: int = 0  # where the last code's output starts in `out`
     code_deadline: float | None = None
     master: int | None = None
     out: bytearray = field(default_factory=bytearray)
@@ -86,8 +95,21 @@ def url_allowed(url: str) -> bool:
     )
 
 
+def _plain(raw: bytes | bytearray) -> str:
+    return _ANSI.sub("", bytes(raw).decode("utf-8", "replace")).replace("\r", "")
+
+
 def _text(s: _Session) -> str:
-    return _ANSI.sub("", s.out.decode("utf-8", "replace")).replace("\r", "")
+    return _plain(s.out)
+
+
+def _refusal(text: str) -> str | None:
+    """A closed reason code for the client's refusal of a code, else None."""
+    if m := _OAUTH_ERROR.search(text):
+        return f"oauth_{m.group(1)}"
+    if _CODE_INVALID.search(text):
+        return "code_invalid"
+    return None
 
 
 _STUB = "#!/bin/sh\nexit 0\n"
@@ -131,25 +153,29 @@ class ClaudeLoginManager(LoginManager[_Session]):
         return self.view(session)
 
     async def submit_code(self, login_id: str, owner: str, code: str) -> dict[str, Any]:
-        """Hand the operator's code to the client, exactly as given. One per login."""
+        """Hand the operator's code to the client, exactly as given, in one write
+        like a paste. The client may refuse it and wait, so a few tries are allowed."""
         s = self._session(login_id, owner)
         self._expire_if_due(s)
         if s.state is not LoginState.PENDING or s.commit is not None:
             raise ConflictError("this login is no longer waiting", code="login_closed")
-        if s.code_sent or s.url is None or s.master is None:
+        if s.url is None or s.master is None or s.eof:
             raise ConflictError(
                 "no code can be accepted now", code="login_not_waiting_for_code"
             )
+        if s.attempts >= MAX_ATTEMPTS:
+            raise ConflictError(
+                "too many codes were tried; start a new login",
+                code="login_attempts_exhausted",
+            )
         if not (0 < len(code) <= MAX_CODE_LEN and _CODE.fullmatch(code)):
             raise ValidationFailedError("the code has an invalid format")
-        s.code_sent = True  # before any await: a second submit finds it taken
+        s.attempts += 1
+        s.awaiting, s.refusal = True, None
+        s.mark = len(s.out)
         s.code_deadline = self._clock() + _RESULT_TIMEOUT_S
-        master = s.master
         try:
-            os.write(master, code.encode("ascii"))
-            await asyncio.sleep(_ENTER_DELAY_S)
-            if s.master == master:
-                os.write(master, b"\r")
+            os.write(s.master, code.encode("ascii") + b"\r")
         except OSError:
             await self._finish(s, LoginState.FAILED, "client_exited")
         return self.view(s)
@@ -159,9 +185,12 @@ class ClaudeLoginManager(LoginManager[_Session]):
         return {
             "login_id": s.id,
             "state": s.state.value,
-            "phase": ("finishing" if s.code_sent else "waiting_for_code")
+            "phase": ("finishing" if s.awaiting else "waiting_for_code")
             if pending
             else None,
+            "attempts": s.attempts,
+            "max_attempts": MAX_ATTEMPTS,
+            "refusal": s.refusal if pending else None,
             "url": s.url if pending else None,
             "expires_in_s": max(0, int(s.expires_at - self._clock())) if pending else 0,
             "account_id": s.account_id,
@@ -320,21 +349,31 @@ class ClaudeLoginManager(LoginManager[_Session]):
             if token := _TOKEN.search(text):
                 await self._finished(s, actor, token.group())
                 return
+            if s.awaiting and (reason := _refusal(_plain(s.out[s.mark :]))):
+                # Turned down, but the client waits for another code.
+                s.awaiting, s.refusal, s.code_deadline = False, reason, None
             if s.eof:
                 if s.state is not LoginState.PENDING:
                     return
-                raise LoginFailure(
-                    "login_rejected"
-                    if s.code_sent
-                    else ("client_exited" if s.url else "no_url")
-                )
+                raise LoginFailure(self._ended(s, text))
             timeout = None
             if s.code_deadline is not None:
                 timeout = s.code_deadline - self._clock()
                 if timeout <= 0:
-                    raise LoginFailure("no_token")
+                    raise LoginFailure(
+                        "token_not_found" if _SUCCESS.search(text) else "no_token"
+                    )
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(s.activity.wait(), timeout)
+
+    @staticmethod
+    def _ended(s: _Session, text: str) -> str:
+        """Why the client left without a token: a closed code, never its words."""
+        if _SUCCESS.search(text):
+            return "token_not_found"  # it said it succeeded; we saw no token
+        if s.attempts:
+            return _refusal(_plain(s.out[s.mark :])) or s.refusal or "login_rejected"
+        return "client_exited" if s.url else "no_url"
 
     async def _finished(self, s: _Session, actor: str, token: str) -> None:
         doc = {"oauth_token": token}

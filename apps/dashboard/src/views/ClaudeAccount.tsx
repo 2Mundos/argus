@@ -63,6 +63,20 @@ export function ClaudeAccount({
   );
 }
 
+/** What a reason code from the login means for the person, without jargon. */
+function loginReason(code: string): string {
+  if (code === "oauth_400")
+    return "Claude refused that code: it has expired or was already used. Open the sign-in page again to get a new code and paste it.";
+  if (code === "code_invalid") return "Claude did not accept that code. Check it and try again.";
+  if (code === "token_not_found")
+    return "Claude said it signed in, but Argus could not find the token it made. Nothing was stored; start again.";
+  if (code === "login_rejected")
+    return "Claude closed the sign-in after the code without saying why.";
+  if (code === "login_attempts_exhausted") return "Too many codes were tried; start a new login.";
+  if (code.startsWith("oauth_")) return `Claude refused the code (error ${code.slice(6)}).`;
+  return code;
+}
+
 type Shared = { renew?: Account; onClose: () => void; onDone: () => void };
 
 /** Create the account, or replace the credential of the one being renewed. */
@@ -423,9 +437,19 @@ function DedicatedLogin({ renew, onClose, onDone }: Shared) {
             </li>
             <li>
               Complete and copy the code it shows, then paste it below
-              {finishing ? " (sent)" : ""}.
+              {finishing ? " (sent)" : ""}. The code expires quickly: paste everything the page
+              shows, including the part after <code>#</code>.
             </li>
           </ol>
+          {login.refusal && (
+            <p className="error" role="alert">
+              {loginReason(login.refusal)} You can try another code
+              {login.attempts != null && login.max_attempts != null
+                ? ` (${login.attempts} of ${login.max_attempts} tries used)`
+                : ""}
+              .
+            </p>
+          )}
           {!finishing && (
             <form onSubmit={sendCode}>
               <label>
@@ -463,6 +487,9 @@ function DedicatedLogin({ renew, onClose, onDone }: Shared) {
             Login {login.state}
             {login.error ? ` (${login.error})` : ""}. Nothing was stored.
           </p>
+          {login.error && loginReason(login.error) !== login.error && (
+            <p className="small">{loginReason(login.error)}</p>
+          )}
           <div className="actions">
             <button type="button" onClick={() => track(undefined)}>
               Try again
