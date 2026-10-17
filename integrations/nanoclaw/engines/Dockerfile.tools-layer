@@ -1,0 +1,11 @@
+# Argus tools layer: the agent image NanoClaw builds has no ssh or rsync, so a
+# worker cannot clone over ssh or sync files. Built by apply-tools-layer.sh.
+ARG BASE
+FROM ${BASE}
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-client rsync \
+ && rm -rf /var/lib/apt/lists/* \
+ && for b in ssh ssh-keygen ssh-keyscan rsync git; do command -v "$b" || exit 1; done
+USER node
+LABEL dev.argus.tools-layer="openssh-client rsync"

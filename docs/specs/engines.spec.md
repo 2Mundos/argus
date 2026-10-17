@@ -52,7 +52,11 @@ In scope:
   exists in the image and reports the pinned version), `authenticated` (a
   credential for *that container's* use exists), `validated` (a real
   non-interactive task completed and was checked). Each is `true`, `false` or
-  `null` (unknown) with a detail and a timestamp. An entry is `usable` only if
+  `null` (unknown) with a detail and a timestamp. `installed` is also false,
+  naming them, when the image lacks a binary every worker needs (`ssh`, `rsync`,
+  `git`): `smoke.sh` probes the image with `docker run … command -v` and records
+  it as `tools` on each row; a missing or inconclusive record (docker failed)
+  changes nothing, so listing never runs a container. An entry is `usable` only if
   all three are `true`. Installed does not imply authenticated; the host's
   login proves nothing about a container.
 - **The ledger is a file** (`<data_dir>/engines-ledger.json`), written by
@@ -155,6 +159,8 @@ In scope:
   with 422; answers are never `accepted` without an effective check.
 - `integrations/nanoclaw/engines/`: installer for the Codex payload and the
   CLI manifest, the image steps for opencode and the Cursor agent (checksum
-  pinned), `argus-delegate.mjs` and its tests, `smoke.sh`.
+  pinned), `argus-delegate.mjs` and its tests, `smoke.sh`, and the tools layer
+  (`Dockerfile.tools-layer`, `apply-tools-layer.sh`: openssh-client and rsync on
+  top of NanoClaw's image, applied by `provision.sh`).
 - The dashboard combo reads `GET /api/engines` (a later increment); the
   catalogue already carries everything it needs.

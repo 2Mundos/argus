@@ -2,13 +2,14 @@
 
 import json
 import os
+import subprocess
 from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx2 as httpx
 import pytest
-from argus_api.engines import catalog, router
+from argus_api.engines import catalog, image_tools, router
 from argus_api.engines.local import (
     LocalModel,
     build_chat_completion_payload,
@@ -460,6 +461,51 @@ def test_readiness_facts_are_separate() -> None:
     assert r.installed.ok is True
     assert r.authenticated.ok is None and r.validated.ok is None
     assert entry.usable is False
+
+
+def _docker(stdout: str = "", code: int = 0):
+    def run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(cmd, code, stdout, "")
+
+    return run
+
+
+def _raises(exc: Exception):
+    def run(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
+        raise exc
+
+    return run
+
+
+def test_image_tools_probe_decisions() -> None:
+    assert image_tools.probe("img", _docker(""))["ok"] is True
+    gone = image_tools.probe("img", _docker("ssh\nrsync\n"))
+    assert gone == {"ok": False, "detail": "missing in image: ssh, rsync"}
+    # a docker failure says nothing about the image
+    assert image_tools.probe("img", _docker("", code=125))["ok"] is None
+    assert image_tools.probe("img", _raises(FileNotFoundError()))["ok"] is None
+    timeout = subprocess.TimeoutExpired("docker", 1)
+    assert image_tools.probe("img", _raises(timeout))["ok"] is None
+
+
+def test_missing_image_tools_make_installed_false_and_unknown_changes_nothing(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text(
+        json.dumps({"engines": {"claude": {"installed": ok_fact("2.1")}}})
+    )
+    image_tools.record(ledger, "img", _docker("rsync\n"))
+    entry = {
+        e.id: e for e in catalog.build(catalog.read_ledger(ledger), None, None).engines
+    }
+    assert entry["claude"].readiness.installed.ok is False
+    assert "rsync" in (entry["claude"].readiness.installed.detail or "")
+    image_tools.record(ledger, "img", _docker("", code=1))
+    again = catalog.build(catalog.read_ledger(ledger), None, None).engines
+    claude = next(e for e in again if e.id == "claude")
+    assert claude.readiness.installed.ok is True
+    assert next(e for e in again if e.id == "codex").readiness.installed.ok is None
 
 
 def test_ledger_missing_or_corrupt_means_unknown(tmp_path: Path) -> None:
