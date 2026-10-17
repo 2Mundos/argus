@@ -473,33 +473,43 @@ Repository access is separate from engine and executor accounts. A distinct
 Argus `repository` account lease is requested only for tasks requiring the
 `repository:write` capability. Pools configure a project-to-HTTPS
 `owner/repository` allowlist; NanoClaw rejects an unconfigured project, host,
-or repository before applying the lease. The account provider is `gitea` and
-must be a dedicated service credential whose upstream permissions are limited
-to the configured repository. After the task, NanoClaw unassigns the OneCLI
-secret and releases the `repository` lease. Tasks without this capability do
-not acquire the credential and retain existing behavior.
+or repository before applying the lease. The account provider is `gitea`.
+After the task, NanoClaw unassigns both OneCLI repository secrets and releases
+the task-scoped `repository` lease. Tasks without this capability do not
+acquire the credential and retain existing behavior.
 
-The operator registers the dedicated Gitea service account through Argus's account registry
-(provider `gitea`, kind `api_key`, credential fields `username` and `token`). The username is the
-service-account login used for Git smart-HTTP Basic authentication; both fields are required and
-validated. The registry
-writes it to the SOPS-backed secret store; the database row contains only the
-`sops:` reference. Configure the matching project URL in the NanoClaw pool's
-`nanoclaw.repositories` map. Do not reuse a personal token or engine account.
+Least privilege is preferred: use a dedicated Gitea bot/service identity with
+permissions limited upstream to the configured repository when one is
+available. For the accepted deployment, the operator cannot create a bot
+account and has chosen the existing personal Gitea PAT for both REST and Git.
+This personal-PAT fallback is permitted by that operator decision; it is not a
+repo-scoped PAT and retains the user's Gitea account permissions. Do not imply
+that proxy path scoping narrows those upstream permissions.
+
+The operator registers the Gitea account through Argus's account registry
+(provider `gitea`, kind `api_key`, credential fields `username` and `token`).
+The username is required for Git smart-HTTP Basic authentication. The registry
+validates both fields, writes the credential to the SOPS-backed secret store,
+and keeps only the `sops:` reference in the database row. Configure the
+matching project URL in the NanoClaw pool's `nanoclaw.repositories` map.
 The NanoClaw host writes two `generic` secrets to OneCLI 1.42, both scoped to the exact Gitea host:
 the REST secret matches only `/api/v1/repos/{owner}/{repository}/*` and injects
 `Authorization: token <PAT>`; the Git smart-HTTP secret matches only
 `/{owner}/{repository}.git/*` and injects `Authorization: Basic <base64(username:PAT)>`.
 The latter is created only in the trusted host-side lease mapper and is stored only in OneCLI's
-encrypted secret store. Base64 is encoding, not encryption: neither form may enter task data,
-agent/model state, logs, process arguments or artifacts. The official API contract documents the
+encrypted secret store. Both are injected only through the OneCLI egress proxy, for the exact
+configured Gitea host and allowlisted repository API/Git paths; the raw PAT never enters task data,
+model prompts, agent environment/files, process arguments, logs or artifacts. Base64 is encoding,
+not encryption. Path scoping is a compensating control at the trusted proxy boundary, not a
+restriction on the personal PAT itself; residual risk remains if that proxy/admin boundary is
+bypassed. The official API contract documents the
 `token` scheme, while Gitea's Git-over-HTTP flow uses Basic with the service username and PAT as
 password ([Gitea 1.26 API authentication](https://docs.gitea.com/api/1.26/)); the target
 deployment version is not configured in this repository and must be confirmed during operator
 provisioning.
-Both patterns are repository-specific, and the upstream identity must also be restricted to that
-single configured repository. The worker's API helper separately enforces its exact URL allowlist.
-Do not use a manager token or broad human PAT.
+Both patterns are repository-specific, and the worker's API helper separately enforces its exact
+URL allowlist. Prefer the repo-limited bot identity when available; this deployment's personal PAT
+is explicitly accepted with the compensating controls above. Do not use a manager token.
 For repository identity, configuration may use either `/owner/repository` or
 `/owner/repository.git`. Normalize exactly one terminal `.git` from the
 repository component for REST API paths and allowlist comparisons; pass the
