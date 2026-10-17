@@ -87,7 +87,17 @@ describe("tokens", () => {
 describe("cleanCode", () => {
   it("trims paste whitespace only and refuses anything else odd", () => {
     expect(cleanCode("  abc-DEF_1.2~3#st%2B+/=  \n")).toBe("abc-DEF_1.2~3#st%2B+/=");
-    for (const bad of ["", "   ", "a b", "é", "$(id)", "a;b", "x".repeat(2049)]) {
+    for (const bad of [
+      "",
+      "   ",
+      "a b",
+      "é",
+      "$(id)",
+      "a;b",
+      "nohash",
+      "abc#",
+      `${"x".repeat(2049)}#y`,
+    ]) {
       expect(cleanCode(bad)).toBeNull();
     }
   });

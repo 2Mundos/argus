@@ -34,6 +34,9 @@ ADMIN = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
 TOKEN = "sk-ant-" + "oat01-" + "FAKE" * 15 + "-SECRET"
 API_KEY = "sk-ant-" + "api03-" + "OLDKEY" * 8
 CODE = "AbC123-xyz_9.~#st%2Bate"
+LONG = (
+    "L" * 64 + "#" + "S" * 43
+)  # a real sign-in code is this long: see the "paste" fake
 OLD = {"api_key": API_KEY}
 
 FAKE = """\
@@ -69,13 +72,35 @@ if mode == "raw":
     # Say when the raw read is armed: in canonical mode a CR ends the line and the
     # read would return the code without it, which says nothing about the manager.
     open({ready!r}, "w").write("1")
-    open({received!r}, "w").write(repr(os.read(0, 4096)))
+    first = os.read(0, 4096)
+    open({received!r}, "w").write(repr((first, os.read(0, 4096))))
     sys.stdout.write("OAuth error: Request failed with status code 400\\n"); sys.stdout.flush()
     time.sleep(60)
+if mode == "paste":
+    # Measured on the shipped client: a long chunk is a paste and its Enter is eaten.
+    import tty
+    tty.setraw(0)
+    buf = b""
+    while True:
+        chunk = os.read(0, 4096)
+        if len(chunk) > 80:
+            buf += chunk.replace(b"\\r", b"")
+        else:
+            buf += chunk
+        if chunk == b"\\r":
+            break
+    open({received!r}, "w").write(buf.decode().rstrip("\\r"))
+    sys.stdout.write("Your OAuth token (valid for 31536000):\\n" + {token!r} + "\\n")
+    sys.stdout.flush()
+    sys.exit(0)
 if mode in ("retry", "stubborn_oauth", "silent", "no_token"):
     tries = []
     while True:
         line = sys.stdin.readline().rstrip("\\r\\n")
+        if line == "" and tries:  # the Enter that restarts the flow: new link
+            sys.stdout.write("https://claude.ai/oauth/authorize?code=true&client_id=c&state=ST" + str(len(tries) + 1) + "\\n")
+            sys.stdout.write("Paste code here if prompted > "); sys.stdout.flush()
+            continue
         tries.append(line)
         open({received!r}, "w").write("\\n".join(tries))
         if mode == "silent":
@@ -516,7 +541,18 @@ async def test_login_is_isolated_by_owner_and_limited(
 
 @pytest.mark.parametrize(
     "code",
-    ["", " " + CODE, CODE + "\n", "a b", "é", "x" * 2049, "$(id)", "a;b", "a\x03"],
+    [
+        "",
+        " " + CODE,
+        CODE + "\n",
+        "a b",
+        "é",
+        "x" * 2049,
+        "nohash",
+        "$(id)",
+        "a;b",
+        "a\x03",
+    ],
 )
 async def test_malformed_codes_are_refused_without_echo(
     db: Database, secrets, tmp_path: Path, code: str
@@ -576,14 +612,16 @@ async def test_a_refused_code_can_be_followed_by_another(
     started = await mgr.start("tok-1", "admin:one", None)
     login_id = started["login_id"]
     assert started["attempts"] == 0 and started["max_attempts"] == 3
-    await mgr.submit_code(login_id, "tok-1", "wrong-code")
-    for _ in range(100):  # the client refuses but stays alive
+    first_url = started["url"]
+    await mgr.submit_code(login_id, "tok-1", "wrong-code#state")
+    for _ in range(200):  # refused: we press its Enter and it prints a new link
         view = mgr.get(login_id, "tok-1")
-        if view["refusal"]:
+        if view["refusal"] and view["phase"] == "waiting_for_code":
             break
         await asyncio.sleep(0.02)
     assert view["state"] == "pending" and view["phase"] == "waiting_for_code"
     assert view["refusal"] == "oauth_400" and view["attempts"] == 1
+    assert view["url"] and view["url"] != first_url and "state=ST2" in view["url"]
     assert "wrong-code" not in json.dumps(view)
     view = await mgr.submit_code(login_id, "tok-1", CODE)
     assert view["attempts"] == 2 and view["refusal"] is None
@@ -615,20 +653,21 @@ async def test_the_number_of_codes_is_limited(
     started = await mgr.start("tok-1", "admin:one", None)
     login_id = started["login_id"]
     for n in range(1, 4):
-        view = await mgr.submit_code(login_id, "tok-1", f"code{n}")
+        view = await mgr.submit_code(login_id, "tok-1", f"code{n}#s")
         assert view["attempts"] == n
-        for _ in range(100):
-            if mgr.get(login_id, "tok-1")["refusal"]:
+        for _ in range(200):
+            v = mgr.get(login_id, "tok-1")
+            if v["refusal"] and v["phase"] == "waiting_for_code":
                 break
             await asyncio.sleep(0.02)
     with pytest.raises(ConflictError) as err:
-        await mgr.submit_code(login_id, "tok-1", "code4")
+        await mgr.submit_code(login_id, "tok-1", "code4#s")
     assert err.value.code == "login_attempts_exhausted"
     assert mgr.get(login_id, "tok-1")["attempts"] == 3
     await mgr.shutdown()
 
 
-async def test_the_code_and_enter_arrive_in_one_write(
+async def test_the_code_and_enter_arrive_as_two_writes(
     db: Database, secrets, tmp_path: Path
 ) -> None:
     mgr, _ = manager(db, secrets, tmp_path, mode="raw")
@@ -643,7 +682,33 @@ async def test_the_code_and_enter_arrive_in_one_write(
         if (tmp_path / "received").exists() and (tmp_path / "received").read_text():
             break
         await asyncio.sleep(0.02)
-    assert (tmp_path / "received").read_text() == repr(CODE.encode() + b"\r")
+    assert (tmp_path / "received").read_text() == repr((CODE.encode(), b"\r"))
+    await mgr.shutdown()
+
+
+async def test_a_long_code_is_submitted_despite_the_clients_paste_handling(
+    db: Database, secrets, tmp_path: Path
+) -> None:
+    """Regression: with value and Enter in one write the real client never saw the
+    Enter for a code of real length, and the login sat in `finishing` for good."""
+    mgr, _ = manager(db, secrets, tmp_path, mode="paste")
+    started = await mgr.start("tok-1", "admin:one", None)
+    await asyncio.sleep(0.3)  # let the fake arm raw mode
+    await mgr.submit_code(started["login_id"], "tok-1", LONG)
+    view = await settle(mgr, started["login_id"])
+    assert view["state"] == "completed", view
+    assert (tmp_path / "received").read_text() == LONG
+
+
+async def test_a_second_code_is_not_written_while_the_first_has_no_verdict(
+    db: Database, secrets, tmp_path: Path
+) -> None:
+    mgr, _ = manager(db, secrets, tmp_path, mode="hang")
+    started = await mgr.start("tok-1", "admin:one", None)
+    await mgr.submit_code(started["login_id"], "tok-1", CODE)
+    with pytest.raises(ConflictError) as err:
+        await mgr.submit_code(started["login_id"], "tok-1", CODE)
+    assert err.value.code == "login_code_in_flight"
     await mgr.shutdown()
 
 

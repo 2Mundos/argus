@@ -61,12 +61,23 @@ let the operator **renew** an existing one without recreating it:
     credentials in it; anything else aborts the session;
   - the operator signs in with the link; the page shows a code; the operator
     pastes it **into the Argus page** (never into chat), and `POST …/code` writes
-    exactly those bytes plus Enter to the client's terminal. The code is
-    1–2048 characters of `[A-Za-z0-9._~#%+/=-]`, never logged, echoed or placed
-    in an event or a validation error. It is written with its Enter in a single
-    write, like a paste. The client may refuse a code and keep waiting, so up to 3
-    codes are accepted per session while it is `pending` and the client is alive
-    (`attempts` / `max_attempts` in the view; the 4th gets
+    exactly those bytes to the client's terminal, pauses briefly, then writes
+    Enter. The code is `<code>#<state>` (the `#` is required: the client refuses
+    a code without it), 1–2048 characters of `[A-Za-z0-9._~#%+/=-]`, never logged,
+    echoed or placed in an event or a validation error. **Value and Enter are two
+    writes**: measured on the shipped client (2.1.296), its input treats a long
+    chunk as a paste and swallows an Enter that arrives in the same chunk, so a
+    real code (about 100+ characters) was never submitted while a 60-character one
+    was. A second code is refused with `login_code_in_flight` until the client
+    answers the first;
+  - the client may refuse a code (`OAuth error … status code 400 Press Enter to
+    retry.`) and waits for Enter; that Enter makes it start the flow again with a
+    **new sign-in link and a new verifier**, so the refused code's link is dead.
+    Argus sends that Enter itself, then publishes the new link (`url`) with the
+    refusal, and the operator signs in again with the new link. A bare second code
+    is never written while the client waits for Enter: it would be swallowed as the
+    retry key. Up to 3 codes are accepted per session while it is `pending` and
+    the client is alive (`attempts` / `max_attempts` in the view; the 4th gets
     `login_attempts_exhausted`);
   - the client then prints the token. Only a private parser reads it; it is
     stored as `{"oauth_token": …}` and appears nowhere else;
@@ -76,7 +87,7 @@ let the operator **renew** an existing one without recreating it:
     teardown;
   - stdout/stderr and raw terminal bytes are never logged or returned; only the
     fixed states (`pending`, `completed`, `failed`, `cancelled`, `expired`), a
-    `phase` (`waiting_for_code`, `finishing`) and fixed reason codes. The client's
+    `phase` (`waiting_for_code`, `finishing`, `renewing_link` while the client restarts after a refusal; no link and no code are accepted then) and fixed reason codes. The client's
     output is classified by fixed markers into a closed code: `oauth_<status>`
     (its "OAuth error … status code NNN"; only the number), `code_invalid`,
     `token_not_found` (it reported success but no token was recognised; nothing is
