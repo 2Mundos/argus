@@ -32,6 +32,19 @@ export function createGatewayFetch({
 
 /** Credential-free Gitea API client. OneCLI injects Authorization at the HTTPS gateway. */
 export function allowlistedRepository(repositoryUrl, allowedRepositories) {
+  const candidate = repositoryIdentity(repositoryUrl);
+  const normalized = `${candidate.origin}/${candidate.owner}/${candidate.repo}`;
+  const allow = new Set(
+    allowedRepositories.map((raw) => {
+      const url = repositoryIdentity(raw);
+      return `${url.origin}/${url.owner}/${url.repo}`;
+    }),
+  );
+  if (!allow.has(normalized)) throw new Error("repository is not configured for this worker");
+  return candidate;
+}
+
+function repositoryIdentity(repositoryUrl) {
   let candidate;
   try {
     candidate = new URL(repositoryUrl);
@@ -50,17 +63,11 @@ export function allowlistedRepository(repositoryUrl, allowedRepositories) {
   const parts = candidate.pathname.split("/").filter(Boolean);
   if (parts.length !== 2 || !parts.every((part) => /^[A-Za-z0-9_.-]+$/.test(part)))
     throw new Error("repository URL must identify exactly owner/repository");
-  const normalized = `${candidate.origin}/${parts.join("/")}`;
-  const allow = new Set(
-    allowedRepositories.map((raw) => {
-      const url = new URL(raw);
-      if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash)
-        throw new Error("configured repositories must be plain HTTPS URLs");
-      return `${url.origin}/${url.pathname.split("/").filter(Boolean).join("/")}`;
-    }),
-  );
-  if (!allow.has(normalized)) throw new Error("repository is not configured for this worker");
-  return { origin: candidate.origin, owner: parts[0], repo: parts[1] };
+  const owner = parts[0];
+  const final = parts[1];
+  const repo = final.endsWith(".git") ? final.slice(0, -4) : final;
+  if (!repo) throw new Error("repository name must not be empty");
+  return { origin: candidate.origin, owner, repo };
 }
 
 export class GiteaApi {

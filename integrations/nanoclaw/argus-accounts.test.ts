@@ -735,44 +735,51 @@ describe("a limit of the executor's provider leaves the Codex engine lease alone
 });
 
 describe("task-scoped repository auth", () => {
-  it("leases only for repository:write, keeps the secret out of the agent message, and releases after completion", async () => {
-    const repoLease = lease("repo", "dummy-gitea-token", {
-      provider: "gitea",
-      role: "repository",
-      credential: { username: "service-user", token: "dummy-gitea-token" },
-    });
-    const codeTask = { ...task(), required_capabilities: ["repository:write"] };
-    const w = world({
-      leases: [lease("engine", "dummy-engine-key"), repoLease],
-      tasks: [codeTask],
-    });
-    const h = harness(w, true, { repositories: { global: "https://git.example.test/org/repo" } });
-    live.push(h.adapter);
-    await h.adapter.setup(h.setup);
-    await until(() => h.inbound.length > 0);
-    expect(h.inbound[0]).toContain("Repository (allowlisted): https://git.example.test/org/repo");
-    expect(h.inbound[0]).not.toContain("dummy-gitea-token");
-    expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
-      { providers: ["anthropic"] },
-      { providers: ["gitea"], role: "repository" },
-    ]);
-    await h.adapter.deliver("local", null, {
-      text: `COMPLETE: ${JSON.stringify({
-        summary: "PR opened",
-        data: {
-          delivery: {
-            repository: "https://git.example.test/org/repo",
-            head_sha: "head-1",
-            ci_status: "success",
+  it.each(["", ".git"])(
+    "normalizes configured repository suffix %s for the worker task URL",
+    async (suffix) => {
+      const repoLease = lease("repo", "dummy-gitea-token", {
+        provider: "gitea",
+        role: "repository",
+        credential: { username: "service-user", token: "dummy-gitea-token" },
+      });
+      const codeTask = { ...task(), required_capabilities: ["repository:write"] };
+      const w = world({
+        leases: [lease("engine", "dummy-engine-key"), repoLease],
+        tasks: [codeTask],
+      });
+      const h = harness(w, true, {
+        repositories: { global: `https://git.example.test/org/repo${suffix}` },
+      });
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length > 0);
+      expect(h.inbound[0]).toContain(
+        "Repository (allowlisted): https://git.example.test/org/repo.git",
+      );
+      expect(h.inbound[0]).not.toContain("dummy-gitea-token");
+      expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
+        { providers: ["anthropic"] },
+        { providers: ["gitea"], role: "repository" },
+      ]);
+      await h.adapter.deliver("local", null, {
+        text: `COMPLETE: ${JSON.stringify({
+          summary: "PR opened",
+          data: {
+            delivery: {
+              repository: "https://git.example.test/org/repo",
+              head_sha: "head-1",
+              ci_status: "success",
+            },
           },
-        },
-      })}`,
-    } as any);
-    const completed = w.calls.find((c) => c.path === "/tasks/t1/complete")!;
-    expect(completed.body.result.data.delivery.head_sha).toBe("head-1");
-    await until(() => w.calls.some((c) => c.path === "/accounts/release?role=repository"));
-    expect(w.calls.filter((c) => c.path === "/accounts/release?role=repository")).toHaveLength(1);
-  });
+        })}`,
+      } as any);
+      const completed = w.calls.find((c) => c.path === "/tasks/t1/complete")!;
+      expect(completed.body.result.data.delivery.head_sha).toBe("head-1");
+      await until(() => w.calls.some((c) => c.path === "/accounts/release?role=repository"));
+      expect(w.calls.filter((c) => c.path === "/accounts/release?role=repository")).toHaveLength(1);
+    },
+  );
 
   it("does not acquire repository credentials for existing non-repository tasks", async () => {
     const w = world({ leases: [lease("engine", "dummy-engine-key")], tasks: [task()] });

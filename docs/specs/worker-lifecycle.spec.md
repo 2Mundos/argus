@@ -500,6 +500,15 @@ provisioning.
 Both patterns are repository-specific, and the upstream identity must also be restricted to that
 single configured repository. The worker's API helper separately enforces its exact URL allowlist.
 Do not use a manager token or broad human PAT.
+For repository identity, configuration may use either `/owner/repository` or
+`/owner/repository.git`. Normalize exactly one terminal `.git` from the
+repository component for REST API paths and allowlist comparisons; pass the
+worker a canonical HTTPS clone URL ending in one `.git`. The REST rule uses
+`/api/v1/repos/{owner}/{repository}/*`; the Git rule uses the exact normalized
+remote prefix `/{owner}/{repository}.git/*`. Never derive either rule from the
+un-normalized suffix or use a broad `repository*` match. Thus both configured
+forms yield the same REST identity and Git remote, while lookalike repositories
+remain rejected by exact normalized allowlist comparison.
 OneCLI's documented generic-secret field is `injectionConfig`, and its path
 matcher supports a single pattern with `*` wildcard forms ([OneCLI 1.42 secret
 service](https://github.com/onecli/onecli/blob/v1.42.0/packages/api/src/services/secret-service.ts),

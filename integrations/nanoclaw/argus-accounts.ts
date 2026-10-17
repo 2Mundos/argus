@@ -42,6 +42,52 @@ interface ProviderMapping {
 
 const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 
+export interface NormalizedRepositoryUrl {
+  origin: string;
+  host: string;
+  owner: string;
+  repo: string;
+  apiPath: string;
+  gitPathPattern: string;
+  cloneUrl: string;
+}
+
+/** Normalize repo and repo.git URLs to one API identity and one Git remote. */
+export function normalizeRepositoryUrl(raw: string): NormalizedRepositoryUrl {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("repository URL is invalid");
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    url.pathname.endsWith("/")
+  )
+    throw new Error("repository URL must be a plain HTTPS repository URL");
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length !== 2 || !parts.every((part) => /^[A-Za-z0-9_.-]+$/.test(part)))
+    throw new Error("repository URL must identify exactly owner/repository");
+  const [owner, rawRepo] = parts;
+  const repo = rawRepo.endsWith(".git") ? rawRepo.slice(0, -4) : rawRepo;
+  if (!repo) throw new Error("repository name must not be empty");
+  const apiPath = `/api/v1/repos/${owner}/${repo}`;
+  const gitPath = `/${owner}/${repo}.git`;
+  return {
+    origin: url.origin,
+    host: url.host,
+    owner,
+    repo,
+    apiPath,
+    gitPathPattern: `${gitPath}/*`,
+    cloneUrl: `${url.origin}${gitPath}`,
+  };
+}
+
 /** Claude Code's own credentials file: `{ claudeAiOauth: { accessToken, expiresAt, … } }`. */
 function claudeAiOauth(
   c: Record<string, unknown>,
@@ -164,20 +210,15 @@ export async function applyRepositoryLease(
 ): Promise<void> {
   if (lease.role !== "repository" || lease.provider !== "gitea")
     throw new Error("repository lease must use the gitea provider and repository role");
-  const url = new URL(repositoryUrl);
-  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash)
-    throw new Error("repository URL must be a plain HTTPS URL");
-  const key = `${url.origin}${url.pathname.replace(/\/$/, "")}`;
+  const repository = normalizeRepositoryUrl(repositoryUrl);
+  const key = `${repository.origin}/${repository.owner}/${repository.repo}`;
   const allowed = allowedRepositories.some((raw) => {
-    const candidate = new URL(raw);
-    return (
-      candidate.protocol === "https:" &&
-      !candidate.username &&
-      !candidate.password &&
-      !candidate.search &&
-      !candidate.hash &&
-      `${candidate.origin}${candidate.pathname.replace(/\/$/, "")}` === key
-    );
+    try {
+      const candidate = normalizeRepositoryUrl(raw);
+      return `${candidate.origin}/${candidate.owner}/${candidate.repo}` === key;
+    } catch {
+      return false;
+    }
   });
   if (!allowed) throw new Error("repository URL is not in the configured allowlist");
   const token = text(lease.credential.token) ?? text(lease.credential.access_token);
@@ -193,13 +234,12 @@ export async function applyRepositoryLease(
       identifier: target.identifier,
     });
     const secrets: Array<{ id: string; name: string }> = await onecli.call("GET", "/secrets");
-    const rootPath = url.pathname.replace(/\/$/, "");
     const secretBodies = [
       {
         name: `argus-${target.identifier}-repository-rest`,
         value: token,
-        hostPattern: url.host,
-        pathPattern: `/api/v1/repos${rootPath}/*`,
+        hostPattern: repository.host,
+        pathPattern: `${repository.apiPath}/*`,
         injectionConfig: { headerName: "Authorization", valueFormat: "token {value}" },
       },
       {
@@ -207,8 +247,8 @@ export async function applyRepositoryLease(
         // Gitea smart-HTTP uses Basic auth. Build this only in the trusted host;
         // OneCLI persists it in its encrypted secret store.
         value: Buffer.from(`${username}:${token}`, "utf8").toString("base64"),
-        hostPattern: url.host,
-        pathPattern: `${rootPath}.git/*`,
+        hostPattern: repository.host,
+        pathPattern: repository.gitPathPattern,
         injectionConfig: { headerName: "Authorization", valueFormat: "Basic {value}" },
       },
     ];

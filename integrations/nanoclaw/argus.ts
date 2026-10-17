@@ -40,6 +40,7 @@ import {
   applyLeases,
   applyRepositoryLease,
   classifyFailure,
+  normalizeRepositoryUrl,
   OneCliClient,
   releaseRepositoryLease,
 } from "./argus-accounts.js";
@@ -564,17 +565,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           throw new Error("repository is not configured for this task project");
         if (activeAccountLeases.length === 0)
           throw new Error("cannot safely reconcile repository access without active base leases");
-        const parsed = new URL(repositoryUrl);
-        const parts = parsed.pathname.split("/").filter(Boolean);
-        if (
-          parsed.protocol !== "https:" ||
-          parsed.username ||
-          parsed.password ||
-          parsed.search ||
-          parsed.hash ||
-          parts.length !== 2
-        )
-          throw new Error("configured repository URL is invalid");
+        const normalizedRepository = normalizeRepositoryUrl(repositoryUrl);
         const { data } = await client.call("POST", "/accounts/lease", {
           providers: ["gitea"],
           role: "repository",
@@ -582,18 +573,18 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         const lease = data as AccountLease;
         repositoryLeaseHeld = true;
         activeRepositoryLease = lease;
-        activeRepositoryUrl = repositoryUrl;
+        activeRepositoryUrl = normalizedRepository.cloneUrl;
         activeRepositoryAllowlist = Object.values(acc.repositories ?? {});
         repositoryTarget = await acc.resolveTarget();
         await applyRepositoryLease(
           acc.onecli,
           repositoryTarget,
           lease,
-          repositoryUrl,
+          normalizedRepository.cloneUrl,
           activeRepositoryAllowlist,
           activeAccountLeases,
         );
-        task.repository_url = repositoryUrl;
+        task.repository_url = normalizedRepository.cloneUrl;
       }
       const pages = await inlinePages(task);
       log.info("Argus task claimed", { task: task.id, attempt: task.attempt });

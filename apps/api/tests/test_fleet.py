@@ -352,6 +352,11 @@ def test_nanoclaw_options_validation() -> None:
         repositories={"argus": "https://git.example.test/team/argus"},
         **ok,
     )
+    NanoclawOptions(
+        instances_root="/srv/nc-i",
+        repositories={"argus": "https://git.example.test/team/argus.git"},
+        **ok,
+    )
     with pytest.raises(ValidationError):
         NanoclawOptions(
             instances_root="/srv/nc-i",

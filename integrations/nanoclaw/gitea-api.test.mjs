@@ -85,6 +85,51 @@ describe("credential-free Gitea API helper", () => {
     assert.ok(calls.every(({ init }) => init.redirect === "error"));
   });
 
+  it("normalizes configured and allowlisted .git URL forms to one REST identity", async () => {
+    for (const configuredSuffix of ["", ".git"]) {
+      for (const allowSuffix of ["", ".git"]) {
+        const calls = [];
+        let pullRequest;
+        const fetch = async (url, init) => {
+          calls.push({ url, init });
+          if (url.includes("/pulls?")) return Response.json(pullRequest ? [pullRequest] : []);
+          if (url.endsWith("/pulls") && init.method === "POST") {
+            pullRequest = {
+              number: 17,
+              head: { ref: "feature", sha: "exact-head", repo: { full_name: "team/project" } },
+              base: { ref: "main" },
+            };
+            return Response.json(pullRequest, { status: 201 });
+          }
+          return Response.json(pullRequest);
+        };
+        const configured = `https://git.example.test/team/project${configuredSuffix}`;
+        const allowed = `https://git.example.test/team/project${allowSuffix}`;
+        const api = new GiteaApi(configured, [allowed], fetch);
+        assert.deepEqual(api.repository, {
+          origin: "https://git.example.test",
+          owner: "team",
+          repo: "project",
+        });
+        assert.equal(
+          await api
+            .createPullRequest({ title: "PR", head: "feature", base: "main" })
+            .then((pr) => pr.number),
+          17,
+        );
+        assert.equal(
+          await api
+            .createPullRequest({ title: "retry", head: "feature", base: "main" })
+            .then((pr) => pr.number),
+          17,
+        );
+        assert.equal(calls.filter(({ init }) => init.method === "POST").length, 1);
+        assert.ok(calls.every(({ url }) => url.includes("/api/v1/repos/team/project/")));
+        assert.ok(calls.every(({ url }) => !url.includes("project.git")));
+      }
+    }
+  });
+
   it("rejects hosts/repos outside the exact HTTPS allowlist and has no merge operation", async () => {
     assert.throws(
       () =>
@@ -100,6 +145,15 @@ describe("credential-free Gitea API helper", () => {
         ]),
       /HTTPS/,
     );
+    for (const lookalike of ["project-other", "project.git.git"]) {
+      assert.throws(
+        () =>
+          new GiteaApi(`https://git.example.test/team/${lookalike}`, [
+            "https://git.example.test/team/project.git",
+          ]),
+        /not configured/,
+      );
+    }
     const api = new GiteaApi("https://git.example.test/team/project", [
       "https://git.example.test/team/project",
     ]);

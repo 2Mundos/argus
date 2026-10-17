@@ -2,11 +2,71 @@ import { describe, expect, it } from "vitest";
 import {
   type AccountLease,
   applyRepositoryLease,
+  normalizeRepositoryUrl,
   OneCliClient,
   releaseRepositoryLease,
 } from "./argus-accounts.js";
 
 describe("dedicated Gitea repository lease", () => {
+  it("normalizes repo and repo.git task URLs and allowlist entries consistently", async () => {
+    for (const configuredSuffix of ["", ".git"]) {
+      for (const allowedSuffix of ["", ".git"]) {
+        const calls: Array<{ method: string; path: string; body?: any }> = [];
+        const secrets: any[] = [];
+        let assigned: string[] = [];
+        const fetchImpl = (async (url: string, init: RequestInit) => {
+          const path = new URL(url).pathname.replace(/^\/api/, "");
+          const body = init.body ? JSON.parse(init.body as string) : undefined;
+          calls.push({ method: init.method ?? "GET", path, body });
+          if (path === "/agents" && init.method === "GET")
+            return Response.json([{ id: "agent", identifier: "worker" }]);
+          if (path === "/secrets" && init.method === "GET") return Response.json(secrets);
+          if (path === "/secrets" && init.method === "POST") {
+            const secret = { id: `secret-${secrets.length}`, ...body };
+            secrets.push(secret);
+            return Response.json(secret);
+          }
+          if (path === "/agents/agent/secrets" && init.method === "PUT") {
+            assigned = body.secretIds;
+            return Response.json({ success: true });
+          }
+          return Response.json({ success: true });
+        }) as typeof globalThis.fetch;
+        const configured = `https://git.example.test/team/repo${configuredSuffix}`;
+        const allowlisted = `https://git.example.test/team/repo${allowedSuffix}`;
+        const normalized = normalizeRepositoryUrl(configured);
+        expect(normalized.cloneUrl).toBe("https://git.example.test/team/repo.git");
+        expect(normalized.apiPath).toBe("/api/v1/repos/team/repo");
+        expect(normalized.gitPathPattern).toBe("/team/repo.git/*");
+
+        await applyRepositoryLease(
+          new OneCliClient("http://onecli.test", fetchImpl),
+          { identifier: "worker", name: "worker" },
+          {
+            lease_id: "repository-lease",
+            account_id: "repository-account",
+            name: "repo",
+            provider: "gitea",
+            kind: "api_key",
+            role: "repository",
+            credential: { username: "service-user", token: "dummy-token" },
+          },
+          configured,
+          [allowlisted],
+          [],
+        );
+        expect(secrets.find((secret) => secret.name.endsWith("-rest"))?.pathPattern).toBe(
+          "/api/v1/repos/team/repo/*",
+        );
+        expect(secrets.find((secret) => secret.name.endsWith("-git"))?.pathPattern).toBe(
+          "/team/repo.git/*",
+        );
+        expect(assigned).toEqual(["secret-0", "secret-1"]);
+        expect(calls.some((call) => call.body?.pathPattern === "/team/repo.git.git/*")).toBe(false);
+      }
+    }
+  });
+
   it("writes a generic Authorization secret for the configured host and removes the assignment on release", async () => {
     const calls: Array<{ method: string; path: string; body?: any }> = [];
     const agents: any[] = [{ id: "ag-1", identifier: "group-1" }];
