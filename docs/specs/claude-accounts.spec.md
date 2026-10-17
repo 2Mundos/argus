@@ -80,7 +80,18 @@ let the operator **renew** an existing one without recreating it:
     the client is alive (`attempts` / `max_attempts` in the view; the 4th gets
     `login_attempts_exhausted`);
   - the client then prints the token. Only a private parser reads it; it is
-    stored as `{"oauth_token": …}` and appears nowhere else;
+    stored as `{"oauth_token": …}` and appears nowhere else. The client's renderer
+    only writes the cells that changed since its last frame and jumps over cells
+    that already show the right character (measured on 2.1.296: the success screen
+    is drawn over the prompt row, so it writes `sk-ant-`, jumps over the `o` of
+    "code", then the rest). Stripping escape codes from the stream therefore loses
+    characters, and a real login failed with `token_not_found`. The output is
+    replayed on a 1000x50 screen (`accounts/terminal.py`, the PTY's size) and the
+    token is read off that screen, strictly framed: after the success marker, the
+    `Your OAuth token (valid for …):` row, then exactly one non-empty row that is a
+    whole `sk-ant-oat…` token, then `Store this token securely.` Until that closing
+    row is drawn nothing is taken; anything else between label and closing row (a
+    wrapped, cut or second value) fails with `token_not_found` and stores nothing;
   - at most 2 sessions, 15 minutes each, one per starting token; the whole
     process group (and a docker container, if used) dies on cancel, expiry or
     failure, and every concurrent teardown caller waits for the one shielded
@@ -110,8 +121,11 @@ let the operator **renew** an existing one without recreating it:
 - A `setup-token` token cannot be refreshed; it lasts what Anthropic grants. An
   expired one is renewed with this wizard.
 - Whether the client's prompts change between versions. The parser keys on the
-  URL and the `sk-ant-oat` token only, and a failed parse is a fixed reason
-  (`no_url`, `client_exited`), not a stall.
+  URL, the success screen's three fixed rows and the `sk-ant-oat` prefix; a
+  changed layout is a fixed reason (`token_not_found`, `no_url`,
+  `client_exited`), never a guessed token. Tests replay bytes captured from the
+  real 2.1.296 client (against a local stand-in for the token endpoint, with a
+  fake token); re-capture them when the pinned client changes.
 
 # 5. Constraints
 
@@ -124,7 +138,7 @@ let the operator **renew** an existing one without recreating it:
 
 - `packages/core`: `claude_auth.py` (shape validation, derived kind, redacted
   summary).
-- `apps/api`: `accounts/login_base.py` (shared), `accounts/claude_login.py`,
+- `apps/api`: `accounts/login_base.py` (shared), `accounts/claude_login.py`, `accounts/terminal.py` (screen replay),
   routes under `/api/accounts/claude-login`, anthropic validation on create and
   credential update, settings `ARGUS_CLAUDE_LOGIN_IMAGE` / `ARGUS_CLAUDE_BIN`,
   422 bodies no longer echo request input.

@@ -24,7 +24,7 @@ from uuid import uuid4
 
 from argus_core import claude_auth
 
-from argus_api.accounts import service
+from argus_api.accounts import service, terminal
 from argus_api.accounts.login_base import (
     LOGIN_TTL_S,
     START_TIMEOUT_S,
@@ -45,6 +45,7 @@ MAX_ATTEMPTS = 3  # codes the client is given per login
 _ENTER_DELAY_S = 0.25  # the client takes a long chunk as a paste and drops its Enter
 _RELINK_TIMEOUT_S = 10.0  # from our retry Enter to the client's new sign-in link
 _COLUMNS = 1000  # wide enough that the client never wraps the link or the token
+_ROWS = 50
 
 _ANSI = re.compile(
     r"\x1b\[[0-?]*[ -/]*[@-~]"  # CSI
@@ -52,7 +53,11 @@ _ANSI = re.compile(
     r"|\x1b[@-Z\\-_]"  # two-byte escapes
 )
 _URL = re.compile(r"https://[^\s\"'<>\x00-\x1f]+(?=\s)")
-_TOKEN = re.compile(r"sk-ant-oat\d{0,4}-[A-Za-z0-9_-]{40,}(?=[^A-Za-z0-9_-]|$)")
+_TOKEN = re.compile(r"sk-ant-oat\d{0,4}-[A-Za-z0-9_-]{40,}")  # a whole screen row
+# The success screen, as the shipped client lays it out (2.1.296): the marker, the
+# label, the token alone on its row, then the closing sentence.
+_TOKEN_LABEL = re.compile(r"Your OAuth token \(valid for [^()]*\):")
+_TOKEN_END = re.compile(r"Store this token securely\.")
 # Fixed markers of the client's own messages. The TUI separates words with cursor
 # moves, so spaces are optional. Only the matched marker is ever turned into a
 # code (plus the three-digit status); no output is kept or returned.
@@ -108,6 +113,44 @@ def _plain(raw: bytes | bytearray) -> str:
 
 def _text(s: _Session) -> str:
     return _plain(s.out)
+
+
+def _succeeded(rows: list[str]) -> bool:
+    return any(_SUCCESS.search(row) for row in rows)
+
+
+def _issued(rows: list[str]) -> tuple[bool, str | None]:
+    """Read the client's success screen the way the operator would.
+
+    Returns (complete, token). Not complete until the closing sentence is on screen
+    below the label: the client draws top-down, so the token row before it is
+    whole. Then the token must be the only thing between label and sentence, on one
+    row, in full; anything else (a wrapped, cut or doubled value) is not taken."""
+    start = next(
+        (i for i in range(len(rows) - 1, -1, -1) if _SUCCESS.search(rows[i])), None
+    )
+    if start is None:
+        return False, None
+    label = next(
+        (
+            i
+            for i in range(start + 1, len(rows))
+            if _TOKEN_LABEL.fullmatch(rows[i].strip())
+        ),
+        None,
+    )
+    if label is None:
+        return False, None
+    end = next(
+        (i for i in range(label + 1, len(rows)) if _TOKEN_END.match(rows[i].strip())),
+        None,
+    )
+    if end is None:
+        return False, None
+    body = [row.strip() for row in rows[label + 1 : end] if row.strip()]
+    if len(body) == 1 and _TOKEN.fullmatch(body[0]):
+        return True, body[0]
+    return True, None
 
 
 def _refusal(text: str) -> str | None:
@@ -330,7 +373,7 @@ class ClaudeLoginManager(LoginManager[_Session]):
             s.master = master
             os.set_blocking(master, False)
             fcntl.ioctl(
-                slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, _COLUMNS, 0, 0)
+                slave, termios.TIOCSWINSZ, struct.pack("HHHH", _ROWS, _COLUMNS, 0, 0)
             )
             try:
                 s.proc = await asyncio.create_subprocess_exec(
@@ -364,13 +407,19 @@ class ClaudeLoginManager(LoginManager[_Session]):
             if len(s.out) > _MAX_OUTPUT:
                 raise LoginFailure("output_too_large")
             text = _text(s)
+            # The renderer skips cells already showing the right character, so the
+            # token is read off a replayed screen, never off the stripped stream.
+            shown = terminal.screen(bytes(s.out), _COLUMNS, _ROWS)
             if s.url is None and (match := _URL.search(text)):
                 if not url_allowed(match.group()):
                     raise LoginFailure("url_not_allowed")
                 s.url = match.group()
                 s.ready.set()
-            if token := _TOKEN.search(text):
-                await self._finished(s, actor, token.group())
+            complete, token = _issued(shown)
+            if complete:
+                if token is None:
+                    raise LoginFailure("token_not_found")
+                await self._finished(s, actor, token)
                 return
             if s.awaiting and (reason := _refusal(_plain(s.out[s.mark :]))):
                 # Turned down, but the client waits for another code.
@@ -399,13 +448,13 @@ class ClaudeLoginManager(LoginManager[_Session]):
             if s.eof:
                 if s.state is not LoginState.PENDING:
                     return
-                raise LoginFailure(self._ended(s, text))
+                raise LoginFailure(self._ended(s, shown))
             timeout = None
             if s.code_deadline is not None:
                 timeout = s.code_deadline - self._clock()
                 if timeout <= 0:
                     raise LoginFailure(
-                        "token_not_found" if _SUCCESS.search(text) else "no_token"
+                        "token_not_found" if _succeeded(shown) else "no_token"
                     )
             if s.relinking:
                 wake = max(0.0, s.relink_deadline - self._clock())
@@ -414,9 +463,9 @@ class ClaudeLoginManager(LoginManager[_Session]):
                 await asyncio.wait_for(s.activity.wait(), timeout)
 
     @staticmethod
-    def _ended(s: _Session, text: str) -> str:
+    def _ended(s: _Session, shown: list[str]) -> str:
         """Why the client left without a token: a closed code, never its words."""
-        if _SUCCESS.search(text):
+        if _succeeded(shown):
             return "token_not_found"  # it said it succeeded; we saw no token
         if s.attempts:
             return _refusal(_plain(s.out[s.mark :])) or s.refusal or "login_rejected"

@@ -6,14 +6,17 @@ import asyncio
 import contextlib
 import json
 import os
+import re
+import shutil
 import signal
 import stat
+import subprocess
 import sys
 from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from argus_api.accounts import login_base, service
+from argus_api.accounts import claude_login, login_base, service, terminal
 from argus_api.accounts.claude_login import (
     ClaudeLoginManager,
     LoginState,
@@ -24,7 +27,7 @@ from argus_api.config import Settings
 from argus_api.db import Database
 from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
 from argus_api.main import app
-from argus_api.secrets import MemorySecretStore
+from argus_api.secrets import MemorySecretStore, SopsSecretStore
 from fastapi.testclient import TestClient
 
 ADMIN_TOKEN = "t" * 40
@@ -38,6 +41,10 @@ LONG = (
     "L" * 64 + "#" + "S" * 43
 )  # a real sign-in code is this long: see the "paste" fake
 OLD = {"api_key": API_KEY}
+# Real output of `claude setup-token` 2.1.296, captured through this manager against a
+# local stand-in for the token endpoint (no Anthropic login): links replaced by
+# same-length placeholders, the token after its first 8 characters by @TOKEN_TAIL@.
+FIXTURES = Path(__file__).parent / "fixtures"
 
 FAKE = """\
 #!{python}
@@ -45,6 +52,34 @@ import json, os, subprocess, sys, time
 mode = {mode!r}
 CODE_OK = {code!r}
 report = {report!r}
+def success(tok):
+    # The shipped client's success screen, line for line (fixtures hold its bytes).
+    sys.stdout.write("\\n\\x1b[32m\u2713 Long-lived authentication token created successfully!\\x1b[39m\\n\\n")
+    sys.stdout.write("Your OAuth token (valid for 1 year):\\n\\n\\x1b[33m" + tok + "\\x1b[39m\\n\\n")
+    sys.stdout.write("Store this token securely. You won't be able to see it again.\\n\\n")
+    sys.stdout.write("Use this token by setting: export CLAUDE_CODE_OAUTH_TOKEN=<token>\\n")
+    sys.stdout.flush()
+if mode.startswith("replay"):
+    # Bytes the real client wrote (claude 2.1.296), replayed in small fragments: the
+    # part before the success screen, then, after the code, the rest.
+    raw = open({replay!r}, "rb").read().replace(b"@TOKEN_TAIL@", {token!r}[8:].encode())
+    cut = raw.index("\u2713".encode())
+    def send(data):
+        for i in range(0, len(data), 7):
+            os.write(1, data[i : i + 7])
+    import termios
+    attrs = termios.tcgetattr(0)  # like the real client: no echo, no line editing
+    attrs[3] &= ~(termios.ECHO | termios.ICANON)
+    termios.tcsetattr(0, termios.TCSANOW, attrs)
+    send(raw[:cut])
+    typed = b""
+    while not typed.endswith((b"\\r", b"\\n")):
+        typed += os.read(0, 4096)
+    rest = raw[cut:]
+    if mode == "replay_cut":  # the stream ends in the middle of the token
+        rest = rest[: rest.index({token!r}[8:].encode()) + 30]
+    send(rest)
+    sys.exit(0)
 with open(report, "w") as f:
     json.dump({{"env": dict(os.environ), "cwd": os.getcwd(), "isatty": sys.stdin.isatty()}}, f)
 url = "https://evil.example/oauth/authorize?x=1" if mode == "badurl" else (
@@ -64,7 +99,7 @@ sys.stdout.write("Paste code here if prompted > "); sys.stdout.flush()
 if mode in ("hang", "tree", "stubborn", "badurl"):
     time.sleep(60)
 if mode == "immediate":
-    sys.stdout.write("Your OAuth token:\\n\\x1b[32m" + {token!r} + "\\x1b[0m\\nStore it safely\\n")
+    success({token!r})
     sys.exit(0)
 if mode == "raw":
     import tty
@@ -90,8 +125,7 @@ if mode == "paste":
         if chunk == b"\\r":
             break
     open({received!r}, "w").write(buf.decode().rstrip("\\r"))
-    sys.stdout.write("Your OAuth token (valid for 31536000):\\n" + {token!r} + "\\n")
-    sys.stdout.flush()
+    success({token!r})
     sys.exit(0)
 if mode in ("retry", "stubborn_oauth", "silent", "no_token"):
     tries = []
@@ -106,8 +140,7 @@ if mode in ("retry", "stubborn_oauth", "silent", "no_token"):
         if mode == "silent":
             sys.exit(1)
         if mode == "no_token":
-            sys.stdout.write("\\x1b[32m✓ Long-lived authentication token created successfully!\\n")
-            sys.stdout.write("Your OAuth token (valid for 1 year):\\nnot-a-token\\n"); sys.stdout.flush()
+            success("not-a-token")
             sys.exit(0)
         if mode == "retry" and len(tries) == 2:
             break
@@ -120,15 +153,9 @@ open({received!r}, "w").write(line)
 if mode == "reject" or line != {code!r}:
     sys.stdout.write("Invalid code. Authentication failed: " + line + "\\n"); sys.stdout.flush()
     sys.exit(1)
-if mode == "real":
-    # Exactly what the shipped 2.1.296 client prints, with the token last.
-    sys.stdout.write("Your OAuth token (valid for 31536000):\\n\\x1b[33m" + {token!r} + "\\x1b[0m")
-    sys.stdout.flush()
-    sys.exit(0)
 while not os.path.exists({go!r}):
     time.sleep(0.02)
-sys.stdout.write("\\nLong-lived token (valid for 1 year):\\n\\x1b[32m" + {token!r} + "\\x1b[0m\\n\\nStore it safely\\n")
-sys.stdout.flush()
+success({token!r})
 """
 
 
@@ -147,7 +174,7 @@ def secrets() -> MemorySecretStore:
 
 
 def fake_claude(
-    tmp_path: Path, mode: str = "ok", token: str = TOKEN
+    tmp_path: Path, mode: str = "ok", token: str = TOKEN, replay: str = "success"
 ) -> tuple[str, Path]:
     go = tmp_path / "go"
     go.write_text("")  # tests that need a pause remove it
@@ -161,6 +188,7 @@ def fake_claude(
             ready=str(tmp_path / "ready"),
             pids=str(tmp_path / "child.pid"),
             go=str(go),
+            replay=str(FIXTURES / f"claude-2.1.296-setup-token-{replay}.bin"),
             token=token,
             code=CODE,
         )
@@ -170,9 +198,15 @@ def fake_claude(
 
 
 def manager(
-    db: Database, secrets, tmp_path: Path, mode: str = "ok", token: str = TOKEN, **kw
+    db: Database,
+    secrets,
+    tmp_path: Path,
+    mode: str = "ok",
+    token: str = TOKEN,
+    replay: str = "success",
+    **kw,
 ):
-    binary, go = fake_claude(tmp_path, mode, token)
+    binary, go = fake_claude(tmp_path, mode, token, replay)
     settings = Settings(data_dir=tmp_path, claude_bin=binary)
     return ClaudeLoginManager(db, secrets, settings, **kw), go
 
@@ -438,27 +472,149 @@ async def test_login_completes_into_an_account(
     assert homes(tmp_path) == set()
 
 
+def _replayed(name: str, token: str = TOKEN) -> bytes:
+    raw = (FIXTURES / f"claude-2.1.296-setup-token-{name}.bin").read_bytes()
+    return raw.replace(b"@TOKEN_TAIL@", token[8:].encode())
+
+
+@pytest.mark.parametrize("name", ["success", "retry-success"])
+def test_the_real_renderer_skips_cells_so_the_stripped_stream_loses_the_token(
+    name: str,
+) -> None:
+    """Root cause of `token_not_found` on a real login: the client's renderer writes
+    only the cells that changed and jumps over one still showing `o` from the
+    previous frame (`sk-ant-` ESC[10G `at01-…`). Escape-stripping drops it; replaying
+    the screen does not."""
+    raw = _replayed(name)
+    assert b"sk-ant-\x1b[10Gat01-" in raw
+    stripped = claude_login._plain(raw)
+    assert TOKEN not in stripped
+    assert re.search(r"sk-ant-oat\d{0,4}-[A-Za-z0-9_-]{40,}", stripped) is None
+    shown = terminal.screen(raw, 1000, 50)
+    assert claude_login._issued(shown) == (True, TOKEN)
+
+
 @pytest.mark.parametrize(
-    "token",
+    ("raw", "rows"),
     [
-        TOKEN,
-        "sk-ant-" + "oat-" + "NOVER" * 12,  # the client's own prefix test, no version
+        # a jump keeps the cell already on screen
+        (b"code\r\x1b[3Gx", ["coxe"]),
+        (b"ab\r\ncd\x1b[1A\x1b[3Gz", ["abz", "cd"]),
+        (b"abcdef\x1b[3G\x1b[K", ["ab"]),
+        # private sequences (keyboard/mode queries) never move the cursor
+        (b"\x1b7abc\r\n\x1b[?u\x1b[<u\x1b[>4mde", ["abc", "de"]),
+        (b"\x1b]8;id=1;https://x/\x07link\x1b]8;;\x07", ["link"]),
+        # cut mid-sequence it is misread; the screen is replayed from the start on
+        # every read and the token is only taken under its closing sentence
+        (b"ab\x1b[1", ["ab1"]),
+    ],
+)
+def test_the_screen_replay(raw: bytes, rows: list[str]) -> None:
+    assert terminal.screen(raw, 1000, 50) == rows
+
+
+def test_a_token_drawn_over_matching_cells_is_read_whole() -> None:
+    """Captured with a fake token chosen to line up with the prompt row under it:
+    the renderer skipped five runs of cells (`o`, `re`, `if`, `prompted`)."""
+    token = "sk-ant-" + "oat01-rexifxprompted_Q-9zW" + "kP3_" * 18 + "Zz-AA"
+    raw = (FIXTURES / "claude-2.1.296-setup-token-success-skips.bin").read_bytes()
+    assert b"\x1b[17Gx\x1b[20Gx\x1b[29G_Q" in raw
+    assert token not in claude_login._plain(raw)
+    assert claude_login._issued(terminal.screen(raw, 1000, 50)) == (True, token)
+
+
+@pytest.mark.parametrize(
+    ("name", "token"),
+    [
+        ("success", TOKEN),
+        ("retry-success", TOKEN),
+        # the client's own prefix test, no version segment
+        ("success", "sk-ant-" + "oat-" + "NOVER" * 12),
     ],
 )
 async def test_the_real_client_output_is_parsed(
-    db: Database, secrets, tmp_path: Path, token: str
+    db: Database, secrets, tmp_path: Path, name: str, token: str
 ) -> None:
-    """The token the shipped client prints last, standalone: the parser keys on the
-    `sk-ant-oat` prefix the client itself checks, never on an assumed version."""
-    mgr, _ = manager(db, secrets, tmp_path, mode="real", token=token)
+    """The real renderer's bytes, in 7-byte fragments, end to end: the whole token
+    is stored, nothing else."""
+    mgr, _ = manager(db, secrets, tmp_path, mode="replay", token=token, replay=name)
     started = await mgr.start("tok-1", "admin:one", None)
     await mgr.submit_code(started["login_id"], "tok-1", CODE)
     view = await settle(mgr, started["login_id"])
     assert view["state"] == "completed", view
+    assert token not in json.dumps(view)
     row = await account_row(db, view["account_id"])
     assert secrets.get(row["secret_ref"].removeprefix("sops:")) == {
         "oauth_token": token
     }
+
+
+async def test_a_stream_that_ends_inside_the_token_stores_nothing(
+    db: Database, secrets, tmp_path: Path
+) -> None:
+    mgr, _ = manager(db, secrets, tmp_path, mode="replay_cut")
+    started = await mgr.start("tok-1", "admin:one", None)
+    await mgr.submit_code(started["login_id"], "tok-1", CODE)
+    view = await settle(mgr, started["login_id"])
+    assert view["state"] == "failed" and view["error"] == "token_not_found"
+    assert secrets.names() == set() and await account_count(db) == 0
+
+
+LABEL = " Your OAuth token (valid for 1 year):"
+END = " Store this token securely. You won't be able to see it again."
+MARK = " \u2713 Long-lived authentication token created successfully!"
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [
+        ([MARK, "", LABEL, "", " " + TOKEN, "", END], (True, TOKEN)),
+        # not finished drawing: wait, take nothing
+        ([MARK, "", LABEL, "", " " + TOKEN[:50]], (False, None)),
+        ([MARK, "", LABEL], (False, None)),
+        (["Paste code here if prompted >", " " + TOKEN], (False, None)),
+        # finished but not exactly one whole token: refuse, never guess
+        ([MARK, LABEL, " " + TOKEN[:60], " " + TOKEN[60:], END], (True, None)),
+        ([MARK, LABEL, " " + TOKEN, " " + TOKEN, END], (True, None)),
+        ([MARK, LABEL, " " + TOKEN + " x", END], (True, None)),
+        ([MARK, LABEL, " sk-ant-at01-" + "x" * 60, END], (True, None)),
+        ([MARK, LABEL, END], (True, None)),
+    ],
+)
+def test_the_success_screen_is_framed_strictly(
+    rows: list[str], expected: tuple[bool, str | None]
+) -> None:
+    assert claude_login._issued(rows) == expected
+
+
+@pytest.mark.skipif(
+    not (shutil.which("sops") and shutil.which("age-keygen")),
+    reason="sops and age-keygen are required",
+)
+async def test_the_real_output_is_stored_encrypted_with_sops(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = tmp_path / "age.key"  # a throwaway identity for this test only
+    subprocess.run(["age-keygen", "-o", str(key)], check=True, capture_output=True)
+    recipient = next(
+        line.split(": ")[1]
+        for line in key.read_text().splitlines()
+        if line.startswith("# public key")
+    )
+    monkeypatch.setenv("SOPS_AGE_KEY_FILE", str(key))
+    monkeypatch.setenv("SOPS_AGE_RECIPIENTS", recipient)
+    path = tmp_path / "secrets.sops.yaml"
+    store = SopsSecretStore(path)
+    await store.reload()
+    mgr, _ = manager(db, store, tmp_path, mode="replay", replay="retry-success")
+    started = await mgr.start("tok-1", "admin:one", None)
+    await mgr.submit_code(started["login_id"], "tok-1", CODE)
+    view = await settle(mgr, started["login_id"])
+    assert view["state"] == "completed", view
+    assert TOKEN not in path.read_text() and TOKEN[8:40] not in path.read_text()
+    reopened = SopsSecretStore(path)
+    await reopened.reload()
+    assert reopened.get(f"account-{view['account_id']}") == {"oauth_token": TOKEN}
 
 
 async def test_renewal_keeps_the_account_and_replaces_only_the_credential(
