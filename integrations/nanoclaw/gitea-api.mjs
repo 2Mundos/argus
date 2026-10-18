@@ -124,7 +124,7 @@ export class GiteaApi {
     return this.request(`/pulls/${positiveNumber(number)}`);
   }
 
-  /** Read-only issue tracker item (not a pull request). Gitea numbers issues and PRs separately. */
+  /** Read-only issue tracker item via `issue-get`; `get` is pull-request-only — do not assume an issue number is a PR. */
   getIssue(number) {
     return this.request(`/issues/${positiveNumber(number)}`);
   }
