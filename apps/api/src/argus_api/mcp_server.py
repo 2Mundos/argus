@@ -8,17 +8,26 @@ Connect with `Authorization: Bearer <agent token>` (or an admin token for the
 orchestrator-style tools).
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
+from types import FunctionType
 from typing import Any, Literal
 
 import httpx2 as httpx
+from argus_core.auth import Scope
 from fastapi import FastAPI
+from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.shared.exceptions import MCPError
+from mcp.types import INVALID_REQUEST
 from pydantic import BaseModel
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Send
+from starlette.types import Scope as AsgiScope
+
+from argus_api.auth import authenticate
+from argus_api.errors import UnauthorizedError
 
 INSTRUCTIONS = """\
 Argus coordinates a fleet of agents. As a worker: claim_task, then work on it while
@@ -34,6 +43,46 @@ server = MCPServer("argus", version="0.1.0", instructions=INSTRUCTIONS)
 
 _app: FastAPI | None = None
 
+# Who a tool is listed to (MCP operations 3.4). Listing is not access control:
+# every call is still decided by the REST endpoint it forwards to.
+AGENTS = frozenset({Scope.WORKER, Scope.ORCHESTRATOR})
+MANAGERS = frozenset({Scope.ORCHESTRATOR, Scope.ADMIN})
+ANYONE = frozenset(Scope)
+audiences: dict[str, frozenset[Scope]] = {}
+
+
+def tool[F: FunctionType](audience: frozenset[Scope]) -> Callable[[F], F]:
+    def register(fn: F) -> F:
+        audiences[fn.__name__] = audience
+        return server.tool()(fn)
+
+    return register
+
+
+async def _list_tools_for_caller(
+    ctx: ServerRequestContext[Any, Any], call_next: CallNext
+) -> HandlerResult:
+    """Answer `tools/list` with only the tools the caller's scope can use."""
+    result = await call_next(ctx)
+    # The SDK hands middleware the serialized result; tests pin that shape.
+    if ctx.method != "tools/list" or not isinstance(result, dict):
+        return result
+    headers = getattr(ctx.request, "headers", None) or {}
+    scheme, _, token = headers.get("authorization", "").partition(" ")
+    assert _app is not None
+    try:
+        if scheme.lower() != "bearer" or not token:
+            raise UnauthorizedError("missing bearer token")
+        async with _app.state.db.read() as conn:
+            scope = (await authenticate(conn, token)).scope
+    except UnauthorizedError as exc:
+        raise MCPError(INVALID_REQUEST, f"401 unauthorized: {exc}") from exc
+    tools = [t for t in result["tools"] if scope in audiences[t["name"]]]
+    return {**result, "tools": tools}
+
+
+server.middleware.append(_list_tools_for_caller)
+
 
 def bind(app: FastAPI) -> None:
     """Point the tools at the REST app they call into (set once at import)."""
@@ -48,7 +97,7 @@ class SlashAlias:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def __call__(self, scope: AsgiScope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http" and scope["path"] == "/mcp":
             scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/"}
         await self.app(scope, receive, send)
@@ -68,7 +117,7 @@ class Endpoint:
             yield
         self._app = None
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def __call__(self, scope: AsgiScope, receive: Receive, send: Send) -> None:
         if self._app is None:
             raise RuntimeError("MCP endpoint used outside the app lifespan")
         await self._app(scope, receive, send)
@@ -147,7 +196,7 @@ class Lease(BaseModel):
 # -- working on tasks ---------------------------------------------------------------
 
 
-@server.tool()
+@tool(AGENTS)
 async def claim_task(
     ctx: Context, capabilities: list[str] | None = None, wait_s: float = 20
 ) -> dict:
@@ -163,7 +212,7 @@ async def claim_task(
     return {"task": task}
 
 
-@server.tool()
+@tool(AGENTS)
 async def heartbeat(ctx: Context, leases: list[Lease] | None = None) -> dict:
     """Prove you are alive and renew the leases on tasks you hold. Call it at least
     every heartbeat_interval_s (30 s). If a lease comes back rejected, stop working on
@@ -176,13 +225,13 @@ async def heartbeat(ctx: Context, leases: list[Lease] | None = None) -> dict:
     )
 
 
-@server.tool()
+@tool(ANYONE)
 async def get_task(ctx: Context, task_id: str) -> dict:
     """Read a task: spec, acceptance criteria, state, attempt, clarifications."""
     return await _call(ctx, "GET", f"/tasks/{task_id}")
 
 
-@server.tool()
+@tool(AGENTS)
 async def report_progress(
     ctx: Context, task_id: str, attempt: int, message: str, percent: int | None = None
 ) -> dict:
@@ -196,7 +245,7 @@ async def report_progress(
     )
 
 
-@server.tool()
+@tool(AGENTS)
 async def complete_task(
     ctx: Context,
     task_id: str,
@@ -233,7 +282,7 @@ async def complete_task(
     )
 
 
-@server.tool()
+@tool(AGENTS)
 async def fail_task(ctx: Context, task_id: str, attempt: int, error: str) -> dict:
     """Give up on the task, explaining why. It is retried (by you or another agent)
     until it runs out of attempts."""
@@ -242,7 +291,7 @@ async def fail_task(ctx: Context, task_id: str, attempt: int, error: str) -> dic
     )
 
 
-@server.tool()
+@tool(AGENTS)
 async def ask_question(
     ctx: Context,
     task_id: str,
@@ -267,7 +316,7 @@ async def ask_question(
     )
 
 
-@server.tool()
+@tool(ANYONE)
 async def create_task(
     ctx: Context,
     title: str,
@@ -300,7 +349,7 @@ async def create_task(
     return await _call(ctx, "POST", "/tasks", json=body)
 
 
-@server.tool()
+@tool(AGENTS)
 async def upload_text_artifact(
     ctx: Context,
     task_id: str,
@@ -321,7 +370,7 @@ async def upload_text_artifact(
     )
 
 
-@server.tool()
+@tool(AGENTS)
 async def leave(ctx: Context) -> dict:
     """End your identity cleanly (when drained or shutting down). Any task you still
     hold is released for someone else."""
@@ -331,7 +380,7 @@ async def leave(ctx: Context) -> dict:
 # -- knowledge ---------------------------------------------------------------------------
 
 
-@server.tool()
+@tool(ANYONE)
 async def search_knowledge(
     ctx: Context, query: str, project: str | None = None, limit: int = 10
 ) -> list[dict]:
@@ -345,7 +394,7 @@ async def search_knowledge(
     )
 
 
-@server.tool()
+@tool(ANYONE)
 async def get_knowledge_page(
     ctx: Context, page_id: str, revision: int | None = None
 ) -> dict:
@@ -355,7 +404,7 @@ async def get_knowledge_page(
     )
 
 
-@server.tool()
+@tool(ANYONE)
 async def write_knowledge(
     ctx: Context,
     title: str,
@@ -395,14 +444,14 @@ async def write_knowledge(
 # -- provider accounts --------------------------------------------------------------------
 
 
-@server.tool()
+@tool(AGENTS)
 async def lease_account(ctx: Context, providers: list[str]) -> dict:
     """Get a provider account (with its credential) to do your work, from the
     providers you can use, most preferred first (e.g. ["anthropic", "openai"])."""
     return await _call(ctx, "POST", "/accounts/lease", json={"providers": providers})
 
 
-@server.tool()
+@tool(AGENTS)
 async def report_account_exhausted(
     ctx: Context,
     account_id: str,
@@ -425,7 +474,7 @@ async def report_account_exhausted(
 # -- orchestration ---------------------------------------------------------------------------
 
 
-@server.tool()
+@tool(MANAGERS)
 async def list_tasks(
     ctx: Context, state: str | None = None, limit: int = 50
 ) -> list[dict]:
@@ -434,25 +483,25 @@ async def list_tasks(
     return await _call(ctx, "GET", "/tasks", params={"state": state, "limit": limit})
 
 
-@server.tool()
+@tool(MANAGERS)
 async def cancel_task(ctx: Context, task_id: str) -> dict:
     """Cancel a task (orchestrators and admins)."""
     return await _call(ctx, "POST", f"/tasks/{task_id}/cancel")
 
 
-@server.tool()
+@tool(MANAGERS)
 async def list_agents(ctx: Context, state: str | None = None) -> list[dict]:
     """List agents (active, draining, gone, lost) and how many tasks each holds."""
     return await _call(ctx, "GET", "/agents", params={"state": state})
 
 
-@server.tool()
+@tool(MANAGERS)
 async def list_pools(ctx: Context) -> list[dict]:
     """List worker pools with desired/max replicas and live instances."""
     return await _call(ctx, "GET", "/pools")
 
 
-@server.tool()
+@tool(MANAGERS)
 async def scale_pool(ctx: Context, name: str, desired_replicas: int) -> dict:
     """Set how many instances a pool should run. Above the pool's cap, a human is
     asked to approve instead (the result carries a decision_id)."""
@@ -461,13 +510,13 @@ async def scale_pool(ctx: Context, name: str, desired_replicas: int) -> dict:
     )
 
 
-@server.tool()
+@tool(MANAGERS)
 async def list_decisions(ctx: Context) -> list[dict]:
     """Open decisions (questions, approvals, reviews, proposals), oldest first."""
     return await _call(ctx, "GET", "/decisions")
 
 
-@server.tool()
+@tool(MANAGERS)
 async def answer_decision(
     ctx: Context, decision_id: str, choice: str | None = None, text: str = ""
 ) -> dict:
@@ -481,7 +530,7 @@ async def answer_decision(
     )
 
 
-@server.tool()
+@tool(MANAGERS)
 async def get_fleet_capabilities(ctx: Context) -> dict:
     """What this node can actually run, measured now: each target's reachability,
     OCI runtimes and resources, and per pool whether a worker can be launched
@@ -489,7 +538,7 @@ async def get_fleet_capabilities(ctx: Context) -> dict:
     return await _call(ctx, "GET", "/fleet/capabilities")
 
 
-@server.tool()
+@tool(MANAGERS)
 async def launch_worker(
     ctx: Context, pool: str, expected_desired_replicas: int | None = None
 ) -> dict:
@@ -505,7 +554,7 @@ async def launch_worker(
     )
 
 
-@server.tool()
+@tool(MANAGERS)
 async def list_worker_templates(ctx: Context) -> dict:
     """The worker templates this node supports, per node: `ready`, or `missing`
     (what to set up). Only a ready template can be created. Read-only. Defaults
@@ -513,7 +562,7 @@ async def list_worker_templates(ctx: Context) -> dict:
     return await _call(ctx, "GET", "/fleet/templates")
 
 
-@server.tool()
+@tool(MANAGERS)
 async def create_worker(
     ctx: Context,
     template: str,
@@ -548,7 +597,7 @@ async def create_worker(
 # -- engines and the local model ---------------------------------------------------------
 
 
-@server.tool()
+@tool(ANYONE)
 async def list_engines(ctx: Context) -> dict:
     """Engines, delegated CLI executors (claude, codex, opencode, cursor-agent) and the
     local model. Each entry separates model provider, harness, executor and account, and
@@ -557,7 +606,7 @@ async def list_engines(ctx: Context) -> dict:
     return await _call(ctx, "GET", "/engines")
 
 
-@server.tool()
+@tool(MANAGERS)
 async def route_task(
     ctx: Context,
     summary: str,
@@ -593,7 +642,7 @@ async def route_task(
     )
 
 
-@server.tool()
+@tool(ANYONE)
 async def run_local(
     ctx: Context,
     prompt: str,

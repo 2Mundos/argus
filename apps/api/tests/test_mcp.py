@@ -4,7 +4,9 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+from argus_api import mcp_server
 from argus_api.main import app
+from argus_core.auth import Scope
 from fastapi.testclient import TestClient
 
 ADMIN_TOKEN = "test-admin-token-" + "m" * 32
@@ -65,23 +67,78 @@ def register(client: TestClient, role: str = "worker") -> str:
 
 
 def test_tools_are_listed_with_descriptions(client: TestClient) -> None:
-    tools = {t["name"]: t for t in rpc(client, ADMIN_TOKEN, "tools/list")["tools"]}
-    for name in (
-        "claim_task",
-        "heartbeat",
-        "report_progress",
-        "complete_task",
-        "fail_task",
-        "ask_question",
-        "search_knowledge",
-        "write_knowledge",
-        "lease_account",
-        "report_account_exhausted",
-        "scale_pool",
-        "answer_decision",
-    ):
-        assert tools[name]["description"], name
+    orchestrator = register(client, "orchestrator")
+    tools = {t["name"]: t for t in rpc(client, orchestrator, "tools/list")["tools"]}
+    assert set(tools) == set(mcp_server.audiences)  # every tool, each with an audience
+    for name, t in tools.items():
+        assert t["description"], name
     assert "task_id" in tools["complete_task"]["inputSchema"]["properties"]
+
+
+def listed(client: TestClient, token: str) -> set[str]:
+    return {t["name"] for t in rpc(client, token, "tools/list")["tools"]}
+
+
+def test_tools_are_listed_by_scope(client: TestClient) -> None:
+    by_scope = {
+        Scope.WORKER: listed(client, register(client)),
+        Scope.ORCHESTRATOR: listed(client, register(client, "orchestrator")),
+        Scope.ADMIN: listed(client, ADMIN_TOKEN),
+    }
+    for scope, names in by_scope.items():
+        assert names == {n for n, a in mcp_server.audiences.items() if scope in a}
+    assert "claim_task" in by_scope[Scope.WORKER]
+    assert "claim_task" not in by_scope[Scope.ADMIN]
+    assert "answer_decision" not in by_scope[Scope.WORKER]
+    assert by_scope[Scope.ORCHESTRATOR] == set(mcp_server.audiences)
+
+
+@pytest.mark.parametrize("token", [None, "not-a-token"])
+def test_tools_list_needs_a_valid_token(client: TestClient, token: str | None) -> None:
+    headers = {"Accept": "application/json, text/event-stream"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    res = client.post(
+        "/mcp",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+    )
+    assert "401 unauthorized" in res.json()["error"]["message"]
+
+
+def _placeholder(schema: dict) -> object:
+    kind = schema.get("type") or next(
+        (s["type"] for s in schema.get("anyOf", []) if s.get("type") != "null"), None
+    )
+    return {"integer": 1, "number": 1, "boolean": False, "array": [], "object": {}}.get(
+        kind, "x"
+    )
+
+
+@pytest.mark.parametrize("role", ["worker", "orchestrator", "admin"])
+def test_no_listed_tool_is_refused_for_scope(client: TestClient, role: str) -> None:
+    """Listing must not advertise a tool whose REST endpoint rejects the caller's
+    scope. Placeholder arguments may fail later (404, 409, 422), never on scope."""
+    token = ADMIN_TOKEN if role == "admin" else register(client, role)
+    tools = rpc(client, token, "tools/list")["tools"]
+    for t in sorted(tools, key=lambda t: t["name"] == "leave"):  # leave ends the token
+        schema = t["inputSchema"]
+        args = {
+            name: _placeholder(schema["properties"][name])
+            for name in schema.get("required", [])
+        }
+        if t["name"] == "claim_task":
+            args["wait_s"] = 0
+        result = tool(client, token, t["name"], **args)
+        error = result.get("error", "") if isinstance(result, dict) else ""
+        assert "requires scope" not in error, (t["name"], error)
+        assert "requires an agent token" not in error, (t["name"], error)
+
+
+def test_unlisted_tools_still_follow_rest_rules(client: TestClient) -> None:
+    worker = register(client)
+    assert tool(client, worker, "list_tasks") == []  # REST lets any caller read
+    assert "requires scope" in tool(client, worker, "cancel_task", task_id="t")["error"]
 
 
 def test_worker_flow_over_mcp(client: TestClient) -> None:

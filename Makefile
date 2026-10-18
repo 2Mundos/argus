@@ -50,6 +50,10 @@ test: ## Run Python and Node tests.
 build: ## Build the dashboard.
 	$(PNPM) build
 
+.PHONY: bench
+bench: ## MCP inbox journey benchmark (docs/specs/mcp-operations.spec.md 3.5).
+	$(UV) run python apps/api/bench/mcp_inbox.py
+
 .PHONY: openapi openapi-check openapi-client-check
 openapi: ## Regenerate openapi.json and the TS client types from the API.
 	$(UV) run python scripts/export_openapi.py
