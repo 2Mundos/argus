@@ -1,5 +1,7 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import Annotated, Literal
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from argus_core import claude_auth, codex_auth
 from argus_core.accounts import (
@@ -12,12 +14,14 @@ from argus_core.accounts import (
     FallbackResult,
     LeaseRequest,
     LeaseRole,
+    QuotaRefresh,
     UsageReport,
+    UsageSeries,
 )
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Query, Request, status
 from pydantic import BaseModel, Field
 
-from argus_api.accounts import service
+from argus_api.accounts import service, usage
 from argus_api.db import utcnow
 from argus_api.deps import (
     AdminDep,
@@ -77,6 +81,36 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
 async def list_accounts(db: DbDep, _: ManagerDep) -> list[Account]:
     async with db.read() as conn:
         return await service.list_accounts(conn, utcnow())
+
+
+@router.get("/usage")
+async def account_usage(
+    db: DbDep,
+    _: ManagerDep,
+    start: Annotated[datetime, Query(alias="from")],
+    end: Annotated[datetime | None, Query(alias="to")] = None,
+    bucket: Literal["hour", "day"] = "day",
+    tz: str = "UTC",
+    account_id: str | None = None,
+) -> UsageSeries:
+    """Reported tokens per account over [from, to), bucketed in the viewer's
+    timezone (account usage 3.5). Buckets with no rows are measured zeros."""
+    try:
+        zone = ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValidationFailedError(f"unknown timezone: {tz}") from None
+    end = end or utcnow()
+    if start.tzinfo is None or end.tzinfo is None:
+        raise ValidationFailedError("from and to need a UTC offset")
+    if start >= end:
+        raise ValidationFailedError("from must be before to")
+    async with db.read() as conn:
+        if account_id is None:
+            ids = [a.id for a in await service.list_accounts(conn, utcnow())]
+        else:
+            ids = [(await service.get_account(conn, account_id, utcnow())).id]
+        accounts = await usage.series(conn, start, end, bucket, zone, ids)
+    return UsageSeries(start=start, end=end, bucket=bucket, tz=tz, accounts=accounts)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -220,6 +254,17 @@ async def cancel_claude_login(
 async def get_account(account_id: str, db: DbDep, _: ManagerDep) -> Account:
     async with db.read() as conn:
         return await service.get_account(conn, account_id, utcnow())
+
+
+@router.post("/{account_id}/quota/refresh")
+async def refresh_quota(
+    account_id: str, request: Request, db: DbDep, _: ManagerDep
+) -> QuotaRefresh:
+    """Read the provider's quota now (Codex only; account usage 3.3). At most once
+    per account per 5 minutes; never refreshes the credential."""
+    async with db.read() as conn:
+        await service.get_account(conn, account_id, utcnow())
+    return await request.app.state.quota.refresh(account_id)
 
 
 @router.patch("/{account_id}")

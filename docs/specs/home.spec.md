@@ -24,7 +24,8 @@ reconnect.
 # 2. Non-Goals
 
 - Not a metrics or time-series system; no history charts.
-- No quota, token or spend figures: Argus stores none for accounts.
+- No quota, token or spend figures on Home: they live on the Accounts tab
+  ([account usage](account-usage.spec.md)). Home adds no near-limit alert.
 - No model/LLM availability verdict. Heartbeats and `running` prove a process is
   alive, not that a model answers; Home says so and does not infer more.
 - No filters on links (no view supports them yet), no new tables, migrations,
@@ -75,7 +76,7 @@ agents: {by_state, by_role: {role: {state: int}}, holding_claims, lost_on_unfini
 pools: {by_status, total, desired, max, live, running,
         items: [{name, status, desired, max, live, running}]}
 instances: {by_state, draining}
-accounts: {by_state, total, by_provider: {provider: {state: int}}, next_reset_at, quota_measured: false}
+accounts: {by_state, total, by_provider: {provider: {state: int}}, next_reset_at, quota_measured}
 decisions: {by_state, open_by_kind, open_by_audience}
 knowledge: {pages_by_state, proposals_by_state}
 ```
@@ -85,7 +86,6 @@ knowledge: {pages_by_state, proposals_by_state}
 - Should failed tasks page after a defined window or once acknowledged? Needs an
   owner's decision and probably a field recording acknowledgement.
 - Links go to bare tabs; deep links with filters need view-level filter support.
-- Whether to expose per-account quota once providers report it.
 
 # 5. Constraints
 

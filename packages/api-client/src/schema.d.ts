@@ -167,6 +167,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Account Usage
+         * @description Reported tokens per account over [from, to), bucketed in the viewer's
+         *     timezone (account usage 3.5). Buckets with no rows are measured zeros.
+         */
+        get: operations["account_usage_api_accounts_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}": {
         parameters: {
             query?: never;
@@ -223,6 +244,27 @@ export interface paths {
          *     `no_account` and returns to ready when an account frees up.
          */
         post: operations["report_exhausted_api_accounts__account_id__exhausted_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/quota/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Quota
+         * @description Read the provider's quota now (Codex only; account usage 3.3). At most once
+         *     per account per 5 minutes; never refreshes the credential.
+         */
+        post: operations["refresh_quota_api_accounts__account_id__quota_refresh_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1437,6 +1479,8 @@ export interface components {
         Account: {
             /** Active Leases */
             active_leases: number;
+            /** Billing Day */
+            billing_day?: number | null;
             /**
              * Created At
              * Format: date-time
@@ -1461,6 +1505,11 @@ export interface components {
             priority: number;
             /** Provider */
             provider: string;
+            /**
+             * Quota
+             * @default []
+             */
+            quota?: components["schemas"]["QuotaWindow"][];
             /** Secret Ref */
             secret_ref: string;
             state: components["schemas"]["AccountState"];
@@ -1547,6 +1596,8 @@ export interface components {
         AccountState: "available" | "exhausted" | "disabled";
         /** AccountUpdate */
         AccountUpdate: {
+            /** Billing Day */
+            billing_day?: number | null;
             /** Enabled */
             enabled?: boolean | null;
             /** Labels */
@@ -1557,6 +1608,16 @@ export interface components {
             max_leases?: number | null;
             /** Priority */
             priority?: number | null;
+        };
+        /** AccountUsage */
+        AccountUsage: {
+            /** Account Id */
+            account_id: string;
+            /** Buckets */
+            buckets: components["schemas"]["UsageBucket"][];
+            /** Reported */
+            reported: boolean;
+            totals: components["schemas"]["argus_core__accounts__Usage"];
         };
         /** AccountsOverview */
         AccountsOverview: {
@@ -3152,6 +3213,58 @@ export interface components {
          * @enum {string}
          */
         ProposalState: "open" | "accepted" | "rejected" | "withdrawn";
+        /** QuotaRefresh */
+        QuotaRefresh: {
+            /** Quota */
+            quota: components["schemas"]["QuotaWindow"][];
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "updated" | "skipped" | "rate_limited" | "failed";
+        };
+        /**
+         * QuotaReport
+         * @description One quota window as a provider stated it (account usage 3.1): a timed
+         *     window with a percentage, or a two-state pool (exhausted or not).
+         */
+        QuotaReport: {
+            /** Exhausted Until */
+            exhausted_until?: string | null;
+            /** Pool */
+            pool?: string | null;
+            /** Resets At */
+            resets_at?: string | null;
+            /** Used Percent */
+            used_percent?: number | null;
+            /** Window Minutes */
+            window_minutes?: number | null;
+        };
+        /** QuotaWindow */
+        QuotaWindow: {
+            /** Exhausted Until */
+            exhausted_until: string | null;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Resets At */
+            resets_at: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "reported" | "polled" | "estimated";
+            /** Used Percent */
+            used_percent: number | null;
+            /** Window */
+            window: string;
+            /** Window Minutes */
+            window_minutes: number | null;
+        };
         /** ReadinessOut */
         ReadinessOut: {
             /** Checks */
@@ -3698,23 +3811,83 @@ export interface components {
         "Usage-Input": {
             /** Account Id */
             account_id?: string | null;
+            /** Cached Input Tokens */
+            cached_input_tokens?: number | null;
             /** Cost Usd */
             cost_usd?: number | null;
             /** Input Tokens */
             input_tokens?: number | null;
+            /** Model */
+            model?: string | null;
             /** Output Tokens */
             output_tokens?: number | null;
         };
-        /** UsageReport */
+        /** UsageBucket */
+        UsageBucket: {
+            /** Cached Input Tokens */
+            cached_input_tokens: number;
+            /** Cost Usd */
+            cost_usd: number;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Runs */
+            runs: number;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+        };
+        /**
+         * UsageReport
+         * @description One engine run on one held account (account usage 3.2).
+         */
         UsageReport: {
+            /** Cached Input Tokens */
+            cached_input_tokens?: number | null;
             /** Cost Usd */
             cost_usd?: number | null;
+            /** Engine */
+            engine?: string | null;
             /** Input Tokens */
             input_tokens?: number | null;
+            /** Model */
+            model?: string | null;
             /** Output Tokens */
             output_tokens?: number | null;
+            /**
+             * Rate Limits
+             * @default []
+             */
+            rate_limits?: components["schemas"]["QuotaReport"][];
+            /** Role */
+            role?: ("engine" | "executor") | null;
             /** Task Id */
             task_id?: string | null;
+        };
+        /** UsageSeries */
+        UsageSeries: {
+            /** Accounts */
+            accounts: components["schemas"]["AccountUsage"][];
+            /**
+             * Bucket
+             * @enum {string}
+             */
+            bucket: "hour" | "day";
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /** Tz */
+            tz: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -3752,12 +3925,22 @@ export interface components {
         };
         /** Usage */
         argus_core__accounts__Usage: {
+            /**
+             * Cached Input Tokens
+             * @default 0
+             */
+            cached_input_tokens?: number;
             /** Cost Usd */
             cost_usd: number;
             /** Input Tokens */
             input_tokens: number;
             /** Output Tokens */
             output_tokens: number;
+            /**
+             * Runs
+             * @default 0
+             */
+            runs?: number;
         };
         /**
          * Readiness
@@ -3803,10 +3986,14 @@ export interface components {
         argus_core__tasks__Usage: {
             /** Account Id */
             account_id?: string | null;
+            /** Cached Input Tokens */
+            cached_input_tokens?: number | null;
             /** Cost Usd */
             cost_usd?: number | null;
             /** Input Tokens */
             input_tokens?: number | null;
+            /** Model */
+            model?: string | null;
             /** Output Tokens */
             output_tokens?: number | null;
         };
@@ -4159,6 +4346,41 @@ export interface operations {
             };
         };
     };
+    account_usage_api_accounts_usage_get: {
+        parameters: {
+            query: {
+                from: string;
+                to?: string | null;
+                bucket?: "hour" | "day";
+                tz?: string;
+                account_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageSeries"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_account_api_accounts__account_id__get: {
         parameters: {
             query?: never;
@@ -4280,6 +4502,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FallbackResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_quota_api_accounts__account_id__quota_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotaRefresh"];
                 };
             };
             /** @description Validation Error */

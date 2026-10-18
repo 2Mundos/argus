@@ -134,6 +134,10 @@ class Snapshot:
     instances: dict[tuple[str, str], int]
     pools: list[dict[str, Any]]
     accounts: dict[tuple[str, str], int]
+    # (provider, account name) -> input, output, cached tokens ever reported
+    account_tokens: dict[tuple[str, str], tuple[int, int, int]]
+    # (provider, account name, window) -> latest % used
+    account_quota: dict[tuple[str, str, str], float]
     decisions_open: int
     events_total: int
     db_main_bytes: int
@@ -183,6 +187,24 @@ async def snapshot(
                 "SELECT provider, state, count(*) FROM accounts GROUP BY provider, state"
             )
         }
+        account_tokens = {
+            (p, name): (i, o, c)
+            for p, name, i, o, c in await grouped(
+                "SELECT a.provider, a.name, coalesce(sum(u.input_tokens), 0),"
+                " coalesce(sum(u.output_tokens), 0),"
+                " coalesce(sum(u.cached_input_tokens), 0)"
+                " FROM accounts a JOIN account_usage u ON u.account_id = a.id"
+                " GROUP BY a.id"
+            )
+        }
+        account_quota = {
+            (p, name, window): pct
+            for p, name, window, pct in await grouped(
+                "SELECT a.provider, a.name, q.window, q.used_percent"
+                " FROM account_quota q JOIN accounts a ON a.id = q.account_id"
+                " WHERE q.used_percent IS NOT NULL"
+            )
+        }
         decisions_open = (
             await one("SELECT count(*) FROM decisions WHERE state = 'open'") or 0
         )
@@ -195,6 +217,8 @@ async def snapshot(
         instances=instances,
         pools=pools,
         accounts=accounts,
+        account_tokens=account_tokens,
+        account_quota=account_quota,
         decisions_open=decisions_open,
         events_total=events_total,
         db_main_bytes=_size(db_path),
@@ -261,6 +285,28 @@ def render_metrics(
     family("argus_accounts", "Provider accounts per provider and state.")
     for (provider, state), n in sorted(snap.accounts.items()):
         sample("argus_accounts", n, provider=provider, state=state)
+    family("argus_account_tokens_total", "Tokens reported per account.", "counter")
+    for (provider, name), counts in sorted(snap.account_tokens.items()):
+        for kind, n in zip(("input", "output", "cached"), counts, strict=True):
+            sample(
+                "argus_account_tokens_total",
+                n,
+                provider=provider,
+                account=name,
+                kind=kind,
+            )
+    family(
+        "argus_account_quota_used_percent",
+        "Latest provider-reported percent used per quota window.",
+    )
+    for (provider, name, window), pct in sorted(snap.account_quota.items()):
+        sample(
+            "argus_account_quota_used_percent",
+            pct,
+            provider=provider,
+            account=name,
+            window=window,
+        )
     family("argus_decisions_open", "Decisions waiting for an answer.")
     sample("argus_decisions_open", snap.decisions_open)
     family("argus_events_total", "Rows ever written to the event log.", "counter")

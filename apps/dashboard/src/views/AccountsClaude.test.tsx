@@ -41,7 +41,9 @@ vi.mock("../api", () => ({
   call: async (path: string) =>
     path === "/api/accounts"
       ? [account("a1", "laude", "anthropic"), account("o1", "codex", "openai")]
-      : [],
+      : path === "/api/accounts/usage"
+        ? { accounts: [] }
+        : [],
 }));
 
 afterEach(cleanup);

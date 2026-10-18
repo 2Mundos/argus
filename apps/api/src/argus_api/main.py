@@ -19,6 +19,7 @@ from argus_api import mcp_server, reaper
 from argus_api.accounts import service as accounts
 from argus_api.accounts.claude_login import ClaudeLoginManager
 from argus_api.accounts.codex_login import CodexLoginManager
+from argus_api.accounts.quota_probe import QuotaProber
 from argus_api.accounts.routes import router as accounts_router
 from argus_api.admin.routes import router as admin_router
 from argus_api.agents.routes import router as agents_router
@@ -96,12 +97,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.fleet = FleetSettings(argus_url=settings.public_url)
         app.state.secrets_ok = secrets_error is None
         app.state.started_at = time.monotonic()
+        app.state.quota = QuotaProber(db, secrets, settings)
         app.state.loops = {
             "reaper": LoopStats("reaper", reaper.REAP_INTERVAL_S),
             "reconciler": LoopStats("reconciler", settings.reconcile_interval_s),
         }
         loops = [
             asyncio.create_task(reaper.run(db, stats=app.state.loops["reaper"])),
+            asyncio.create_task(app.state.quota.run()),
             asyncio.create_task(
                 reconciler.run(
                     db,

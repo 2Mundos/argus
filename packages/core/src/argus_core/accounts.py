@@ -44,12 +44,49 @@ class AccountUpdate(BaseModel):
     max_leases: int | None = Field(default=None, ge=1)
     labels: dict[str, str] | None = None
     enabled: bool | None = None
+    billing_day: int | None = Field(default=None, ge=1, le=31)
 
 
 class Usage(BaseModel):
     input_tokens: int
     output_tokens: int
+    cached_input_tokens: int = 0
     cost_usd: float
+    runs: int = 0  # usage reports counted
+
+
+QuotaSource = Literal["reported", "polled", "estimated"]
+
+
+class QuotaReport(BaseModel):
+    """One quota window as a provider stated it (account usage 3.1): a timed
+    window with a percentage, or a two-state pool (exhausted or not)."""
+
+    window_minutes: int | None = Field(default=None, gt=0)
+    pool: str | None = Field(default=None, pattern=r"^[a-z0-9_]{1,40}$")
+    used_percent: float | None = Field(default=None, ge=0, le=100)
+    resets_at: datetime | None = None
+    exhausted_until: datetime | None = None
+
+    @model_validator(mode="after")
+    def one_window(self) -> "QuotaReport":
+        if (self.window_minutes is None) == (self.pool is None):
+            raise ValueError("give exactly one of window_minutes or pool")
+        return self
+
+    @property
+    def window(self) -> str:
+        return self.pool or f"{self.window_minutes}m"
+
+
+class QuotaWindow(BaseModel):
+    window: str
+    window_minutes: int | None
+    used_percent: float | None
+    resets_at: datetime | None
+    exhausted_until: datetime | None
+    observed_at: datetime
+    source: QuotaSource
 
 
 class Account(BaseModel):
@@ -69,6 +106,8 @@ class Account(BaseModel):
     active_leases: int
     usage_24h: Usage
     usage_total: Usage
+    quota: list[QuotaWindow] = []
+    billing_day: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -111,10 +150,47 @@ class FallbackResult(BaseModel):
 
 
 class UsageReport(BaseModel):
+    """One engine run on one held account (account usage 3.2)."""
+
     task_id: str | None = None
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
+    cached_input_tokens: int | None = Field(default=None, ge=0)
     cost_usd: float | None = Field(default=None, ge=0)
+    model: str | None = Field(default=None, max_length=100)
+    engine: str | None = Field(default=None, max_length=50)
+    role: Literal["engine", "executor"] | None = None
+    rate_limits: list[QuotaReport] = Field(default=[], max_length=10)
+
+
+class UsageBucket(BaseModel):
+    start: datetime  # in the requested timezone
+    input_tokens: int
+    output_tokens: int
+    cached_input_tokens: int
+    cost_usd: float
+    runs: int
+
+
+class AccountUsage(BaseModel):
+    account_id: str
+    reported: bool  # has this account ever reported usage
+    totals: Usage
+    buckets: list[UsageBucket]
+
+
+class UsageSeries(BaseModel):
+    start: datetime
+    end: datetime
+    bucket: Literal["hour", "day"]
+    tz: str
+    accounts: list[AccountUsage]
+
+
+class QuotaRefresh(BaseModel):
+    status: Literal["updated", "skipped", "rate_limited", "failed"]
+    reason: str | None = None
+    quota: list[QuotaWindow]
 
 
 class CredentialUpdate(BaseModel):

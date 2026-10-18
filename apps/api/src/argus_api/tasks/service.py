@@ -26,6 +26,7 @@ from argus_core.tasks import (
     transition,
 )
 
+from argus_api.accounts.usage import insert_usage
 from argus_api.db import Tx, ts
 from argus_api.decisions import store as decisions
 from argus_api.errors import (
@@ -730,18 +731,12 @@ async def _record_result_usage(
                 "result.usage.account_id is not a known account",
                 details=[usage.account_id],
             )
-    await tx.conn.execute(
-        "INSERT INTO account_usage (account_id, agent_id, task_id, input_tokens,"
-        " output_tokens, cost_usd, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (
-            usage.account_id,
-            agent_id,
-            task_id,
-            usage.input_tokens,
-            usage.output_tokens,
-            usage.cost_usd,
-            ts(tx.now),
-        ),
+    await insert_usage(
+        tx,
+        usage.account_id,
+        agent_id,
+        task_id,
+        **usage.model_dump(exclude={"account_id"}),
     )
 
 

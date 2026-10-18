@@ -8,6 +8,17 @@
             "title": "Active Leases",
             "type": "integer"
           },
+          "billing_day": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing Day"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -72,6 +83,14 @@
           "provider": {
             "title": "Provider",
             "type": "string"
+          },
+          "quota": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/QuotaWindow"
+            },
+            "title": "Quota",
+            "type": "array"
           },
           "secret_ref": {
             "title": "Secret Ref",
@@ -280,6 +299,19 @@
       },
       "AccountUpdate": {
         "properties": {
+          "billing_day": {
+            "anyOf": [
+              {
+                "maximum": 31.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing Day"
+          },
           "enabled": {
             "anyOf": [
               {
@@ -330,6 +362,36 @@
           }
         },
         "title": "AccountUpdate",
+        "type": "object"
+      },
+      "AccountUsage": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/UsageBucket"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "reported": {
+            "title": "Reported",
+            "type": "boolean"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/argus_core__accounts__Usage"
+          }
+        },
+        "required": [
+          "account_id",
+          "reported",
+          "totals",
+          "buckets"
+        ],
+        "title": "AccountUsage",
         "type": "object"
       },
       "AccountsOverview": {
@@ -4536,6 +4598,191 @@
         "title": "ProposalState",
         "type": "string"
       },
+      "QuotaRefresh": {
+        "properties": {
+          "quota": {
+            "items": {
+              "$ref": "#/components/schemas/QuotaWindow"
+            },
+            "title": "Quota",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "enum": [
+              "updated",
+              "skipped",
+              "rate_limited",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "quota"
+        ],
+        "title": "QuotaRefresh",
+        "type": "object"
+      },
+      "QuotaReport": {
+        "description": "One quota window as a provider stated it (account usage 3.1): a timed\nwindow with a percentage, or a two-state pool (exhausted or not).",
+        "properties": {
+          "exhausted_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exhausted Until"
+          },
+          "pool": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9_]{1,40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pool"
+          },
+          "resets_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resets At"
+          },
+          "used_percent": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used Percent"
+          },
+          "window_minutes": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Minutes"
+          }
+        },
+        "title": "QuotaReport",
+        "type": "object"
+      },
+      "QuotaWindow": {
+        "properties": {
+          "exhausted_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exhausted Until"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "resets_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resets At"
+          },
+          "source": {
+            "enum": [
+              "reported",
+              "polled",
+              "estimated"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "used_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used Percent"
+          },
+          "window": {
+            "title": "Window",
+            "type": "string"
+          },
+          "window_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Minutes"
+          }
+        },
+        "required": [
+          "window",
+          "window_minutes",
+          "used_percent",
+          "resets_at",
+          "exhausted_until",
+          "observed_at",
+          "source"
+        ],
+        "title": "QuotaWindow",
+        "type": "object"
+      },
       "ReadinessOut": {
         "properties": {
           "checks": {
@@ -6070,6 +6317,18 @@
             ],
             "title": "Account Id"
           },
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
+          },
           "cost_usd": {
             "anyOf": [
               {
@@ -6093,6 +6352,18 @@
               }
             ],
             "title": "Input Tokens"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
           },
           "output_tokens": {
             "anyOf": [
@@ -6110,8 +6381,60 @@
         "title": "Usage",
         "type": "object"
       },
-      "UsageReport": {
+      "UsageBucket": {
         "properties": {
+          "cached_input_tokens": {
+            "title": "Cached Input Tokens",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "runs": {
+            "title": "Runs",
+            "type": "integer"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "input_tokens",
+          "output_tokens",
+          "cached_input_tokens",
+          "cost_usd",
+          "runs"
+        ],
+        "title": "UsageBucket",
+        "type": "object"
+      },
+      "UsageReport": {
+        "description": "One engine run on one held account (account usage 3.2).",
+        "properties": {
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
+          },
           "cost_usd": {
             "anyOf": [
               {
@@ -6123,6 +6446,18 @@
               }
             ],
             "title": "Cost Usd"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
           },
           "input_tokens": {
             "anyOf": [
@@ -6136,6 +6471,18 @@
             ],
             "title": "Input Tokens"
           },
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
           "output_tokens": {
             "anyOf": [
               {
@@ -6147,6 +6494,30 @@
               }
             ],
             "title": "Output Tokens"
+          },
+          "rate_limits": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/QuotaReport"
+            },
+            "maxItems": 10,
+            "title": "Rate Limits",
+            "type": "array"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "engine",
+                  "executor"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
           },
           "task_id": {
             "anyOf": [
@@ -6161,6 +6532,48 @@
           }
         },
         "title": "UsageReport",
+        "type": "object"
+      },
+      "UsageSeries": {
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/AccountUsage"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "bucket": {
+            "enum": [
+              "hour",
+              "day"
+            ],
+            "title": "Bucket",
+            "type": "string"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "tz": {
+            "title": "Tz",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "bucket",
+          "tz",
+          "accounts"
+        ],
+        "title": "UsageSeries",
         "type": "object"
       },
       "ValidationError": {
@@ -6277,6 +6690,11 @@
       },
       "argus_core__accounts__Usage": {
         "properties": {
+          "cached_input_tokens": {
+            "default": 0,
+            "title": "Cached Input Tokens",
+            "type": "integer"
+          },
           "cost_usd": {
             "title": "Cost Usd",
             "type": "number"
@@ -6287,6 +6705,11 @@
           },
           "output_tokens": {
             "title": "Output Tokens",
+            "type": "integer"
+          },
+          "runs": {
+            "default": 0,
+            "title": "Runs",
             "type": "integer"
           }
         },
@@ -6384,6 +6807,18 @@
             ],
             "title": "Account Id"
           },
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
+          },
           "cost_usd": {
             "anyOf": [
               {
@@ -6407,6 +6842,18 @@
               }
             ],
             "title": "Input Tokens"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
           },
           "output_tokens": {
             "anyOf": [
@@ -6949,6 +7396,112 @@
         ]
       }
     },
+    "/api/accounts/usage": {
+      "get": {
+        "description": "Reported tokens per account over [from, to), bucketed in the viewer's\ntimezone (account usage 3.5). Buckets with no rows are measured zeros.",
+        "operationId": "account_usage_api_accounts_usage_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "From",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "bucket",
+            "required": false,
+            "schema": {
+              "default": "day",
+              "enum": [
+                "hour",
+                "day"
+              ],
+              "title": "Bucket",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "default": "UTC",
+              "title": "Tz",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "account_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSeries"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Account Usage",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
     "/api/accounts/{account_id}": {
       "get": {
         "operationId": "get_account_api_accounts__account_id__get",
@@ -7155,6 +7708,54 @@
           }
         ],
         "summary": "Report Exhausted",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/quota/refresh": {
+      "post": {
+        "description": "Read the provider's quota now (Codex only; account usage 3.3). At most once\nper account per 5 minutes; never refreshes the credential.",
+        "operationId": "refresh_quota_api_accounts__account_id__quota_refresh_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaRefresh"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Refresh Quota",
         "tags": [
           "accounts"
         ]

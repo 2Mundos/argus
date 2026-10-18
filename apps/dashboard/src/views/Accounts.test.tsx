@@ -118,6 +118,7 @@ vi.mock("../api", () => ({
   },
   call: async (path: string) => {
     if (path === "/api/accounts") return [];
+    if (path === "/api/accounts/usage") return { accounts: [] };
     if (path === "/api/engines") {
       if (mock.enginesError) throw mock.enginesError;
       return catalog;
