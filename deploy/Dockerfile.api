@@ -45,7 +45,11 @@ COPY --from=dashboard /src/apps/dashboard/dist /app/dashboard
 RUN apt-get update && apt-get install -y --no-install-recommends openssh-client \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir /data && chown nobody:nogroup /data
-ENV PATH="/app/.venv/bin:$PATH" ARGUS_DATA_DIR=/data ARGUS_DASHBOARD_DIR=/app/dashboard
+# Set by the release workflow (docs/specs/releases.spec.md); last, so it never
+# invalidates the layers above.
+ARG ARGUS_VERSION=0.0.0+dev
+ENV PATH="/app/.venv/bin:$PATH" ARGUS_DATA_DIR=/data ARGUS_DASHBOARD_DIR=/app/dashboard \
+    ARGUS_VERSION=$ARGUS_VERSION
 VOLUME /data
 USER nobody
 EXPOSE 8000

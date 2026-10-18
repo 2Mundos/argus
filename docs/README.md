@@ -18,6 +18,7 @@ fails otherwise (`scripts/validate_docs.py`).
 | [`drafts/`](drafts) | Work in progress, not yet a spec |
 | [`research/`](research) | Investigations and comparisons |
 | [`runbooks/`](runbooks) | Operational procedures |
+| [`releases/`](releases) | Release notes, one per version |
 
 ## Core principle
 
@@ -56,6 +57,8 @@ every new dependency is judged against it.
   provider account: reported usage, Codex quota probe, Cursor pools, charts
 - [MCP operations](specs/mcp-operations.spec.md) — inbox and fleet journeys over
   MCP with compact, paged responses; REST/MCP coverage audit
+- [Releases](specs/releases.spec.md) — `make release`, version inference, notes
+  that say whether an upgrade can be rolled back, the tagged image
 
 ### Drafts
 
@@ -80,3 +83,9 @@ every new dependency is judged against it.
   base × tools × project layers, building and pointing a pool at one
 - [Cursor executor fleet smoke](runbooks/2026-10-18.cursor-fleet-smoke.ref.md) —
   completed parent verification of delegated `composer-2.5` (2026-10-18)
+
+### Releases
+
+One document per released version, in [`releases/`](releases), written by
+`make release`. Indexed as a series rather than file by file: the filenames are
+`YYYY-MM-DD.vX-Y-Z.ref.md` and sort chronologically.

@@ -1,0 +1,85 @@
+name: Release
+# Builds and publishes a tagged release (docs/specs/releases.spec.md). Tags are
+# cut by `make release`; dispatch rebuilds an existing tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild, e.g. v0.2.0
+        required: true
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Check the tag
+        id: meta
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a vX.Y.Z tag: $TAG" >&2; exit 1; }
+          git fetch --quiet origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD origin/main || { echo "$TAG is not on main" >&2; exit 1; }
+          notes=$(ls docs/releases/*."${TAG//./-}".ref.md 2>/dev/null | head -1)
+          [ -n "$notes" ] || { echo "no notes for $TAG in docs/releases" >&2; exit 1; }
+          registry="${GITHUB_SERVER_URL#*://}"
+          {
+            echo "tag=$TAG"
+            echo "notes=$notes"
+            echo "registry=$registry"
+            echo "image=$registry/${GITHUB_REPOSITORY,,}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.meta.outputs.registry }}
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_WRITE_TOKEN }}
+
+      - name: Build and push the image
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          IMAGE: ${{ steps.meta.outputs.image }}
+        run: |
+          set -euo pipefail
+          docker build -f deploy/Dockerfile.api \
+            --build-arg ARGUS_VERSION="$TAG" \
+            --label org.opencontainers.image.version="$TAG" \
+            --label org.opencontainers.image.revision="$(git rev-parse HEAD)" \
+            --label org.opencontainers.image.source="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            -t "$IMAGE:$TAG" .
+          docker push "$IMAGE:$TAG"
+
+      - name: Create the Gitea release
+        env:
+          TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          NOTES: ${{ steps.meta.outputs.notes }}
+          IMAGE: ${{ steps.meta.outputs.image }}
+        run: |
+          set -euo pipefail
+          if curl -sf -o /dev/null -H "Authorization: token $TOKEN" "$API/releases/tags/$TAG"; then
+            echo "Release $TAG already exists"; exit 0
+          fi
+          python3 - <<'PY' | curl -sSf -o /dev/null -X POST "$API/releases" \
+            -H "Authorization: token $TOKEN" -H "Content-Type: application/json" --data @-
+          import json, os
+          tag, image = os.environ["TAG"], os.environ["IMAGE"]
+          body = open(os.environ["NOTES"]).read().split("\n", 1)[1].lstrip()
+          body = f"Image: `{image}:{tag}`\n\n{body}"
+          print(json.dumps({"tag_name": tag, "name": tag, "body": body}))
+          PY
+          echo "Created release $TAG"

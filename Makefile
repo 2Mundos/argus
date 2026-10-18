@@ -65,6 +65,10 @@ openapi-client-check: ## Fail if schema.d.ts does not match the committed openap
 	$(PNPM) --filter @argus/api-client exec openapi-typescript openapi.json -o "$$tmp" --silent --default-non-nullable false; \
 	cmp -s "$$tmp" packages/api-client/src/schema.d.ts || { echo "schema.d.ts is stale: run \`make openapi\`"; exit 1; }
 
+.PHONY: release
+release: ## Cut a release on main: notes, commit, tag (ARGS="--dry-run" or "--push").
+	python3 scripts/release.py $(ARGS)
+
 .PHONY: audit
 audit: ## Audit dependencies for known vulnerabilities.
 	$(UV) run pip-audit --skip-editable

@@ -31,4 +31,5 @@ Instructions for AI agents working in this repo.
 make setup   # install everything
 make check   # lint + typecheck + test
 make format  # autofix
+make release ARGS=--dry-run  # preview the next release (docs/specs/releases.spec.md)
 ```
