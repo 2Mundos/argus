@@ -882,3 +882,156 @@ th {
     grid-template-columns: 1fr;
   }
 }
+
+/* -- account usage ------------------------------------------------------------ */
+
+.stats dd,
+.stats dt {
+  margin: 0;
+}
+.stats dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.provider-mark {
+  width: 1.1em;
+  height: 1.1em;
+  vertical-align: -0.2em;
+}
+.provider-mark.letter {
+  display: inline-grid;
+  place-items: center;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 0.75em;
+  font-weight: 600;
+}
+.state-icon {
+  width: 0.95em;
+  height: 0.95em;
+  vertical-align: -0.15em;
+}
+button.link.account-name {
+  font-weight: 600;
+  color: var(--text);
+}
+.quota-cell {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 10rem;
+}
+.meter {
+  display: grid;
+  gap: 0.15rem;
+}
+.meter svg {
+  width: 100%;
+  height: 6px;
+}
+.meter-track {
+  fill: var(--surface-2);
+}
+.meter-fill {
+  fill: var(--accent);
+}
+.meter-full .meter-track {
+  fill: color-mix(in srgb, var(--danger) 35%, var(--surface));
+}
+.meter-label {
+  font-size: 12px;
+}
+.pill {
+  display: inline-block;
+  font-size: 12px;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.pill-full {
+  color: var(--danger);
+  border-color: currentColor;
+}
+.spark {
+  color: var(--accent);
+}
+.spark-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.account-detail {
+  display: grid;
+  gap: 0.5rem;
+  align-content: start;
+}
+.account-detail p {
+  margin: 0;
+}
+.account-detail h3 {
+  margin-top: 0.75rem;
+}
+.quota-list {
+  display: grid;
+  gap: 0.6rem;
+  max-width: 420px;
+}
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.segmented button {
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+}
+.segmented button.active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.chart {
+  margin: 0;
+}
+.chart svg {
+  width: 100%;
+  height: auto;
+}
+.chart .grid line {
+  stroke: var(--border);
+}
+.chart text {
+  fill: var(--muted);
+  font-size: 10px;
+}
+.bar-input {
+  fill: var(--accent);
+}
+.bar-cached {
+  fill: color-mix(in srgb, var(--accent) 45%, var(--surface));
+}
+.bar-output {
+  fill: var(--ok);
+}
+.legend {
+  display: flex;
+  gap: 1rem;
+}
+.swatch {
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  border-radius: 2px;
+  vertical-align: -0.05em;
+}
+.swatch.bar-input {
+  background: var(--accent);
+}
+.swatch.bar-cached {
+  background: color-mix(in srgb, var(--accent) 45%, var(--surface));
+}
+.swatch.bar-output {
+  background: var(--ok);
+}

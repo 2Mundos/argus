@@ -97,7 +97,9 @@ class Usage(BaseModel):
 
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
+    cached_input_tokens: int | None = Field(default=None, ge=0)
     cost_usd: float | None = Field(default=None, ge=0)
+    model: str | None = Field(default=None, max_length=100)
     account_id: str | None = None
 
 

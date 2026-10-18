@@ -235,13 +235,20 @@ async def test_usage_from_results_and_reports(
 ) -> None:
     c1 = await add(db, store, "claude-1", "anthropic")
     async with db.write() as tx:
+        with pytest.raises(ForbiddenError):  # only the lease holder reports
+            await accounts.record_usage(tx, c1, A, UsageReport(input_tokens=1))
+    await lease(db, store, A)
+    async with db.write() as tx:
         await tasks.create_task(
             tx, TaskCreate(project="global", title="t"), "admin:test"
         )
         task = await tasks.claim(tx, A, [])
         assert task is not None
         await accounts.record_usage(
-            tx, c1, A, UsageReport(input_tokens=100, cost_usd=0.5)
+            tx,
+            c1,
+            A,
+            UsageReport(input_tokens=100, cached_input_tokens=40, cost_usd=0.5),
         )
         await tasks.complete(
             tx,
@@ -261,6 +268,10 @@ async def test_usage_from_results_and_reports(
         7,
     )
     assert account.usage_total.cost_usd == pytest.approx(0.75)
+    assert (account.usage_total.cached_input_tokens, account.usage_total.runs) == (
+        40,
+        2,
+    )
     clock.advance(timedelta(days=2).total_seconds())
     assert (await get(db, c1, clock)).usage_24h.input_tokens == 0
 
