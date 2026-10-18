@@ -36,8 +36,11 @@ metadata, but is not the central repository or PR operator. These boundaries do
 not alter the task/lease semantics below. A task-result `review` gate and the
 PR's own CI/review are distinct; neither implies the other. PR status must be
 tied to the exact reported head SHA. Merge remains with a human or existing
-repository policy unless separately authorized; this spec grants no automatic
-merge authority.
+repository policy unless a task or pinned delivery policy explicitly authorizes
+it; Argus grants no automatic merge authority. When authorized, the NanoClaw
+delivery worker may merge under the preconditions injected by `renderTask`
+(required checks green on the exact head, P1–P3 findings resolved, no
+force_merge or bypass); merge does not authorize manual Production operations.
 
 # 2. Non-Goals
 
@@ -568,15 +571,21 @@ number) and `list-prs` (paginated PR list with explicit `--state` and capped
 `--limit`). The `get` command is pull-request-only; a 404 on `get` does not
 imply auth failure when the tracker number is an issue — use `issue-get`.
 A retry of PR creation returns an existing open PR for the same source branch and
-base rather than creating a duplicate. It has no merge operation and uses an Undici proxy
-dispatcher for Node fetch (no direct-network fallback). The image overlay
-installs this helper and its pinned Undici dependency. Configure the same
-project-to-repository allowlist in the worker container as
-`ARGUS_REPOSITORIES_JSON`; without it the helper fails closed.
+base rather than creating a duplicate. `updatePullRequest` does not accept a
+merge flag; authorized delivery merges use the Gitea pull-request merge REST
+endpoint through the same allowlisted OneCLI-proxied `GiteaApi.request` path as
+other helper calls. The helper uses an Undici proxy dispatcher for Node fetch
+(no direct-network fallback). The image overlay installs this helper and its
+pinned Undici dependency. Configure the same project-to-repository allowlist in
+the worker container as `ARGUS_REPOSITORIES_JSON`; without it the helper fails
+closed.
 
 The secret must not appear in task spec/result, model prompt, agent
 environment/files, process arguments, logs, or artifacts. Argus receives only
-non-secret delivery metadata. Merge remains human/repository-policy controlled.
+non-secret delivery metadata. The injected task contract (`renderTask`) forbids
+merge by default and states preconditions when a task sets
+`input.delivery.allow_merge` to boolean `true` or when pinned project delivery
+policy in knowledge authorizes it (spec prose alone is not a programmatic grant).
 
 Consequences for Argus:
 
@@ -602,8 +611,9 @@ Consequences for Argus:
   2. Long-polls `POST /api/tasks/claim` in code (no LLM loop burns tokens
      polling), one task at a time.
   3. Injects the claimed task (spec, acceptance, pinned knowledge bodies,
-     reply instructions, and the mandatory `argus-delegate` implementation
-     contract from `renderTask`) as an inbound message, waking the agent container.
+     reply instructions, repository delivery/merge rules when applicable, and
+     the mandatory `argus-delegate` implementation contract from `renderTask`)
+     as an inbound message, waking the agent container.
   4. Turns replies into Argus calls: a plain reply is a progress note;
      `COMPLETE:`/`FAIL:`/`ASK:` prefixes complete, fail, or ask. A 409 drops the
      reply and moves on.

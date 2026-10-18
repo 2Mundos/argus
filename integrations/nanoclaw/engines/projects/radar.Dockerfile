@@ -24,7 +24,9 @@ RUN apt-get update \
       libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b fonts-dejavu-core shared-mime-info \
  && rm -rf /var/lib/apt/lists/*
 USER node
+# Codex engine turn budget: delegate (e.g. 1800s) + gates + CI; see engines.spec.md.
+ENV ARGUS_CODEX_TURN_TIMEOUT_MS=7200000
 # Pinned to the minor Radar's host venv uses; the lock's requires-python is only a floor.
 RUN uv python install 3.13 \
  && uv python find 3.13
-LABEL dev.argus.project-layer="radar python3.13 pango"
+LABEL dev.argus.project-layer="radar python3.13 pango codex-turn-2h"

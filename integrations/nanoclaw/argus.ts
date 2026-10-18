@@ -134,11 +134,38 @@ export interface ArgusTask {
   project: string;
   required_capabilities?: string[];
   repository_url?: string;
+  input?: Record<string, unknown>;
   attempt: number;
   failures?: number;
   error?: string | null;
   acceptance: string[];
   knowledge_refs: KnowledgeRef[];
+}
+
+/** True only when the task input explicitly sets delivery.allow_merge to boolean true. */
+export function taskAuthorizesMerge(task: ArgusTask): boolean {
+  const delivery = task.input?.delivery;
+  if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) return false;
+  return (delivery as Record<string, unknown>).allow_merge === true;
+}
+
+function repositoryTaskLines(task: ArgusTask): string[] {
+  const lines = [
+    `Repository (allowlisted): ${task.repository_url}`,
+    "Use /usr/local/bin/argus-gitea-api for repository API access (get = pull request by number; issue-get = issue tracker item; list-prs = paginated PR list with --state; status = commit statuses for the PR head SHA); do not handle credentials or add auth headers yourself.",
+  ];
+  if (taskAuthorizesMerge(task)) {
+    lines.push(
+      "This task explicitly authorizes merge when every precondition below holds; otherwise stop after CI/review without merging.",
+      "Before merge: re-read the PR (`get`), confirm the current head SHA, and use `status` so every required check on that exact SHA is success (pending, failure, cancelled, or unknown is not approval; skipped is not execution). Resolve agentic review findings P1–P3. Respect repository branch protections and reviews. Never use force_merge, bypass, force-push, or mark a PR merged without a successful Gitea merge API call through the same allowlisted OneCLI-proxied HTTPS path as other argus-gitea-api operations (GiteaApi.request). If the head changes, re-run gates and CI on the new SHA before merging. After merge, read the PR back and record merged state and merge_commit_sha; a failed POST is not success.",
+      "Merge does not authorize manual Production deploys, production data changes, or production flag toggles—only normal repository automation already configured.",
+    );
+  } else {
+    lines.push(
+      "Do not merge pull requests unless this task or its pinned project delivery policy (see spec, acceptance, and Relevant knowledge below) explicitly authorizes merge.",
+    );
+  }
+  return lines;
 }
 
 export type Directive = { kind: "complete" | "fail" | "ask" | "progress"; text: string };
@@ -177,12 +204,7 @@ export function renderTask(task: ArgusTask, pages: Map<string, string>): string 
   const lines = [
     `[Argus task] ${task.title}`,
     `Project: ${task.project} · Task: ${task.id} · Attempt: ${task.attempt}`,
-    ...(task.repository_url
-      ? [
-          `Repository (allowlisted): ${task.repository_url}`,
-          "Use /usr/local/bin/argus-gitea-api for repository API access (get = pull request by number; issue-get = issue tracker item; list-prs = paginated PR list with --state); do not handle credentials, add auth headers, or merge pull requests.",
-        ]
-      : []),
+    ...(task.repository_url ? repositoryTaskLines(task) : []),
     "",
     task.spec.trim() || "(no further description)",
   ];

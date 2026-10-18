@@ -209,7 +209,7 @@ if "GIT_HTTP_PROXY_AUTHMETHOD" not in s:
     new = "  'GIT_SSL_CAINFO',\n  'GIT_HTTP_PROXY_AUTHMETHOD',\n  'GIT_TERMINAL_PROMPT',\n  'HOME',"
     assert old in s, "codex-app-server CODEX_ENV_ALLOWLIST shape changed upstream"
     s = s.replace(old, new, 1)
-runtime_keys = ["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME", "ARGUS_REPOSITORIES_JSON"]
+runtime_keys = ["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME", "ARGUS_REPOSITORIES_JSON", "ARGUS_CODEX_TURN_TIMEOUT_MS"]
 missing = [k for k in runtime_keys if f"  '{k}',\n" not in s]
 if missing:
     insert = "".join(f"  '{k}',\n" for k in missing)
@@ -315,6 +315,73 @@ PY
   )"
   if [ "$patch_result" = patched ]; then
     echo "patched $codex_test (Codex env forwards git, Cursor delegate, Gitea map)"
+  fi
+fi
+
+providers_dir="$target/container/agent-runner/src/providers"
+mkdir -p "$providers_dir"
+cp "$here/overlays/codex-turn-timeout.ts" "$here/overlays/codex-turn-timeout.test.ts" "$providers_dir/"
+
+codex_provider="$providers_dir/codex.ts"
+if [ -f "$codex_provider" ]; then
+  patch_result="$(
+    python3 - "$codex_provider" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+original = s
+marker = "from './codex-turn-timeout.js'"
+if marker not in s:
+    anchor = "} from './codex-app-server.js';"
+    assert anchor in s, "codex.ts import block changed upstream"
+    s = s.replace(
+        anchor,
+        "} from './codex-app-server.js';\nimport { resolveCodexTurnTimeoutMs } from './codex-turn-timeout.js';",
+        1,
+    )
+s = s.replace("const TURN_TIMEOUT_MS = 10 * 60 * 1000;\n", "")
+turn_anchor = "  let turnId: string | null = null;\n"
+turn_insert = (
+    "  let turnId: string | null = null;\n\n"
+    "  const turnTimeoutMs = resolveCodexTurnTimeoutMs();\n"
+)
+if "const turnTimeoutMs = resolveCodexTurnTimeoutMs();" not in s:
+    assert turn_anchor in s, "runOneTurn turnId declaration changed upstream"
+    s = s.replace(turn_anchor, turn_insert, 1)
+old_timer = """  const timer = setTimeout(() => {
+    state.error = new Error(`Turn timed out after ${TURN_TIMEOUT_MS}ms`);
+    finishTurn();
+    kick();
+  }, TURN_TIMEOUT_MS);"""
+new_timer = """  const timer = setTimeout(() => {
+    if (!turnDone && turnId) {
+      void interruptCodexTurn(server, threadId, turnId).catch(() => {});
+    }
+    state.error = new Error(`Turn timed out after ${turnTimeoutMs}ms`);
+    finishTurn();
+    kick();
+  }, turnTimeoutMs);"""
+if old_timer in s:
+    s = s.replace(old_timer, new_timer, 1)
+elif "interruptCodexTurn(server, threadId, turnId)" not in s:
+    partial = """  const timer = setTimeout(() => {
+    state.error = new Error(`Turn timed out after ${turnTimeoutMs}ms`);
+    finishTurn();
+    kick();
+  }, turnTimeoutMs);"""
+    assert partial in s, "codex.ts turn timer block changed upstream"
+    s = s.replace(
+        partial,
+        new_timer,
+        1,
+    )
+if s != original:
+    open(p, "w").write(s)
+    print("patched")
+PY
+  )"
+  if [ "$patch_result" = patched ]; then
+    echo "patched $codex_provider (configurable Codex turn timeout + interrupt on expiry)"
   fi
 fi
 

@@ -77,6 +77,17 @@ In scope:
   Prompts, answers and credentials are not stored in the catalogue.
 - **Codex is the orchestration engine; Claude Code is the preferred code
   executor.** The worker instructions say so; the catalogue carries the role.
+- **Codex turn deadline is configurable for Argus delivery.** Upstream NanoClaw
+  hard-codes a ten-minute engine turn timeout in `container/agent-runner/src/providers/codex.ts`.
+  Argus installs `codex-turn-timeout.ts` (overlay via `integrations/nanoclaw/install.sh`)
+  and patches `codex.ts` to read `ARGUS_CODEX_TURN_TIMEOUT_MS` from the agent
+  environment (forwarded through `CODEX_ENV_ALLOWLIST`). Unset keeps the
+  ten-minute default; valid values are `60000`–`7200000` ms (two-hour delivery
+  ceiling). Invalid values fail the turn at resolution time. On expiry the runner
+  interrupts the active Codex turn before surfacing the error. Radar project
+  images set `ARGUS_CODEX_TURN_TIMEOUT_MS=7200000` in
+  `engines/projects/radar.Dockerfile`; other pools may set the same variable on
+  the agent image or session env without changing the global default.
 - **No silent fallback.** `argus-delegate` for an executor without
   credentials exits `78` and prints `{"blocked":"auth_missing"}`. It never
   substitutes another executor or provider. A route whose wanted engine has no

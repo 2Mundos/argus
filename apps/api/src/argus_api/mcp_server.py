@@ -101,7 +101,12 @@ async def _call(
     content: bytes | None = None,
     headers: dict[str, str] | None = None,
 ) -> Any:
-    auth = (ctx.headers or {}).get("authorization")
+    raw = (ctx.headers or {}).get("authorization", "")
+    auth = ""
+    if raw.lower().startswith("bearer "):
+        auth = raw[7:]
+    elif raw:
+        auth = raw
     if not auth:
         raise ToolError(
             "missing token: connect with the header 'Authorization: Bearer <token>'"

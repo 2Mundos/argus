@@ -90,7 +90,12 @@ describe("credential-free Gitea API helper", () => {
     const fetch = async (url, init) => {
       calls.push({ url, init });
       if (url.endsWith("/issues/1043")) {
-        return Response.json({ number: 1043, title: "Tracker item", state: "open", pull_request: null });
+        return Response.json({
+          number: 1043,
+          title: "Tracker item",
+          state: "open",
+          pull_request: null,
+        });
       }
       if (url.includes("/pulls?state=open&page=1&limit=2")) {
         return Response.json([{ number: 926, title: "PR", state: "open" }]);
@@ -128,8 +133,14 @@ describe("credential-free Gitea API helper", () => {
       ["https://git.example.test/team/project"],
       async () => Response.json([]),
     );
-    assert.throws(() => api.listPullRequests({ state: "merged", page: 1, limit: 10 }), /state must/);
-    assert.throws(() => api.listPullRequests({ state: "open", page: 0, limit: 10 }), /positive integer/);
+    assert.throws(
+      () => api.listPullRequests({ state: "merged", page: 1, limit: 10 }),
+      /state must/,
+    );
+    assert.throws(
+      () => api.listPullRequests({ state: "open", page: 0, limit: 10 }),
+      /positive integer/,
+    );
     assert.throws(
       () => api.listPullRequests({ state: "open", page: 1, limit: 51 }),
       /limit must be 1\.\.50/,
