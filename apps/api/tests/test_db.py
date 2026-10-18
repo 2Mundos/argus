@@ -39,6 +39,32 @@ async def test_write_rolls_back_on_error(db: Database) -> None:
     assert await _count_events(db) == 1
 
 
+async def test_a_cancel_after_commit_stays_a_cancel(
+    db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The commit ran but the caller was cancelled meanwhile: the CancelledError
+    must reach the caller (a failed ROLLBACK must not replace it), or a cancelled
+    background loop would swallow it and never stop."""
+    writer = db._writer
+    real = writer.execute
+
+    async def commit_then_cancel(sql: str, *args):
+        result = await real(sql, *args)
+        if sql == "COMMIT":
+            raise asyncio.CancelledError
+        return result
+
+    monkeypatch.setattr(writer, "execute", commit_then_cancel)
+    with pytest.raises(asyncio.CancelledError):
+        async with db.write() as tx:
+            await _insert_event(tx.conn)
+    monkeypatch.undo()
+    assert await _count_events(db) == 1  # committed
+    async with db.write() as tx:  # and the writer is still usable
+        await _insert_event(tx.conn)
+    assert await _count_events(db) == 2
+
+
 async def test_writes_are_serialized(db: Database) -> None:
     order: list[str] = []
 
