@@ -602,7 +602,8 @@ Consequences for Argus:
   2. Long-polls `POST /api/tasks/claim` in code (no LLM loop burns tokens
      polling), one task at a time.
   3. Injects the claimed task (spec, acceptance, pinned knowledge bodies,
-     reply instructions) as an inbound message, waking the agent container.
+     reply instructions, and the mandatory `argus-delegate` implementation
+     contract from `renderTask`) as an inbound message, waking the agent container.
   4. Turns replies into Argus calls: a plain reply is a progress note;
      `COMPLETE:`/`FAIL:`/`ASK:` prefixes complete, fail, or ask. A 409 drops the
      reply and moves on.

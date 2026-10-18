@@ -139,6 +139,24 @@ describe("renderTask", () => {
     expect(text).toContain("    Step 2");
     expect(text).toContain('"COMPLETE:"');
   });
+
+  it("requires argus-delegate for implementation and forbids direct CLIs", () => {
+    const text = renderTask(task() as any, new Map());
+    expect(text).toContain("/usr/local/bin/argus-delegate EXECUTOR");
+    expect(text).toContain("EXECUTOR agent");
+    expect(text).toContain(
+      "/usr/local/bin/argus-delegate agent \\\n    --cwd <task-checkout> --prompt-file <prompt.txt>",
+    );
+    expect(text).toContain("Example (normal implementation, not --read-only):");
+    expect(text).not.toMatch(/argus-delegate agent[^\n]*--read-only/);
+    expect(text).toContain("Do not invoke agent, cursor-agent, claude, codex, or opencode directly");
+    expect(text).toContain("prepareExecutorEnv");
+    expect(text).toContain("argus-model-policy.json");
+    expect(text).toContain("delegate JSON");
+    expect(text).toContain("resume this same task");
+    expect(text).toContain('"ASK:"');
+    expect(text).toContain('"FAIL:"');
+  });
 });
 
 describe("Argus channel", () => {

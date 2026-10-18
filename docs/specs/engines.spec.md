@@ -91,6 +91,12 @@ In scope:
   kept as an artifact file; the final line on stdout is one JSON object with
   `engine` (`ARGUS_ENGINE`), `executor`, the executor version, `model` when
   known, `cwd`, `exit_code`, `timed_out`, `duration_ms`, `artifacts`.
+  The Argus NanoClaw channel states this contract in every claimed task body
+  (`integrations/nanoclaw/argus.ts` `renderTask`): implementation must use
+  `/usr/local/bin/argus-delegate` (Cursor → `agent`); direct `cursor-agent` /
+  vendor CLIs are forbidden for delegated coding; materialized gateway stubs are
+  authorized non-secret metadata; the worker attaches the delegate JSON report
+  and resumes the same task on failure rather than inheriting another task's block.
 - **Local routing is conservative and deterministic.** A task goes to the
   local model only if *all* hold: the caller declares it simple and low-risk
   and gives deterministic acceptance criteria; it touches no auth, security or
