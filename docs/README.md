@@ -50,6 +50,8 @@ every new dependency is judged against it.
   agents and people, delivered with every claim
 - [Home](specs/home.spec.md) — the default dashboard tab: what needs attention,
   complete totals for every core state, recent activity, and health
+- [MCP operations](specs/mcp-operations.spec.md) — inbox and fleet journeys over
+  MCP with compact, paged responses; REST/MCP coverage audit
 
 ### Drafts
 
