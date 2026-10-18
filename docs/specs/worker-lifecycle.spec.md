@@ -534,10 +534,18 @@ Git also does not honor `SSL_CERT_FILE` / `NODE_EXTRA_CA_CERTS` for HTTPS verifi
 The Argus NanoClaw install sets `GIT_SSL_CAINFO` to the same combined gateway CA bundle path
 as `SSL_CERT_FILE` when mounted (otherwise the gateway-only CA path from OneCLI container
 config), so `git clone`/`git fetch` through the proxy trust the MITM CA without disabling
-verification. Repository credentials remain scoped to `…/repo.git/*` only while the
-`repository` lease is held; release removes OneCLI assignments (a post-task probe must not
-be mistaken for a live-task failure). Workers clone at runtime over HTTPS via the injected
-proxy; project toolchain images do not bake source repositories.
+verification. The Codex agent-runner rebuilds child process env from
+`CODEX_ENV_ALLOWLIST` in `container/agent-runner`; the Argus install overlay must keep
+`GIT_HTTP_PROXY_AUTHMETHOD=basic` and `GIT_TERMINAL_PROMPT=0` alongside the gateway
+`GIT_SSL_CAINFO` and proxy variables so Git authenticates to the OneCLI SDK tunnel, while
+still dropping raw provider secrets (API keys, tokens). Inspecting `Docker` container
+`Config.Env` or running `docker exec git` is not sufficient: those see the container entry
+env, not the filtered env Codex passes to `tools.exec_command`; acceptance requires a
+`repository:write` task whose engine performs a native HTTPS `git clone`/`fetch` with no
+`git config` CA or proxy overrides. Repository credentials remain scoped to `…/repo.git/*`
+only while the `repository` lease is held; release removes OneCLI assignments (a post-task
+probe must not be mistaken for a live-task failure). Workers clone at runtime over HTTPS
+via the injected proxy; project toolchain images do not bake source repositories.
 It reconciles the complete currently-held engine/executor/repository lease set (including both
 repository secrets)
 because OneCLI's set-secrets endpoint replaces assignments, and the
