@@ -27,8 +27,10 @@ equal paths that end in the same record, and let the pool choose the engine:
   the operator does, naming the document; Argus never looks in those places.
 - Mounting host login directories into workers.
 - Inventing an API key for a ChatGPT login, or measuring balance by a paid probe.
-- A balance model. Quota is what providers report (`exhausted`), otherwise
-  unknown, and unknown is never treated as zero.
+- A balance model. Quota is what providers report (`exhausted`, or the window
+  percentages a free read-only probe returns, see
+  [account usage](account-usage.spec.md)), otherwise unknown, and unknown is
+  never treated as zero.
 - A second credential store. SOPS is the store; OneCLI is the delivery path.
 
 # 3. Decisions Made

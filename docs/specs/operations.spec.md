@@ -67,6 +67,8 @@ All names are prefixed `argus_`. Gauges unless noted.
 | `argus_pool_replicas` | `pool`, `kind` | `kind` is `desired`, `max`, or `live` |
 | `argus_pool_status` | `pool`, `status` | 1 for the pool's current status (`ok`/`unreachable`/`failing`) |
 | `argus_accounts` | `provider`, `state` | accounts per provider and state |
+| `argus_account_tokens_total` (counter) | `provider`, `account`, `kind` | reported tokens: input, output, cached ([account usage](account-usage.spec.md)) |
+| `argus_account_quota_used_percent` | `provider`, `account`, `window` | latest provider-reported % used per quota window |
 | `argus_decisions_open` | | decisions waiting for an answer |
 | `argus_events_total` | | counter: rows ever written to the event log |
 | `argus_loop_last_success_timestamp_seconds` | `loop` | unix time of the loop's last good pass |

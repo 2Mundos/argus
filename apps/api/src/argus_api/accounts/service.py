@@ -22,6 +22,7 @@ from argus_core.accounts import (
     UsageReport,
 )
 
+from argus_api.accounts import usage
 from argus_api.db import Tx, ts
 from argus_api.errors import ConflictError, ForbiddenError, NotFoundError
 from argus_api.events import record
@@ -118,6 +119,8 @@ async def update_account(
         fields["max_leases"] = body.max_leases
     if body.labels is not None:
         fields["labels"] = json.dumps(body.labels)
+    if "billing_day" in body.model_fields_set:
+        fields["billing_day"] = body.billing_day
     if body.enabled is False and row["state"] != "disabled":
         fields |= {
             "state": "disabled",
@@ -369,22 +372,23 @@ async def release_waiting_tasks(tx: Tx) -> list[str]:
 
 
 async def record_usage(
-    tx: Tx, account_id: str, agent_id: str | None, report: UsageReport
+    tx: Tx, account_id: str, agent_id: str, report: UsageReport
 ) -> None:
+    """One engine run on an account the agent holds (account usage 3.2)."""
     await _row(tx.conn, account_id)
-    await tx.conn.execute(
-        "INSERT INTO account_usage (account_id, agent_id, task_id, input_tokens,"
-        " output_tokens, cost_usd, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (
-            account_id,
-            agent_id,
-            report.task_id,
-            report.input_tokens,
-            report.output_tokens,
-            report.cost_usd,
-            ts(tx.now),
-        ),
+    if await _lease_on(tx.conn, agent_id, account_id) is None:
+        raise ForbiddenError("only an agent holding a lease may report its usage")
+    await usage.insert_usage(
+        tx,
+        account_id,
+        agent_id,
+        report.task_id,
+        **report.model_dump(exclude={"task_id", "rate_limits"}),
     )
+    if report.rate_limits:
+        await usage.upsert_quota(
+            tx, account_id, report.rate_limits, "reported", f"agent:{agent_id}"
+        )
 
 
 async def secret_name_for_update(
@@ -540,7 +544,8 @@ async def _row(conn: aiosqlite.Connection, account_id: str) -> aiosqlite.Row:
 
 _USAGE = (
     "coalesce(sum(u.input_tokens), 0), coalesce(sum(u.output_tokens), 0),"
-    " coalesce(sum(u.cost_usd), 0.0)"
+    " coalesce(sum(u.cached_input_tokens), 0), coalesce(sum(u.cost_usd), 0.0),"
+    " count(*)"
 )
 _SELECT = (  # constant fragments only
     "SELECT a.*,"  # noqa: S608
@@ -549,14 +554,26 @@ _SELECT = (  # constant fragments only
     " (SELECT json_array(" + _USAGE + ") FROM account_usage u"
     "  WHERE u.account_id = a.id AND u.at > ?) AS usage_24h,"
     " (SELECT json_array(" + _USAGE + ") FROM account_usage u"
-    "  WHERE u.account_id = a.id) AS usage_total"
+    "  WHERE u.account_id = a.id) AS usage_total,"
+    " (SELECT json_group_array(json_object('window', q.window,"
+    "  'window_minutes', q.window_minutes, 'used_percent', q.used_percent,"
+    "  'resets_at', q.resets_at, 'exhausted_until', q.exhausted_until,"
+    "  'observed_at', q.observed_at, 'source', q.source))"
+    "  FROM (SELECT * FROM account_quota WHERE account_id = a.id"
+    "   ORDER BY window_minutes IS NULL, window_minutes, window) q) AS quota"
     " FROM accounts a"
 )
 
 
 def _usage(raw: str) -> Usage:
-    i, o, c = json.loads(raw)
-    return Usage(input_tokens=i, output_tokens=o, cost_usd=c)
+    i, o, cached, cost, runs = json.loads(raw)
+    return Usage(
+        input_tokens=i,
+        output_tokens=o,
+        cached_input_tokens=cached,
+        cost_usd=cost,
+        runs=runs,
+    )
 
 
 def _to_account(row: aiosqlite.Row) -> Account:
@@ -564,4 +581,5 @@ def _to_account(row: aiosqlite.Row) -> Account:
     data["labels"] = json.loads(data["labels"])
     data["usage_24h"] = _usage(data["usage_24h"])
     data["usage_total"] = _usage(data["usage_total"])
+    data["quota"] = json.loads(data["quota"])
     return Account.model_validate(data)

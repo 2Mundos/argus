@@ -52,6 +52,10 @@ every new dependency is judged against it.
   agents and people, delivered with every claim
 - [Home](specs/home.spec.md) — the default dashboard tab: what needs attention,
   complete totals for every core state, recent activity, and health
+- [Account usage](specs/account-usage.spec.md) — tokens spent and quota left per
+  provider account: reported usage, Codex quota probe, Cursor pools, charts
+- [MCP operations](specs/mcp-operations.spec.md) — inbox and fleet journeys over
+  MCP with compact, paged responses; REST/MCP coverage audit
 
 ### Drafts
 

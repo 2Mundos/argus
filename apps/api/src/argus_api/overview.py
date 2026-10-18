@@ -183,6 +183,9 @@ async def overview(db: Database) -> Overview:
             next_reset = await scalar(
                 "SELECT min(exhausted_until) FROM accounts WHERE state = 'exhausted'"
             )
+            quota_measured = bool(
+                await scalar("SELECT EXISTS (SELECT 1 FROM account_quota)")
+            )
 
             decisions = _filled(
                 DecisionState,
@@ -241,7 +244,7 @@ async def overview(db: Database) -> Overview:
             total=sum(accounts.values()),
             by_provider=accounts_by_provider,
             next_reset_at=datetime.fromisoformat(next_reset) if next_reset else None,
-            quota_measured=False,
+            quota_measured=quota_measured,
         ),
         decisions=DecisionsOverview(
             by_state=decisions,

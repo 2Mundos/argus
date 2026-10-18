@@ -1,0 +1,1148 @@
+[
+  {
+    "description": "Claim the next task you can do, waiting up to wait_s seconds (max 30) for one.\n    Returns the task (keep its `id` and `attempt`) with `knowledge_refs`: pages to\n    read first. Returns {\"task\": null} when nothing became ready.",
+    "inputSchema": {
+      "properties": {
+        "capabilities": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capabilities"
+        },
+        "wait_s": {
+          "default": 20,
+          "title": "Wait S",
+          "type": "number"
+        }
+      },
+      "type": "object",
+      "title": "claim_taskArguments"
+    },
+    "name": "claim_task"
+  },
+  {
+    "description": "Prove you are alive and renew the leases on tasks you hold. Call it at least\n    every heartbeat_interval_s (30 s). If a lease comes back rejected, stop working on\n    that task. If state is \"draining\", finish your task and then call leave.",
+    "inputSchema": {
+      "properties": {
+        "leases": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Lease"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Leases"
+        }
+      },
+      "type": "object",
+      "$defs": {
+        "Lease": {
+          "properties": {
+            "task_id": {
+              "title": "Task Id",
+              "type": "string"
+            },
+            "attempt": {
+              "title": "Attempt",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "task_id",
+            "attempt"
+          ],
+          "title": "Lease",
+          "type": "object"
+        }
+      },
+      "title": "heartbeatArguments"
+    },
+    "name": "heartbeat"
+  },
+  {
+    "description": "Read a task: spec, acceptance criteria, state, attempt, clarifications.",
+    "inputSchema": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object",
+      "title": "get_taskArguments"
+    },
+    "name": "get_task"
+  },
+  {
+    "description": "Post a short progress note shown to humans (at most one per 10 s). It also\n    renews your lease on the task.",
+    "inputSchema": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "percent": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Percent"
+        }
+      },
+      "required": [
+        "task_id",
+        "attempt",
+        "message"
+      ],
+      "type": "object",
+      "title": "report_progressArguments"
+    },
+    "name": "report_progress"
+  },
+  {
+    "description": "Finish the task. `summary` says what you did (Markdown); `data` must match the\n    task kind's result schema if it has one; `artifacts` are ids from\n    upload_text_artifact. Report token usage and the account you used, if known.",
+    "inputSchema": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data"
+        },
+        "artifacts": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifacts"
+        },
+        "account_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Account Id"
+        },
+        "input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Tokens"
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Tokens"
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Usd"
+        }
+      },
+      "required": [
+        "task_id",
+        "attempt",
+        "summary"
+      ],
+      "type": "object",
+      "title": "complete_taskArguments"
+    },
+    "name": "complete_task"
+  },
+  {
+    "description": "Give up on the task, explaining why. It is retried (by you or another agent)\n    until it runs out of attempts.",
+    "inputSchema": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "error": {
+          "title": "Error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "attempt",
+        "error"
+      ],
+      "type": "object",
+      "title": "fail_taskArguments"
+    },
+    "name": "fail_task"
+  },
+  {
+    "description": "Ask for a decision you cannot make yourself. Your task is paused (its lease is\n    released) until someone answers; the answer is added to the task spec under\n    \"Clarifications\" and the task becomes claimable again.",
+    "inputSchema": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "question": {
+          "title": "Question",
+          "type": "string"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Options"
+        },
+        "audience": {
+          "default": "any",
+          "enum": [
+            "any",
+            "orchestrator",
+            "human"
+          ],
+          "title": "Audience",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "attempt",
+        "question"
+      ],
+      "type": "object",
+      "title": "ask_questionArguments"
+    },
+    "name": "ask_question"
+  },
+  {
+    "description": "Create a task. Workers may only create subtasks of a task they hold (set\n    parent_id; the project is inherited). Orchestrators create any task and must name\n    a project. `knowledge` pins pages the claiming agent should read.",
+    "inputSchema": {
+      "properties": {
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project"
+        },
+        "spec": {
+          "default": "",
+          "title": "Spec",
+          "type": "string"
+        },
+        "kind": {
+          "default": "generic",
+          "title": "Kind",
+          "type": "string"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Id"
+        },
+        "depends_on": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Depends On"
+        },
+        "required_capabilities": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Capabilities"
+        },
+        "priority": {
+          "default": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "acceptance": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acceptance"
+        },
+        "knowledge": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Knowledge"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object",
+      "title": "create_taskArguments"
+    },
+    "name": "create_task"
+  },
+  {
+    "description": "Attach a text file (report, diff, log, notes) to the task you hold. Pass the\n    returned id in complete_task's `artifacts`. Names: letters, digits, . _ -",
+    "inputSchema": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "content": {
+          "title": "Content",
+          "type": "string"
+        },
+        "media_type": {
+          "default": "text/plain",
+          "title": "Media Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "attempt",
+        "name",
+        "content"
+      ],
+      "type": "object",
+      "title": "upload_text_artifactArguments"
+    },
+    "name": "upload_text_artifact"
+  },
+  {
+    "description": "End your identity cleanly (when drained or shutting down). Any task you still\n    hold is released for someone else.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object",
+      "title": "leaveArguments"
+    },
+    "name": "leave"
+  },
+  {
+    "description": "Search the shared knowledge base (titles, summaries, bodies, tags). Stale pages\n    are marked and ranked last; verify them before relying on them.",
+    "inputSchema": {
+      "properties": {
+        "query": {
+          "title": "Query",
+          "type": "string"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project"
+        },
+        "limit": {
+          "default": 10,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object",
+      "title": "search_knowledgeArguments"
+    },
+    "name": "search_knowledge",
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Result",
+          "type": "array"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "type": "object",
+      "title": "search_knowledgeOutput"
+    }
+  },
+  {
+    "description": "Read a knowledge page (Markdown body). Keep `revision_id` if you plan to edit it.",
+    "inputSchema": {
+      "properties": {
+        "page_id": {
+          "title": "Page Id",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        }
+      },
+      "required": [
+        "page_id"
+      ],
+      "type": "object",
+      "title": "get_knowledge_pageArguments"
+    },
+    "name": "get_knowledge_page"
+  },
+  {
+    "description": "Record something others will need. Without page_id this creates a page; with\n    page_id and base_revision_id (from get_knowledge_page) it edits it, and fails with\n    knowledge_conflict if someone changed it meanwhile (re-read and retry). Depending\n    on settings, your change is published or proposed for review (see `status`).",
+    "inputSchema": {
+      "properties": {
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "body": {
+          "title": "Body",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "summary": {
+          "default": "",
+          "title": "Summary",
+          "type": "string"
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tags"
+        },
+        "project": {
+          "default": "global",
+          "title": "Project",
+          "type": "string"
+        },
+        "page_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page Id"
+        },
+        "base_revision_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Revision Id"
+        }
+      },
+      "required": [
+        "title",
+        "body",
+        "reason"
+      ],
+      "type": "object",
+      "title": "write_knowledgeArguments"
+    },
+    "name": "write_knowledge"
+  },
+  {
+    "description": "Get a provider account (with its credential) to do your work, from the\n    providers you can use, most preferred first (e.g. [\"anthropic\", \"openai\"]).",
+    "inputSchema": {
+      "properties": {
+        "providers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Providers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "type": "object",
+      "title": "lease_accountArguments"
+    },
+    "name": "lease_account"
+  },
+  {
+    "description": "Your account hit a quota or rate limit. Returns the next account to use, or\n    none: then pass task_id/attempt so the task waits until an account frees up.\n    `until` is the provider's reset time (ISO 8601) if it told you.",
+    "inputSchema": {
+      "properties": {
+        "account_id": {
+          "title": "Account Id",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "until": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Until"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "attempt": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attempt"
+        }
+      },
+      "required": [
+        "account_id"
+      ],
+      "type": "object",
+      "title": "report_account_exhaustedArguments"
+    },
+    "name": "report_account_exhausted"
+  },
+  {
+    "description": "List tasks, newest first, optionally by state (ready, claimed, blocked,\n    in_review, succeeded, failed, \u2026).",
+    "inputSchema": {
+      "properties": {
+        "state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "State"
+        },
+        "limit": {
+          "default": 50,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "type": "object",
+      "title": "list_tasksArguments"
+    },
+    "name": "list_tasks",
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Result",
+          "type": "array"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "type": "object",
+      "title": "list_tasksOutput"
+    }
+  },
+  {
+    "description": "Cancel a task (orchestrators and admins).",
+    "inputSchema": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object",
+      "title": "cancel_taskArguments"
+    },
+    "name": "cancel_task"
+  },
+  {
+    "description": "List agents (active, draining, gone, lost) and how many tasks each holds.",
+    "inputSchema": {
+      "properties": {
+        "state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "State"
+        }
+      },
+      "type": "object",
+      "title": "list_agentsArguments"
+    },
+    "name": "list_agents",
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Result",
+          "type": "array"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "type": "object",
+      "title": "list_agentsOutput"
+    }
+  },
+  {
+    "description": "List worker pools with desired/max replicas and live instances.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object",
+      "title": "list_poolsArguments"
+    },
+    "name": "list_pools",
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Result",
+          "type": "array"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "type": "object",
+      "title": "list_poolsOutput"
+    }
+  },
+  {
+    "description": "Set how many instances a pool should run. Above the pool's cap, a human is\n    asked to approve instead (the result carries a decision_id).",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "desired_replicas": {
+          "title": "Desired Replicas",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "desired_replicas"
+      ],
+      "type": "object",
+      "title": "scale_poolArguments"
+    },
+    "name": "scale_pool"
+  },
+  {
+    "description": "Open decisions (questions, approvals, reviews, proposals), oldest first.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object",
+      "title": "list_decisionsArguments"
+    },
+    "name": "list_decisions",
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Result",
+          "type": "array"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "type": "object",
+      "title": "list_decisionsOutput"
+    }
+  },
+  {
+    "description": "Answer an open decision addressed to you: one of its options as `choice`\n    (e.g. approve/reject, accept/reject), and/or a text answer or notes.",
+    "inputSchema": {
+      "properties": {
+        "decision_id": {
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "choice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Choice"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision_id"
+      ],
+      "type": "object",
+      "title": "answer_decisionArguments"
+    },
+    "name": "answer_decision"
+  },
+  {
+    "description": "What this node can actually run, measured now: each target's reachability,\n    OCI runtimes and resources, and per pool whether a worker can be launched\n    (`launchable`, `blockers`, per-check detail; ok=null means unverified).",
+    "inputSchema": {
+      "properties": {},
+      "type": "object",
+      "title": "get_fleet_capabilitiesArguments"
+    },
+    "name": "get_fleet_capabilities"
+  },
+  {
+    "description": "Request one more worker from a pool (adds 1 to its desired replicas, up to\n    its cap). The result means *requested*, not running: poll list_pools or\n    get_fleet_capabilities. Pass the pool's current desired_replicas as\n    expected_desired_replicas so a retry cannot launch twice (409 stale_pool).",
+    "inputSchema": {
+      "properties": {
+        "pool": {
+          "title": "Pool",
+          "type": "string"
+        },
+        "expected_desired_replicas": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Desired Replicas"
+        }
+      },
+      "required": [
+        "pool"
+      ],
+      "type": "object",
+      "title": "launch_workerArguments"
+    },
+    "name": "launch_worker"
+  },
+  {
+    "description": "The worker templates this node supports, per node: `ready`, or `missing`\n    (what to set up). Only a ready template can be created. Read-only. Defaults\n    (suggested pool name, quantity 1, cap) are in each template's `defaults`.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object",
+      "title": "list_worker_templatesArguments"
+    },
+    "name": "list_worker_templates"
+  },
+  {
+    "description": "Create a pool from a ready template and request `quantity` workers (default\n    1). `name` is required and is the idempotency key: repeating a call is 409\n    pool_exists, never a second worker (take a free name from `defaults.name` in\n    list_worker_templates). Image, runtime, and options come from the template; `image` is only for\n    argus-worker and must be one it offers. `advanced` (capabilities, env,\n    extra_hosts, max_replicas) is admin only. The result means *requested*, not running: follow\n    it with list_pools. A name that exists is 409 pool_exists (use launch_worker).",
+    "inputSchema": {
+      "properties": {
+        "template": {
+          "title": "Template",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "node": {
+          "default": "local",
+          "title": "Node",
+          "type": "string"
+        },
+        "quantity": {
+          "default": 1,
+          "title": "Quantity",
+          "type": "integer"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image"
+        },
+        "advanced": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Advanced"
+        }
+      },
+      "required": [
+        "template",
+        "name"
+      ],
+      "type": "object",
+      "title": "create_workerArguments"
+    },
+    "name": "create_worker"
+  },
+  {
+    "description": "Engines, delegated CLI executors (claude, codex, opencode, cursor-agent) and the\n    local model. Each entry separates model provider, harness, executor and account, and\n    reports `readiness` as three facts (installed, authenticated, validated; ok=null is\n    unknown). `usable` is true only when all three hold. Read-only.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object",
+      "title": "list_enginesArguments"
+    },
+    "name": "list_engines"
+  },
+  {
+    "description": "Decide where a task should run: the local model, or codex/claude. The local model is\n    chosen only if the task is simple, low risk, has deterministic acceptance criteria,\n    is not multi-file or sensitive, and `input_chars` (everything the model would see:\n    instructions, tool schemas, history, inputs) provably fits. Unknown size never goes\n    local. Needs the orchestrator or admin scope. The decision and its reason are recorded.",
+    "inputSchema": {
+      "properties": {
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "simple": {
+          "default": false,
+          "title": "Simple",
+          "type": "boolean"
+        },
+        "low_risk": {
+          "default": false,
+          "title": "Low Risk",
+          "type": "boolean"
+        },
+        "criteria_deterministic": {
+          "default": false,
+          "title": "Criteria Deterministic",
+          "type": "boolean"
+        },
+        "multi_file": {
+          "default": false,
+          "title": "Multi File",
+          "type": "boolean"
+        },
+        "touches_sensitive": {
+          "default": false,
+          "title": "Touches Sensitive",
+          "type": "boolean"
+        },
+        "is_code": {
+          "default": false,
+          "title": "Is Code",
+          "type": "boolean"
+        },
+        "input_chars": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Chars"
+        },
+        "output_tokens": {
+          "default": 512,
+          "title": "Output Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "summary"
+      ],
+      "type": "object",
+      "title": "route_taskArguments"
+    },
+    "name": "route_task"
+  },
+  {
+    "description": "Run one bounded completion on the local model (no tools, no side effects) and\n    check it against `criteria` ({json_schema, must_contain, equals, max_chars}).\n    `verdict` is `accepted` (use `text`) or `escalate`: then do the work with\n    `escalate_to` yourself. Cost is unknown (null), not zero. Use route_task first.",
+    "inputSchema": {
+      "properties": {
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "system": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "System"
+        },
+        "criteria": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Criteria"
+        },
+        "max_output_tokens": {
+          "default": 512,
+          "title": "Max Output Tokens",
+          "type": "integer"
+        },
+        "max_attempts": {
+          "default": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "type": "object",
+      "title": "run_localArguments"
+    },
+    "name": "run_local"
+  }
+]

@@ -6,7 +6,7 @@ export const CODEX_TURN_TIMEOUT_MAX_MS = 2 * 60 * 60 * 1000;
 export class CodexTurnTimeoutConfigError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'CodexTurnTimeoutConfigError';
+    this.name = "CodexTurnTimeoutConfigError";
   }
 }
 
@@ -16,11 +16,15 @@ export function resolveCodexTurnTimeoutMs(env: NodeJS.ProcessEnv = process.env):
   if (!raw) return CODEX_TURN_TIMEOUT_DEFAULT_MS;
   if (!/^\d+$/.test(raw)) {
     throw new CodexTurnTimeoutConfigError(
-      'ARGUS_CODEX_TURN_TIMEOUT_MS must be a positive integer number of milliseconds',
+      "ARGUS_CODEX_TURN_TIMEOUT_MS must be a positive integer number of milliseconds",
     );
   }
   const ms = Number(raw);
-  if (!Number.isSafeInteger(ms) || ms < CODEX_TURN_TIMEOUT_MIN_MS || ms > CODEX_TURN_TIMEOUT_MAX_MS) {
+  if (
+    !Number.isSafeInteger(ms) ||
+    ms < CODEX_TURN_TIMEOUT_MIN_MS ||
+    ms > CODEX_TURN_TIMEOUT_MAX_MS
+  ) {
     throw new CodexTurnTimeoutConfigError(
       `ARGUS_CODEX_TURN_TIMEOUT_MS must be between ${CODEX_TURN_TIMEOUT_MIN_MS} and ${CODEX_TURN_TIMEOUT_MAX_MS}`,
     );

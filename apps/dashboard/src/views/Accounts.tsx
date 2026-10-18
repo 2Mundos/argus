@@ -11,9 +11,13 @@ import {
 import { type Account, api, call } from "../api";
 import { relative } from "../format";
 import { useLiveData } from "../live";
+import { hasModelUsage, tokens, totalTokens, viewerTimeZone, windowQuery } from "../usage";
+import { AccountDetail } from "./AccountDetail";
 import { DeleteAccount, EditAccount, ReplaceCredential } from "./AccountDialogs";
 import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
+import { QuotaMeter, Sparkline } from "./charts";
+import { ProviderMark, StateIcon } from "./providerIcons";
 
 export function Accounts() {
   const [adding, setAdding] = useState(false);
@@ -30,6 +34,17 @@ export function Accounts() {
     error: loadError,
     reload: reloadList,
   } = useLiveData(() => call(api.GET("/api/accounts")), []);
+  const { data: week } = useLiveData(
+    () =>
+      call(
+        api.GET("/api/accounts/usage", {
+          params: { query: { ...windowQuery("7d", new Date()), tz: viewerTimeZone() } },
+        }),
+      ),
+    [],
+  );
+  const [selected, setSelected] = useState<string>();
+  const selectedAccount = accounts?.find((a) => a.id === selected);
 
   async function toggle(account: Account) {
     setError(undefined);
@@ -79,96 +94,129 @@ export function Accounts() {
       </p>
       {notice && <p className="small">{notice}</p>}
       {(error || loadError) && <p className="error">{error ?? loadError?.message}</p>}
-      <table className="accounts-table">
+      <table className="accounts-table accounts">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Provider</th>
+            <th>Account</th>
             <th>State</th>
-            <th>Priority</th>
+            <th>Quota left</th>
+            <th>Tokens, 7 days</th>
             <th>Leases</th>
-            <th>Last 24 h</th>
-            <th>Total</th>
             <th />
           </tr>
         </thead>
         <tbody>
-          {(accounts ?? []).map((a) => (
-            <tr key={a.id}>
-              <td data-label="Name">
-                {a.name} <span className="muted small">{a.kind.replace("_", " ")}</span>
-              </td>
-              <td data-label="Provider">{a.provider}</td>
-              <td data-label="State">
-                <span className={`badge account-${a.state}`}>{a.state}</span>
-                {a.state === "exhausted" && (
-                  <span className="muted small"> resets {relative(a.exhausted_until)}</span>
-                )}
-                {a.disabled_reason && <span className="muted small"> {a.disabled_reason}</span>}
-              </td>
-              <td data-label="Priority">{a.priority}</td>
-              <td data-label="Leases">
-                {a.active_leases}
-                {a.max_leases != null && ` / ${a.max_leases}`}
-              </td>
-              <td data-label="Last 24 h" className="small">
-                {usage(a.usage_24h)}
-              </td>
-              <td data-label="Total" className="small">
-                {usage(a.usage_total)}
-              </td>
-              <td>
-                <div className="account-actions">
+          {(accounts ?? []).map((a) => {
+            const series = week?.accounts.find((u) => u.account_id === a.id);
+            const model = hasModelUsage(a.provider);
+            return (
+              <tr key={a.id}>
+                <td data-label="Account">
                   <button
                     type="button"
-                    className="link"
-                    aria-label={`Edit ${a.name}`}
-                    onClick={() => setEditing(a)}
+                    className="link account-name"
+                    onClick={() => setSelected(a.id)}
                   >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="link"
-                    aria-label={`${a.state === "disabled" ? "Enable" : "Disable"} ${a.name}`}
-                    onClick={() => toggle(a)}
-                  >
-                    {a.state === "disabled" ? "Enable" : "Disable"}
-                  </button>
-                  {a.provider === "anthropic" ? (
-                    <button
-                      type="button"
-                      className="link"
-                      aria-label={`Renew credential of ${a.name}`}
-                      onClick={() => setClaude({ renew: a })}
-                    >
-                      Renew credential
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="link"
-                      aria-label={`Replace credential of ${a.name}`}
-                      onClick={() => setReplacing(a)}
-                    >
-                      Replace credential
-                    </button>
+                    <ProviderMark provider={a.provider} /> {a.name}
+                  </button>{" "}
+                  <span className="muted small">
+                    {a.provider} · {a.kind.replace("_", " ")} · priority {a.priority}
+                  </span>
+                </td>
+                <td data-label="State">
+                  <span className={`badge account-${a.state}`}>
+                    <StateIcon state={a.state} /> {a.state}
+                  </span>
+                  {a.state === "exhausted" && (
+                    <span className="muted small"> resets {relative(a.exhausted_until)}</span>
                   )}
-                  <button
-                    type="button"
-                    className="link danger"
-                    aria-label={`Delete ${a.name}`}
-                    onClick={() => setDeleting(a)}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
+                  {a.disabled_reason && <span className="muted small"> {a.disabled_reason}</span>}
+                </td>
+                <td data-label="Quota left">
+                  {!model ? (
+                    <span className="muted small">—</span>
+                  ) : (a.quota ?? []).length === 0 ? (
+                    <span className="muted small">unknown</span>
+                  ) : (
+                    <div className="quota-cell">
+                      {(a.quota ?? []).map((q) => (
+                        <QuotaMeter key={q.window} q={q} compact />
+                      ))}
+                    </div>
+                  )}
+                </td>
+                <td data-label="Tokens, 7 days">
+                  {!model ? (
+                    <span className="muted small">—</span>
+                  ) : series?.reported ? (
+                    <span className="spark-cell">
+                      <Sparkline
+                        values={series.buckets.map(totalTokens)}
+                        label={`${a.name}: tokens per day, last 7 days`}
+                      />
+                      <span className="small">{tokens(totalTokens(series.totals))}</span>
+                    </span>
+                  ) : (
+                    <span className="muted small">not reported</span>
+                  )}
+                </td>
+                <td data-label="Leases">
+                  {a.active_leases}
+                  {a.max_leases != null && ` / ${a.max_leases}`}
+                </td>
+                <td>
+                  <div className="account-actions">
+                    <button
+                      type="button"
+                      className="link"
+                      aria-label={`Edit ${a.name}`}
+                      onClick={() => setEditing(a)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="link"
+                      aria-label={`${a.state === "disabled" ? "Enable" : "Disable"} ${a.name}`}
+                      onClick={() => toggle(a)}
+                    >
+                      {a.state === "disabled" ? "Enable" : "Disable"}
+                    </button>
+                    {a.provider === "anthropic" ? (
+                      <button
+                        type="button"
+                        className="link"
+                        aria-label={`Renew credential of ${a.name}`}
+                        onClick={() => setClaude({ renew: a })}
+                      >
+                        Renew credential
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="link"
+                        aria-label={`Replace credential of ${a.name}`}
+                        onClick={() => setReplacing(a)}
+                      >
+                        Replace credential
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="link danger"
+                      aria-label={`Delete ${a.name}`}
+                      onClick={() => setDeleting(a)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
           {accounts?.length === 0 && (
             <tr>
-              <td colSpan={8} className="muted">
+              <td colSpan={6} className="muted">
                 No accounts yet.
               </td>
             </tr>
@@ -216,6 +264,9 @@ export function Accounts() {
           }}
         />
       )}
+      {selectedAccount && (
+        <AccountDetail account={selectedAccount} onClose={() => setSelected(undefined)} />
+      )}
       {claude && (
         <ClaudeAccount
           renew={claude.renew}
@@ -237,13 +288,6 @@ export function Accounts() {
       )}
     </section>
   );
-}
-
-function usage(u: Account["usage_24h"]): string {
-  const tokens = u.input_tokens + u.output_tokens;
-  if (tokens === 0 && u.cost_usd === 0) return "—";
-  const k = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
-  return `${k} tokens · $${u.cost_usd.toFixed(2)}`;
 }
 
 function AddAccount({ onClose }: { onClose: () => void }) {
@@ -402,6 +446,13 @@ function AddAccount({ onClose }: { onClose: () => void }) {
           </label>
         </div>
         {authNotice && <p className="small muted">{authNotice}</p>}
+        {resolvedProvider === "cursor" && (
+          <p className="small muted">
+            Argus sees a Cursor pool as exhausted only when Cursor refuses work. With on-demand
+            spending enabled, Cursor bills instead, so set a spend limit of $0 in Cursor if Argus
+            should see exhaustion.
+          </p>
+        )}
         {isGitea ? (
           <div className="row">
             <label>

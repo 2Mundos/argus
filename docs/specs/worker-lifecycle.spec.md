@@ -432,7 +432,9 @@ as a managed pool of size 1 uses the same model and comes later.
   orchestrators `list_tasks`, `cancel_task`, `list_agents`, `list_pools`,
   `scale_pool`, `get_fleet_capabilities`, `launch_worker`, `list_worker_templates`,
   `create_worker` (see
-  [worker launch](worker-launch.spec.md)), `list_decisions`, `answer_decision`. The server's instructions
+  [worker launch](worker-launch.spec.md)), `list_decisions`, `answer_decision`.
+  `tools/list` shows each token only the tools its scope can use
+  ([MCP operations](mcp-operations.spec.md) 3.4). The server's instructions
   tell agents the working loop (claim, heartbeat, progress, complete; a 409
   means stop). The SDK's DNS-rebinding check is disabled because agents reach
   Argus by non-localhost names and every call needs a bearer token, which is what

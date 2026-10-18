@@ -50,7 +50,7 @@ vi.mock("../live", async () => {
 
 vi.mock("../api", () => ({
   api: {
-    GET: () => "list",
+    GET: (path: string) => (path === "/api/accounts/usage" ? "usage" : "list"),
     POST: () => "post",
     PATCH: (_: string, init: { params: { path: { account_id: string } }; body: object }) => ({
       op: "patch",
@@ -71,6 +71,7 @@ vi.mock("../api", () => ({
     }),
   },
   call: async (req: unknown) => {
+    if (req === "usage") return { accounts: [] };
     if (req === "list") {
       mock.listCalls += 1;
       return mock.list;
