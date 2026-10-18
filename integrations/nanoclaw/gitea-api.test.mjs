@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { ProxyAgent } from "undici";
-import { createGatewayFetch, GiteaApi } from "./gitea-api.mjs";
+import { allowlistedRepository, createGatewayFetch, GiteaApi } from "./gitea-api.mjs";
 
 describe("credential-free Gitea API helper", () => {
   it("isolates REST token and Git Basic injection to exact host and path rules in a local proxy", async () => {
@@ -85,6 +85,13 @@ describe("credential-free Gitea API helper", () => {
     assert.ok(calls.every(({ init }) => init.redirect === "error"));
   });
 
+  it("fails closed when the worker repository allowlist is empty", () => {
+    assert.throws(
+      () => allowlistedRepository("https://git.example.test/team/project", []),
+      /repository is not configured for this worker/,
+    );
+  });
+
   it("normalizes configured and allowlisted .git URL forms to one REST identity", async () => {
     for (const configuredSuffix of ["", ".git"]) {
       for (const allowSuffix of ["", ".git"]) {
@@ -131,32 +138,41 @@ describe("credential-free Gitea API helper", () => {
   });
 
   it("rejects hosts/repos outside the exact HTTPS allowlist and has no merge operation", async () => {
+    const noopFetch = async () => Response.json({});
     assert.throws(
       () =>
-        new GiteaApi("https://git.example.test/other/project", [
-          "https://git.example.test/team/project",
-        ]),
+        new GiteaApi(
+          "https://git.example.test/other/project",
+          ["https://git.example.test/team/project"],
+          noopFetch,
+        ),
       /not configured/,
     );
     assert.throws(
       () =>
-        new GiteaApi("http://git.example.test/team/project", [
-          "https://git.example.test/team/project",
-        ]),
+        new GiteaApi(
+          "http://git.example.test/team/project",
+          ["https://git.example.test/team/project"],
+          noopFetch,
+        ),
       /HTTPS/,
     );
     for (const lookalike of ["project-other", "project.git.git"]) {
       assert.throws(
         () =>
-          new GiteaApi(`https://git.example.test/team/${lookalike}`, [
-            "https://git.example.test/team/project.git",
-          ]),
+          new GiteaApi(
+            `https://git.example.test/team/${lookalike}`,
+            ["https://git.example.test/team/project.git"],
+            noopFetch,
+          ),
         /not configured/,
       );
     }
-    const api = new GiteaApi("https://git.example.test/team/project", [
+    const api = new GiteaApi(
       "https://git.example.test/team/project",
-    ]);
+      ["https://git.example.test/team/project"],
+      noopFetch,
+    );
     assert.throws(() => api.updatePullRequest(7, { merge: true }), /unsupported PR update field/);
   });
 

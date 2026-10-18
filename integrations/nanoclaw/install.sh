@@ -197,17 +197,57 @@ PY
 fi
 
 codex_ts="$target/container/agent-runner/src/providers/codex-app-server.ts"
-if [ -f "$codex_ts" ] && ! grep -q "GIT_HTTP_PROXY_AUTHMETHOD" "$codex_ts"; then
-  python3 - "$codex_ts" <<'PY'
+if [ -f "$codex_ts" ]; then
+  patch_result="$(
+    python3 - "$codex_ts" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p).read()
-old = "  'GIT_SSL_CAINFO',\n  'HOME',"
-new = "  'GIT_SSL_CAINFO',\n  'GIT_HTTP_PROXY_AUTHMETHOD',\n  'GIT_TERMINAL_PROMPT',\n  'HOME',"
-assert old in s, "codex-app-server CODEX_ENV_ALLOWLIST shape changed upstream"
+original = s
+if "GIT_HTTP_PROXY_AUTHMETHOD" not in s:
+    old = "  'GIT_SSL_CAINFO',\n  'HOME',"
+    new = "  'GIT_SSL_CAINFO',\n  'GIT_HTTP_PROXY_AUTHMETHOD',\n  'GIT_TERMINAL_PROMPT',\n  'HOME',"
+    assert old in s, "codex-app-server CODEX_ENV_ALLOWLIST shape changed upstream"
+    s = s.replace(old, new, 1)
+runtime_keys = ["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME", "ARGUS_REPOSITORIES_JSON"]
+missing = [k for k in runtime_keys if f"  '{k}',\n" not in s]
+if missing:
+    insert = "".join(f"  '{k}',\n" for k in missing)
+    anchor = "  'CODEX_HOME',\n"
+    assert anchor in s, "codex-app-server CODEX_ENV_ALLOWLIST missing CODEX_HOME anchor"
+    s = s.replace(anchor, insert + anchor, 1)
+if s != original:
+    open(p, "w").write(s)
+    print("patched")
+PY
+  )"
+  if [ "$patch_result" = patched ]; then
+    echo "patched $codex_ts (Codex env allowlist: git, Cursor delegate, Gitea map)"
+  fi
+fi
+
+container_runner="$target/src/container-runner.ts"
+if [ -f "$container_runner" ] && ! grep -q "argusRepositoriesJson" "$container_runner"; then
+  python3 - "$container_runner" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = """  const contributedEnv: Record<string, string> = {
+    ...(contribution.env ?? {}),
+    ...(gateway.env ?? {}),
+  };"""
+new = """  const contributedEnv: Record<string, string> = {
+    ...(contribution.env ?? {}),
+    ...(gateway.env ?? {}),
+  };
+  const argusRepositoriesJson = process.env.ARGUS_REPOSITORIES_JSON?.trim();
+  if (argusRepositoriesJson) {
+    contributedEnv.ARGUS_REPOSITORIES_JSON = argusRepositoriesJson;
+  }"""
+assert old in s, "container-runner composeSessionSpec contributedEnv block changed upstream"
 open(p, "w").write(s.replace(old, new, 1))
 PY
-  echo "patched $codex_ts (Codex env allowlist: git proxy auth knobs)"
+  echo "patched $container_runner (host ARGUS_REPOSITORIES_JSON → agent contributedEnv)"
 fi
 
 codex_test="$target/container/agent-runner/src/providers/codex-app-server.test.ts"
@@ -242,13 +282,39 @@ if marker not in s:
         1,
     )
     assert marker in s, "codex-app-server env test shape changed upstream"
+runtime_marker = "forwards Cursor delegate and Gitea allowlist env"
+if runtime_marker not in s:
+    s = s.replace(
+        """      GIT_TERMINAL_PROMPT: '0',
+      OPENAI_API_KEY: 'sk-test',""",
+        """      GIT_TERMINAL_PROMPT: '0',
+      CURSOR_CONFIG_DIR: '/home/node/.config/cursor',
+      XDG_CONFIG_HOME: '/home/node/.config',
+      ARGUS_REPOSITORIES_JSON: '{"radar":"https://git.example.test/radar/radar.git"}',
+      OPENAI_API_KEY: 'sk-test',""",
+        1,
+    )
+    s = s.replace(
+        """    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+    expect(env.OPENAI_API_KEY).toBeUndefined();""",
+        """    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+    // forwards Cursor delegate and Gitea allowlist env
+    expect(env.CURSOR_CONFIG_DIR).toBe('/home/node/.config/cursor');
+    expect(env.XDG_CONFIG_HOME).toBe('/home/node/.config');
+    expect(env.ARGUS_REPOSITORIES_JSON).toBe(
+      '{"radar":"https://git.example.test/radar/radar.git"}',
+    );
+    expect(env.OPENAI_API_KEY).toBeUndefined();""",
+        1,
+    )
+    assert "expect(env.CURSOR_CONFIG_DIR)" in s, "codex-app-server env test runtime keys missing"
 if s != original:
     open(p, "w").write(s)
     print("patched")
 PY
   )"
   if [ "$patch_result" = patched ]; then
-    echo "patched $codex_test (Codex env forwards git proxy auth knobs)"
+    echo "patched $codex_test (Codex env forwards git, Cursor delegate, Gitea map)"
   fi
 fi
 

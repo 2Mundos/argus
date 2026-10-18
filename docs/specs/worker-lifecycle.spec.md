@@ -537,12 +537,17 @@ config), so `git clone`/`git fetch` through the proxy trust the MITM CA without 
 verification. The Codex agent-runner rebuilds child process env from
 `CODEX_ENV_ALLOWLIST` in `container/agent-runner`; the Argus install overlay must keep
 `GIT_HTTP_PROXY_AUTHMETHOD=basic` and `GIT_TERMINAL_PROMPT=0` alongside the gateway
-`GIT_SSL_CAINFO` and proxy variables so Git authenticates to the OneCLI SDK tunnel, while
-still dropping raw provider secrets (API keys, tokens). Inspecting `Docker` container
-`Config.Env` or running `docker exec git` is not sufficient: those see the container entry
-env, not the filtered env Codex passes to `tools.exec_command`; acceptance requires a
-`repository:write` task whose engine performs a native HTTPS `git clone`/`fetch` with no
-`git config` CA or proxy overrides. Repository credentials remain scoped to `…/repo.git/*`
+`GIT_SSL_CAINFO` and proxy variables so Git authenticates to the OneCLI SDK tunnel, plus
+`CURSOR_CONFIG_DIR` and `XDG_CONFIG_HOME` so `argus-delegate` can materialize the gateway's
+HTTP/1.1 Cursor stubs into a writable config dir, and `ARGUS_REPOSITORIES_JSON` so
+`argus-gitea-api` sees the same project-to-URL allowlist as the NanoClaw host, while still
+dropping raw provider secrets (API keys, tokens). The fleet sets `ARGUS_REPOSITORIES_JSON`
+on the NanoClaw host container only; `install.sh` copies it into the agent container's
+`contributedEnv` when composing a session. Inspecting `Docker` container `Config.Env` or
+running `docker exec git` is not sufficient: those see the container entry env, not the
+filtered env Codex passes to `tools.exec_command`; acceptance requires a `repository:write`
+task whose engine performs a native HTTPS `git clone`/`fetch` with no `git config` CA or
+proxy overrides. Repository credentials remain scoped to `…/repo.git/*`
 only while the `repository` lease is held; release removes OneCLI assignments (a post-task
 probe must not be mistaken for a live-task failure). Workers clone at runtime over HTTPS
 via the injected proxy; project toolchain images do not bake source repositories.
