@@ -199,7 +199,18 @@ export interface paths {
         get: operations["get_account_api_accounts__account_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Account
+         * @description Delete an account and, if nothing else references it, its Argus-generated
+         *     credential. `confirm_name` must equal the current name; `409 account_in_use`
+         *     while a lease is active.
+         *
+         *     SOPS and SQLite cannot commit together. The secret is removed inside the SQL
+         *     transaction, so a store failure rolls the rows back; if the commit then fails
+         *     after the secret is gone, the exact prior value is written back (compensation,
+         *     best effort: if that write also fails the error names the entry, never a value).
+         */
+        delete: operations["delete_account_api_accounts__account_id__delete"];
         options?: never;
         head?: never;
         /** Update Account */
@@ -1606,6 +1617,8 @@ export interface components {
             } | null;
             /** Max Leases */
             max_leases?: number | null;
+            /** Name */
+            name?: string | null;
             /** Priority */
             priority?: number | null;
         };
@@ -2684,6 +2697,11 @@ export interface components {
              */
             docker_socket?: string;
             /**
+             * Executor Providers
+             * @default []
+             */
+            executor_providers?: string[];
+            /**
              * Group Add
              * @default []
              */
@@ -2730,6 +2748,11 @@ export interface components {
              * @default /var/run/docker.sock
              */
             docker_socket: string;
+            /**
+             * Executor Providers
+             * @default []
+             */
+            executor_providers: string[];
             /**
              * Group Add
              * @default []
@@ -4400,6 +4423,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Account"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_account_api_accounts__account_id__delete: {
+        parameters: {
+            query: {
+                confirm_name: string;
+            };
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

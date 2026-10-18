@@ -1,0 +1,1 @@
+- Skill `radar-security-evidence-lane` patch: adicionada regra imperativa (evidência parcial, verificação de conteúdo, não apenas status/label). Não há duplicata; conteúdo verificado antes da aplicação. Nenhuma alteração .py externa; arquivo de triagem em .hermes/cache/scratch preservado (evidências redigidas, verificações determinísticas, benchmarks dos workers).

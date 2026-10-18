@@ -66,7 +66,7 @@ export function ClaudeAccount({
 /** What a reason code from the login means for the person, without jargon. */
 function loginReason(code: string): string {
   if (code === "oauth_400")
-    return "Claude refused that code: it has expired or was already used. Open the sign-in page again to get a new code and paste it.";
+    return "Claude refused that code: it expired, was already used, or came from an earlier link. Claude has made a new sign-in link: open it, sign in again and paste the new code.";
   if (code === "code_invalid") return "Claude did not accept that code. Check it and try again.";
   if (code === "token_not_found")
     return "Claude said it signed in, but Argus could not find the token it made. Nothing was stored; start again.";
@@ -357,7 +357,9 @@ function DedicatedLogin({ renew, onClose, onDone }: Shared) {
     setError(undefined);
     const clean = cleanCode(code);
     if (!clean) {
-      setError("That is not a valid code: paste it exactly as the sign-in page shows it.");
+      setError(
+        "That is not a valid code: paste everything the sign-in page shows, including the part after #.",
+      );
       return;
     }
     setBusy(true);
@@ -421,6 +423,7 @@ function DedicatedLogin({ renew, onClose, onDone }: Shared) {
 
   const link = safeClaudeUrl(login.url);
   const finishing = login.phase === "finishing";
+  const renewing = login.phase === "renewing_link";
   return (
     <div>
       {login.state === "pending" && (
@@ -452,7 +455,7 @@ function DedicatedLogin({ renew, onClose, onDone }: Shared) {
               .
             </p>
           )}
-          {!finishing && (
+          {!finishing && !renewing && (
             <form onSubmit={sendCode}>
               <label>
                 Code from the sign-in page
@@ -473,7 +476,9 @@ function DedicatedLogin({ renew, onClose, onDone }: Shared) {
             </form>
           )}
           <p className="muted small" role="status">
-            {finishing ? "Code sent, finishing sign-in…" : "Waiting for the code…"} expires in{" "}
+            {finishing && "Code sent, finishing sign-in…"}
+            {renewing && "Preparing a new sign-in link…"}
+            {!finishing && !renewing && "Waiting for the code…"} expires in{" "}
             {Math.ceil(login.expires_in_s / 60)} min.
           </p>
         </>

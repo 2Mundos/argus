@@ -424,6 +424,7 @@ async def test_nanoclaw_runtime_spec(
     assert spec.mounts[1].create_owner == "1000:1000"
     assert spec.env["CONTAINER_IMAGE"] == "nanoclaw-agent:1"
     assert spec.env["ARGUS_ACCOUNT_PROVIDERS"] == "anthropic"
+    assert "ARGUS_EXECUTOR_PROVIDERS" not in spec.env  # unset keeps the channel default
     assert (
         spec.env["ARGUS_REPOSITORIES_JSON"]
         == '{"argus": "https://git.example.test/team/argus"}'
@@ -431,6 +432,52 @@ async def test_nanoclaw_runtime_spec(
     assert spec.env["ARGUS_NANOCLAW_INSTANCES_ROOT"] == "/srv/nc-i"
     assert spec.env["ARGUS_BOOTSTRAP_TOKENS"].startswith("argus_boot_")
     assert (spec.user, spec.group_add) == ("1000:1000", ["999"])
+
+
+def test_executor_providers_are_explicit_and_cursor_is_never_an_engine() -> None:
+    from argus_core.fleet import NanoclawOptions
+    from pydantic import ValidationError
+
+    ok = {"install_dir": "/opt/nc", "instances_root": "/srv/i", "agent_image": "a:1"}
+    opts = NanoclawOptions(
+        account_providers=["openai", "anthropic"], executor_providers=["cursor"], **ok
+    )
+    assert opts.executor_providers == ["cursor"]
+    assert NanoclawOptions(**ok).executor_providers == []  # default: not set
+    with pytest.raises(ValidationError, match="cursor is an executor"):
+        NanoclawOptions(account_providers=["cursor"], **ok)
+    with pytest.raises(ValidationError, match="must match"):
+        NanoclawOptions(executor_providers=["Cursor,anthropic"], **ok)
+
+
+async def test_nanoclaw_runtime_passes_the_executor_providers(
+    db: Database, registry: TargetRegistry, target: FakeTarget
+) -> None:
+    from argus_core.fleet import NanoclawOptions
+
+    async with db.write() as tx:
+        await fleet.upsert_pool(
+            tx,
+            "web",
+            PoolUpsert(
+                runtime="nanoclaw",
+                image="host:dev",
+                desired_replicas=1,
+                max_replicas=2,
+                nanoclaw=NanoclawOptions(
+                    install_dir="/opt/nc",
+                    instances_root="/srv/i",
+                    agent_image="a:1",
+                    account_providers=["openai"],
+                    executor_providers=["cursor", "anthropic"],
+                ),
+            ),
+            "admin:test",
+        )
+    await tick(db, registry)
+    [spec] = target.specs.values()
+    assert spec.env["ARGUS_ACCOUNT_PROVIDERS"] == "openai"
+    assert spec.env["ARGUS_EXECUTOR_PROVIDERS"] == "cursor,anthropic"
 
 
 async def _nanoclaw_pool(db: Database) -> None:

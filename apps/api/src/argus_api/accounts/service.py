@@ -104,6 +104,15 @@ async def update_account(
 ) -> Account:
     row = await _row(tx.conn, account_id)
     fields: dict[str, Any] = {}
+    if body.name is not None and body.name != row["name"]:
+        async with tx.conn.execute(
+            "SELECT 1 FROM accounts WHERE name = ?", (body.name,)
+        ) as cur:
+            if await cur.fetchone():
+                raise ConflictError(
+                    f"an account named {body.name!r} already exists", code="name_taken"
+                )
+        fields["name"] = body.name
     if body.priority is not None:
         fields["priority"] = body.priority
     if "max_leases" in body.model_fields_set:
@@ -139,6 +148,64 @@ async def update_account(
         if fields.get("state") == "available":
             await release_waiting_tasks(tx)
     return await get_account(tx.conn, account_id, tx.now)
+
+
+async def delete_account(
+    tx: Tx, account_id: str, confirm_name: str, actor: str
+) -> str | None:
+    """Remove an account, its usage history and its ended leases. `confirm_name`
+    must be the account's current name, so a stale or wrong target is refused;
+    an account with an active lease is refused.
+
+    Returns the name of the Argus-generated secret that is now unreferenced and
+    should be removed by the caller, or None. The secret store is not part of
+    this SQL transaction; the caller coordinates the two."""
+    row = await _row(tx.conn, account_id)
+    if confirm_name != row["name"]:
+        raise ConflictError(
+            "confirmation does not match the account's current name",
+            code="name_mismatch",
+        )
+    async with tx.conn.execute(
+        "SELECT count(*) FROM account_leases WHERE account_id = ? AND released_at IS NULL",
+        (account_id,),
+    ) as cur:
+        active = (await cur.fetchone() or (0,))[0]
+    if active:
+        raise ConflictError(
+            f"account has {active} active lease(s); wait for release or disable it",
+            code="account_in_use",
+        )
+    await tx.conn.execute(
+        "DELETE FROM account_usage WHERE account_id = ?", (account_id,)
+    )
+    await tx.conn.execute(
+        "DELETE FROM account_leases WHERE account_id = ?", (account_id,)
+    )
+    await tx.conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+    # Only an entry Argus generated (`account-*`) and no other account still
+    # references; an operator-managed ref, or one a sibling uses, stays.
+    secret = ref_name(row["secret_ref"])
+    async with tx.conn.execute(
+        "SELECT count(*) FROM accounts WHERE secret_ref = ?", (row["secret_ref"],)
+    ) as cur:
+        shared = (await cur.fetchone() or (0,))[0]
+    removable = (
+        secret if secret and secret.startswith("account-") and not shared else None
+    )
+    await record(
+        tx,
+        actor,
+        "account",
+        account_id,
+        "account.deleted",
+        {
+            "name": row["name"],
+            "provider": row["provider"],
+            "secret_removed": removable is not None,
+        },
+    )
+    return removable
 
 
 async def reconcile_secrets(tx: Tx, store: SecretStore) -> None:

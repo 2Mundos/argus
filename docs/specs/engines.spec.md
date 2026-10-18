@@ -52,7 +52,11 @@ In scope:
   exists in the image and reports the pinned version), `authenticated` (a
   credential for *that container's* use exists), `validated` (a real
   non-interactive task completed and was checked). Each is `true`, `false` or
-  `null` (unknown) with a detail and a timestamp. An entry is `usable` only if
+  `null` (unknown) with a detail and a timestamp. `installed` is also false,
+  naming them, when the image lacks a binary every worker needs (`ssh`, `rsync`,
+  `git`): `smoke.sh` probes the image with `docker run … command -v` and records
+  it as `tools` on each row; a missing or inconclusive record (docker failed)
+  changes nothing, so listing never runs a container. An entry is `usable` only if
   all three are `true`. Installed does not imply authenticated; the host's
   login proves nothing about a container.
 - **The ledger is a file** (`<data_dir>/engines-ledger.json`), written by
@@ -73,6 +77,17 @@ In scope:
   Prompts, answers and credentials are not stored in the catalogue.
 - **Codex is the orchestration engine; Claude Code is the preferred code
   executor.** The worker instructions say so; the catalogue carries the role.
+- **Codex turn deadline is configurable for Argus delivery.** Upstream NanoClaw
+  hard-codes a ten-minute engine turn timeout in `container/agent-runner/src/providers/codex.ts`.
+  Argus installs `codex-turn-timeout.ts` (overlay via `integrations/nanoclaw/install.sh`)
+  and patches `codex.ts` to read `ARGUS_CODEX_TURN_TIMEOUT_MS` from the agent
+  environment (forwarded through `CODEX_ENV_ALLOWLIST`). Unset keeps the
+  ten-minute default; valid values are `60000`–`7200000` ms (two-hour delivery
+  ceiling). Invalid values fail the turn at resolution time. On expiry the runner
+  interrupts the active Codex turn before surfacing the error. Radar project
+  images set `ARGUS_CODEX_TURN_TIMEOUT_MS=7200000` in
+  `engines/projects/radar.Dockerfile`; other pools may set the same variable on
+  the agent image or session env without changing the global default.
 - **No silent fallback.** `argus-delegate` for an executor without
   credentials exits `78` and prints `{"blocked":"auth_missing"}`. It never
   substitutes another executor or provider. A route whose wanted engine has no
@@ -87,6 +102,12 @@ In scope:
   kept as an artifact file; the final line on stdout is one JSON object with
   `engine` (`ARGUS_ENGINE`), `executor`, the executor version, `model` when
   known, `cwd`, `exit_code`, `timed_out`, `duration_ms`, `artifacts`.
+  The Argus NanoClaw channel states this contract in every claimed task body
+  (`integrations/nanoclaw/argus.ts` `renderTask`): implementation must use
+  `/usr/local/bin/argus-delegate` (Cursor → `agent`); direct `cursor-agent` /
+  vendor CLIs are forbidden for delegated coding; materialized gateway stubs are
+  authorized non-secret metadata; the worker attaches the delegate JSON report
+  and resumes the same task on failure rather than inheriting another task's block.
 - **Local routing is conservative and deterministic.** A task goes to the
   local model only if *all* hold: the caller declares it simple and low-risk
   and gives deterministic acceptance criteria; it touches no auth, security or
@@ -155,6 +176,8 @@ In scope:
   with 422; answers are never `accepted` without an effective check.
 - `integrations/nanoclaw/engines/`: installer for the Codex payload and the
   CLI manifest, the image steps for opencode and the Cursor agent (checksum
-  pinned), `argus-delegate.mjs` and its tests, `smoke.sh`.
+  pinned), `argus-delegate.mjs` and its tests, `smoke.sh`, and the tools layer
+  (`Dockerfile.tools-layer`, `apply-tools-layer.sh`: openssh-client and rsync on
+  top of NanoClaw's image, applied by `provision.sh`).
 - The dashboard combo reads `GET /api/engines` (a later increment); the
   catalogue already carries everything it needs.

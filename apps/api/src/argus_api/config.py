@@ -41,6 +41,7 @@ class Settings:
     # and account policy; unset keeps the pool defaults (no accounts, default URL).
     nanoclaw_onecli_url: str | None = None
     nanoclaw_account_providers: tuple[str, ...] = ()  # most preferred first
+    nanoclaw_executor_providers: tuple[str, ...] = ()  # delegated CLI's account
     nanoclaw_network: str | None = None  # Docker network that reaches the gateway
     worker_images: tuple[str, ...] = ()  # trusted `argus-worker` images
     docker_hosts: tuple[str, ...] = ()  # extra Docker nodes the guided flow may use
@@ -125,6 +126,7 @@ class Settings:
             nanoclaw_group_add=_csv("ARGUS_NANOCLAW_GROUP_ADD"),
             nanoclaw_onecli_url=os.environ.get("ARGUS_NANOCLAW_ONECLI_URL") or None,
             nanoclaw_account_providers=_csv("ARGUS_NANOCLAW_ACCOUNT_PROVIDERS"),
+            nanoclaw_executor_providers=_csv("ARGUS_NANOCLAW_EXECUTOR_PROVIDERS"),
             nanoclaw_network=os.environ.get("ARGUS_NANOCLAW_NETWORK") or None,
             worker_images=_csv("ARGUS_WORKER_IMAGES"),
             docker_hosts=_csv("ARGUS_FLEET_DOCKER_HOSTS"),

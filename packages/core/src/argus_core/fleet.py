@@ -1,5 +1,6 @@
 """Pools and instances (worker lifecycle 3.5)."""
 
+import re
 from datetime import datetime
 from enum import StrEnum
 from urllib.parse import urlsplit
@@ -52,6 +53,9 @@ class KubernetesOptions(BaseModel):
 
 # 107 (sun_path limit) - 1 ("/") - 36 (instance uuid) - len("/data/ncl.sock") = 56.
 NANOCLAW_MAX_ROOT_LEN = 107 - 1 - 36 - len("/data/ncl.sock")
+# Account providers that only a delegated CLI can use: NanoClaw has no harness for them.
+EXECUTOR_ONLY = frozenset({"cursor"})
+PROVIDER_ID = re.compile(r"^[a-z0-9_-]{1,50}$")
 
 
 class NanoclawOptions(BaseModel):
@@ -81,10 +85,28 @@ class NanoclawOptions(BaseModel):
     # Providers whose accounts Argus leases to this agent and switches in the
     # OneCLI vault (e.g. ["anthropic"]). Empty: use the vault's own credential.
     account_providers: list[str] = []
+    # Providers for the one `executor` lease: the account a CLI the worker
+    # delegates to (argus-delegate) uses, taken when the engine's account is of
+    # another provider. Empty keeps the default (anthropic); set it to say
+    # explicitly that this pool delegates elsewhere, e.g. ["cursor"].
+    executor_providers: list[str] = []
     # Explicit project -> HTTPS repository allowlist; values are not secrets.
     repositories: dict[str, str] = {}
     user: str | None = None  # "uid:gid" to run the host container as
     group_add: list[str] = []  # e.g. the docker socket's group id
+
+    @model_validator(mode="after")
+    def validate_providers(self) -> "NanoclawOptions":
+        for name in (*self.account_providers, *self.executor_providers):
+            if not PROVIDER_ID.match(name):
+                raise ValueError(f"provider {name!r} must match [a-z0-9_-]{{1,50}}")
+        engine_only = [p for p in self.account_providers if p in EXECUTOR_ONLY]
+        if engine_only:
+            raise ValueError(
+                f"{', '.join(engine_only)} is an executor, not an engine: "
+                "put it in executor_providers"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_repositories(self) -> "NanoclawOptions":

@@ -124,6 +124,21 @@ export class GiteaApi {
     return this.request(`/pulls/${positiveNumber(number)}`);
   }
 
+  /** Read-only issue tracker item via `issue-get`; `get` is pull-request-only — do not assume an issue number is a PR. */
+  getIssue(number) {
+    return this.request(`/issues/${positiveNumber(number)}`);
+  }
+
+  /** Read-only pull request list for the allowlisted repository. */
+  listPullRequests({ state, page = 1, limit = 30 }) {
+    const query = new URLSearchParams({
+      state: pullListState(state),
+      page: String(positiveNumber(page)),
+      limit: String(pullListLimit(limit)),
+    });
+    return this.request(`/pulls?${query}`);
+  }
+
   updatePullRequest(number, input) {
     if (Object.keys(input).some((key) => !["title", "body", "state", "base"].includes(key)))
       throw new Error("unsupported PR update field");
@@ -141,7 +156,23 @@ export class GiteaApi {
 
 function positiveNumber(value) {
   const n = Number(value);
-  if (!Number.isSafeInteger(n) || n < 1) throw new Error("PR number must be a positive integer");
+  if (!Number.isSafeInteger(n) || n < 1) throw new Error("number must be a positive integer");
+  return n;
+}
+
+const PULL_LIST_STATES = new Set(["open", "closed", "all"]);
+const PULL_LIST_LIMIT_MAX = 50;
+
+function pullListState(state) {
+  if (typeof state !== "string" || !PULL_LIST_STATES.has(state))
+    throw new Error("state must be open, closed, or all");
+  return state;
+}
+
+function pullListLimit(limit) {
+  const n = Number(limit);
+  if (!Number.isSafeInteger(n) || n < 1 || n > PULL_LIST_LIMIT_MAX)
+    throw new Error(`limit must be 1..${PULL_LIST_LIMIT_MAX}`);
   return n;
 }
 
@@ -166,6 +197,15 @@ async function main(argv) {
     });
   } else if (command === "get") {
     result = await api.getPullRequest(options.number);
+  } else if (command === "issue-get") {
+    result = await api.getIssue(options.number);
+  } else if (command === "list-prs") {
+    if (!options.state) throw new Error("list-prs requires --state open|closed|all");
+    result = await api.listPullRequests({
+      state: options.state,
+      page: options.page ?? "1",
+      limit: options.limit ?? "30",
+    });
   } else if (command === "update") {
     const body = {};
     for (const key of ["title", "body", "state", "base"])
@@ -175,7 +215,9 @@ async function main(argv) {
     result = await api.getPullRequestStatus(options.number);
   } else {
     throw new Error(
-      "usage: gitea-api.mjs <create|get|update|status> --repository URL [--number N]",
+      "usage: gitea-api.mjs <create|get|issue-get|list-prs|update|status> --repository URL " +
+        "[--number N] [--state open|closed|all] [--page N] [--limit N]; " +
+        "get is a pull request by number, issue-get is an issue tracker item, list-prs lists PRs",
     );
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);

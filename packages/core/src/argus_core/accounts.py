@@ -40,6 +40,7 @@ class AccountCreate(BaseModel):
 
 
 class AccountUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
     priority: int | None = None
     max_leases: int | None = Field(default=None, ge=1)
     labels: dict[str, str] | None = None

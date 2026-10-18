@@ -10,7 +10,10 @@ import {
   authorizedCwd,
   authStatus,
   buildCommand,
+  cursorConfigDirAllowsCliWrites,
   executorJsonFailure,
+  materializePrivateCursorConfig,
+  prepareExecutorEnv,
   READ_ONLY_PROMPT_PREFIX,
 } from "./argus-delegate.mjs";
 
@@ -19,7 +22,19 @@ const DELEGATE = path.join(path.dirname(fileURLToPath(import.meta.url)), "argus-
 /** A sandbox: a workspace root, a fake HOME, and fake executables first on PATH. */
 function sandbox(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delegate-"));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => {
+    const relax = (p) => {
+      try {
+        const st = fs.statSync(p);
+        fs.chmodSync(p, st.isDirectory() ? 0o755 : 0o644);
+        if (st.isDirectory()) for (const name of fs.readdirSync(p)) relax(path.join(p, name));
+      } catch {
+        /* ignore */
+      }
+    };
+    relax(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
   const work = path.join(dir, "work");
   const home = path.join(dir, "home");
   const bin = path.join(dir, "bin");
@@ -93,7 +108,7 @@ test("an empty auth stub is not a credential", (t) => {
 });
 
 test("the credential check never needs the secret itself", () => {
-  assert.equal(authStatus("agent", { CURSOR_API_KEY: "x" }, "/nonexistent").ok, true);
+  assert.equal(authStatus("agent", { CURSOR_API_KEY: "x" }, "/nonexistent").ok, false);
   assert.equal(authStatus("agent", {}, "/nonexistent").ok, false);
   assert.equal(
     authStatus("opencode", { ARGUS_OPENCODE_ATTACH: "http://127.0.0.1:4096" }, "/nonexistent").ok,
@@ -150,11 +165,114 @@ test("an executor that fails is reported as a failure, not hidden", async (t) =>
 
 test("not installed is distinct from not authenticated", async (t) => {
   const s = sandbox(t);
+  const authDir = path.join(s.home, ".config", "cursor");
+  fs.mkdirSync(authDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(authDir, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
   const { code, report } = await run(["agent", "--cwd", s.work], {
-    env: { ...s.env, PATH: s.bin, CURSOR_API_KEY: "x" },
+    env: { ...s.env, PATH: s.bin, HOME: s.home },
   });
   assert.equal(code, 127);
   assert.equal(report.blocked, "not_installed");
+});
+
+test("prepareExecutorEnv writes cli-config beside auth when the tree is writable", (t) => {
+  const s = sandbox(t);
+  const dir = path.join(s.dir, "runtime");
+  const authDir = path.join(s.home, ".config", "cursor");
+  fs.mkdirSync(authDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(authDir, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
+  const out = prepareExecutorEnv("agent", { ...s.env, HOME: s.home }, dir);
+  assert.equal(out.CURSOR_CONFIG_DIR, authDir);
+  const cfg = JSON.parse(fs.readFileSync(path.join(authDir, "cli-config.json"), "utf8"));
+  assert.equal(cfg.network.useHttp1ForAgent, true);
+  assert.equal(prepareExecutorEnv("claude", out, dir), out);
+});
+
+function lockCursorDirReadOnly(cursor) {
+  fs.chmodSync(path.join(cursor, "auth.json"), 0o444);
+  if (fs.existsSync(path.join(cursor, "cli-config.json"))) {
+    fs.chmodSync(path.join(cursor, "cli-config.json"), 0o444);
+  }
+  fs.chmodSync(cursor, 0o555);
+}
+
+test("prepareExecutorEnv does not write read-only injected cli-config that already enables HTTP/1.1", (t) => {
+  const s = sandbox(t);
+  const probe = path.join(s.dir, "probe");
+  const cursor = path.join(probe, "cursor");
+  fs.mkdirSync(cursor, { recursive: true });
+  fs.writeFileSync(
+    path.join(cursor, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
+  fs.writeFileSync(
+    path.join(cursor, "cli-config.json"),
+    '{"version":1,"network":{"useHttp1ForAgent":true}}',
+  );
+  lockCursorDirReadOnly(cursor);
+  const before = fs.readFileSync(path.join(cursor, "cli-config.json"), "utf8");
+  const runtime = path.join(s.dir, "runtime");
+  const out = prepareExecutorEnv(
+    "agent",
+    { HOME: s.home, XDG_CONFIG_HOME: probe, CURSOR_CONFIG_DIR: cursor },
+    runtime,
+  );
+  assert.equal(out.CURSOR_CONFIG_DIR, path.join(runtime, "cursor-config"));
+  assert.equal(fs.readFileSync(path.join(cursor, "cli-config.json"), "utf8"), before);
+  assert.ok(fs.existsSync(path.join(out.CURSOR_CONFIG_DIR, "auth.json")));
+  assert.ok(cursorConfigDirAllowsCliWrites(out.CURSOR_CONFIG_DIR));
+});
+
+test("prepareExecutorEnv uses a private writable dir when injected cli-config is read-only and lacks HTTP/1.1", (t) => {
+  const s = sandbox(t);
+  const probe = path.join(s.dir, "probe");
+  const cursor = path.join(probe, "cursor");
+  fs.mkdirSync(cursor, { recursive: true });
+  fs.writeFileSync(
+    path.join(cursor, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
+  fs.writeFileSync(path.join(cursor, "cli-config.json"), '{"version":1,"network":{}}');
+  const runtime = path.join(s.dir, "runtime");
+  lockCursorDirReadOnly(cursor);
+  const out = prepareExecutorEnv(
+    "agent",
+    { HOME: s.home, XDG_CONFIG_HOME: probe, CURSOR_CONFIG_DIR: cursor },
+    runtime,
+  );
+  assert.equal(out.CURSOR_CONFIG_DIR, path.join(runtime, "cursor-config"));
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(out.CURSOR_CONFIG_DIR, "cli-config.json"), "utf8")).network
+      .useHttp1ForAgent,
+    true,
+  );
+});
+
+test("materializePrivateCursorConfig copies sentinel auth without mutating the stub mount", (t) => {
+  const s = sandbox(t);
+  const stub = path.join(s.dir, "stub");
+  fs.mkdirSync(stub, { recursive: true });
+  fs.writeFileSync(
+    path.join(stub, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
+  fs.writeFileSync(
+    path.join(stub, "cli-config.json"),
+    '{"version":1,"network":{"useHttp1ForAgent":true}}',
+  );
+  lockCursorDirReadOnly(stub);
+  const privateDir = materializePrivateCursorConfig(stub, path.join(s.dir, "runtime"));
+  assert.ok(cursorConfigDirAllowsCliWrites(privateDir));
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(privateDir, "auth.json"), "utf8")).accessToken,
+    "sentinel",
+  );
 });
 
 test("commands are non-interactive, scoped to the cwd, and read-only on request", () => {
@@ -178,9 +296,12 @@ test("commands are non-interactive, scoped to the cwd, and read-only on request"
   assert.ok(claudeWrite.args.includes("--allowed-tools"));
   assert.ok(claudeWrite.args.join(" ").includes("Bash"));
   const agentWrite = buildCommand("agent", { cwd: "/w", readOnly: false });
+  assert.ok(agentWrite.args.includes("--trust"));
   assert.ok(agentWrite.args.includes("--force"));
+  assert.equal(agentWrite.args.indexOf("--trust"), agentWrite.args.indexOf("--workspace") + 2);
   assert.equal(agentWrite.args.includes("--mode"), false);
   const agentRo = buildCommand("agent", { cwd: "/w", readOnly: true });
+  assert.ok(agentRo.args.includes("--trust"));
   assert.equal(agentRo.readOnlyEnforcement, "prompt_only");
   for (const forbidden of ["--mode", "--plan", "--force", "plan", "ask"]) {
     assert.equal(
@@ -208,16 +329,23 @@ test("claude exit 0 with is_error is a delegate failure", async (t) => {
   assert.equal(code, 1);
   assert.equal(report.executor_error?.kind, "is_error");
   assert.match(report.executor_error?.detail, /quota/);
+  assert.equal(report.attempts.length, 1, "quota must not escalate to a more expensive model");
 });
 
 test("agent empty JSON result is an invalid execution", async (t) => {
   const s = sandbox(t);
+  const authDir = path.join(s.home, ".config", "cursor");
+  fs.mkdirSync(authDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(authDir, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
   s.fake(
     "agent",
     'if [ "$1" = "--version" ]; then echo v; exit 0; fi\necho \'{"type":"result","result":""}\'',
   );
   const { code, report } = await run(["agent", "--cwd", s.work], {
-    env: { ...s.env, CURSOR_API_KEY: "x" },
+    env: { ...s.env, HOME: s.home },
   });
   assert.equal(code, 1);
   assert.equal(report.executor_error?.kind, "empty_result");
@@ -225,13 +353,19 @@ test("agent empty JSON result is an invalid execution", async (t) => {
 
 test("read-only agent uses print only with a static-review prompt prefix", async (t) => {
   const s = sandbox(t);
+  const authDir = path.join(s.home, ".config", "cursor");
+  fs.mkdirSync(authDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(authDir, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
   const got = path.join(s.dir, "prompt.txt");
   s.fake(
     "agent",
     `if [ "$1" = "--version" ]; then echo v; exit 0; fi\necho "$@" >${got}; echo '{"type":"result","result":"ok"}'`,
   );
   await run(["agent", "--cwd", s.work, "--read-only"], {
-    env: { ...s.env, CURSOR_API_KEY: "x" },
+    env: { ...s.env, HOME: s.home },
     input: "inspect only",
   });
   const body = fs.readFileSync(got, "utf8");
@@ -249,4 +383,81 @@ test("usage errors exit 64", async (t) => {
   const s = sandbox(t);
   assert.equal((await run(["nonsense"], { env: s.env })).code, 64);
   assert.equal((await run(["claude", "--timeout", "0"], { env: s.env })).code, 64);
+});
+
+test("editable chains retry CLI failures with per-attempt durable evidence", async (t) => {
+  const s = sandbox(t);
+  s.fake(
+    "claude",
+    `if [ "$1" = "--version" ]; then echo v; exit 0; fi
+cat >/dev/null
+case "$*" in *sonnet*) echo '{"is_error":true,"result":"context exceeded"}';; *) echo '{"result":"ok"}';; esac`,
+  );
+  const policy = { harness: { codex: ["luna"] }, implementation: { claude: ["sonnet", "opus"] } };
+  const { code, report } = await run(["claude", "--cwd", s.work], {
+    env: { ...s.env, ANTHROPIC_API_KEY: "x", ARGUS_MODEL_POLICY: JSON.stringify(policy) },
+  });
+  assert.equal(code, 0);
+  assert.equal(report.engine, "codex");
+  assert.equal(report.attempts.length, 2);
+  assert.equal(report.attempts[0].configured_model, "sonnet");
+  assert.equal(report.attempts[1].configured_model, "opus");
+  assert.equal(report.attempts[1].fallback_reason, "is_error");
+  for (const attempt of report.attempts) {
+    assert.equal(attempt.requested_model, "sonnet");
+    assert.equal(attempt.resolved_model, null);
+    assert.match(attempt.policy_revision, /^[a-f0-9]{64}$/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(attempt.report_file, "utf8")), attempt);
+  }
+});
+
+test("explicit model pins; failed verification retries are reasoned and task-linked", async (t) => {
+  const s = sandbox(t);
+  s.fake(
+    "claude",
+    `if [ "$1" = "--version" ]; then echo v; exit 0; fi
+cat >/dev/null; echo '{"is_error":true,"result":"failed"}'`,
+  );
+  const pinned = await run(["claude", "--cwd", s.work, "--model", "custom"], {
+    env: { ...s.env, ANTHROPIC_API_KEY: "x" },
+  });
+  assert.equal(pinned.code, 1);
+  assert.equal(pinned.report.attempts.length, 1);
+  assert.equal(pinned.report.requested_model, "custom");
+  const { policySnapshot } = await import("./model-policy.mjs");
+  const snapshot = policySnapshot(
+    { harness: {}, implementation: { claude: ["sonnet", "opus"] } },
+    { task_id: "task1", attempt: 3 },
+  );
+  const file = path.join(s.work, "policy.json");
+  fs.writeFileSync(file, JSON.stringify(snapshot));
+  const retry = await run(
+    ["claude", "--cwd", s.work, "--model-attempt", "2", "--fallback-reason", "verification_failed"],
+    {
+      env: { ...s.env, ANTHROPIC_API_KEY: "x", ARGUS_MODEL_POLICY_FILE: file },
+    },
+  );
+  assert.equal(retry.report.configured_model, "opus");
+  assert.equal(retry.report.fallback_reason, "verification_failed");
+  assert.deepEqual(retry.report.task, { task_id: "task1", attempt: 3 });
+  assert.equal(retry.report.attempts.length, 1);
+});
+
+test("invalid policies and invalid retry requests fail before CLI execution", async (t) => {
+  const s = sandbox(t);
+  const marker = path.join(s.dir, "ran");
+  s.fake("claude", `touch ${marker}; exit 0`);
+  const env = { ...s.env, ANTHROPIC_API_KEY: "x" };
+  for (const args of [
+    ["--model-attempt", "0"],
+    ["--model-attempt", "2"],
+    ["--model-attempt", "NaN"],
+  ]) {
+    assert.equal((await run(["claude", "--cwd", s.work, ...args], { env })).code, 64);
+  }
+  assert.equal(
+    (await run(["claude", "--cwd", s.work], { env: { ...env, ARGUS_MODEL_POLICY: "{}" } })).code,
+    64,
+  );
+  assert.equal(fs.existsSync(marker), false);
 });

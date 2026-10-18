@@ -1,0 +1,20 @@
+[
+  {
+    "id": "6866bb53-48e5-4455-b2b7-4284666a8ba6",
+    "name": "Default Agent",
+    "identifier": "default",
+    "isDefault": true,
+    "secretMode": "all",
+    "createdAt": "2026-10-18T00:59:21.026Z",
+    "_count": { "agentSecrets": 0, "agentAppConnections": 0 }
+  },
+  {
+    "id": "e6552a9d-f83e-443f-8786-9c30842276c3",
+    "name": "scratch",
+    "identifier": "scratch-agent",
+    "isDefault": false,
+    "secretMode": "selective",
+    "createdAt": "2026-10-18T01:02:19.472Z",
+    "_count": { "agentSecrets": 2, "agentAppConnections": 0 }
+  }
+]

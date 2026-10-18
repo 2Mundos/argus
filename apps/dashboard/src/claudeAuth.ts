@@ -110,12 +110,14 @@ export function checkToken(type: TokenType, token: string): ClaudeCheck {
   return checkClaudeCredential(JSON.stringify(tokenCredential(type, token)));
 }
 
-const CODE = /^[A-Za-z0-9._~#%+/=-]{1,2048}$/;
+const CODE = /^[A-Za-z0-9._~%+/=-]+#[A-Za-z0-9._~#%+/=-]+$/;
+const MAX_CODE = 2048;
 
-/** The code the sign-in page shows: pasted whitespace is trimmed, nothing else. */
+/** The code the sign-in page shows, `<code>#<state>`: pasted whitespace is trimmed,
+ * nothing else. A value without the `#` part is refused by the client. */
 export function cleanCode(raw: string): string | null {
   const code = raw.trim();
-  return CODE.test(code) ? code : null;
+  return code.length <= MAX_CODE && CODE.test(code) ? code : null;
 }
 
 /** Only https links to Claude/Anthropic are shown as links (the API enforces it too). */

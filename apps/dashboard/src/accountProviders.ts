@@ -9,6 +9,9 @@ export type AccountProviderOption = {
   authMethods: string[];
 };
 
+/** Not an engine: a service credential workers use for repository access. */
+export const GITEA_PROVIDER = "gitea";
+
 const PROVIDER_ID = /^[a-z0-9_-]{1,50}$/;
 
 /** HTML `pattern` for custom provider id (hyphen escaped for Unicode Sets / Chrome). */
@@ -26,6 +29,13 @@ export function providerOptionsFromCatalog(catalog: EngineCatalog): AccountProvi
       id,
       label: `${id} (${e.axes.model_provider}) — ${auth}`,
       authMethods: e.auth_methods,
+    });
+  }
+  if (!seen.has(GITEA_PROVIDER)) {
+    out.push({
+      id: GITEA_PROVIDER,
+      label: "gitea (repository access) — username + personal access token",
+      authMethods: ["personal-access-token"],
     });
   }
   return out.sort((a, b) => a.id.localeCompare(b.id));
@@ -52,6 +62,12 @@ export function nativeAuthNotice(providerId: string): string | undefined {
       "This JSON account is for Argus task leasing. Use “Add Claude account” to import a " +
       "credential or sign in with a dedicated login, and “Renew credential” on an existing " +
       "account. A Claude Code login inside a worker is separate."
+    );
+  }
+  if (providerId === GITEA_PROVIDER) {
+    return (
+      "A Gitea account is a username and personal access token for repository access. " +
+      "It is leased only to the repository role and injected by the proxy, never given to the model."
     );
   }
   return undefined;

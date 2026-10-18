@@ -28,6 +28,14 @@ pnpm run build && pnpm exec vitest run src/channels/argus.test.ts
 pnpm exec tsx scripts/init-argus-agent.ts --agent-name "Worker"   # agent group + wiring
 ```
 
+The install hook also patches the OneCLI gateway contribution so agent containers receive
+`GIT_SSL_CAINFO` pointing at the same trusted CA bundle as `SSL_CERT_FILE` (Git ignores the
+latter), and extends the Codex env allowlist so spawned shells keep `GIT_HTTP_PROXY_AUTHMETHOD=basic`
+and `GIT_TERMINAL_PROMPT=0` with the proxy/CA (provider secrets stay blocked). Gitea repository
+leases use OneCLI path `/{owner}/{repo}.git/*` for smart-HTTP injection while the lease is held.
+Operator `docker exec` Git probes do not substitute for a full native worker checkout under
+Codex; see [worker lifecycle spec 3.8](../../docs/specs/worker-lifecycle.spec.md).
+
 Then start the NanoClaw host with the Argus environment (what an Argus `plain`
 runtime container receives):
 

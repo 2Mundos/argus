@@ -24,7 +24,7 @@ from uuid import uuid4
 
 from argus_core import claude_auth
 
-from argus_api.accounts import service
+from argus_api.accounts import service, terminal
 from argus_api.accounts.login_base import (
     LOGIN_TTL_S,
     START_TIMEOUT_S,
@@ -38,11 +38,14 @@ from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
 
 ALLOWED_HOSTS = ("claude.ai", "claude.com", "anthropic.com")
 MAX_CODE_LEN = 2048
-_CODE = re.compile(r"[A-Za-z0-9._~#%+/=-]+")
+_CODE = re.compile(r"[A-Za-z0-9._~%+/=-]+#[A-Za-z0-9._~#%+/=-]+")  # code#state
 _MAX_OUTPUT = 128 * 1024
 _RESULT_TIMEOUT_S = 90.0  # from the code to the token, else the code was refused
 MAX_ATTEMPTS = 3  # codes the client is given per login
+_ENTER_DELAY_S = 0.25  # the client takes a long chunk as a paste and drops its Enter
+_RELINK_TIMEOUT_S = 10.0  # from our retry Enter to the client's new sign-in link
 _COLUMNS = 1000  # wide enough that the client never wraps the link or the token
+_ROWS = 50
 
 _ANSI = re.compile(
     r"\x1b\[[0-?]*[ -/]*[@-~]"  # CSI
@@ -50,12 +53,17 @@ _ANSI = re.compile(
     r"|\x1b[@-Z\\-_]"  # two-byte escapes
 )
 _URL = re.compile(r"https://[^\s\"'<>\x00-\x1f]+(?=\s)")
-_TOKEN = re.compile(r"sk-ant-oat\d{0,4}-[A-Za-z0-9_-]{40,}(?=[^A-Za-z0-9_-]|$)")
+_TOKEN = re.compile(r"sk-ant-oat\d{0,4}-[A-Za-z0-9_-]{40,}")  # a whole screen row
+# The success screen, as the shipped client lays it out (2.1.296): the marker, the
+# label, the token alone on its row, then the closing sentence.
+_TOKEN_LABEL = re.compile(r"Your OAuth token \(valid for [^()]*\):")
+_TOKEN_END = re.compile(r"Store this token securely\.")
 # Fixed markers of the client's own messages. The TUI separates words with cursor
 # moves, so spaces are optional. Only the matched marker is ever turned into a
 # code (plus the three-digit status); no output is kept or returned.
 _OAUTH_ERROR = re.compile(r"OAuth\s*error:?.*?status\s*code\s*(\d{3})", re.S)
 _CODE_INVALID = re.compile(r"Invalid\s*code|Authentication\s*failed", re.I)
+_RETRY = re.compile(r"Press\s*Enter\s*to\s*retry", re.I)
 _SUCCESS = re.compile(r"Long-lived\s*authentication\s*token\s*created\s*successfully")
 
 __all__ = ["ClaudeLoginManager", "LoginState", "LoginUnavailableError", "url_allowed"]
@@ -74,6 +82,10 @@ class _Session(LoginSession):
     refusal: str | None = None  # why the client turned the last code down
     mark: int = 0  # where the last code's output starts in `out`
     code_deadline: float | None = None
+    need_enter: bool = False  # the client refused a code and waits for Enter
+    relinking: bool = False  # our Enter was sent; the client prints a new link
+    relink_mark: int = 0
+    relink_deadline: float = 0.0
     master: int | None = None
     out: bytearray = field(default_factory=bytearray)
     eof: bool = False
@@ -101,6 +113,44 @@ def _plain(raw: bytes | bytearray) -> str:
 
 def _text(s: _Session) -> str:
     return _plain(s.out)
+
+
+def _succeeded(rows: list[str]) -> bool:
+    return any(_SUCCESS.search(row) for row in rows)
+
+
+def _issued(rows: list[str]) -> tuple[bool, str | None]:
+    """Read the client's success screen the way the operator would.
+
+    Returns (complete, token). Not complete until the closing sentence is on screen
+    below the label: the client draws top-down, so the token row before it is
+    whole. Then the token must be the only thing between label and sentence, on one
+    row, in full; anything else (a wrapped, cut or doubled value) is not taken."""
+    start = next(
+        (i for i in range(len(rows) - 1, -1, -1) if _SUCCESS.search(rows[i])), None
+    )
+    if start is None:
+        return False, None
+    label = next(
+        (
+            i
+            for i in range(start + 1, len(rows))
+            if _TOKEN_LABEL.fullmatch(rows[i].strip())
+        ),
+        None,
+    )
+    if label is None:
+        return False, None
+    end = next(
+        (i for i in range(label + 1, len(rows)) if _TOKEN_END.match(rows[i].strip())),
+        None,
+    )
+    if end is None:
+        return False, None
+    body = [row.strip() for row in rows[label + 1 : end] if row.strip()]
+    if len(body) == 1 and _TOKEN.fullmatch(body[0]):
+        return True, body[0]
+    return True, None
 
 
 def _refusal(text: str) -> str | None:
@@ -170,12 +220,24 @@ class ClaudeLoginManager(LoginManager[_Session]):
             )
         if not (0 < len(code) <= MAX_CODE_LEN and _CODE.fullmatch(code)):
             raise ValidationFailedError("the code has an invalid format")
+        if s.awaiting or s.relinking:
+            raise ConflictError(
+                "the client has not answered the previous code yet",
+                code="login_code_in_flight",
+            )
         s.attempts += 1
-        s.awaiting, s.refusal = True, None
+        s.awaiting, s.refusal, s.need_enter = True, None, False
         s.mark = len(s.out)
         s.code_deadline = self._clock() + _RESULT_TIMEOUT_S
+        master = s.master
         try:
-            os.write(s.master, code.encode("ascii") + b"\r")
+            # Two writes: the client's input takes a long chunk as a paste and
+            # swallows an Enter that arrives in it (measured, spec 3).
+            os.write(master, code.encode("ascii"))
+            await asyncio.sleep(_ENTER_DELAY_S)
+            if s.master is not master:  # torn down while we waited
+                return self.view(s)
+            os.write(master, b"\r")
         except OSError:
             await self._finish(s, LoginState.FAILED, "client_exited")
         return self.view(s)
@@ -185,19 +247,23 @@ class ClaudeLoginManager(LoginManager[_Session]):
         return {
             "login_id": s.id,
             "state": s.state.value,
-            "phase": ("finishing" if s.awaiting else "waiting_for_code")
-            if pending
-            else None,
+            "phase": self._phase(s) if pending else None,
             "attempts": s.attempts,
             "max_attempts": MAX_ATTEMPTS,
             "refusal": s.refusal if pending else None,
-            "url": s.url if pending else None,
+            "url": s.url if pending and not s.relinking else None,
             "expires_in_s": max(0, int(s.expires_at - self._clock())) if pending else 0,
             "account_id": s.account_id,
             "error": s.error,
         }
 
     # -- internals -----------------------------------------------------------------
+
+    @staticmethod
+    def _phase(s: _Session) -> str:
+        if s.relinking:
+            return "renewing_link"
+        return "finishing" if s.awaiting else "waiting_for_code"
 
     def _scrub(self, s: _Session) -> None:
         s.out.clear()
@@ -307,7 +373,7 @@ class ClaudeLoginManager(LoginManager[_Session]):
             s.master = master
             os.set_blocking(master, False)
             fcntl.ioctl(
-                slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, _COLUMNS, 0, 0)
+                slave, termios.TIOCSWINSZ, struct.pack("HHHH", _ROWS, _COLUMNS, 0, 0)
             )
             try:
                 s.proc = await asyncio.create_subprocess_exec(
@@ -341,35 +407,65 @@ class ClaudeLoginManager(LoginManager[_Session]):
             if len(s.out) > _MAX_OUTPUT:
                 raise LoginFailure("output_too_large")
             text = _text(s)
+            # The renderer skips cells already showing the right character, so the
+            # token is read off a replayed screen, never off the stripped stream.
+            shown = terminal.screen(bytes(s.out), _COLUMNS, _ROWS)
             if s.url is None and (match := _URL.search(text)):
                 if not url_allowed(match.group()):
                     raise LoginFailure("url_not_allowed")
                 s.url = match.group()
                 s.ready.set()
-            if token := _TOKEN.search(text):
-                await self._finished(s, actor, token.group())
+            complete, token = _issued(shown)
+            if complete:
+                if token is None:
+                    raise LoginFailure("token_not_found")
+                await self._finished(s, actor, token)
                 return
             if s.awaiting and (reason := _refusal(_plain(s.out[s.mark :]))):
                 # Turned down, but the client waits for another code.
                 s.awaiting, s.refusal, s.code_deadline = False, reason, None
+                s.need_enter = True
+            if s.need_enter and _RETRY.search(_plain(s.out[s.mark :])):
+                # The client restarts the flow on Enter, with a new link and a new
+                # verifier: send it ourselves, a code written now would be eaten by it.
+                s.need_enter, s.relinking = False, True
+                s.relink_mark = len(s.out)
+                s.relink_deadline = self._clock() + _RELINK_TIMEOUT_S
+                try:
+                    assert s.master is not None
+                    os.write(s.master, b"\r")
+                except OSError:
+                    raise LoginFailure("client_exited") from None
+            if s.relinking:
+                # A redraw may repeat the old link first: wait for a different one.
+                links = _URL.findall(_plain(s.out[s.relink_mark :]))
+                if fresh := next((u for u in links if u != s.url), None):
+                    if not url_allowed(fresh):
+                        raise LoginFailure("url_not_allowed")
+                    s.url, s.relinking = fresh, False
+                elif self._clock() >= s.relink_deadline:
+                    s.relinking = False  # it kept its link
             if s.eof:
                 if s.state is not LoginState.PENDING:
                     return
-                raise LoginFailure(self._ended(s, text))
+                raise LoginFailure(self._ended(s, shown))
             timeout = None
             if s.code_deadline is not None:
                 timeout = s.code_deadline - self._clock()
                 if timeout <= 0:
                     raise LoginFailure(
-                        "token_not_found" if _SUCCESS.search(text) else "no_token"
+                        "token_not_found" if _succeeded(shown) else "no_token"
                     )
+            if s.relinking:
+                wake = max(0.0, s.relink_deadline - self._clock())
+                timeout = wake if timeout is None else min(timeout, wake)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(s.activity.wait(), timeout)
 
     @staticmethod
-    def _ended(s: _Session, text: str) -> str:
+    def _ended(s: _Session, shown: list[str]) -> str:
         """Why the client left without a token: a closed code, never its words."""
-        if _SUCCESS.search(text):
+        if _succeeded(shown):
             return "token_not_found"  # it said it succeeded; we saw no token
         if s.attempts:
             return _refusal(_plain(s.out[s.mark :])) or s.refusal or "login_rejected"

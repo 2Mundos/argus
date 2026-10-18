@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChannelSetup } from "./adapter.js";
-import { type ArgusConfig, createArgusAdapter, fromEnv, parseReply, renderTask } from "./argus.js";
+import {
+  type ArgusConfig,
+  createArgusAdapter,
+  fromEnv,
+  parseReply,
+  renderTask,
+  taskAuthorizesMerge,
+} from "./argus.js";
 
 type Call = { method: string; path: string; body: any };
 
@@ -138,6 +145,74 @@ describe("renderTask", () => {
     expect(text).toContain("Deploy runbook: How to deploy");
     expect(text).toContain("    Step 2");
     expect(text).toContain('"COMPLETE:"');
+  });
+
+  it("denies merge by default on repository tasks and documents status reads", () => {
+    const repoTask = task({
+      repository_url: "https://git.example.test/org/repo.git",
+    });
+    expect(taskAuthorizesMerge(repoTask as any)).toBe(false);
+    const text = renderTask(repoTask as any, new Map());
+    expect(text).toContain("status = commit statuses for the PR head SHA");
+    expect(text).toContain("Do not merge pull requests unless");
+    expect(text).not.toContain("force_merge");
+    expect(text).not.toContain("This task explicitly authorizes merge");
+    expect(text).not.toMatch(/\bRadar\b/i);
+  });
+
+  it("adds merge preconditions when the task explicitly authorizes delivery merge", () => {
+    const repoTask = task({
+      repository_url: "https://git.example.test/org/repo.git",
+      input: { delivery: { allow_merge: true } },
+    });
+    expect(taskAuthorizesMerge(repoTask as any)).toBe(true);
+    const text = renderTask(repoTask as any, new Map());
+    expect(text).toContain("This task explicitly authorizes merge");
+    expect(text).toContain("exact SHA");
+    expect(text).toContain("P1–P3");
+    expect(text).toContain("force_merge");
+    expect(text).toContain("GiteaApi.request");
+    expect(text).toContain("manual Production deploys");
+    expect(text).not.toContain("Do not merge pull requests unless");
+  });
+
+  it("does not treat spec mentions, negations, or non-boolean input as merge grants", () => {
+    const repo = { repository_url: "https://git.example.test/org/repo.git" };
+    const deny = "Do not merge pull requests unless";
+    const grant = "This task explicitly authorizes merge";
+    for (const over of [
+      { spec: "See docs: allow_merge: true is only valid in task input." },
+      { spec: "Do not set allow_merge: true without owner approval." },
+      { input: { delivery: { allow_merge: "true" } } },
+    ]) {
+      const repoTask = task({ ...repo, ...over });
+      expect(taskAuthorizesMerge(repoTask as any)).toBe(false);
+      const text = renderTask(repoTask as any, new Map());
+      expect(text).toContain(deny);
+      expect(text).not.toContain(grant);
+    }
+  });
+
+  it("requires argus-delegate for implementation and forbids direct CLIs", () => {
+    const text = renderTask(task() as any, new Map());
+    expect(text).toContain("/usr/local/bin/argus-delegate EXECUTOR");
+    expect(text).toContain("EXECUTOR agent");
+    expect(text).toContain("the NanoClaw engine remains Codex");
+    expect(text).not.toContain("When the engine is Cursor");
+    expect(text).toContain(
+      "/usr/local/bin/argus-delegate agent \\\n    --cwd <task-checkout> --prompt-file <prompt.txt>",
+    );
+    expect(text).toContain("Example (normal implementation, not --read-only):");
+    expect(text).not.toMatch(/argus-delegate agent[^\n]*--read-only/);
+    expect(text).toContain(
+      "Do not invoke agent, cursor-agent, claude, codex, or opencode directly",
+    );
+    expect(text).toContain("prepareExecutorEnv");
+    expect(text).toContain("argus-model-policy.json");
+    expect(text).toContain("delegate JSON");
+    expect(text).toContain("resume this same task");
+    expect(text).toContain('"ASK:"');
+    expect(text).toContain('"FAIL:"');
   });
 });
 

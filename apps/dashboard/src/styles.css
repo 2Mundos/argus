@@ -149,6 +149,35 @@ input[type="checkbox"] {
   padding: 0;
   margin: 0;
 }
+@media (max-width: 720px) {
+  .accounts-table,
+  .accounts-table tbody,
+  .accounts-table tr,
+  .accounts-table td {
+    display: block;
+  }
+  .accounts-table thead {
+    display: none;
+  }
+  .accounts-table tr {
+    border-bottom: 1px solid var(--border);
+    padding: 0.4rem 0;
+  }
+  .accounts-table td {
+    border: none;
+    padding: 0.2rem 0.75rem;
+    overflow-wrap: anywhere;
+  }
+  .accounts-table td[data-label]:not(:first-child)::before {
+    content: attr(data-label) ": ";
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .accounts-table .account-actions {
+    justify-content: flex-start;
+    padding-top: 0.3rem;
+  }
+}
 label.check {
   display: flex;
   align-items: center;
@@ -655,6 +684,27 @@ th {
   display: flex;
   gap: 0.75rem;
   justify-content: flex-end;
+}
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem 0.9rem;
+  min-width: 9rem;
+}
+.account-actions button {
+  white-space: nowrap;
+}
+button.link.danger {
+  color: var(--danger);
+}
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+label.check input {
+  width: auto;
 }
 .pool-ok,
 .instance-running {

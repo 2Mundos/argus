@@ -116,14 +116,18 @@ if [ "$ENGINES" = 1 ]; then "$here/engines/install-engines.sh" "$SRC"; fi
   cd "$SRC"
   pnpm rebuild better-sqlite3   # pnpm skips native builds by default
   pnpm run build
-  pnpm exec vitest run src/channels/argus.test.ts src/gateway-providers/onecli.test.ts src/gateway-providers/onecli-files.test.ts src/gateway-providers/gateway-provider-registry.test.ts
+  # tsc does not emit imported JS assets; restore them even if build cleaned dist.
+  "$here/install.sh" "$SRC" >/dev/null
+  pnpm exec vitest run src/channels/argus.test.ts src/channels/argus-accounts.test.ts src/channels/argus-gitea-lease.test.ts src/gateway-providers/argus-cursor-stub.test.ts src/gateway-providers/argus-onecli-git-ca.test.ts src/gateway-providers/onecli.test.ts src/gateway-providers/onecli-files.test.ts src/gateway-providers/gateway-provider-registry.test.ts
 )
 
 # Agent image: NanoClaw's own build script, then a stable tag and a `docker save`
 # archive (the sandboxed host's private daemon starts without images).
 (cd "$SRC" && ./container/build.sh)
 built="$(cd "$SRC" && PROJECT_ROOT="$SRC" bash -c 'source setup/lib/install-slug.sh && container_image_base'):latest"
-docker tag "$built" "$AGENT_TAG"
+# ssh and rsync are not in NanoClaw's image: the Argus tools layer goes on top of
+# the fresh build, so AGENT_TAG (what the fleet runs and what is saved) has them.
+"$here/engines/apply-tools-layer.sh" "$built" "$AGENT_TAG"
 docker save -o "$ARCHIVE" "$AGENT_TAG"
 
 docker build -t "$HOST_IMAGE" "$repo/deploy/nanoclaw-host"

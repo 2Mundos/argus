@@ -38,6 +38,29 @@ interface ProviderMapping {
   expired?(credential: Record<string, unknown>, now: number): boolean;
   /** True when the picked value cannot be this provider's token (never logs a value). */
   malformed?(credential: Record<string, unknown>): boolean;
+  /**
+   * A reason, naming fields and never values, why the document cannot be applied
+   * (wrong shape, expired). Checked before `pick`, with the time of the check.
+   */
+  problem?(credential: Record<string, unknown>, now: number): string | null;
+  /**
+   * The secret value when the document is not itself a usable token (an API key
+   * is traded for an access token here, on the trusted host, so the worker's CLI
+   * never makes the trade and never holds what it returns).
+   */
+  exchange?(credential: Record<string, unknown>, fetchImpl: typeof fetch): Promise<string | null>;
+  /** No NanoClaw harness runs on this provider: only a delegated CLI uses it. */
+  executorOnly?: boolean;
+  /**
+   * Inject with a generic header secret, one per endpoint (host + path pattern),
+   * instead of a typed secret. A request that matches no endpoint is forwarded
+   * untouched, so the credential cannot be used on any other path.
+   */
+  generic?: {
+    headerName: string;
+    valueFormat: string;
+    endpoints: Array<{ suffix: string; pathPattern: string }>;
+  };
 }
 
 const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
@@ -119,6 +142,86 @@ function chatgptLogin(c: Record<string, unknown>): boolean {
   );
 }
 
+/** `exp` of a JWT-shaped token in epoch ms, read without checking the signature; null if none. */
+export function jwtExpiryMs(token: string): number | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8"));
+    const exp = claims?.exp;
+    return typeof exp === "number" && Number.isFinite(exp) ? exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The Cursor CLI treats an access token with under five minutes left as expiring. */
+export const CURSOR_EXPIRY_MARGIN_MS = 300_000;
+const CURSOR_HOST = "api2.cursor.sh";
+
+/**
+ * Why a Cursor document cannot be applied, or null. Two shapes, never mixed: an
+ * `api_key`, or an imported login (`accessToken` + `refreshToken`). Only the
+ * access token ever reaches the vault; a CLI settings file holds neither.
+ */
+function cursorProblem(c: Record<string, unknown>, now: number): string | null {
+  const hasKey = "api_key" in c;
+  const hasLogin = "accessToken" in c;
+  if (hasKey && hasLogin) return "give only one of: api_key, accessToken";
+  if (!hasKey && !hasLogin)
+    return "has neither api_key nor accessToken with refreshToken (a Cursor settings file is not a credential)";
+  if (hasKey) {
+    const key = text(c.api_key);
+    if (!key || /\s/.test(key)) return "api_key must be a non-empty string without whitespace";
+    if (jwtExpiryMs(key) !== null)
+      return "api_key holds a login token (a JWT); it belongs in accessToken with refreshToken";
+    return null;
+  }
+  const access = text(c.accessToken);
+  const missing = [access ? null : "accessToken", text(c.refreshToken) ? null : "refreshToken"];
+  if (missing.some(Boolean))
+    return `login credential is missing: ${missing.filter(Boolean).join(", ")}`;
+  const exp = jwtExpiryMs(access!);
+  if (exp === null) return "accessToken is not a JWT with an exp claim";
+  if (exp <= now + CURSOR_EXPIRY_MARGIN_MS)
+    return "accessToken is expired or about to expire (the channel does not refresh logins)";
+  return null;
+}
+
+/**
+ * Trade a Cursor API key for its access token, the way the CLI does
+ * (`POST /auth/exchange_user_api_key`, key as bearer, observed on 2026.10.16),
+ * but here on the trusted host. The refresh token in the answer is dropped.
+ */
+export async function exchangeCursorApiKey(
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetchImpl(`https://${CURSOR_HOST}/auth/exchange_user_api_key`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: "{}",
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    throw new Error("the Cursor API key could not be exchanged (network error)");
+  }
+  if (!res.ok) throw new Error(`the Cursor API key was not accepted (HTTP ${res.status})`);
+  let access: unknown;
+  try {
+    access = ((await res.json()) as { accessToken?: unknown }).accessToken;
+  } catch {
+    access = undefined;
+  }
+  const token = text(access);
+  const exp = token ? jwtExpiryMs(token) : null;
+  if (!token || exp === null || exp <= Date.now())
+    throw new Error("the Cursor API key exchange returned no usable accessToken");
+  return token;
+}
+
 export const PROVIDERS: Record<string, ProviderMapping> = {
   // An API key, or a subscription's OAuth token; OneCLI tells them apart.
   anthropic: {
@@ -158,6 +261,31 @@ export const PROVIDERS: Record<string, ProviderMapping> = {
         : c.auth_mode === "apikey"
           ? text(c.OPENAI_API_KEY)
           : null,
+  },
+  // Cursor: the CLI sends `Authorization: Bearer <token>` to api2.cursor.sh. The
+  // container holds a sentinel token; the gateway swaps in the real access token
+  // for exactly the paths below, over HTTP/1.1 (it does not negotiate h2). Observed
+  // with the shipped CLI against a mock and the real gateway (cursor accounts spec).
+  cursor: {
+    type: "generic",
+    host: CURSOR_HOST,
+    engine: "",
+    executorOnly: true,
+    secretSuffix: "-cursor",
+    generic: {
+      headerName: "Authorization",
+      valueFormat: "Bearer {value}",
+      endpoints: [
+        { suffix: "-agent", pathPattern: "/agent.v1.*" },
+        { suffix: "-aiserver", pathPattern: "/aiserver.v1.*" },
+      ],
+    },
+    problem: cursorProblem,
+    pick: (c) => text(c.accessToken),
+    exchange: async (c, fetchImpl) => {
+      const key = text(c.api_key);
+      return key ? exchangeCursorApiKey(key, fetchImpl) : null;
+    },
   },
 };
 
@@ -296,7 +424,7 @@ async function reconcileSecretAssignments(
     if (lease.role === "repository") continue;
     const mapping = PROVIDERS[lease.provider];
     if (!mapping) throw new Error("unsupported active lease provider");
-    names.add(`argus-${identifier}${mapping.secretSuffix}`);
+    secretNames(identifier, mapping).forEach((name) => names.add(name));
   }
   const repositoryNames = [
     `argus-${identifier}-repository-rest`,
@@ -317,18 +445,25 @@ export interface ApplyTarget {
   name: string;
 }
 
+/** The OneCLI secret names a provider's account occupies for one agent group. */
+function secretNames(identifier: string, mapping: ProviderMapping): string[] {
+  const base = `argus-${identifier}${mapping.secretSuffix}`;
+  return mapping.generic ? mapping.generic.endpoints.map((e) => `${base}${e.suffix}`) : [base];
+}
+
 /** Validate a lease and turn its credential into what OneCLI stores. */
-function secretFor(lease: AccountLease): {
-  mapping: ProviderMapping;
-  value: string;
-  host: string;
-} {
+async function secretFor(
+  lease: AccountLease,
+  fetchImpl: typeof fetch,
+): Promise<{ mapping: ProviderMapping; value: string; host: string }> {
   const mapping = PROVIDERS[lease.provider];
   if (!mapping) {
     throw new Error(
       `provider ${JSON.stringify(lease.provider)} cannot be applied to OneCLI (known: ${Object.keys(PROVIDERS).join(", ")})`,
     );
   }
+  const problem = mapping.problem?.(lease.credential, Date.now());
+  if (problem) throw new Error(`account ${lease.name} (${lease.provider}): ${problem}`);
   if (mapping.expired?.(lease.credential, Date.now())) {
     throw new Error(
       `account ${lease.name} has an expired ${lease.provider} access token: renew it in Argus (the channel does not refresh OAuth tokens)`,
@@ -339,7 +474,8 @@ function secretFor(lease: AccountLease): {
       `account ${lease.name} holds an ${lease.provider} credential that is not a token (expected sk-ant-oat…): renew it in Argus with the token from \`claude setup-token\``,
     );
   }
-  const value = mapping.pick(lease.credential);
+  const value =
+    mapping.pick(lease.credential) ?? (await mapping.exchange?.(lease.credential, fetchImpl));
   if (!value) {
     throw new Error(`account ${lease.name} has no usable credential field for ${lease.provider}`);
   }
@@ -347,21 +483,31 @@ function secretFor(lease: AccountLease): {
   return { mapping, value, host };
 }
 
+export interface AppliedLeases {
+  /** The NanoClaw provider (engine) that runs on the first lease's account. */
+  engine: string;
+  /** When the value injected for the `executor` lease stops working (epoch ms), if it says. */
+  executorExpiresAt: number | null;
+}
+
 /**
  * Make `leases` exactly the credentials this agent group can use (first lease =
  * the engine's). Idempotent. A secret of an earlier lease that is not in the
  * list is unassigned, so a released lease leaves no usable residual secret.
- * Returns the NanoClaw provider (engine) that runs on the first lease's account.
  */
-export async function applyLeases(
+export async function applyLeasesDetailed(
   onecli: OneCliClient,
   target: ApplyTarget,
   leases: AccountLease[],
-): Promise<string> {
+  fetchImpl: typeof fetch = fetch,
+): Promise<AppliedLeases> {
   if (leases.length === 0) throw new Error("applyLeases needs at least one lease");
-  const prepared = leases
-    .filter((lease) => lease.role !== "repository")
-    .map((l) => ({ lease: l, ...secretFor(l) }));
+  const prepared = [];
+  for (const lease of leases.filter((l) => l.role !== "repository")) {
+    prepared.push({ lease, ...(await secretFor(lease, fetchImpl)) });
+  }
+  if (prepared[0]?.mapping.executorOnly)
+    throw new Error(`provider ${prepared[0].lease.provider} is an executor, not an engine`);
 
   const agents: Array<{ id: string; identifier: string }> = await onecli.call("GET", "/agents");
   let agent = agents.find((a) => a.identifier === target.identifier);
@@ -373,27 +519,45 @@ export async function applyLeases(
   const secrets: Array<{ id: string; name: string }> = await onecli.call("GET", "/secrets");
   const ids: string[] = [];
   const done = new Set<string>();
-  for (const { mapping, value, host } of prepared) {
-    const secretName = `argus-${target.identifier}${mapping.secretSuffix}`;
-    if (done.has(secretName)) continue; // one account per provider: the first lease wins
-    done.add(secretName);
-    let secret = secrets.find((s) => s.name === secretName);
-    if (secret) {
-      // A credential-dependent host (API key vs login) may change with the value.
-      await onecli.call(
-        "PATCH",
-        `/secrets/${secret.id}`,
-        typeof mapping.host === "function" ? { value, hostPattern: host } : { value },
-      );
-    } else {
-      secret = await onecli.call("POST", "/secrets", {
-        name: secretName,
-        type: mapping.type,
-        value,
-        hostPattern: host,
-      });
+  let executorExpiresAt: number | null = null;
+  for (const { lease, mapping, value, host } of prepared) {
+    const names = secretNames(target.identifier, mapping);
+    if (done.has(names[0]!)) continue; // one account per provider: the first lease wins
+    done.add(names[0]!);
+    if (lease.role === "executor") executorExpiresAt = jwtExpiryMs(value);
+    for (const [index, secretName] of names.entries()) {
+      const endpoint = mapping.generic?.endpoints[index];
+      const body = endpoint
+        ? {
+            name: secretName,
+            type: "generic",
+            value,
+            hostPattern: host,
+            pathPattern: endpoint.pathPattern,
+            injectionConfig: {
+              headerName: mapping.generic!.headerName,
+              valueFormat: mapping.generic!.valueFormat,
+            },
+          }
+        : { name: secretName, type: mapping.type, value, hostPattern: host };
+      let secret = secrets.find((s) => s.name === secretName);
+      if (secret) {
+        // A credential-dependent host (API key vs login) may change with the value;
+        // a generic secret is always sent whole so its host, path and header are ours.
+        await onecli.call(
+          "PATCH",
+          `/secrets/${secret.id}`,
+          endpoint
+            ? body
+            : typeof mapping.host === "function"
+              ? { value, hostPattern: host }
+              : { value },
+        );
+      } else {
+        secret = await onecli.call("POST", "/secrets", body);
+      }
+      ids.push(secret!.id);
     }
-    ids.push(secret!.id);
   }
   if (leases.some((lease) => lease.role === "repository")) {
     for (const suffix of ["rest", "git"]) {
@@ -405,7 +569,17 @@ export async function applyLeases(
   }
   await onecli.call("PUT", `/agents/${agent!.id}/secrets`, { secretIds: ids });
   await onecli.call("PATCH", `/agents/${agent!.id}/secret-mode`, { mode: "selective" });
-  return prepared[0]!.mapping.engine;
+  return { engine: prepared[0]!.mapping.engine, executorExpiresAt };
+}
+
+/** `applyLeasesDetailed`, returning only the engine (the NanoClaw provider to run). */
+export async function applyLeases(
+  onecli: OneCliClient,
+  target: ApplyTarget,
+  leases: AccountLease[],
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  return (await applyLeasesDetailed(onecli, target, leases, fetchImpl)).engine;
 }
 
 /** The single-lease form of `applyLeases`. */

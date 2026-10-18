@@ -76,6 +76,8 @@ def container_spec(
         }
         if nc.account_providers:
             env["ARGUS_ACCOUNT_PROVIDERS"] = ",".join(nc.account_providers)
+        if nc.executor_providers:
+            env["ARGUS_EXECUTOR_PROVIDERS"] = ",".join(nc.executor_providers)
         workdir = f"{nc.instances_root.rstrip('/')}/{instance_id}"
         sandboxed = pool.docker.runtime is not None
         mounts = [

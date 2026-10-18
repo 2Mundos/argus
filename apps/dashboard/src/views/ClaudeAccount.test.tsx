@@ -288,13 +288,36 @@ describe("dedicated login path", () => {
     fireEvent.change(input(), { target: { value: CODE } });
     fireEvent.click(screen.getByRole("button", { name: "Send code" }));
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("expired or was already used");
+    expect(alert.textContent).toContain("came from an earlier link");
     expect(alert.textContent).toContain("1 of 3 tries used");
     expect(document.body.textContent).toContain("including the part after #");
     expect(document.body.textContent).not.toContain(CODE);
     fireEvent.change(input(), { target: { value: "Other-code#st" } });
     fireEvent.click(screen.getByRole("button", { name: "Send code" }));
     await waitFor(() => expect(mock.posts.filter((p) => p.path.endsWith("/code"))).toHaveLength(2));
+  });
+
+  it("hides the code field while Claude prepares the new link, then shows the new link", async () => {
+    render(<ClaudeAccount onClose={vi.fn()} onDone={vi.fn()} />);
+    await start();
+    mock.codeResult = pending({ phase: "renewing_link", url: null, refusal: "oauth_400" });
+    fireEvent.change(screen.getByLabelText("Code from the sign-in page"), {
+      target: { value: CODE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send code" }));
+    expect(await screen.findByText(/Preparing a new sign-in link/)).toBeTruthy();
+    expect(screen.queryByLabelText("Code from the sign-in page")).toBeNull();
+  });
+
+  it("refuses a code without the #state part locally", async () => {
+    render(<ClaudeAccount onClose={vi.fn()} onDone={vi.fn()} />);
+    await start();
+    fireEvent.change(screen.getByLabelText("Code from the sign-in page"), {
+      target: { value: "onlythefirstpart" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send code" }));
+    expect(await screen.findByText(/part after #/)).toBeTruthy();
+    expect(mock.posts.some((p) => p.path.endsWith("/code"))).toBe(false);
   });
 
   it("refuses a malformed code locally and does not send it", async () => {

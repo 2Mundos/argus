@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import {
   CUSTOM_PROVIDER_PATTERN,
+  GITEA_PROVIDER,
   localBrokerNotice,
   nativeAuthNotice,
   PROVIDER_PICK_CUSTOM,
@@ -12,6 +13,7 @@ import { relative } from "../format";
 import { useLiveData } from "../live";
 import { hasModelUsage, tokens, totalTokens, viewerTimeZone, windowQuery } from "../usage";
 import { AccountDetail } from "./AccountDetail";
+import { DeleteAccount, EditAccount, ReplaceCredential } from "./AccountDialogs";
 import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
 import { QuotaMeter, Sparkline } from "./charts";
@@ -22,12 +24,16 @@ export function Accounts() {
   const [addingCodex, setAddingCodex] = useState(false);
   // A Claude wizard: new (`{}`) or renewing the given account.
   const [claude, setClaude] = useState<{ renew?: Account }>();
+  const [editing, setEditing] = useState<Account>();
+  const [deleting, setDeleting] = useState<Account>();
+  const [replacing, setReplacing] = useState<Account>();
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
-  const { data: accounts, error: loadError } = useLiveData(
-    () => call(api.GET("/api/accounts")),
-    [],
-  );
+  const {
+    data: accounts,
+    error: loadError,
+    reload: reloadList,
+  } = useLiveData(() => call(api.GET("/api/accounts")), []);
   const { data: week } = useLiveData(
     () =>
       call(
@@ -49,6 +55,7 @@ export function Accounts() {
           body: { enabled: account.state === "disabled" },
         }),
       );
+      reloadList();
     } catch (err) {
       setError((err as Error).message);
     }
@@ -87,7 +94,7 @@ export function Accounts() {
       </p>
       {notice && <p className="small">{notice}</p>}
       {(error || loadError) && <p className="error">{error ?? loadError?.message}</p>}
-      <table className="accounts">
+      <table className="accounts-table accounts">
         <thead>
           <tr>
             <th>Account</th>
@@ -104,7 +111,7 @@ export function Accounts() {
             const model = hasModelUsage(a.provider);
             return (
               <tr key={a.id}>
-                <td>
+                <td data-label="Account">
                   <button
                     type="button"
                     className="link account-name"
@@ -116,7 +123,7 @@ export function Accounts() {
                     {a.provider} · {a.kind.replace("_", " ")} · priority {a.priority}
                   </span>
                 </td>
-                <td>
+                <td data-label="State">
                   <span className={`badge account-${a.state}`}>
                     <StateIcon state={a.state} /> {a.state}
                   </span>
@@ -125,7 +132,7 @@ export function Accounts() {
                   )}
                   {a.disabled_reason && <span className="muted small"> {a.disabled_reason}</span>}
                 </td>
-                <td>
+                <td data-label="Quota left">
                   {!model ? (
                     <span className="muted small">—</span>
                   ) : (a.quota ?? []).length === 0 ? (
@@ -138,7 +145,7 @@ export function Accounts() {
                     </div>
                   )}
                 </td>
-                <td>
+                <td data-label="Tokens, 7 days">
                   {!model ? (
                     <span className="muted small">—</span>
                   ) : series?.reported ? (
@@ -153,24 +160,56 @@ export function Accounts() {
                     <span className="muted small">not reported</span>
                   )}
                 </td>
-                <td>
+                <td data-label="Leases">
                   {a.active_leases}
                   {a.max_leases != null && ` / ${a.max_leases}`}
                 </td>
                 <td>
-                  <button type="button" className="link" onClick={() => toggle(a)}>
-                    {a.state === "disabled" ? "Enable" : "Disable"}
-                  </button>
-                  {a.provider === "anthropic" && (
+                  <div className="account-actions">
                     <button
                       type="button"
                       className="link"
-                      aria-label={`Renew credential of ${a.name}`}
-                      onClick={() => setClaude({ renew: a })}
+                      aria-label={`Edit ${a.name}`}
+                      onClick={() => setEditing(a)}
                     >
-                      Renew credential
+                      Edit
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      className="link"
+                      aria-label={`${a.state === "disabled" ? "Enable" : "Disable"} ${a.name}`}
+                      onClick={() => toggle(a)}
+                    >
+                      {a.state === "disabled" ? "Enable" : "Disable"}
+                    </button>
+                    {a.provider === "anthropic" ? (
+                      <button
+                        type="button"
+                        className="link"
+                        aria-label={`Renew credential of ${a.name}`}
+                        onClick={() => setClaude({ renew: a })}
+                      >
+                        Renew credential
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="link"
+                        aria-label={`Replace credential of ${a.name}`}
+                        onClick={() => setReplacing(a)}
+                      >
+                        Replace credential
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="link danger"
+                      aria-label={`Delete ${a.name}`}
+                      onClick={() => setDeleting(a)}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </td>
               </tr>
             );
@@ -184,10 +223,50 @@ export function Accounts() {
           )}
         </tbody>
       </table>
+      {adding && (
+        <AddAccount
+          onClose={() => {
+            setAdding(false);
+            reloadList();
+          }}
+        />
+      )}
+      {editing && (
+        <EditAccount
+          account={editing}
+          onClose={() => setEditing(undefined)}
+          onDone={(message) => {
+            setEditing(undefined);
+            setNotice(message);
+            reloadList();
+          }}
+        />
+      )}
+      {replacing && (
+        <ReplaceCredential
+          account={replacing}
+          onClose={() => setReplacing(undefined)}
+          onDone={(message) => {
+            setReplacing(undefined);
+            setNotice(message);
+            reloadList();
+          }}
+        />
+      )}
+      {deleting && (
+        <DeleteAccount
+          account={deleting}
+          onClose={() => setDeleting(undefined)}
+          onDone={(message) => {
+            setDeleting(undefined);
+            setNotice(message);
+            reloadList();
+          }}
+        />
+      )}
       {selectedAccount && (
         <AccountDetail account={selectedAccount} onClose={() => setSelected(undefined)} />
       )}
-      {adding && <AddAccount onClose={() => setAdding(false)} />}
       {claude && (
         <ClaudeAccount
           renew={claude.renew}
@@ -226,6 +305,8 @@ function AddAccount({ onClose }: { onClose: () => void }) {
     priority: 0,
     maxLeases: "",
     credential: '{\n  "api_key": ""\n}',
+    giteaUsername: "",
+    giteaToken: "",
   });
   const [error, setError] = useState<string>();
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
@@ -240,6 +321,7 @@ function AddAccount({ onClose }: { onClose: () => void }) {
   const resolvedProvider =
     providerPick === PROVIDER_PICK_CUSTOM ? customProvider.trim() : providerPick;
   const authNotice = nativeAuthNotice(resolvedProvider);
+  const isGitea = resolvedProvider === GITEA_PROVIDER;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -254,11 +336,15 @@ function AddAccount({ onClose }: { onClose: () => void }) {
       return;
     }
     let credential: Record<string, unknown>;
-    try {
-      credential = JSON.parse(form.credential);
-    } catch {
-      setError("The credential must be a JSON object.");
-      return;
+    if (isGitea) {
+      credential = { username: form.giteaUsername.trim(), token: form.giteaToken };
+    } else {
+      try {
+        credential = JSON.parse(form.credential);
+      } catch {
+        setError("The credential must be a JSON object.");
+        return;
+      }
     }
     try {
       await call(
@@ -367,16 +453,42 @@ function AddAccount({ onClose }: { onClose: () => void }) {
             should see exhaustion.
           </p>
         )}
-        <label>
-          Credential (JSON; stored encrypted, never shown again)
-          <textarea
-            rows={5}
-            value={form.credential}
-            onChange={(e) => set("credential", e.target.value)}
-            spellCheck={false}
-            autoComplete="off"
-          />
-        </label>
+        {isGitea ? (
+          <div className="row">
+            <label>
+              Gitea username
+              <input
+                aria-label="Gitea username"
+                value={form.giteaUsername}
+                onChange={(e) => set("giteaUsername", e.target.value)}
+                autoComplete="off"
+                required
+              />
+            </label>
+            <label>
+              Gitea token (stored encrypted, never shown again)
+              <input
+                type="password"
+                aria-label="Gitea token"
+                value={form.giteaToken}
+                onChange={(e) => set("giteaToken", e.target.value)}
+                autoComplete="off"
+                required
+              />
+            </label>
+          </div>
+        ) : (
+          <label>
+            Credential (JSON; stored encrypted, never shown again)
+            <textarea
+              rows={5}
+              value={form.credential}
+              onChange={(e) => set("credential", e.target.value)}
+              spellCheck={false}
+              autoComplete="off"
+            />
+          </label>
+        )}
         {error && <p className="error">{error}</p>}
         <div className="actions">
           <button type="button" onClick={onClose}>

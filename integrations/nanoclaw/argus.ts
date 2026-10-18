@@ -25,26 +25,38 @@
  *                             account leasing from Argus and OneCLI switching;
  *                             without it the channel uses whatever credential
  *                             the OneCLI vault already has
+ *   ARGUS_EXECUTOR_PROVIDERS  comma-separated providers for the executor lease
+ *                             (default: anthropic). Set to "cursor" on a pool that
+ *                             should delegate to the Cursor CLI.
  *   ONECLI_URL / ONECLI_API_KEY  how to reach the OneCLI vault (accounts only)
  *   ARGUS_EXIT_ON_DRAIN       "false" to keep the host running once Argus has
  *                             drained this agent (default: exit, so the
  *                             instance ends; only when ARGUS_INSTANCE_ID is set)
  */
 import { createHash } from "node:crypto";
-
+import { mkdir, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { log } from "../log.js";
 import type { ChannelAdapter, ChannelDefaults, ChannelSetup, OutboundMessage } from "./adapter.js";
 import {
   type AccountLease,
   type ApplyTarget,
   applyLeases,
+  applyLeasesDetailed,
   applyRepositoryLease,
+  CURSOR_EXPIRY_MARGIN_MS,
   classifyFailure,
   normalizeRepositoryUrl,
   OneCliClient,
   releaseRepositoryLease,
 } from "./argus-accounts.js";
 import { registerChannelAdapter } from "./channel-registry.js";
+import {
+  loadPolicy,
+  type ModelSelection,
+  policySnapshot,
+  selectHarnessModel,
+} from "./model-policy.mjs";
 
 export const PLATFORM_ID = "local";
 export const CHANNEL_TYPE = "argus";
@@ -96,6 +108,8 @@ export interface ArgusConfig {
     /** Explicit project -> HTTPS repository allowlist from this pool. */
     repositories?: Record<string, string>;
   };
+  /** Apply a pinned policy before starting a task; absent only in test adapters. */
+  selectModels?: (task: ArgusTask) => Promise<ModelSelection>;
   /** Called once, after Argus drained this agent, its work is done, and it left. */
   onDrained?: () => void;
   /** Test seams. */
@@ -113,16 +127,45 @@ interface KnowledgeRef {
   stale: boolean;
 }
 
-interface ArgusTask {
+export interface ArgusTask {
   id: string;
   title: string;
   spec: string;
   project: string;
   required_capabilities?: string[];
   repository_url?: string;
+  input?: Record<string, unknown>;
   attempt: number;
+  failures?: number;
+  error?: string | null;
   acceptance: string[];
   knowledge_refs: KnowledgeRef[];
+}
+
+/** True only when the task input explicitly sets delivery.allow_merge to boolean true. */
+export function taskAuthorizesMerge(task: ArgusTask): boolean {
+  const delivery = task.input?.delivery;
+  if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) return false;
+  return (delivery as Record<string, unknown>).allow_merge === true;
+}
+
+function repositoryTaskLines(task: ArgusTask): string[] {
+  const lines = [
+    `Repository (allowlisted): ${task.repository_url}`,
+    "Use /usr/local/bin/argus-gitea-api for repository API access (get = pull request by number; issue-get = issue tracker item; list-prs = paginated PR list with --state; status = commit statuses for the PR head SHA); do not handle credentials or add auth headers yourself.",
+  ];
+  if (taskAuthorizesMerge(task)) {
+    lines.push(
+      "This task explicitly authorizes merge when every precondition below holds; otherwise stop after CI/review without merging.",
+      "Before merge: re-read the PR (`get`), confirm the current head SHA, and use `status` so every required check on that exact SHA is success (pending, failure, cancelled, or unknown is not approval; skipped is not execution). Resolve agentic review findings P1–P3. Respect repository branch protections and reviews. Never use force_merge, bypass, force-push, or mark a PR merged without a successful Gitea merge API call through the same allowlisted OneCLI-proxied HTTPS path as other argus-gitea-api operations (GiteaApi.request). If the head changes, re-run gates and CI on the new SHA before merging. After merge, read the PR back and record merged state and merge_commit_sha; a failed POST is not success.",
+      "Merge does not authorize manual Production deploys, production data changes, or production flag toggles—only normal repository automation already configured.",
+    );
+  } else {
+    lines.push(
+      "Do not merge pull requests unless this task or its pinned project delivery policy (see spec, acceptance, and Relevant knowledge below) explicitly authorizes merge.",
+    );
+  }
+  return lines;
 }
 
 export type Directive = { kind: "complete" | "fail" | "ask" | "progress"; text: string };
@@ -161,12 +204,7 @@ export function renderTask(task: ArgusTask, pages: Map<string, string>): string 
   const lines = [
     `[Argus task] ${task.title}`,
     `Project: ${task.project} · Task: ${task.id} · Attempt: ${task.attempt}`,
-    ...(task.repository_url
-      ? [
-          `Repository (allowlisted): ${task.repository_url}`,
-          "Use /usr/local/bin/argus-gitea-api for repository API access; do not handle credentials, add auth headers, or merge pull requests.",
-        ]
-      : []),
+    ...(task.repository_url ? repositoryTaskLines(task) : []),
     "",
     task.spec.trim() || "(no further description)",
   ];
@@ -186,6 +224,29 @@ export function renderTask(task: ArgusTask, pages: Map<string, string>): string 
     }
   }
   lines.push(
+    "",
+    "Delegated implementation (mandatory): run all coding/model work through /usr/local/bin/argus-delegate EXECUTOR.",
+    "EXECUTOR is the leased CLI role (claude | codex | opencode | agent). When Cursor is the selected coding executor, use EXECUTOR agent; the NanoClaw engine remains Codex.",
+    "Do not invoke agent, cursor-agent, claude, codex, or opencode directly for implementation — that bypasses",
+    "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
+    "Direct Git, gates, QA, and other non-delegated shell commands in the checkout are fine when they are not a",
+    "substitute for argus-delegate.",
+    "",
+    "Example (normal implementation, not --read-only):",
+    "  /usr/local/bin/argus-delegate agent \\",
+    "    --cwd <task-checkout> --prompt-file <prompt.txt> --out <task-checkout>/.argus-delegate --timeout <seconds>",
+    "Use the model and retry policy from argus-model-policy.json (or --model / --model-attempt when retrying).",
+    "",
+    "The delegate wrapper may materialize gateway stubs and cli-config metadata in a private writable directory;",
+    "that is authorized and is not a copy of real credentials. Do not chmod or remount read-only seed files, and",
+    "do not read auth.json or other secret material.",
+    "",
+    "Model policy: argus-model-policy.json pins this task policy for argus-delegate. Attach the delegate JSON",
+    "report (last stdout line) as a task artifact. After a failed verification/context limit, retry with",
+    "--model-attempt N --fallback-reason REASON; --model pins an override.",
+    "",
+    "If delegation fails, resume this same task (same Task id above) with the error and artifact context; do not",
+    "treat another task's block or missing Postgres as proof this task cannot proceed.",
     "",
     "How to respond: send short progress updates as normal messages. When you are done, reply with a",
     'message starting with "COMPLETE:" followed by a summary of what you did. If you cannot do it,',
@@ -369,6 +430,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let draining = false;
   let registered = false;
   let current: { id: string; attempt: number } | null = null;
+  let currentClaim: ArgusTask | null = null;
   let currentText: string | null = null; // what the agent was sent, to re-send after a switch
   // Artifacts uploaded for the task in flight (agent attachments), by artifact id,
   // and attachments that could not be stored, for the completion to report.
@@ -455,6 +517,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   function finishTask(): void {
     current = null;
+    currentClaim = null;
     currentText = null;
     attached = new Map();
     attachFailures = [];
@@ -523,6 +586,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         await applyAndSelect(cfg.accounts, lease, "exhausted");
         account = { id: lease.account_id, name: lease.name, provider: lease.provider };
         log.info("Switched to another Argus account", { account: lease.name });
+        if (currentClaim) await prepareModels(currentClaim);
         if (currentText && resends < MAX_RESENDS) {
           resends += 1;
           await injectTask(
@@ -551,12 +615,32 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     finishTask();
   }
 
+  async function prepareModels(task: ArgusTask): Promise<void> {
+    if (!cfg.selectModels) return;
+    const selection = await cfg.selectModels(task);
+    const bytes = new TextEncoder().encode(JSON.stringify(selection, null, 2));
+    const sha = createHash("sha256").update(bytes).digest("hex");
+    const name = `model-policy-attempt-${task.attempt}.json`;
+    attached.set(await ensureArtifact(task, name, bytes, sha, "application/json"), { name, sha });
+  }
+
   async function runTask(task: ArgusTask): Promise<void> {
     current = { id: task.id, attempt: task.attempt };
     lastProgressAt = 0;
     const finished = new Promise<void>((resolve) => {
       taskDone = resolve;
     });
+    currentClaim = task;
+    try {
+      await prepareModels(task);
+    } catch (err) {
+      await client.call("POST", `/tasks/${task.id}/fail`, {
+        attempt: task.attempt,
+        error: `model policy could not be applied/recorded: ${String(err)}`,
+      });
+      finishTask();
+      return;
+    }
     try {
       if (task.required_capabilities?.includes("repository:write")) {
         const acc = cfg.accounts;
@@ -657,8 +741,19 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
     const target = await acc.resolveTarget();
     let engine: string;
+    const fetchImpl = cfg.fetch ?? fetch;
     try {
-      engine = await applyLeases(acc.onecli, target, held);
+      const applied = await applyLeasesDetailed(acc.onecli, target, held, fetchImpl);
+      engine = applied.engine;
+      if (
+        applied.executorExpiresAt !== null &&
+        applied.executorExpiresAt <= (cfg.now?.() ?? Date.now()) + CURSOR_EXPIRY_MARGIN_MS
+      ) {
+        log.warn(
+          "The Cursor executor access token is expired or about to expire; renew the account in Argus (the channel does not refresh OAuth tokens)",
+          { account: held[1]?.name, expires_at: applied.executorExpiresAt },
+        );
+      }
     } catch (err) {
       if (held.length < 2) throw err;
       // An unusable executor account (expired token, no credential field) must
@@ -669,7 +764,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       });
       held.pop();
       await client.call("POST", "/accounts/release?role=executor").catch(() => undefined);
-      engine = await applyLeases(acc.onecli, target, held);
+      engine = (await applyLeasesDetailed(acc.onecli, target, held, fetchImpl)).engine;
     }
     executor = held[1] ? { id: held[1].account_id, name: held[1].name } : null;
     activeAccountLeases = [...held];
@@ -1040,6 +1135,10 @@ function accountsFromEnv(): ArgusConfig["accounts"] {
     .split(",")
     .map((p) => p.trim())
     .filter(Boolean);
+  const executorProviders = (process.env.ARGUS_EXECUTOR_PROVIDERS ?? "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
   let repositories: Record<string, string> = {};
   const repositoriesJson = process.env.ARGUS_REPOSITORIES_JSON?.trim();
   if (repositoriesJson) {
@@ -1074,6 +1173,7 @@ function accountsFromEnv(): ArgusConfig["accounts"] {
   }
   return {
     providers,
+    ...(executorProviders.length > 0 ? { executorProviders } : {}),
     repositories,
     onecli: new OneCliClient(
       process.env.ONECLI_URL?.trim() || "http://127.0.0.1:10254",
@@ -1112,6 +1212,47 @@ function accountsFromEnv(): ArgusConfig["accounts"] {
   };
 }
 
+export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
+  // Validate once at host startup. A pool update cannot mutate an in-flight policy.
+  const snapshot = loadPolicy();
+  return async (task) => {
+    const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
+      "../db/messaging-groups.js"
+    );
+    const { getAgentGroup } = await import("../db/agent-groups.js");
+    const { getContainerConfig, updateContainerConfigScalars } = await import(
+      "../db/container-configs.js"
+    );
+    const { getSessionsByAgentGroup } = await import("../db/sessions.js");
+    const { killContainer } = await import("../container-runner.js");
+    const mg = await getMessagingGroupByPlatform(CHANNEL_TYPE, PLATFORM_ID);
+    const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
+    const group = wiring ? await getAgentGroup(wiring.agent_group_id) : undefined;
+    if (!group) throw new Error("no Argus group for model policy");
+    const config = await getContainerConfig(group.id);
+    if (!config) throw new Error("no container config for model policy");
+    const engine = (config.provider || "claude").toLowerCase();
+    const selection = selectHarnessModel(snapshot, engine, task);
+    if (selection.configured_model && config.model !== selection.configured_model) {
+      await updateContainerConfigScalars(group.id, { model: selection.configured_model });
+      for (const session of await getSessionsByAgentGroup(group.id)) {
+        killContainer(session.id, "argus: model policy changed");
+      }
+    }
+    const pinned = policySnapshot(snapshot.policy, { task_id: task.id, attempt: task.attempt });
+    const dir = path.resolve("groups", group.folder);
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, "argus-model-policy.json");
+    await writeFile(file + ".tmp", JSON.stringify(pinned) + "\n");
+    await rename(file + ".tmp", file);
+    return {
+      ...selection,
+      configured_model: selection.configured_model ?? config.model ?? null,
+      policy: snapshot.policy,
+    };
+  };
+}
+
 export function fromEnv(): ChannelAdapter | null {
   const url = process.env.ARGUS_URL?.trim();
   if (!url) return null;
@@ -1133,6 +1274,7 @@ export function fromEnv(): ChannelAdapter | null {
       .filter(Boolean),
     name: process.env.ARGUS_AGENT_NAME?.trim() || "nanoclaw",
     accounts: accountsFromEnv(),
+    selectModels: modelsFromEnv(),
     // Under an Argus instance, a drained agent means this host should go: ask
     // NanoClaw to shut down through its own SIGTERM handling.
     onDrained:

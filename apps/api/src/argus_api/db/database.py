@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -103,7 +104,17 @@ class Database:
             except BaseException:
                 await self._writer.execute("ROLLBACK")
                 raise
-            await self._writer.execute("COMMIT")
+            try:
+                await self._writer.execute("COMMIT")
+            except BaseException:
+                # A cancelled COMMIT may still complete in aiosqlite's thread: roll
+                # back only what is still open, and never let a failed ROLLBACK
+                # replace the original error (a swallowed CancelledError leaves a
+                # background loop running forever).
+                if self._writer.in_transaction:
+                    with contextlib.suppress(Exception):
+                        await self._writer.execute("ROLLBACK")
+                raise
         for event in tx.events:
             self.bus.publish(event)
 

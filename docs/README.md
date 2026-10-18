@@ -46,6 +46,8 @@ every new dependency is judged against it.
   login as an Argus account; engine selection and fallback between engines
 - [Claude accounts](specs/claude-accounts.spec.md) — import, generate with a
   dedicated login, or renew an Anthropic credential as an Argus account
+- [Cursor accounts](specs/cursor-accounts.spec.md) — import a login or API key
+  for the delegated Cursor CLI; executor lease and OneCLI path-scoped injection
 - [Knowledge](specs/knowledge.spec.md) — projects and a versioned wiki shared by
   agents and people, delivered with every claim
 - [Home](specs/home.spec.md) — the default dashboard tab: what needs attention,
@@ -71,3 +73,10 @@ every new dependency is judged against it.
 
 - [NanoClaw integration spike](research/2026-10-14.nanoclaw-integration.research.md) —
   channels, credentials, drivers
+
+- [Preferred models](specs/model-selection.spec.md)
+- [Model policy operation](runbooks/2026-10-17.model-selection.ref.md)
+- [Project agent images](runbooks/2026-10-17.project-agent-images.ref.md) —
+  base × tools × project layers, building and pointing a pool at one
+- [Cursor executor fleet smoke](runbooks/2026-10-18.cursor-fleet-smoke.ref.md) —
+  completed parent verification of delegated `composer-2.5` (2026-10-18)

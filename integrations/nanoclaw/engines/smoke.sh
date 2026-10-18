@@ -8,6 +8,7 @@
 # alone: only a real checked task sets it. Runs offline (--network none).
 set -euo pipefail
 
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 image="${1:?usage: smoke.sh IMAGE [LEDGER]}"
 ledger="${2:-${ARGUS_DATA_DIR:-data}/engines-ledger.json}"
 expect() { # id binary pinned-substring
@@ -60,3 +61,5 @@ for (const id of Object.keys(installed)) {
 fs.writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`);
 for (const id of Object.keys(installed)) console.log(id.padEnd(13), "installed=" + installed[id].ok, "authenticated=" + authed[id].ok, "|", installed[id].detail);
 JS
+# Binaries every worker needs (ssh, rsync, git): probed in the image, recorded as `tools`.
+uv run --quiet --project "$here/../../.." python -m argus_api.engines.image_tools "$image" "$ledger"

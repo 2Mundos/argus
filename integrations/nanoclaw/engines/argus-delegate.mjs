@@ -1,8 +1,10 @@
 #!/usr/bin/env node
+import { spawn, spawnSync } from "node:child_process";
 // Non-interactive delegation to a specialist CLI (docs/specs/engines.spec.md).
 //
 //   argus-delegate EXECUTOR [--cwd DIR] [--timeout SECONDS] [--prompt-file F]
 //                  [--out DIR] [--model M] [--read-only]
+//                  [--model-attempt N --fallback-reason REASON]
 //
 // EXECUTOR is claude | codex | opencode | agent. The prompt comes from stdin or
 // --prompt-file. The last line on stdout is one JSON object: the identity of the
@@ -11,13 +13,14 @@
 // allowed, 78 no credentials (nothing was run, nothing else was tried), 124
 // timeout, 127 executor not installed.
 //
-// It never falls back to another executor or provider, and it never reads the
+// Model retries follow a pinned policy; it never switches executor or provider, and it never reads the
 // content of a credential: it only checks that one is present.
-import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { loadPolicy, selectModel } from "./model-policy.mjs";
 
 export const EXECUTORS = ["claude", "codex", "opencode", "agent"];
 const KILL_GRACE_MS = 5000;
@@ -63,9 +66,9 @@ export function authStatus(executor, e = process.env, home = os.homedir()) {
             need: "`opencode auth login`, or ARGUS_OPENCODE_ATTACH=<your opencode server>",
           };
     case "agent":
-      return env(e, "CURSOR_API_KEY") || present(path.join(xdg, "cursor", "auth.json"))
+      return present(path.join(xdg, "cursor", "auth.json"))
         ? { ok: true }
-        : { ok: false, need: "CURSOR_API_KEY, or `agent login`" };
+        : { ok: false, need: "a Cursor auth.json stub (from the gateway; not CURSOR_API_KEY)" };
     default:
       return { ok: false, need: "unknown executor" };
   }
@@ -134,6 +137,7 @@ export function buildCommand(executor, { cwd, model, readOnly, lastMessageFile }
           "json",
           "--workspace",
           cwd,
+          "--trust",
           ...(readOnly ? [] : ["--force"]),
           ...(model ? ["--model", model] : []),
         ],
@@ -143,6 +147,111 @@ export function buildCommand(executor, { cwd, model, readOnly, lastMessageFile }
     default:
       throw new Error(`unknown executor ${executor}`);
   }
+}
+
+function readCliConfig(cfgPath) {
+  try {
+    if (!fs.existsSync(cfgPath)) return null;
+    const parsed = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function http1Enabled(doc) {
+  return doc?.network?.useHttp1ForAgent === true;
+}
+
+/** True when the path (or its parent for a missing file) allows creating/overwriting. */
+function pathIsWritable(filePath) {
+  const dir = path.dirname(filePath);
+  try {
+    fs.accessSync(dir, fs.constants.W_OK);
+    if (fs.existsSync(filePath)) fs.accessSync(filePath, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function writeCliConfig(cfgPath, doc) {
+  const out = {
+    ...doc,
+    version: doc.version ?? 1,
+    network: {
+      ...(doc.network && typeof doc.network === "object" ? doc.network : {}),
+      useHttp1ForAgent: true,
+    },
+  };
+  fs.writeFileSync(cfgPath, `${JSON.stringify(out, null, 2)}\n`);
+  return out;
+}
+
+/** Native CLI atomically rewrites cli-config via temp files in CURSOR_CONFIG_DIR. */
+export function cursorConfigDirAllowsCliWrites(configDir) {
+  const probe = path.join(configDir, `.argus-write-probe-${randomUUID()}`);
+  try {
+    fs.writeFileSync(probe, "");
+    fs.unlinkSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Copy sentinel stub auth + HTTP/1.1 cli-config into a per-run writable tree (no host secrets). */
+export function materializePrivateCursorConfig(stubDir, runtimeRoot) {
+  const privateDir = path.join(runtimeRoot, "cursor-config");
+  fs.mkdirSync(privateDir, { recursive: true });
+  const authSrc = path.join(stubDir, "auth.json");
+  if (present(authSrc)) {
+    fs.writeFileSync(path.join(privateDir, "auth.json"), fs.readFileSync(authSrc));
+  }
+  const injected = readCliConfig(path.join(stubDir, "cli-config.json"));
+  writeCliConfig(path.join(privateDir, "cli-config.json"), injected ?? { version: 1, network: {} });
+  return privateDir;
+}
+
+/**
+ * Cursor CLI runtime: gateway stubs stay read-only mounts; the native CLI needs a
+ * writable CURSOR_CONFIG_DIR for atomic cli-config updates even when HTTP/1.1 is preset.
+ */
+export function prepareExecutorEnv(
+  executor,
+  e = process.env,
+  runtimeRoot = "/tmp/argus-cursor-runtime",
+) {
+  if (executor !== "agent") return e;
+  const home = e.HOME || os.homedir();
+  const xdg = e.XDG_CONFIG_HOME || path.join(home, ".config");
+  const stubDir = e.CURSOR_CONFIG_DIR || path.join(xdg, "cursor");
+  if (
+    !present(path.join(xdg, "cursor", "auth.json")) &&
+    !present(path.join(stubDir, "auth.json"))
+  ) {
+    return e;
+  }
+
+  if (!cursorConfigDirAllowsCliWrites(stubDir)) {
+    const privateDir = materializePrivateCursorConfig(stubDir, runtimeRoot);
+    return { ...e, CURSOR_CONFIG_DIR: privateDir };
+  }
+
+  const mountedCfg = path.join(stubDir, "cli-config.json");
+  const injected = readCliConfig(mountedCfg);
+  const baseDoc = injected ?? { version: 1, network: {} };
+  if (injected && http1Enabled(injected)) {
+    return { ...e, CURSOR_CONFIG_DIR: stubDir };
+  }
+  if (pathIsWritable(mountedCfg)) {
+    fs.mkdirSync(path.dirname(mountedCfg), { recursive: true });
+    writeCliConfig(mountedCfg, baseDoc);
+    return { ...e, CURSOR_CONFIG_DIR: stubDir };
+  }
+
+  const privateDir = materializePrivateCursorConfig(stubDir, runtimeRoot);
+  return { ...e, CURSOR_CONFIG_DIR: privateDir };
 }
 
 /** `cwd` must resolve (symlinks included) inside one of the allowed roots. */
@@ -182,6 +291,8 @@ function parseArgs(argv) {
     else if (a === "--prompt-file") opts.promptFile = val();
     else if (a === "--out") opts.out = val();
     else if (a === "--model") opts.model = val();
+    else if (a === "--model-attempt") opts.modelAttempt = Number(val());
+    else if (a === "--fallback-reason") opts.fallbackReason = val();
     else if (a === "--read-only") opts.readOnly = true;
     else if (a.startsWith("--")) throw new Error(`unknown option ${a}`);
     else rest.push(a);
@@ -248,6 +359,25 @@ export async function main(argv, e = process.env) {
   if (!EXECUTORS.includes(executor))
     finish(64, { ...identity, error: "usage", detail: "unknown executor", executors: EXECUTORS });
 
+  let snapshot;
+  let selection;
+  try {
+    snapshot = loadPolicy(
+      e,
+      e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json",
+    );
+    selection = selectModel(
+      snapshot,
+      "implementation",
+      executor,
+      opts.modelAttempt ?? 1,
+      opts.fallbackReason,
+      opts.model,
+    );
+  } catch (err) {
+    finish(64, { ...identity, error: "model_policy_invalid", detail: err.message });
+  }
+
   const roots = (e.ARGUS_DELEGATE_ROOTS || "/workspace").split(":").filter(Boolean);
   const cwd = authorizedCwd(opts.cwd || process.cwd(), roots);
   if (!cwd)
@@ -257,6 +387,8 @@ export async function main(argv, e = process.env) {
       cwd: opts.cwd || process.cwd(),
       allowed_roots: roots,
     });
+
+  e = prepareExecutorEnv(executor, e, path.join(cwd, ".argus-delegate-runtime"));
 
   // Auth first: a missing credential blocks, it never reroutes.
   const auth = authStatus(executor, e);
@@ -269,14 +401,69 @@ export async function main(argv, e = process.env) {
   if (!prompt.trim()) finish(64, { ...identity, error: "usage", detail: "empty prompt" });
   if (opts.readOnly) prompt = `${READ_ONLY_PROMPT_PREFIX}\n\n${prompt}`;
 
+  const deadline = Date.now() + opts.timeout * 1000;
+  const attempts = [];
+  let outcome;
+  do {
+    outcome = await runAttempt(
+      executor,
+      opts,
+      e,
+      identity,
+      version,
+      cwd,
+      prompt,
+      snapshot,
+      selection,
+      deadline,
+    );
+    attempts.push(outcome.report);
+    if (
+      outcome.exit === 0 ||
+      !selection.has_next ||
+      outcome.report.timed_out ||
+      outcome.report.signal ||
+      outcome.report.interrupted ||
+      outcome.report.exit_code === 127 ||
+      /quota|rate.?limit|out of credits|unauthori[sz]ed|authentication|invalid.?api.?key|insufficient.*(credit|balance)/i.test(
+        outcome.report.tail + " " + outcome.report.stderr_tail,
+      )
+    )
+      break;
+    selection = selectModel(
+      snapshot,
+      "implementation",
+      executor,
+      selection.model_attempt + 1,
+      outcome.report.executor_error?.kind || "executor_failed",
+    );
+  } while (Date.now() < deadline);
+  finish(outcome.exit, { ...outcome.report, attempts });
+}
+
+async function runAttempt(
+  executor,
+  opts,
+  e,
+  identity,
+  version,
+  cwd,
+  prompt,
+  snapshot,
+  selection,
+  deadline,
+) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const out = path.resolve(opts.out || path.join(cwd, ".argus-delegate"));
   fs.mkdirSync(out, { recursive: true });
-  const base = path.join(out, `${executor}-${stamp}`);
+  const base = path.join(out, `${executor}-${stamp}-${randomUUID().slice(0, 8)}`);
+  const reportFile = `${base}.json`;
+  const evidence = { ...selection, task: snapshot.context, policy: snapshot.policy };
+  fs.writeFileSync(reportFile, JSON.stringify({ ...evidence, status: "started" }) + "\n");
   const lastMessageFile = `${base}.last-message.txt`;
   const cmd = buildCommand(
     executor,
-    { cwd, model: opts.model, readOnly: opts.readOnly, lastMessageFile },
+    { cwd, model: selection.configured_model, readOnly: opts.readOnly, lastMessageFile },
     e,
   );
   const args = cmd.promptVia === "argv" ? [...cmd.args, prompt] : cmd.args;
@@ -304,21 +491,30 @@ export async function main(argv, e = process.env) {
     }
   };
   let timedOut = false;
+  let interrupted = false;
   let hardKill;
   const stop = () => {
     killTree("SIGTERM");
     hardKill = setTimeout(() => killTree("SIGKILL"), KILL_GRACE_MS);
   };
-  const timer = setTimeout(() => {
-    timedOut = true;
+  const timer = setTimeout(
+    () => {
+      timedOut = true;
+      stop();
+    },
+    Math.max(1, deadline - Date.now()),
+  );
+  const interrupt = () => {
+    interrupted = true;
     stop();
-  }, opts.timeout * 1000);
-  for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, stop);
+  };
+  for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, interrupt);
 
   const { code, signal } = await new Promise((resolve) => {
     child.on("error", (err) => resolve({ code: 127, signal: String(err.code || err.message) }));
     child.on("close", (c, s) => resolve({ code: c, signal: s }));
   });
+  for (const sig of ["SIGTERM", "SIGINT"]) process.off(sig, interrupt);
   clearTimeout(timer);
   clearTimeout(hardKill);
   killTree("SIGKILL"); // grandchildren that outlived the CLI
@@ -331,22 +527,29 @@ export async function main(argv, e = process.env) {
   const tailSource = fs.existsSync(lastMessageFile) ? lastMessageFile : stdoutFile;
   const tail = fs.readFileSync(tailSource, "utf8").slice(-TAIL_CHARS);
   const jsonFail = !timedOut && code === 0 ? executorJsonFailure(executor, stdoutText) : null;
-  const exit = timedOut ? 124 : jsonFail || code !== 0 ? 1 : 0;
-  finish(exit, {
+  const exit = timedOut ? 124 : interrupted || jsonFail || code !== 0 ? 1 : 0;
+  const report = {
     ...identity,
+    ...evidence,
+    report_file: reportFile,
+    status: "finished",
     version,
-    model: opts.model ?? null,
+    model: selection.configured_model,
     cwd,
     read_only: opts.readOnly,
     read_only_enforcement: cmd.readOnlyEnforcement ?? "unknown",
     exit_code: code,
     signal,
     timed_out: timedOut,
+    interrupted,
     duration_ms: Date.now() - started,
     artifacts,
     tail,
+    stderr_tail: fs.readFileSync(stderrFile, "utf8").slice(-TAIL_CHARS),
     ...(jsonFail ? { executor_error: jsonFail } : {}),
-  });
+  };
+  fs.writeFileSync(reportFile, JSON.stringify(report, null, 2) + "\n");
+  return { exit, report };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

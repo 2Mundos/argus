@@ -61,22 +61,44 @@ let the operator **renew** an existing one without recreating it:
     credentials in it; anything else aborts the session;
   - the operator signs in with the link; the page shows a code; the operator
     pastes it **into the Argus page** (never into chat), and `POST …/code` writes
-    exactly those bytes plus Enter to the client's terminal. The code is
-    1–2048 characters of `[A-Za-z0-9._~#%+/=-]`, never logged, echoed or placed
-    in an event or a validation error. It is written with its Enter in a single
-    write, like a paste. The client may refuse a code and keep waiting, so up to 3
-    codes are accepted per session while it is `pending` and the client is alive
-    (`attempts` / `max_attempts` in the view; the 4th gets
+    exactly those bytes to the client's terminal, pauses briefly, then writes
+    Enter. The code is `<code>#<state>` (the `#` is required: the client refuses
+    a code without it), 1–2048 characters of `[A-Za-z0-9._~#%+/=-]`, never logged,
+    echoed or placed in an event or a validation error. **Value and Enter are two
+    writes**: measured on the shipped client (2.1.296), its input treats a long
+    chunk as a paste and swallows an Enter that arrives in the same chunk, so a
+    real code (about 100+ characters) was never submitted while a 60-character one
+    was. A second code is refused with `login_code_in_flight` until the client
+    answers the first;
+  - the client may refuse a code (`OAuth error … status code 400 Press Enter to
+    retry.`) and waits for Enter; that Enter makes it start the flow again with a
+    **new sign-in link and a new verifier**, so the refused code's link is dead.
+    Argus sends that Enter itself, then publishes the new link (`url`) with the
+    refusal, and the operator signs in again with the new link. A bare second code
+    is never written while the client waits for Enter: it would be swallowed as the
+    retry key. Up to 3 codes are accepted per session while it is `pending` and
+    the client is alive (`attempts` / `max_attempts` in the view; the 4th gets
     `login_attempts_exhausted`);
   - the client then prints the token. Only a private parser reads it; it is
-    stored as `{"oauth_token": …}` and appears nowhere else;
+    stored as `{"oauth_token": …}` and appears nowhere else. The client's renderer
+    only writes the cells that changed since its last frame and jumps over cells
+    that already show the right character (measured on 2.1.296: the success screen
+    is drawn over the prompt row, so it writes `sk-ant-`, jumps over the `o` of
+    "code", then the rest). Stripping escape codes from the stream therefore loses
+    characters, and a real login failed with `token_not_found`. The output is
+    replayed on a 1000x50 screen (`accounts/terminal.py`, the PTY's size) and the
+    token is read off that screen, strictly framed: after the success marker, the
+    `Your OAuth token (valid for …):` row, then exactly one non-empty row that is a
+    whole `sk-ant-oat…` token, then `Store this token securely.` Until that closing
+    row is drawn nothing is taken; anything else between label and closing row (a
+    wrapped, cut or second value) fails with `token_not_found` and stores nothing;
   - at most 2 sessions, 15 minutes each, one per starting token; the whole
     process group (and a docker container, if used) dies on cancel, expiry or
     failure, and every concurrent teardown caller waits for the one shielded
     teardown;
   - stdout/stderr and raw terminal bytes are never logged or returned; only the
     fixed states (`pending`, `completed`, `failed`, `cancelled`, `expired`), a
-    `phase` (`waiting_for_code`, `finishing`) and fixed reason codes. The client's
+    `phase` (`waiting_for_code`, `finishing`, `renewing_link` while the client restarts after a refusal; no link and no code are accepted then) and fixed reason codes. The client's
     output is classified by fixed markers into a closed code: `oauth_<status>`
     (its "OAuth error … status code NNN"; only the number), `code_invalid`,
     `token_not_found` (it reported success but no token was recognised; nothing is
@@ -99,8 +121,11 @@ let the operator **renew** an existing one without recreating it:
 - A `setup-token` token cannot be refreshed; it lasts what Anthropic grants. An
   expired one is renewed with this wizard.
 - Whether the client's prompts change between versions. The parser keys on the
-  URL and the `sk-ant-oat` token only, and a failed parse is a fixed reason
-  (`no_url`, `client_exited`), not a stall.
+  URL, the success screen's three fixed rows and the `sk-ant-oat` prefix; a
+  changed layout is a fixed reason (`token_not_found`, `no_url`,
+  `client_exited`), never a guessed token. Tests replay bytes captured from the
+  real 2.1.296 client (against a local stand-in for the token endpoint, with a
+  fake token); re-capture them when the pinned client changes.
 
 # 5. Constraints
 
@@ -113,7 +138,7 @@ let the operator **renew** an existing one without recreating it:
 
 - `packages/core`: `claude_auth.py` (shape validation, derived kind, redacted
   summary).
-- `apps/api`: `accounts/login_base.py` (shared), `accounts/claude_login.py`,
+- `apps/api`: `accounts/login_base.py` (shared), `accounts/claude_login.py`, `accounts/terminal.py` (screen replay),
   routes under `/api/accounts/claude-login`, anthropic validation on create and
   credential update, settings `ARGUS_CLAUDE_LOGIN_IMAGE` / `ARGUS_CLAUDE_BIN`,
   422 bodies no longer echo request input.

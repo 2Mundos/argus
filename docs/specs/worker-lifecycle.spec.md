@@ -36,8 +36,11 @@ metadata, but is not the central repository or PR operator. These boundaries do
 not alter the task/lease semantics below. A task-result `review` gate and the
 PR's own CI/review are distinct; neither implies the other. PR status must be
 tied to the exact reported head SHA. Merge remains with a human or existing
-repository policy unless separately authorized; this spec grants no automatic
-merge authority.
+repository policy unless a task or pinned delivery policy explicitly authorizes
+it; Argus grants no automatic merge authority. When authorized, the NanoClaw
+delivery worker may merge under the preconditions injected by `renderTask`
+(required checks green on the exact head, P1–P3 findings resolved, no
+force_merge or bypass); merge does not authorize manual Production operations.
 
 # 2. Non-Goals
 
@@ -475,33 +478,47 @@ Repository access is separate from engine and executor accounts. A distinct
 Argus `repository` account lease is requested only for tasks requiring the
 `repository:write` capability. Pools configure a project-to-HTTPS
 `owner/repository` allowlist; NanoClaw rejects an unconfigured project, host,
-or repository before applying the lease. The account provider is `gitea` and
-must be a dedicated service credential whose upstream permissions are limited
-to the configured repository. After the task, NanoClaw unassigns the OneCLI
-secret and releases the `repository` lease. Tasks without this capability do
-not acquire the credential and retain existing behavior.
+or repository before applying the lease. The account provider is `gitea`.
+After the task, NanoClaw unassigns both OneCLI repository secrets and releases
+the task-scoped `repository` lease. Tasks without this capability do not
+acquire the credential and retain existing behavior.
 
-The operator registers the dedicated Gitea service account through Argus's account registry
-(provider `gitea`, kind `api_key`, credential fields `username` and `token`). The username is the
-service-account login used for Git smart-HTTP Basic authentication; both fields are required and
-validated. The registry
-writes it to the SOPS-backed secret store; the database row contains only the
-`sops:` reference. Configure the matching project URL in the NanoClaw pool's
-`nanoclaw.repositories` map. Do not reuse a personal token or engine account.
+Least privilege is preferred: use a dedicated Gitea bot/service identity with
+permissions limited upstream to the configured repository when one is
+available. For the accepted deployment, the operator cannot create a bot
+account and has chosen the existing personal Gitea PAT for both REST and Git.
+This personal-PAT fallback is permitted by that operator decision; it is not a
+repo-scoped PAT and retains the user's Gitea account permissions. Do not imply
+that proxy path scoping narrows those upstream permissions.
+
+The operator registers the Gitea account through Argus's account registry
+(provider `gitea`, kind `api_key`, credential fields `username` and `token`).
+The username is required for Git smart-HTTP Basic authentication. The registry
+validates both fields, writes the credential to the SOPS-backed secret store,
+and keeps only the `sops:` reference in the database row. The dashboard's
+Add account dialog offers `gitea` with username and token fields (the token is a
+password input and is never shown again). Configure the
+matching project URL in the NanoClaw pool's `nanoclaw.repositories` map.
 The NanoClaw host writes two `generic` secrets to OneCLI 1.42, both scoped to the exact Gitea host:
 the REST secret matches only `/api/v1/repos/{owner}/{repository}/*` and injects
 `Authorization: token <PAT>`; the Git smart-HTTP secret matches only
 `/{owner}/{repository}.git/*` and injects `Authorization: Basic <base64(username:PAT)>`.
 The latter is created only in the trusted host-side lease mapper and is stored only in OneCLI's
-encrypted secret store. Base64 is encoding, not encryption: neither form may enter task data,
-agent/model state, logs, process arguments or artifacts. The official API contract documents the
+encrypted secret store. Both are injected only through the OneCLI egress proxy, for the exact
+configured Gitea host and allowlisted repository API/Git paths; the raw PAT never enters task data,
+model prompts, agent environment/files, process arguments, logs or artifacts. Base64 is encoding,
+not encryption. Path scoping is a compensating control at the trusted proxy boundary, not a
+restriction on the personal PAT itself; residual risk remains if that proxy/admin boundary is
+bypassed. The official API contract documents the
 `token` scheme, while Gitea's Git-over-HTTP flow uses Basic with the service username and PAT as
 password ([Gitea 1.26 API authentication](https://docs.gitea.com/api/1.26/)); the target
 deployment version is not configured in this repository and must be confirmed during operator
 provisioning.
-Both patterns are repository-specific, and the upstream identity must also be restricted to that
-single configured repository. The worker's API helper separately enforces its exact URL allowlist.
-Do not use a manager token or broad human PAT.
+Both patterns are repository-specific, and the worker's API helper separately enforces its exact
+URL allowlist. Prefer the repo-limited bot identity when available; this deployment's personal PAT
+is explicitly accepted only through SOPS and exact OneCLI host/path injection for the allowlisted
+repository. Argus admin/API tokens and Hermes/model-provider credentials are forbidden for
+repository access.
 For repository identity, configuration may use either `/owner/repository` or
 `/owner/repository.git`. Normalize exactly one terminal `.git` from the
 repository component for REST API paths and allowlist comparisons; pass the
@@ -515,6 +532,30 @@ OneCLI's documented generic-secret field is `injectionConfig`, and its path
 matcher supports a single pattern with `*` wildcard forms ([OneCLI 1.42 secret
 service](https://github.com/onecli/onecli/blob/v1.42.0/packages/api/src/services/secret-service.ts),
 [path-matching contract](https://trybrowzer.com/docs/onecli/credential-injection/injection-modes-reference#path-matching)).
+Do not use a `/**` suffix for Git paths: OneCLI 1.42 `path_matches` treats that as segment
+wildcards and it does not match real smart-HTTP paths such as
+`/{owner}/{repo}.git/info/refs`; injection silently skips and Git sees no `Authorization`.
+Git also does not honor `SSL_CERT_FILE` / `NODE_EXTRA_CA_CERTS` for HTTPS verification.
+The Argus NanoClaw install sets `GIT_SSL_CAINFO` to the same combined gateway CA bundle path
+as `SSL_CERT_FILE` when mounted (otherwise the gateway-only CA path from OneCLI container
+config), so `git clone`/`git fetch` through the proxy trust the MITM CA without disabling
+verification. The Codex agent-runner rebuilds child process env from
+`CODEX_ENV_ALLOWLIST` in `container/agent-runner`; the Argus install overlay must keep
+`GIT_HTTP_PROXY_AUTHMETHOD=basic` and `GIT_TERMINAL_PROMPT=0` alongside the gateway
+`GIT_SSL_CAINFO` and proxy variables so Git authenticates to the OneCLI SDK tunnel, plus
+`CURSOR_CONFIG_DIR` and `XDG_CONFIG_HOME` so `argus-delegate` can materialize the gateway's
+HTTP/1.1 Cursor stubs into a writable config dir, and `ARGUS_REPOSITORIES_JSON` so
+`argus-gitea-api` sees the same project-to-URL allowlist as the NanoClaw host, while still
+dropping raw provider secrets (API keys, tokens). The fleet sets `ARGUS_REPOSITORIES_JSON`
+on the NanoClaw host container only; `install.sh` copies it into the agent container's
+`contributedEnv` when composing a session. Inspecting `Docker` container `Config.Env` or
+running `docker exec git` is not sufficient: those see the container entry env, not the
+filtered env Codex passes to `tools.exec_command`; acceptance requires a `repository:write`
+task whose engine performs a native HTTPS `git clone`/`fetch` with no `git config` CA or
+proxy overrides. Repository credentials remain scoped to `…/repo.git/*`
+only while the `repository` lease is held; release removes OneCLI assignments (a post-task
+probe must not be mistaken for a live-task failure). Workers clone at runtime over HTTPS
+via the injected proxy; project toolchain images do not bake source repositories.
 It reconciles the complete currently-held engine/executor/repository lease set (including both
 repository secrets)
 because OneCLI's set-secrets endpoint replaces assignments, and the
@@ -527,17 +568,26 @@ admin access; the agent container has only the existing egress-proxy route,
 never the OneCLI admin API or raw token. Git/REST use HTTPS through the proxy,
 not SSH credentials. The worker API helper has no token parameter, verifies an
 exact repository allowlist, supports PR create/read/update and CI status reads
-tied to the PR head SHA. A retry of PR creation returns an existing open PR for
-the same source branch and base rather than creating a duplicate. It has no
-merge operation and uses an Undici proxy
-dispatcher for Node fetch (no direct-network fallback). The image overlay
-installs this helper and its pinned Undici dependency. Configure the same
-project-to-repository allowlist in the worker container as
-`ARGUS_REPOSITORIES_JSON`; without it the helper fails closed.
+tied to the PR head SHA, plus read-only `issue-get` (issue tracker item by
+number) and `list-prs` (paginated PR list with explicit `--state` and capped
+`--limit`). The `get` command is pull-request-only; a 404 on `get` does not
+imply auth failure when the tracker number is an issue — use `issue-get`.
+A retry of PR creation returns an existing open PR for the same source branch and
+base rather than creating a duplicate. `updatePullRequest` does not accept a
+merge flag; authorized delivery merges use the Gitea pull-request merge REST
+endpoint through the same allowlisted OneCLI-proxied `GiteaApi.request` path as
+other helper calls. The helper uses an Undici proxy dispatcher for Node fetch
+(no direct-network fallback). The image overlay installs this helper and its
+pinned Undici dependency. Configure the same project-to-repository allowlist in
+the worker container as `ARGUS_REPOSITORIES_JSON`; without it the helper fails
+closed.
 
 The secret must not appear in task spec/result, model prompt, agent
 environment/files, process arguments, logs, or artifacts. Argus receives only
-non-secret delivery metadata. Merge remains human/repository-policy controlled.
+non-secret delivery metadata. The injected task contract (`renderTask`) forbids
+merge by default and states preconditions when a task sets
+`input.delivery.allow_merge` to boolean `true` or when pinned project delivery
+policy in knowledge authorizes it (spec prose alone is not a programmatic grant).
 
 Consequences for Argus:
 
@@ -563,7 +613,9 @@ Consequences for Argus:
   2. Long-polls `POST /api/tasks/claim` in code (no LLM loop burns tokens
      polling), one task at a time.
   3. Injects the claimed task (spec, acceptance, pinned knowledge bodies,
-     reply instructions) as an inbound message, waking the agent container.
+     reply instructions, repository delivery/merge rules when applicable, and
+     the mandatory `argus-delegate` implementation contract from `renderTask`)
+     as an inbound message, waking the agent container.
   4. Turns replies into Argus calls: a plain reply is a progress note;
      `COMPLETE:`/`FAIL:`/`ASK:` prefixes complete, fail, or ask. A 409 drops the
      reply and moves on.
@@ -618,6 +670,33 @@ database never holds a secret.
   Admins register accounts (`POST /api/accounts`) either with the credential,
   which Argus writes to the SOPS file as `account-<id>`, or with a `secret_ref`
   to an entry already there.
+- **Edit, replace credential, delete** (admin). `PATCH /api/accounts/{id}` changes
+  `name` (unique; `409 name_taken`), `priority`, `max_leases`, `labels` and
+  `enabled`; it never touches the credential and never returns it. The credential
+  is replaced only by `PUT /api/accounts/{id}/credential` (or the Claude renewal
+  login). The dashboard's **Replace credential** (every provider except
+  `anthropic`, which has Renew credential) sends a blank-by-default JSON document,
+  pasted or read from a file the operator picks; stored values are never loaded
+  into the form. The server validates it with the provider's own check where one
+  exists (`gitea`; `openai`, `anthropic` as for registration) and otherwise
+  requires a non-empty JSON object. Replacing changes nothing but the secret: a
+  disabled account stays disabled. A document is only stored, never treated as
+  proof of authentication.
+  Disabling is reversible and is not deletion.
+  `DELETE /api/accounts/{id}?confirm_name=<name>` removes the registry row, its
+  usage history and its ended leases, and the `account-*` secret Argus generated
+  unless another account still references it (operator-managed refs are never
+  removed). `confirm_name` must equal the current name (`409 name_mismatch`:
+  a renamed or wrong target is refused) and an account with an active lease is
+  refused (`409 account_in_use`); disabled accounts can be deleted.
+  **The SOPS file and SQLite do not share a transaction.** The secret is removed
+  inside the SQL transaction, so a store failure rolls the rows back; if the SQL
+  commit then fails after the secret was removed, the route writes the exact prior
+  value back (best effort compensation, not atomicity). If that restore also
+  fails the error (`secret_restore_failed`) names the entry, never a value, and the
+  operator recovers it from the secrets file backup. An `account.deleted` event
+  records name and provider, never a credential. The dashboard asks the operator to
+  type the account's name.
 - **Leasing** (`POST /api/accounts/lease {providers}`, most preferred first):
   Argus picks the highest-priority usable account among those providers (the
   agent's provider order breaks ties, then the least-leased account) and returns

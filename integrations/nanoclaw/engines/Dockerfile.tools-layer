@@ -1,0 +1,23 @@
+# Argus tools layer for the NanoClaw agent image. The image built by NanoClaw is
+# node:22-slim plus chromium: it has no ssh/rsync (so a worker cannot clone over
+# ssh or sync files) and no Python toolchain (so a worker cannot run the gates of
+# a Python repo, which is what makes a worker able to prove its own work instead
+# of handing unverified code back). This layer adds both, carries the Argus bin
+# assets (argus-delegate and its model policy) so an image built from any BASE
+# gets the current ones, and fails the build if a required binary is missing.
+# Built by apply-tools-layer.sh.
+ARG BASE
+FROM ${BASE}
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      openssh-client rsync python3 python3-venv make ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && for b in ssh ssh-keygen ssh-keyscan rsync git python3 make; do command -v "$b" || exit 1; done
+# uv as a standalone binary: no pip, no PEP 668 workarounds, same version for every image.
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh \
+ && command -v uv && uv --version
+COPY --chmod=0755 argus-delegate.mjs /usr/local/bin/argus-delegate
+COPY --chmod=0644 model-policy.mjs model-policy.defaults.json /usr/local/bin/
+USER node
+LABEL dev.argus.tools-layer="openssh-client rsync python3 uv make argus-delegate model-policy"

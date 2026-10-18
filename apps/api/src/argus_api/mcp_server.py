@@ -150,11 +150,15 @@ async def _call(
     content: bytes | None = None,
     headers: dict[str, str] | None = None,
 ) -> Any:
-    auth = (ctx.headers or {}).get("authorization")
-    if not auth:
+    raw = ((ctx.headers or {}).get("authorization") or "").strip()
+    if not raw:
         raise ToolError(
             "missing token: connect with the header 'Authorization: Bearer <token>'"
         )
+    # The REST layer authenticates through HTTPBearer, which requires the scheme.
+    # Forward the header verbatim, only adding "Bearer " when the client sent a
+    # bare token, so the downstream call is authenticated instead of rejected.
+    auth = raw if raw.lower().startswith("bearer ") else f"Bearer {raw}"
     assert _app is not None
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=_app), base_url="http://argus", timeout=60

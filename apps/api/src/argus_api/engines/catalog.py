@@ -75,8 +75,10 @@ _DECLARED: list[tuple[str, str, EngineRole, Axes, list[str], str]] = [
             executor="agent",
             account_provider="cursor",
         ),
-        ["CURSOR_API_KEY", "agent-login"],
-        "Blocked without CURSOR_API_KEY or a login made in the container.",
+        ["argus-account", "CURSOR_API_KEY", "agent-login"],
+        "Delegated executor only (never an engine). An Argus cursor account (an "
+        "imported login or an API key) reaches it through the vault; blocked "
+        "without one or a login made in the container.",
     ),
 ]
 
@@ -103,6 +105,18 @@ def _readiness(record: dict) -> Readiness:
         except ValueError:
             facts[name] = Fact(ok=None, detail="unreadable ledger entry")
     return Readiness(**facts)
+
+
+def _with_tools(r: Readiness, tools: object) -> Readiness:
+    """A binary missing from the image makes `installed` false, named. An absent,
+    unreadable or inconclusive record (docker failed) changes nothing: not checked."""
+    try:
+        fact = Fact.model_validate(tools or {})
+    except ValueError:
+        return r
+    if fact.ok is False:
+        return r.model_copy(update={"installed": fact})
+    return r
 
 
 def _with_registry(r: Readiness, summary: AccountsSummary) -> Readiness:
@@ -139,7 +153,7 @@ def build(
     entries: list[EngineEntry] = []
     for eid, label, role, axes, auth, notes in _DECLARED:
         rec = ledger.get(eid, {})
-        r = _readiness(rec)
+        r = _with_tools(_readiness(rec), rec.get("tools"))
         summary: AccountsSummary | None = None
         if accounts is not None and axes.account_provider:
             summary = accounts.get(axes.account_provider, AccountsSummary())
