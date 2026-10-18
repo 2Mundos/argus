@@ -103,6 +103,15 @@ async def update_account(
 ) -> Account:
     row = await _row(tx.conn, account_id)
     fields: dict[str, Any] = {}
+    if body.name is not None and body.name != row["name"]:
+        async with tx.conn.execute(
+            "SELECT 1 FROM accounts WHERE name = ?", (body.name,)
+        ) as cur:
+            if await cur.fetchone():
+                raise ConflictError(
+                    f"an account named {body.name!r} already exists", code="name_taken"
+                )
+        fields["name"] = body.name
     if body.priority is not None:
         fields["priority"] = body.priority
     if "max_leases" in body.model_fields_set:
@@ -136,6 +145,53 @@ async def update_account(
         if fields.get("state") == "available":
             await release_waiting_tasks(tx)
     return await get_account(tx.conn, account_id, tx.now)
+
+
+async def delete_account(
+    tx: Tx, account_id: str, confirm_name: str, actor: str, store: SecretStore
+) -> None:
+    """Remove an account, its usage history, ended leases, and the secret Argus
+    wrote for it. `confirm_name` must be the account's current name, so a stale
+    or wrong target is refused. An account with an active lease is refused.
+    The secret is removed last, inside the transaction: if the store fails, the
+    whole delete rolls back."""
+    row = await _row(tx.conn, account_id)
+    if confirm_name != row["name"]:
+        raise ConflictError(
+            "confirmation does not match the account's current name",
+            code="name_mismatch",
+        )
+    async with tx.conn.execute(
+        "SELECT count(*) FROM account_leases WHERE account_id = ? AND released_at IS NULL",
+        (account_id,),
+    ) as cur:
+        active = (await cur.fetchone() or (0,))[0]
+    if active:
+        raise ConflictError(
+            f"account has {active} active lease(s); wait for release or disable it",
+            code="account_in_use",
+        )
+    await tx.conn.execute(
+        "DELETE FROM account_usage WHERE account_id = ?", (account_id,)
+    )
+    await tx.conn.execute(
+        "DELETE FROM account_leases WHERE account_id = ?", (account_id,)
+    )
+    await tx.conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+    # Only the entry Argus created for this account; an operator-managed
+    # `secret_ref` into the SOPS file is left alone.
+    secret = ref_name(row["secret_ref"])
+    owned = secret == f"account-{account_id}"
+    await record(
+        tx,
+        actor,
+        "account",
+        account_id,
+        "account.deleted",
+        {"name": row["name"], "provider": row["provider"], "secret_removed": owned},
+    )
+    if owned and secret is not None:
+        await store.delete(secret)
 
 
 async def reconcile_secrets(tx: Tx, store: SecretStore) -> None:

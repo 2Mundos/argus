@@ -230,6 +230,22 @@ async def update_account(
         return await service.update_account(tx, account_id, body, caller.actor)
 
 
+@router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_account(
+    account_id: str,
+    confirm_name: str,
+    db: DbDep,
+    caller: AdminDep,
+    secrets: SecretsDep,
+) -> None:
+    """Delete an account and its encrypted credential. `confirm_name` must equal
+    the current name; `409 account_in_use` while a lease is active."""
+    async with db.write() as tx:
+        await service.delete_account(
+            tx, account_id, confirm_name, caller.actor, secrets
+        )
+
+
 @router.post("/lease")
 async def lease_account(
     body: LeaseRequest, db: DbDep, agent_id: AgentDep, secrets: SecretsDep

@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Generator
 from datetime import timedelta
 from pathlib import Path
@@ -497,3 +498,142 @@ async def test_one_account_held_in_both_roles_exhausts_per_role(
         )
     assert result.lease is None
     assert await active(db) == [("engine", only)]
+
+
+def _create(client: TestClient, name: str) -> dict:
+    res = client.post(
+        "/api/accounts",
+        json={"name": name, "provider": "acme", "credential": {"api_key": "k"}},
+        headers=ADMIN,
+    )
+    assert res.status_code == 201
+    return res.json()
+
+
+def test_edit_fields_and_name_conflict(client: TestClient) -> None:
+    one, two = _create(client, "one"), _create(client, "two")
+    res = client.patch(
+        f"/api/accounts/{one['id']}",
+        json={"name": "renamed", "priority": 5, "max_leases": 2, "enabled": False},
+        headers=ADMIN,
+    )
+    body = res.json()
+    assert (body["name"], body["priority"], body["max_leases"]) == ("renamed", 5, 2)
+    assert body["state"] == "disabled"
+    assert body["secret_ref"] == one["secret_ref"]
+    res = client.patch(
+        f"/api/accounts/{two['id']}", json={"name": "renamed"}, headers=ADMIN
+    )
+    assert (res.status_code, res.json()["detail"]["code"]) == (409, "name_taken")
+    # Renaming to its own name is a no-op, not a conflict.
+    res = client.patch(
+        f"/api/accounts/{two['id']}", json={"name": "two"}, headers=ADMIN
+    )
+    assert res.status_code == 200
+
+
+def test_delete_needs_admin_and_the_current_name(client: TestClient) -> None:
+    account = _create(client, "doomed")
+    url = f"/api/accounts/{account['id']}"
+    assert client.delete(url, params={"confirm_name": "doomed"}).status_code == 401
+    assert client.delete(url, headers=ADMIN).status_code == 422
+    res = client.delete(url, params={"confirm_name": "other"}, headers=ADMIN)
+    assert (res.status_code, res.json()["detail"]["code"]) == (409, "name_mismatch")
+    client.patch(url, json={"name": "renamed"}, headers=ADMIN)
+    res = client.delete(url, params={"confirm_name": "doomed"}, headers=ADMIN)
+    assert (res.status_code, res.json()["detail"]["code"]) == (409, "name_mismatch")
+    assert client.get(url, headers=ADMIN).status_code == 200
+    res = client.delete(url, params={"confirm_name": "renamed"}, headers=ADMIN)
+    assert res.status_code == 204
+    assert client.get(url, headers=ADMIN).status_code == 404
+    assert (
+        client.delete(
+            url, params={"confirm_name": "renamed"}, headers=ADMIN
+        ).status_code
+        == 404
+    )
+
+
+def test_delete_refuses_active_lease_then_succeeds_once_released(
+    client: TestClient,
+) -> None:
+    account = _create(client, "busy")
+    url = f"/api/accounts/{account['id']}"
+    worker = register(client)
+    client.post("/api/accounts/lease", json={"providers": ["acme"]}, headers=worker)
+    res = client.delete(url, params={"confirm_name": "busy"}, headers=ADMIN)
+    assert (res.status_code, res.json()["detail"]["code"]) == (409, "account_in_use")
+    assert client.get(url, headers=ADMIN).json()["active_leases"] == 1
+    client.post("/api/accounts/release", headers=worker)
+    assert (
+        client.delete(url, params={"confirm_name": "busy"}, headers=ADMIN).status_code
+        == 204
+    )
+
+
+def test_delete_removes_usage_leases_and_secret_but_not_other_accounts(
+    client: TestClient,
+) -> None:
+    gone, kept = _create(client, "gone"), _create(client, "kept")
+    worker = register(client)
+    leased = client.post(
+        "/api/accounts/lease", json={"providers": ["acme"]}, headers=worker
+    ).json()
+    client.post(
+        f"/api/accounts/{leased['account_id']}/usage",
+        json={"input_tokens": 3, "output_tokens": 4, "cost_usd": 0.1},
+        headers=worker,
+    )
+    client.post("/api/accounts/release", headers=worker)
+    # Disabled accounts, with history, are deletable.
+    for account in (gone, kept):
+        client.patch(
+            f"/api/accounts/{account['id']}", json={"enabled": False}, headers=ADMIN
+        )
+    secrets = app.state.secrets
+    assert f"account-{gone['id']}" in secrets.names()
+    res = client.delete(
+        f"/api/accounts/{gone['id']}", params={"confirm_name": "gone"}, headers=ADMIN
+    )
+    assert res.status_code == 204
+    assert f"account-{gone['id']}" not in secrets.names()
+    assert f"account-{kept['id']}" in secrets.names()
+    names = [a["name"] for a in client.get("/api/accounts", headers=ADMIN).json()]
+    assert names == ["kept"]
+
+
+def test_delete_rolls_back_when_the_secret_store_fails(client: TestClient) -> None:
+    account = _create(client, "sticky")
+    url = f"/api/accounts/{account['id']}"
+    secrets = app.state.secrets
+
+    async def fail(name: str) -> None:
+        raise SecretStoreError("sops unset failed")
+
+    original, secrets.delete = secrets.delete, fail
+    try:
+        res = client.delete(url, params={"confirm_name": "sticky"}, headers=ADMIN)
+    finally:
+        secrets.delete = original
+    assert res.status_code == 503
+    assert client.get(url, headers=ADMIN).status_code == 200
+    assert f"account-{account['id']}" in secrets.names()
+
+
+def test_delete_leaves_an_operator_managed_secret(
+    client: TestClient,
+) -> None:
+    secrets = app.state.secrets
+    asyncio.run(secrets.put("shared", {"api_key": "k"}))
+    res = client.post(
+        "/api/accounts",
+        json={"name": "ref", "provider": "acme", "secret_ref": "sops:shared"},
+        headers=ADMIN,
+    )
+    res = client.delete(
+        f"/api/accounts/{res.json()['id']}",
+        params={"confirm_name": "ref"},
+        headers=ADMIN,
+    )
+    assert res.status_code == 204
+    assert "shared" in secrets.names()

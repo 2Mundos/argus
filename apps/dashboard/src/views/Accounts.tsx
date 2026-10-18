@@ -11,6 +11,7 @@ import {
 import { type Account, api, call } from "../api";
 import { relative } from "../format";
 import { useLiveData } from "../live";
+import { DeleteAccount, EditAccount } from "./AccountDialogs";
 import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
 
@@ -19,12 +20,15 @@ export function Accounts() {
   const [addingCodex, setAddingCodex] = useState(false);
   // A Claude wizard: new (`{}`) or renewing the given account.
   const [claude, setClaude] = useState<{ renew?: Account }>();
+  const [editing, setEditing] = useState<Account>();
+  const [deleting, setDeleting] = useState<Account>();
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
-  const { data: accounts, error: loadError } = useLiveData(
-    () => call(api.GET("/api/accounts")),
-    [],
-  );
+  const {
+    data: accounts,
+    error: loadError,
+    reload: reloadList,
+  } = useLiveData(() => call(api.GET("/api/accounts")), []);
 
   async function toggle(account: Account) {
     setError(undefined);
@@ -35,6 +39,7 @@ export function Accounts() {
           body: { enabled: account.state === "disabled" },
         }),
       );
+      reloadList();
     } catch (err) {
       setError((err as Error).message);
     }
@@ -73,7 +78,7 @@ export function Accounts() {
       </p>
       {notice && <p className="small">{notice}</p>}
       {(error || loadError) && <p className="error">{error ?? loadError?.message}</p>}
-      <table>
+      <table className="accounts-table">
         <thead>
           <tr>
             <th>Name</th>
@@ -89,38 +94,65 @@ export function Accounts() {
         <tbody>
           {(accounts ?? []).map((a) => (
             <tr key={a.id}>
-              <td>
+              <td data-label="Name">
                 {a.name} <span className="muted small">{a.kind.replace("_", " ")}</span>
               </td>
-              <td>{a.provider}</td>
-              <td>
+              <td data-label="Provider">{a.provider}</td>
+              <td data-label="State">
                 <span className={`badge account-${a.state}`}>{a.state}</span>
                 {a.state === "exhausted" && (
                   <span className="muted small"> resets {relative(a.exhausted_until)}</span>
                 )}
                 {a.disabled_reason && <span className="muted small"> {a.disabled_reason}</span>}
               </td>
-              <td>{a.priority}</td>
-              <td>
+              <td data-label="Priority">{a.priority}</td>
+              <td data-label="Leases">
                 {a.active_leases}
                 {a.max_leases != null && ` / ${a.max_leases}`}
               </td>
-              <td className="small">{usage(a.usage_24h)}</td>
-              <td className="small">{usage(a.usage_total)}</td>
+              <td data-label="Last 24 h" className="small">
+                {usage(a.usage_24h)}
+              </td>
+              <td data-label="Total" className="small">
+                {usage(a.usage_total)}
+              </td>
               <td>
-                <button type="button" className="link" onClick={() => toggle(a)}>
-                  {a.state === "disabled" ? "Enable" : "Disable"}
-                </button>
-                {a.provider === "anthropic" && (
+                <div className="account-actions">
                   <button
                     type="button"
                     className="link"
-                    aria-label={`Renew credential of ${a.name}`}
-                    onClick={() => setClaude({ renew: a })}
+                    aria-label={`Edit ${a.name}`}
+                    onClick={() => setEditing(a)}
                   >
-                    Renew credential
+                    Edit
                   </button>
-                )}
+                  <button
+                    type="button"
+                    className="link"
+                    aria-label={`${a.state === "disabled" ? "Enable" : "Disable"} ${a.name}`}
+                    onClick={() => toggle(a)}
+                  >
+                    {a.state === "disabled" ? "Enable" : "Disable"}
+                  </button>
+                  {a.provider === "anthropic" && (
+                    <button
+                      type="button"
+                      className="link"
+                      aria-label={`Renew credential of ${a.name}`}
+                      onClick={() => setClaude({ renew: a })}
+                    >
+                      Renew credential
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="link danger"
+                    aria-label={`Delete ${a.name}`}
+                    onClick={() => setDeleting(a)}
+                  >
+                    Delete
+                  </button>
+                </div>
               </td>
             </tr>
           ))}
@@ -133,7 +165,36 @@ export function Accounts() {
           )}
         </tbody>
       </table>
-      {adding && <AddAccount onClose={() => setAdding(false)} />}
+      {adding && (
+        <AddAccount
+          onClose={() => {
+            setAdding(false);
+            reloadList();
+          }}
+        />
+      )}
+      {editing && (
+        <EditAccount
+          account={editing}
+          onClose={() => setEditing(undefined)}
+          onDone={(message) => {
+            setEditing(undefined);
+            setNotice(message);
+            reloadList();
+          }}
+        />
+      )}
+      {deleting && (
+        <DeleteAccount
+          account={deleting}
+          onClose={() => setDeleting(undefined)}
+          onDone={(message) => {
+            setDeleting(undefined);
+            setNotice(message);
+            reloadList();
+          }}
+        />
+      )}
       {claude && (
         <ClaudeAccount
           renew={claude.renew}

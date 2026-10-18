@@ -178,7 +178,12 @@ export interface paths {
         get: operations["get_account_api_accounts__account_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Account
+         * @description Delete an account and its encrypted credential. `confirm_name` must equal
+         *     the current name; `409 account_in_use` while a lease is active.
+         */
+        delete: operations["delete_account_api_accounts__account_id__delete"];
         options?: never;
         head?: never;
         /** Update Account */
@@ -1555,6 +1560,8 @@ export interface components {
             } | null;
             /** Max Leases */
             max_leases?: number | null;
+            /** Name */
+            name?: string | null;
             /** Priority */
             priority?: number | null;
         };
@@ -4178,6 +4185,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Account"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_account_api_accounts__account_id__delete: {
+        parameters: {
+            query: {
+                confirm_name: string;
+            };
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

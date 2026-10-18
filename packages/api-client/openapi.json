@@ -317,6 +317,19 @@
             ],
             "title": "Max Leases"
           },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
           "priority": {
             "anyOf": [
               {
@@ -6950,6 +6963,54 @@
       }
     },
     "/api/accounts/{account_id}": {
+      "delete": {
+        "description": "Delete an account and its encrypted credential. `confirm_name` must equal\nthe current name; `409 account_in_use` while a lease is active.",
+        "operationId": "delete_account_api_accounts__account_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "confirm_name",
+            "required": true,
+            "schema": {
+              "title": "Confirm Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Account",
+        "tags": [
+          "accounts"
+        ]
+      },
       "get": {
         "operationId": "get_account_api_accounts__account_id__get",
         "parameters": [

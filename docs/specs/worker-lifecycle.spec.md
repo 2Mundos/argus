@@ -630,6 +630,20 @@ database never holds a secret.
   Admins register accounts (`POST /api/accounts`) either with the credential,
   which Argus writes to the SOPS file as `account-<id>`, or with a `secret_ref`
   to an entry already there.
+- **Edit and delete** (admin). `PATCH /api/accounts/{id}` changes `name`
+  (unique; `409 name_taken`), `priority`, `max_leases`, `labels` and `enabled`;
+  it never touches the credential, which is replaced only by
+  `PUT /api/accounts/{id}/credential` (or a renewal login) and is never returned.
+  Disabling is reversible and is not deletion. `DELETE /api/accounts/{id}?confirm_name=<name>`
+  removes the registry row, its usage history, its ended leases, and the
+  `account-<id>` secret Argus wrote (an operator-managed `secret_ref` is left in
+  the file). `confirm_name` must equal the current name (`409 name_mismatch`, so a
+  renamed or wrong target is refused) and an account with an active lease is
+  refused (`409 account_in_use`); disabled accounts can be deleted. The secret is
+  removed inside the transaction, so a secret-store failure rolls everything back.
+  An `account.deleted` event records name and provider, never a credential. The
+  dashboard offers Edit and Delete per row; Delete asks the operator to type the
+  account's name.
 - **Leasing** (`POST /api/accounts/lease {providers}`, most preferred first):
   Argus picks the highest-priority usable account among those providers (the
   agent's provider order breaks ties, then the least-leased account) and returns
