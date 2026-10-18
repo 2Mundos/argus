@@ -92,9 +92,10 @@ on create and replace, and deliver it to the **delegated** Cursor CLI
   `ARGUS_EXECUTOR_PROVIDERS`; tests in `test_cursor_accounts.py`.
 - `integrations/nanoclaw`: `argus-accounts.ts` (mapping, exchange, apply),
   `argus-cursor-stub.ts`, `argus.ts` (`ARGUS_EXECUTOR_PROVIDERS`),
-  `argus-delegate` (`prepareExecutorEnv`: consume read-only injected
-  `cli-config.json` when it already sets HTTP/1.1; never write RO credential
-  stubs), `install.sh` hooks into `onecli.ts`.
+  `argus-delegate` (`prepareExecutorEnv`: copy sentinel stubs into a per-run
+  writable `CURSOR_CONFIG_DIR` when gateway mounts are read-only; native CLI
+  atomic config writes never target RO stub paths), `install.sh` hooks into
+  `onecli.ts`.
 - Acceptance: `make check`; channel tests after `install.sh` into a NanoClaw
   checkout; parent bounded fleet smoke with `executor_providers: ["cursor"]` on
   one pool.

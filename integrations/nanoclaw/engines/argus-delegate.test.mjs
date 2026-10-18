@@ -11,6 +11,8 @@ import {
   authStatus,
   buildCommand,
   executorJsonFailure,
+  cursorConfigDirAllowsCliWrites,
+  materializePrivateCursorConfig,
   prepareExecutorEnv,
   READ_ONLY_PROMPT_PREFIX,
 } from "./argus-delegate.mjs";
@@ -215,13 +217,16 @@ test("prepareExecutorEnv does not write read-only injected cli-config that alrea
   );
   lockCursorDirReadOnly(cursor);
   const before = fs.readFileSync(path.join(cursor, "cli-config.json"), "utf8");
+  const runtime = path.join(s.dir, "runtime");
   const out = prepareExecutorEnv(
     "agent",
     { HOME: s.home, XDG_CONFIG_HOME: probe, CURSOR_CONFIG_DIR: cursor },
-    path.join(s.dir, "runtime"),
+    runtime,
   );
-  assert.equal(out.CURSOR_CONFIG_DIR, cursor);
+  assert.equal(out.CURSOR_CONFIG_DIR, path.join(runtime, "cursor-config"));
   assert.equal(fs.readFileSync(path.join(cursor, "cli-config.json"), "utf8"), before);
+  assert.ok(fs.existsSync(path.join(out.CURSOR_CONFIG_DIR, "auth.json")));
+  assert.ok(cursorConfigDirAllowsCliWrites(out.CURSOR_CONFIG_DIR));
 });
 
 test("prepareExecutorEnv uses a private writable dir when injected cli-config is read-only and lacks HTTP/1.1", (t) => {
@@ -246,6 +251,27 @@ test("prepareExecutorEnv uses a private writable dir when injected cli-config is
     JSON.parse(fs.readFileSync(path.join(out.CURSOR_CONFIG_DIR, "cli-config.json"), "utf8")).network
       .useHttp1ForAgent,
     true,
+  );
+});
+
+test("materializePrivateCursorConfig copies sentinel auth without mutating the stub mount", (t) => {
+  const s = sandbox(t);
+  const stub = path.join(s.dir, "stub");
+  fs.mkdirSync(stub, { recursive: true });
+  fs.writeFileSync(
+    path.join(stub, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
+  fs.writeFileSync(
+    path.join(stub, "cli-config.json"),
+    '{"version":1,"network":{"useHttp1ForAgent":true}}',
+  );
+  lockCursorDirReadOnly(stub);
+  const privateDir = materializePrivateCursorConfig(stub, path.join(s.dir, "runtime"));
+  assert.ok(cursorConfigDirAllowsCliWrites(privateDir));
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(privateDir, "auth.json"), "utf8")).accessToken,
+    "sentinel",
   );
 });
 

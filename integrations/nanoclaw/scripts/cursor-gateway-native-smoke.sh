@@ -43,18 +43,43 @@ chmodSync(cursor, 0o555);
 NODE
 
 # Parent EROFS repro (read-only credential tree, no network).
+mkdir -p "$STAGE/probe-runtime"
 docker run --rm --network none --cap-drop=ALL --security-opt=no-new-privileges \
+  --user node \
   --entrypoint node \
   -v "$DELEGATE:/probe/argus-delegate.mjs:ro" \
   -v "$POLICY:/probe/model-policy.mjs:ro" \
   -v "$STAGE/cursor:/probe/cursor:ro" \
+  -v "$STAGE/probe-runtime:/probe/runtime" \
   "$IMAGE" --input-type=module -e \
-  'import {prepareExecutorEnv} from "/probe/argus-delegate.mjs";
-   prepareExecutorEnv("agent",{HOME:"/home/node",XDG_CONFIG_HOME:"/probe",CURSOR_CONFIG_DIR:"/probe/cursor"},"/probe/runtime");
-   console.log("prepareExecutorEnv_ro_ok");' \
-  | rg -q prepareExecutorEnv_ro_ok
+  'import fs from "node:fs";
+   import {prepareExecutorEnv,cursorConfigDirAllowsCliWrites} from "/probe/argus-delegate.mjs";
+   const out=prepareExecutorEnv("agent",{HOME:"/home/node",XDG_CONFIG_HOME:"/probe",CURSOR_CONFIG_DIR:"/probe/cursor"},"/probe/runtime");
+   if(out.CURSOR_CONFIG_DIR==="/probe/cursor") process.exit(2);
+   if(!cursorConfigDirAllowsCliWrites(out.CURSOR_CONFIG_DIR)) process.exit(3);
+   fs.writeFileSync(out.CURSOR_CONFIG_DIR+"/cli-config.json.atomic-probe","");
+   console.log("prepareExecutorEnv_private_writable_ok");' \
+  | rg -q prepareExecutorEnv_private_writable_ok
 
-docker exec argus-cursor-scratch-up sh -c ': > /w/logs/upstream.jsonl'
+# Fleet-like per-file RO binds (root-owned parent, UID 1000) + native atomic cli-config temp write.
+docker run --rm --network none --user node --entrypoint node \
+  -v "$DELEGATE:/opt/argus/argus-delegate.mjs:ro" \
+  -v "$POLICY:/opt/argus/model-policy.mjs:ro" \
+  -v "$STAGE/cursor/auth.json:/home/node/.config/cursor/auth.json:ro" \
+  -v "$STAGE/cursor/cli-config.json:/home/node/.config/cursor/cli-config.json:ro" \
+  -v "$STAGE/work:/tmp/work" \
+  "$IMAGE" --input-type=module -e \
+  'import fs from "node:fs";
+   import {prepareExecutorEnv} from "/opt/argus/argus-delegate.mjs";
+   const e=prepareExecutorEnv("agent",{HOME:"/home/node",XDG_CONFIG_HOME:"/home/node/.config",CURSOR_CONFIG_DIR:"/home/node/.config/cursor"},"/tmp/work/.argus-delegate-runtime");
+   if(e.CURSOR_CONFIG_DIR.startsWith("/home/node/.config/cursor")) process.exit(2);
+   const tmp=e.CURSOR_CONFIG_DIR+"/cli-config.json."+Date.now()+".tmp";
+   fs.writeFileSync(tmp,"{}");
+   fs.renameSync(tmp,e.CURSOR_CONFIG_DIR+"/cli-config.json");
+   console.log("fleet_mount_topology_ok");' \
+  | rg -q fleet_mount_topology_ok
+
+docker exec argus-cursor-scratch-up sh -c ': > /w/logs/upstream.jsonl' 2>/dev/null || true
 
 ENV_FILE="$STAGE/container.env"
 node -e "
@@ -67,6 +92,7 @@ for (const [k, v] of Object.entries(payload.env ?? {})) {
 require('fs').writeFileSync(process.argv[3], lines.join('\n') + '\n');
 " "$AFTER_JSON" "$ONECLI_NAME" "$ENV_FILE"
 
+chmod -R a+rwX "$STAGE/work" 2>/dev/null || true
 printf '%s\n' "Reply with exactly the token SMOKE_OK and nothing else." >"$STAGE/prompt.txt"
 set +e
 docker run --rm --network "$NET" \
@@ -115,9 +141,22 @@ const scoped = parsed.some(
 );
 const authProbeOnly = !scoped && injected;
 const workspaceTrustBlocked = /workspace trust required/i.test(errTail);
+const configEacces = /EACCES.*cli-config\.json/i.test(errTail + outTail);
+let reportTail = "";
+try {
+  const last = outTail.trim().split("\n").pop() ?? "";
+  reportTail = JSON.parse(last).stderr_tail ?? "";
+} catch {
+  /* ignore */
+}
+const networkAttempted = /EPROTO|ECONNREFUSED|tls_get_more_records|fetch failed/i.test(
+  errTail + outTail + reportTail,
+);
 const summary = {
   delegateExit,
   workspaceTrustBlocked,
+  configEacces,
+  networkAttempted,
   upstreamLines: parsed.length,
   exchangeFromWorker: exchange,
   gatewayInjectedFakeBearer: injected,
@@ -131,18 +170,22 @@ if (workspaceTrustBlocked) {
   console.error("agent blocked on workspace trust (expected --trust on authorized cwd)");
   process.exit(1);
 }
+if (configEacces) {
+  console.error("native CLI could not atomically write cli-config (need private CURSOR_CONFIG_DIR)");
+  process.exit(1);
+}
 if (exchange) {
   console.error("worker reached /auth/exchange_user_api_key");
   process.exit(1);
 }
-if (!injected) {
-  console.error("upstream never saw REALFAKE bearer");
+if (!injected && !networkAttempted) {
+  console.error("delegate never reached network (config/auth still blocking?)");
   process.exit(1);
 }
-if (!scoped && !authProbeOnly) {
+if (injected && !scoped && !authProbeOnly) {
   console.error("expected scoped api2 path or distinguishable auth probe with injection");
   process.exit(1);
 }
 NODE
 
-echo "native smoke ok: RO stubs, prepareExecutorEnv, delegate→OneCLI; fake bearer on upstream"
+echo "native smoke ok: private CURSOR_CONFIG_DIR; delegate reached network or upstream injection"

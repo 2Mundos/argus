@@ -188,10 +188,37 @@ function writeCliConfig(cfgPath, doc) {
   return out;
 }
 
+/** Native CLI atomically rewrites cli-config via temp files in CURSOR_CONFIG_DIR. */
+export function cursorConfigDirAllowsCliWrites(configDir) {
+  const probe = path.join(configDir, `.argus-write-probe-${randomUUID()}`);
+  try {
+    fs.writeFileSync(probe, "");
+    fs.unlinkSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Copy sentinel stub auth + HTTP/1.1 cli-config into a per-run writable tree (no host secrets). */
+export function materializePrivateCursorConfig(stubDir, runtimeRoot) {
+  const privateDir = path.join(runtimeRoot, "cursor-config");
+  fs.mkdirSync(privateDir, { recursive: true });
+  const authSrc = path.join(stubDir, "auth.json");
+  if (present(authSrc)) {
+    fs.writeFileSync(path.join(privateDir, "auth.json"), fs.readFileSync(authSrc));
+  }
+  const injected = readCliConfig(path.join(stubDir, "cli-config.json"));
+  writeCliConfig(
+    path.join(privateDir, "cli-config.json"),
+    injected ?? { version: 1, network: {} },
+  );
+  return privateDir;
+}
+
 /**
- * Cursor CLI HTTP/1.1 config for the gateway. Injected `cli-config.json` stubs are
- * mounted read-only: consume them when they already set `useHttp1ForAgent`; otherwise
- * write only to a writable private dir (never mutate RO stubs).
+ * Cursor CLI runtime: gateway stubs stay read-only mounts; the native CLI needs a
+ * writable CURSOR_CONFIG_DIR for atomic cli-config updates even when HTTP/1.1 is preset.
  */
 export function prepareExecutorEnv(
   executor,
@@ -201,25 +228,29 @@ export function prepareExecutorEnv(
   if (executor !== "agent") return e;
   const home = e.HOME || os.homedir();
   const xdg = e.XDG_CONFIG_HOME || path.join(home, ".config");
-  if (!present(path.join(xdg, "cursor", "auth.json"))) return e;
-
-  const mountedDir = e.CURSOR_CONFIG_DIR || path.join(xdg, "cursor");
-  const mountedCfg = path.join(mountedDir, "cli-config.json");
-  const injected = readCliConfig(mountedCfg);
-  if (injected && http1Enabled(injected)) {
-    return { ...e, CURSOR_CONFIG_DIR: mountedDir };
+  const stubDir = e.CURSOR_CONFIG_DIR || path.join(xdg, "cursor");
+  if (!present(path.join(xdg, "cursor", "auth.json")) && !present(path.join(stubDir, "auth.json"))) {
+    return e;
   }
 
+  if (!cursorConfigDirAllowsCliWrites(stubDir)) {
+    const privateDir = materializePrivateCursorConfig(stubDir, runtimeRoot);
+    return { ...e, CURSOR_CONFIG_DIR: privateDir };
+  }
+
+  const mountedCfg = path.join(stubDir, "cli-config.json");
+  const injected = readCliConfig(mountedCfg);
   const baseDoc = injected ?? { version: 1, network: {} };
+  if (injected && http1Enabled(injected)) {
+    return { ...e, CURSOR_CONFIG_DIR: stubDir };
+  }
   if (pathIsWritable(mountedCfg)) {
     fs.mkdirSync(path.dirname(mountedCfg), { recursive: true });
     writeCliConfig(mountedCfg, baseDoc);
-    return { ...e, CURSOR_CONFIG_DIR: mountedDir };
+    return { ...e, CURSOR_CONFIG_DIR: stubDir };
   }
 
-  const privateDir = path.join(runtimeRoot, "cursor-config");
-  fs.mkdirSync(privateDir, { recursive: true });
-  writeCliConfig(path.join(privateDir, "cli-config.json"), baseDoc);
+  const privateDir = materializePrivateCursorConfig(stubDir, runtimeRoot);
   return { ...e, CURSOR_CONFIG_DIR: privateDir };
 }
 
