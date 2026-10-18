@@ -74,3 +74,5 @@ every new dependency is judged against it.
 - [Model policy operation](runbooks/2026-10-17.model-selection.ref.md)
 - [Project agent images](runbooks/2026-10-17.project-agent-images.ref.md) —
   base × tools × project layers, building and pointing a pool at one
+- [Cursor executor fleet smoke](runbooks/2026-10-18.cursor-fleet-smoke.ref.md) —
+  completed parent verification of delegated `composer-2.5` (2026-10-18)

@@ -20,16 +20,21 @@ on create and replace, and deliver it to the **delegated** Cursor CLI
   lease and never replaces the primary harness.
 - **Delivery**: the NanoClaw channel (trusted host) writes the credential into
   the OneCLI vault. API keys are exchanged for a short-lived access token on the
-  host (`POST https://api2.cursor.sh/auth/exchange_user_api_key`); the worker
-  never performs that exchange. OAuth logins use `accessToken` only;
-  `refreshToken` stays in Argus and is never sent to OneCLI or the container.
-  The container holds a **sentinel** (`CURSOR_API_KEY` and/or a stub
-  `auth.json`); the gateway injects the real bearer token only for
+  host only (`POST https://api2.cursor.sh/auth/exchange_user_api_key`); the
+  worker never performs that exchange. OAuth logins use the exchanged or imported
+  `accessToken` on the host; `refreshToken` stays in Argus, is never sent to
+  OneCLI or the container, and is **not** refreshed automatically by the channel
+  (operators renew in Argus when access nears expiry).
+  The worker holds a **non-secret sentinel** only: a stub `auth.json` with a
+  fake JWT-shaped `accessToken` and a placeholder `refreshToken` (never a real
+  provider token). The gateway injects the real bearer token only for
   `api2.cursor.sh` on paths `/agent.v1.*` and `/aiserver.v1.*` (generic
-  secrets, one per path family). Other hosts and paths are forwarded untouched.
+  secrets, one per path family). **`CURSOR_API_KEY` is never set in the worker**
+  (the native CLI would call `/auth/exchange_user_api_key` locally). Other hosts
+  and paths are forwarded untouched.
 - **Pool configuration**: `nanoclaw.executor_providers` (env
   `ARGUS_NANOCLAW_EXECUTOR_PROVIDERS` on the pool, `ARGUS_EXECUTOR_PROVIDERS` on
-  the channel) lists providers for the executor lease, for example `["cursor"]`
+  channel) lists providers for the executor lease, for example `["cursor"]`
   to direct one worker at Cursor while the default executor remains
   `["anthropic"]` when unset.
 
@@ -41,8 +46,8 @@ on create and replace, and deliver it to the **delegated** Cursor CLI
   near-expired access tokens are rejected at apply time (five-minute margin,
   matching the shipped CLI).
 - Replacing Claude/Codex as the default engine or global executor.
-- Running a paid Cursor model call in CI; parent smoke uses fleet with a real
-  leased account.
+- Running a paid Cursor model call in CI; fleet acceptance uses a parent-run
+  bounded smoke with a real leased account (see [fleet smoke ref](runbooks/2026-10-18.cursor-fleet-smoke.ref.md)).
 
 # 3. Decisions Made
 
@@ -58,16 +63,23 @@ on create and replace, and deliver it to the **delegated** Cursor CLI
   patterns. Host pattern is exactly `api2.cursor.sh`.
 - **Child runtime** (`argus-cursor-stub.ts`, `argus-delegate`): generic Cursor
   secrets do not add `CURSOR_*` to `container-config` env (only proxy + CA).
-  The trusted host detects assignment via `GET /api/agents/{id}/secrets` and
-  secret metadata (`type: generic`, `hostPattern: api2.cursor.sh`, path
-  patterns), then mounts sentinel `~/.config/cursor/auth.json` (fake
-  `accessToken` + placeholder `refreshToken`) and `cli-config.json` with
-  `network.useHttp1ForAgent: true`. Never set `CURSOR_API_KEY` in the worker
-  (that would call `/auth/exchange_user_api_key` locally). `argus-delegate`
-  treats only `auth.json` presence as authenticated.
-- **Engine catalogue**: Cursor remains `role: executor` only; readiness still
-  requires a container credential (`CURSOR_API_KEY` or stub `auth.json`), not an
-  Argus lease by itself.
+  The trusted host detects assignment via OneCLI agent/secret **metadata** (no
+  secret values), then mounts read-only sentinel stubs at
+  `/home/node/.config/cursor/auth.json` and `cli-config.json` (HTTP/1.1 preset).
+  `argus-delegate` treats stub `auth.json` presence under `XDG_CONFIG_HOME` as
+  authenticated. Because the native CLI atomically rewrites `cli-config.json`
+  via temp files in `CURSOR_CONFIG_DIR`, `prepareExecutorEnv` copies sentinel
+  `auth.json` and HTTP/1.1 `cli-config.json` into a **per-run writable tree**
+  under `{authorized cwd}/.argus-delegate-runtime/cursor-config/` when gateway
+  mounts are read-only; RO stub paths are never mutated. Read-only delegation
+  uses `--trust` on the already authorized workspace cwd and does **not** pass
+  `--force` (tool permissions); write mode may pass `--force` as today.
+- **Engine catalogue** (public API): Cursor is `role: executor` only. Readiness
+  for a running worker is **stub `auth.json` present** (sentinel session shape)
+  plus gateway path-scoped injection configured on the host—not `CURSOR_API_KEY`
+  in fleet workers and not an Argus lease visible inside the container alone.
+  Catalogue fields such as `usable` / `authenticated` / `validated` reflect that
+  delegated path after lease apply, not raw env API keys in the child.
 
 # 4. Open Questions
 
@@ -92,10 +104,13 @@ on create and replace, and deliver it to the **delegated** Cursor CLI
   `ARGUS_EXECUTOR_PROVIDERS`; tests in `test_cursor_accounts.py`.
 - `integrations/nanoclaw`: `argus-accounts.ts` (mapping, exchange, apply),
   `argus-cursor-stub.ts`, `argus.ts` (`ARGUS_EXECUTOR_PROVIDERS`),
-  `argus-delegate` (`prepareExecutorEnv`: copy sentinel stubs into a per-run
-  writable `CURSOR_CONFIG_DIR` when gateway mounts are read-only; native CLI
-  atomic config writes never target RO stub paths), `install.sh` hooks into
-  `onecli.ts`.
-- Acceptance: `make check`; channel tests after `install.sh` into a NanoClaw
-  checkout; parent bounded fleet smoke with `executor_providers: ["cursor"]` on
-  one pool.
+  `argus-delegate` (`prepareExecutorEnv`, `--trust`, private `CURSOR_CONFIG_DIR`),
+  `install.sh` hooks into `onecli.ts`.
+- **Acceptance (automated)**: `make check`; channel/gateway tests after
+  `install.sh` into a NanoClaw checkout; fake-credential delegate/proxy probes
+  in the integration scripts (no live Cursor model in CI).
+- **Acceptance (fleet)**: parent-run `argus-delegate agent --read-only` with an
+  explicit model (for example `composer-2.5`), **native CLI exit code 0**, and an
+  exact controlled nonce echoed in the CLI JSON result—not merely Argus task
+  completion. Record outcomes in a dated ref when verified; see
+  [2026-10-18 cursor fleet smoke](runbooks/2026-10-18.cursor-fleet-smoke.ref.md).
