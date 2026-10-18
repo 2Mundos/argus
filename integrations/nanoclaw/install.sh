@@ -195,4 +195,61 @@ PY
     echo "patched $onecli_test (expects GIT_SSL_CAINFO on gateway contribution)"
   fi
 fi
+
+codex_ts="$target/container/agent-runner/src/providers/codex-app-server.ts"
+if [ -f "$codex_ts" ] && ! grep -q "GIT_HTTP_PROXY_AUTHMETHOD" "$codex_ts"; then
+  python3 - "$codex_ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "  'GIT_SSL_CAINFO',\n  'HOME',"
+new = "  'GIT_SSL_CAINFO',\n  'GIT_HTTP_PROXY_AUTHMETHOD',\n  'GIT_TERMINAL_PROMPT',\n  'HOME',"
+assert old in s, "codex-app-server CODEX_ENV_ALLOWLIST shape changed upstream"
+open(p, "w").write(s.replace(old, new, 1))
+PY
+  echo "patched $codex_ts (Codex env allowlist: git proxy auth knobs)"
+fi
+
+codex_test="$target/container/agent-runner/src/providers/codex-app-server.test.ts"
+if [ -f "$codex_test" ]; then
+  patch_result="$(
+    python3 - "$codex_test" <<'PY'
+import sys
+p = sys.argv[1]
+original = open(p).read()
+s = original
+marker = "GIT_HTTP_PROXY_AUTHMETHOD for OneCLI git smart HTTP"
+if marker not in s:
+    s = s.replace(
+        """      HTTPS_PROXY: 'http://proxy',
+      OPENAI_API_KEY: 'sk-test',""",
+        """      HTTPS_PROXY: 'http://proxy',
+      GIT_SSL_CAINFO: '/tmp/onecli-ca.pem',
+      GIT_HTTP_PROXY_AUTHMETHOD: 'basic',
+      GIT_TERMINAL_PROMPT: '0',
+      OPENAI_API_KEY: 'sk-test',""",
+        1,
+    )
+    s = s.replace(
+        """    expect(env.HTTPS_PROXY).toBe('http://proxy');
+    expect(env.OPENAI_API_KEY).toBeUndefined();""",
+        """    expect(env.HTTPS_PROXY).toBe('http://proxy');
+    // GIT_HTTP_PROXY_AUTHMETHOD for OneCLI git smart HTTP through the SDK proxy tunnel.
+    expect(env.GIT_SSL_CAINFO).toBe('/tmp/onecli-ca.pem');
+    expect(env.GIT_HTTP_PROXY_AUTHMETHOD).toBe('basic');
+    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+    expect(env.OPENAI_API_KEY).toBeUndefined();""",
+        1,
+    )
+    assert marker in s, "codex-app-server env test shape changed upstream"
+if s != original:
+    open(p, "w").write(s)
+    print("patched")
+PY
+  )"
+  if [ "$patch_result" = patched ]; then
+    echo "patched $codex_test (Codex env forwards git proxy auth knobs)"
+  fi
+fi
+
 echo "installed. Next: (cd $target && pnpm run build && pnpm exec vitest run src/channels/argus.test.ts)"
