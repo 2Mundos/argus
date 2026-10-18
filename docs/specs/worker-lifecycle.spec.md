@@ -563,9 +563,12 @@ admin access; the agent container has only the existing egress-proxy route,
 never the OneCLI admin API or raw token. Git/REST use HTTPS through the proxy,
 not SSH credentials. The worker API helper has no token parameter, verifies an
 exact repository allowlist, supports PR create/read/update and CI status reads
-tied to the PR head SHA. A retry of PR creation returns an existing open PR for
-the same source branch and base rather than creating a duplicate. It has no
-merge operation and uses an Undici proxy
+tied to the PR head SHA, plus read-only `issue-get` (issue tracker item by
+number) and `list-prs` (paginated PR list with explicit `--state` and capped
+`--limit`). The `get` command is pull-request-only; a 404 on `get` does not
+imply auth failure when the tracker number is an issue — use `issue-get`.
+A retry of PR creation returns an existing open PR for the same source branch and
+base rather than creating a duplicate. It has no merge operation and uses an Undici proxy
 dispatcher for Node fetch (no direct-network fallback). The image overlay
 installs this helper and its pinned Undici dependency. Configure the same
 project-to-repository allowlist in the worker container as

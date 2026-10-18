@@ -21,4 +21,5 @@ check project-python uv python find 3.13
 check git git --version
 check ssh ssh -V
 check make make --version
+check graft graft --version
 exit "$fail"

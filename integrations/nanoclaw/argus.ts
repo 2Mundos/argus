@@ -180,7 +180,7 @@ export function renderTask(task: ArgusTask, pages: Map<string, string>): string 
     ...(task.repository_url
       ? [
           `Repository (allowlisted): ${task.repository_url}`,
-          "Use /usr/local/bin/argus-gitea-api for repository API access; do not handle credentials, add auth headers, or merge pull requests.",
+          "Use /usr/local/bin/argus-gitea-api for repository API access (get = pull request by number; issue-get = issue tracker item; list-prs = paginated PR list with --state); do not handle credentials, add auth headers, or merge pull requests.",
         ]
       : []),
     "",

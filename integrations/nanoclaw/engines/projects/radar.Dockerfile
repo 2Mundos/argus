@@ -7,6 +7,14 @@
 ARG BASE
 FROM ${BASE}
 USER root
+# Radar AGENTS.md expects graft for codebase navigation; pin matches the Hermes host.
+# Prebuilt tree is staged by build-project-image.sh (npm install needs native compilers in slim).
+COPY .graft-stage/graft /usr/local/lib/graft
+RUN printf '%s\n' '#!/bin/sh' 'exec node /usr/local/lib/graft/dist/cli.js "$@"' > /usr/local/bin/graft \
+ && chmod 0755 /usr/local/bin/graft \
+ && graft --version
+# Refresh the Gitea helper when the project layer is rebuilt (no full agent rebuild).
+COPY --chmod=0755 gitea-api.mjs /usr/local/bin/argus-gitea-api
 # Runtime libraries only, no -dev: every compiled dependency of the lock ships a
 # manylinux wheel. The exception is weasyprint (pure Python), which loads pango,
 # harfbuzz and fontconfig-backed fonts at import time; this is the subset of the

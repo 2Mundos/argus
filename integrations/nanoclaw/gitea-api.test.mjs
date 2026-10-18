@@ -85,6 +85,57 @@ describe("credential-free Gitea API helper", () => {
     assert.ok(calls.every(({ init }) => init.redirect === "error"));
   });
 
+  it("reads issues and lists pull requests on distinct REST paths", async () => {
+    const calls = [];
+    const fetch = async (url, init) => {
+      calls.push({ url, init });
+      if (url.endsWith("/issues/1043")) {
+        return Response.json({ number: 1043, title: "Tracker item", state: "open", pull_request: null });
+      }
+      if (url.includes("/pulls?state=open&page=1&limit=2")) {
+        return Response.json([{ number: 926, title: "PR", state: "open" }]);
+      }
+      if (url.endsWith("/pulls/926")) {
+        return Response.json({
+          number: 926,
+          head: { ref: "topic", sha: "abc", repo: { full_name: "team/project" } },
+          base: { ref: "main" },
+        });
+      }
+      return Response.json(null, { status: 404 });
+    };
+    const api = new GiteaApi(
+      "https://git.example.test/team/project",
+      ["https://git.example.test/team/project"],
+      fetch,
+    );
+    const issue = await api.getIssue(1043);
+    assert.equal(issue.number, 1043);
+    assert.equal(issue.pull_request, null);
+    const prs = await api.listPullRequests({ state: "open", page: 1, limit: 2 });
+    assert.equal(prs.length, 1);
+    assert.equal(prs[0].number, 926);
+    await api.getPullRequest(926);
+    assert.ok(calls.some(({ url }) => url.endsWith("/issues/1043")));
+    assert.ok(calls.some(({ url }) => url.includes("/pulls?state=open&page=1&limit=2")));
+    assert.ok(calls.some(({ url }) => url.endsWith("/pulls/926")));
+    assert.ok(calls.every(({ init }) => init.redirect === "error"));
+  });
+
+  it("rejects invalid list-prs pagination and state", () => {
+    const api = new GiteaApi(
+      "https://git.example.test/team/project",
+      ["https://git.example.test/team/project"],
+      async () => Response.json([]),
+    );
+    assert.throws(() => api.listPullRequests({ state: "merged", page: 1, limit: 10 }), /state must/);
+    assert.throws(() => api.listPullRequests({ state: "open", page: 0, limit: 10 }), /positive integer/);
+    assert.throws(
+      () => api.listPullRequests({ state: "open", page: 1, limit: 51 }),
+      /limit must be 1\.\.50/,
+    );
+  });
+
   it("fails closed when the worker repository allowlist is empty", () => {
     assert.throws(
       () => allowlistedRepository("https://git.example.test/team/project", []),
