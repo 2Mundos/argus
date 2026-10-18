@@ -11,6 +11,7 @@ import {
   authStatus,
   buildCommand,
   executorJsonFailure,
+  prepareExecutorEnv,
   READ_ONLY_PROMPT_PREFIX,
 } from "./argus-delegate.mjs";
 
@@ -19,7 +20,19 @@ const DELEGATE = path.join(path.dirname(fileURLToPath(import.meta.url)), "argus-
 /** A sandbox: a workspace root, a fake HOME, and fake executables first on PATH. */
 function sandbox(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delegate-"));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => {
+    const relax = (p) => {
+      try {
+        const st = fs.statSync(p);
+        fs.chmodSync(p, st.isDirectory() ? 0o755 : 0o644);
+        if (st.isDirectory()) for (const name of fs.readdirSync(p)) relax(path.join(p, name));
+      } catch {
+        /* ignore */
+      }
+    };
+    relax(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
   const work = path.join(dir, "work");
   const home = path.join(dir, "home");
   const bin = path.join(dir, "bin");
@@ -93,7 +106,7 @@ test("an empty auth stub is not a credential", (t) => {
 });
 
 test("the credential check never needs the secret itself", () => {
-  assert.equal(authStatus("agent", { CURSOR_API_KEY: "x" }, "/nonexistent").ok, true);
+  assert.equal(authStatus("agent", { CURSOR_API_KEY: "x" }, "/nonexistent").ok, false);
   assert.equal(authStatus("agent", {}, "/nonexistent").ok, false);
   assert.equal(
     authStatus("opencode", { ARGUS_OPENCODE_ATTACH: "http://127.0.0.1:4096" }, "/nonexistent").ok,
@@ -150,11 +163,90 @@ test("an executor that fails is reported as a failure, not hidden", async (t) =>
 
 test("not installed is distinct from not authenticated", async (t) => {
   const s = sandbox(t);
+  const authDir = path.join(s.home, ".config", "cursor");
+  fs.mkdirSync(authDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(authDir, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
   const { code, report } = await run(["agent", "--cwd", s.work], {
-    env: { ...s.env, PATH: s.bin, CURSOR_API_KEY: "x" },
+    env: { ...s.env, PATH: s.bin, HOME: s.home },
   });
   assert.equal(code, 127);
   assert.equal(report.blocked, "not_installed");
+});
+
+test("prepareExecutorEnv writes cli-config beside auth when the tree is writable", (t) => {
+  const s = sandbox(t);
+  const dir = path.join(s.dir, "runtime");
+  const authDir = path.join(s.home, ".config", "cursor");
+  fs.mkdirSync(authDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(authDir, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
+  const out = prepareExecutorEnv("agent", { ...s.env, HOME: s.home }, dir);
+  assert.equal(out.CURSOR_CONFIG_DIR, authDir);
+  const cfg = JSON.parse(fs.readFileSync(path.join(authDir, "cli-config.json"), "utf8"));
+  assert.equal(cfg.network.useHttp1ForAgent, true);
+  assert.equal(prepareExecutorEnv("claude", out, dir), out);
+});
+
+function lockCursorDirReadOnly(cursor) {
+  fs.chmodSync(path.join(cursor, "auth.json"), 0o444);
+  if (fs.existsSync(path.join(cursor, "cli-config.json"))) {
+    fs.chmodSync(path.join(cursor, "cli-config.json"), 0o444);
+  }
+  fs.chmodSync(cursor, 0o555);
+}
+
+test("prepareExecutorEnv does not write read-only injected cli-config that already enables HTTP/1.1", (t) => {
+  const s = sandbox(t);
+  const probe = path.join(s.dir, "probe");
+  const cursor = path.join(probe, "cursor");
+  fs.mkdirSync(cursor, { recursive: true });
+  fs.writeFileSync(
+    path.join(cursor, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
+  fs.writeFileSync(
+    path.join(cursor, "cli-config.json"),
+    '{"version":1,"network":{"useHttp1ForAgent":true}}',
+  );
+  lockCursorDirReadOnly(cursor);
+  const before = fs.readFileSync(path.join(cursor, "cli-config.json"), "utf8");
+  const out = prepareExecutorEnv(
+    "agent",
+    { HOME: s.home, XDG_CONFIG_HOME: probe, CURSOR_CONFIG_DIR: cursor },
+    path.join(s.dir, "runtime"),
+  );
+  assert.equal(out.CURSOR_CONFIG_DIR, cursor);
+  assert.equal(fs.readFileSync(path.join(cursor, "cli-config.json"), "utf8"), before);
+});
+
+test("prepareExecutorEnv uses a private writable dir when injected cli-config is read-only and lacks HTTP/1.1", (t) => {
+  const s = sandbox(t);
+  const probe = path.join(s.dir, "probe");
+  const cursor = path.join(probe, "cursor");
+  fs.mkdirSync(cursor, { recursive: true });
+  fs.writeFileSync(
+    path.join(cursor, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
+  fs.writeFileSync(path.join(cursor, "cli-config.json"), '{"version":1,"network":{}}');
+  const runtime = path.join(s.dir, "runtime");
+  lockCursorDirReadOnly(cursor);
+  const out = prepareExecutorEnv(
+    "agent",
+    { HOME: s.home, XDG_CONFIG_HOME: probe, CURSOR_CONFIG_DIR: cursor },
+    runtime,
+  );
+  assert.equal(out.CURSOR_CONFIG_DIR, path.join(runtime, "cursor-config"));
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(out.CURSOR_CONFIG_DIR, "cli-config.json"), "utf8")).network
+      .useHttp1ForAgent,
+    true,
+  );
 });
 
 test("commands are non-interactive, scoped to the cwd, and read-only on request", () => {
@@ -178,9 +270,12 @@ test("commands are non-interactive, scoped to the cwd, and read-only on request"
   assert.ok(claudeWrite.args.includes("--allowed-tools"));
   assert.ok(claudeWrite.args.join(" ").includes("Bash"));
   const agentWrite = buildCommand("agent", { cwd: "/w", readOnly: false });
+  assert.ok(agentWrite.args.includes("--trust"));
   assert.ok(agentWrite.args.includes("--force"));
+  assert.equal(agentWrite.args.indexOf("--trust"), agentWrite.args.indexOf("--workspace") + 2);
   assert.equal(agentWrite.args.includes("--mode"), false);
   const agentRo = buildCommand("agent", { cwd: "/w", readOnly: true });
+  assert.ok(agentRo.args.includes("--trust"));
   assert.equal(agentRo.readOnlyEnforcement, "prompt_only");
   for (const forbidden of ["--mode", "--plan", "--force", "plan", "ask"]) {
     assert.equal(
@@ -213,12 +308,18 @@ test("claude exit 0 with is_error is a delegate failure", async (t) => {
 
 test("agent empty JSON result is an invalid execution", async (t) => {
   const s = sandbox(t);
+  const authDir = path.join(s.home, ".config", "cursor");
+  fs.mkdirSync(authDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(authDir, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
   s.fake(
     "agent",
     'if [ "$1" = "--version" ]; then echo v; exit 0; fi\necho \'{"type":"result","result":""}\'',
   );
   const { code, report } = await run(["agent", "--cwd", s.work], {
-    env: { ...s.env, CURSOR_API_KEY: "x" },
+    env: { ...s.env, HOME: s.home },
   });
   assert.equal(code, 1);
   assert.equal(report.executor_error?.kind, "empty_result");
@@ -226,13 +327,19 @@ test("agent empty JSON result is an invalid execution", async (t) => {
 
 test("read-only agent uses print only with a static-review prompt prefix", async (t) => {
   const s = sandbox(t);
+  const authDir = path.join(s.home, ".config", "cursor");
+  fs.mkdirSync(authDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(authDir, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
   const got = path.join(s.dir, "prompt.txt");
   s.fake(
     "agent",
     `if [ "$1" = "--version" ]; then echo v; exit 0; fi\necho "$@" >${got}; echo '{"type":"result","result":"ok"}'`,
   );
   await run(["agent", "--cwd", s.work, "--read-only"], {
-    env: { ...s.env, CURSOR_API_KEY: "x" },
+    env: { ...s.env, HOME: s.home },
     input: "inspect only",
   });
   const body = fs.readFileSync(got, "utf8");

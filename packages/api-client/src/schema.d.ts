@@ -2636,6 +2636,11 @@ export interface components {
              */
             docker_socket?: string;
             /**
+             * Executor Providers
+             * @default []
+             */
+            executor_providers?: string[];
+            /**
              * Group Add
              * @default []
              */
@@ -2682,6 +2687,11 @@ export interface components {
              * @default /var/run/docker.sock
              */
             docker_socket: string;
+            /**
+             * Executor Providers
+             * @default []
+             */
+            executor_providers: string[];
             /**
              * Group Add
              * @default []

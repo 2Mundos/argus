@@ -1,0 +1,18 @@
+{
+  "env": {
+    "HTTPS_PROXY": "http://x:SCRATCH-ONECLI-PROXY-TOKEN@host.docker.internal:10255",
+    "HTTP_PROXY": "http://x:SCRATCH-ONECLI-PROXY-TOKEN@host.docker.internal:10255",
+    "https_proxy": "http://x:SCRATCH-ONECLI-PROXY-TOKEN@host.docker.internal:10255",
+    "http_proxy": "http://x:SCRATCH-ONECLI-PROXY-TOKEN@host.docker.internal:10255",
+    "NODE_EXTRA_CA_CERTS": "/tmp/onecli-gateway-ca.pem",
+    "NODE_USE_ENV_PROXY": "1",
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_HTTP_PROXY_AUTHMETHOD": "basic",
+    "ANTHROPIC_API_KEY": "placeholder"
+  },
+  "caCertificate": "-----BEGIN CERTIFICATE-----\nMIIBqzCCAVGgAwIBAgIUDqHmM8Tp8F2BL7m4IAqn5tPKrKIwCgYIKoZIzj0EAwIw\nMzEgMB4GA1UEAwwXT25lQ0xJIExvY2FsIEdhdGV3YXkgQ0ExDzANBgNVBAoMBk9u\nZUNMSTAeFw0yNjEwMTgwMTAyMTRaFw0zNjEwMTUwMTAyMTRaMDMxIDAeBgNVBAMM\nF09uZUNMSSBMb2NhbCBHYXRld2F5IENBMQ8wDQYDVQQKDAZPbmVDTEkwWTATBgcq\nhkjOPQIBBggqhkjOPQMBBwNCAASpb4lybfN2q62Q4SL8sy/1slsJNgdtFaf/tXPN\nrGqel2vo6930rr0zy8bQ9fxl77Q+xkG466olcM7k9HZ4pHldo0MwQTAPBgNVHQ8B\nAf8EBQMDBwYAMB0GA1UdDgQWBBTrEoiQpXQXIglVww4AJ2eSapNIFDAPBgNVHRMB\nAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIHGbxP/gu3+NDVD9A4P8DSTm2/7S\nLcGotI5w3ok9TInHAiEAyaDh/FHSlIS5E9wAJYl7FmEKQ3m4xKbVpg7LN3Fw0Mw=\n-----END CERTIFICATE-----",
+  "caCertificateContainerPath": "/tmp/onecli-gateway-ca.pem",
+  "warnings": [
+    "No Anthropic credentials configured — the agent will use its own API key if available. Add one at /secrets"
+  ]
+}

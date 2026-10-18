@@ -1,7 +1,7 @@
 from datetime import timedelta
 from uuid import uuid4
 
-from argus_core import claude_auth, codex_auth
+from argus_core import claude_auth, codex_auth, cursor_auth
 from argus_core.accounts import (
     Account,
     AccountCreate,
@@ -45,6 +45,8 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
             found = claude_auth.validate(credential)
         elif provider == codex_auth.PROVIDER:
             found = codex_auth.validate(credential)
+        elif provider == cursor_auth.PROVIDER:
+            found = cursor_auth.validate(credential)
         elif provider == "gitea":
             token = credential.get("token")
             username = credential.get("username")
@@ -72,7 +74,11 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
                     f"invalid {provider} credential: must be a non-empty JSON object"
                 )
             return None
-    except (claude_auth.ClaudeAuthError, codex_auth.CodexAuthError) as exc:
+    except (
+        claude_auth.ClaudeAuthError,
+        codex_auth.CodexAuthError,
+        cursor_auth.CursorAuthError,
+    ) as exc:
         raise ValidationFailedError(f"invalid {provider} credential: {exc}") from None
     return found.kind, found.mode
 

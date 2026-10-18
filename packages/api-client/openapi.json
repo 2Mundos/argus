@@ -3281,6 +3281,14 @@
             "title": "Docker Socket",
             "type": "string"
           },
+          "executor_providers": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Executor Providers",
+            "type": "array"
+          },
           "group_add": {
             "default": [],
             "items": {
@@ -3367,6 +3375,14 @@
             "title": "Docker Socket",
             "type": "string"
           },
+          "executor_providers": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Executor Providers",
+            "type": "array"
+          },
           "group_add": {
             "default": [],
             "items": {
@@ -3419,6 +3435,7 @@
           "docker_socket",
           "agent_image_archive",
           "account_providers",
+          "executor_providers",
           "repositories",
           "user",
           "group_add"

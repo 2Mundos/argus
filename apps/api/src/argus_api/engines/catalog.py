@@ -75,8 +75,10 @@ _DECLARED: list[tuple[str, str, EngineRole, Axes, list[str], str]] = [
             executor="agent",
             account_provider="cursor",
         ),
-        ["CURSOR_API_KEY", "agent-login"],
-        "Blocked without CURSOR_API_KEY or a login made in the container.",
+        ["argus-account", "CURSOR_API_KEY", "agent-login"],
+        "Delegated executor only (never an engine). An Argus cursor account (an "
+        "imported login or an API key) reaches it through the vault; blocked "
+        "without one or a login made in the container.",
     ),
 ]
 

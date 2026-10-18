@@ -5,8 +5,12 @@ import {
   type AccountLease,
   applyLease,
   applyLeases,
+  applyLeasesDetailed,
   applyRepositoryLease,
+  CURSOR_EXPIRY_MARGIN_MS,
   classifyFailure,
+  exchangeCursorApiKey,
+  jwtExpiryMs,
   OneCliClient,
   releaseRepositoryLease,
 } from "./argus-accounts.js";
@@ -122,7 +126,8 @@ function world(opts: {
       }
       let m = /^\/secrets\/([^/]+)$/.exec(path);
       if (method === "PATCH" && m) {
-        onecli.secrets.find((s) => s.id === m![1])!.value = body.value;
+        const secret = onecli.secrets.find((s) => s.id === m![1])!;
+        Object.assign(secret, body);
         return json(200, { success: true });
       }
       m = /^\/agents\/([^/]+)\/secrets$/.exec(path);
@@ -701,6 +706,183 @@ describe("classifyFailure for Codex and by provider", () => {
     expect(classifyFailure("Out of credits", "openai").kind).toBe("failed");
     expect(classifyFailure("usage_limit_reached", "anthropic").kind).toBe("failed");
     expect(classifyFailure("Rate limit [five_hour]", "anthropic").kind).toBe("exhausted");
+  });
+});
+
+// -- cursor accounts (docs/specs/cursor-accounts.spec.md) ------------------------------
+
+function cursorJwt(expSec: number) {
+  const payload = Buffer.from(JSON.stringify({ sub: "auth0|fake", exp: expSec })).toString(
+    "base64url",
+  );
+  return `h.${payload}.fakesig`;
+}
+
+const FUTURE_SEC = Math.floor(Date.now() / 1000) + 86400 * 30;
+const CURSOR_ACCESS = cursorJwt(FUTURE_SEC);
+const CURSOR_REFRESH = cursorJwt(FUTURE_SEC + 1);
+const CURSOR_API_KEY = `key_${"FAKE".repeat(10)}`;
+const CURSOR_LOGIN = { accessToken: CURSOR_ACCESS, refreshToken: CURSOR_REFRESH };
+const CURSOR_SETTINGS = {
+  version: 1,
+  permissions: { allow: [], deny: [] },
+  editor: { vimMode: false },
+  model: { modelId: "composer-2.5" },
+  authInfo: { authId: "auth0|SETTINGS", email: "x@example.test" },
+};
+
+const cursorLease = (over: Partial<AccountLease> = {}) =>
+  lease("cursor-1", "", {
+    provider: "cursor",
+    kind: "subscription",
+    credential: CURSOR_LOGIN,
+    role: "executor",
+    ...over,
+  });
+
+describe("cursor credential documents", () => {
+  const target = { identifier: "g", name: "G" };
+
+  it("maps an OAuth login to two generic secrets on api2.cursor.sh only", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    await applyLeases(onecli, target, [codexLease(), cursorLease()]);
+    const posts = w.calls.filter((c) => c.path === "/secrets" && c.method === "POST");
+    const agent = posts.find((c) => c.body.name === "argus-g-cursor-agent")!;
+    const ai = posts.find((c) => c.body.name === "argus-g-cursor-aiserver")!;
+    expect(agent.body).toMatchObject({
+      type: "generic",
+      hostPattern: "api2.cursor.sh",
+      pathPattern: "/agent.v1.*",
+      injectionConfig: { headerName: "Authorization", valueFormat: "Bearer {value}" },
+      value: CURSOR_ACCESS,
+    });
+    expect(ai.body).toMatchObject({
+      hostPattern: "api2.cursor.sh",
+      pathPattern: "/aiserver.v1.*",
+      value: CURSOR_ACCESS,
+    });
+    expect(posts.some((c) => c.body.hostPattern === "evil.cursor.sh")).toBe(false);
+    expect(JSON.stringify(w.calls)).not.toContain(CURSOR_REFRESH);
+  });
+
+  it("exchanges an API key on the trusted host and stores the access token only", async () => {
+    const exchanged = cursorJwt(FUTURE_SEC + 60);
+    const w = world({ leases: [] });
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (url === "https://api2.cursor.sh/auth/exchange_user_api_key") {
+        expect(init?.headers && (init.headers as Record<string, string>).Authorization).toBe(
+          `Bearer ${CURSOR_API_KEY}`,
+        );
+        return new Response(JSON.stringify({ accessToken: exchanged }), { status: 200 });
+      }
+      return w.fetchImpl(url, init as RequestInit);
+    }) as typeof fetch;
+    const onecli = new OneCliClient("http://onecli.test", fetchImpl);
+    await applyLeases(
+      onecli,
+      target,
+      [
+        codexLease(),
+        cursorLease({
+          kind: "api_key",
+          credential: { api_key: CURSOR_API_KEY },
+        }),
+      ],
+      fetchImpl,
+    );
+    const agent = w.onecli.secrets.find((s) => s.name === "argus-g-cursor-agent")!;
+    expect(agent.value).toBe(exchanged);
+    expect(w.calls.some((c) => c.who === "argus")).toBe(false);
+  });
+
+  it("rejects settings-only and expired documents without echoing secrets", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    for (const credential of [
+      CURSOR_SETTINGS,
+      { accessToken: cursorJwt(Math.floor(Date.now() / 1000) - 60), refreshToken: CURSOR_REFRESH },
+      {
+        accessToken: cursorJwt(Math.floor((Date.now() + CURSOR_EXPIRY_MARGIN_MS) / 1000)),
+        refreshToken: CURSOR_REFRESH,
+      },
+    ]) {
+      const err = await applyLeases(onecli, target, [
+        codexLease(),
+        cursorLease({ credential }),
+      ]).catch((e) => e);
+      expect(String(err.message)).toMatch(/cursor-1/);
+      expect(String(err.message)).not.toContain(CURSOR_ACCESS);
+      expect(String(err.message)).not.toContain(CURSOR_API_KEY);
+    }
+    expect(w.onecli.secrets).toEqual([]);
+  });
+
+  it("unassigns cursor secrets when the executor lease ends but keeps the engine", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    await applyLeases(onecli, target, [codexLease(), cursorLease()]);
+    const names = w.onecli.agents[0]!.secrets.map(
+      (id) => w.onecli.secrets.find((s) => s.id === id)!.name,
+    );
+    expect(names.sort()).toEqual(
+      ["argus-g-cursor-agent", "argus-g-cursor-aiserver", "argus-g-openai"].sort(),
+    );
+    await applyLeases(onecli, target, [codexLease()]);
+    const after = w.onecli.agents[0]!.secrets.map(
+      (id) => w.onecli.secrets.find((s) => s.id === id)!.name,
+    );
+    expect(after).toEqual(["argus-g-openai"]);
+    expect(w.onecli.secrets.some((s) => s.name.includes("cursor"))).toBe(true);
+  });
+});
+
+describe("exchangeCursorApiKey", () => {
+  it("refuses a response without a usable JWT accessToken", async () => {
+    const bad = (body: unknown, status = 200) =>
+      (async () => new Response(JSON.stringify(body), { status })) as typeof fetch;
+    await expect(
+      exchangeCursorApiKey(CURSOR_API_KEY, bad({ accessToken: "not-jwt" })),
+    ).rejects.toThrow(/no usable accessToken/);
+    await expect(
+      exchangeCursorApiKey(CURSOR_API_KEY, bad({ accessToken: cursorJwt(1) })),
+    ).rejects.toThrow(/no usable accessToken/);
+    await expect(exchangeCursorApiKey(CURSOR_API_KEY, bad({}, 401))).rejects.toThrow(/HTTP 401/);
+  });
+});
+
+describe("cursor executor selection in the channel", () => {
+  it("leases cursor for the executor when executorProviders says so", async () => {
+    const w = world({
+      leases: [codexLease(), cursorLease()],
+      tasks: [task()],
+    });
+    const { adapter, setup } = harness(w, true, {
+      providers: ["openai"],
+      executorProviders: ["cursor"],
+    });
+    live.push(adapter);
+    await adapter.setup(setup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
+      { providers: ["openai"] },
+      { providers: ["cursor"], role: "executor" },
+    ]);
+    expect(w.onecli.secrets.filter((s) => s.name.includes("cursor"))).toHaveLength(2);
+  });
+});
+
+describe("applyLeasesDetailed", () => {
+  it("reports executor JWT expiry for a Cursor executor lease", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const exp = jwtExpiryMs(CURSOR_ACCESS);
+    const out = await applyLeasesDetailed(onecli, { identifier: "g", name: "G" }, [
+      codexLease(),
+      cursorLease(),
+    ]);
+    expect(out.engine).toBe("codex");
+    expect(out.executorExpiresAt).toBe(exp);
   });
 });
 

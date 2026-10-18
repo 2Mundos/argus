@@ -377,6 +377,7 @@ GATEWAY = pytest.mark.parametrize(
             | {
                 "ARGUS_NANOCLAW_ONECLI_URL": "http://onecli:10254",
                 "ARGUS_NANOCLAW_ACCOUNT_PROVIDERS": "openai, anthropic",
+                "ARGUS_NANOCLAW_EXECUTOR_PROVIDERS": "cursor",
                 "ARGUS_NANOCLAW_NETWORK": "onecli-control",
             }
         )
@@ -393,6 +394,7 @@ def test_guided_nanoclaw_worker_inherits_the_operator_gateway_and_providers(
     pool = create(client, template="nanoclaw-socket", name="inherits").json()["pool"]
     assert pool["nanoclaw"]["onecli_url"] == "http://onecli:10254"
     assert pool["nanoclaw"]["account_providers"] == ["openai", "anthropic"]
+    assert pool["nanoclaw"]["executor_providers"] == ["cursor"]
     assert pool["nanoclaw"]["agent_image"] == extra_env["ARGUS_NANOCLAW_AGENT_IMAGE"]
     assert pool["docker"]["network"] == "onecli-control"
     # The isolation is still the template's own.
@@ -409,6 +411,7 @@ def test_without_operator_gateway_settings_the_pool_keeps_its_defaults(
     ]
     assert pool["nanoclaw"]["onecli_url"] == "http://host.docker.internal:10254"
     assert pool["nanoclaw"]["account_providers"] == []
+    assert pool["nanoclaw"]["executor_providers"] == []
     assert pool["docker"]["network"] is None
 
 

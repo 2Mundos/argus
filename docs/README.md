@@ -46,6 +46,8 @@ every new dependency is judged against it.
   login as an Argus account; engine selection and fallback between engines
 - [Claude accounts](specs/claude-accounts.spec.md) — import, generate with a
   dedicated login, or renew an Anthropic credential as an Argus account
+- [Cursor accounts](specs/cursor-accounts.spec.md) — import a login or API key
+  for the delegated Cursor CLI; executor lease and OneCLI path-scoped injection
 - [Knowledge](specs/knowledge.spec.md) — projects and a versioned wiki shared by
   agents and people, delivered with every claim
 - [Home](specs/home.spec.md) — the default dashboard tab: what needs attention,

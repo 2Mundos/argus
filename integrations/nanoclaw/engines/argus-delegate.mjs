@@ -66,9 +66,9 @@ export function authStatus(executor, e = process.env, home = os.homedir()) {
             need: "`opencode auth login`, or ARGUS_OPENCODE_ATTACH=<your opencode server>",
           };
     case "agent":
-      return env(e, "CURSOR_API_KEY") || present(path.join(xdg, "cursor", "auth.json"))
+      return present(path.join(xdg, "cursor", "auth.json"))
         ? { ok: true }
-        : { ok: false, need: "CURSOR_API_KEY, or `agent login`" };
+        : { ok: false, need: "a Cursor auth.json stub (from the gateway; not CURSOR_API_KEY)" };
     default:
       return { ok: false, need: "unknown executor" };
   }
@@ -137,6 +137,7 @@ export function buildCommand(executor, { cwd, model, readOnly, lastMessageFile }
           "json",
           "--workspace",
           cwd,
+          "--trust",
           ...(readOnly ? [] : ["--force"]),
           ...(model ? ["--model", model] : []),
         ],
@@ -146,6 +147,80 @@ export function buildCommand(executor, { cwd, model, readOnly, lastMessageFile }
     default:
       throw new Error(`unknown executor ${executor}`);
   }
+}
+
+function readCliConfig(cfgPath) {
+  try {
+    if (!fs.existsSync(cfgPath)) return null;
+    const parsed = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function http1Enabled(doc) {
+  return doc?.network?.useHttp1ForAgent === true;
+}
+
+/** True when the path (or its parent for a missing file) allows creating/overwriting. */
+function pathIsWritable(filePath) {
+  const dir = path.dirname(filePath);
+  try {
+    fs.accessSync(dir, fs.constants.W_OK);
+    if (fs.existsSync(filePath)) fs.accessSync(filePath, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function writeCliConfig(cfgPath, doc) {
+  const out = {
+    ...doc,
+    version: doc.version ?? 1,
+    network: {
+      ...(doc.network && typeof doc.network === "object" ? doc.network : {}),
+      useHttp1ForAgent: true,
+    },
+  };
+  fs.writeFileSync(cfgPath, `${JSON.stringify(out, null, 2)}\n`);
+  return out;
+}
+
+/**
+ * Cursor CLI HTTP/1.1 config for the gateway. Injected `cli-config.json` stubs are
+ * mounted read-only: consume them when they already set `useHttp1ForAgent`; otherwise
+ * write only to a writable private dir (never mutate RO stubs).
+ */
+export function prepareExecutorEnv(
+  executor,
+  e = process.env,
+  runtimeRoot = "/tmp/argus-cursor-runtime",
+) {
+  if (executor !== "agent") return e;
+  const home = e.HOME || os.homedir();
+  const xdg = e.XDG_CONFIG_HOME || path.join(home, ".config");
+  if (!present(path.join(xdg, "cursor", "auth.json"))) return e;
+
+  const mountedDir = e.CURSOR_CONFIG_DIR || path.join(xdg, "cursor");
+  const mountedCfg = path.join(mountedDir, "cli-config.json");
+  const injected = readCliConfig(mountedCfg);
+  if (injected && http1Enabled(injected)) {
+    return { ...e, CURSOR_CONFIG_DIR: mountedDir };
+  }
+
+  const baseDoc = injected ?? { version: 1, network: {} };
+  if (pathIsWritable(mountedCfg)) {
+    fs.mkdirSync(path.dirname(mountedCfg), { recursive: true });
+    writeCliConfig(mountedCfg, baseDoc);
+    return { ...e, CURSOR_CONFIG_DIR: mountedDir };
+  }
+
+  const privateDir = path.join(runtimeRoot, "cursor-config");
+  fs.mkdirSync(privateDir, { recursive: true });
+  writeCliConfig(path.join(privateDir, "cli-config.json"), baseDoc);
+  return { ...e, CURSOR_CONFIG_DIR: privateDir };
 }
 
 /** `cwd` must resolve (symlinks included) inside one of the allowed roots. */
@@ -281,6 +356,8 @@ export async function main(argv, e = process.env) {
       cwd: opts.cwd || process.cwd(),
       allowed_roots: roots,
     });
+
+  e = prepareExecutorEnv(executor, e, path.join(cwd, ".argus-delegate-runtime"));
 
   // Auth first: a missing credential blocks, it never reroutes.
   const auth = authStatus(executor, e);

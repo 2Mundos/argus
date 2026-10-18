@@ -22,6 +22,10 @@ cp "$here/argus-accounts.test.ts" "$target/src/channels/argus-accounts.test.ts"
 cp "$here/argus-gitea-lease.test.ts" "$target/src/channels/argus-gitea-lease.test.ts"
 cp "$here/argus-codex-stub.ts" "$target/src/gateway-providers/argus-codex-stub.ts"
 cp "$here/argus-codex-stub.test.ts" "$target/src/gateway-providers/argus-codex-stub.test.ts"
+cp "$here/argus-cursor-stub.ts" "$target/src/gateway-providers/argus-cursor-stub.ts"
+cp "$here/argus-cursor-stub.test.ts" "$target/src/gateway-providers/argus-cursor-stub.test.ts"
+mkdir -p "$target/src/gateway-providers/fixtures"
+cp -r "$here/fixtures/cursor-gateway" "$target/src/gateway-providers/fixtures/"
 cp "$here/init-argus-agent.ts" "$target/scripts/init-argus-agent.ts"
 cp "$here/gitea-api.mjs" "$target/container/gitea-api.mjs"
 
@@ -63,6 +67,67 @@ new = "  const config = await withMirroredCodexAccount(\n    await onecli.getCon
 assert old in s and "argus-codex-stub" in s
 open(p, "w").write(s.replace(old, new, 1))
 PY
-  echo "patched $onecli_ts"
+  echo "patched $onecli_ts (codex stub)"
+fi
+if [ -f "$onecli_ts" ] && ! grep -q "withCursorDelegateRuntime" "$onecli_ts"; then
+  python3 - "$onecli_ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+needle = "import { codexAccountId, withMirroredCodexAccount } from './argus-codex-stub.js';"
+assert needle in s, "run install after the codex stub hook is present"
+if "argus-cursor-stub" not in s:
+    s = s.replace(
+        needle,
+        needle
+        + "\nimport { cursorExecutorAssigned, withCursorDelegateRuntime } from './argus-cursor-stub.js';",
+        1,
+    )
+candidates = [
+    """  const config = augmentCursorContainerConfig(await withMirroredCodexAccount(
+    await onecli.getContainerConfig({ agent: input.key.agentGroupId }),
+    async () => (onecliUrl ? codexAccountId(onecliUrl, onecliApiKey, input.key.agentGroupId) : null),
+  ));""",
+    """  const config = await withMirroredCodexAccount(
+    await onecli.getContainerConfig({ agent: input.key.agentGroupId }),
+    async () => (onecliUrl ? codexAccountId(onecliUrl, onecliApiKey, input.key.agentGroupId) : null),
+  );""",
+]
+new = """  const config = await withCursorDelegateRuntime(
+    await withMirroredCodexAccount(
+      await onecli.getContainerConfig({ agent: input.key.agentGroupId }),
+      async () => (onecliUrl ? codexAccountId(onecliUrl, onecliApiKey, input.key.agentGroupId) : null),
+    ),
+    async () =>
+      onecliUrl
+        ? cursorExecutorAssigned(onecliUrl, onecliApiKey, input.key.agentGroupId)
+        : false,
+  );"""
+for old in candidates:
+    if old in s:
+        s = s.replace(old, new, 1)
+        break
+else:
+    raise SystemExit("onecli.ts: no codex container-config hook found to wrap")
+assert "withCursorDelegateRuntime" in s
+open(p, "w").write(s)
+PY
+  echo "patched $onecli_ts (cursor delegate runtime)"
+fi
+onecli_test="$target/src/gateway-providers/onecli.test.ts"
+if [ -f "$onecli_test" ] && grep -q 'expect(fetchMock).toHaveBeenCalledTimes(1);' "$onecli_test"; then
+  python3 - "$onecli_test" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "    expect(fetchMock).toHaveBeenCalledTimes(1);"
+new = """    const healthFetches = fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith('/v1/health'),
+    );
+    expect(healthFetches).toHaveLength(1);"""
+assert old in s, "onecli health-monitor test shape changed upstream"
+open(p, "w").write(s.replace(old, new, 1))
+PY
+  echo "patched $onecli_test (health monitor counts /v1/health only)"
 fi
 echo "installed. Next: (cd $target && pnpm run build && pnpm exec vitest run src/channels/argus.test.ts)"

@@ -25,6 +25,9 @@
  *                             account leasing from Argus and OneCLI switching;
  *                             without it the channel uses whatever credential
  *                             the OneCLI vault already has
+ *   ARGUS_EXECUTOR_PROVIDERS  comma-separated providers for the executor lease
+ *                             (default: anthropic). Set to "cursor" on a pool that
+ *                             should delegate to the Cursor CLI.
  *   ONECLI_URL / ONECLI_API_KEY  how to reach the OneCLI vault (accounts only)
  *   ARGUS_EXIT_ON_DRAIN       "false" to keep the host running once Argus has
  *                             drained this agent (default: exit, so the
@@ -39,7 +42,9 @@ import {
   type AccountLease,
   type ApplyTarget,
   applyLeases,
+  applyLeasesDetailed,
   applyRepositoryLease,
+  CURSOR_EXPIRY_MARGIN_MS,
   classifyFailure,
   normalizeRepositoryUrl,
   OneCliClient,
@@ -694,8 +699,19 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
     const target = await acc.resolveTarget();
     let engine: string;
+    const fetchImpl = cfg.fetch ?? fetch;
     try {
-      engine = await applyLeases(acc.onecli, target, held);
+      const applied = await applyLeasesDetailed(acc.onecli, target, held, fetchImpl);
+      engine = applied.engine;
+      if (
+        applied.executorExpiresAt !== null &&
+        applied.executorExpiresAt <= (cfg.now?.() ?? Date.now()) + CURSOR_EXPIRY_MARGIN_MS
+      ) {
+        log.warn(
+          "The Cursor executor access token is expired or about to expire; renew the account in Argus (the channel does not refresh OAuth tokens)",
+          { account: held[1]?.name, expires_at: applied.executorExpiresAt },
+        );
+      }
     } catch (err) {
       if (held.length < 2) throw err;
       // An unusable executor account (expired token, no credential field) must
@@ -706,7 +722,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       });
       held.pop();
       await client.call("POST", "/accounts/release?role=executor").catch(() => undefined);
-      engine = await applyLeases(acc.onecli, target, held);
+      engine = (await applyLeasesDetailed(acc.onecli, target, held, fetchImpl)).engine;
     }
     executor = held[1] ? { id: held[1].account_id, name: held[1].name } : null;
     activeAccountLeases = [...held];
@@ -1077,6 +1093,10 @@ function accountsFromEnv(): ArgusConfig["accounts"] {
     .split(",")
     .map((p) => p.trim())
     .filter(Boolean);
+  const executorProviders = (process.env.ARGUS_EXECUTOR_PROVIDERS ?? "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
   let repositories: Record<string, string> = {};
   const repositoriesJson = process.env.ARGUS_REPOSITORIES_JSON?.trim();
   if (repositoriesJson) {
@@ -1111,6 +1131,7 @@ function accountsFromEnv(): ArgusConfig["accounts"] {
   }
   return {
     providers,
+    ...(executorProviders.length > 0 ? { executorProviders } : {}),
     repositories,
     onecli: new OneCliClient(
       process.env.ONECLI_URL?.trim() || "http://127.0.0.1:10254",
