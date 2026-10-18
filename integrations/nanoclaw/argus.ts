@@ -204,7 +204,7 @@ export function renderTask(task: ArgusTask, pages: Map<string, string>): string 
   lines.push(
     "",
     "Delegated implementation (mandatory): run all coding/model work through /usr/local/bin/argus-delegate EXECUTOR.",
-    "EXECUTOR is the leased CLI role (claude | codex | opencode | agent). When the engine is Cursor, use EXECUTOR agent.",
+    "EXECUTOR is the leased CLI role (claude | codex | opencode | agent). When Cursor is the selected coding executor, use EXECUTOR agent; the NanoClaw engine remains Codex.",
     "Do not invoke agent, cursor-agent, claude, codex, or opencode directly for implementation — that bypasses",
     "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
     "Direct Git, gates, QA, and other non-delegated shell commands in the checkout are fine when they are not a",
