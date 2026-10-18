@@ -24,6 +24,9 @@ cp "$here/argus-codex-stub.ts" "$target/src/gateway-providers/argus-codex-stub.t
 cp "$here/argus-codex-stub.test.ts" "$target/src/gateway-providers/argus-codex-stub.test.ts"
 cp "$here/argus-cursor-stub.ts" "$target/src/gateway-providers/argus-cursor-stub.ts"
 cp "$here/argus-cursor-stub.test.ts" "$target/src/gateway-providers/argus-cursor-stub.test.ts"
+cp "$here/argus-onecli-git-ca.ts" "$target/src/gateway-providers/argus-onecli-git-ca.ts"
+cp "$here/argus-onecli-git-ca.test.ts" "$target/src/gateway-providers/argus-onecli-git-ca.test.ts"
+cp "$here/onecli-path-match.ts" "$target/src/gateway-providers/onecli-path-match.ts"
 mkdir -p "$target/src/gateway-providers/fixtures"
 cp -r "$here/fixtures/cursor-gateway" "$target/src/gateway-providers/fixtures/"
 cp "$here/init-argus-agent.ts" "$target/scripts/init-argus-agent.ts"
@@ -129,5 +132,49 @@ assert old in s, "onecli health-monitor test shape changed upstream"
 open(p, "w").write(s.replace(old, new, 1))
 PY
   echo "patched $onecli_test (health monitor counts /v1/health only)"
+fi
+if [ -f "$onecli_ts" ] && ! grep -q "argus-onecli-git-ca" "$onecli_ts"; then
+  python3 - "$onecli_ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+needle = "import { cursorExecutorAssigned, withCursorDelegateRuntime } from './argus-cursor-stub.js';"
+assert needle in s, "run install after the cursor delegate hook is present"
+s = s.replace(
+    needle,
+    needle + "\nimport { applyGitSslCaInfo } from './argus-onecli-git-ca.js';",
+    1,
+)
+old = "  for (const stub of config.credentialStubs ?? []) mount('stub', stub.content, stub.containerPath);\n  return { env, mounts };"
+new = """  for (const stub of config.credentialStubs ?? []) mount('stub', stub.content, stub.containerPath);
+  applyGitSslCaInfo(env, config.caCertificateContainerPath);
+  return { env, mounts };"""
+assert old in s, "onecli.ts contributionFromConfig shape changed upstream"
+open(p, "w").write(s.replace(old, new, 1))
+PY
+  echo "patched $onecli_ts (GIT_SSL_CAINFO for git smart HTTP)"
+fi
+if [ -f "$onecli_test" ] && ! grep -q "GIT_SSL_CAINFO tracks the combined CA bundle" "$onecli_test"; then
+  python3 - "$onecli_test" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+for bad in (
+    "        GIT_SSL_CAINFO: '/tmp/onecli-ca.pem',\n",
+    "        GIT_SSL_CAINFO: '/tmp/onecli-combined-ca.pem',\n",
+):
+    s = s.replace(bad, "")
+anchor = """    });
+    expect(withProviderEnv({}, '')).toEqual({});"""
+insert = """    });
+    // GIT_SSL_CAINFO tracks the combined CA bundle when the host trust store is available.
+    expect(lease.contribution.env.GIT_SSL_CAINFO).toBe(
+      lease.contribution.env.SSL_CERT_FILE ?? '/tmp/onecli-ca.pem',
+    );
+    expect(withProviderEnv({}, '')).toEqual({});"""
+assert anchor in s, "onecli session contribution test shape changed upstream"
+open(p, "w").write(s.replace(anchor, insert, 1))
+PY
+  echo "patched $onecli_test (expects GIT_SSL_CAINFO on gateway contribution)"
 fi
 echo "installed. Next: (cd $target && pnpm run build && pnpm exec vitest run src/channels/argus.test.ts)"

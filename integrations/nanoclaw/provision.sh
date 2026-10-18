@@ -118,7 +118,7 @@ if [ "$ENGINES" = 1 ]; then "$here/engines/install-engines.sh" "$SRC"; fi
   pnpm run build
   # tsc does not emit imported JS assets; restore them even if build cleaned dist.
   "$here/install.sh" "$SRC" >/dev/null
-  pnpm exec vitest run src/channels/argus.test.ts src/channels/argus-accounts.test.ts src/gateway-providers/argus-cursor-stub.test.ts src/gateway-providers/onecli.test.ts src/gateway-providers/onecli-files.test.ts src/gateway-providers/gateway-provider-registry.test.ts
+  pnpm exec vitest run src/channels/argus.test.ts src/channels/argus-accounts.test.ts src/channels/argus-gitea-lease.test.ts src/gateway-providers/argus-cursor-stub.test.ts src/gateway-providers/argus-onecli-git-ca.test.ts src/gateway-providers/onecli.test.ts src/gateway-providers/onecli-files.test.ts src/gateway-providers/gateway-provider-registry.test.ts
 )
 
 # Agent image: NanoClaw's own build script, then a stable tag and a `docker save`

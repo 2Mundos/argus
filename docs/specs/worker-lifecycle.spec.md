@@ -527,6 +527,17 @@ OneCLI's documented generic-secret field is `injectionConfig`, and its path
 matcher supports a single pattern with `*` wildcard forms ([OneCLI 1.42 secret
 service](https://github.com/onecli/onecli/blob/v1.42.0/packages/api/src/services/secret-service.ts),
 [path-matching contract](https://trybrowzer.com/docs/onecli/credential-injection/injection-modes-reference#path-matching)).
+Do not use a `/**` suffix for Git paths: OneCLI 1.42 `path_matches` treats that as segment
+wildcards and it does not match real smart-HTTP paths such as
+`/{owner}/{repo}.git/info/refs`; injection silently skips and Git sees no `Authorization`.
+Git also does not honor `SSL_CERT_FILE` / `NODE_EXTRA_CA_CERTS` for HTTPS verification.
+The Argus NanoClaw install sets `GIT_SSL_CAINFO` to the same combined gateway CA bundle path
+as `SSL_CERT_FILE` when mounted (otherwise the gateway-only CA path from OneCLI container
+config), so `git clone`/`git fetch` through the proxy trust the MITM CA without disabling
+verification. Repository credentials remain scoped to `…/repo.git/*` only while the
+`repository` lease is held; release removes OneCLI assignments (a post-task probe must not
+be mistaken for a live-task failure). Workers clone at runtime over HTTPS via the injected
+proxy; project toolchain images do not bake source repositories.
 It reconciles the complete currently-held engine/executor/repository lease set (including both
 repository secrets)
 because OneCLI's set-secrets endpoint replaces assignments, and the

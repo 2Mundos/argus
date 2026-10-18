@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { onecliPathMatches } from "../gateway-providers/onecli-path-match.js";
 import {
   type AccountLease,
   applyRepositoryLease,
@@ -8,6 +9,19 @@ import {
 } from "./argus-accounts.js";
 
 describe("dedicated Gitea repository lease", () => {
+  it("uses a OneCLI 1.42-compatible git path pattern (not /**)", () => {
+    const { gitPathPattern } = normalizeRepositoryUrl("https://git.example.test/team/repo");
+    const smartHttpPaths = [
+      "/team/repo.git/info/refs",
+      "/team/repo.git/git-upload-pack",
+      "/team/repo.git/HEAD",
+    ];
+    for (const path of smartHttpPaths) {
+      expect(onecliPathMatches(path, gitPathPattern)).toBe(true);
+      expect(onecliPathMatches(path, "/team/repo.git/**")).toBe(false);
+    }
+  });
+
   it("normalizes repo and repo.git task URLs and allowlist entries consistently", async () => {
     for (const configuredSuffix of ["", ".git"]) {
       for (const allowedSuffix of ["", ".git"]) {
