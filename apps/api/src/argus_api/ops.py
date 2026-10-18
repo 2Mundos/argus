@@ -15,7 +15,8 @@ from argus_core.tasks import TaskState
 
 from argus_api.db import Database, utcnow
 
-VERSION = "0.1.0"
+# Baked into release images (docs/specs/releases.spec.md 3.5).
+VERSION = os.environ.get("ARGUS_VERSION", "0.0.0+dev")
 WRITE_PROBE_TIMEOUT_S = 5.0
 MIN_FREE_BYTES = 64 * 1024 * 1024
 MIN_STALE_WINDOW_S = 30.0

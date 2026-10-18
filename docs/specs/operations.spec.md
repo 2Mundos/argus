@@ -92,7 +92,8 @@ first pass.
 ## 3.4 System view
 
 `GET /api/system` (any valid token) returns the readiness checks, the same
-numbers as `/api/metrics` in structured form, and the build version. The dashboard's
+numbers as `/api/metrics` in structured form, and the build version (the release
+tag baked into the image, `0.0.0+dev` otherwise; [releases](releases.spec.md) 3.5). The dashboard's
 System tab renders it and refreshes with the event stream.
 
 # 4. Open Questions
