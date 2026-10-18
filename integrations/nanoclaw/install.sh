@@ -154,27 +154,42 @@ open(p, "w").write(s.replace(old, new, 1))
 PY
   echo "patched $onecli_ts (GIT_SSL_CAINFO for git smart HTTP)"
 fi
-if [ -f "$onecli_test" ] && ! grep -q "GIT_SSL_CAINFO tracks the combined CA bundle" "$onecli_test"; then
-  python3 - "$onecli_test" <<'PY'
+if [ -f "$onecli_test" ]; then
+  if python3 - "$onecli_test" <<'PY' | grep -q '^patched$'; then
 import sys
 p = sys.argv[1]
-s = open(p).read()
+original = open(p).read()
+s = original
+canonical = """    const contributionEnv = lease.contribution?.env;
+    if (!contributionEnv) throw new Error('missing contribution env');
+    // GIT_SSL_CAINFO tracks the combined CA bundle when the host trust store is available.
+    expect(contributionEnv.GIT_SSL_CAINFO).toBe(
+      contributionEnv.SSL_CERT_FILE ?? '/tmp/onecli-ca.pem',
+    );"""
+legacy = """    // GIT_SSL_CAINFO tracks the combined CA bundle when the host trust store is available.
+    expect(lease.contribution.env.GIT_SSL_CAINFO).toBe(
+      lease.contribution.env.SSL_CERT_FILE ?? '/tmp/onecli-ca.pem',
+    );"""
 for bad in (
     "        GIT_SSL_CAINFO: '/tmp/onecli-ca.pem',\n",
     "        GIT_SSL_CAINFO: '/tmp/onecli-combined-ca.pem',\n",
 ):
     s = s.replace(bad, "")
-anchor = """    });
+if legacy in s:
+    s = s.replace(legacy, canonical)
+elif canonical not in s:
+    anchor = """    });
     expect(withProviderEnv({}, '')).toEqual({});"""
-insert = """    });
-    // GIT_SSL_CAINFO tracks the combined CA bundle when the host trust store is available.
-    expect(lease.contribution.env.GIT_SSL_CAINFO).toBe(
-      lease.contribution.env.SSL_CERT_FILE ?? '/tmp/onecli-ca.pem',
-    );
-    expect(withProviderEnv({}, '')).toEqual({});"""
-assert anchor in s, "onecli session contribution test shape changed upstream"
-open(p, "w").write(s.replace(anchor, insert, 1))
+    insert = f"""    }});
+{canonical}
+    expect(withProviderEnv({{}}, '')).toEqual({{}});"""
+    assert anchor in s, "onecli session contribution test shape changed upstream"
+    s = s.replace(anchor, insert, 1)
+if s != original:
+    open(p, "w").write(s)
+    print("patched")
 PY
-  echo "patched $onecli_test (expects GIT_SSL_CAINFO on gateway contribution)"
+    echo "patched $onecli_test (expects GIT_SSL_CAINFO on gateway contribution)"
+  fi
 fi
 echo "installed. Next: (cd $target && pnpm run build && pnpm exec vitest run src/channels/argus.test.ts)"
