@@ -161,14 +161,19 @@ Findings outside the gap list:
 
 ## 3.4 Discovery
 
-- One mount at `/mcp`. A subclass of `MCPServer` overrides `_handle_list_tools`,
-  which receives the request context, and filters the list by the bearer token's
-  scope. The hook is private SDK API, so a test pins its behaviour; if an SDK
-  upgrade breaks it, the fallback is a second mount at `/mcp/ops`.
-- `tools/list` is filtered by the caller's scope: workers see worker and
-  knowledge tools, managers also see orchestration tools, and admin-only tools
-  (`update_pool`) appear only for admins. Calling a hidden tool still answers
-  with the REST 403. Hiding a tool is not access control.
+- One mount at `/mcp`. A server middleware (`MCPServer.middleware`, the SDK's
+  documented hook) resolves the bearer token's scope and filters the
+  `tools/list` result. A missing or invalid token gets a `401 unauthorized`
+  error. The SDK passes the middleware a serialized result, and tests pin that.
+  If an SDK upgrade breaks the hook, the fallback is a second mount at
+  `/mcp/ops`.
+- Each tool declares its audience: agents (worker and orchestrator tokens),
+  managers (orchestrator and admin), or anyone. Workers see the task-working
+  and knowledge tools. Orchestrators see everything. Admins see everything
+  except the tools that need an agent identity (`claim_task`, `heartbeat`, …).
+  Admin-only tools (`update_pool`) appear only for admins. A test calls every
+  listed tool for each scope and fails if REST refuses one on scope. Calling an
+  unlisted tool still follows REST's rules. Hiding a tool is not access control.
 - The server `instructions` name the inbox journey and the fleet journey. They
   also give the fallback when a tool is missing: say which tool is missing and
   stop; do not script REST around it. The same text goes to
