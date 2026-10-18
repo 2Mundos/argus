@@ -30,6 +30,7 @@ const mock = vi.hoisted(() => ({
   listCalls: 0,
   patches: [] as { id: string; body: Record<string, unknown> }[],
   deletes: [] as { id: string; confirm: string }[],
+  puts: [] as { id: string; credential: Record<string, unknown> }[],
   failWith: undefined as Error | undefined,
 }));
 
@@ -56,6 +57,10 @@ vi.mock("../api", () => ({
       id: init.params.path.account_id,
       body: init.body,
     }),
+    PUT: (
+      _: string,
+      init: { params: { path: { account_id: string } }; body: { credential: object } },
+    ) => ({ op: "put", id: init.params.path.account_id, credential: init.body.credential }),
     DELETE: (
       _: string,
       init: { params: { path: { account_id: string }; query: { confirm_name: string } } },
@@ -70,9 +75,16 @@ vi.mock("../api", () => ({
       mock.listCalls += 1;
       return mock.list;
     }
-    const r = req as { op: string; id: string; body?: Record<string, unknown>; confirm?: string };
+    const r = req as {
+      op: string;
+      id: string;
+      body?: Record<string, unknown>;
+      confirm?: string;
+      credential?: Record<string, unknown>;
+    };
     if (mock.failWith) throw mock.failWith;
     if (r.op === "patch") mock.patches.push({ id: r.id, body: r.body ?? {} });
+    if (r.op === "put") mock.puts.push({ id: r.id, credential: r.credential ?? {} });
     if (r.op === "delete") {
       mock.deletes.push({ id: r.id, confirm: r.confirm ?? "" });
       mock.list = mock.list.filter((a) => (a as Account).id !== r.id);
@@ -89,6 +101,7 @@ beforeEach(() => {
   mock.listCalls = 0;
   mock.patches = [];
   mock.deletes = [];
+  mock.puts = [];
   mock.failWith = undefined;
 });
 afterEach(cleanup);
@@ -107,7 +120,7 @@ describe("account row actions", () => {
   it("edits only changed fields, shows no credential, and refreshes the list", async () => {
     render(<Accounts />);
     fireEvent.click(await screen.findByRole("button", { name: "Edit work" }));
-    expect(screen.queryByLabelText(/credential|token|api key/i)).toBeNull();
+    expect(document.querySelector(".dialog textarea, .dialog input[type=password]")).toBeNull();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "work2" } });
     fireEvent.change(screen.getByLabelText(/Max concurrent leases/), { target: { value: "3" } });
     fireEvent.click(screen.getByRole("checkbox"));
@@ -188,6 +201,77 @@ describe("account row actions", () => {
     expect(screen.getByRole("button", { name: "Delete account" })).toHaveProperty(
       "disabled",
       false,
+    );
+  });
+
+  it("offers Replace credential for non-anthropic accounts and keeps Renew for anthropic", async () => {
+    mock.list = [account({}), account({ id: "id-3", name: "claude", provider: "anthropic" })];
+    render(<Accounts />);
+    expect(await screen.findByRole("button", { name: "Replace credential of work" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Replace credential of claude" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Renew credential of claude" })).toBeTruthy();
+  });
+
+  it("replaces a credential from a blank form without echoing it", async () => {
+    mock.list = [account({ state: "disabled", disabled_reason: "x" })];
+    render(<Accounts />);
+    fireEvent.click(await screen.findByRole("button", { name: "Replace credential of work" }));
+    const box = screen.getByLabelText("New credential") as HTMLTextAreaElement;
+    expect(box.value).toBe("");
+    fireEvent.change(box, { target: { value: '{"accessToken":"s3cret-value"}' } });
+    fireEvent.click(screen.getByRole("button", { name: "Replace credential" }));
+    await waitFor(() =>
+      expect(mock.puts).toEqual([{ id: "id-1", credential: { accessToken: "s3cret-value" } }]),
+    );
+    expect(await screen.findByText("Replaced the credential of “work”.")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("s3cret-value");
+    expect(mock.patches).toHaveLength(0); // nothing re-enables the account
+  });
+
+  it("loads a chosen JSON file into the form", async () => {
+    render(<Accounts />);
+    fireEvent.click(await screen.findByRole("button", { name: "Replace credential of work" }));
+    const file = new File(['{"k":"v"}'], "auth.json", { type: "application/json" });
+    Object.defineProperty(file, "text", { value: async () => '{"k":"v"}' });
+    fireEvent.change(screen.getByLabelText("Credential file"), { target: { files: [file] } });
+    await waitFor(() =>
+      expect((screen.getByLabelText("New credential") as HTMLTextAreaElement).value).toBe(
+        '{"k":"v"}',
+      ),
+    );
+  });
+
+  it("rejects non-object JSON locally and shows server errors without the value", async () => {
+    render(<Accounts />);
+    fireEvent.click(await screen.findByRole("button", { name: "Replace credential of work" }));
+    fireEvent.change(screen.getByLabelText("New credential"), { target: { value: "[1]" } });
+    fireEvent.click(screen.getByRole("button", { name: "Replace credential" }));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/JSON object/);
+    fireEvent.change(screen.getByLabelText("New credential"), { target: { value: "{}" } });
+    fireEvent.click(screen.getByRole("button", { name: "Replace credential" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/empty/));
+    mock.failWith = new Error("invalid acme credential: must be a non-empty JSON object");
+    fireEvent.change(screen.getByLabelText("New credential"), {
+      target: { value: '{"a":"zzz-secret"}' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Replace credential" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/non-empty/));
+    expect(screen.getByRole("alert").textContent).not.toContain("zzz-secret");
+    expect(mock.puts).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByLabelText("New credential")).toBeNull();
+  });
+
+  it("uses username and token fields to replace a gitea credential", async () => {
+    mock.list = [account({ provider: "gitea" })];
+    render(<Accounts />);
+    fireEvent.click(await screen.findByRole("button", { name: "Replace credential of work" }));
+    expect((screen.getByLabelText("Gitea token") as HTMLInputElement).value).toBe("");
+    fireEvent.change(screen.getByLabelText("Gitea username"), { target: { value: "pedro" } });
+    fireEvent.change(screen.getByLabelText("Gitea token"), { target: { value: "tok" } });
+    fireEvent.click(screen.getByRole("button", { name: "Replace credential" }));
+    await waitFor(() =>
+      expect(mock.puts[0]?.credential).toEqual({ username: "pedro", token: "tok" }),
     );
   });
 });

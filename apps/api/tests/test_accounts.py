@@ -637,3 +637,98 @@ def test_delete_leaves_an_operator_managed_secret(
     )
     assert res.status_code == 204
     assert "shared" in secrets.names()
+
+
+def test_delete_commit_failure_after_secret_removal_restores_the_exact_secret(
+    client: TestClient,
+) -> None:
+    account = _create(client, "fragile")
+    url = f"/api/accounts/{account['id']}"
+    secrets = app.state.secrets
+    name = f"account-{account['id']}"
+    prior = dict(secrets.get(name))
+    writer = app.state.db._writer
+    original_execute, original_delete = writer.execute, secrets.delete
+    removed = False
+
+    async def delete(secret: str) -> None:
+        nonlocal removed
+        await original_delete(secret)
+        removed = True
+
+    async def boom() -> None:
+        raise OSError("disk I/O error")
+
+    def execute(sql, *args, **kwargs):
+        if sql == "COMMIT" and removed:
+            return boom()
+        return original_execute(sql, *args, **kwargs)
+
+    writer.execute, secrets.delete = execute, delete
+    try:
+        with pytest.raises(OSError, match="disk I/O"):
+            client.delete(url, params={"confirm_name": "fragile"}, headers=ADMIN)
+    finally:
+        writer.execute, secrets.delete = original_execute, original_delete
+    assert removed
+    assert secrets.get(name) == prior
+    after = client.get(url, headers=ADMIN)
+    assert after.status_code == 200 and after.json()["name"] == "fragile"
+    # The writer is usable again and the delete can be retried.
+    res = client.delete(url, params={"confirm_name": "fragile"}, headers=ADMIN)
+    assert res.status_code == 204 and secrets.get(name) is None
+
+
+def test_delete_keeps_a_secret_another_account_still_references(
+    client: TestClient,
+) -> None:
+    owner = _create(client, "owner")
+    secrets = app.state.secrets
+    name = f"account-{owner['id']}"
+    sibling = client.post(
+        "/api/accounts",
+        json={"name": "sibling", "provider": "acme", "secret_ref": f"sops:{name}"},
+        headers=ADMIN,
+    ).json()
+    res = client.delete(
+        f"/api/accounts/{owner['id']}", params={"confirm_name": "owner"}, headers=ADMIN
+    )
+    assert res.status_code == 204 and secrets.get(name) is not None
+    worker = register(client)
+    leased = client.post(
+        "/api/accounts/lease", json={"providers": ["acme"]}, headers=worker
+    ).json()
+    assert leased["account_id"] == sibling["id"] and leased["credential"]
+    client.post("/api/accounts/release", headers=worker)
+    # The last referrer takes the generated secret with it.
+    res = client.delete(
+        f"/api/accounts/{sibling['id']}",
+        params={"confirm_name": "sibling"},
+        headers=ADMIN,
+    )
+    assert res.status_code == 204 and secrets.get(name) is None
+
+
+def test_replace_credential_keeps_state_and_validates_shape(
+    client: TestClient,
+) -> None:
+    account = _create(client, "cursor-ish")
+    url = f"/api/accounts/{account['id']}"
+    client.patch(url, json={"enabled": False, "priority": 4}, headers=ADMIN)
+    cred = f"{url}/credential"
+    res = client.put(cred, json={"credential": {}}, headers=ADMIN)
+    assert res.status_code == 422 and "non-empty" in res.text
+    res = client.put(
+        cred, json={"credential": {"accessToken": "new-secret-xyz"}}, headers=ADMIN
+    )
+    assert res.status_code == 204 and "new-secret-xyz" not in res.text
+    assert app.state.secrets.get(f"account-{account['id']}") == {
+        "accessToken": "new-secret-xyz"
+    }
+    after = client.get(url, headers=ADMIN).json()
+    assert (after["state"], after["priority"], after["name"]) == (
+        "disabled",
+        4,
+        "cursor-ish",
+    )
+    assert "new-secret-xyz" not in client.get("/api/accounts", headers=ADMIN).text

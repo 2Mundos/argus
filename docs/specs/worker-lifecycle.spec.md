@@ -630,20 +630,33 @@ database never holds a secret.
   Admins register accounts (`POST /api/accounts`) either with the credential,
   which Argus writes to the SOPS file as `account-<id>`, or with a `secret_ref`
   to an entry already there.
-- **Edit and delete** (admin). `PATCH /api/accounts/{id}` changes `name`
-  (unique; `409 name_taken`), `priority`, `max_leases`, `labels` and `enabled`;
-  it never touches the credential, which is replaced only by
-  `PUT /api/accounts/{id}/credential` (or a renewal login) and is never returned.
-  Disabling is reversible and is not deletion. `DELETE /api/accounts/{id}?confirm_name=<name>`
-  removes the registry row, its usage history, its ended leases, and the
-  `account-<id>` secret Argus wrote (an operator-managed `secret_ref` is left in
-  the file). `confirm_name` must equal the current name (`409 name_mismatch`, so a
-  renamed or wrong target is refused) and an account with an active lease is
-  refused (`409 account_in_use`); disabled accounts can be deleted. The secret is
-  removed inside the transaction, so a secret-store failure rolls everything back.
-  An `account.deleted` event records name and provider, never a credential. The
-  dashboard offers Edit and Delete per row; Delete asks the operator to type the
-  account's name.
+- **Edit, replace credential, delete** (admin). `PATCH /api/accounts/{id}` changes
+  `name` (unique; `409 name_taken`), `priority`, `max_leases`, `labels` and
+  `enabled`; it never touches the credential and never returns it. The credential
+  is replaced only by `PUT /api/accounts/{id}/credential` (or the Claude renewal
+  login). The dashboard's **Replace credential** (every provider except
+  `anthropic`, which has Renew credential) sends a blank-by-default JSON document,
+  pasted or read from a file the operator picks; stored values are never loaded
+  into the form. The server validates it with the provider's own check where one
+  exists (`gitea`; `openai`, `anthropic` as for registration) and otherwise
+  requires a non-empty JSON object. Replacing changes nothing but the secret: a
+  disabled account stays disabled. A document is only stored, never treated as
+  proof of authentication.
+  Disabling is reversible and is not deletion.
+  `DELETE /api/accounts/{id}?confirm_name=<name>` removes the registry row, its
+  usage history and its ended leases, and the `account-*` secret Argus generated
+  unless another account still references it (operator-managed refs are never
+  removed). `confirm_name` must equal the current name (`409 name_mismatch`:
+  a renamed or wrong target is refused) and an account with an active lease is
+  refused (`409 account_in_use`); disabled accounts can be deleted.
+  **The SOPS file and SQLite do not share a transaction.** The secret is removed
+  inside the SQL transaction, so a store failure rolls the rows back; if the SQL
+  commit then fails after the secret was removed, the route writes the exact prior
+  value back (best effort compensation, not atomicity). If that restore also
+  fails the error (`secret_restore_failed`) names the entry, never a value, and the
+  operator recovers it from the secrets file backup. An `account.deleted` event
+  records name and provider, never a credential. The dashboard asks the operator to
+  type the account's name.
 - **Leasing** (`POST /api/accounts/lease {providers}`, most preferred first):
   Argus picks the highest-priority usable account among those providers (the
   agent's provider order breaks ties, then the least-leased account) and returns

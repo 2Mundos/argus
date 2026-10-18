@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from "react";
+import { GITEA_PROVIDER } from "../accountProviders";
 import { type Account, api, call } from "../api";
 
 /** Edits registry fields only. The credential is never loaded, shown, or sent
@@ -171,6 +172,149 @@ export function DeleteAccount({
           </button>
           <button type="submit" className="danger" disabled={busy || typed !== account.name}>
             Delete account
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/** Replaces the stored credential with a document the operator supplies. The
+ * form starts blank and nothing stored is ever read into it. The server stores
+ * it after validating its shape; storing is not proof that it authenticates. */
+export function ReplaceCredential({
+  account,
+  onClose,
+  onDone,
+}: {
+  account: Account;
+  onClose: () => void;
+  onDone: (message: string) => void;
+}) {
+  const isGitea = account.provider === GITEA_PROVIDER;
+  const [text, setText] = useState("");
+  const [username, setUsername] = useState("");
+  const [token, setToken] = useState("");
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+
+  async function pick(file: File | undefined) {
+    if (!file) return;
+    setError(undefined);
+    try {
+      setText(await file.text());
+    } catch {
+      setError("Could not read that file.");
+    }
+  }
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setError(undefined);
+    let credential: Record<string, unknown>;
+    if (isGitea) {
+      credential = { username: username.trim(), token };
+    } else {
+      try {
+        const parsed: unknown = JSON.parse(text);
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw 0;
+        credential = parsed as Record<string, unknown>;
+      } catch {
+        setError("The credential must be a JSON object.");
+        return;
+      }
+      if (Object.keys(credential).length === 0) {
+        setError("The credential must not be an empty object.");
+        return;
+      }
+    }
+    setBusy(true);
+    try {
+      await call(
+        api.PUT("/api/accounts/{account_id}/credential", {
+          params: { path: { account_id: account.id } },
+          body: { credential },
+        }),
+      );
+      onDone(`Replaced the credential of “${account.name}”.`);
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="overlay">
+      <form
+        className="dialog"
+        onSubmit={submit}
+        aria-label={`Replace credential of ${account.name}`}
+        noValidate
+      >
+        <h2>Replace credential of {account.name}</h2>
+        <p className="muted small">
+          Name, provider, priority, lease limit and enabled state stay as they are; a disabled
+          account stays disabled. The old credential is overwritten and is never shown. Supply the
+          login document the provider's client writes, not a settings file without tokens: Argus
+          stores it but cannot tell here whether it signs in.
+        </p>
+        {isGitea ? (
+          <div className="row">
+            <label>
+              Gitea username
+              <input
+                aria-label="Gitea username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              Gitea token
+              <input
+                type="password"
+                aria-label="Gitea token"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                autoComplete="off"
+              />
+            </label>
+          </div>
+        ) : (
+          <>
+            <label>
+              New credential (JSON object; stored encrypted)
+              <textarea
+                aria-label="New credential"
+                rows={6}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              Or choose a JSON file
+              <input
+                type="file"
+                aria-label="Credential file"
+                accept=".json,application/json"
+                onChange={(e) => pick(e.target.files?.[0])}
+              />
+            </label>
+          </>
+        )}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="actions">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={busy}>
+            Replace credential
           </button>
         </div>
       </form>

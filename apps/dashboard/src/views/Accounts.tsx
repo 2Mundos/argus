@@ -11,7 +11,7 @@ import {
 import { type Account, api, call } from "../api";
 import { relative } from "../format";
 import { useLiveData } from "../live";
-import { DeleteAccount, EditAccount } from "./AccountDialogs";
+import { DeleteAccount, EditAccount, ReplaceCredential } from "./AccountDialogs";
 import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
 
@@ -22,6 +22,7 @@ export function Accounts() {
   const [claude, setClaude] = useState<{ renew?: Account }>();
   const [editing, setEditing] = useState<Account>();
   const [deleting, setDeleting] = useState<Account>();
+  const [replacing, setReplacing] = useState<Account>();
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
   const {
@@ -134,7 +135,7 @@ export function Accounts() {
                   >
                     {a.state === "disabled" ? "Enable" : "Disable"}
                   </button>
-                  {a.provider === "anthropic" && (
+                  {a.provider === "anthropic" ? (
                     <button
                       type="button"
                       className="link"
@@ -142,6 +143,15 @@ export function Accounts() {
                       onClick={() => setClaude({ renew: a })}
                     >
                       Renew credential
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="link"
+                      aria-label={`Replace credential of ${a.name}`}
+                      onClick={() => setReplacing(a)}
+                    >
+                      Replace credential
                     </button>
                   )}
                   <button
@@ -179,6 +189,17 @@ export function Accounts() {
           onClose={() => setEditing(undefined)}
           onDone={(message) => {
             setEditing(undefined);
+            setNotice(message);
+            reloadList();
+          }}
+        />
+      )}
+      {replacing && (
+        <ReplaceCredential
+          account={replacing}
+          onClose={() => setReplacing(undefined)}
+          onDone={(message) => {
+            setReplacing(undefined);
             setNotice(message);
             reloadList();
           }}

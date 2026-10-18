@@ -180,8 +180,14 @@ export interface paths {
         post?: never;
         /**
          * Delete Account
-         * @description Delete an account and its encrypted credential. `confirm_name` must equal
-         *     the current name; `409 account_in_use` while a lease is active.
+         * @description Delete an account and, if nothing else references it, its Argus-generated
+         *     credential. `confirm_name` must equal the current name; `409 account_in_use`
+         *     while a lease is active.
+         *
+         *     SOPS and SQLite cannot commit together. The secret is removed inside the SQL
+         *     transaction, so a store failure rolls the rows back; if the commit then fails
+         *     after the secret is gone, the exact prior value is written back (compensation,
+         *     best effort: if that write also fails the error names the entry, never a value).
          */
         delete: operations["delete_account_api_accounts__account_id__delete"];
         options?: never;

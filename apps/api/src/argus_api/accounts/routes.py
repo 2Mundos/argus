@@ -67,6 +67,10 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
                 )
             return "api_key", "token"
         else:
+            if not credential:
+                raise ValidationFailedError(
+                    f"invalid {provider} credential: must be a non-empty JSON object"
+                )
             return None
     except (claude_auth.ClaudeAuthError, codex_auth.CodexAuthError) as exc:
         raise ValidationFailedError(f"invalid {provider} credential: {exc}") from None
@@ -238,12 +242,35 @@ async def delete_account(
     caller: AdminDep,
     secrets: SecretsDep,
 ) -> None:
-    """Delete an account and its encrypted credential. `confirm_name` must equal
-    the current name; `409 account_in_use` while a lease is active."""
-    async with db.write() as tx:
-        await service.delete_account(
-            tx, account_id, confirm_name, caller.actor, secrets
-        )
+    """Delete an account and, if nothing else references it, its Argus-generated
+    credential. `confirm_name` must equal the current name; `409 account_in_use`
+    while a lease is active.
+
+    SOPS and SQLite cannot commit together. The secret is removed inside the SQL
+    transaction, so a store failure rolls the rows back; if the commit then fails
+    after the secret is gone, the exact prior value is written back (compensation,
+    best effort: if that write also fails the error names the entry, never a value)."""
+    removed: str | None = None
+    prior: dict | None = None
+    try:
+        async with db.write() as tx:
+            removed = await service.delete_account(
+                tx, account_id, confirm_name, caller.actor
+            )
+            if removed is not None:
+                prior = secrets.get(removed)
+                await secrets.delete(removed)
+    except BaseException:
+        if removed is not None and prior is not None and secrets.get(removed) is None:
+            try:
+                await secrets.put(removed, prior)
+            except SecretStoreError:
+                raise SecretStoreError(
+                    f"account delete failed and secret {removed!r} could not be"
+                    " restored; recover it from the secrets file backup",
+                    code="secret_restore_failed",
+                ) from None
+        raise
 
 
 @router.post("/lease")

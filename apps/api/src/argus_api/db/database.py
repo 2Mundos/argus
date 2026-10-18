@@ -103,7 +103,11 @@ class Database:
             except BaseException:
                 await self._writer.execute("ROLLBACK")
                 raise
-            await self._writer.execute("COMMIT")
+            try:
+                await self._writer.execute("COMMIT")
+            except BaseException:
+                await self._writer.execute("ROLLBACK")
+                raise
         for event in tx.events:
             self.bus.publish(event)
 

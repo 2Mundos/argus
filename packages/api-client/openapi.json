@@ -6964,7 +6964,7 @@
     },
     "/api/accounts/{account_id}": {
       "delete": {
-        "description": "Delete an account and its encrypted credential. `confirm_name` must equal\nthe current name; `409 account_in_use` while a lease is active.",
+        "description": "Delete an account and, if nothing else references it, its Argus-generated\ncredential. `confirm_name` must equal the current name; `409 account_in_use`\nwhile a lease is active.\n\nSOPS and SQLite cannot commit together. The secret is removed inside the SQL\ntransaction, so a store failure rolls the rows back; if the commit then fails\nafter the secret is gone, the exact prior value is written back (compensation,\nbest effort: if that write also fails the error names the entry, never a value).",
         "operationId": "delete_account_api_accounts__account_id__delete",
         "parameters": [
           {
