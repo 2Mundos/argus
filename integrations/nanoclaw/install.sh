@@ -155,7 +155,8 @@ PY
   echo "patched $onecli_ts (GIT_SSL_CAINFO for git smart HTTP)"
 fi
 if [ -f "$onecli_test" ]; then
-  if python3 - "$onecli_test" <<'PY' | grep -q '^patched$'; then
+  patch_result="$(
+    python3 - "$onecli_test" <<'PY'
 import sys
 p = sys.argv[1]
 original = open(p).read()
@@ -189,6 +190,8 @@ if s != original:
     open(p, "w").write(s)
     print("patched")
 PY
+  )"
+  if [ "$patch_result" = patched ]; then
     echo "patched $onecli_test (expects GIT_SSL_CAINFO on gateway contribution)"
   fi
 fi
