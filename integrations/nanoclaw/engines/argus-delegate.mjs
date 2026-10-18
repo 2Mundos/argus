@@ -209,10 +209,7 @@ export function materializePrivateCursorConfig(stubDir, runtimeRoot) {
     fs.writeFileSync(path.join(privateDir, "auth.json"), fs.readFileSync(authSrc));
   }
   const injected = readCliConfig(path.join(stubDir, "cli-config.json"));
-  writeCliConfig(
-    path.join(privateDir, "cli-config.json"),
-    injected ?? { version: 1, network: {} },
-  );
+  writeCliConfig(path.join(privateDir, "cli-config.json"), injected ?? { version: 1, network: {} });
   return privateDir;
 }
 
@@ -229,7 +226,10 @@ export function prepareExecutorEnv(
   const home = e.HOME || os.homedir();
   const xdg = e.XDG_CONFIG_HOME || path.join(home, ".config");
   const stubDir = e.CURSOR_CONFIG_DIR || path.join(xdg, "cursor");
-  if (!present(path.join(xdg, "cursor", "auth.json")) && !present(path.join(stubDir, "auth.json"))) {
+  if (
+    !present(path.join(xdg, "cursor", "auth.json")) &&
+    !present(path.join(stubDir, "auth.json"))
+  ) {
     return e;
   }
 
