@@ -679,6 +679,14 @@ describe("an unusable executor account", () => {
 
 describe("classifyFailure for Codex and by provider", () => {
   it.each([
+    "HTTP 401 token_expired",
+    "Error: token_expired",
+    "401 unauthorized authentication failed",
+  ])("treats %j as auth expiry for an openai engine", (text) => {
+    expect(classifyFailure(text, "openai").kind).toBe("exhausted");
+  });
+
+  it.each([
     "usage_limit_reached",
     "You've hit your usage limit. Try again later.",
     "You\u2019ve hit your usage limit",
