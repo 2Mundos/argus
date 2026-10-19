@@ -609,6 +609,15 @@ const QUOTA_NOTICES: Array<{ provider: string; pattern: RegExp }> = [
   },
 ];
 
+/** OpenAI engine auth expiry (401/token_expired): treated as an exhausted account so Argus leases another one. */
+const AUTH_EXPIRED_NOTICES: Array<{ provider: string; pattern: RegExp }> = [
+  {
+    provider: "openai",
+    pattern:
+      /^(?:error:\s*)?(?:http\s*)?401\b.*token_expired|^(?:error:\s*)?token_expired\b|^(?:error:\s*)?(?:http\s*)?401\b.*(?:authentication|unauthori[sz]ed)/i,
+  },
+];
+
 /**
  * Classify the text of an agent failure notice. NanoClaw's runner puts the
  * provider's own message there when a run was blocked; anything else is a plain
@@ -619,6 +628,16 @@ const QUOTA_NOTICES: Array<{ provider: string; pattern: RegExp }> = [
 export function classifyFailure(noticeText: string, provider?: string): FailureKind {
   const t = noticeText.trim();
   const body = t.replace(/^(?:error:\s*|reconnecting\.{3}\s*\d+\/\d+:\s*)/i, "");
+  const authHit = AUTH_EXPIRED_NOTICES.find(
+    (q) => q.pattern.test(body) && (!provider || q.provider === provider),
+  );
+  if (authHit) {
+    return {
+      kind: "exhausted",
+      reason: t.slice(0, 500),
+      until: undefined,
+    };
+  }
   const hit = QUOTA_NOTICES.find(
     (q) => q.pattern.test(body) && (!provider || q.provider === provider),
   );
