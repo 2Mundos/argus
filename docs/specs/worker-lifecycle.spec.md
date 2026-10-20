@@ -434,8 +434,8 @@ as a managed pool of size 1 uses the same model and comes later.
   `cancel_task`, `list_agents`, `list_pools`, `scale_pool`,
   `get_fleet_capabilities`, `launch_worker`, `list_worker_templates`,
   `create_worker` (see [worker launch](worker-launch.spec.md)), `route_task`,
-  `list_decisions`, `get_decision`, `answer_decision`. Lists return the page
-  envelope ([MCP operations](mcp-operations.spec.md) 3.1).
+  `list_decisions`, `get_decision`, `answer_decision`, `answer_decisions`. Lists
+  return the page envelope ([MCP operations](mcp-operations.spec.md) 3.1).
   `tools/list` shows each token only the tools its scope can use
   ([MCP operations](mcp-operations.spec.md) 3.4). The server's instructions
   tell agents the working loop (claim, heartbeat, progress, complete; a 409

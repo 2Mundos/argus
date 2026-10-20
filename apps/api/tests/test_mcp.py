@@ -322,3 +322,51 @@ def test_inbox_journey_tools_match_rest(client: TestClient) -> None:
     assert retry["error"].startswith("409 task_not_failed")
     tasks = tool(client, orchestrator, "list_tasks", states=["ready"], limit=1)
     assert (tasks["total"], tasks["has_more"]) == (1, False)
+
+
+def test_answers_over_mcp_are_safe_to_retry(client: TestClient) -> None:
+    orchestrator = register(client, "orchestrator")
+    ids = []
+    for _ in range(2):
+        task = tool(client, ADMIN_TOKEN, "create_task", title="t", project="global")
+        ids.append(task["id"])
+    worker = register(client)
+    asked = []
+    for _ in ids:
+        claimed = tool(client, worker, "claim_task", wait_s=0)["task"]
+        asked.append(
+            tool(
+                client,
+                worker,
+                "ask_question",
+                task_id=claimed["id"],
+                attempt=claimed["attempt"],
+                question="?",
+                options=["a", "b"],
+            )["id"]
+        )
+    one = tool(
+        client,
+        orchestrator,
+        "answer_decision",
+        decision_id=asked[0],
+        choice="a",
+        request_id="r0",
+    )
+    retry = tool(
+        client,
+        orchestrator,
+        "answer_decision",
+        decision_id=asked[0],
+        choice="a",
+        request_id="r0",
+    )
+    assert (one["replayed"], retry["replayed"]) == (False, True)
+    answers = [
+        {"decision_id": asked[0], "choice": "a", "request_id": "r0"},
+        {"decision_id": asked[1], "choice": "c", "request_id": "r1"},
+    ]
+    batch = tool(client, orchestrator, "answer_decisions", answers=answers)
+    assert [r["ok"] for r in batch["results"]] == [True, False]
+    assert batch["results"][0]["decision"]["replayed"] is True
+    assert batch["results"][1]["error"]["code"] == "invalid_choice"

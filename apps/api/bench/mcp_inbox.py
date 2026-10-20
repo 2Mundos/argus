@@ -22,8 +22,10 @@ never change it. It runs only on the tree it was recorded on (8c14188): the
 tools it calls have changed shape since, so check that commit out to rerun it.
 
 `journey_after` uses the P0 read tools; its numbers are in `results/after.json`.
+`journey_answers` adds the batch answer (step 4), in `results/answers.json`.
+Each recorded journey stays as it was; a later step adds its own.
 
-    uv run python apps/api/bench/mcp_inbox.py [after|before] [--out FILE]
+    uv run python apps/api/bench/mcp_inbox.py [answers|after|before] [--out FILE]
 """
 
 import argparse
@@ -373,9 +375,59 @@ def journey_after(agent: Agent) -> dict[str, Any]:
     return {"states": states, "for_human": sorted(for_human)}
 
 
+def journey_answers(agent: Agent) -> dict[str, Any]:
+    """Step 4: the same reads as `after`, then every answer in one
+    answer_decisions call, each with a request id so a retry is safe."""
+    agent.list_tools()
+    inbox = agent.call("get_inbox", project=TARGET, limit=100)
+    assert not inbox["has_more"]
+    questions = agent.call(
+        "list_decisions", project=TARGET, kinds=["question"], view="detail", limit=100
+    )
+    assert not questions["has_more"]
+    asked = {d["id"]: d for d in questions["items"]}
+
+    answers: list[dict[str, Any]] = []
+    touched: list[str] = []
+    for_human: list[str] = []
+    for row in inbox["items"]:
+        task_id, decision_id = row["subject_id"], row["decision_id"]
+        if decision_id is None:
+            continue
+        if row["audience"] == "human":
+            for_human.append(task_id)
+            continue
+        if row["decision_kind"] == "question":
+            decision = asked[decision_id]
+            answer = {"choice": pick_option(decision["question"], decision["options"])}
+        elif row["decision_kind"] == "review":
+            listed = agent.call("list_artifacts", task_id=task_id)
+            report = next(a for a in listed if a["in_result"])
+            assert agent.call("verify_artifact", artifact_id=report["id"])["ok"]
+            read = agent.call("read_artifact", artifact_id=report["id"])
+            assert read["next_offset"] is None
+            answer = {
+                "choice": verdict_of(read["text"].encode()),
+                "text": "checked report.md (verified on the server)",
+            }
+        else:
+            continue
+        answers.append(
+            {"decision_id": decision_id, "request_id": decision_id, **answer}
+        )
+        touched.append(task_id)
+    results = agent.call("answer_decisions", answers=answers)["results"]
+    assert all(r["ok"] for r in results), results
+    back = agent.call("get_tasks", ids=touched)
+    assert not back["missing"]
+    states = {t["id"]: t["state"] for t in back["items"]}
+    return {"states": states, "for_human": sorted(for_human)}
+
+
 JOURNEYS: dict[str, Callable[[Agent], dict[str, Any]]] = {
     "before": journey_before,
     "after": journey_after,
+    "answers": journey_answers,
 }
 
 
@@ -433,7 +485,7 @@ def run(name: str, schemas: Path | None = None) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("journey", nargs="?", default="after", choices=JOURNEYS)
+    parser.add_argument("journey", nargs="?", default="answers", choices=JOURNEYS)
     parser.add_argument("--out", type=Path, help="write the result as JSON here")
     parser.add_argument("--schemas", type=Path, help="write tools/list here")
     args = parser.parse_args()

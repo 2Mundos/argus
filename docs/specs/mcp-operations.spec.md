@@ -127,10 +127,14 @@ Findings outside the gap list:
 - **Answers:** `answer_decision` gains an optional `request_id`. A retry that
   carries the same `request_id`, actor, choice and text after success returns
   the stored decision with `replayed: true` instead of `409 decision_not_open`.
-  Any other difference stays a 409. The request id is stored on the decision.
+  Any other difference stays a 409: another choice, text, caller or request id,
+  no request id, or a decision that was cancelled rather than answered. The
+  request id (≤200 characters) is stored on the decision.
   `answer_decisions([{decision_id, choice, text, request_id}])` (≤20) answers
   each item in its own write transaction and returns one
-  `{decision_id, ok, decision | error}` per item, in order.
+  `{decision_id, ok, decision | error}` per item, in order. REST serves it as
+  `POST /api/decisions/answers`; a malformed or oversized batch is a 422 as a
+  whole, and an item's domain error (`{status, code, message}`) fails only it.
 - **Unblock and retry** are exposed as MCP `unblock_task` and `retry_task`.
 
 ## 3.3 P1 — fleet
@@ -228,6 +232,14 @@ take three calls each (list, verify, read) instead of two REST reads, because
 integrity and the `in_result` check move to the server. Read-back is one batch
 call instead of ten.
 
+**Measured after step 4** (`results/answers.json`): one `answer_decisions` call
+replaces ten `answer_decision` calls, so the journey takes 16 MCP calls instead
+of 25. It saves calls and round trips, not bytes: context is 76,346 bytes
+(19,086 est. tokens), against 74,290 for the step 3 journey on the same tree.
+Each item returns the whole decision, question included (13.4 KB for ten), and
+the new tool adds 1.0 KB to the orchestrator's `tools/list` (23,825 bytes, 38
+tools).
+
 # 4. Open Questions
 
 - **Worker read scope:** today a worker can read any task, decision or artifact
@@ -252,7 +264,7 @@ call instead of ten.
 
 # 6. Implementation Consequences
 
-Delivered as small PRs, in order (1 to 3 are done):
+Delivered as small PRs, in order (1 to 4 are done):
 
 1. **This spec** and the index link.
 2. **Baseline and discovery:** the frozen "before" benchmark (script, seed,

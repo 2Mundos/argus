@@ -42,7 +42,8 @@ account runs out of quota, call report_account_exhausted to get the next one.
 As an orchestrator, work the inbox: get_inbox lists what waits (blocked, in review,
 awaiting approval) with decision and artifact ids; list_decisions(view="detail") or
 get_decision reads the questions; list_artifacts, verify_artifact and read_artifact
-check evidence; answer_decision acts; get_tasks(ids) reads the effects back. Lists
+check evidence; answer_decision or answer_decisions acts (give each answer a
+request_id, so retries are safe); get_tasks(ids) reads the effects back. Lists
 are paged: `total` counts every match, follow `next_cursor` while `has_more`. If a
 tool you need is missing, say which and stop; do not script REST around it."""
 
@@ -687,15 +688,40 @@ async def get_decision(ctx: Context, decision_id: str) -> dict:
 
 @tool(MANAGERS)
 async def answer_decision(
-    ctx: Context, decision_id: str, choice: str | None = None, text: str = ""
+    ctx: Context,
+    decision_id: str,
+    choice: str | None = None,
+    text: str = "",
+    request_id: str | None = None,
 ) -> dict:
     """Answer an open decision addressed to you: one of its options as `choice`
-    (e.g. approve/reject, accept/reject), and/or a text answer or notes."""
+    (e.g. approve/reject, accept/reject), and/or a text answer or notes. Pass a
+    fresh `request_id` so a retry returns the stored answer (`replayed`), not 409."""
     return await _call(
         ctx,
         "POST",
         f"/decisions/{decision_id}/answer",
-        json={"choice": choice, "text": text},
+        json={"choice": choice, "text": text, "request_id": request_id},
+    )
+
+
+class Answer(BaseModel):
+    decision_id: str
+    choice: str | None = None
+    text: str = ""
+    request_id: str | None = None
+
+
+@tool(MANAGERS)
+async def answer_decisions(ctx: Context, answers: list[Answer]) -> dict:
+    """Answer up to 20 decisions at once, each with its own explicit answer (as in
+    answer_decision). Each is applied on its own: read `results[i].ok` and `error`
+    per item; one failure does not stop the others."""
+    return await _call(
+        ctx,
+        "POST",
+        "/decisions/answers",
+        json={"answers": [a.model_dump() for a in answers]},
     )
 
 

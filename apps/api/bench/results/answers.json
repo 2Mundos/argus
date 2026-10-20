@@ -1,0 +1,58 @@
+{
+  "journey": "answers",
+  "outcome_ok": true,
+  "tasks_resolved": 10,
+  "for_human": 2,
+  "mcp_calls": 16,
+  "rest_calls": 0,
+  "by_name": {
+    "answer_decisions": {
+      "calls": 1,
+      "response_bytes": 13386
+    },
+    "get_inbox": {
+      "calls": 1,
+      "response_bytes": 7777
+    },
+    "get_tasks": {
+      "calls": 1,
+      "response_bytes": 8487
+    },
+    "list_artifacts": {
+      "calls": 4,
+      "response_bytes": 3834
+    },
+    "list_decisions": {
+      "calls": 1,
+      "response_bytes": 6890
+    },
+    "read_artifact": {
+      "calls": 4,
+      "response_bytes": 6454
+    },
+    "verify_artifact": {
+      "calls": 4,
+      "response_bytes": 1334
+    }
+  },
+  "tools_list_bytes": 23825,
+  "tools_list_by_scope": {
+    "worker": {
+      "tools": 21,
+      "bytes": 13292
+    },
+    "orchestrator": {
+      "tools": 38,
+      "bytes": 23825
+    },
+    "admin": {
+      "tools": 28,
+      "bytes": 17589
+    }
+  },
+  "request_bytes": 4359,
+  "response_bytes": 48162,
+  "context_bytes": 76346,
+  "context_tokens_estimate": 19086,
+  "wall_s": 0.592
+}

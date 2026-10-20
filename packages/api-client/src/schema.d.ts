@@ -588,6 +588,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/decisions/answers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Answer Decisions
+         * @description Answer up to 20 decisions, each with its own explicit answer and in its own
+         *     transaction. Each item succeeds or fails on its own (`ok`, `error`).
+         */
+        post: operations["answer_decisions_api_decisions_answers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/decisions/{decision_id}": {
         parameters: {
             query?: never;
@@ -618,6 +639,8 @@ export interface paths {
          * Answer Decision
          * @description Answer an open decision. Approvals take `approve`/`reject`, reviews
          *     `accept`/`reject` (with `text` as notes), questions their options or text.
+         *     With a `request_id`, a retry of the same answer by the same caller returns
+         *     the stored decision with `replayed: true` instead of 409 decision_not_open.
          */
         post: operations["answer_decision_api_decisions__decision_id__answer_post"];
         delete?: never;
@@ -1877,6 +1900,86 @@ export interface components {
             /** Lost On Unfinished Instance */
             lost_on_unfinished_instance: number;
         };
+        /** AnswerBatch */
+        AnswerBatch: {
+            /** Answers */
+            answers: components["schemas"]["AnswerItem"][];
+        };
+        /** AnswerBatchResult */
+        AnswerBatchResult: {
+            /** Results */
+            results: components["schemas"]["AnswerOutcome"][];
+        };
+        /** AnswerItem */
+        AnswerItem: {
+            /** Choice */
+            choice?: string | null;
+            /** Decision Id */
+            decision_id: string;
+            /** Request Id */
+            request_id?: string | null;
+            save_to_knowledge?: components["schemas"]["SaveToKnowledge"] | null;
+            /**
+             * Text
+             * @default
+             */
+            text?: string;
+        };
+        /** AnswerOutcome */
+        AnswerOutcome: {
+            decision?: components["schemas"]["AnsweredDecision"] | null;
+            /** Decision Id */
+            decision_id: string;
+            error?: components["schemas"]["ItemError"] | null;
+            /** Ok */
+            ok: boolean;
+        };
+        /** AnsweredDecision */
+        AnsweredDecision: {
+            /** Answer Choice */
+            answer_choice: string | null;
+            /** Answer Text */
+            answer_text: string | null;
+            audience: components["schemas"]["Audience"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decided At */
+            decided_at: string | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** Id */
+            id: string;
+            kind: components["schemas"]["DecisionKind"];
+            /** Options */
+            options: string[] | null;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            } | null;
+            /** Project */
+            project?: string | null;
+            /** Question */
+            question: string;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed?: boolean;
+            /** Request Id */
+            request_id?: string | null;
+            /** Requested By */
+            requested_by: string;
+            state: components["schemas"]["DecisionState"];
+            /** Subject Id */
+            subject_id: string;
+            /** Subject Title */
+            subject_title?: string | null;
+            /** Subject Type */
+            subject_type: string;
+        };
         /** Artifact */
         Artifact: {
             /** Attempt */
@@ -2254,6 +2357,8 @@ export interface components {
             project?: string | null;
             /** Question */
             question: string;
+            /** Request Id */
+            request_id?: string | null;
             /** Requested By */
             requested_by: string;
             state: components["schemas"]["DecisionState"];
@@ -2268,6 +2373,8 @@ export interface components {
         DecisionAnswer: {
             /** Choice */
             choice?: string | null;
+            /** Request Id */
+            request_id?: string | null;
             save_to_knowledge?: components["schemas"]["SaveToKnowledge"] | null;
             /**
              * Text
@@ -2306,6 +2413,8 @@ export interface components {
             project?: string | null;
             /** Question */
             question: string;
+            /** Request Id */
+            request_id?: string | null;
             /** Requested By */
             requested_by: string;
             state: components["schemas"]["DecisionState"];
@@ -2726,6 +2835,17 @@ export interface components {
             expires_at: string;
             /** Token */
             token: string;
+        };
+        /** ItemError */
+        ItemError: {
+            /** Code */
+            code: string;
+            /** Details */
+            details?: string[];
+            /** Message */
+            message: string;
+            /** Status */
+            status: number;
         };
         /** KnowledgeOverview */
         KnowledgeOverview: {
@@ -5577,6 +5697,39 @@ export interface operations {
             };
         };
     };
+    answer_decisions_api_decisions_answers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnswerBatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnswerBatchResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_decision_api_decisions__decision_id__get: {
         parameters: {
             query?: never;
@@ -5629,7 +5782,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Decision"];
+                    "application/json": components["schemas"]["AnsweredDecision"];
                 };
             };
             /** @description Validation Error */

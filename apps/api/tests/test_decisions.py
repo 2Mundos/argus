@@ -207,6 +207,44 @@ async def test_policy_gate_holds_tasks_past_the_hourly_limit(
     assert (await create(db, actor, limit=2)).state is S.READY
 
 
+# -- retries -------------------------------------------------------------------------
+
+
+async def test_a_retried_answer_is_replayed_not_applied_twice(db: Database) -> None:
+    await create(db)
+    task = await claim(db)
+    async with db.write() as tx:
+        asked = await decisions.ask(
+            tx, A, task.id, Ask(attempt=task.attempt, question="?", options=["a", "b"])
+        )
+    first = await answer(db, asked.id, caller=ORCH, choice="a", request_id="r1")
+    assert (first.replayed, first.request_id) == (False, "r1")
+    spec = (await get_task(db, task.id)).spec
+    again = await answer(db, asked.id, caller=ORCH, choice="a", request_id="r1")
+    assert again.replayed
+    assert again.decided_at == first.decided_at
+    assert (await get_task(db, task.id)).spec == spec  # the clarification once
+    for change in (
+        {"caller": ORCH, "choice": "b", "request_id": "r1"},  # another answer
+        {"caller": ORCH, "choice": "a", "request_id": "r2"},  # another request
+        {"caller": ADMIN, "choice": "a", "request_id": "r1"},  # another caller
+        {"caller": ORCH, "choice": "a", "text": "why", "request_id": "r1"},
+        {"caller": ORCH, "choice": "a"},  # no request id: a plain duplicate
+    ):
+        with pytest.raises(ConflictError) as err:
+            await answer(db, asked.id, **change)
+        assert err.value.code == "decision_not_open"
+
+
+async def test_a_cancelled_decision_is_never_replayed(db: Database) -> None:
+    task = await create(db, requires_approval=True)
+    [approval] = await open_for(db, task.id)
+    async with db.write() as tx:
+        await tasks.cancel(tx, task.id, "admin:test")
+    with pytest.raises(ConflictError):
+        await answer(db, approval.id, choice="approve", request_id="r1")
+
+
 # -- HTTP ------------------------------------------------------------------------------
 
 
@@ -262,3 +300,46 @@ async def test_decisions_carry_the_task_title(db: Database) -> None:
     task = await create(db, requires_approval=True)
     [decision] = await open_for(db, task.id)
     assert decision.subject_title == "t"
+
+
+def test_answer_many_applies_each_item_on_its_own(client: TestClient) -> None:
+    def approval() -> str:
+        task = client.post(
+            "/api/tasks",
+            json={"project": "global", "title": "t", "requires_approval": True},
+            headers=ADMIN_H,
+        ).json()
+        res = client.get(
+            "/api/decisions", params={"subject_id": task["id"]}, headers=ADMIN_H
+        )
+        return res.json()["items"][0]["id"]
+
+    a, b = approval(), approval()
+    batch = {
+        "answers": [
+            {"decision_id": a, "choice": "approve", "request_id": "ra"},
+            {"decision_id": "nope", "choice": "approve"},
+            {"decision_id": b, "choice": "maybe"},
+            {"decision_id": b, "choice": "reject", "request_id": "rb"},
+        ]
+    }
+    res = client.post("/api/decisions/answers", json=batch, headers=ADMIN_H)
+    assert res.status_code == 200
+    results = res.json()["results"]
+    assert [(r["decision_id"], r["ok"]) for r in results] == [
+        (a, True),
+        ("nope", False),
+        (b, False),
+        (b, True),
+    ]
+    assert results[1]["error"]["code"] == "not_found"
+    assert results[2]["error"]["code"] == "invalid_choice"
+    assert results[3]["decision"]["answer_choice"] == "reject"
+
+    again = client.post("/api/decisions/answers", json=batch, headers=ADMIN_H).json()
+    assert [r["ok"] for r in again["results"]] == [True, False, False, True]
+    assert all(again["results"][i]["decision"]["replayed"] for i in (0, 3))
+
+    too_many = {"answers": [{"decision_id": a}] * 21}
+    res = client.post("/api/decisions/answers", json=too_many, headers=ADMIN_H)
+    assert res.status_code == 422
