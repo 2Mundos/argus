@@ -178,9 +178,18 @@ test("actual harness hook applies config, stops stale containers and pins policy
     engine: "claude",
     account_provider: "anthropic",
     executor_account_provider: "openai",
+    engine_account_id: "a-claude",
+    executor_account_id: "a-codex",
     preferred_executor: "codex",
   });
   assert.equal(loadPolicy({}, file).policy.implementation.codex[0], "gpt-6-luna");
+  // Without a separate executor lease the engine's account is the executor account too.
+  await hook(
+    { id: "task2", attempt: 1, failures: 1, spec: "" },
+    { engine: held.engine, executor: null },
+  );
+  const same = JSON.parse(readFileSync(file, "utf8")).context;
+  assert.deepEqual([same.engine_account_id, same.executor_account_id], ["a-claude", "a-claude"]);
   await hook({ id: "task2", attempt: 1, failures: 1, spec: "" }, held);
   assert.equal(globalThis.argusModelTest.killed.length, 1, "unchanged model keeps warm sessions");
 });

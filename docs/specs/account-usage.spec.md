@@ -170,6 +170,57 @@ scope (orchestrator, admin), as `GET /api/accounts` is. There is no MCP tool yet
 - `argus_account_quota_used_percent{provider,account,window}`, for windows
   with a percentage.
 
+## 3.8 Worker reporting (`argus-delegate`)
+
+- **What is parsed.** After every executor attempt, `engines/usage.mjs`
+  `parseUsage(executor, stdout)` reads only what the CLI printed:
+  - `claude`: the result object; tokens are summed over `modelUsage` (helper
+    models included, matching `total_cost_usd`), else the top-level `usage`;
+    `num_turns` is the turn count. Verified against a real result.
+  - `codex`: `turn.completed` events, summed across turns. **Synthetic,
+    unverified** (documented shape, no real sample).
+  - `agent` (Cursor): the result object's `usage` (`inputTokens`,
+    `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`). **Synthetic,
+    unverified.**
+  - `opencode`: `step_finish` events, `tokens {input, output, cache {read,
+    write}}` and `cost`, summed. **Synthetic, unverified.**
+- **One field rule for every executor.** `input_tokens` is the prompt tokens
+  not served from cache (fresh input plus cache-creation tokens),
+  `cached_input_tokens` is cache-read tokens, and the two never overlap
+  (Codex's `input_tokens` includes its cached part, so the cached part is
+  subtracted). `cost_usd` is the CLI's own figure or null; it is never
+  computed.
+- **No figures, no numbers.** Missing input or output tokens, unparseable
+  output, or an unknown shape give `measurement: "not_reported"` with a
+  reason code and null figures. An absent cache field counts as 0 only when
+  input and output are present.
+- **`run_key`** is `r1:<task_id>:<agent_id>:<engine>:<executor>:<started_at>`,
+  each part reduced to `[A-Za-z0-9._-]` (others become `_`; a missing part is
+  `none`), or `r1:<sha256>` when longer than 200 characters. `agent_id` is
+  `ARGUS_AGENT_ID` or the hostname. It holds identifiers only. Every model
+  attempt is its own run, with its own start time and key.
+- **Spool file.** Always, `<out>/usage-<first 16 hex of sha256(run_key)>.json`
+  holds `{account_id, payload}`, the exact body that is (or would be) sent, so
+  a missed report can be replayed; the key makes a replay idempotent.
+- **Best-effort POST.** Only when `ARGUS_URL` and `ARGUS_AGENT_TOKEN` are set
+  and the pinned task context (`argus-model-policy.json`) carries
+  `executor_account_id`. The body is `{task_id, model, engine, role:
+  "executor", measurement, input_tokens, output_tokens, cached_input_tokens,
+  cost_usd, run_key}`, where `engine` is the executor CLI that ran. The token
+  is only in the `Authorization` header and never in the body, the spool file,
+  the report or the logs. The call has a 5 s timeout; on any failure the
+  delegate writes one line to stderr and goes on. It never throws and never
+  changes its exit code.
+- **Report fields.** The JSON report (and each entry of `attempts`) gains
+  `usage`, `run_key`, `usage_spool` and `usage_report: {status:
+  sent|skipped|failed, reason}`. `skipped` reasons: `no_account_id`,
+  `no_api_env`; `failed` reasons: `http_<status>` or the error name.
+- **Context keys.** The host pins `engine_account_id` and
+  `executor_account_id` (the lease's `account_id`, or null). Without a
+  separate executor lease the executor account is the engine's, as for
+  `executor_account_provider`. The delegate always acts as role `executor`;
+  `engine_account_id` is for a harness-side reporter.
+
 # 4. Open Questions
 
 - **Claude quota.** Only an undocumented OAuth usage endpoint exists. It stays
@@ -199,6 +250,8 @@ scope (orchestrator, admin), as `GET /api/accounts` is. There is no MCP tool yet
   has a snapshot.
 - Dashboard `views/Accounts.tsx`, plus `charts.tsx`, `providerIcons.tsx` and
   `usage.ts` (pure helpers, unit-tested).
+- NanoClaw side: `engines/usage.mjs`, `argus-delegate.mjs` (§3.8) and the
+  context keys pinned by `argus.ts`.
 - Follow-ups:
-  - NanoClaw executors report usage and Cursor pool exhaustion;
+  - NanoClaw executors report Cursor pool exhaustion;
   - a NanoClaw harness patch forwards the main engine's usage and rate limits.
