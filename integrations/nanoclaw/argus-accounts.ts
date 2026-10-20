@@ -652,3 +652,24 @@ export function classifyFailure(noticeText: string, provider?: string): FailureK
   }
   return { kind: "failed", reason: t.slice(0, 1000) || "the agent run failed" };
 }
+
+/** Fixed, non-sensitive reason for a structured auth expiry; never the notice or log text. */
+const STRUCTURED_AUTH_EXPIRED_REASON = "OpenAI/Codex authentication expired";
+
+/**
+ * The structured `content.providerFailure` of a NanoClaw failure notice
+ * (docs/specs/codex-accounts.spec.md §3). Only `{provider:"codex",
+ * kind:"auth_expired"}` against a held `openai` account exhausts it (`codex` is
+ * the NanoClaw engine; its Argus account provider is `openai`). Anything else
+ * (unknown value, other account provider, bad shape) is not a decision: null.
+ */
+export function classifyProviderFailure(
+  value: unknown,
+  accountProvider?: string,
+): FailureKind | null {
+  if (accountProvider !== "openai") return null;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const { provider, kind } = value as { provider?: unknown; kind?: unknown };
+  if (provider !== "codex" || kind !== "auth_expired") return null;
+  return { kind: "exhausted", reason: STRUCTURED_AUTH_EXPIRED_REASON, until: undefined };
+}

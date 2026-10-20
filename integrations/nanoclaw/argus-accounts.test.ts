@@ -9,6 +9,7 @@ import {
   applyRepositoryLease,
   CURSOR_EXPIRY_MARGIN_MS,
   classifyFailure,
+  classifyProviderFailure,
   exchangeCursorApiKey,
   jwtExpiryMs,
   OneCliClient,
@@ -924,6 +925,104 @@ describe("a limit of the executor's provider leaves the Codex engine lease alone
     const call = w.calls.find((c) => /\/exhausted$/.test(c.path))!;
     expect(call.path).toBe("/accounts/a-codex-1/exhausted");
     expect(call.body).toMatchObject({ role: "engine", reason: "usage_limit_reached" });
+  });
+});
+
+describe("structured providerFailure on a failure notice", () => {
+  const GENERIC = "The agent run failed. Check the logs for details. SECRET-ERR-STRING sk-SYNTH";
+  const structured = (providerFailure: unknown, failureNotice = true) => ({
+    kind: "chat",
+    content: { text: GENERIC, failureNotice, providerFailure },
+  });
+  const run = async (leases: Array<AccountLease | "no_account">, msg: unknown) => {
+    const w = world({ leases, tasks: [task()] });
+    const h = harness(w, true, { providers: ["openai", "anthropic"] });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    await h.adapter.deliver("local", null, msg as any);
+    await until(() =>
+      w.calls.some((c) => /\/exhausted$/.test(c.path) || /\/tasks\/t1\/fail$/.test(c.path)),
+    );
+    return { w, h };
+  };
+  const exhaustedCalls = (w: ReturnType<typeof world>) =>
+    w.calls.filter((c) => /\/exhausted$/.test(c.path));
+  const ok = { provider: "codex", kind: "auth_expired" };
+
+  it("exhausts the openai engine lease with a fixed reason, switches and resends", async () => {
+    const { w, h } = await run(
+      [
+        codexLease(),
+        "no_account", // executor lease for the first engine
+        { ...codexLease(), lease_id: "l-codex-2", account_id: "a-codex-2", name: "codex-2" },
+        "no_account", // executor lease for the replacement
+      ],
+      structured(ok),
+    );
+    const [call] = exhaustedCalls(w);
+    expect(call?.path).toBe("/accounts/a-codex-1/exhausted");
+    expect(call?.body).toEqual({
+      reason: "OpenAI/Codex authentication expired",
+      role: "engine",
+      task_id: "t1",
+      attempt: 1,
+    });
+    await until(() => h.inbound.length > 1);
+    expect(h.inbound[1].content.text).toContain("account was switched");
+    const seen = JSON.stringify([w.calls.filter((c) => c.who === "argus"), h.inbound]);
+    expect(seen).not.toContain("SECRET-ERR-STRING");
+    expect(seen).not.toContain("sk-SYNTH");
+  });
+
+  it("does not exhaust when the held account is not openai", async () => {
+    const { w } = await run([lease("claude-1", "sk-ant")], structured(ok));
+    expect(exhaustedCalls(w)).toEqual([]);
+    expect(w.calls.some((c) => /\/tasks\/t1\/fail$/.test(c.path))).toBe(true);
+  });
+
+  it.each([
+    ["unknown provider", { provider: "claude", kind: "auth_expired" }],
+    ["unknown kind", { provider: "codex", kind: "rate_limited" }],
+    ["case variant", { provider: "Codex", kind: "auth_expired" }],
+    ["non-string kind", { provider: "codex", kind: 401 }],
+    ["string", "auth_expired"],
+    ["array", [ok]],
+    ["null", null],
+    ["empty object", {}],
+  ])("fails normally for an invalid value (%s)", async (_n, value) => {
+    const { w } = await run([codexLease()], structured(value));
+    expect(exhaustedCalls(w)).toEqual([]);
+    const fail = w.calls.find((c) => /\/tasks\/t1\/fail$/.test(c.path))!;
+    expect(fail.body.error).toContain("The agent run failed");
+  });
+
+  it("ignores providerFailure without failureNotice", async () => {
+    const w = world({ leases: [codexLease()], tasks: [task()] });
+    const h = harness(w, true, { providers: ["openai"] });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    await h.adapter.deliver("local", null, structured(ok, false) as any);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(exhaustedCalls(w)).toEqual([]);
+    expect(w.calls.some((c) => /\/tasks\/t1\/fail$/.test(c.path))).toBe(false);
+  });
+
+  it("keeps a generic notice without metadata as a plain failure", async () => {
+    const { w } = await run([codexLease()], failure("The agent run failed. Check the logs."));
+    expect(exhaustedCalls(w)).toEqual([]);
+    expect(w.calls.some((c) => /\/tasks\/t1\/fail$/.test(c.path))).toBe(true);
+  });
+
+  it("classifyProviderFailure fails closed without an openai account", () => {
+    expect(classifyProviderFailure(ok, undefined)).toBeNull();
+    expect(classifyProviderFailure(ok, "anthropic")).toBeNull();
+    expect(classifyProviderFailure(ok, "openai")).toEqual({
+      kind: "exhausted",
+      reason: "OpenAI/Codex authentication expired",
+      until: undefined,
+    });
   });
 });
 
