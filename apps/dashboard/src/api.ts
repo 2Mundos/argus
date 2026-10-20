@@ -21,6 +21,7 @@ export type Pool = components["schemas"]["Pool"];
 export type SystemSummary = components["schemas"]["SystemSummary"];
 export type Instance = components["schemas"]["Instance"];
 export type FleetCapabilities = components["schemas"]["FleetCapabilities"];
+export type FleetHealth = components["schemas"]["FleetHealth"];
 export type Overview = components["schemas"]["Overview"];
 export type EngineCatalog = components["schemas"]["EngineCatalog"];
 export type TemplateCatalog = components["schemas"]["TemplateCatalog"];
