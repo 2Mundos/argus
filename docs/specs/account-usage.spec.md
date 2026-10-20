@@ -22,7 +22,8 @@ scope (orchestrator, admin), as `GET /api/accounts` is. There is no MCP tool yet
 
 # 2. Non-Goals
 
-- No price table: cost appears only as reported, never estimated from tokens.
+- No price table here: this view shows cost only as reported, never estimated
+  from tokens (estimates live in the [cost view](cost-view.spec.md), labelled).
   For subscription accounts it is hidden, since the quota is what matters there.
 - No near-limit alerts or thresholds (home spec). A window at 100% is already
   reported as `exhausted`.

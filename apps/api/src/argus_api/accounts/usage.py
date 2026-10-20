@@ -157,14 +157,14 @@ def bucket_starts(
     cursor = start.astimezone(UTC).replace(second=0, microsecond=0)
     cursor -= timedelta(minutes=cursor.minute % 15)
     while cursor < end and len(starts) <= MAX_BUCKETS:
-        local = _floor(cursor, "hour", tz)
+        local = floor(cursor, "hour", tz)
         if not starts or starts[-1] != local:
             starts.append(local)
         cursor += timedelta(minutes=15)
     return starts
 
 
-def _floor(at: datetime, bucket: Bucket, tz: ZoneInfo) -> datetime:
+def floor(at: datetime, bucket: Bucket, tz: ZoneInfo) -> datetime:
     local = at.astimezone(tz)
     if bucket == "day":
         return datetime(local.year, local.month, local.day, tzinfo=tz)
@@ -201,7 +201,7 @@ async def series(
     ) as cur:
         for account_id, minute, i, o, c, cost, n, u in await cur.fetchall():
             at = datetime.fromisoformat(minute + ":00+00:00")
-            acc = sums[account_id][_floor(at, bucket, tz)]
+            acc = sums[account_id][floor(at, bucket, tz)]
             for k, v in enumerate((i, o, c, cost, n, u)):
                 acc[k] += v
     async with conn.execute("SELECT DISTINCT account_id FROM account_usage") as cur:

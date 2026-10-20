@@ -58,6 +58,8 @@ class Settings:
     # Dedicated Claude login (claude accounts spec 3): `claude setup-token`, same shape.
     claude_login_image: str | None = None
     claude_bin: str | None = None
+    # Price table for the cost view (cost view 3.2); default is the shipped one.
+    pricing_file: Path | None = None
 
     @property
     def db_path(self) -> Path:
@@ -145,6 +147,9 @@ class Settings:
             codex_bin=os.environ.get("ARGUS_CODEX_BIN") or None,
             claude_login_image=os.environ.get("ARGUS_CLAUDE_LOGIN_IMAGE") or None,
             claude_bin=os.environ.get("ARGUS_CLAUDE_BIN") or None,
+            pricing_file=(
+                Path(f) if (f := os.environ.get("ARGUS_PRICING_FILE")) else None
+            ),
             dashboard_dir=(
                 Path(d) if (d := os.environ.get("ARGUS_DASHBOARD_DIR")) else None
             ),
