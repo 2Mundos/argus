@@ -3,7 +3,8 @@
 Estado: **WIP — CANDIDATAS, não carregadas, não verificadas em runtime; sem aprovação de deploy** (sem sudo, sem `docker run`
 nesta etapa). Compilam offline; nada aqui prova que o Bubblewrap funciona. A prova é o
 [RUNBOOK](RUNBOOK.md). Mudança de comportamento exige spec antes de ativar (AGENTS.md):
-[codex-sandbox-profile.spec.md](../../../docs/specs/codex-sandbox-profile.spec.md), também não implementada.
+[codex-sandbox-profile.spec.md](../../../docs/specs/codex-sandbox-profile.spec.md). O opt-in por worker
+que aplica estes artefatos está implementado, mas as políticas em si continuam candidatas.
 
 ## Fontes primárias (consultadas em 2026-10-19)
 
@@ -20,7 +21,7 @@ não foi provado que `moby/profiles@main` é byte a byte o vendorizado nele. O b
 
 ## Artefatos (sha256 no momento da escrita)
 
-- `argus-codex-worker.apparmor` — `240001ea6abff5318dd3d3d5dba2e01b459c1b3e3fc72b05887fbe085ff78660`
+- `argus-codex-worker.apparmor` — `0aceddf7817d148537f124fe333782431eb8e90f1af6157d10ddf531179c5106` (v2; v1 `240001ea…` foi o carregado no host e negou `rslave`, ver abaixo)
 - `argus-codex-worker.seccomp.json` — `d199b4c8cbe4106a1e5fadb078a37a15a4b56c49d1d28ca6922d94767c81d846` (formatado com Biome; o hash anterior, `f9739dde…`, era da saída crua do `jq`, semanticamente idêntica: mesmo JSON parseado)
 - `scripts/derive-seccomp.sh` (derivação via `jq`; a saída crua precisa passar por `biome format --stdin-file-path=argus-codex-worker.seccomp.json` para bater byte a byte com o hash acima, exigência do `biome check .` do repositório), `scripts/validate-offline.sh`
 
@@ -41,17 +42,26 @@ não foi provado que `moby/profiles@main` é byte a byte o vendorizado nele. O b
 ## Deltas vs. Docker default
 
 ### AppArmor (`docker-default` renderizado com abi 3.0, `tunables/global`, `abstractions/base`)
-1. `deny mount,` removido; entra allow-list (mount não listado continua negado por padrão):
-   `rslave -> /`, `tmpfs -> /**`, `bind`/`rbind /** -> /**`, `remount,bind -> /**`, `rprivate -> /**`,
-   `devpts -> /**`.
+1. `deny mount,` removido; entra allow-list (mount não listado continua negado por padrão). **`options=(...)` casa o
+   conjunto EXATO de flags** (apparmor.d(5)): `rw` e `silent` (MS_SILENT) precisam estar listados. Regras v2, cada uma com as flags
+   que o bubblewrap realmente passa (`bubblewrap.c`/`bind-mount.c` nos hashes acima):
+   - `options=(rw, silent, rslave) -> /` (l.3280) — **demonstrada necessária**: probe real, v1 negou com
+     `flags="rw, silent, rslave"`, `info="failed flags match"` (v1 tinha `options=(rslave)`).
+   - `fstype=tmpfs options=(rw, nosuid, nodev) tmpfs -> /**` (l.3284, 980; sem `silent`). Removida a regra tmpfs sem opções (aceitava qualquer flag).
+   - `options=(rw, silent, bind|rbind) /** -> /**` (l.3303, 3331; bind-mount.c:458).
+   - `options=(rw, silent, rprivate) -> /**` (l.3339).
+   - `fstype=devpts options=(rw, nosuid, noexec) devpts -> /**` (l.1478).
+   - **Removida** a regra `remount,bind` da v1: `MS_BIND|MS_REMOUNT` (bind-mount.c:514,534) é só o fallback sem `mount_setattr(2)`;
+     se um probe mostrar `DENIED`, adicionar exatamente o conjunto logado. Todas as demais da v1 estavam erradas pelo mesmo motivo
+     (faltavam `rw`/`silent`), mas só `rslave` foi observada.
 2. `pivot_root,` adicionado.
 3. Nada mais mudou: denies de famílias de socket, `/proc` e `/sys` escrita, `sysrq-trigger`, `kcore`,
    sinais e ptrace por peer. Sem `userns` rule e sem ABI 4: a prova local (docker-default AppArmor +
    seccomp aberto → `unshare -Ur` PASS) mostra que não é necessária, e o abi 3.0 mantém o
    comportamento já medido.
 
-Status por regra: **`rslave -> /` é demonstrada necessária** (erro observado). As demais são
-**candidatas deduzidas do fonte do bwrap, não verificadas**; os padrões de caminho `/**` são
+Status por regra: **`(rw, silent, rslave) -> /` é demonstrada necessária** (erro observado; a v2 ainda não foi carregada).
+As demais são **candidatas deduzidas do fonte do bwrap, não verificadas**; os padrões de caminho `/**` são
 deliberadamente largos porque o destino de bwrap é dinâmico (`/tmp/newroot/...`) e não foi medido.
 O RUNBOOK passo 6 inclui como estreitá-los via `dmesg`/audit (`apparmor="DENIED" operation="mount"`).
 
@@ -78,4 +88,4 @@ Todas com `excludes.caps: CAP_SYS_ADMIN` (quem tem a cap já era liberado pelo u
 - Host `restrict_unprivileged_userns=1`: perfis não-`unconfined` (como este) não são o alvo da
   restrição, coerente com a prova local; um upgrade do Ubuntu pode mudar isso.
 - Perfil nomeado `argus-codex-worker` precisa ser carregado no host antes de qualquer `docker run`
-  que o use; sem ele o Docker falha ao criar o container (fail closed).
+  que o use; sem ele o runc falha no start (`change_onexec … label not found`, observado), nunca no create (fail closed).

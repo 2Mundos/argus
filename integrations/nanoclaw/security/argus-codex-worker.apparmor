@@ -55,20 +55,22 @@ profile "argus-codex-worker" flags=(attach_disconnected,mediate_deleted) {
   deny @{PROC}/kcore rwklx,
 
   # --- DELTA: Bubblewrap-in-userns mount allow-list (CANDIDATE, see PROVENANCE.md) ---
-  # bubblewrap.c: mount(NULL, "/", MS_SLAVE|MS_REC)           -> make / slave
-  mount options=(rslave) -> /,
-  # bubblewrap.c: mount("tmpfs", base_path, "tmpfs", NODEV|NOSUID) and --tmpfs/--dev tmpfs
-  mount fstype=tmpfs options=(nosuid, nodev) tmpfs -> /**,
-  mount fstype=tmpfs tmpfs -> /**,
-  # bind-mount.c / bubblewrap.c: MS_BIND [|MS_REC] of newroot, binds, /proc and /dev nodes
-  mount options=(bind) /** -> /**,
-  mount options=(rbind) /** -> /**,
-  # bind-mount.c: MS_BIND|MS_REMOUNT to apply ro/nosuid/nodev; bubblewrap.c: MS_REC|MS_PRIVATE on oldroot
-  mount options=(remount, bind) -> /**,
-  mount options=(rprivate) -> /**,
-  # bubblewrap.c --dev: mount("devpts", .../pts)
-  mount fstype=devpts devpts -> /**,
+  # options=(...) matches the EXACT flag set (apparmor.d(5)): "rw" and MS_SILENT must be listed,
+  # and a call carrying any other flag does not match. Flags below are those bubblewrap passes.
+  # bubblewrap.c:3280 mount(NULL, "/", NULL, MS_SILENT|MS_SLAVE|MS_REC)  [kernel log: "rw, silent, rslave"]
+  mount options=(rw, silent, rslave) -> /,
+  # bubblewrap.c:3284, :980 mount("tmpfs", ..., MS_NODEV|MS_NOSUID)
+  mount fstype=tmpfs options=(rw, nosuid, nodev) tmpfs -> /**,
+  # bubblewrap.c:3303,3331 and bind-mount.c:458 MS_SILENT|MS_BIND[|MS_REC]
+  mount options=(rw, silent, bind) /** -> /**,
+  mount options=(rw, silent, rbind) /** -> /**,
+  # bubblewrap.c:3339 mount(oldroot, MS_SILENT|MS_REC|MS_PRIVATE)
+  mount options=(rw, silent, rprivate) -> /**,
+  # bubblewrap.c:1478 --dev: mount("devpts", ..., MS_NOSUID|MS_NOEXEC)
+  mount fstype=devpts options=(rw, nosuid, noexec) devpts -> /**,
   pivot_root,
+  # NOT allowed (not observed needed): bind-mount.c:514 MS_BIND|MS_REMOUNT is only the fallback when
+  # mount_setattr(2) is unavailable; if a probe shows it DENIED, add exactly the logged flag set.
   # --- END DELTA (every other mount remains denied by default) ---
 
   deny /sys/[^f]*/** wklx,

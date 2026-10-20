@@ -385,4 +385,16 @@ PY
   fi
 fi
 
+# Codex sandbox profile, opt-in per worker (docs/specs/codex-sandbox-profile.spec.md).
+# Files only: nothing here loads AppArmor, needs root, or turns the profile on. The
+# seccomp JSON lands at <checkout>/security/, the one fixed path the driver reads.
+cp "$here/argus-codex-sandbox.ts" "$target/src/drivers/argus-codex-sandbox.ts"
+cp "$here/argus-codex-sandbox.test.ts" "$target/src/drivers/argus-codex-sandbox.test.ts"
+cp "$here/argus-codex-sandbox-composition.test.ts" "$target/src/argus-codex-sandbox-composition.test.ts"
+mkdir -p "$target/security"
+cp "$here/security/argus-codex-worker.seccomp.json" "$target/security/argus-codex-worker.seccomp.json"
+
+# Idempotent and upgrading: also rewrites an earlier version of these hooks (patch-codex-sandbox.py).
+python3 "$here/patch-codex-sandbox.py" "$target"
+
 echo "installed. Next: (cd $target && pnpm run build && pnpm exec vitest run src/channels/argus.test.ts)"
