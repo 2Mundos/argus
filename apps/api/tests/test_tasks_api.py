@@ -243,3 +243,35 @@ def test_retry_is_a_manager_operation(
     res = client.post(f"/api/tasks/{failed['id']}/retry", headers=agent)
     assert res.status_code == 403
     assert client.get(f"/api/tasks/{failed['id']}").json()["state"] == "failed"
+
+
+def test_progress_milestone_over_rest(
+    client: TestClient, agent: dict[str, str]
+) -> None:
+    created = client.post("/api/tasks", json={"project": "global", "title": "t"}).json()
+    legacy = client.get(f"/api/tasks/{created['id']}").json()
+    assert (legacy["progress_kind"], legacy["progress_data"]) == (None, None)
+    claimed = client.post("/api/tasks/claim", json={}, headers=agent).json()
+    url = f"/api/tasks/{claimed['id']}/progress"
+    bad = client.post(
+        url,
+        json={"attempt": 1, "message": "m", "kind": "bogus", "data": {}},
+        headers=agent,
+    )
+    assert bad.status_code == 422
+    res = client.post(
+        url,
+        json={
+            "attempt": 1,
+            "message": "PR #3",
+            "kind": "pr_opened",
+            "data": {"number": 3, "url": "https://git.example.com/o/r/pulls/3"},
+        },
+        headers=agent,
+    )
+    assert res.status_code == 200
+    assert res.json()["progress_kind"] == "pr_opened"
+    summary = client.get("/api/tasks", params={"view": "summary"}).json()["items"][0]
+    assert summary["progress_kind"] == "pr_opened"
+    assert summary["progress_data"]["number"] == 3
+    assert summary["progress_at"] is not None

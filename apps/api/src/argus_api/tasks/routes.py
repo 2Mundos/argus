@@ -1,11 +1,18 @@
 import asyncio
 from datetime import timedelta
-from typing import Annotated
+from typing import Annotated, Any
 
 from argus_core.auth import Scope
-from argus_core.tasks import ClaimedTask, Task, TaskCreate, TaskResult, TaskState
+from argus_core.tasks import (
+    ClaimedTask,
+    Task,
+    TaskCreate,
+    TaskResult,
+    TaskState,
+    validate_milestone,
+)
 from fastapi import APIRouter, Query, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from argus_api.db import utcnow
 from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
@@ -33,6 +40,14 @@ class ProgressRequest(BaseModel):
     attempt: int
     message: str = Field(min_length=1, max_length=2000)
     percent: int | None = Field(default=None, ge=0, le=100)
+    # A milestone (progress-milestones spec 3.1): a kind from the closed set and its data.
+    kind: str | None = None
+    data: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _milestone(self) -> "ProgressRequest":
+        validate_milestone(self.kind, self.data)
+        return self
 
 
 class FailRequest(BaseModel):
@@ -168,7 +183,14 @@ async def report_progress(
     """Post a progress note (at most one per 10 s). Also renews the lease."""
     async with db.write() as tx:
         return await service.report_progress(
-            tx, agent_id, task_id, body.attempt, body.message, body.percent
+            tx,
+            agent_id,
+            task_id,
+            body.attempt,
+            body.message,
+            body.percent,
+            body.kind,
+            body.data,
         )
 
 

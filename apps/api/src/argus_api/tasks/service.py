@@ -24,6 +24,7 @@ from argus_core.tasks import (
     TaskState,
     TransitionContext,
     transition,
+    validate_milestone,
 )
 
 from argus_api.accounts.usage import insert_usage
@@ -210,6 +211,8 @@ async def claim(
         set_={
             "assignee_agent_id": agent_id,
             "attempt": attempt,
+            "progress_kind": None,  # a milestone belongs to one attempt
+            "progress_data": None,
             "lease_expires_at": _deadline(tx.now, row["lease_ttl_s"]),
             "timeout_at": (
                 _deadline(tx.now, timeout)
@@ -288,10 +291,23 @@ async def report_progress(
     attempt: int,
     message: str,
     percent: int | None = None,
+    kind: str | None = None,
+    data: dict[str, Any] | None = None,
 ) -> Task:
-    """Record a progress note. It is a worker write, so it also renews the lease."""
+    """Record a progress note. It is a worker write, so it also renews the lease.
+
+    A note with a `kind` is a milestone (progress-milestones spec): it replaces the
+    stored one and is not rate limited unless the kind repeats. A note without a kind
+    leaves the stored milestone alone.
+    """
+    try:
+        validate_milestone(kind, data)
+    except ValueError as err:
+        raise ValidationFailedError(str(err)) from None
     row = await _owned(tx, task_id, attempt, agent_id)
-    if row["progress_at"] is not None:
+    if row["progress_at"] is not None and (
+        kind is None or kind == row["progress_kind"]
+    ):
         last = datetime.fromisoformat(row["progress_at"])
         wait = PROGRESS_MIN_INTERVAL_S - (tx.now - last).total_seconds()
         if wait > 0:
@@ -310,13 +326,23 @@ async def report_progress(
             task_id,
         ),
     )
+    if kind is not None:
+        await tx.conn.execute(
+            "UPDATE tasks SET progress_kind = ?, progress_data = ? WHERE id = ?",
+            (kind, json.dumps({**(data or {}), "at": ts(tx.now)}), task_id),
+        )
     await record(
         tx,
         f"agent:{agent_id}",
         "task",
         task_id,
         "task.progress",
-        {"attempt": attempt, "message": message, "percent": percent},
+        {
+            "attempt": attempt,
+            "message": message,
+            "percent": percent,
+            **({"kind": kind, "data": data or {}} if kind is not None else {}),
+        },
     )
     return await get_task(tx.conn, task_id)
 
@@ -375,6 +401,7 @@ async def retry(tx: Tx, task_id: str, actor: str) -> Task:
         "UPDATE tasks SET state = ?, attempt = 0, failures = 0, error = NULL,"
         " assignee_agent_id = NULL, lease_expires_at = NULL, timeout_at = NULL,"
         " progress_message = NULL, progress_percent = NULL, progress_at = NULL,"
+        " progress_kind = NULL, progress_data = NULL,"
         " block_reason = NULL, updated_at = ? WHERE id = ?",
         (S.READY, ts(tx.now), task_id),
     )
@@ -881,6 +908,8 @@ async def _to_task(conn: aiosqlite.Connection, row: aiosqlite.Row) -> Task:
         data[f] = json.loads(data[f])
     if data["result"] is not None:
         data["result"] = json.loads(data["result"])
+    if data["progress_data"] is not None:
+        data["progress_data"] = json.loads(data["progress_data"])
     data["requires_approval"] = bool(data["requires_approval"])
     data["depends_on"] = await _deps(conn, row["id"])
     async with conn.execute(

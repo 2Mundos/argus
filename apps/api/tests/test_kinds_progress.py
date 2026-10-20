@@ -170,3 +170,101 @@ async def test_completion_without_progress_still_works(db: Database) -> None:
     task = await claim(db)
     async with db.write() as tx:
         assert (await tasks.complete(tx, A, task.id, task.attempt, DONE)).result
+
+
+# -- milestones (progress-milestones spec) ----------------------------------------
+
+
+async def milestone(db: Database, task, kind, data=None, message: str = "m"):
+    async with db.write() as tx:
+        return await tasks.report_progress(
+            tx, A, task.id, task.attempt, message, None, kind, data
+        )
+
+
+COMMIT = {"branch": "feat/x", "sha": "abc1234"}
+
+
+async def test_milestone_is_recorded_with_server_time(
+    db: Database, clock: FakeClock
+) -> None:
+    await create(db)
+    task = await claim(db)
+    after = await milestone(db, task, "commit_created", COMMIT)
+    assert after.progress_kind == "commit_created"
+    assert after.progress_data is not None
+    assert after.progress_data.pop("at")
+    assert after.progress_data == COMMIT
+
+
+async def test_legacy_task_has_no_milestone(db: Database) -> None:
+    await create(db)
+    task = await claim(db)
+    after = await progress(db, task, "plain note")
+    assert (after.progress_kind, after.progress_data) == (None, None)
+
+
+async def test_milestone_with_a_different_kind_skips_the_rate_limit(
+    db: Database, clock: FakeClock
+) -> None:
+    await create(db)
+    task = await claim(db)
+    await progress(db, task)
+    clock.advance(1)
+    await milestone(db, task, "commit_created", COMMIT)
+    clock.advance(1)
+    pr = {"number": 7, "url": "https://git.example.com/o/r/pulls/7"}
+    after = await milestone(db, task, "pr_opened", pr)
+    assert after.progress_kind == "pr_opened"
+    clock.advance(1)
+    with pytest.raises(RateLimitedError):  # same kind again inside 10 s
+        await milestone(db, task, "pr_opened", pr)
+
+
+async def test_free_text_note_keeps_the_milestone_and_is_limited(
+    db: Database, clock: FakeClock
+) -> None:
+    await create(db)
+    task = await claim(db)
+    await milestone(db, task, "commit_created", COMMIT)
+    clock.advance(1)
+    with pytest.raises(RateLimitedError):
+        await progress(db, task, "chatter")
+    clock.advance(10)
+    after = await progress(db, task, "chatter")
+    assert after.progress_message == "chatter"
+    assert after.progress_kind == "commit_created"
+
+
+@pytest.mark.parametrize(
+    ("kind", "data"),
+    [
+        ("deployed", {}),
+        ("commit_created", {"branch": "b", "sha": "nothex!"}),
+        ("commit_created", {"branch": "b"}),
+        ("commit_created", {**COMMIT, "extra": 1}),
+        ("pr_opened", {"number": 1, "url": "javascript:alert(1)"}),
+        ("pr_opened", {"number": 1, "url": "https://u:p@git.example.com/pulls/1"}),
+        ("pr_opened", {"number": 1, "url": "https://git.example.com/pulls/1?token=x"}),
+        ("pr_opened", {"number": 0, "url": "https://git.example.com/pulls/1"}),
+        ("ci_failed", {}),
+        ("waiting_input", {"x": 1}),
+        (None, {"sha": "abc1234"}),
+    ],
+)
+async def test_invalid_milestones_are_refused(db: Database, kind, data) -> None:
+    await create(db)
+    task = await claim(db)
+    with pytest.raises(ValidationFailedError):
+        await milestone(db, task, kind, data)
+
+
+async def test_retry_clears_the_milestone(db: Database) -> None:
+    await create(db, max_attempts=1)
+    task = await claim(db)
+    await milestone(db, task, "waiting_input")
+    async with db.write() as tx:
+        await tasks.fail(tx, A, task.id, task.attempt, "boom")
+    async with db.write() as tx:
+        after = await tasks.retry(tx, task.id, "user:me")
+    assert (after.progress_kind, after.progress_data) == (None, None)

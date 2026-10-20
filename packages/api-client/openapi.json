@@ -1706,6 +1706,28 @@
             ],
             "title": "Progress At"
           },
+          "progress_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Data"
+          },
+          "progress_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProgressKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "progress_message": {
             "anyOf": [
               {
@@ -6006,11 +6028,48 @@
         "title": "PoolsOverview",
         "type": "object"
       },
+      "ProgressKind": {
+        "description": "The closed set of structured progress milestones (progress-milestones spec 3.1).",
+        "enum": [
+          "commit_created",
+          "pr_opened",
+          "ci_running",
+          "ci_passed",
+          "ci_failed",
+          "gate_failed",
+          "waiting_input"
+        ],
+        "title": "ProgressKind",
+        "type": "string"
+      },
       "ProgressRequest": {
         "properties": {
           "attempt": {
             "title": "Attempt",
             "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
           },
           "message": {
             "maxLength": 2000,
@@ -7228,6 +7287,28 @@
             ],
             "title": "Progress At"
           },
+          "progress_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Data"
+          },
+          "progress_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProgressKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "progress_message": {
             "anyOf": [
               {
@@ -7701,6 +7782,28 @@
             ],
             "title": "Progress At"
           },
+          "progress_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Data"
+          },
+          "progress_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProgressKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "progress_message": {
             "anyOf": [
               {
@@ -7822,6 +7925,7 @@
           "block_reason",
           "progress_message",
           "progress_percent",
+          "progress_at",
           "created_at",
           "version",
           "age_s",
@@ -7836,7 +7940,6 @@
           "failures",
           "result",
           "error",
-          "progress_at",
           "knowledge",
           "created_by",
           "updated_at"
@@ -8351,6 +8454,40 @@
             "title": "Priority",
             "type": "integer"
           },
+          "progress_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress At"
+          },
+          "progress_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Data"
+          },
+          "progress_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProgressKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "progress_message": {
             "anyOf": [
               {
@@ -8419,6 +8556,7 @@
           "block_reason",
           "progress_message",
           "progress_percent",
+          "progress_at",
           "created_at",
           "version",
           "age_s"

@@ -4,12 +4,13 @@
 `detail` carries the whole task with each long free-text field cut to TEXT_CAP.
 """
 
+import json
 from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
 import aiosqlite
-from argus_core.tasks import Review, Task, TaskState
+from argus_core.tasks import ProgressKind, Review, Task, TaskState
 from pydantic import BaseModel, Field
 
 from argus_api.db import Snapshot
@@ -49,6 +50,9 @@ class TaskSummary(Refs):
     block_reason: str | None
     progress_message: str | None
     progress_percent: int | None
+    progress_at: datetime | None
+    progress_kind: ProgressKind | None = None
+    progress_data: dict[str, Any] | None = None
     created_at: datetime
     version: str  # updated_at; pass it back as expected_version
     age_s: int  # since creation
@@ -183,6 +187,9 @@ async def _page(snap: Snapshot, rows: list[aiosqlite.Row], view: View) -> TaskPa
             "version": row["updated_at"],
             "age_s": _age(snap.now, row["created_at"]),
             "block_reason": cap(row["block_reason"], "block_reason", truncated),
+            "progress_data": (
+                json.loads(row["progress_data"]) if row["progress_data"] else None
+            ),
             "progress_message": cap(
                 row["progress_message"], "progress_message", truncated
             ),
