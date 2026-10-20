@@ -65,6 +65,9 @@ class AccountsOverview(BaseModel):
     total: int
     by_provider: dict[str, Counts]
     next_reset_at: datetime | None  # earliest `exhausted_until`, if any
+    # Some account is exhausted and none available: claims are held until a refill
+    # (`next_reset_at`).
+    awaiting_quota: bool
     # Argus stores no quota or limit for an account, so none is reported.
     quota_measured: bool
 
@@ -247,6 +250,9 @@ async def overview(db: Database) -> Overview:
             total=sum(accounts.values()),
             by_provider=accounts_by_provider,
             next_reset_at=datetime.fromisoformat(next_reset) if next_reset else None,
+            awaiting_quota=bool(
+                accounts.get("exhausted") and not accounts.get("available")
+            ),
             quota_measured=quota_measured,
         ),
         decisions=DecisionsOverview(

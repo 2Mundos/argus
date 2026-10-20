@@ -674,10 +674,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       }
       // No replacement (Argus blocked the task as no_account), or too many switches.
       if (!data.task_blocked) {
+        // With no replacement account the limit is not the task's fault: Argus
+        // requeues it without consuming an attempt and holds claims until an
+        // account refills.
         await client.call("POST", `/tasks/${task.id}/fail`, {
           attempt: task.attempt,
           error: f.reason,
-          reason: "provider_failure",
+          reason: data.lease ? "provider_failure" : "quota",
         });
       }
       finishTask();

@@ -53,7 +53,9 @@ class ProgressRequest(BaseModel):
 class FailRequest(BaseModel):
     attempt: int
     error: str = Field(min_length=1)
-    reason: Literal["worker_fail", "channel_error", "provider_failure"] = "worker_fail"
+    reason: Literal["worker_fail", "channel_error", "provider_failure", "quota"] = (
+        "worker_fail"
+    )
     """Why the attempt failed: the worker said so, or the channel detected it."""
 
 

@@ -455,6 +455,10 @@
       },
       "AccountsOverview": {
         "properties": {
+          "awaiting_quota": {
+            "title": "Awaiting Quota",
+            "type": "boolean"
+          },
           "by_provider": {
             "additionalProperties": {
               "additionalProperties": {
@@ -498,6 +502,7 @@
           "total",
           "by_provider",
           "next_reset_at",
+          "awaiting_quota",
           "quota_measured"
         ],
         "title": "AccountsOverview",
@@ -3520,7 +3525,8 @@
             "enum": [
               "worker_fail",
               "channel_error",
-              "provider_failure"
+              "provider_failure",
+              "quota"
             ],
             "title": "Reason",
             "type": "string"

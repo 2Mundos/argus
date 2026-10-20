@@ -404,12 +404,70 @@ describe("classifyFailure", () => {
       until: undefined,
     });
   });
+  it("recognizes Claude's session-limit wording and the UTC clock reset", () => {
+    const now = new Date("2026-10-20T20:00:00.000Z");
+    const text = "You've hit your session limit · resets 11:50pm (UTC)";
+    expect(classifyFailure(text, "anthropic", now)).toEqual({
+      kind: "exhausted",
+      reason: text,
+      until: "2026-10-20T23:50:00.000Z",
+    });
+    expect(
+      classifyFailure("You\u2019ve hit your limit · resets 11:50 pm (UTC)", "anthropic", now),
+    ).toMatchObject({ kind: "exhausted", until: "2026-10-20T23:50:00.000Z" });
+    // already past today: the next occurrence is tomorrow
+    expect(
+      classifyFailure("You've hit your session limit · resets 1:05am (UTC)", "anthropic", now),
+    ).toMatchObject({ until: "2026-10-21T01:05:00.000Z" });
+    expect(classifyFailure("Usage limit reached", "anthropic", now)).toMatchObject({
+      kind: "exhausted",
+      until: undefined,
+    });
+    expect(
+      classifyFailure("You've hit your limit · resets sometime", "anthropic", now),
+    ).toMatchObject({ kind: "exhausted", until: undefined });
+    expect(
+      classifyFailure("Rate limit [five_hour] (resets 2026-10-20T23:50:00.000Z)", "anthropic"),
+    ).toMatchObject({ until: "2026-10-20T23:50:00.000Z" });
+    // another provider's account is not exhausted by Claude's wording
+    expect(classifyFailure(text, "openai", now).kind).toBe("failed");
+  });
   it("treats everything else as a plain failure, anchored to the start", () => {
+    expect(classifyFailure("Connection reset by peer (ECONNRESET)", "anthropic").kind).toBe(
+      "failed",
+    );
     expect(classifyFailure("The agent run failed. Check the logs for details.").kind).toBe(
       "failed",
     );
     expect(classifyFailure("Failed to authenticate. API Error: 401").kind).toBe("failed");
     expect(classifyFailure("the tool hit a rate limit in some API").kind).toBe("failed");
+  });
+});
+
+describe("classifyProviderFailure (claude)", () => {
+  it("exhausts an anthropic account on a structured rate limit", () => {
+    expect(
+      classifyProviderFailure(
+        { provider: "claude", kind: "rate_limit", resetsAt: "2026-10-20T23:50:00Z" },
+        "anthropic",
+      ),
+    ).toEqual({
+      kind: "exhausted",
+      reason: "Claude usage limit reached",
+      until: "2026-10-20T23:50:00.000Z",
+    });
+    expect(
+      classifyProviderFailure(
+        { provider: "claude", kind: "rate_limit", resetsAt: "nope" },
+        "anthropic",
+      ),
+    ).toMatchObject({ kind: "exhausted", until: undefined });
+  });
+  it("ignores other accounts and shapes", () => {
+    const v = { provider: "claude", kind: "rate_limit" };
+    expect(classifyProviderFailure(v, "openai")).toBeNull();
+    expect(classifyProviderFailure({ provider: "claude", kind: "other" }, "anthropic")).toBeNull();
+    expect(classifyProviderFailure(null, "anthropic")).toBeNull();
   });
 });
 
@@ -540,6 +598,26 @@ describe("channel with accounts", () => {
     const before = w.calls.length;
     await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: late" });
     expect(w.calls.slice(before).some((c) => c.path.endsWith("/complete"))).toBe(false);
+  });
+
+  it("a Claude session limit with nothing to switch to fails the attempt as quota", async () => {
+    const w = world({
+      leases: [lease("a", "sk-ant-AAAA")],
+      tasks: [task()],
+      exhaustedResponse: () => ({ lease: null, task_blocked: false }),
+    });
+    const h = harness(w);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver(
+      "local",
+      null,
+      failure("You've hit your session limit · resets 11:50pm (UTC)"),
+    );
+    expect(w.calls.some((c) => c.path === "/accounts/a-a/exhausted")).toBe(true);
+    const fail = w.calls.find((c) => c.path === "/tasks/t1/fail")!;
+    expect(fail.body).toMatchObject({ attempt: 1, reason: "quota" });
   });
 
   it("gives the account back when it cannot be applied to the vault", async () => {

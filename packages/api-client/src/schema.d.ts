@@ -1951,6 +1951,8 @@ export interface components {
         };
         /** AccountsOverview */
         AccountsOverview: {
+            /** Awaiting Quota */
+            awaiting_quota: boolean;
             /** By Provider */
             by_provider: {
                 [key: string]: {
@@ -2974,7 +2976,7 @@ export interface components {
              * @default worker_fail
              * @enum {string}
              */
-            reason?: "worker_fail" | "channel_error" | "provider_failure";
+            reason?: "worker_fail" | "channel_error" | "provider_failure" | "quota";
         };
         /** FailureExample */
         FailureExample: {
