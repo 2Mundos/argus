@@ -11,6 +11,7 @@ from argus_core.agents import (
     LIVE,
     Agent,
     AgentRegister,
+    AgentRuntime,
     AgentState,
     BootstrapTokenCreate,
 )
@@ -158,11 +159,23 @@ class Heartbeat:
     rejected: list[RejectedLease]
 
 
-async def heartbeat(tx: Tx, agent_id: str, leases: list[tuple[str, int]]) -> Heartbeat:
-    """Refresh the agent and renew the leases it lists, in one transaction."""
+async def heartbeat(
+    tx: Tx,
+    agent_id: str,
+    leases: list[tuple[str, int]],
+    runtime: AgentRuntime | None = None,
+) -> Heartbeat:
+    """Refresh the agent and renew the leases it lists, in one transaction. A
+    reported `runtime` replaces the last one; without it the last one stays."""
     state = await _live_state(tx.conn, agent_id)
     await tx.conn.execute(
-        "UPDATE agents SET last_heartbeat_at = ? WHERE id = ?", (ts(tx.now), agent_id)
+        "UPDATE agents SET last_heartbeat_at = ?,"
+        " runtime = coalesce(?, runtime) WHERE id = ?",
+        (
+            ts(tx.now),
+            runtime.model_dump_json() if runtime is not None else None,
+            agent_id,
+        ),
     )
     renewed, rejected = await tasks.renew(tx, agent_id, leases)
     return Heartbeat(state, renewed, rejected)
@@ -280,4 +293,5 @@ _SELECT = (
 def _to_agent(row: aiosqlite.Row) -> Agent:
     data: dict[str, Any] = dict(row)
     data["capabilities"] = json.loads(data["capabilities"])
+    data["runtime"] = json.loads(data["runtime"]) if data.get("runtime") else None
     return Agent.model_validate(data)

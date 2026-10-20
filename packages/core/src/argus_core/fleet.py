@@ -7,6 +7,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from argus_core.agents import AgentRuntime
+
 POOL_NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,39}$"
 
 
@@ -186,6 +188,31 @@ class Pool(PoolUpsert):
     live_instances: int  # every instance not confirmed terminated
     created_at: datetime
     updated_at: datetime
+    version: str  # updated_at as stored; PATCH takes it as expected_version
+
+
+REDACTED = "***"
+
+
+class PoolPatch(BaseModel):
+    """A partial pool update (MCP operations 3.3). Fields left out are kept; name,
+    target and runtime cannot change. `env` merges: a value sets a variable,
+    null removes it, and variables not named are kept (values are write-only)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: str = Field(min_length=1)
+    image: str | None = Field(default=None, min_length=1, max_length=500)
+    capabilities: list[str] | None = None
+    agents_per_instance: int | None = Field(default=None, ge=1, le=50)
+    desired_replicas: int | None = Field(default=None, ge=0)
+    max_replicas: int | None = Field(default=None, ge=0, le=1000)
+    env: dict[str, str | None] | None = None
+    cpus: float | None = Field(default=None, gt=0)
+    memory_mb: int | None = Field(default=None, ge=16)
+    docker: DockerOptions | None = None
+    kubernetes: KubernetesOptions | None = None
+    nanoclaw: NanoclawOptions | None = None
 
 
 class ScaleRequest(BaseModel):
@@ -210,6 +237,9 @@ class InstanceAgent(BaseModel):
     name: str
     state: str
     claimed_tasks: int
+    capabilities: list[str] = []
+    last_heartbeat_at: datetime | None = None
+    runtime: AgentRuntime | None = None
 
 
 class Instance(BaseModel):
@@ -226,6 +256,42 @@ class Instance(BaseModel):
     running_at: datetime | None
     terminating_at: datetime | None
     terminated_at: datetime | None
+    image: str | None = None  # what it was started with
+    image_digest: str | None = None  # as the target reported it once running
+
+
+class FactSource(StrEnum):
+    """How far a runtime fact is proven, weakest first."""
+
+    CONFIGURED = "configured"  # the pool definition says so
+    REQUESTED = "requested"  # Argus asked the target for it
+    STARTED = "started"  # the target reports it on the running container
+    VALIDATED = "validated"  # a registered, heartbeating agent reports it
+    UNKNOWN = "unknown"  # no proof either way
+
+
+class Fact(BaseModel):
+    value: str | bool | list[str] | None
+    source: FactSource
+
+
+class InstanceRuntime(BaseModel):
+    image: Fact
+    image_digest: Fact
+    worker_version: Fact
+    capabilities: Fact
+    engine: Fact
+    executor: Fact
+    ready: Fact  # an active agent heartbeats: a live process, not a working model
+
+
+class InspectedInstance(Instance):
+    runtime: InstanceRuntime
+
+
+class PoolInspection(BaseModel):
+    pool: Pool
+    instances: list[InspectedInstance]  # live ones, newest first
 
 
 class Check(BaseModel):

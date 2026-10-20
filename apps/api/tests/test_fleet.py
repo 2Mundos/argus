@@ -618,6 +618,7 @@ def test_sandboxed_nanoclaw_has_no_docker_socket() -> None:
         live_instances=0,
         created_at=now,
         updated_at=now,
+        version="v1",
         **upsert.model_dump(),
     )
     spec = container_spec(pool, "i-1", ["argus_boot_x"], "http://argus")

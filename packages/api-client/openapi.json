@@ -696,6 +696,16 @@
           "role": {
             "$ref": "#/components/schemas/Role"
           },
+          "runtime": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentRuntime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "state": {
             "$ref": "#/components/schemas/AgentState"
           }
@@ -741,6 +751,49 @@
           "bootstrap_token"
         ],
         "title": "AgentRegister",
+        "type": "object"
+      },
+      "AgentRuntime": {
+        "description": "What an agent says it runs, sent on heartbeat. Self-reported: it proves a\nlive process said so, not that the engine or model works.",
+        "properties": {
+          "engine": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
+          },
+          "executor": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executor"
+          },
+          "worker_version": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Version"
+          }
+        },
+        "title": "AgentRuntime",
         "type": "object"
       },
       "AgentState": {
@@ -3094,45 +3147,17 @@
         "title": "ExhaustedReport",
         "type": "object"
       },
-      "Fact": {
-        "description": "One readiness fact: true, false, or unknown (None) with its evidence.",
-        "properties": {
-          "at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "At"
-          },
-          "detail": {
-            "default": "not checked",
-            "title": "Detail",
-            "type": "string"
-          },
-          "ok": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ok"
-          }
-        },
-        "required": [
-          "ok",
-          "detail",
-          "at"
+      "FactSource": {
+        "description": "How far a runtime fact is proven, weakest first.",
+        "enum": [
+          "configured",
+          "requested",
+          "started",
+          "validated",
+          "unknown"
         ],
-        "title": "Fact",
-        "type": "object"
+        "title": "FactSource",
+        "type": "string"
       },
       "FailRequest": {
         "properties": {
@@ -3240,6 +3265,16 @@
             },
             "title": "Leases",
             "type": "array"
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentRuntime"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "HeartbeatRequest",
@@ -3522,6 +3557,146 @@
         "title": "InboxPage",
         "type": "object"
       },
+      "InspectedInstance": {
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/InstanceAgent"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "draining": {
+            "title": "Draining",
+            "type": "boolean"
+          },
+          "exit_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Reason"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image"
+          },
+          "image_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Digest"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "pool": {
+            "title": "Pool",
+            "type": "string"
+          },
+          "provider_ref": {
+            "title": "Provider Ref",
+            "type": "string"
+          },
+          "running_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Running At"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/InstanceRuntime"
+          },
+          "start_attempts": {
+            "title": "Start Attempts",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/InstanceState"
+          },
+          "terminated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminated At"
+          },
+          "terminating_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminating At"
+          }
+        },
+        "required": [
+          "id",
+          "pool",
+          "provider_ref",
+          "state",
+          "draining",
+          "start_attempts",
+          "last_error",
+          "exit_reason",
+          "agents",
+          "created_at",
+          "running_at",
+          "terminating_at",
+          "terminated_at",
+          "runtime"
+        ],
+        "title": "InspectedInstance",
+        "type": "object"
+      },
       "Instance": {
         "properties": {
           "agents": {
@@ -3554,6 +3729,28 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image"
+          },
+          "image_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Digest"
           },
           "last_error": {
             "anyOf": [
@@ -3638,6 +3835,14 @@
       },
       "InstanceAgent": {
         "properties": {
+          "capabilities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
           "claimed_tasks": {
             "title": "Claimed Tasks",
             "type": "integer"
@@ -3646,9 +3851,31 @@
             "title": "Id",
             "type": "string"
           },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
+          },
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentRuntime"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "state": {
             "title": "State",
@@ -3662,6 +3889,42 @@
           "claimed_tasks"
         ],
         "title": "InstanceAgent",
+        "type": "object"
+      },
+      "InstanceRuntime": {
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/argus_core__fleet__Fact"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/argus_core__fleet__Fact"
+          },
+          "executor": {
+            "$ref": "#/components/schemas/argus_core__fleet__Fact"
+          },
+          "image": {
+            "$ref": "#/components/schemas/argus_core__fleet__Fact"
+          },
+          "image_digest": {
+            "$ref": "#/components/schemas/argus_core__fleet__Fact"
+          },
+          "ready": {
+            "$ref": "#/components/schemas/argus_core__fleet__Fact"
+          },
+          "worker_version": {
+            "$ref": "#/components/schemas/argus_core__fleet__Fact"
+          }
+        },
+        "required": [
+          "image",
+          "image_digest",
+          "worker_version",
+          "capabilities",
+          "engine",
+          "executor",
+          "ready"
+        ],
+        "title": "InstanceRuntime",
         "type": "object"
       },
       "InstanceState": {
@@ -5114,6 +5377,10 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
           }
         },
         "required": [
@@ -5136,7 +5403,8 @@
           "last_error",
           "live_instances",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "version"
         ],
         "title": "Pool",
         "type": "object"
@@ -5186,6 +5454,26 @@
           "blockers"
         ],
         "title": "PoolCapability",
+        "type": "object"
+      },
+      "PoolInspection": {
+        "properties": {
+          "instances": {
+            "items": {
+              "$ref": "#/components/schemas/InspectedInstance"
+            },
+            "title": "Instances",
+            "type": "array"
+          },
+          "pool": {
+            "$ref": "#/components/schemas/Pool"
+          }
+        },
+        "required": [
+          "pool",
+          "instances"
+        ],
+        "title": "PoolInspection",
         "type": "object"
       },
       "PoolItem": {
@@ -5257,6 +5545,162 @@
           "status"
         ],
         "title": "PoolOut",
+        "type": "object"
+      },
+      "PoolPatch": {
+        "additionalProperties": false,
+        "description": "A partial pool update (MCP operations 3.3). Fields left out are kept; name,\ntarget and runtime cannot change. `env` merges: a value sets a variable,\nnull removes it, and variables not named are kept (values are write-only).",
+        "properties": {
+          "agents_per_instance": {
+            "anyOf": [
+              {
+                "maximum": 50.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agents Per Instance"
+          },
+          "capabilities": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capabilities"
+          },
+          "cpus": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpus"
+          },
+          "desired_replicas": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Desired Replicas"
+          },
+          "docker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DockerOptions-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "env": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Env"
+          },
+          "expected_version": {
+            "minLength": 1,
+            "title": "Expected Version",
+            "type": "string"
+          },
+          "image": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image"
+          },
+          "kubernetes": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KubernetesOptions-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_replicas": {
+            "anyOf": [
+              {
+                "maximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Replicas"
+          },
+          "memory_mb": {
+            "anyOf": [
+              {
+                "minimum": 16.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Mb"
+          },
+          "nanoclaw": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NanoclawOptions-Input"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "PoolPatch",
         "type": "object"
       },
       "PoolStatus": {
@@ -8402,23 +8846,63 @@
         "title": "Usage",
         "type": "object"
       },
+      "argus_core__engines__Fact": {
+        "description": "One readiness fact: true, false, or unknown (None) with its evidence.",
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "detail": {
+            "default": "not checked",
+            "title": "Detail",
+            "type": "string"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          }
+        },
+        "required": [
+          "ok",
+          "detail",
+          "at"
+        ],
+        "title": "Fact",
+        "type": "object"
+      },
       "argus_core__engines__Readiness": {
         "description": "Installed != authenticated != validated; usable only if all three hold.",
         "properties": {
           "authenticated": {
-            "$ref": "#/components/schemas/Fact",
+            "$ref": "#/components/schemas/argus_core__engines__Fact",
             "default": {
               "detail": "not checked"
             }
           },
           "installed": {
-            "$ref": "#/components/schemas/Fact",
+            "$ref": "#/components/schemas/argus_core__engines__Fact",
             "default": {
               "detail": "not checked"
             }
           },
           "validated": {
-            "$ref": "#/components/schemas/Fact",
+            "$ref": "#/components/schemas/argus_core__engines__Fact",
             "default": {
               "detail": "not checked"
             }
@@ -8430,6 +8914,39 @@
           "validated"
         ],
         "title": "Readiness",
+        "type": "object"
+      },
+      "argus_core__fleet__Fact": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/FactSource"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "value",
+          "source"
+        ],
+        "title": "Fact",
         "type": "object"
       },
       "argus_core__fleet__Readiness": {
@@ -11224,6 +11741,54 @@
         ]
       }
     },
+    "/api/instances/{instance_id}/recycle": {
+      "post": {
+        "description": "Replace a running instance without interrupting work: its agents drain, it\nstops once none holds a claimed task, and a new one starts in its place.",
+        "operationId": "recycle_instance_api_instances__instance_id__recycle_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Instance"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Recycle Instance",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
     "/api/instances/{instance_id}/terminate": {
       "post": {
         "description": "Stop an instance now: its agents end immediately (tasks released); its slot\nfrees once the provider confirms the container is gone.",
@@ -11999,6 +12564,7 @@
     },
     "/api/pools": {
       "get": {
+        "description": "Every pool; `env` shows its keys with redacted values.",
         "operationId": "list_pools_api_pools_get",
         "responses": {
           "200": {
@@ -12029,6 +12595,7 @@
     },
     "/api/pools/{name}": {
       "get": {
+        "description": "A pool; `env` values are redacted unless an admin asks for `reveal_env`.",
         "operationId": "get_pool_api_pools__name__get",
         "parameters": [
           {
@@ -12039,6 +12606,16 @@
               "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "reveal_env",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Reveal Env",
+              "type": "boolean"
             }
           }
         ],
@@ -12074,8 +12651,65 @@
           "fleet"
         ]
       },
+      "patch": {
+        "description": "Change some of a pool's options (admin only), keeping the rest. Requires\nthe `version` you read as `expected_version` (409 stale_version otherwise).\nName, target and runtime cannot change. `env` merges; null removes a key.",
+        "operationId": "patch_pool_api_pools__name__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PoolPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pool"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Patch Pool",
+        "tags": [
+          "fleet"
+        ]
+      },
       "put": {
-        "description": "Create or replace a pool definition, including its replica cap (admin only).\nThe reconciler converges instances to it within seconds.",
+        "description": "Create or replace a pool definition, including its replica cap (admin only).\nThe reconciler converges instances to it within seconds. This replaces `env`\nwhole; PATCH changes single variables without resending the others.",
         "operationId": "upsert_pool_api_pools__name__put",
         "parameters": [
           {
@@ -12127,6 +12761,55 @@
           }
         ],
         "summary": "Upsert Pool",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/pools/{name}/inspect": {
+      "get": {
+        "description": "The pool, its live instances and agents, and per instance what is proven\nabout what runs there: each fact says its source (configured, requested,\nstarted, validated) or `unknown`.",
+        "operationId": "inspect_pool_api_pools__name__inspect_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolInspection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Inspect Pool",
         "tags": [
           "fleet"
         ]

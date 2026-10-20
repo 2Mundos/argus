@@ -198,8 +198,11 @@ check evidence; `answer_decision` or `answer_decisions` acts (give each answer a
 `request_id`, so a retry is replayed, not refused); `get_tasks(ids)` reads the
 effects back.
 Lists are paged: `total` counts every match; follow `next_cursor` while
-`has_more`. If a tool is missing, say which and stop; do not script REST around
-it.
+`has_more`. For the fleet, `inspect_pool` shows what each instance is proven to
+run (each fact's `source`, or `unknown`); `recycle_instance` and `drain_agent`
+never interrupt claimed work; admins change options with `update_pool`, passing
+the pool's `version`. If a tool is missing, say which and stop; do not script
+REST around it.
 
 ## Not done yet
 

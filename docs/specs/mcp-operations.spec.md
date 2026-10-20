@@ -145,11 +145,18 @@ Findings outside the gap list:
   `capabilities`, `engine`, `executor`, `ready`) carries a `source`:
   `configured | requested | started | validated | unknown`. A fact without proof
   is `unknown`. Heartbeats prove a live process, not a working model (home spec).
+  `image` is `requested` (what the instance was started with, recorded at start)
+  or else the pool's `configured` image. `capabilities` are `validated` when
+  active agents registered them, else `configured`. `ready` is `true`
+  (`validated`) only while the instance has an active agent; otherwise it is
+  `unknown`, never `false` by assumption.
 - **Runtime facts come from two layered sources.** The reconciler reads the image
-  digest from the target (Docker inspect or Pod status) once the instance starts,
+  digest from the target (the container's image id in Docker, the container
+  status `imageID` of the Pod) in the listing it already takes before each pass,
   outside any write transaction, and stores it on the instance (`started`). Agents
   may send an optional `runtime` object (`worker_version`, `engine`, `executor`)
-  on heartbeat, stored on the agent (`validated`). One migration adds both.
+  on heartbeat, stored on the agent (`validated`); a heartbeat without it keeps
+  the last report. One migration adds both.
   Workers that do not report stay `unknown`. A worker never vouches for its own
   image.
   MCP `get_instance(id)` and `get_instance_logs(id, tail≤500)` wrap the existing
@@ -157,16 +164,26 @@ Findings outside the gap list:
 - **Safe option updates:** `PATCH /api/pools/{name}` (admin, the same as `PUT`)
   with a partial body and a required `expected_version` → MCP `update_pool`.
   Fields it does not mention are kept. Name, target and runtime cannot change
-  through it. `env` values are write-only, and responses return only the keys.
+  through it (any unknown field is a 422). `env` values are write-only, and
+  responses return only the keys: a PATCH merges `env`, a value sets a key and
+  `null` removes it. A stale version is `409 stale_version` with the current
+  version in `details`; a result that breaks a pool rule is `422 invalid_pool`.
+  `update_pool` is listed to admins only.
 - **Redaction:** in every pool response, on every surface, `env` comes back as
   `{key: "***"}` unless the caller is admin and asks for `reveal_env=true` over
-  REST. MCP never sends that flag.
+  REST (`GET /api/pools/{name}`; anyone else gets a 403). MCP never sends that
+  flag. The dashboard edits existing pools through PATCH, so it never writes a
+  redacted value back.
 - **Drain and recycle:** MCP `drain_agent(agent_id)` wraps the existing REST
   call. `POST /api/instances/{id}/recycle` → MCP `recycle_instance` marks the
   instance `draining`. The reconciler terminates it only once none of its agents
   holds a claimed task, then starts a replacement up to `desired_replicas`. A
   recycle never interrupts active work or a running delegate. Checkpoints stay
-  the worker runtime's job.
+  the worker runtime's job. Orchestrators and admins may recycle; only a
+  `running` instance can be (`409 instance_not_running`), and recycling one that
+  is already draining changes nothing. The same stop rule now covers every
+  draining instance, so an idle drained worker that never calls `leave` no
+  longer holds its slot.
 - **Bounded wait:** `GET /api/events?after=<id>&wait_s≤30&subject_type&subject_id`
   → MCP `wait_for_events`. It returns the events after the cursor at once, or
   long-polls on the bus up to `wait_s`, the same pattern as `claim_task`. It
@@ -240,6 +257,12 @@ Each item returns the whole decision, question included (13.4 KB for ten), and
 the new tool adds 1.0 KB to the orchestrator's `tools/list` (23,825 bytes, 38
 tools).
 
+**Schema cost of step 5** (no fleet journey is benchmarked): the orchestrator's
+`tools/list` grows to 26,148 bytes (43 tools, +2.3 KB), the admin's to 21,123
+(34 tools, +3.5 KB with `update_pool`), and the worker's to 13,796 (+0.5 KB, the
+heartbeat's `runtime`). The inbox journey is unchanged in calls; its context is
+78,669 bytes, the larger `tools/list` included.
+
 # 4. Open Questions
 
 - **Worker read scope:** today a worker can read any task, decision or artifact
@@ -264,7 +287,7 @@ tools).
 
 # 6. Implementation Consequences
 
-Delivered as small PRs, in order (1 to 4 are done):
+Delivered as small PRs, in order (1 to 5 are done):
 
 1. **This spec** and the index link.
 2. **Baseline and discovery:** the frozen "before" benchmark (script, seed,

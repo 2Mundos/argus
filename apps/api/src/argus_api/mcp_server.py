@@ -11,7 +11,7 @@ orchestrator-style tools).
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from types import FunctionType
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import httpx2 as httpx
 from argus_core.auth import Scope
@@ -22,7 +22,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_REQUEST
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Receive, Send
 from starlette.types import Scope as AsgiScope
 
@@ -45,7 +45,12 @@ get_decision reads the questions; list_artifacts, verify_artifact and read_artif
 check evidence; answer_decision or answer_decisions acts (give each answer a
 request_id, so retries are safe); get_tasks(ids) reads the effects back. Lists
 are paged: `total` counts every match, follow `next_cursor` while `has_more`. If a
-tool you need is missing, say which and stop; do not script REST around it."""
+tool you need is missing, say which and stop; do not script REST around it.
+
+For the fleet: inspect_pool shows what each instance is proven to run (a fact's
+`source`, or `unknown`); recycle_instance and drain_agent never interrupt claimed
+work; admins change options with update_pool(expected_version=the pool's version).
+Then inspect_pool again to read back the effect."""
 
 server = MCPServer("argus", version="0.1.0", instructions=INSTRUCTIONS)
 
@@ -55,6 +60,7 @@ _app: FastAPI | None = None
 # every call is still decided by the REST endpoint it forwards to.
 AGENTS = frozenset({Scope.WORKER, Scope.ORCHESTRATOR})
 MANAGERS = frozenset({Scope.ORCHESTRATOR, Scope.ADMIN})
+ADMINS = frozenset({Scope.ADMIN})
 ANYONE = frozenset(Scope)
 audiences: dict[str, frozenset[Scope]] = {}
 
@@ -179,7 +185,12 @@ async def _call(
             content=content,
             headers={"Authorization": auth, **(headers or {})},
         )
-    body = res.json() if res.content else None
+    if not res.content:
+        body = None
+    elif res.headers.get("content-type", "").startswith("text/plain"):
+        body = res.text
+    else:
+        body = res.json()
     if res.is_error:
         raise ToolError(_describe(res.status_code, body))
     return body
@@ -203,6 +214,12 @@ def _describe(status: int, body: Any) -> str:
 class Lease(BaseModel):
     task_id: str
     attempt: int
+
+
+class Runtime(BaseModel):
+    worker_version: str | None = None
+    engine: str | None = None
+    executor: str | None = None
 
 
 ViewArg = Literal["summary", "detail"]
@@ -244,16 +261,17 @@ async def claim_task(
 
 
 @tool(AGENTS)
-async def heartbeat(ctx: Context, leases: list[Lease] | None = None) -> dict:
+async def heartbeat(
+    ctx: Context, leases: list[Lease] | None = None, runtime: Runtime | None = None
+) -> dict:
     """Prove you are alive and renew the leases on tasks you hold. Call it at least
     every heartbeat_interval_s (30 s). If a lease comes back rejected, stop working on
-    that task. If state is "draining", finish your task and then call leave."""
-    return await _call(
-        ctx,
-        "POST",
-        "/agents/me/heartbeat",
-        json={"leases": [lease.model_dump() for lease in leases or []]},
-    )
+    that task. If state is "draining", finish your task and then call leave.
+    `runtime` reports what you run (worker_version, engine, executor), if known."""
+    body: dict[str, Any] = {"leases": [lease.model_dump() for lease in leases or []]}
+    if runtime is not None:
+        body["runtime"] = runtime.model_dump()
+    return await _call(ctx, "POST", "/agents/me/heartbeat", json=body)
 
 
 @tool(ANYONE)
@@ -638,8 +656,92 @@ async def list_agents(ctx: Context, state: str | None = None) -> list[dict]:
 
 @tool(MANAGERS)
 async def list_pools(ctx: Context) -> list[dict]:
-    """List worker pools with desired/max replicas and live instances."""
+    """List worker pools with desired/max replicas and live instances. `env` shows
+    keys only; values are write-only."""
     return await _call(ctx, "GET", "/pools")
+
+
+@tool(MANAGERS)
+async def inspect_pool(ctx: Context, name: str) -> dict:
+    """A pool with its live instances and agents, and per instance what is proven
+    about what runs: image, image_digest, worker_version, capabilities, engine,
+    executor, ready. Each fact has a `source` (configured < requested < started <
+    validated) or `unknown`: never read unknown as success."""
+    return await _call(ctx, "GET", f"/pools/{name}/inspect")
+
+
+@tool(ADMINS)
+async def update_pool(
+    ctx: Context,
+    name: str,
+    expected_version: str,
+    image: str | None = None,
+    capabilities: list[str] | None = None,
+    desired_replicas: int | None = None,
+    max_replicas: int | None = None,
+    agents_per_instance: int | None = None,
+    env: dict[str, str | None] | None = None,
+    cpus: float | None = None,
+    memory_mb: int | None = None,
+    docker: dict | None = None,
+    kubernetes: dict | None = None,
+    nanoclaw: dict | None = None,
+) -> dict:
+    """Change some of a pool's options, keeping the rest (admin only). Pass the
+    pool's `version` as expected_version; 409 stale_version means it changed: read
+    it again. `env` merges (null removes a key). Name, target, runtime are fixed."""
+    changes = {
+        "image": image,
+        "capabilities": capabilities,
+        "desired_replicas": desired_replicas,
+        "max_replicas": max_replicas,
+        "agents_per_instance": agents_per_instance,
+        "env": env,
+        "cpus": cpus,
+        "memory_mb": memory_mb,
+        "docker": docker,
+        "kubernetes": kubernetes,
+        "nanoclaw": nanoclaw,
+    }
+    body = {k: v for k, v in changes.items() if v is not None}
+    return await _call(
+        ctx,
+        "PATCH",
+        f"/pools/{name}",
+        json={"expected_version": expected_version, **body},
+    )
+
+
+@tool(MANAGERS)
+async def get_instance(ctx: Context, instance_id: str) -> dict:
+    """One instance: state, draining, image and digest, and its agents."""
+    return await _call(ctx, "GET", f"/instances/{instance_id}")
+
+
+@tool(MANAGERS)
+async def get_instance_logs(
+    ctx: Context, instance_id: str, tail: Annotated[int, Field(ge=1, le=500)] = 200
+) -> dict:
+    """The last `tail` lines (max 500) of an instance's container output, read live
+    from its target."""
+    logs = await _call(
+        ctx, "GET", f"/instances/{instance_id}/logs", params={"tail": tail}
+    )
+    return {"logs": logs}
+
+
+@tool(MANAGERS)
+async def drain_agent(ctx: Context, agent_id: str) -> dict:
+    """Let an agent finish its current task, then claim nothing new."""
+    return await _call(ctx, "POST", f"/agents/{agent_id}/drain")
+
+
+@tool(MANAGERS)
+async def recycle_instance(ctx: Context, instance_id: str) -> dict:
+    """Replace a running instance without interrupting work: its agents drain, it
+    stops once none holds a claimed task, then a new one starts. Follow it with
+    inspect_pool."""
+    return await _call(ctx, "POST", f"/instances/{instance_id}/recycle")
 
 
 @tool(MANAGERS)

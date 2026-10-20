@@ -207,7 +207,9 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   account leases (3.9). The response lists renewed leases with their deadlines
   and rejected pairs; a rejected pair does not renew that task or prevent other
   valid pairs from renewing. Agent liveness can refresh even when a task lease is
-  rejected. Workers do not heartbeat per task.
+  rejected. Workers do not heartbeat per task. A heartbeat may carry an
+  optional `runtime` (`worker_version`, `engine`, `executor`), shown by pool
+  inspection as self-reported ([MCP operations](mcp-operations.spec.md) 3.3).
 - The **reaper** loop (every 10 s) independently expires task leases whose
   deadline has passed, including leases belonging to agents still sending
   heartbeats. It also marks agents with
@@ -290,8 +292,10 @@ startup lock file guarantees there is only one. As built:
   they are confirmed. Containers carrying the pool's label that Argus does not
   track as live are stopped as orphans.
 - **Scale-down** drops reserved instances first, then drains idle running
-  instances (their agents go `draining`, leave, and the container then goes);
-  instances with a claimed task are skipped.
+  instances (their agents go `draining`); instances with a claimed task are
+  skipped. A draining instance (scaled down or recycled with
+  `POST /api/instances/{id}/recycle`) is stopped once none of its agents holds a
+  claimed task, or when they all leave, whichever comes first.
 - **Scaling API**: `POST /api/pools/{name}/scale`. Up to `max_replicas`,
   orchestrators and admins scale directly; above it an admin raises the cap
   along with it, while an orchestrator's request opens a `policy` decision for a
@@ -432,10 +436,13 @@ as a managed pool of size 1 uses the same model and comes later.
   `lease_account`, `report_account_exhausted`; `list_engines`, `run_local`; and
   for orchestrators `get_inbox`, `list_tasks`, `unblock_task`, `retry_task`,
   `cancel_task`, `list_agents`, `list_pools`, `scale_pool`,
-  `get_fleet_capabilities`, `launch_worker`, `list_worker_templates`,
+  `inspect_pool`, `get_instance`, `get_instance_logs`, `drain_agent`,
+  `recycle_instance`, `get_fleet_capabilities`, `launch_worker`,
+  `list_worker_templates`,
   `create_worker` (see [worker launch](worker-launch.spec.md)), `route_task`,
-  `list_decisions`, `get_decision`, `answer_decision`, `answer_decisions`. Lists
-  return the page envelope ([MCP operations](mcp-operations.spec.md) 3.1).
+  `list_decisions`, `get_decision`, `answer_decision`, `answer_decisions`; and
+  for admins `update_pool`. Lists return the page envelope
+  ([MCP operations](mcp-operations.spec.md) 3.1).
   `tools/list` shows each token only the tools its scope can use
   ([MCP operations](mcp-operations.spec.md) 3.4). The server's instructions
   tell agents the working loop (claim, heartbeat, progress, complete; a 409

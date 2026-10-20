@@ -304,7 +304,7 @@ def test_advanced_options_for_admin_only_and_validated(
     ok = create(client, template="argus-worker", name="w", advanced=adv).json()["pool"]
     assert (ok["capabilities"], ok["env"], ok["docker"]["extra_hosts"]) == (
         ["gpu"],
-        {"MODE": "x"},
+        {"MODE": "***"},  # values are write-only on every response
         ["db:10.0.0.2"],
     )
 

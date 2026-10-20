@@ -5,13 +5,26 @@ from datetime import datetime
 from typing import Any
 
 import aiosqlite
+from argus_core.agents import AgentRuntime
 from argus_core.auth import Scope
 from argus_core.decisions import Audience, DecisionKind
-from argus_core.fleet import Instance, InstanceAgent, Pool, PoolUpsert
+from argus_core.fleet import (
+    REDACTED,
+    Fact,
+    FactSource,
+    InspectedInstance,
+    Instance,
+    InstanceAgent,
+    InstanceRuntime,
+    Pool,
+    PoolInspection,
+    PoolPatch,
+    PoolUpsert,
+)
 
 from argus_api.db import Tx, ts
 from argus_api.decisions import store as decisions
-from argus_api.errors import ConflictError, NotFoundError
+from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
 from argus_api.events import record
 
 _CONFIG_FIELDS = (
@@ -68,6 +81,48 @@ async def upsert_pool(tx: Tx, name: str, body: PoolUpsert, actor: str) -> Pool:
     )
     await record(
         tx, actor, "pool", name, "pool.upserted", {"desired": body.desired_replicas}
+    )
+    return await get_pool(tx.conn, name)
+
+
+def redact(pool: Pool) -> Pool:
+    """The pool as every response shows it: `env` keys, never values (3.3)."""
+    return pool.model_copy(update={"env": dict.fromkeys(pool.env, REDACTED)})
+
+
+async def patch_pool(tx: Tx, name: str, body: PoolPatch, actor: str) -> Pool:
+    """Apply a partial update, guarded by the pool's version (3.3)."""
+    pool = await get_pool(tx.conn, name)
+    if body.expected_version != pool.version:
+        raise ConflictError(
+            f"pool {name!r} changed since you read it (version {pool.version});"
+            " read it again and reapply your change",
+            code="stale_version",
+            details=[pool.version],
+        )
+    changes = body.model_dump(exclude_unset=True, exclude={"expected_version", "env"})
+    current = PoolUpsert.model_validate(pool.model_dump()).model_dump()
+    merged = {**current, **changes}
+    if body.env is not None:
+        env = dict(pool.env)
+        for key, value in body.env.items():
+            if value is None:
+                env.pop(key, None)
+            else:
+                env[key] = value
+        merged["env"] = env
+    try:
+        upsert = PoolUpsert.model_validate(merged)
+    except ValueError as exc:  # a consistency rule across fields
+        raise ValidationFailedError(str(exc), code="invalid_pool") from exc
+    await upsert_pool(tx, name, upsert, actor)
+    await record(
+        tx,
+        actor,
+        "pool",
+        name,
+        "pool.patched",
+        {"fields": sorted([*changes, *(["env"] if body.env is not None else [])])},
     )
     return await get_pool(tx.conn, name)
 
@@ -194,6 +249,80 @@ async def get_instance(conn: aiosqlite.Connection, instance_id: str) -> Instance
     return await _to_instance(conn, row)
 
 
+async def recycle(tx: Tx, instance_id: str, actor: str) -> None:
+    """Drain an instance so the reconciler replaces it: it stops only once none
+    of its agents holds a claimed task, then a new one starts (3.3)."""
+    from argus_api.agents import service as agents
+
+    async with tx.conn.execute(
+        "SELECT state, draining FROM instances WHERE id = ?", (instance_id,)
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        raise NotFoundError(f"instance not found: {instance_id}")
+    if row["state"] != "running":
+        raise ConflictError(
+            f"instance {instance_id} is {row['state']}; only a running one is recycled",
+            code="instance_not_running",
+        )
+    if row["draining"]:
+        return  # already on its way out: a retry changes nothing
+    await tx.conn.execute(
+        "UPDATE instances SET draining = 1 WHERE id = ?", (instance_id,)
+    )
+    async with tx.conn.execute(
+        "SELECT id FROM agents WHERE instance_id = ? AND state = 'active'",
+        (instance_id,),
+    ) as cur:
+        for agent in await cur.fetchall():
+            await agents.drain(tx, agent["id"], actor)
+    await record(tx, actor, "instance", instance_id, "instance.recycling")
+
+
+async def inspect(conn: aiosqlite.Connection, name: str) -> PoolInspection:
+    """The pool and its live instances with what is proven about each one."""
+    pool = await get_pool(conn, name)
+    inspected = [
+        InspectedInstance(**i.model_dump(), runtime=_runtime(pool, i))
+        for i in await list_instances(conn, name)
+    ]
+    return PoolInspection(pool=redact(pool), instances=inspected)
+
+
+def _runtime(pool: Pool, inst: Instance) -> InstanceRuntime:
+    unknown = Fact(value=None, source=FactSource.UNKNOWN)
+    active = [a for a in inst.agents if a.state == "active"]
+    reporting = sorted(
+        (a for a in active if a.runtime is not None),
+        key=lambda a: str(a.last_heartbeat_at),
+        reverse=True,
+    )
+    reported: AgentRuntime | None = reporting[0].runtime if reporting else None
+
+    def said(field: str) -> Fact:
+        value = getattr(reported, field) if reported is not None else None
+        return Fact(value=value, source=FactSource.VALIDATED) if value else unknown
+
+    return InstanceRuntime(
+        image=Fact(value=inst.image, source=FactSource.REQUESTED)
+        if inst.image
+        else Fact(value=pool.image, source=FactSource.CONFIGURED),
+        image_digest=Fact(value=inst.image_digest, source=FactSource.STARTED)
+        if inst.image_digest
+        else unknown,
+        worker_version=said("worker_version"),
+        capabilities=Fact(
+            value=sorted({c for a in active for c in a.capabilities}),
+            source=FactSource.VALIDATED,
+        )
+        if active
+        else Fact(value=pool.capabilities, source=FactSource.CONFIGURED),
+        engine=said("engine"),
+        executor=said("executor"),
+        ready=Fact(value=True, source=FactSource.VALIDATED) if active else unknown,
+    )
+
+
 async def request_termination(tx: Tx, instance_id: str, reason: str) -> None:
     """Admin kill: the reconciler stops it and confirms before freeing the slot."""
     from argus_api.fleet.reconciler import begin_terminating
@@ -223,17 +352,28 @@ def _to_pool(row: aiosqlite.Row) -> Pool:
     data = dict(row)
     data["capabilities"] = json.loads(data["capabilities"])
     data |= json.loads(data.pop("config"))
+    data["version"] = row["updated_at"]
     return Pool.model_validate(data)
 
 
 async def _to_instance(conn: aiosqlite.Connection, row: aiosqlite.Row) -> Instance:
     async with conn.execute(
-        "SELECT a.id, a.name, a.state, (SELECT count(*) FROM tasks t WHERE"
+        "SELECT a.id, a.name, a.state, a.capabilities, a.last_heartbeat_at,"
+        " a.runtime, (SELECT count(*) FROM tasks t WHERE"
         " t.state = 'claimed' AND t.assignee_agent_id = a.id) AS claimed_tasks"
         " FROM agents a WHERE a.instance_id = ? ORDER BY a.created_at",
         (row["id"],),
     ) as cur:
-        agents = [InstanceAgent.model_validate(dict(a)) for a in await cur.fetchall()]
+        agents = [
+            InstanceAgent.model_validate(
+                {
+                    **dict(a),
+                    "capabilities": json.loads(a["capabilities"]),
+                    "runtime": json.loads(a["runtime"]) if a["runtime"] else None,
+                }
+            )
+            for a in await cur.fetchall()
+        ]
     return Instance.model_validate(
         {**dict(row), "draining": bool(row["draining"]), "agents": agents}
     )

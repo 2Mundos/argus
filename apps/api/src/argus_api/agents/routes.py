@@ -1,6 +1,12 @@
 from datetime import datetime
 
-from argus_core.agents import Agent, AgentRegister, AgentState, BootstrapTokenCreate
+from argus_core.agents import (
+    Agent,
+    AgentRegister,
+    AgentRuntime,
+    AgentState,
+    BootstrapTokenCreate,
+)
 from fastapi import APIRouter, status
 from pydantic import BaseModel
 
@@ -28,6 +34,7 @@ class LeaseRef(BaseModel):
 
 class HeartbeatRequest(BaseModel):
     leases: list[LeaseRef] = []
+    runtime: AgentRuntime | None = None  # what you run; shown as validated
 
 
 class RenewedLease(BaseModel):
@@ -86,7 +93,10 @@ async def heartbeat(
     """Prove liveness and renew the listed task leases (each one independently)."""
     async with db.write() as tx:
         hb = await service.heartbeat(
-            tx, agent_id, [(lease.task_id, lease.attempt) for lease in body.leases]
+            tx,
+            agent_id,
+            [(lease.task_id, lease.attempt) for lease in body.leases],
+            body.runtime,
         )
     return HeartbeatResponse(
         state=hb.state,
