@@ -25,6 +25,9 @@ if not URL.startswith(("http://", "https://")):
 BOOTSTRAP = os.environ["ARGUS_BOOTSTRAP_TOKENS"].split(",")[0]
 CAPABILITIES = [c for c in os.environ.get("ARGUS_CAPABILITIES", "").split(",") if c]
 WORK_SECONDS = float(os.environ.get("ECHO_WORK_SECONDS", "1"))
+# What this worker runs, sent on every heartbeat; pool inspection shows it as
+# self-reported (validated), never as proof the work succeeds.
+RUNTIME = {"worker_version": "echo-worker/1", "engine": "echo", "executor": None}
 
 stop = threading.Event()
 draining = threading.Event()
@@ -53,7 +56,9 @@ def call(method: str, path: str, body: dict | None = None, timeout: float = 30):
 def heartbeat_loop(interval: float) -> None:
     while not stop.wait(interval):
         status, body = call(
-            "POST", "/api/agents/me/heartbeat", {"leases": [lease] if lease else []}
+            "POST",
+            "/api/agents/me/heartbeat",
+            {"leases": [lease] if lease else [], "runtime": RUNTIME},
         )
         if status == 401:
             print("token revoked; exiting", flush=True)

@@ -334,11 +334,12 @@ def test_answer_many_applies_each_item_on_its_own(client: TestClient) -> None:
     ]
     assert results[1]["error"]["code"] == "not_found"
     assert results[2]["error"]["code"] == "invalid_choice"
-    assert results[3]["decision"]["answer_choice"] == "reject"
+    assert results[3]["answer_choice"] == "reject"
+    assert "question" not in results[3]  # compact: what was decided
 
     again = client.post("/api/decisions/answers", json=batch, headers=ADMIN_H).json()
     assert [r["ok"] for r in again["results"]] == [True, False, False, True]
-    assert all(again["results"][i]["decision"]["replayed"] for i in (0, 3))
+    assert all(again["results"][i]["replayed"] for i in (0, 3))
 
     too_many = {"answers": [{"decision_id": a}] * 21}
     res = client.post("/api/decisions/answers", json=too_many, headers=ADMIN_H)

@@ -371,7 +371,7 @@ def test_answers_over_mcp_are_safe_to_retry(client: TestClient) -> None:
     ]
     batch = tool(client, orchestrator, "answer_decisions", answers=answers)
     assert [r["ok"] for r in batch["results"]] == [True, False]
-    assert batch["results"][0]["decision"]["replayed"] is True
+    assert batch["results"][0]["replayed"] is True
     assert batch["results"][1]["error"]["code"] == "invalid_choice"
 
 

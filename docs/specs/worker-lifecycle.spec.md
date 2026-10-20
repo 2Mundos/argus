@@ -437,7 +437,7 @@ as a managed pool of size 1 uses the same model and comes later.
   for orchestrators `get_inbox`, `list_tasks`, `unblock_task`, `retry_task`,
   `cancel_task`, `list_agents`, `list_pools`, `scale_pool`,
   `inspect_pool`, `get_instance`, `get_instance_logs`, `drain_agent`,
-  `recycle_instance`, `get_fleet_capabilities`, `launch_worker`,
+  `recycle_instance`, `wait_for_events`, `get_fleet_capabilities`, `launch_worker`,
   `list_worker_templates`,
   `create_worker` (see [worker launch](worker-launch.spec.md)), `route_task`,
   `list_decisions`, `get_decision`, `answer_decision`, `answer_decisions`; and

@@ -774,6 +774,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/events/wait": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Wait Events
+         * @description Events after the cursor `after`, oldest first, waiting up to `wait_s`
+         *     seconds for one when none has happened yet (long-poll, like a claim). Without
+         *     `after`, waits for the next event from now. Keep `next_cursor` for the next
+         *     call; nothing is missed between calls.
+         */
+        get: operations["wait_events_api_events_wait_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/fleet/capabilities": {
         parameters: {
             query?: never;
@@ -1995,14 +2018,30 @@ export interface components {
              */
             text?: string;
         };
-        /** AnswerOutcome */
+        /**
+         * AnswerOutcome
+         * @description One item's result: what was decided, not the whole decision (its question
+         *     is already known to the caller); get_decision reads it in full.
+         */
         AnswerOutcome: {
-            decision?: components["schemas"]["AnsweredDecision"] | null;
+            /** Answer Choice */
+            answer_choice?: string | null;
+            /** Decided At */
+            decided_at?: string | null;
             /** Decision Id */
             decision_id: string;
             error?: components["schemas"]["ItemError"] | null;
             /** Ok */
             ok: boolean;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed?: boolean;
+            /** Subject Id */
+            subject_id?: string | null;
+            /** Subject Type */
+            subject_type?: string | null;
         };
         /** AnsweredDecision */
         AnsweredDecision: {
@@ -2696,6 +2735,15 @@ export interface components {
             subject_id: string;
             /** Subject Type */
             subject_type: string;
+        };
+        /** EventWait */
+        EventWait: {
+            /** Events */
+            events: components["schemas"]["EventOut"][];
+            /** Next Cursor */
+            next_cursor: number;
+            /** Timed Out */
+            timed_out: boolean;
         };
         /** ExhaustedReport */
         ExhaustedReport: {
@@ -6144,6 +6192,40 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    wait_events_api_events_wait_get: {
+        parameters: {
+            query?: {
+                after?: number | null;
+                wait_s?: number;
+                subject_type?: string | null;
+                subject_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventWait"];
+                };
             };
             /** @description Validation Error */
             422: {

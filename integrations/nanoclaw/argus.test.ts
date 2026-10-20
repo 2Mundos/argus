@@ -300,6 +300,21 @@ describe("Argus channel", () => {
     expect(fake.calls.some((c) => c.path.includes("/complete"))).toBe(false);
   });
 
+  it("reports its runtime on heartbeat, unknown parts as null", async () => {
+    const fake = fakeArgus();
+    const h = harness(fake, { workerVersion: "nanoclaw/9.9.9" });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => fake.calls.some((c) => c.path === "/agents/me/heartbeat"), 2500);
+    const beat = fake.calls.find((c) => c.path === "/agents/me/heartbeat");
+    // No account leasing in this adapter: engine and executor are not known.
+    expect(beat?.body.runtime).toEqual({
+      worker_version: "nanoclaw/9.9.9",
+      engine: null,
+      executor: null,
+    });
+  });
+
   it("stops claiming once Argus reports the agent as draining", async () => {
     const fake = fakeArgus({ heartbeat: { state: "draining", renewed: [], rejected: [] } });
     const h = harness(fake);
