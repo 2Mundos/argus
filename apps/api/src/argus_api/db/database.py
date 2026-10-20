@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import itertools
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -26,6 +27,9 @@ def ts(dt: datetime) -> str:
 Clock = Callable[[], datetime]
 
 
+_savepoints = itertools.count(1)
+
+
 @dataclass(frozen=True)
 class Tx:
     """An open write transaction.
@@ -37,6 +41,26 @@ class Tx:
     conn: aiosqlite.Connection
     now: datetime
     events: list[Event] = field(default_factory=list)
+
+    @asynccontextmanager
+    async def savepoint(self) -> AsyncGenerator[None]:
+        """Run a unit of work that may fail without aborting the transaction.
+
+        On an exception its writes are rolled back and its events dropped (they
+        must never be published), then the exception propagates for the caller
+        to handle; the rest of the transaction is untouched.
+        """
+        name = f"sp_{next(_savepoints)}"
+        mark = len(self.events)
+        await self.conn.execute(f"SAVEPOINT {name}")
+        try:
+            yield
+        except Exception:
+            await self.conn.execute(f"ROLLBACK TO {name}")
+            await self.conn.execute(f"RELEASE {name}")
+            del self.events[mark:]
+            raise
+        await self.conn.execute(f"RELEASE {name}")
 
 
 @dataclass(frozen=True)

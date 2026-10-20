@@ -3310,6 +3310,16 @@
             "minLength": 1,
             "title": "Error",
             "type": "string"
+          },
+          "reason": {
+            "default": "worker_fail",
+            "enum": [
+              "worker_fail",
+              "channel_error",
+              "provider_failure"
+            ],
+            "title": "Reason",
+            "type": "string"
           }
         },
         "required": [

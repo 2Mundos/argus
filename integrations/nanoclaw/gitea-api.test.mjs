@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { connect } from "node:net";
@@ -8,7 +8,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { ProxyAgent } from "undici";
-import { allowlistedRepository, createGatewayFetch, GiteaApi } from "./gitea-api.mjs";
+import {
+  allowlistedRepository,
+  bodyFromOptions,
+  createGatewayFetch,
+  GiteaApi,
+} from "./gitea-api.mjs";
 
 describe("credential-free Gitea API helper", () => {
   it("isolates REST token and Git Basic injection to exact host and path rules in a local proxy", async () => {
@@ -313,6 +318,26 @@ describe("credential-free Gitea API helper", () => {
     } finally {
       await close(proxy);
       await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads long PR bodies from --body-file and refuses ambiguous or unsafe sources", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gitea-body-"));
+    try {
+      const file = join(dir, "body.md");
+      const text = `# PR\n\n${'line `with` "quotes" and $vars\n'.repeat(50)}`;
+      writeFileSync(file, text);
+      assert.equal(bodyFromOptions({ "body-file": file }), text);
+      assert.equal(bodyFromOptions({ body: "inline" }), "inline");
+      assert.equal(bodyFromOptions({}), undefined);
+      assert.throws(() => bodyFromOptions({ body: "x", "body-file": file }), /either --body or/);
+      assert.throws(() => bodyFromOptions({ "body-file": dir }), /regular file/);
+      assert.throws(() => bodyFromOptions({ "body-file": join(dir, "missing") }), /not readable/);
+      const big = join(dir, "big.md");
+      writeFileSync(big, "x".repeat(256 * 1024 + 1));
+      assert.throws(() => bodyFromOptions({ "body-file": big }), /larger than/);
+    } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });

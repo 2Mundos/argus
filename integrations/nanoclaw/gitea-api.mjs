@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -176,6 +177,25 @@ function pullListLimit(limit) {
   return n;
 }
 
+const BODY_FILE_MAX_BYTES = 256 * 1024;
+
+/** `--body TEXT` or `--body-file PATH` (long PR bodies); never both. Returns undefined when neither is given. */
+export function bodyFromOptions(options) {
+  if (options["body-file"] === undefined) return options.body;
+  if (options.body !== undefined) throw new Error("use either --body or --body-file, not both");
+  const file = options["body-file"];
+  let info;
+  try {
+    info = statSync(file);
+  } catch {
+    throw new Error("--body-file is not readable");
+  }
+  if (!info.isFile()) throw new Error("--body-file must be a regular file");
+  if (info.size > BODY_FILE_MAX_BYTES)
+    throw new Error(`--body-file is larger than ${BODY_FILE_MAX_BYTES} bytes`);
+  return readFileSync(file, "utf8");
+}
+
 async function main(argv) {
   const [command, ...args] = argv;
   const options = {};
@@ -193,7 +213,7 @@ async function main(argv) {
       title: options.title,
       head: options.head,
       base: options.base,
-      body: options.body ?? "",
+      body: bodyFromOptions(options) ?? "",
     });
   } else if (command === "get") {
     result = await api.getPullRequest(options.number);
@@ -208,15 +228,18 @@ async function main(argv) {
     });
   } else if (command === "update") {
     const body = {};
-    for (const key of ["title", "body", "state", "base"])
+    const text = bodyFromOptions(options);
+    for (const key of ["title", "state", "base"])
       if (options[key] !== undefined) body[key] = options[key];
+    if (text !== undefined) body.body = text;
     result = await api.updatePullRequest(options.number, body);
   } else if (command === "status") {
     result = await api.getPullRequestStatus(options.number);
   } else {
     throw new Error(
       "usage: gitea-api.mjs <create|get|issue-get|list-prs|update|status> --repository URL " +
-        "[--number N] [--state open|closed|all] [--page N] [--limit N]; " +
+        "[--number N] [--state open|closed|all] [--page N] [--limit N] [--title T] [--head BRANCH] " +
+        "[--base BASE] [--body TEXT | --body-file PATH]; " +
         "get is a pull request by number, issue-get is an issue tracker item, list-prs lists PRs",
     );
   }
