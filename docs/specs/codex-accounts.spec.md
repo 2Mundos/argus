@@ -85,6 +85,15 @@ equal paths that end in the same record, and let the pool choose the engine:
   and then restarts that group's session container so the next turn starts on
   the new harness. Each switch is reported to Argus (`engine.selected` event
   with account id, never credentials).
+- **Rotation replaces the runtime.** After a limit or expired-auth report leads
+  to a replacement lease (also within one provider, where the harness does not
+  change and nothing else would stop the container), the channel stops the
+  group's running session containers and waits for each to exit before it resends
+  the task, so the next container is built with the stubs (credential, workspace
+  id) of the account now held. The task id, attempt, leases and workspace are
+  untouched; the rotation costs no attempt. The initial lease stops nothing. If a
+  container cannot be stopped (30 s), the task is not resent to the old process:
+  the attempt is failed with that reason.
 - **Structured auth-expiry signal.** A NanoClaw failure notice
   (`failureNotice: true`) may carry `content.providerFailure =
   { provider: "codex", kind: "auth_expired" }` next to a generic text.
