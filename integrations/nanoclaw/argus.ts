@@ -46,6 +46,7 @@ import {
   applyRepositoryLease,
   CURSOR_EXPIRY_MARGIN_MS,
   classifyFailure,
+  classifyProviderFailure,
   normalizeRepositoryUrl,
   OneCliClient,
   releaseRepositoryLease,
@@ -568,8 +569,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   async function handleFailure(
     task: { id: string; attempt: number },
     noticeText: string,
+    providerFailure?: unknown,
   ): Promise<void> {
-    const f = classifyFailure(noticeText, account?.provider);
+    const textual = classifyFailure(noticeText, account?.provider);
+    const f =
+      textual.kind === "failed"
+        ? (classifyProviderFailure(providerFailure, account?.provider) ?? textual)
+        : textual;
     if (f.kind === "exhausted" && cfg.accounts && account) {
       const exhausted = account;
       account = null;
@@ -1076,7 +1082,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const d = parseReply(text);
       try {
         if (isFailureNotice) {
-          await handleFailure(task, text);
+          await handleFailure(task, text, (content as Record<string, unknown>).providerFailure);
         } else if (d.kind === "complete") {
           const result = completionPayload(d.text);
           await completeWithResult(task, result.summary || "(no summary)", result.data);

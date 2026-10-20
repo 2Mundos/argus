@@ -85,6 +85,18 @@ equal paths that end in the same record, and let the pool choose the engine:
   and then restarts that group's session container so the next turn starts on
   the new harness. Each switch is reported to Argus (`engine.selected` event
   with account id, never credentials).
+- **Structured auth-expiry signal.** A NanoClaw failure notice
+  (`failureNotice: true`) may carry `content.providerFailure =
+  { provider: "codex", kind: "auth_expired" }` next to a generic text.
+  `codex` names the NanoClaw engine; its Argus account provider is `openai`.
+  Only that exact pair, read only inside a `failureNotice` message and only
+  while the held engine lease is `openai`, reports the account exhausted
+  (`POST /accounts/{id}/exhausted`, role `engine`, default cooldown, no
+  invented reset) with the fixed reason `OpenAI/Codex authentication expired`;
+  the notice or log text is never copied. It fails closed: unknown provider or
+  kind, another account provider, a bad shape, or the field outside a failure
+  notice is an ordinary failed attempt. Free text never exhausts an account
+  beyond the recognised quota/auth notices above.
 - **Lease order is the fallback order.** Workers list providers by preference,
   Codex first (`ARGUS_ACCOUNT_PROVIDERS=openai,anthropic`). Within a provider
   the pool picks by priority; when an account reports exhaustion the next
