@@ -20,6 +20,7 @@ const account = (over: Partial<Account>): Account => ({
   active_leases: 0,
   usage_24h: usage,
   usage_total: usage,
+  quota_status: { state: "unknown", reason: "no_usage_records", windows: [] },
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
   ...over,
@@ -135,6 +136,20 @@ describe("account row actions", () => {
     await waitFor(() => expect(mock.listCalls).toBeGreaterThan(before));
     expect(screen.queryByRole("form", { name: "Edit work" })).toBeNull();
     expect(screen.getByText("Saved “work2”.")).toBeTruthy();
+  });
+
+  it("edits token limits, rejects bad values and clears them with empty inputs", async () => {
+    mock.list = [account({ token_limits: { "5h": 1000 } })];
+    render(<Accounts />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit work" }));
+    fireEvent.change(screen.getByLabelText("7d"), { target: { value: "1.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/7d token limit/);
+    expect(mock.patches).toHaveLength(0);
+    fireEvent.change(screen.getByLabelText("7d"), { target: { value: "5000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mock.patches).toHaveLength(1));
+    expect(mock.patches[0]?.body).toEqual({ token_limits: { "5h": 1000, "7d": 5000 } });
   });
 
   it("clears the lease limit back to unlimited", async () => {

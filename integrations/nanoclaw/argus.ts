@@ -1365,6 +1365,9 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
       engine,
       account_provider: held.engine?.provider ?? null,
       executor_account_provider: held.executor?.provider ?? held.engine?.provider ?? null,
+      // Opaque lease ids (no credential): the delegate reports executor usage against them.
+      engine_account_id: held.engine?.account_id ?? null,
+      executor_account_id: (held.executor ?? held.engine)?.account_id ?? null,
       preferred_executor: executorFor(held.executor?.provider ?? held.engine?.provider ?? ""),
     });
     const dir = path.resolve("groups", group.folder);

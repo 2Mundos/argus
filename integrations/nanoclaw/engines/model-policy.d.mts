@@ -12,6 +12,9 @@ export interface PolicySnapshot {
     engine?: string;
     account_provider?: string | null;
     executor_account_provider?: string | null;
+    /** Leased account ids for usage reports (the executor falls back to the engine's account). */
+    engine_account_id?: string | null;
+    executor_account_id?: string | null;
     /** The delegate CLI of the best-priority leased account (claude | codex | agent). */
     preferred_executor?: string | null;
   } | null;

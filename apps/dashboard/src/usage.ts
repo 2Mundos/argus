@@ -5,6 +5,8 @@ export type QuotaWindow = components["schemas"]["QuotaWindow"];
 export type UsageSeries = components["schemas"]["UsageSeries"];
 export type AccountUsage = components["schemas"]["AccountUsage"];
 export type UsageBucket = components["schemas"]["UsageBucket"];
+export type QuotaStatus = components["schemas"]["QuotaStatus"];
+export type QuotaStatusWindow = components["schemas"]["QuotaStatusWindow"];
 
 /** Accounts that hold repository leases, not model quota. */
 export function hasModelUsage(provider: string): boolean {
@@ -111,4 +113,44 @@ export function bucketLabel(startIso: string, bucket: "hour" | "day", tz: string
   return bucket === "hour"
     ? d.toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit", timeZone: tz })
     : d.toLocaleDateString("en", { month: "short", day: "numeric", timeZone: tz });
+}
+
+/** Why Argus has no quota figure; never a mute "unknown". */
+export const QUOTA_REASON_LABELS: Record<string, string> = {
+  no_usage_records: "No usage reported yet",
+  provider_does_not_expose: "Provider does not expose quota",
+  window_not_configured: "No quota window configured",
+};
+
+export function quotaUnknownLabel(status: Pick<QuotaStatus, "reason">): string {
+  return (status.reason && QUOTA_REASON_LABELS[status.reason]) || "Quota unknown";
+}
+
+/** "3 runs without measurement", or null when every run was measured. */
+export function unmeasuredNote(n: number | undefined): string | null {
+  return n ? `${n} ${n === 1 ? "run" : "runs"} without measurement` : null;
+}
+
+/** Every run in these totals lacked figures: showing zero tokens would be a lie. */
+export function allUnmeasured(t: { runs?: number; unmeasured_runs?: number }): boolean {
+  const n = t.unmeasured_runs ?? 0;
+  return n > 0 && n >= (t.runs ?? 0);
+}
+
+export const TOKEN_LIMIT_PERIODS = ["5h", "24h", "7d"] as const;
+
+/** Parse the three limit inputs ("" = unset). All empty clears the limits (null). */
+export function parseTokenLimits(
+  raw: Record<(typeof TOKEN_LIMIT_PERIODS)[number], string>,
+): { limits: Record<string, number> | null } | { error: string } {
+  const limits: Record<string, number> = {};
+  for (const period of TOKEN_LIMIT_PERIODS) {
+    const text = raw[period].trim();
+    if (text === "") continue;
+    const n = Number(text);
+    if (!Number.isInteger(n) || n < 1)
+      return { error: `The ${period} token limit must be a whole number of at least 1, or empty.` };
+    limits[period] = n;
+  }
+  return { limits: Object.keys(limits).length ? limits : null };
 }
