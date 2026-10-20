@@ -118,7 +118,10 @@ async def overview(db: Database) -> Overview:
 
             tasks = _filled(
                 TaskState,
-                await grouped("SELECT state, count(*) FROM tasks GROUP BY state"),
+                await grouped(
+                    "SELECT state, count(*) FROM tasks"
+                    " WHERE archived_at IS NULL GROUP BY state"
+                ),
             )
 
             agents_by_state = _zeros(AgentState)

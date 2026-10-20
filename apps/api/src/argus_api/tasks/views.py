@@ -50,6 +50,7 @@ class TaskSummary(Refs):
     progress_message: str | None
     progress_percent: int | None
     created_at: datetime
+    archived_at: datetime | None
     version: str  # updated_at; pass it back as expected_version
     age_s: int  # since creation
     truncated: dict[str, int] = {}  # field -> full length in bytes
@@ -77,15 +78,18 @@ async def list_tasks(
     project: str | None = None,
     kind: str | None = None,
     assignee: str | None = None,
+    archived: bool = False,
     view: View = "summary",
     limit: int = 25,
     cursor: str | None = None,
 ) -> TaskPage:
-    """Newest first, keyset-paged on (created_at, id)."""
+    """Newest first, keyset-paged on (created_at, id). Archived tasks are left out
+    unless `archived` asks for exactly those."""
     limit = clamp(limit)
     filters: dict[str, Any] = {"states": sorted(states or []), "project": project}
-    filters |= {"kind": kind, "assignee": assignee}
-    where, params = ["1 = 1"], []
+    filters |= {"kind": kind, "assignee": assignee, "archived": archived}
+    where = ["archived_at IS NOT NULL" if archived else "archived_at IS NULL"]
+    params: list[Any] = []
     if states:
         where.append(f"state IN ({','.join('?' * len(states))})")
         params += states

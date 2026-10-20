@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, call, download } from "../api";
+import { ARCHIVABLE } from "../archive";
 import { bytes, relative, shortId } from "../format";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
@@ -22,13 +23,17 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
   );
   const [task, artifacts, events] = data ?? [];
 
-  async function act(action: "cancel" | "unblock" | "retry") {
+  async function act(action: "cancel" | "unblock" | "retry" | "archive" | "unarchive") {
     setError(undefined);
     setConfirmingRetry(false);
     try {
       const path = { task_id: taskId };
       if (action === "cancel")
         await call(api.POST("/api/tasks/{task_id}/cancel", { params: { path } }));
+      else if (action === "archive")
+        await call(api.POST("/api/tasks/{task_id}/archive", { params: { path } }));
+      else if (action === "unarchive")
+        await call(api.POST("/api/tasks/{task_id}/unarchive", { params: { path } }));
       else if (action === "retry")
         await call(api.POST("/api/tasks/{task_id}/retry", { params: { path } }));
       else await call(api.POST("/api/tasks/{task_id}/unblock", { params: { path } }));
@@ -137,7 +142,17 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                       Retry
                     </button>
                   ))}
-                {!["succeeded", "failed", "cancelled"].includes(task.state) && (
+                {ARCHIVABLE.includes(task.state) &&
+                  (task.archived_at ? (
+                    <button type="button" onClick={() => act("unarchive")}>
+                      Unarchive
+                    </button>
+                  ) : (
+                    <button type="button" onClick={() => act("archive")}>
+                      Archive
+                    </button>
+                  ))}
+                {!ARCHIVABLE.includes(task.state) && (
                   <button type="button" className="danger" onClick={() => act("cancel")}>
                     Cancel task
                   </button>

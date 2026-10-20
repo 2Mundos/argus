@@ -170,6 +170,7 @@ class Task(BaseModel):
     created_by: str
     created_at: datetime
     updated_at: datetime
+    archived_at: datetime | None  # set while an operator has archived it
 
 
 class ClaimedTask(Task):
