@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 import aiosqlite
+from argus_core.accounts import role_accepts
 from argus_core.agents import LIVE, AgentState
 from argus_core.auth import Scope
 from argus_core.decisions import Audience, DecisionKind
@@ -18,7 +19,9 @@ from argus_core.kinds import TaskKind
 from argus_core.tasks import (
     TERMINAL,
     Action,
+    Failover,
     Review,
+    ServingAccount,
     Task,
     TaskCreate,
     TaskResult,
@@ -45,6 +48,11 @@ from argus_api.kinds import service as kinds
 log = logging.getLogger(__name__)
 S = TaskState
 _JSON_FIELDS = ("acceptance", "input", "required_capabilities")
+
+# `blocked` for want of a usable model account (account selection 3.6). Rows written
+# before the rename carry `no_account`; both are read and released alike.
+AWAITING_QUOTA = "awaiting_quota"
+QUOTA_WAIT_REASONS = (AWAITING_QUOTA, "no_account")
 
 
 # -- reads -------------------------------------------------------------------
@@ -386,6 +394,57 @@ async def block(tx: Tx, agent_id: str, task_id: str, attempt: int, reason: str) 
         data={"reason": reason},
     )
     return await get_task(tx.conn, task_id)
+
+
+async def pause_for_quota(
+    tx: Tx, agent_id: str, task_id: str, attempt: int, note: str, *, wait: bool
+) -> Task:
+    """A provider quota ended the attempt (not the task's fault): back to `ready`
+    (or, with `wait`, `blocked` as `awaiting_quota` because no account is left)
+    with `failures` and `attempt` untouched, so `max_attempts` is not consumed.
+    Fenced like `fail`, which it replaces for this case."""
+    row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
+    outcome = "waiting for quota" if wait else "requeued"
+    await _apply(
+        tx,
+        row,
+        Action.BLOCK if wait else Action.REQUEUE,
+        f"agent:{agent_id}",
+        set_={
+            "progress_message": f"attempt {attempt} paused: provider quota reached;"
+            f" {outcome}",
+            "progress_percent": None,
+            "progress_at": ts(tx.now),
+            **({"block_reason": AWAITING_QUOTA} if wait else {}),
+        },
+        data={"reason": "quota_exhausted", "error": note[:500]},
+    )
+    return await get_task(tx.conn, task_id)
+
+
+async def await_quota_ready(
+    tx: Tx, agent_id: str, capabilities: list[str]
+) -> list[str]:
+    """Block the `ready` tasks this agent could claim as `awaiting_quota`: it has no
+    usable account, so claiming would only fail. `attempt` and `failures` stay;
+    `release_waiting_tasks` returns them to ready. Returns the task ids."""
+    async with tx.conn.execute(
+        "SELECT * FROM tasks t WHERE state = 'ready' AND NOT EXISTS ("
+        "  SELECT 1 FROM json_each(t.required_capabilities) rc"
+        "  WHERE rc.value NOT IN (SELECT value FROM json_each(?))) ORDER BY id",
+        (json.dumps(capabilities),),
+    ) as cur:
+        rows = await cur.fetchall()
+    for row in rows:
+        await _apply(
+            tx,
+            row,
+            Action.BLOCK,
+            f"agent:{agent_id}",
+            set_={"block_reason": AWAITING_QUOTA},
+            data={"reason": AWAITING_QUOTA},
+        )
+    return [r["id"] for r in rows]
 
 
 # -- orchestrator / human operations --------------------------------------------
@@ -765,9 +824,11 @@ async def _expire_where(
 # -- internals ------------------------------------------------------------------
 
 
-async def check_lease(tx: Tx, task_id: str, attempt: int, agent_id: str) -> None:
-    """Public ownership check for writes owned by other modules (artifacts)."""
-    await _owned(tx, task_id, attempt, agent_id)
+async def check_lease(
+    tx: Tx, task_id: str, attempt: int, agent_id: str, *, allow_expired: bool = False
+) -> None:
+    """Public ownership check for writes owned by other modules (artifacts, accounts)."""
+    await _owned(tx, task_id, attempt, agent_id, allow_expired=allow_expired)
 
 
 async def _owned(
@@ -1062,12 +1123,74 @@ async def _to_task(conn: aiosqlite.Connection, row: aiosqlite.Row) -> Task:
         data["progress_data"] = json.loads(data["progress_data"])
     data["requires_approval"] = bool(data["requires_approval"])
     data["depends_on"] = await _deps(conn, row["id"])
+    data["refill_at"] = await _refill_at(conn, row)
+    data["serving_account"] = await _serving_account(conn, row)
+    data["failover"] = await _last_failover(conn, row)
     async with conn.execute(
         "SELECT page_id FROM task_knowledge WHERE task_id = ? ORDER BY page_id",
         (row["id"],),
     ) as cur:
         data["knowledge"] = [r[0] for r in await cur.fetchall()]
     return Task.model_validate(data)
+
+
+async def _refill_at(conn: aiosqlite.Connection, row: aiosqlite.Row) -> datetime | None:
+    """When the earliest exhausted account a model run could use resets."""
+    if row["state"] != S.BLOCKED or row["block_reason"] not in QUOTA_WAIT_REASONS:
+        return None
+    async with conn.execute(
+        "SELECT provider, exhausted_until FROM accounts"
+        " WHERE state = 'exhausted' AND exhausted_until IS NOT NULL"
+    ) as cur:
+        marks = [
+            datetime.fromisoformat(r["exhausted_until"])
+            for r in await cur.fetchall()
+            if role_accepts("engine", r["provider"], None)
+        ]
+    return min(marks, default=None)
+
+
+async def _serving_account(
+    conn: aiosqlite.Connection, row: aiosqlite.Row
+) -> ServingAccount | None:
+    """The account the claiming agent's harness runs on (name only, no secret)."""
+    if row["state"] != S.CLAIMED:
+        return None
+    async with conn.execute(
+        "SELECT a.id, a.name, a.provider FROM account_leases l"
+        " JOIN accounts a ON a.id = l.account_id WHERE l.agent_id = ?"
+        " AND l.role = 'engine' AND l.released_at IS NULL",
+        (row["assignee_agent_id"],),
+    ) as cur:
+        acc = await cur.fetchone()
+    return (
+        ServingAccount(id=acc["id"], name=acc["name"], provider=acc["provider"])
+        if acc
+        else None
+    )
+
+
+async def _last_failover(
+    conn: aiosqlite.Connection, row: aiosqlite.Row
+) -> Failover | None:
+    if row["attempt"] == 0:
+        return None
+    async with conn.execute(
+        "SELECT at, data FROM events WHERE subject_type = 'task' AND subject_id = ?"
+        " AND kind = 'account.failover' ORDER BY id DESC LIMIT 1",
+        (row["id"],),
+    ) as cur:
+        event = await cur.fetchone()
+    if event is None:
+        return None
+    d = json.loads(event["data"])
+    return Failover(
+        from_account=d.get("from"),
+        to_account=d.get("to"),
+        reason=d.get("reason", ""),
+        at=datetime.fromisoformat(event["at"]),
+        attempt=d.get("attempt", row["attempt"]),
+    )
 
 
 def _deadline(now: datetime, ttl_s: int) -> str:

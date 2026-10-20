@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import { accountsFromEnv, createArgusAdapter, renderTask } from "./argus.js";
@@ -9,6 +10,7 @@ import {
   applyRepositoryLease,
   CURSOR_EXPIRY_MARGIN_MS,
   classifyFailure,
+  classifyLogTail,
   classifyProviderFailure,
   exchangeCursorApiKey,
   jwtExpiryMs,
@@ -286,6 +288,7 @@ function harness(
   w: ReturnType<typeof world>,
   withAccounts = true,
   extra: Partial<NonNullable<Parameters<typeof createArgusAdapter>[0]["accounts"]>> = {},
+  top: Partial<Parameters<typeof createArgusAdapter>[0]> = {},
 ) {
   const inbound: any[] = [];
   const setup = {
@@ -301,6 +304,7 @@ function harness(
     name: "w",
     fetch: w.fetchImpl,
     claimWaitS: 1,
+    ...top,
     accounts: withAccounts
       ? {
           models: true,
@@ -1532,5 +1536,116 @@ describe("global account selection in the channel", () => {
     await new Promise((r) => setTimeout(r, 100)); // the task is never finished
     expect(selectEngine).toHaveBeenCalledTimes(1);
     expect(w.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(2);
+  });
+});
+
+// -- quota failover (account-selection.spec.md 3.6) -----------------------------------
+
+describe("quota notices shared with Argus", () => {
+  const cases = JSON.parse(
+    readFileSync(
+      new URL("../../packages/core/tests/fixtures/quota-notices.json", import.meta.url),
+      "utf8",
+    ),
+  ) as Array<{ provider: string; notice: string; exhausted: boolean; until?: string | null }>;
+  it.each(cases)("$provider: $notice", (c) => {
+    const f = classifyFailure(c.notice, c.provider === "anthropic" ? "anthropic" : "openai");
+    expect(f.kind).toBe(c.exhausted ? "exhausted" : "failed");
+    if (c.exhausted) expect((f as { until?: string }).until ?? null).toBe(c.until ?? null);
+  });
+});
+
+describe("a Claude rate limit that only the structured field or the log shows", () => {
+  const GENERIC = "The agent run failed. Check the logs for details.";
+  const resets = "2026-10-20T23:50:00.000Z";
+  const A = lease("a", "sk-ant-AAAA");
+  const B = lease("b", "sk-ant-BBBB");
+
+  it("classifyProviderFailure reads claude/rate_limit for an anthropic account only", () => {
+    const v = { provider: "claude", kind: "rate_limit", resets_at: resets };
+    expect(classifyProviderFailure(v, "anthropic")).toEqual({
+      kind: "exhausted",
+      reason: `Rate limit reached (resets ${resets})`,
+      until: resets,
+    });
+    expect(
+      classifyProviderFailure({ provider: "claude", kind: "rate_limit" }, "anthropic"),
+    ).toEqual({ kind: "exhausted", reason: "Rate limit reached" });
+    expect(classifyProviderFailure(v, "openai")).toBeNull();
+    expect(classifyProviderFailure(v, undefined)).toBeNull();
+    expect(classifyProviderFailure({ provider: "claude", kind: "other" }, "anthropic")).toBeNull();
+  });
+
+  it("classifyLogTail takes the last Rate limit line and ignores other providers", () => {
+    const tail = `x\nRate limit [five_hour] (resets 2026-10-20T20:00:00Z)\nmore\nRate limit [five_hour] (resets ${resets})\n`;
+    expect(classifyLogTail(tail, "anthropic")).toMatchObject({ kind: "exhausted", until: resets });
+    expect(classifyLogTail(tail, "openai")).toBeNull();
+    expect(classifyLogTail("nothing here", "anthropic")).toBeNull();
+  });
+
+  it("generic notice + structured rate_limit: exhausts, switches, resends on the same attempt", async () => {
+    const w = world({ leases: [A, B], tasks: [task()] });
+    const h = harness(w);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", null, {
+      kind: "chat",
+      content: {
+        text: GENERIC,
+        failureNotice: true,
+        providerFailure: { provider: "claude", kind: "rate_limit", resets_at: resets },
+      },
+    });
+    const report = w.calls.find((c) => c.path === "/accounts/a-a/exhausted")!;
+    expect(report.body).toMatchObject({ until: resets, task_id: "t1", attempt: 1 });
+    await until(() => h.inbound.length === 2);
+    expect(h.inbound[1].content.text).toContain("account was switched");
+    expect(w.calls.some((c) => c.path.endsWith("/fail"))).toBe(false);
+    expect(w.onecli.secrets[0]!.value).toBe("sk-ant-BBBB");
+  });
+
+  it("generic notice + log tail: same flow, reset parsed from the log", async () => {
+    const w = world({ leases: [A, B], tasks: [task()] });
+    const h = harness(
+      w,
+      true,
+      {},
+      {
+        agentLogTail: async () => `Rate limit [five_hour] (resets ${resets})\n`,
+      },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", null, failure(GENERIC));
+    const report = w.calls.find((c) => c.path === "/accounts/a-a/exhausted")!;
+    expect(report.body).toMatchObject({ until: resets, attempt: 1 });
+    await until(() => h.inbound.length === 2);
+    expect(w.calls.some((c) => c.path.endsWith("/fail"))).toBe(false);
+  });
+
+  it("a generic notice with nothing else is still a plain failure", async () => {
+    const w = world({ leases: [A, B], tasks: [task()] });
+    const h = harness(w, true, {}, { agentLogTail: async () => "all fine" });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", null, failure(GENERIC));
+    await until(() => w.calls.some((c) => c.path === "/tasks/t1/fail"));
+    expect(w.calls.some((c) => c.path.endsWith("/exhausted"))).toBe(false);
+  });
+});
+
+describe("no usable account at claim time", () => {
+  it("tells Argus so its ready tasks show as awaiting quota", async () => {
+    const w = world({ leases: ["no_account"], tasks: [task()] });
+    const h = harness(w);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((c) => c.path === "/accounts/awaiting-quota"));
+    const call = w.calls.find((c) => c.path === "/accounts/awaiting-quota")!;
+    expect(call.body).toMatchObject({ runtime_providers: ["anthropic", "openai"] });
+    expect(w.calls.some((c) => c.path === "/tasks/claim")).toBe(false);
   });
 });

@@ -46,8 +46,11 @@ import {
   applyRepositoryLease,
   CURSOR_EXPIRY_MARGIN_MS,
   classifyFailure,
+  classifyLogTail,
   classifyProviderFailure,
   executorFor,
+  type FailureKind,
+  isGenericFailureNotice,
   normalizeRepositoryUrl,
   OneCliClient,
   releaseRepositoryLease,
@@ -132,6 +135,13 @@ export interface ArgusConfig {
   };
   /** Apply a pinned policy before starting a task; absent only in test adapters. */
   selectModels?: (task: ArgusTask, held: HeldAccounts) => Promise<ModelSelection>;
+  /**
+   * The tail of the agent's log (host-provided). A run that ends with only the
+   * generic failure notice is checked for Claude Code's `Rate limit [..] (resets
+   * ..)` line. Absent: only the notice text and the structured providerFailure
+   * can show an exhausted account.
+   */
+  agentLogTail?: () => Promise<string>;
   /** Called once, after Argus drained this agent, its work is done, and it left. */
   onDrained?: () => void;
   /** Reported on heartbeat as `runtime.worker_version`, e.g. "nanoclaw/1.2.3". */
@@ -485,6 +495,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let account: { id: string; name: string; provider: string } | null = null;
   let executor: { id: string; name: string; provider: string } | null = null;
   let leasedAt = 0; // when the engine lease was last confirmed (idle rebalance)
+  let recycleOnLease = false; // Argus moved us to another account: recycle once the next one is applied
   let engineInUse: string | null = null; // the harness the leased account selected
   let activeAccountLeases: AccountLease[] = [];
   let repositoryTarget: ApplyTarget | null = null;
@@ -624,10 +635,17 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     providerFailure?: unknown,
   ): Promise<void> {
     const textual = classifyFailure(noticeText, account?.provider);
-    const f =
+    let f: FailureKind =
       textual.kind === "failed"
         ? (classifyProviderFailure(providerFailure, account?.provider) ?? textual)
         : textual;
+    if (f.kind === "failed" && isGenericFailureNotice(noticeText) && cfg.agentLogTail) {
+      try {
+        f = classifyLogTail(await cfg.agentLogTail(), account?.provider) ?? f;
+      } catch (err) {
+        log.warn("Could not read the agent log tail", { err });
+      }
+    }
     if (f.kind === "exhausted" && cfg.accounts && account) {
       const exhausted = account;
       account = null;
@@ -640,6 +658,16 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         attempt: task.attempt,
       });
       log.warn("Argus account exhausted", { account: exhausted.name, until: f.until });
+      const next = data.lease as AccountLease | undefined;
+      log.warn(
+        `account_failover ${JSON.stringify({
+          from: exhausted.name,
+          to: next?.name ?? null,
+          reason: f.reason,
+          task_id: task.id,
+          attempt: task.attempt,
+        })}`,
+      );
       if (data.lease) {
         const lease = data.lease as AccountLease;
         await applyAndSelect(cfg.accounts, lease, "exhausted");
@@ -651,9 +679,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           await cfg.accounts.recycleRuntime?.();
         } catch (err) {
           log.error("The previous runtime could not be stopped; not resending the task", { err });
+          // A quota-led reason makes Argus requeue without consuming the attempt.
           await client.call("POST", `/tasks/${task.id}/fail`, {
             attempt: task.attempt,
-            error: "The account was switched but the previous worker runtime could not be stopped",
+            error: `${f.reason}; the account was switched but the previous worker runtime could not be stopped`,
             reason: "provider_failure",
           });
           finishTask();
@@ -683,11 +712,19 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       finishTask();
       return;
     }
-    await client.call("POST", `/tasks/${task.id}/fail`, {
+    const { data: failed } = await client.call("POST", `/tasks/${task.id}/fail`, {
       attempt: task.attempt,
       error: f.reason,
       reason: "provider_failure",
     });
+    // Argus may have recognised a quota notice itself and moved this worker to
+    // another account (account selection 3.6): drop the stale one; the next lease
+    // is applied and the runtime recycled.
+    const switched = (failed as { failover?: { attempt?: number } } | null)?.failover;
+    if (switched?.attempt === task.attempt && account) {
+      account = null;
+      recycleOnLease = true;
+    }
     finishTask();
   }
 
@@ -911,7 +948,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (rebalancing && lease.account_id === account?.id) return true; // still the best
       try {
         await applyAndSelect(acc, lease, "lease");
-        if (rebalancing) await acc.recycleRuntime?.();
+        if (rebalancing || recycleOnLease) await acc.recycleRuntime?.();
+        recycleOnLease = false;
       } catch (err) {
         // Do not sit on an account we cannot use: give it back, then retry later.
         await client.call("POST", "/accounts/release").catch(() => undefined);
@@ -935,6 +973,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         log.warn("No Argus account is usable right now; not claiming work", {
           message: err.message,
         });
+        // Ready work this worker could take is shown as awaiting quota, with when.
+        await client
+          .call("POST", "/accounts/awaiting-quota", {
+            capabilities: cfg.capabilities,
+            runtime_providers: runtimeProviders("engine"),
+          })
+          .catch((e) => log.warn("Could not mark ready tasks as awaiting quota", { err: e }));
       } else {
         log.warn("Could not lease/apply an account (will retry)", { err });
       }

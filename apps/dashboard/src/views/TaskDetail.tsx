@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, call, download } from "../api";
 import { ARCHIVABLE } from "../archive";
+import { TaskFailover } from "../failover";
 import { bytes, relative, shortId } from "../format";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
@@ -81,6 +82,7 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                 <dd>
                   {task.attempt} (failures {task.failures}/{task.max_attempts})
                 </dd>
+                <TaskFailover task={task} />
                 {task.assignee_agent_id && (
                   <>
                     <dt>Assignee</dt>

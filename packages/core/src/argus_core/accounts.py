@@ -217,9 +217,21 @@ class ExhaustedReport(BaseModel):
     runtime_providers: list[str] | None = Field(default=None, min_length=1)
     # Which of the agent's leases hit the limit (it may hold one account twice).
     role: LeaseRole = "engine"
-    # The task the agent was working on: blocked as `no_account` if nothing is left.
+    # The task the agent was working on: blocked as `awaiting_quota` if nothing is left.
     task_id: str | None = None
     attempt: int | None = None
+
+
+class AwaitingQuotaRequest(BaseModel):
+    """An agent with no usable account asks for the work it cannot claim to wait."""
+
+    capabilities: list[str] = []
+    runtime_providers: list[str] | None = Field(default=None, min_length=1)
+
+
+class AwaitingQuotaResult(BaseModel):
+    task_ids: list[str]
+    refill_at: datetime | None = None  # earliest exhausted_until
 
 
 class FallbackResult(BaseModel):

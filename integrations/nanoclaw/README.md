@@ -194,8 +194,16 @@ worker provider list (the retired `account_providers` / `executor_providers` /
    only) from which `argus-delegate claude` restores the variable for its own
    child when the proxy and CA match; see
    [global account selection](../../docs/specs/account-selection.spec.md).
-3. With no replacement, Argus blocks the task as `no_account` and the channel
-   lets go of it; it leases again (and claims) once an account is usable.
+   A generic "The agent run failed" notice counts too when the structured
+   `providerFailure` is `{provider:"claude", kind:"rate_limit", resets_at?}` or
+   the agent log tail (optional `agentLogTail` hook of the channel config) holds
+   `Rate limit [..] (resets ..)`; without the hook only the notice and the
+   structured field are seen. The task is resent on the same attempt and no
+   failure is reported. The channel logs `account_failover`.
+3. With no replacement, Argus blocks the task as `awaiting_quota` (with
+   `refill_at`) and the channel lets go of it; it leases again (and claims) once
+   an account is usable. When it cannot lease at claim time it calls
+   `POST /accounts/awaiting-quota` so ready tasks show as waiting too.
 4. Any other failure notice now fails the attempt with its text, so Argus retries
    it (up to `max_attempts`) instead of leaving it claimed.
 

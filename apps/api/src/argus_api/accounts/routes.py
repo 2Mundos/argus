@@ -9,6 +9,8 @@ from argus_core.accounts import (
     AccountCreate,
     AccountLease,
     AccountUpdate,
+    AwaitingQuotaRequest,
+    AwaitingQuotaResult,
     CredentialUpdate,
     ExhaustedReport,
     FallbackResult,
@@ -352,6 +354,21 @@ async def release_account(
         await service.release(tx, agent_id, "released", role)
 
 
+@router.post("/awaiting-quota")
+async def awaiting_quota(
+    body: AwaitingQuotaRequest, db: DbDep, agent_id: AgentDep
+) -> AwaitingQuotaResult:
+    """The agent could not lease an account and so cannot claim: park the ready tasks
+    it could have taken as `awaiting_quota`. `409 account_available` if one is usable."""
+    async with db.write() as tx:
+        ids = await service.mark_awaiting_quota(
+            tx, agent_id, body.capabilities, body.runtime_providers
+        )
+        return AwaitingQuotaResult(
+            task_ids=ids, refill_at=await service.earliest_reset(tx, "engine", None)
+        )
+
+
 @router.post("/{account_id}/exhausted")
 async def report_exhausted(
     account_id: str,
@@ -363,7 +380,7 @@ async def report_exhausted(
 ) -> FallbackResult:
     """Report that the leased account hit a quota. Returns the next account to use
     (best remaining by priority, any provider), or none: then the given task is blocked as
-    `no_account` and returns to ready when an account frees up."""
+    `awaiting_quota` and returns to ready when an account frees up."""
     async with db.write() as tx:
         return await service.exhausted(
             tx,

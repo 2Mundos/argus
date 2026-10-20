@@ -1433,6 +1433,64 @@
         "title": "Audience",
         "type": "string"
       },
+      "AwaitingQuotaRequest": {
+        "description": "An agent with no usable account asks for the work it cannot claim to wait.",
+        "properties": {
+          "capabilities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "runtime_providers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Providers"
+          }
+        },
+        "title": "AwaitingQuotaRequest",
+        "type": "object"
+      },
+      "AwaitingQuotaResult": {
+        "properties": {
+          "refill_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refill At"
+          },
+          "task_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Task Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "task_ids"
+        ],
+        "title": "AwaitingQuotaResult",
+        "type": "object"
+      },
       "Axes": {
         "properties": {
           "account_provider": {
@@ -1749,6 +1807,16 @@
             ],
             "title": "Error"
           },
+          "failover": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Failover"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "failures": {
             "title": "Failures",
             "type": "integer"
@@ -1876,6 +1944,18 @@
             "title": "Project",
             "type": "string"
           },
+          "refill_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refill At"
+          },
           "required_capabilities": {
             "items": {
               "type": "string"
@@ -1899,6 +1979,16 @@
           },
           "review": {
             "$ref": "#/components/schemas/Review"
+          },
+          "serving_account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ServingAccount"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "spec": {
             "title": "Spec",
@@ -3472,6 +3562,55 @@
           "error"
         ],
         "title": "FailRequest",
+        "type": "object"
+      },
+      "Failover": {
+        "description": "The last switch of the account serving a task (account selection 3.6).",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "from_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Account"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "to_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Account"
+          }
+        },
+        "required": [
+          "from_account",
+          "to_account",
+          "reason",
+          "at",
+          "attempt"
+        ],
+        "title": "Failover",
         "type": "object"
       },
       "FallbackResult": {
@@ -7167,6 +7306,29 @@
         "title": "SecretsReloaded",
         "type": "object"
       },
+      "ServingAccount": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "provider"
+        ],
+        "title": "ServingAccount",
+        "type": "object"
+      },
       "Source": {
         "description": "What justifies a revision: a task, decision, artifact, or URL.",
         "properties": {
@@ -7447,6 +7609,16 @@
             ],
             "title": "Error"
           },
+          "failover": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Failover"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "failures": {
             "title": "Failures",
             "type": "integer"
@@ -7566,6 +7738,18 @@
             "title": "Project",
             "type": "string"
           },
+          "refill_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refill At"
+          },
           "required_capabilities": {
             "items": {
               "type": "string"
@@ -7589,6 +7773,16 @@
           },
           "review": {
             "$ref": "#/components/schemas/Review"
+          },
+          "serving_account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ServingAccount"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "spec": {
             "title": "Spec",
@@ -7955,6 +8149,16 @@
             ],
             "title": "Error"
           },
+          "failover": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Failover"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "failures": {
             "title": "Failures",
             "type": "integer"
@@ -8074,6 +8278,18 @@
             "title": "Project",
             "type": "string"
           },
+          "refill_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refill At"
+          },
           "required_capabilities": {
             "items": {
               "type": "string"
@@ -8097,6 +8313,16 @@
           },
           "review": {
             "$ref": "#/components/schemas/Review"
+          },
+          "serving_account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ServingAccount"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "spec": {
             "title": "Spec",
@@ -9710,6 +9936,53 @@
         ]
       }
     },
+    "/api/accounts/awaiting-quota": {
+      "post": {
+        "description": "The agent could not lease an account and so cannot claim: park the ready tasks\nit could have taken as `awaiting_quota`. `409 account_available` if one is usable.",
+        "operationId": "awaiting_quota_api_accounts_awaiting_quota_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AwaitingQuotaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AwaitingQuotaResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Awaiting Quota",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
     "/api/accounts/claude-login": {
       "post": {
         "description": "Start the official client's `setup-token` login for a new `anthropic`\naccount, or to renew `renew_account_id` (claude accounts spec 3).",
@@ -10455,7 +10728,7 @@
     },
     "/api/accounts/{account_id}/exhausted": {
       "post": {
-        "description": "Report that the leased account hit a quota. Returns the next account to use\n(best remaining by priority, any provider), or none: then the given task is blocked as\n`no_account` and returns to ready when an account frees up.",
+        "description": "Report that the leased account hit a quota. Returns the next account to use\n(best remaining by priority, any provider), or none: then the given task is blocked as\n`awaiting_quota` and returns to ready when an account frees up.",
         "operationId": "report_exhausted_api_accounts__account_id__exhausted_post",
         "parameters": [
           {
@@ -14693,6 +14966,7 @@
     },
     "/api/tasks/{task_id}/fail": {
       "post": {
+        "description": "Fail the attempt. A `provider_failure` that is a known quota notice of the\nagent's engine account is not a failure: the account is exhausted, the task\nreturns to ready (or waits as `awaiting_quota`) and `failures` is unchanged.",
         "operationId": "fail_task_api_tasks__task_id__fail_post",
         "parameters": [
           {

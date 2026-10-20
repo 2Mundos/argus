@@ -103,7 +103,7 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
                           │                     └────── in_review ◀─┘
                           │                     ▲
                           │                     │ unblocked
-                          │                  blocked ◀── needs input / no account
+                          │                  blocked ◀── needs input / awaiting quota
                           │
                           │   fail / expire (failures = max) ──▶ failed
                           └── cancel (any non-terminal state) ──▶ cancelled
@@ -769,7 +769,11 @@ database never holds a secret.
   account: the best remaining usable account of any provider, by priority. Accounts
   return to `available` on their own when the reset time passes (reaper).
 - **No accounts left**: the response carries no lease and the earliest reset
-  time; the given task is blocked with reason `no_account`. Such tasks return to
+  time; the given task is blocked with reason `awaiting_quota` (`refill_at` on the
+  task is that earliest reset; the legacy value `no_account` is read the same way).
+  A `provider_failure` `FAIL` whose error is a quota notice does the same without
+  consuming an attempt or a failure (see
+  [account selection](account-selection.spec.md) 3.6). Such tasks return to
   `ready` as soon as any account becomes usable again (recovery, a new account,
   re-enabling, or a secrets reload), and whoever claims them leases afresh.
 - **Usage is recorded, not enforced**: `result.usage.account_id` on completion,

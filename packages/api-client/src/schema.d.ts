@@ -26,6 +26,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/awaiting-quota": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Awaiting Quota
+         * @description The agent could not lease an account and so cannot claim: park the ready tasks
+         *     it could have taken as `awaiting_quota`. `409 account_available` if one is usable.
+         */
+        post: operations["awaiting_quota_api_accounts_awaiting_quota_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/claude-login": {
         parameters: {
             query?: never;
@@ -252,7 +273,7 @@ export interface paths {
          * Report Exhausted
          * @description Report that the leased account hit a quota. Returns the next account to use
          *     (best remaining by priority, any provider), or none: then the given task is blocked as
-         *     `no_account` and returns to ready when an account frees up.
+         *     `awaiting_quota` and returns to ready when an account frees up.
          */
         post: operations["report_exhausted_api_accounts__account_id__exhausted_post"];
         delete?: never;
@@ -1661,7 +1682,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Fail Task */
+        /**
+         * Fail Task
+         * @description Fail the attempt. A `provider_failure` that is a known quota notice of the
+         *     agent's engine account is not a failure: the account is exhausted, the task
+         *     returns to ready (or waits as `awaiting_quota`) and `failures` is unchanged.
+         */
         post: operations["fail_task_api_tasks__task_id__fail_post"];
         delete?: never;
         options?: never;
@@ -2269,6 +2295,26 @@ export interface components {
          * @enum {string}
          */
         Audience: "human" | "orchestrator" | "any";
+        /**
+         * AwaitingQuotaRequest
+         * @description An agent with no usable account asks for the work it cannot claim to wait.
+         */
+        AwaitingQuotaRequest: {
+            /**
+             * Capabilities
+             * @default []
+             */
+            capabilities?: string[];
+            /** Runtime Providers */
+            runtime_providers?: string[] | null;
+        };
+        /** AwaitingQuotaResult */
+        AwaitingQuotaResult: {
+            /** Refill At */
+            refill_at?: string | null;
+            /** Task Ids */
+            task_ids: string[];
+        };
         /** Axes */
         Axes: {
             /** Account Provider */
@@ -2386,6 +2432,7 @@ export interface components {
             depends_on: string[];
             /** Error */
             error: string | null;
+            failover?: components["schemas"]["Failover"] | null;
             /** Failures */
             failures: number;
             /** Id */
@@ -2426,12 +2473,15 @@ export interface components {
             progress_percent: number | null;
             /** Project */
             project: string;
+            /** Refill At */
+            refill_at?: string | null;
             /** Required Capabilities */
             required_capabilities: string[];
             /** Requires Approval */
             requires_approval: boolean;
             result: components["schemas"]["TaskResult-Output"] | null;
             review: components["schemas"]["Review"];
+            serving_account?: components["schemas"]["ServingAccount"] | null;
             /** Spec */
             spec: string;
             state: components["schemas"]["TaskState"];
@@ -2940,6 +2990,25 @@ export interface components {
              * @enum {string}
              */
             reason?: "worker_fail" | "channel_error" | "provider_failure";
+        };
+        /**
+         * Failover
+         * @description The last switch of the account serving a task (account selection 3.6).
+         */
+        Failover: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Attempt */
+            attempt: number;
+            /** From Account */
+            from_account: string | null;
+            /** Reason */
+            reason: string;
+            /** To Account */
+            to_account: string | null;
         };
         /** FallbackResult */
         FallbackResult: {
@@ -4284,6 +4353,15 @@ export interface components {
             /** Secrets */
             secrets: number;
         };
+        /** ServingAccount */
+        ServingAccount: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Provider */
+            provider: string;
+        };
         /**
          * Source
          * @description What justifies a revision: a task, decision, artifact, or URL.
@@ -4376,6 +4454,7 @@ export interface components {
             depends_on: string[];
             /** Error */
             error: string | null;
+            failover?: components["schemas"]["Failover"] | null;
             /** Failures */
             failures: number;
             /** Id */
@@ -4411,12 +4490,15 @@ export interface components {
             progress_percent: number | null;
             /** Project */
             project: string;
+            /** Refill At */
+            refill_at?: string | null;
             /** Required Capabilities */
             required_capabilities: string[];
             /** Requires Approval */
             requires_approval: boolean;
             result: components["schemas"]["TaskResult-Output"] | null;
             review: components["schemas"]["Review"];
+            serving_account?: components["schemas"]["ServingAccount"] | null;
             /** Spec */
             spec: string;
             state: components["schemas"]["TaskState"];
@@ -4558,6 +4640,7 @@ export interface components {
             depends_on: string[];
             /** Error */
             error: string | null;
+            failover?: components["schemas"]["Failover"] | null;
             /** Failures */
             failures: number;
             /** Id */
@@ -4593,12 +4676,15 @@ export interface components {
             progress_percent: number | null;
             /** Project */
             project: string;
+            /** Refill At */
+            refill_at?: string | null;
             /** Required Capabilities */
             required_capabilities: string[];
             /** Requires Approval */
             requires_approval: boolean;
             result: components["schemas"]["TaskResult-Output"] | null;
             review: components["schemas"]["Review"];
+            serving_account?: components["schemas"]["ServingAccount"] | null;
             /** Spec */
             spec: string;
             state: components["schemas"]["TaskState"];
@@ -5131,6 +5217,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Account"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    awaiting_quota_api_accounts_awaiting_quota_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AwaitingQuotaRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwaitingQuotaResult"];
                 };
             };
             /** @description Validation Error */
