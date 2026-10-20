@@ -1,6 +1,5 @@
 """Asking and answering decisions; answers drive task transitions (3.10)."""
 
-import aiosqlite
 from argus_core.auth import Scope
 from argus_core.decisions import (
     Ask,
@@ -19,23 +18,6 @@ from argus_api.events import record
 from argus_api.fleet import service as fleet
 from argus_api.knowledge import service as knowledge
 from argus_api.tasks import service as tasks
-
-
-async def list_decisions(
-    conn: aiosqlite.Connection,
-    *,
-    state: DecisionState | None = DecisionState.OPEN,
-    subject_id: str | None = None,
-) -> list[Decision]:
-    sql, params = store.SELECT + " WHERE 1 = 1", []
-    if state is not None:
-        sql += " AND d.state = ?"
-        params.append(state)
-    if subject_id is not None:
-        sql += " AND d.subject_id = ?"
-        params.append(subject_id)
-    async with conn.execute(sql + " ORDER BY d.created_at, d.id", params) as cur:
-        return [store.to_decision(r) for r in await cur.fetchall()]
 
 
 async def ask(tx: Tx, agent_id: str, task_id: str, body: Ask) -> Decision:

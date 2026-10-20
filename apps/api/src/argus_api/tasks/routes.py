@@ -1,16 +1,20 @@
 import asyncio
 from datetime import timedelta
+from typing import Annotated
 
 from argus_core.auth import Scope
 from argus_core.tasks import ClaimedTask, Task, TaskCreate, TaskResult, TaskState
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
 from pydantic import BaseModel, Field
 
 from argus_api.db import utcnow
 from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
+from argus_api.errors import ValidationFailedError
 from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
-from argus_api.tasks import service
+from argus_api.paging import DEFAULT_LIMIT, View
+from argus_api.tasks import service, views
+from argus_api.tasks.views import TaskPage
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -59,10 +63,35 @@ async def create_task(
 
 @router.get("")
 async def list_tasks(
-    db: DbDep, _: CallerDep, state: TaskState | None = None, limit: int = 100
-) -> list[Task]:
-    async with db.read() as conn:
-        return await service.list_tasks(conn, state=state, limit=min(limit, 500))
+    db: DbDep,
+    _: CallerDep,
+    state: Annotated[list[TaskState] | None, Query()] = None,
+    project: str | None = None,
+    kind: str | None = None,
+    ids: str | None = None,
+    view: View = "summary",
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> TaskPage:
+    """Tasks newest first, in pages (max 100). `ids` (comma-separated, max 50) is
+    a batch read instead: no other filter, no paging, unknown ids in `missing`."""
+    async with db.snapshot() as snap:
+        if ids is not None:
+            if state or project or kind or cursor:
+                raise ValidationFailedError(
+                    "ids is a batch read; it takes no other filter or cursor",
+                    code="ids_exclusive",
+                )
+            return await views.get_tasks(snap, ids.split(","), view)
+        return await views.list_tasks(
+            snap,
+            states=state,
+            project=project,
+            kind=kind,
+            view=view,
+            limit=limit,
+            cursor=cursor,
+        )
 
 
 @router.post(

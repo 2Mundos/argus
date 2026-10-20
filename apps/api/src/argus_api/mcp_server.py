@@ -37,7 +37,14 @@ longer hold the task, so stop working on it. If you need a human or orchestrator
 decide something, use ask_question (your task is paused until answered). Read the
 knowledge pages listed with each claimed task before starting; search_knowledge for
 more, and write_knowledge when you learn something others will need. If a provider
-account runs out of quota, call report_account_exhausted to get the next one."""
+account runs out of quota, call report_account_exhausted to get the next one.
+
+As an orchestrator, work the inbox: get_inbox lists what waits (blocked, in review,
+awaiting approval) with decision and artifact ids; list_decisions(view="detail") or
+get_decision reads the questions; list_artifacts, verify_artifact and read_artifact
+check evidence; answer_decision acts; get_tasks(ids) reads the effects back. Lists
+are paged: `total` counts every match, follow `next_cursor` while `has_more`. If a
+tool you need is missing, say which and stop; do not script REST around it."""
 
 server = MCPServer("argus", version="0.1.0", instructions=INSTRUCTIONS)
 
@@ -197,6 +204,25 @@ class Lease(BaseModel):
     attempt: int
 
 
+ViewArg = Literal["summary", "detail"]
+InboxState = Literal["blocked", "in_review", "awaiting_approval"]
+TaskStateArg = Literal[
+    "awaiting_approval",
+    "pending",
+    "ready",
+    "claimed",
+    "blocked",
+    "in_review",
+    "succeeded",
+    "failed",
+    "cancelled",
+]
+DecisionKindArg = Literal["question", "approval", "review", "policy", "knowledge"]
+ArtifactRole = Literal[
+    "report", "delegate_report", "policy_snapshot", "qa_receipt", "other"
+]
+
+
 # -- working on tasks ---------------------------------------------------------------
 
 
@@ -233,6 +259,53 @@ async def heartbeat(ctx: Context, leases: list[Lease] | None = None) -> dict:
 async def get_task(ctx: Context, task_id: str) -> dict:
     """Read a task: spec, acceptance criteria, state, attempt, clarifications."""
     return await _call(ctx, "GET", f"/tasks/{task_id}")
+
+
+@tool(ANYONE)
+async def get_tasks(ctx: Context, ids: list[str], view: ViewArg = "summary") -> dict:
+    """Read up to 50 tasks in one call, in the order given; unknown ids come back in
+    `missing`. view=detail adds spec and result (long text cut, see `truncated`)."""
+    return await _call(
+        ctx, "GET", "/tasks", params={"ids": ",".join(ids), "view": view}
+    )
+
+
+@tool(ANYONE)
+async def list_artifacts(
+    ctx: Context,
+    task_id: str,
+    attempt: int | None = None,
+    role: ArtifactRole | None = None,
+) -> list[dict]:
+    """A task's artifacts: name, attempt, role, size, sha256, and `in_result` (the
+    task's result lists it). Metadata only; read_artifact for content."""
+    return await _call(
+        ctx,
+        "GET",
+        f"/tasks/{task_id}/artifacts",
+        params={"attempt": attempt, "role": role},
+    )
+
+
+@tool(ANYONE)
+async def read_artifact(
+    ctx: Context, artifact_id: str, offset: int = 0, max_bytes: int = 16384
+) -> dict:
+    """Read a text or JSON artifact as UTF-8 from byte `offset` (max_bytes ≤ 65536);
+    continue from `next_offset` until it is null. Other media types: `binary` true."""
+    return await _call(
+        ctx,
+        "GET",
+        f"/artifacts/{artifact_id}/text",
+        params={"offset": offset, "max_bytes": max_bytes},
+    )
+
+
+@tool(ANYONE)
+async def verify_artifact(ctx: Context, artifact_id: str) -> dict:
+    """Re-hash an artifact's stored bytes against its recorded size and SHA-256.
+    `ok` means the bytes are intact, not that the content is acceptable."""
+    return await _call(ctx, "POST", f"/artifacts/{artifact_id}/verify")
 
 
 @tool(AGENTS)
@@ -361,14 +434,17 @@ async def upload_text_artifact(
     name: str,
     content: str,
     media_type: str = "text/plain",
+    role: ArtifactRole | None = None,
 ) -> dict:
     """Attach a text file (report, diff, log, notes) to the task you hold. Pass the
-    returned id in complete_task's `artifacts`. Names: letters, digits, . _ -"""
+    returned id in complete_task's `artifacts`. Names: letters, digits, . _ -
+    `role`: report (yours), delegate_report (a delegate's original), policy_snapshot,
+    qa_receipt, other."""
     return await _call(
         ctx,
         "POST",
         f"/tasks/{task_id}/artifacts",
-        params={"attempt": attempt, "name": name},
+        params={"attempt": attempt, "name": name, "role": role},
         content=content.encode(),
         headers={"Content-Type": media_type},
     )
@@ -479,12 +555,72 @@ async def report_account_exhausted(
 
 
 @tool(MANAGERS)
+async def get_inbox(
+    ctx: Context,
+    project: str | None = None,
+    states: list[InboxState] | None = None,
+    decision_kinds: list[DecisionKindArg] | None = None,
+    view: ViewArg = "summary",
+    limit: int = 25,
+    cursor: str | None = None,
+) -> dict:
+    """What waits on you, oldest first: blocked, in-review and awaiting-approval
+    tasks with their open decision (id, kind, audience) and current artifact ids,
+    plus open pool and knowledge decisions. Totals by state and decision kind
+    cover every match. view=detail adds each task and decision in full."""
+    return await _call(
+        ctx,
+        "GET",
+        "/inbox",
+        params={
+            "project": project,
+            "state": states,
+            "decision_kind": decision_kinds,
+            "view": view,
+            "limit": limit,
+            "cursor": cursor,
+        },
+    )
+
+
+@tool(MANAGERS)
 async def list_tasks(
-    ctx: Context, state: str | None = None, limit: int = 50
-) -> list[dict]:
-    """List tasks, newest first, optionally by state (ready, claimed, blocked,
-    in_review, succeeded, failed, …)."""
-    return await _call(ctx, "GET", "/tasks", params={"state": state, "limit": limit})
+    ctx: Context,
+    states: list[TaskStateArg] | None = None,
+    project: str | None = None,
+    kind: str | None = None,
+    view: ViewArg = "summary",
+    limit: int = 25,
+    cursor: str | None = None,
+) -> dict:
+    """List tasks, newest first, in pages (limit ≤ 100). Summary rows carry state
+    and ids (decisions, artifacts, dependencies), not the spec or result."""
+    return await _call(
+        ctx,
+        "GET",
+        "/tasks",
+        params={
+            "state": states,
+            "project": project,
+            "kind": kind,
+            "view": view,
+            "limit": limit,
+            "cursor": cursor,
+        },
+    )
+
+
+@tool(MANAGERS)
+async def unblock_task(ctx: Context, task_id: str) -> dict:
+    """Return a blocked task to ready without answering its question (the question
+    is cancelled). To answer it, use answer_decision instead."""
+    return await _call(ctx, "POST", f"/tasks/{task_id}/unblock")
+
+
+@tool(MANAGERS)
+async def retry_task(ctx: Context, task_id: str) -> dict:
+    """Give a failed task a fresh window of attempts (409 task_not_failed otherwise)."""
+    return await _call(ctx, "POST", f"/tasks/{task_id}/retry")
 
 
 @tool(MANAGERS)
@@ -515,9 +651,38 @@ async def scale_pool(ctx: Context, name: str, desired_replicas: int) -> dict:
 
 
 @tool(MANAGERS)
-async def list_decisions(ctx: Context) -> list[dict]:
-    """Open decisions (questions, approvals, reviews, proposals), oldest first."""
-    return await _call(ctx, "GET", "/decisions")
+async def list_decisions(
+    ctx: Context,
+    state: Literal["open", "answered", "cancelled"] = "open",
+    subject_id: str | None = None,
+    project: str | None = None,
+    kinds: list[DecisionKindArg] | None = None,
+    view: ViewArg = "summary",
+    limit: int = 25,
+    cursor: str | None = None,
+) -> dict:
+    """Decisions (questions, approvals, reviews, policy, knowledge), oldest first, in
+    pages. Summary rows have options but not the question; view=detail adds it."""
+    return await _call(
+        ctx,
+        "GET",
+        "/decisions",
+        params={
+            "state": state,
+            "subject_id": subject_id,
+            "project": project,
+            "kind": kinds,
+            "view": view,
+            "limit": limit,
+            "cursor": cursor,
+        },
+    )
+
+
+@tool(MANAGERS)
+async def get_decision(ctx: Context, decision_id: str) -> dict:
+    """Read one decision in full: question, options, payload, answer."""
+    return await _call(ctx, "GET", f"/decisions/{decision_id}")
 
 
 @tool(MANAGERS)

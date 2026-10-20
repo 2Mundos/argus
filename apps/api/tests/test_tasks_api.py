@@ -44,10 +44,10 @@ def test_create_get_list(client: TestClient) -> None:
     assert task["state"] == "ready"
     assert task["created_by"] == "admin:preset"
     assert client.get(f"/api/tasks/{task['id']}").json()["title"] == "write docs"
-    assert [t["id"] for t in client.get("/api/tasks?state=ready").json()] == [
+    assert [t["id"] for t in client.get("/api/tasks?state=ready").json()["items"]] == [
         task["id"]
     ]
-    assert client.get("/api/tasks?state=failed").json() == []
+    assert client.get("/api/tasks?state=failed").json()["total"] == 0
 
 
 def test_claim_and_complete(client: TestClient, agent: dict[str, str]) -> None:

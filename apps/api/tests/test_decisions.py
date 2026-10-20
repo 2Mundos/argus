@@ -6,6 +6,7 @@ from api_support import DONE, FakeClock, insert_agent
 from argus_api.auth import Identity
 from argus_api.db import Database
 from argus_api.decisions import service as decisions
+from argus_api.decisions import views as decision_views
 from argus_api.errors import ConflictError, ForbiddenError, ValidationFailedError
 from argus_api.main import app
 from argus_api.tasks import service as tasks
@@ -52,8 +53,11 @@ async def get_task(db: Database, task_id: str):
 
 
 async def open_for(db: Database, task_id: str):
-    async with db.read() as conn:
-        return await decisions.list_decisions(conn, subject_id=task_id)
+    async with db.snapshot() as snap:
+        page = await decision_views.list_decisions(
+            snap, subject_id=task_id, view="detail"
+        )
+    return page.items
 
 
 async def answer(db: Database, decision_id: str, caller=ADMIN, **kw):
@@ -140,10 +144,9 @@ async def test_decision_becomes_moot_when_task_moves_on(db: Database) -> None:
             tx, A, task.id, Ask(attempt=task.attempt, question="?")
         )
         await tasks.cancel(tx, task.id, "admin:test")
-    async with db.read() as conn:
-        assert (await decisions.list_decisions(conn, state=None))[
-            0
-        ].state is DecisionState.CANCELLED
+    async with db.snapshot() as snap:
+        page = await decision_views.list_decisions(snap, state=None)
+    assert page.items[0].state is DecisionState.CANCELLED
     with pytest.raises(ConflictError) as err:
         await answer(db, asked.id, text="too late")
     assert err.value.code == "decision_not_open"
@@ -234,7 +237,9 @@ def test_inbox_over_http(client: TestClient) -> None:
         headers=worker,
     )
     assert res.status_code == 201
-    [inbox] = client.get("/api/decisions", headers=ADMIN_H).json()
+    [inbox] = client.get(
+        "/api/decisions", params={"view": "detail"}, headers=ADMIN_H
+    ).json()["items"]
     assert inbox["question"] == "Proceed?"
     assert (
         client.post(
@@ -246,7 +251,7 @@ def test_inbox_over_http(client: TestClient) -> None:
         f"/api/decisions/{inbox['id']}/answer", json={"text": "yes"}, headers=ADMIN_H
     )
     assert res.json()["state"] == "answered"
-    assert client.get("/api/decisions", headers=ADMIN_H).json() == []
+    assert client.get("/api/decisions", headers=ADMIN_H).json()["total"] == 0
     assert (
         client.get(f"/api/tasks/{task['id']}", headers=ADMIN_H).json()["state"]
         == "ready"

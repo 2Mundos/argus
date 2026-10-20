@@ -39,6 +39,17 @@ class Tx:
     events: list[Event] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class Snapshot:
+    """An open read transaction: every query on `conn` sees one consistent state.
+
+    `now` is read once, after `BEGIN`, so ages computed from it agree with the data.
+    """
+
+    conn: aiosqlite.Connection
+    now: datetime
+
+
 class Database:
     """One serialized writer connection plus a pool of read-only connections."""
 
@@ -125,6 +136,16 @@ class Database:
             yield conn
         finally:
             self._readers.put_nowait(conn)
+
+    @asynccontextmanager
+    async def snapshot(self) -> AsyncGenerator[Snapshot]:
+        """Read in one transaction, so totals and pages come from the same state."""
+        async with self.read() as conn:
+            await conn.execute("BEGIN")
+            try:
+                yield Snapshot(conn, self._clock())
+            finally:
+                await conn.execute("COMMIT")
 
 
 async def _connect(database: str, *, uri: bool = False) -> aiosqlite.Connection:

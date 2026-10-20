@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from "react";
-import { api, call, type Task, type TaskKind, type TaskState } from "../api";
+import { api, call, newestTasks, type TaskKind, type TaskState, type TaskSummary } from "../api";
 import { relative, shortId } from "../format";
 import { useLiveData } from "../live";
 import { TaskDetail } from "./TaskDetail";
@@ -16,10 +16,8 @@ const COLUMNS: { title: string; states: TaskState[] }[] = [
 export function Tasks() {
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const { data: tasks, error } = useLiveData(
-    () => call(api.GET("/api/tasks", { params: { query: { limit: 500 } } })),
-    [],
-  );
+  const { data, error } = useLiveData(() => newestTasks(), []);
+  const tasks = data?.items;
 
   return (
     <section>
@@ -30,6 +28,11 @@ export function Tasks() {
         </button>
       </div>
       {error && <p className="error">{error.message}</p>}
+      {data && data.total > data.items.length && (
+        <p className="muted small">
+          Showing the newest {data.items.length} of {data.total} tasks.
+        </p>
+      )}
       <div className="board">
         {COLUMNS.map((column) => {
           const items = (tasks ?? []).filter((t) => column.states.includes(t.state));
@@ -51,7 +54,7 @@ export function Tasks() {
   );
 }
 
-function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
+function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
   return (
     <button type="button" className="task-card" onClick={onOpen}>
       <span className="title">{task.title}</span>

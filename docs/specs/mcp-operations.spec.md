@@ -74,10 +74,12 @@ Findings outside the gap list:
   `400 cursor_mismatch`. Default `limit` is 25, max 100.
 - **Projections:** `view=summary` (the default) or `view=detail`. Summary carries
   ids, title, state, kind, project, age, attempt, version, and references (ids)
-  to decisions, artifacts and dependencies. It carries no `spec`, `result.data`,
-  `question` or `payload` bodies. Detail carries the full model, but every
-  free-text field over **4 KB** is cut, and the response says so with
-  `truncated: [field, …]` plus the full length.
+  to decisions, artifacts and dependencies. A task summary also keeps the short
+  operational fields the board shows (assignee, lease, block reason, progress
+  note). It carries no `spec`, `result`, `input`, `question` or `payload` bodies.
+  Detail carries the full model, but every free-text field over **4 KB** is cut,
+  and each item says so with `truncated: {field: full length in bytes}`. A
+  single-item read (`GET /tasks/{id}`, `GET /decisions/{id}`) stays whole.
 - **Version:** each task and pool exposes `version` (its `updated_at`, ISO). Writes
   that need concurrency protection take `expected_version` and fail with
   `409 stale_version` and the current version.
@@ -89,28 +91,35 @@ Findings outside the gap list:
   `blocked | in_review | awaiting_approval`, plus open decisions whose subject is
   not a task (pool policy, knowledge). Each row joins the task with its open
   decision, if any, and adds `age_s`, `decision_id`, `decision_kind`,
-  `audience` and `artifact_ids`. The response also carries
+  `audience` and `artifact_ids` (the current attempt's). The response also carries
   `totals_by_state` and `totals_by_decision_kind` for the filtered set, from the
-  same snapshot. Order: oldest first.
+  same snapshot. A row about another subject counts under its subject type
+  (`pool`), and a task with no open decision under `none`. `states` keeps only
+  task rows. Order: oldest first, by when the row started waiting.
 - **`GET /api/tasks`** gains `project`, `kind`, repeated `state`, `view` and
   `cursor`. It always returns the page envelope. The dashboard moves to the new
   shape in the same PR, so the generated client keeps a single response type.
 - **Batch read:** `GET /api/tasks?ids=a,b,c&view=detail` (≤50 ids) → MCP
   `get_tasks(ids, view)`. Unknown ids come back in `missing: [...]`; nothing
-  fails as a whole.
+  fails as a whole. `ids` takes no other filter or cursor (`422 ids_exclusive`).
 - **Decisions:** MCP `list_decisions` exposes REST's `state` and `subject_id`
   filters and the new `project` and `kind` filters, with the page envelope. Add
   MCP `get_decision`.
 - **Artifacts:** MCP `list_artifacts(task_id, attempt?, role?)` returns metadata
-  plus `in_result`, which says whether the attempt's result lists the artifact.
+  plus `in_result`, which says whether the task's result lists the artifact. It
+  is the whole list for one task, not a page: a task's artifacts are bounded by
+  its attempts.
 - **Artifact roles:** an upload may declare an optional `role`, one of
   `report | delegate_report | policy_snapshot | qa_receipt | other`. This needs
   a migration, and existing artifacts get `null`. The role is declared at upload,
   never inferred from the name. MCP `upload_text_artifact` gains `role`.
   MCP `read_artifact(artifact_id, offset=0, max_bytes=16384)` returns UTF-8 text
   for `text/*` and JSON media types, or `binary: true` with no bytes otherwise.
-  Size, SHA-256, `created_by` and the attempt come back every time. REST gets
-  `Range` support on `/content` and `GET /artifacts/{id}` for metadata.
+  Size, SHA-256, `created_by` and the attempt come back every time. It never
+  splits a UTF-8 character: a read ends before one and `next_offset` resumes
+  there. REST serves it as `GET /artifacts/{id}/text?offset&max_bytes`
+  (64 to 65536), and gets `Range` support on `/content` and
+  `GET /artifacts/{id}` for metadata.
 - **Verification:** `POST /api/artifacts/{id}/verify` → MCP
   `verify_artifact`. It re-hashes the stored file and returns
   `{ok, size, sha256, expected_size, expected_sha256}`. `ok` means the bytes are
@@ -197,6 +206,28 @@ Findings outside the gap list:
 - The PR publishes the real numbers, including regressions such as larger
   schemas.
 
+**Measured after step 3** (`results/after.json` against `results/before.json`,
+same seed and outcome; tokens are bytes / 4):
+
+| | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| MCP calls | 24 | 25 | +1 |
+| Ad hoc REST calls | 8 | 0 | −8 |
+| Response bytes | 204,926 | 45,062 | −78% |
+| `tools/list` bytes, orchestrator (tools) | 17,618 (29) | 22,812 (37) | +29% |
+| `tools/list` bytes, worker (tools) | 17,618 (29) | 13,292 (21) | −25% |
+| `tools/list` bytes, admin (tools) | 17,618 (29) | 16,576 (27) | −6% |
+| Context bytes (est. tokens) | 227,008 (56,752) | 72,613 (18,153) | −68% |
+
+The saving comes from summaries and server-side filters: `list_tasks` over three
+states with full bodies (121 KB) and `list_decisions` (38 KB) become one inbox
+page (7.8 KB) and one page of question details (6.7 KB). The cost is a larger
+orchestrator schema: the 8 new tools and the wider list signatures add 5.2 KB,
+paid once per session. Reviews
+take three calls each (list, verify, read) instead of two REST reads, because
+integrity and the `in_result` check move to the server. Read-back is one batch
+call instead of ten.
+
 # 4. Open Questions
 
 - **Worker read scope:** today a worker can read any task, decision or artifact
@@ -221,7 +252,7 @@ Findings outside the gap list:
 
 # 6. Implementation Consequences
 
-Delivered as small PRs, in order:
+Delivered as small PRs, in order (1 to 3 are done):
 
 1. **This spec** and the index link.
 2. **Baseline and discovery:** the frozen "before" benchmark (script, seed,

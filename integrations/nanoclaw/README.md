@@ -187,6 +187,18 @@ renewed in Argus, because the channel does not refresh OAuth tokens.
 The credential stays in OneCLI's vault after the agent leaves; the vault is the
 credential store by design.
 
+## Orchestrating over MCP
+
+An orchestrator token connected to Argus's `/mcp` endpoint gets the inbox
+journey as native tools ([MCP operations](../../docs/specs/mcp-operations.spec.md)):
+`get_inbox` lists what waits (blocked, in review, awaiting approval) with
+decision and artifact ids; `list_decisions(view="detail")` or `get_decision`
+reads the questions; `list_artifacts`, `verify_artifact` and `read_artifact`
+check evidence; `answer_decision` acts; `get_tasks(ids)` reads the effects back.
+Lists are paged: `total` counts every match; follow `next_cursor` while
+`has_more`. If a tool is missing, say which and stop; do not script REST around
+it.
+
 ## Not done yet
 
 - No token usage is reported back (NanoClaw does not expose it to the channel).
