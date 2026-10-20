@@ -2324,6 +2324,11 @@ export interface components {
             priority: number;
             /** Progress At */
             progress_at: string | null;
+            /** Progress Data */
+            progress_data?: {
+                [key: string]: unknown;
+            } | null;
+            progress_kind?: components["schemas"]["ProgressKind"] | null;
             /** Progress Message */
             progress_message: string | null;
             /** Progress Percent */
@@ -3810,10 +3815,22 @@ export interface components {
             /** Total */
             total: number;
         };
+        /**
+         * ProgressKind
+         * @description The closed set of structured progress milestones (progress-milestones spec 3.1).
+         * @enum {string}
+         */
+        ProgressKind: "commit_created" | "pr_opened" | "ci_running" | "ci_passed" | "ci_failed" | "gate_failed" | "waiting_input";
         /** ProgressRequest */
         ProgressRequest: {
             /** Attempt */
             attempt: number;
+            /** Data */
+            data?: {
+                [key: string]: unknown;
+            } | null;
+            /** Kind */
+            kind?: string | null;
             /** Message */
             message: string;
             /** Percent */
@@ -4290,6 +4307,11 @@ export interface components {
             priority: number;
             /** Progress At */
             progress_at: string | null;
+            /** Progress Data */
+            progress_data?: {
+                [key: string]: unknown;
+            } | null;
+            progress_kind?: components["schemas"]["ProgressKind"] | null;
             /** Progress Message */
             progress_message: string | null;
             /** Progress Percent */
@@ -4465,6 +4487,11 @@ export interface components {
             priority: number;
             /** Progress At */
             progress_at: string | null;
+            /** Progress Data */
+            progress_data?: {
+                [key: string]: unknown;
+            } | null;
+            progress_kind?: components["schemas"]["ProgressKind"] | null;
             /** Progress Message */
             progress_message: string | null;
             /** Progress Percent */
@@ -4656,6 +4683,13 @@ export interface components {
             parent_id: string | null;
             /** Priority */
             priority: number;
+            /** Progress At */
+            progress_at: string | null;
+            /** Progress Data */
+            progress_data?: {
+                [key: string]: unknown;
+            } | null;
+            progress_kind?: components["schemas"]["ProgressKind"] | null;
             /** Progress Message */
             progress_message: string | null;
             /** Progress Percent */

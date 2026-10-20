@@ -57,6 +57,8 @@ every new dependency is judged against it.
   complete totals for every core state, recent activity, and health
 - [Live work](specs/live-work.spec.md) — what an agent is doing now: task activity
   feed, agent drawer with its current work and container output
+- [Progress milestones](specs/progress-milestones.spec.md) — structured progress
+  signals (commit, PR, CI, gate) on task cards and a no-signal indicator
 - [Account usage](specs/account-usage.spec.md) — tokens spent and quota left per
   provider account: reported usage, Codex quota probe, Cursor pools, charts
 - [MCP operations](specs/mcp-operations.spec.md) — inbox and fleet journeys over
