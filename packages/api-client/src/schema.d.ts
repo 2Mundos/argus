@@ -124,6 +124,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/cost": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Account Cost
+         * @description Tokens and estimated cost per account, project and day over the window
+         *     ending now (cost view 3.3). Read only.
+         */
+        get: operations["account_cost_api_accounts_cost_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/lease": {
         parameters: {
             query?: never;
@@ -1841,6 +1862,36 @@ export interface components {
             usage_24h: components["schemas"]["argus_core__accounts__Usage"];
             usage_total: components["schemas"]["argus_core__accounts__Usage"];
         };
+        /** AccountCost */
+        AccountCost: {
+            /** Account Id */
+            account_id: string;
+            /** Cached Input Tokens */
+            cached_input_tokens: number | null;
+            /** Estimated Cost Usd */
+            estimated_cost_usd: number | null;
+            /** Input Tokens */
+            input_tokens: number | null;
+            /** Measured Runs */
+            measured_runs: number;
+            /** Name */
+            name: string;
+            /** Not Reported Runs */
+            not_reported_runs: number;
+            /** Output Tokens */
+            output_tokens: number | null;
+            /** Provider */
+            provider: string;
+            /** Quota */
+            quota: components["schemas"]["QuotaWindow"][];
+            quota_status: components["schemas"]["QuotaStatus"];
+            /** Reported Cost Usd */
+            reported_cost_usd: number | null;
+            /** Runs */
+            runs: number;
+            /** Unpriced Runs */
+            unpriced_runs: number;
+        };
         /** AccountCount */
         AccountCount: {
             /** Count */
@@ -2543,6 +2594,59 @@ export interface components {
             attempt: number;
             result: components["schemas"]["TaskResult-Input"];
         };
+        /**
+         * CostFigures
+         * @description What one group spent. `runs = measured_runs + not_reported_runs`. A token
+         *     field is null when no measured run carried it, never 0 (cost view 3.1).
+         */
+        CostFigures: {
+            /** Cached Input Tokens */
+            cached_input_tokens: number | null;
+            /** Estimated Cost Usd */
+            estimated_cost_usd: number | null;
+            /** Input Tokens */
+            input_tokens: number | null;
+            /** Measured Runs */
+            measured_runs: number;
+            /** Not Reported Runs */
+            not_reported_runs: number;
+            /** Output Tokens */
+            output_tokens: number | null;
+            /** Reported Cost Usd */
+            reported_cost_usd: number | null;
+            /** Runs */
+            runs: number;
+            /** Unpriced Runs */
+            unpriced_runs: number;
+        };
+        /** CostReport */
+        CostReport: {
+            /** By Account */
+            by_account: components["schemas"]["AccountCost"][];
+            /** By Project */
+            by_project: components["schemas"]["ProjectCost"][];
+            /** Daily */
+            daily: components["schemas"]["DayCost"][];
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            pricing: components["schemas"]["PricingInfo"];
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            totals: components["schemas"]["CostFigures"];
+            /** Tz */
+            tz: string;
+            /**
+             * Window
+             * @enum {string}
+             */
+            window: "24h" | "7d" | "30d";
+        };
         /** CreateWorkerRequest */
         CreateWorkerRequest: {
             advanced?: components["schemas"]["AdvancedOptions"] | null;
@@ -2606,6 +2710,32 @@ export interface components {
             main_bytes: number;
             /** Wal Bytes */
             wal_bytes: number;
+        };
+        /** DayCost */
+        DayCost: {
+            /** Cached Input Tokens */
+            cached_input_tokens: number | null;
+            /** Estimated Cost Usd */
+            estimated_cost_usd: number | null;
+            /** Input Tokens */
+            input_tokens: number | null;
+            /** Measured Runs */
+            measured_runs: number;
+            /** Not Reported Runs */
+            not_reported_runs: number;
+            /** Output Tokens */
+            output_tokens: number | null;
+            /** Reported Cost Usd */
+            reported_cost_usd: number | null;
+            /** Runs */
+            runs: number;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /** Unpriced Runs */
+            unpriced_runs: number;
         };
         /** Decision */
         Decision: {
@@ -4035,6 +4165,25 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** PricingInfo */
+        PricingInfo: {
+            /** As Of */
+            as_of: string;
+            /** Currency */
+            currency: string;
+            /**
+             * Estimate
+             * @default true
+             * @constant
+             */
+            estimate?: true;
+            /** Source */
+            source: string;
+            /** Unpriced Models */
+            unpriced_models: string[];
+            /** Version */
+            version: string;
+        };
         /**
          * ProgressKind
          * @description The closed set of structured progress milestones (progress-milestones spec 3.1).
@@ -4077,6 +4226,29 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** ProjectCost */
+        ProjectCost: {
+            /** Cached Input Tokens */
+            cached_input_tokens: number | null;
+            /** Estimated Cost Usd */
+            estimated_cost_usd: number | null;
+            /** Input Tokens */
+            input_tokens: number | null;
+            /** Measured Runs */
+            measured_runs: number;
+            /** Not Reported Runs */
+            not_reported_runs: number;
+            /** Output Tokens */
+            output_tokens: number | null;
+            /** Project */
+            project: string | null;
+            /** Reported Cost Usd */
+            reported_cost_usd: number | null;
+            /** Runs */
+            runs: number;
+            /** Unpriced Runs */
+            unpriced_runs: number;
         };
         /** ProjectUpsert */
         ProjectUpsert: {
@@ -5494,6 +5666,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CodexLogin"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    account_cost_api_accounts_cost_get: {
+        parameters: {
+            query?: {
+                window?: "24h" | "7d" | "30d";
+                tz?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostReport"];
                 };
             };
             /** @description Validation Error */

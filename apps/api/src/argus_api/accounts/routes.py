@@ -18,10 +18,11 @@ from argus_core.accounts import (
     UsageReport,
     UsageSeries,
 )
+from argus_core.cost import CostReport, CostWindow
 from fastapi import APIRouter, Query, Request, status
 from pydantic import BaseModel, Field
 
-from argus_api.accounts import service, usage
+from argus_api.accounts import cost, pricing, service, usage
 from argus_api.db import utcnow
 from argus_api.deps import (
     AdminDep,
@@ -121,6 +122,25 @@ async def account_usage(
             ids = [(await service.get_account(conn, account_id, utcnow())).id]
         accounts = await usage.series(conn, start, end, bucket, zone, ids)
     return UsageSeries(start=start, end=end, bucket=bucket, tz=tz, accounts=accounts)
+
+
+@router.get("/cost")
+async def account_cost(
+    db: DbDep,
+    _: ManagerDep,
+    settings: SettingsDep,
+    window: CostWindow = "24h",
+    tz: str = "UTC",
+) -> CostReport:
+    """Tokens and estimated cost per account, project and day over the window
+    ending now (cost view 3.3). Read only."""
+    try:
+        zone = ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValidationFailedError(f"unknown timezone: {tz}") from None
+    table = pricing.load(settings.pricing_file)
+    async with db.read() as conn:
+        return await cost.report(conn, utcnow(), window, tz, zone, table)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

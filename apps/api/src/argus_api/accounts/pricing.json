@@ -1,0 +1,11 @@
+{
+  "currency": "USD",
+  "as_of": "2026-10-20",
+  "version": "estimates-2026-10-20",
+  "models": {
+    "claude-opus-5-5": { "input": 5.0, "output": 25.0, "cached_input": 0.5 },
+    "claude-sonnet-5-5": { "input": 3.0, "output": 15.0, "cached_input": 0.3 },
+    "claude-haiku-5-5": { "input": 1.0, "output": 5.0, "cached_input": 0.1 },
+    "gpt-6-luna": { "input": 1.25, "output": 10.0, "cached_input": 0.125 }
+  }
+}

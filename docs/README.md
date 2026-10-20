@@ -64,6 +64,8 @@ every new dependency is judged against it.
   signals (commit, PR, CI, gate) on task cards and a no-signal indicator
 - [Account usage](specs/account-usage.spec.md) — tokens spent and quota left per
   provider account: reported usage, Codex quota probe, Cursor pools, charts
+- [Cost view](specs/cost-view.spec.md) — the Custo tab: tokens and estimated cost
+  per project and account over 24h/7d/30d, price table, unpriced models
 - [MCP operations](specs/mcp-operations.spec.md) — inbox and fleet journeys over
   MCP with compact, paged responses; REST/MCP coverage audit
 - [Task archive](specs/task-archive.spec.md) — archive terminal tasks out of lists

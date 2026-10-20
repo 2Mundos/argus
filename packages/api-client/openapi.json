@@ -150,6 +150,121 @@
         "title": "Account",
         "type": "object"
       },
+      "AccountCost": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "measured_runs": {
+            "title": "Measured Runs",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "not_reported_runs": {
+            "title": "Not Reported Runs",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "quota": {
+            "items": {
+              "$ref": "#/components/schemas/QuotaWindow"
+            },
+            "title": "Quota",
+            "type": "array"
+          },
+          "quota_status": {
+            "$ref": "#/components/schemas/QuotaStatus"
+          },
+          "reported_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported Cost Usd"
+          },
+          "runs": {
+            "title": "Runs",
+            "type": "integer"
+          },
+          "unpriced_runs": {
+            "title": "Unpriced Runs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runs",
+          "measured_runs",
+          "not_reported_runs",
+          "input_tokens",
+          "output_tokens",
+          "cached_input_tokens",
+          "estimated_cost_usd",
+          "reported_cost_usd",
+          "unpriced_runs",
+          "account_id",
+          "name",
+          "provider",
+          "quota",
+          "quota_status"
+        ],
+        "title": "AccountCost",
+        "type": "object"
+      },
       "AccountCount": {
         "properties": {
           "count": {
@@ -2228,6 +2343,162 @@
         "title": "CompleteRequest",
         "type": "object"
       },
+      "CostFigures": {
+        "description": "What one group spent. `runs = measured_runs + not_reported_runs`. A token\nfield is null when no measured run carried it, never 0 (cost view 3.1).",
+        "properties": {
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "measured_runs": {
+            "title": "Measured Runs",
+            "type": "integer"
+          },
+          "not_reported_runs": {
+            "title": "Not Reported Runs",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "reported_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported Cost Usd"
+          },
+          "runs": {
+            "title": "Runs",
+            "type": "integer"
+          },
+          "unpriced_runs": {
+            "title": "Unpriced Runs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runs",
+          "measured_runs",
+          "not_reported_runs",
+          "input_tokens",
+          "output_tokens",
+          "cached_input_tokens",
+          "estimated_cost_usd",
+          "reported_cost_usd",
+          "unpriced_runs"
+        ],
+        "title": "CostFigures",
+        "type": "object"
+      },
+      "CostReport": {
+        "properties": {
+          "by_account": {
+            "items": {
+              "$ref": "#/components/schemas/AccountCost"
+            },
+            "title": "By Account",
+            "type": "array"
+          },
+          "by_project": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectCost"
+            },
+            "title": "By Project",
+            "type": "array"
+          },
+          "daily": {
+            "items": {
+              "$ref": "#/components/schemas/DayCost"
+            },
+            "title": "Daily",
+            "type": "array"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/PricingInfo"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/CostFigures"
+          },
+          "tz": {
+            "title": "Tz",
+            "type": "string"
+          },
+          "window": {
+            "enum": [
+              "24h",
+              "7d",
+              "30d"
+            ],
+            "title": "Window",
+            "type": "string"
+          }
+        },
+        "required": [
+          "window",
+          "start",
+          "end",
+          "tz",
+          "pricing",
+          "totals",
+          "by_account",
+          "by_project",
+          "daily"
+        ],
+        "title": "CostReport",
+        "type": "object"
+      },
       "CreateWorkerRequest": {
         "properties": {
           "advanced": {
@@ -2389,6 +2660,100 @@
           "wal_bytes"
         ],
         "title": "DatabaseOut",
+        "type": "object"
+      },
+      "DayCost": {
+        "properties": {
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "measured_runs": {
+            "title": "Measured Runs",
+            "type": "integer"
+          },
+          "not_reported_runs": {
+            "title": "Not Reported Runs",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "reported_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported Cost Usd"
+          },
+          "runs": {
+            "title": "Runs",
+            "type": "integer"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "unpriced_runs": {
+            "title": "Unpriced Runs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runs",
+          "measured_runs",
+          "not_reported_runs",
+          "input_tokens",
+          "output_tokens",
+          "cached_input_tokens",
+          "estimated_cost_usd",
+          "reported_cost_usd",
+          "unpriced_runs",
+          "start"
+        ],
+        "title": "DayCost",
         "type": "object"
       },
       "Decision": {
@@ -6477,6 +6842,48 @@
         "title": "PoolsOverview",
         "type": "object"
       },
+      "PricingInfo": {
+        "properties": {
+          "as_of": {
+            "title": "As Of",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "estimate": {
+            "const": true,
+            "default": true,
+            "title": "Estimate",
+            "type": "boolean"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "unpriced_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unpriced Models",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "currency",
+          "as_of",
+          "version",
+          "source",
+          "unpriced_models"
+        ],
+        "title": "PricingInfo",
+        "type": "object"
+      },
       "ProgressKind": {
         "description": "The closed set of structured progress milestones (progress-milestones spec 3.1).",
         "enum": [
@@ -6582,6 +6989,106 @@
           "updated_at"
         ],
         "title": "Project",
+        "type": "object"
+      },
+      "ProjectCost": {
+        "properties": {
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "measured_runs": {
+            "title": "Measured Runs",
+            "type": "integer"
+          },
+          "not_reported_runs": {
+            "title": "Not Reported Runs",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "reported_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported Cost Usd"
+          },
+          "runs": {
+            "title": "Runs",
+            "type": "integer"
+          },
+          "unpriced_runs": {
+            "title": "Unpriced Runs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runs",
+          "measured_runs",
+          "not_reported_runs",
+          "input_tokens",
+          "output_tokens",
+          "cached_input_tokens",
+          "estimated_cost_usd",
+          "reported_cost_usd",
+          "unpriced_runs",
+          "project"
+        ],
+        "title": "ProjectCost",
         "type": "object"
       },
       "ProjectUpsert": {
@@ -10378,6 +10885,70 @@
           }
         ],
         "summary": "Get Codex Login",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/cost": {
+      "get": {
+        "description": "Tokens and estimated cost per account, project and day over the window\nending now (cost view 3.3). Read only.",
+        "operationId": "account_cost_api_accounts_cost_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "24h",
+              "enum": [
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "title": "Window",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "default": "UTC",
+              "title": "Tz",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CostReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Account Cost",
         "tags": [
           "accounts"
         ]

@@ -3,6 +3,7 @@ import { handleUnauthorized, setToken, token } from "./api";
 import { LiveProvider, useLive } from "./live";
 import { Accounts } from "./views/Accounts";
 import { Agents } from "./views/Agents";
+import { Cost } from "./views/Cost";
 import { Engines } from "./views/Engines";
 import { Events } from "./views/Events";
 import { Frota } from "./views/Frota";
@@ -23,6 +24,7 @@ const TABS = {
   inbox: "Inbox",
   knowledge: "Knowledge",
   accounts: "Accounts",
+  cost: "Custo",
   engines: "Engines",
   events: "Events",
   system: "System",
@@ -86,6 +88,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
         {tab === "inbox" && <Inbox />}
         {tab === "knowledge" && <Knowledge />}
         {tab === "accounts" && <Accounts />}
+        {tab === "cost" && <Cost />}
         {tab === "engines" && <Engines />}
         {tab === "events" && <Events />}
         {tab === "system" && <System />}
