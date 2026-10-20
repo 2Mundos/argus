@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, call, fetchText } from "../api";
 import { relative, shortId } from "../format";
 import { useLiveData } from "../live";
+import { TaskLabel } from "../TaskLabel";
 import { Activity, useNow } from "./Activity";
 
 const LOG_TAIL = 200;
@@ -75,7 +76,9 @@ export function AgentDetail({ agentId, onClose }: { agentId: string; onClose: ()
             {data.work.map(({ task, events }) => (
               <div key={task.id}>
                 <p>
-                  <strong>{task.title}</strong>{" "}
+                  <strong>
+                    <TaskLabel title={task.title} project={task.project} />
+                  </strong>{" "}
                   <span className="muted small">
                     {shortId(task.id)} · attempt {task.attempt}
                   </span>

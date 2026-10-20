@@ -114,7 +114,7 @@ describe("AgentDetail", () => {
     const { unmount } = render(<AgentDetail agentId="agent-1" onClose={() => {}} />);
     await flush();
     expect(screen.getByText("nanoclaw/1.2 · codex · unknown")).toBeTruthy();
-    expect(screen.getByText("Finance canary")).toBeTruthy();
+    expect(screen.getByText("Global - Finance canary")).toBeTruthy();
     expect(screen.getByText("cloned the repo")).toBeTruthy();
     expect(screen.getByText(/session started/)).toBeTruthy();
     expect(mock.fetchText).toHaveBeenCalledWith("/api/instances/inst-1/logs?tail=200");

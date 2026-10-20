@@ -11,12 +11,20 @@ import {
 import { type Account, api, call } from "../api";
 import { relative } from "../format";
 import { useLiveData } from "../live";
-import { hasModelUsage, tokens, totalTokens, viewerTimeZone, windowQuery } from "../usage";
+import {
+  allUnmeasured,
+  hasModelUsage,
+  tokens,
+  totalTokens,
+  unmeasuredNote,
+  viewerTimeZone,
+  windowQuery,
+} from "../usage";
 import { AccountDetail } from "./AccountDetail";
 import { DeleteAccount, EditAccount, ReplaceCredential } from "./AccountDialogs";
 import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
-import { QuotaMeter, Sparkline } from "./charts";
+import { QuotaMeter, QuotaStatusView, Sparkline } from "./charts";
 import { ProviderMark, StateIcon } from "./providerIcons";
 
 export function Accounts() {
@@ -136,7 +144,7 @@ export function Accounts() {
                   {!model ? (
                     <span className="muted small">—</span>
                   ) : (a.quota ?? []).length === 0 ? (
-                    <span className="muted small">unknown</span>
+                    <QuotaStatusView status={a.quota_status} compact />
                   ) : (
                     <div className="quota-cell">
                       {(a.quota ?? []).map((q) => (
@@ -150,11 +158,20 @@ export function Accounts() {
                     <span className="muted small">—</span>
                   ) : series?.reported ? (
                     <span className="spark-cell">
-                      <Sparkline
-                        values={series.buckets.map(totalTokens)}
-                        label={`${a.name}: tokens per day, last 7 days`}
-                      />
-                      <span className="small">{tokens(totalTokens(series.totals))}</span>
+                      {!allUnmeasured(series.totals) && (
+                        <>
+                          <Sparkline
+                            values={series.buckets.map(totalTokens)}
+                            label={`${a.name}: tokens per day, last 7 days`}
+                          />
+                          <span className="small">{tokens(totalTokens(series.totals))}</span>
+                        </>
+                      )}
+                      {unmeasuredNote(series.totals.unmeasured_runs) && (
+                        <span className="muted small">
+                          {unmeasuredNote(series.totals.unmeasured_runs)}
+                        </span>
+                      )}
                     </span>
                   ) : (
                     <span className="muted small">not reported</span>

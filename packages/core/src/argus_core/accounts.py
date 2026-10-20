@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 LeaseRole = Literal["engine", "executor", "repository"]
 
@@ -42,6 +42,21 @@ class AccountState(StrEnum):
     DISABLED = "disabled"
 
 
+QuotaPeriod = Literal["5h", "24h", "7d"]
+PERIOD_HOURS: dict[str, int] = {"5h": 5, "24h": 24, "7d": 168}
+
+
+def _check_token_limits(v: dict[str, int] | None) -> dict[str, int] | None:
+    if v is None:
+        return v
+    for period, limit in v.items():
+        if period not in PERIOD_HOURS:
+            raise ValueError(f"unknown token limit window {period!r}: use 5h, 24h, 7d")
+        if limit < 1:
+            raise ValueError(f"token limit for {period} must be a positive integer")
+    return v
+
+
 class AccountCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     provider: str = Field(min_length=1, max_length=50, pattern=r"^[a-z0-9_-]+$")
@@ -53,6 +68,10 @@ class AccountCreate(BaseModel):
     # reference to an entry that is already there (`sops:<name>`).
     credential: dict[str, Any] | None = None
     secret_ref: str | None = Field(default=None, pattern=r"^sops:[A-Za-z0-9_-]{1,128}$")
+    # Max total (input + output) tokens per rolling window; used to estimate quota.
+    token_limits: dict[str, int] | None = None
+
+    _limits = field_validator("token_limits")(_check_token_limits)
 
     @model_validator(mode="after")
     def one_secret_source(self) -> "AccountCreate":
@@ -68,6 +87,9 @@ class AccountUpdate(BaseModel):
     labels: dict[str, str] | None = None
     enabled: bool | None = None
     billing_day: int | None = Field(default=None, ge=1, le=31)
+    token_limits: dict[str, int] | None = None  # null clears
+
+    _limits = field_validator("token_limits")(_check_token_limits)
 
 
 class Usage(BaseModel):
@@ -75,7 +97,8 @@ class Usage(BaseModel):
     output_tokens: int
     cached_input_tokens: int = 0
     cost_usd: float
-    runs: int = 0  # usage reports counted
+    runs: int = 0  # usage reports counted (every row)
+    unmeasured_runs: int = 0  # of those, runs whose engine reported no figures
 
 
 QuotaSource = Literal["reported", "polled", "estimated"]
@@ -112,6 +135,26 @@ class QuotaWindow(BaseModel):
     source: QuotaSource
 
 
+class QuotaStatusWindow(BaseModel):
+    period: QuotaPeriod
+    limit: int
+    used: int
+    remaining: int
+    used_percent: float
+    source: Literal["estimated"] = "estimated"
+
+
+class QuotaStatus(BaseModel):
+    """Whether Argus knows this account's quota, and if not, why (never a 0/100)."""
+
+    state: Literal["known", "unknown"]
+    reason: (
+        Literal["no_usage_records", "provider_does_not_expose", "window_not_configured"]
+        | None
+    ) = None
+    windows: list[QuotaStatusWindow] = []
+
+
 class Account(BaseModel):
     """Registry entry. Never contains the credential."""
 
@@ -130,6 +173,8 @@ class Account(BaseModel):
     usage_24h: Usage
     usage_total: Usage
     quota: list[QuotaWindow] = []
+    quota_status: QuotaStatus
+    token_limits: dict[str, int] | None = None
     billing_day: int | None = None
     created_at: datetime
     updated_at: datetime
@@ -195,6 +240,26 @@ class UsageReport(BaseModel):
     engine: str | None = Field(default=None, max_length=50)
     role: Literal["engine", "executor"] | None = None
     rate_limits: list[QuotaReport] = Field(default=[], max_length=10)
+    # Idempotency: built by the client from task+agent+engine+start. A repeat adds no row.
+    run_key: str | None = Field(default=None, min_length=1, max_length=200)
+    # not_reported: the run happened but the engine gave no figures (all null).
+    measurement: Literal["measured", "not_reported"] = "measured"
+
+    @model_validator(mode="after")
+    def honest_figures(self) -> "UsageReport":
+        figures = (
+            self.input_tokens,
+            self.output_tokens,
+            self.cached_input_tokens,
+            self.cost_usd,
+        )
+        if self.measurement == "not_reported" and any(f is not None for f in figures):
+            raise ValueError("a not_reported run must not carry tokens or cost")
+        if self.measurement == "measured" and all(f is None for f in figures):
+            raise ValueError(
+                "a measured run needs tokens or cost; use measurement=not_reported"
+            )
+        return self
 
 
 class UsageBucket(BaseModel):
@@ -204,6 +269,7 @@ class UsageBucket(BaseModel):
     cached_input_tokens: int
     cost_usd: float
     runs: int
+    unmeasured_runs: int = 0
 
 
 class AccountUsage(BaseModel):

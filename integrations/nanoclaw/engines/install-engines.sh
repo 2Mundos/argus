@@ -54,7 +54,7 @@ fs.writeFileSync(file, `${JSON.stringify(tools, null, 2)}\n`);
 JS
 
 # 3. image: the Cursor agent, argus-delegate, and a version smoke that fails the build
-cp "$here/install-cursor-agent.sh" "$here/argus-delegate.mjs" "$here/model-policy.mjs" "$here/model-policy.defaults.json" "$target/container/"
+cp "$here/install-cursor-agent.sh" "$here/argus-delegate.mjs" "$here/model-policy.mjs" "$here/model-policy.defaults.json" "$here/milestones.mjs" "$target/container/"
 cp "$here/../gitea-api.mjs" "$target/container/"
 if ! grep -q "Argus specialist CLIs" "$target/container/Dockerfile"; then
   python3 - "$target/container/Dockerfile" <<'PY'
@@ -68,10 +68,11 @@ block = '''# ---- Argus specialist CLIs ----------------------------------------
 # worker uses to hand work to any of the four. The smoke fails the build if a CLI
 # does not run, so "in the image" is proven, not assumed. Authentication is NOT
 # part of the image: each worker logs in with the vendor client.
-COPY install-cursor-agent.sh argus-delegate.mjs model-policy.mjs model-policy.defaults.json gitea-api.mjs /tmp/argus-engines/
+COPY install-cursor-agent.sh argus-delegate.mjs model-policy.mjs model-policy.defaults.json milestones.mjs gitea-api.mjs /tmp/argus-engines/
 RUN sh /tmp/argus-engines/install-cursor-agent.sh \\
  && install -m 0755 /tmp/argus-engines/argus-delegate.mjs /usr/local/bin/argus-delegate \\
- && install -m 0644 /tmp/argus-engines/model-policy.mjs /tmp/argus-engines/model-policy.defaults.json /usr/local/bin/ \\
+ && install -m 0644 /tmp/argus-engines/model-policy.mjs /tmp/argus-engines/model-policy.defaults.json /tmp/argus-engines/milestones.mjs /usr/local/bin/ \\
+ && install -m 0644 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/gitea-api.mjs \\
  && npm install --prefix /usr/local/lib/argus-gitea --omit=dev --no-audit --no-fund undici@8.12.2 \\
  && install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api \\
  && rm -rf /tmp/argus-engines \\
@@ -101,6 +102,10 @@ s = re.sub(
 needle = " && install -m 0755 /tmp/argus-engines/argus-delegate.mjs /usr/local/bin/argus-delegate \\\n"
 if needle in s and "argus-gitea-api" not in s:
     s = s.replace(needle, needle + " && npm install --prefix /usr/local/lib/argus-gitea --omit=dev --no-audit --no-fund undici@8.12.2 \\\n && install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api \\\n", 1)
+# milestones.mjs and the sibling gitea-api.mjs (CI milestones) for already-patched checkouts.
+if "milestones.mjs" not in s:
+    s = s.replace("model-policy.defaults.json gitea-api.mjs /tmp/argus-engines/", "model-policy.defaults.json milestones.mjs gitea-api.mjs /tmp/argus-engines/", 1)
+    s = s.replace(" && rm -rf /tmp/argus-engines \\\n", " && install -m 0644 /tmp/argus-engines/milestones.mjs /tmp/argus-engines/gitea-api.mjs /usr/local/bin/ \\\n && rm -rf /tmp/argus-engines \\\n", 1)
 assert "gitea-api.mjs /tmp/argus-engines/" in s
 assert "argus-gitea-api" in s
 open(p, "w").write(s)

@@ -19,13 +19,14 @@ const account = (a: Partial<Account>): Account =>
     usage_24h: usage,
     usage_total: usage,
     quota: [],
+    quota_status: { state: "unknown", reason: "no_usage_records", windows: [] },
     billing_day: null,
     created_at: "2026-10-01T00:00:00Z",
     updated_at: "2026-10-01T00:00:00Z",
     ...a,
   }) as Account;
 
-const ACCOUNTS = [
+const ACCOUNTS: Account[] = [
   account({
     id: "c1",
     name: "codex-main",
@@ -51,7 +52,40 @@ const ACCOUNTS = [
       },
     ],
   }),
-  account({ id: "u1", name: "cursor-team", provider: "cursor" }),
+  account({
+    id: "u1",
+    name: "cursor-team",
+    provider: "cursor",
+    quota_status: { state: "unknown", reason: "provider_does_not_expose", windows: [] },
+  }),
+  account({
+    id: "k1",
+    name: "claude-limited",
+    provider: "anthropic",
+    token_limits: { "5h": 100_000 },
+    quota_status: {
+      state: "known",
+      reason: null,
+      windows: [
+        {
+          period: "5h",
+          limit: 100_000,
+          used: 12_000,
+          remaining: 88_000,
+          used_percent: 12,
+          source: "estimated",
+        },
+      ],
+    },
+  }),
+  account({
+    id: "w1",
+    name: "openai-key",
+    provider: "openai",
+    kind: "api_key",
+    quota_status: { state: "unknown", reason: "window_not_configured", windows: [] },
+  }),
+  account({ id: "m1", name: "unmeasured-only", provider: "openai" }),
   account({ id: "g1", name: "gitea-bot", provider: "gitea", kind: "api_key" }),
 ];
 
@@ -91,19 +125,23 @@ vi.mock("../api", () => ({
   call: async (req: { path: string; query?: Record<string, string> }) => {
     if (req.path === "/api/accounts") return ACCOUNTS;
     if (req.path === "/api/accounts/usage") {
-      const ids = req.query?.account_id ? [req.query.account_id] : ["c1", "u1", "g1"];
+      const ids = req.query?.account_id ? [req.query.account_id] : ACCOUNTS.map((a) => a.id);
       return {
         bucket: req.query?.bucket ?? "day",
         accounts: ids.map((id) => ({
           account_id: id,
-          reported: id === "c1",
-          totals: {
-            ...usage,
-            input_tokens: 300,
-            output_tokens: 30,
-            cached_input_tokens: 15,
-            runs: 3,
-          },
+          reported: ["c1", "k1", "m1"].includes(id),
+          totals:
+            id === "m1"
+              ? { ...usage, runs: 4, unmeasured_runs: 4 }
+              : {
+                  ...usage,
+                  input_tokens: 300,
+                  output_tokens: 30,
+                  cached_input_tokens: 15,
+                  runs: id === "k1" ? 5 : 3,
+                  unmeasured_runs: id === "k1" ? 2 : 0,
+                },
           buckets: [bucket("2026-10-16T00:00:00Z", 100), bucket("2026-10-17T00:00:00Z", 200)],
         })),
       };
@@ -130,10 +168,27 @@ describe("accounts usage", () => {
     expect(within(codex).getByText("19% left")).toBeTruthy();
     expect(within(codex).getByRole("img", { name: /tokens per day/ })).toBeTruthy();
     const cursor = screen.getByText("cursor-team").closest("tr") as HTMLElement;
-    expect(within(cursor).getByText("unknown")).toBeTruthy();
+    expect(within(cursor).getByText("Provider does not expose quota")).toBeTruthy();
+    expect(within(cursor).queryByText("unknown")).toBeNull();
     expect(within(cursor).getByText("not reported")).toBeTruthy();
     const gitea = screen.getByText("gitea-bot").closest("tr") as HTMLElement;
     expect(within(gitea).queryByText("not reported")).toBeNull();
+  });
+
+  it("shows estimated windows, a reason when quota is unknown, and unmeasured runs", async () => {
+    render(<Accounts />);
+    const claude = (await screen.findByText("claude-limited")).closest("tr") as HTMLElement;
+    expect(within(claude).getByText("88% left")).toBeTruthy();
+    expect(within(claude).getByText("12k / 100k (est.)")).toBeTruthy();
+    expect(within(claude).getByText("2 runs without measurement")).toBeTruthy();
+    expect(within(claude).getByText("330")).toBeTruthy();
+    const key = screen.getByText("openai-key").closest("tr") as HTMLElement;
+    expect(within(key).getByText("No quota window configured")).toBeTruthy();
+    // Every run lacked figures: no sparkline and no 0 total, just the count.
+    const none = screen.getByText("unmeasured-only").closest("tr") as HTMLElement;
+    expect(within(none).getByText("No usage reported yet")).toBeTruthy();
+    expect(within(none).getByText("4 runs without measurement")).toBeTruthy();
+    expect(within(none).queryByRole("img", { name: /tokens per day/ })).toBeNull();
   });
 
   it("opens the detail with a time window filter and quota refresh", async () => {

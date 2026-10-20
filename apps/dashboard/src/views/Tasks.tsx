@@ -2,6 +2,9 @@ import { type FormEvent, useState } from "react";
 import { api, call, newestTasks, type TaskKind, type TaskState, type TaskSummary } from "../api";
 import { relative, shortId } from "../format";
 import { useLiveData } from "../live";
+import { TaskSignal } from "../milestones";
+import { TaskLabel } from "../TaskLabel";
+import { useNow } from "./Activity";
 import { ArchiveTasks } from "./ArchiveTasks";
 import { TaskDetail } from "./TaskDetail";
 
@@ -73,9 +76,10 @@ export function Tasks() {
 }
 
 function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
+  const now = useNow(30_000);
   return (
     <button type="button" className="task-card" onClick={onOpen}>
-      <span className="title">{task.title}</span>
+      <TaskLabel className="title" title={task.title} project={task.project} />
       <span className="meta">
         <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
         {task.kind !== "generic" && <span className="badge">{task.kind}</span>}
@@ -87,16 +91,7 @@ function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
           {shortId(task.assignee_agent_id ?? "")} · lease {relative(task.lease_expires_at)}
         </span>
       )}
-      {task.progress_message && task.state === "claimed" && (
-        <span className="progress">
-          {task.progress_percent != null && (
-            <span className="bar">
-              <span style={{ width: `${task.progress_percent}%` }} />
-            </span>
-          )}
-          <span className="small">{task.progress_message}</span>
-        </span>
-      )}
+      {task.state === "claimed" && <TaskSignal task={task} now={now} />}
       {task.block_reason && task.state === "blocked" && (
         <span className="small muted">{task.block_reason}</span>
       )}

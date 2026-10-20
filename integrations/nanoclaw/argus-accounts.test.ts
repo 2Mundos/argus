@@ -582,7 +582,11 @@ describe("channel with accounts", () => {
     await until(() => h.inbound.length === 1);
     await h.adapter.deliver("local", null, failure("Failed to authenticate. API Error: 401"));
     const fail = w.calls.find((c) => c.path === "/tasks/t1/fail")!;
-    expect(fail.body).toEqual({ attempt: 1, error: "Failed to authenticate. API Error: 401" });
+    expect(fail.body).toEqual({
+      attempt: 1,
+      error: "Failed to authenticate. API Error: 401",
+      reason: "provider_failure",
+    });
     expect(w.calls.some((c) => c.path.endsWith("/exhausted"))).toBe(false);
   });
 

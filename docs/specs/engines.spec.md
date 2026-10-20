@@ -101,7 +101,11 @@ In scope:
   and the whole group is killed on timeout or on SIGTERM; stdout of the CLI is
   kept as an artifact file; the final line on stdout is one JSON object with
   `engine` (`ARGUS_ENGINE`), `executor`, the executor version, `model` when
-  known, `cwd`, `exit_code`, `timed_out`, `duration_ms`, `artifacts`.
+  known, `cwd`, `exit_code`, `timed_out`, `duration_ms`, `artifacts`, and the
+  run's `usage`, `run_key` and `usage_report`. Each attempt's token usage is
+  parsed, spooled to `<out>/usage-*.json` and reported best-effort to the
+  executor's account; it never changes the exit code
+  ([account usage](account-usage.spec.md) §3.8).
   The Argus NanoClaw channel states this contract in every claimed task body
   (`integrations/nanoclaw/argus.ts` `renderTask`): implementation must use
   `/usr/local/bin/argus-delegate` (Cursor → `agent`); direct `cursor-agent` /

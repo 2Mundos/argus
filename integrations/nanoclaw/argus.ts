@@ -176,7 +176,8 @@ export function taskAuthorizesMerge(task: ArgusTask): boolean {
 function repositoryTaskLines(task: ArgusTask): string[] {
   const lines = [
     `Repository (allowlisted): ${task.repository_url}`,
-    "Use /usr/local/bin/argus-gitea-api for repository API access (get = pull request by number; issue-get = issue tracker item; list-prs = paginated PR list with --state; status = commit statuses for the PR head SHA); do not handle credentials or add auth headers yourself.",
+    "Use /usr/local/bin/argus-gitea-api for repository API access; do not handle credentials or add auth headers yourself. Commands: get = pull request by number; issue-get = issue tracker item; list-prs = paginated PR list with --state; status = commit statuses for the PR head SHA; create = open a pull request; update = edit a pull request.",
+    `To open a PR (you can; push your branch first, then): argus-gitea-api create --repository ${task.repository_url} --title "<title>" --head <branch> --base <base-branch> --body "<text>"   (a long body may use --body-file <path> only if argus-gitea-api create accepts it on your image; an unsupported option is silently ignored, so check the returned PR body). create is idempotent: if an open PR for the same head and base exists it is returned instead of a duplicate. To edit one: argus-gitea-api update --repository ${task.repository_url} --number <N> [--title T] [--body-file PATH | --body TEXT] [--base B] [--state open|closed]. Both print the PR JSON (number, html_url, head.sha).`,
   ];
   if (taskAuthorizesMerge(task)) {
     lines.push(
@@ -215,10 +216,21 @@ function completionPayload(text: string): { summary: string; data?: Record<strin
   return { summary: text };
 }
 
-/** Interpret an agent reply. Directives are matched at the start, case-insensitively. */
+// Markdown decoration a model puts around a directive: quotes, bullets, bold/code.
+const LEAD = "[\\s>*_`~#+-]*";
+const COLON_DIRECTIVE = new RegExp(`^${LEAD}(complete|fail|ask)[*_\`~]*\\s*[:：][*_\`~]*\\s*`, "i");
+// "FAIL - why": only the upper-case keyword, so prose like "Ask - then" stays progress.
+const DASH_DIRECTIVE = new RegExp(`^${LEAD}(COMPLETE|FAIL|ASK)[*_\`~]*\\s+[-–—]\\s+`);
+
+/**
+ * Interpret an agent reply. A directive is read at the start of the first non-blank
+ * line, case-insensitively, tolerating markdown around it (`**FAIL:**`, `> FAIL:`,
+ * `- FAIL:`) and `KEYWORD - text`; the rest of the reply (further paragraphs
+ * included) is its text.
+ */
 export function parseReply(raw: string): Directive {
   const text = raw.trim();
-  const m = /^(complete|fail|ask)\s*:\s*/i.exec(text);
+  const m = COLON_DIRECTIVE.exec(text) ?? DASH_DIRECTIVE.exec(text);
   if (!m) return { kind: "progress", text };
   return { kind: m[1]!.toLowerCase() as Directive["kind"], text: text.slice(m[0].length).trim() };
 }
@@ -642,6 +654,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           await client.call("POST", `/tasks/${task.id}/fail`, {
             attempt: task.attempt,
             error: "The account was switched but the previous worker runtime could not be stopped",
+            reason: "provider_failure",
           });
           finishTask();
           return;
@@ -664,6 +677,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         await client.call("POST", `/tasks/${task.id}/fail`, {
           attempt: task.attempt,
           error: f.reason,
+          reason: "provider_failure",
         });
       }
       finishTask();
@@ -672,6 +686,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     await client.call("POST", `/tasks/${task.id}/fail`, {
       attempt: task.attempt,
       error: f.reason,
+      reason: "provider_failure",
     });
     finishTask();
   }
@@ -701,6 +716,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       await client.call("POST", `/tasks/${task.id}/fail`, {
         attempt: task.attempt,
         error: `model policy could not be applied/recorded: ${String(err)}`,
+        reason: "channel_error",
       });
       finishTask();
       return;
@@ -745,6 +761,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         .call("POST", `/tasks/${task.id}/fail`, {
           attempt: task.attempt,
           error: "worker repository credential unavailable or repository is not allowlisted",
+          reason: "channel_error",
         })
         .catch(() => undefined);
       finishTask();
@@ -1191,6 +1208,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           log.warn("Argus says this task is no longer ours; dropping the reply", {
             task: task.id,
             code: err.code,
+            directive: d.kind,
+            // A dropped FAIL is the one reply whose text is worth keeping in the log.
+            ...(d.kind === "fail" ? { text: d.text.slice(0, 500) } : {}),
           });
           finishTask();
         } else if (err instanceof ArgusError && err.permanent) {
@@ -1208,6 +1228,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
                 0,
                 2000,
               ),
+            reason: "channel_error",
           });
           finishTask();
         } else {
@@ -1365,6 +1386,9 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
       engine,
       account_provider: held.engine?.provider ?? null,
       executor_account_provider: held.executor?.provider ?? held.engine?.provider ?? null,
+      // Opaque lease ids (no credential): the delegate reports executor usage against them.
+      engine_account_id: held.engine?.account_id ?? null,
+      executor_account_id: (held.executor ?? held.engine)?.account_id ?? null,
       preferred_executor: executorFor(held.executor?.provider ?? held.engine?.provider ?? ""),
     });
     const dir = path.resolve("groups", group.folder);

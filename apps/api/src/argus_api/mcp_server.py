@@ -330,15 +330,29 @@ async def verify_artifact(ctx: Context, artifact_id: str) -> dict:
 
 @tool(AGENTS)
 async def report_progress(
-    ctx: Context, task_id: str, attempt: int, message: str, percent: int | None = None
+    ctx: Context,
+    task_id: str,
+    attempt: int,
+    message: str,
+    percent: int | None = None,
+    kind: str | None = None,
+    data: dict | None = None,
 ) -> dict:
     """Post a short progress note shown to humans (at most one per 10 s). It also
-    renews your lease on the task."""
+    renews your lease on the task. Optional `kind` marks a milestone: commit_created
+    {branch, sha}, pr_opened {number, url}, ci_running|ci_passed|ci_failed {sha},
+    gate_failed {gate}, waiting_input; a milestone is not limited unless its kind repeats."""
     return await _call(
         ctx,
         "POST",
         f"/tasks/{task_id}/progress",
-        json={"attempt": attempt, "message": message, "percent": percent},
+        json={
+            "attempt": attempt,
+            "message": message,
+            "percent": percent,
+            "kind": kind,
+            "data": data,
+        },
     )
 
 
