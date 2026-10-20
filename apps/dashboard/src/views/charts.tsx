@@ -196,3 +196,16 @@ export function QuotaStatusView(props: { status: QuotaStatus; compact?: boolean 
     </div>
   );
 }
+
+/** The quota cell shared by Accounts and Cost: provider windows, else the estimated/unknown status. */
+export function AccountQuota(props: { quota?: QuotaWindow[]; status: QuotaStatus }) {
+  const quota = props.quota ?? [];
+  if (quota.length === 0) return <QuotaStatusView status={props.status} compact />;
+  return (
+    <div className="quota-cell">
+      {quota.map((q) => (
+        <QuotaMeter key={q.window} q={q} compact />
+      ))}
+    </div>
+  );
+}

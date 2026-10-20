@@ -24,7 +24,7 @@ import { AccountDetail } from "./AccountDetail";
 import { DeleteAccount, EditAccount, ReplaceCredential } from "./AccountDialogs";
 import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
-import { QuotaMeter, QuotaStatusView, Sparkline } from "./charts";
+import { AccountQuota, Sparkline } from "./charts";
 import { ProviderMark, StateIcon } from "./providerIcons";
 
 export function Accounts() {
@@ -143,14 +143,8 @@ export function Accounts() {
                 <td data-label="Quota left">
                   {!model ? (
                     <span className="muted small">—</span>
-                  ) : (a.quota ?? []).length === 0 ? (
-                    <QuotaStatusView status={a.quota_status} compact />
                   ) : (
-                    <div className="quota-cell">
-                      {(a.quota ?? []).map((q) => (
-                        <QuotaMeter key={q.window} q={q} compact />
-                      ))}
-                    </div>
+                    <AccountQuota quota={a.quota} status={a.quota_status} />
                   )}
                 </td>
                 <td data-label="Tokens, 7 days">

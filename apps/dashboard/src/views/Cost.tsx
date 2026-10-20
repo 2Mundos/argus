@@ -15,7 +15,7 @@ import {
 } from "../cost";
 import { useLiveData } from "../live";
 import { bucketLabel, viewerTimeZone } from "../usage";
-import { QuotaStatusView } from "./charts";
+import { AccountQuota } from "./charts";
 
 /** Tokens and estimated cost per account, project and day (cost view spec). */
 export function Cost() {
@@ -77,7 +77,7 @@ export function Report({ report, tz }: { report: CostReport; tz: string }) {
           key: a.account_id,
           name: a.name,
           f: a,
-          extra: <QuotaStatusView status={a.quota_status} compact />,
+          extra: <AccountQuota quota={a.quota} status={a.quota_status} />,
         }))}
         currency={currency}
         label="Conta"

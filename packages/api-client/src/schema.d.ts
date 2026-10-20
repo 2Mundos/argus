@@ -1798,6 +1798,8 @@ export interface components {
             output_tokens: number | null;
             /** Provider */
             provider: string;
+            /** Quota */
+            quota: components["schemas"]["QuotaWindow"][];
             quota_status: components["schemas"]["QuotaStatus"];
             /** Reported Cost Usd */
             reported_cost_usd: number | null;

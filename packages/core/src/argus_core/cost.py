@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from argus_core.accounts import QuotaStatus
+from argus_core.accounts import QuotaStatus, QuotaWindow
 
 CostWindow = Literal["24h", "7d", "30d"]
 
@@ -29,6 +29,7 @@ class AccountCost(CostFigures):
     account_id: str
     name: str
     provider: str
+    quota: list[QuotaWindow]  # provider snapshot, as on GET /api/accounts
     quota_status: QuotaStatus
 
 

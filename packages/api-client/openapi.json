@@ -216,6 +216,13 @@
             "title": "Provider",
             "type": "string"
           },
+          "quota": {
+            "items": {
+              "$ref": "#/components/schemas/QuotaWindow"
+            },
+            "title": "Quota",
+            "type": "array"
+          },
           "quota_status": {
             "$ref": "#/components/schemas/QuotaStatus"
           },
@@ -252,6 +259,7 @@
           "account_id",
           "name",
           "provider",
+          "quota",
           "quota_status"
         ],
         "title": "AccountCost",

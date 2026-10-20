@@ -8,14 +8,14 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from argus_api.accounts import cost, pricing
+from argus_api.accounts import cost, pricing, usage
 from argus_api.accounts import service as accounts
 from argus_api.accounts.pricing import PriceTable, PricingInvalidError
 from argus_api.config import Settings
 from argus_api.db import Database, ts
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
-from argus_core.accounts import AccountCreate
+from argus_core.accounts import AccountCreate, QuotaReport
 from argus_core.cost import CostReport
 from fastapi.testclient import TestClient
 
@@ -171,6 +171,28 @@ async def test_quota_status_is_the_accounts_screen_one(db: Database) -> None:
     async with db.read() as conn:
         listed = {x.id: x for x in await accounts.list_accounts(conn, NOW)}
     assert r.by_account[0].quota_status == listed[a].quota_status
+
+
+async def test_quota_windows_are_the_accounts_screen_ones(db: Database) -> None:
+    snap = await add_account(db, "snap")
+    bare = await add_account(db, "bare")
+    async with db.write() as tx:
+        await usage.upsert_quota(
+            tx,
+            snap,
+            [QuotaReport(window_minutes=300, used_percent=42)],
+            "reported",
+            "t",
+        )
+    r = await run(db)
+    async with db.read() as conn:
+        listed = {x.id: x for x in await accounts.list_accounts(conn, NOW)}
+    by = {x.account_id: x for x in r.by_account}
+    assert [q.window for q in by[snap].quota] == ["300m"]
+    assert by[bare].quota == []
+    for aid in (snap, bare):
+        assert by[aid].quota == listed[aid].quota
+        assert by[aid].quota_status == listed[aid].quota_status
 
 
 async def test_not_reported_runs_are_counted_not_summed(db: Database) -> None:

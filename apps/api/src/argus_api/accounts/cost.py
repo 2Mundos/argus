@@ -176,6 +176,7 @@ async def report(
                 account_id=a.id,
                 name=a.name,
                 provider=a.provider,
+                quota=a.quota,
                 quota_status=a.quota_status,
                 **acc.figures().model_dump(),
             )

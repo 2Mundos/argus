@@ -51,6 +51,17 @@ const REPORT: CostReport = {
       account_id: "a1",
       name: "codex-main",
       provider: "openai",
+      quota: [
+        {
+          window: "300m",
+          window_minutes: 300,
+          used_percent: 42,
+          resets_at: null,
+          exhausted_until: null,
+          observed_at: "2026-10-20T11:00:00Z",
+          source: "reported",
+        },
+      ],
       quota_status: { state: "known", reason: null, windows: [] },
     },
     {
@@ -60,9 +71,17 @@ const REPORT: CostReport = {
       account_id: "a2",
       name: "nr-only",
       provider: "openai",
+      quota: [],
       quota_status: unknown,
     },
-    { ...none, account_id: "a3", name: "idle", provider: "openai", quota_status: unknown },
+    {
+      ...none,
+      account_id: "a3",
+      name: "idle",
+      provider: "openai",
+      quota: [],
+      quota_status: unknown,
+    },
     {
       ...used,
       estimated_cost_usd: null,
@@ -70,6 +89,7 @@ const REPORT: CostReport = {
       account_id: "a4",
       name: "unpriced-acc",
       provider: "openai",
+      quota: [],
       quota_status: unknown,
     },
   ],
@@ -145,6 +165,12 @@ describe("Cost view", () => {
     render(<Cost />);
     await screen.findByText("idle");
     expect(within(row("idle")).getByText("No usage reported yet")).toBeTruthy();
+  });
+
+  it("renders the provider quota meter like Accounts", async () => {
+    render(<Cost />);
+    await screen.findByText("codex-main");
+    expect(within(row("codex-main")).getByText("58% left")).toBeTruthy();
   });
 
   it("badges the top five and names the pricing source, date and unpriced models", async () => {
