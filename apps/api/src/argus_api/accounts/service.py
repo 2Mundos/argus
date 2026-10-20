@@ -18,6 +18,7 @@ from argus_core.accounts import (
     ExhaustedReport,
     FallbackResult,
     LeaseRole,
+    QuotaWindow,
     Usage,
     UsageReport,
     role_accepts,
@@ -50,7 +51,7 @@ async def get_account(
         row = await cur.fetchone()
     if row is None:
         raise NotFoundError(f"account not found: {account_id}")
-    return _to_account(row)
+    return await _to_account(conn, row, now)
 
 
 async def list_accounts(conn: aiosqlite.Connection, now: datetime) -> list[Account]:
@@ -58,7 +59,8 @@ async def list_accounts(conn: aiosqlite.Connection, now: datetime) -> list[Accou
         _SELECT + " ORDER BY a.provider, a.priority DESC, a.name",
         (ts(now - timedelta(days=1)),),
     ) as cur:
-        return [_to_account(r) for r in await cur.fetchall()]
+        rows = await cur.fetchall()
+    return [await _to_account(conn, r, now) for r in rows]
 
 
 async def create_account(
@@ -74,8 +76,8 @@ async def create_account(
     now = ts(tx.now)
     await tx.conn.execute(
         "INSERT INTO accounts (id, name, provider, kind, secret_ref, priority, max_leases,"
-        " state, disabled_reason, auto_disabled, labels, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " state, disabled_reason, auto_disabled, labels, created_at, updated_at,"
+        " token_limits) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             account_id,
             body.name,
@@ -90,6 +92,7 @@ async def create_account(
             json.dumps(body.labels),
             now,
             now,
+            json.dumps(body.token_limits) if body.token_limits else None,
         ),
     )
     await record(
@@ -122,6 +125,10 @@ async def update_account(
         fields["labels"] = json.dumps(body.labels)
     if "billing_day" in body.model_fields_set:
         fields["billing_day"] = body.billing_day
+    if "token_limits" in body.model_fields_set:
+        fields["token_limits"] = (
+            json.dumps(body.token_limits) if body.token_limits else None
+        )
     if body.enabled is False and row["state"] != "disabled":
         fields |= {
             "state": "disabled",
@@ -573,7 +580,7 @@ async def _row(conn: aiosqlite.Connection, account_id: str) -> aiosqlite.Row:
 _USAGE = (
     "coalesce(sum(u.input_tokens), 0), coalesce(sum(u.output_tokens), 0),"
     " coalesce(sum(u.cached_input_tokens), 0), coalesce(sum(u.cost_usd), 0.0),"
-    " count(*)"
+    " count(*), coalesce(sum(u.measurement = 'not_reported'), 0)"
 )
 _SELECT = (  # constant fragments only
     "SELECT a.*,"  # noqa: S608
@@ -594,20 +601,29 @@ _SELECT = (  # constant fragments only
 
 
 def _usage(raw: str) -> Usage:
-    i, o, cached, cost, runs = json.loads(raw)
+    i, o, cached, cost, runs, unmeasured = json.loads(raw)
     return Usage(
         input_tokens=i,
         output_tokens=o,
         cached_input_tokens=cached,
         cost_usd=cost,
         runs=runs,
+        unmeasured_runs=unmeasured,
     )
 
 
-def _to_account(row: aiosqlite.Row) -> Account:
+async def _to_account(
+    conn: aiosqlite.Connection, row: aiosqlite.Row, now: datetime
+) -> Account:
     data = dict(row)
     data["labels"] = json.loads(data["labels"])
     data["usage_24h"] = _usage(data["usage_24h"])
     data["usage_total"] = _usage(data["usage_total"])
     data["quota"] = json.loads(data["quota"])
+    data["quota_status"] = await usage.quota_status(
+        conn, data, [QuotaWindow.model_validate(q) for q in data["quota"]], now
+    )
+    data["token_limits"] = (
+        json.loads(data["token_limits"]) if data["token_limits"] else None
+    )
     return Account.model_validate(data)

@@ -3,16 +3,21 @@
 A leaf module: both the account and the task services write usage through it.
 """
 
+import json
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 import aiosqlite
+from argus_core import claude_auth, cursor_auth
 from argus_core.accounts import (
+    PERIOD_HOURS,
     AccountUsage,
     QuotaReport,
     QuotaSource,
+    QuotaStatus,
+    QuotaStatusWindow,
     QuotaWindow,
     Usage,
     UsageBucket,
@@ -39,11 +44,15 @@ async def insert_usage(
     model: str | None = None,
     engine: str | None = None,
     role: str | None = None,
+    run_key: str | None = None,
+    measurement: str = "measured",
 ) -> None:
+    """One row per report. A repeated `run_key` for the account adds nothing."""
     await tx.conn.execute(
         "INSERT INTO account_usage (account_id, agent_id, task_id, input_tokens,"
-        " output_tokens, cached_input_tokens, cost_usd, model, engine, role, at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " output_tokens, cached_input_tokens, cost_usd, model, engine, role, at,"
+        " run_key, measurement) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT DO NOTHING",
         (
             account_id,
             agent_id,
@@ -56,6 +65,8 @@ async def insert_usage(
             engine,
             role,
             ts(tx.now),
+            run_key,
+            measurement,
         ),
     )
 
@@ -177,20 +188,21 @@ async def series(
     # Minute granularity in SQL keeps the rows few; the local bucket is
     # computed here, where the timezone rules are.
     sums: dict[str, dict[datetime, list[float]]] = defaultdict(
-        lambda: defaultdict(lambda: [0, 0, 0, 0.0, 0])
+        lambda: defaultdict(lambda: [0, 0, 0, 0.0, 0, 0])
     )
     async with conn.execute(
         "SELECT account_id, substr(at, 1, 16) AS minute,"
         " coalesce(sum(input_tokens), 0), coalesce(sum(output_tokens), 0),"
         " coalesce(sum(cached_input_tokens), 0), coalesce(sum(cost_usd), 0.0),"
-        " count(*) FROM account_usage WHERE at >= ? AND at < ?"
+        " count(*), coalesce(sum(measurement = 'not_reported'), 0)"
+        " FROM account_usage WHERE at >= ? AND at < ?"
         " GROUP BY account_id, minute",
         (ts(start), ts(end)),
     ) as cur:
-        for account_id, minute, i, o, c, cost, n in await cur.fetchall():
+        for account_id, minute, i, o, c, cost, n, u in await cur.fetchall():
             at = datetime.fromisoformat(minute + ":00+00:00")
             acc = sums[account_id][_floor(at, bucket, tz)]
-            for k, v in enumerate((i, o, c, cost, n)):
+            for k, v in enumerate((i, o, c, cost, n, u)):
                 acc[k] += v
     async with conn.execute("SELECT DISTINCT account_id FROM account_usage") as cur:
         reported = {r[0] for r in await cur.fetchall()}
@@ -200,11 +212,12 @@ async def series(
         buckets = [
             UsageBucket(
                 start=s,
-                input_tokens=int((v := per.get(s, [0, 0, 0, 0.0, 0]))[0]),
+                input_tokens=int((v := per.get(s, [0, 0, 0, 0.0, 0, 0]))[0]),
                 output_tokens=int(v[1]),
                 cached_input_tokens=int(v[2]),
                 cost_usd=float(v[3]),
                 runs=int(v[4]),
+                unmeasured_runs=int(v[5]),
             )
             for s in starts
         ]
@@ -218,8 +231,60 @@ async def series(
                     cached_input_tokens=sum(b.cached_input_tokens for b in buckets),
                     cost_usd=sum(b.cost_usd for b in buckets),
                     runs=sum(b.runs for b in buckets),
+                    unmeasured_runs=sum(b.unmeasured_runs for b in buckets),
                 ),
                 buckets=buckets,
             )
         )
     return out
+
+
+# -- quota status ---------------------------------------------------------------
+
+# Providers that expose no quota Argus may read, however the account is used.
+_NO_QUOTA_PROVIDERS = frozenset({claude_auth.PROVIDER, cursor_auth.PROVIDER})
+
+
+async def quota_status(
+    conn: aiosqlite.Connection,
+    account: dict,
+    snapshots: list[QuotaWindow],
+    now: datetime,
+) -> QuotaStatus:
+    """Do we know this account's quota? Provider snapshots first, then local
+    estimates against `token_limits`; otherwise unknown with the reason."""
+    if snapshots:
+        return QuotaStatus(state="known")
+    limits = json.loads(account["token_limits"]) if account["token_limits"] else {}
+    if limits:
+        windows = []
+        for period, hours in PERIOD_HOURS.items():
+            if period not in limits:
+                continue
+            async with conn.execute(
+                "SELECT coalesce(sum(coalesce(input_tokens, 0)"
+                " + coalesce(output_tokens, 0)), 0) FROM account_usage"
+                " WHERE account_id = ? AND measurement = 'measured' AND at > ?",
+                (account["id"], ts(now - timedelta(hours=hours))),
+            ) as cur:
+                row = await cur.fetchone()
+                used = int(row[0]) if row else 0
+            limit = int(limits[period])
+            windows.append(
+                QuotaStatusWindow(
+                    period=period,  # ty: ignore[invalid-argument-type]
+                    limit=limit,
+                    used=used,
+                    remaining=max(limit - used, 0),
+                    used_percent=min(round(used / limit * 100, 1), 100.0),
+                )
+            )
+        return QuotaStatus(state="known", windows=windows)
+    async with conn.execute(
+        "SELECT 1 FROM account_usage WHERE account_id = ? LIMIT 1", (account["id"],)
+    ) as cur:
+        if await cur.fetchone() is None:
+            return QuotaStatus(state="unknown", reason="no_usage_records")
+    if account["kind"] == "api_key" or account["provider"] in _NO_QUOTA_PROVIDERS:
+        return QuotaStatus(state="unknown", reason="provider_does_not_expose")
+    return QuotaStatus(state="unknown", reason="window_not_configured")

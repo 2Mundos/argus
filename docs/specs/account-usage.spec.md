@@ -60,6 +60,14 @@ scope (orchestrator, admin), as `GET /api/accounts` is. There is no MCP tool yet
 - The body carries:
   - `input_tokens`, `output_tokens`, `cached_input_tokens`;
   - `model`, `engine`, `role`, `cost_usd`, `task_id`;
+  - optional `run_key` (at most 200 characters; the client builds it from
+    task, agent, engine and start): a repeated report of the same key for the
+    account returns `204` and adds no row. Without a key every report is a row;
+  - `measurement`: `measured` (default) or `not_reported`. A `not_reported` run
+    happened but the engine gave no figures, so every token and cost field must
+    be null. A `measured` report needs at least one of the token or cost
+    fields. Both rules are validation errors: a missing figure is never
+    stored as 0;
   - optional `rate_limits: [{window_minutes | pool, used_percent, resets_at,
     exhausted_until}]`.
 - `result.usage` on task completion maps to the same insert.
@@ -104,8 +112,25 @@ scope (orchestrator, admin), as `GET /api/accounts` is. There is no MCP tool yet
 
 ## 3.5 Read API
 
-- `GET /api/accounts` gains `quota: [...]`, plus `cached_input_tokens` and
-  `runs` in its usage totals.
+- `GET /api/accounts` gains `quota: [...]`, plus `cached_input_tokens`,
+  `runs` and `unmeasured_runs` in its usage totals. `runs` counts every row,
+  `unmeasured_runs` the `not_reported` ones; tokens and cost sum measured rows
+  only. The series totals and buckets carry the same two counts.
+- Accounts gain `token_limits` (create and update API): an optional object of
+  positive integers under `5h`, `24h`, `7d`, the most total (input + output)
+  tokens the account may spend in that rolling window. Null clears it.
+- The account read model carries `quota_status`:
+  `{state: known|unknown, reason, windows: [{period, limit, used, remaining,
+  used_percent, source: "estimated"}]}`. The first rule that applies wins:
+  1. provider snapshots exist in `quota`: `known` (`windows` may be empty; the
+     snapshots are in `quota`);
+  2. `token_limits` is set: `known`, with `windows` computed from the local
+     rolling sums of measured rows (`estimated`);
+  3. the account has no usage rows: `unknown`, `no_usage_records`;
+  4. an API-key account, or provider `anthropic` or `cursor`:
+     `unknown`, `provider_does_not_expose`;
+  5. otherwise `unknown`, `window_not_configured`.
+  No figure is ever invented: `unknown` has no windows.
 - `GET /api/accounts/usage?from&to&bucket=hour|day&tz=<IANA>[&account_id]`
   returns totals and a time series per account.
   - Buckets follow the viewer's timezone, so "Today" matches their clock.
@@ -145,6 +170,57 @@ scope (orchestrator, admin), as `GET /api/accounts` is. There is no MCP tool yet
 - `argus_account_quota_used_percent{provider,account,window}`, for windows
   with a percentage.
 
+## 3.8 Worker reporting (`argus-delegate`)
+
+- **What is parsed.** After every executor attempt, `engines/usage.mjs`
+  `parseUsage(executor, stdout)` reads only what the CLI printed:
+  - `claude`: the result object; tokens are summed over `modelUsage` (helper
+    models included, matching `total_cost_usd`), else the top-level `usage`;
+    `num_turns` is the turn count. Verified against a real result.
+  - `codex`: `turn.completed` events, summed across turns. **Synthetic,
+    unverified** (documented shape, no real sample).
+  - `agent` (Cursor): the result object's `usage` (`inputTokens`,
+    `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`). **Synthetic,
+    unverified.**
+  - `opencode`: `step_finish` events, `tokens {input, output, cache {read,
+    write}}` and `cost`, summed. **Synthetic, unverified.**
+- **One field rule for every executor.** `input_tokens` is the prompt tokens
+  not served from cache (fresh input plus cache-creation tokens),
+  `cached_input_tokens` is cache-read tokens, and the two never overlap
+  (Codex's `input_tokens` includes its cached part, so the cached part is
+  subtracted). `cost_usd` is the CLI's own figure or null; it is never
+  computed.
+- **No figures, no numbers.** Missing input or output tokens, unparseable
+  output, or an unknown shape give `measurement: "not_reported"` with a
+  reason code and null figures. An absent cache field counts as 0 only when
+  input and output are present.
+- **`run_key`** is `r1:<task_id>:<agent_id>:<engine>:<executor>:<started_at>`,
+  each part reduced to `[A-Za-z0-9._-]` (others become `_`; a missing part is
+  `none`), or `r1:<sha256>` when longer than 200 characters. `agent_id` is
+  `ARGUS_AGENT_ID` or the hostname. It holds identifiers only. Every model
+  attempt is its own run, with its own start time and key.
+- **Spool file.** Always, `<out>/usage-<first 16 hex of sha256(run_key)>.json`
+  holds `{account_id, payload}`, the exact body that is (or would be) sent, so
+  a missed report can be replayed; the key makes a replay idempotent.
+- **Best-effort POST.** Only when `ARGUS_URL` and `ARGUS_AGENT_TOKEN` are set
+  and the pinned task context (`argus-model-policy.json`) carries
+  `executor_account_id`. The body is `{task_id, model, engine, role:
+  "executor", measurement, input_tokens, output_tokens, cached_input_tokens,
+  cost_usd, run_key}`, where `engine` is the executor CLI that ran. The token
+  is only in the `Authorization` header and never in the body, the spool file,
+  the report or the logs. The call has a 5 s timeout; on any failure the
+  delegate writes one line to stderr and goes on. It never throws and never
+  changes its exit code.
+- **Report fields.** The JSON report (and each entry of `attempts`) gains
+  `usage`, `run_key`, `usage_spool` and `usage_report: {status:
+  sent|skipped|failed, reason}`. `skipped` reasons: `no_account_id`,
+  `no_api_env`; `failed` reasons: `http_<status>` or the error name.
+- **Context keys.** The host pins `engine_account_id` and
+  `executor_account_id` (the lease's `account_id`, or null). Without a
+  separate executor lease the executor account is the engine's, as for
+  `executor_account_provider`. The delegate always acts as role `executor`;
+  `engine_account_id` is for a harness-side reporter.
+
 # 4. Open Questions
 
 - **Claude quota.** Only an undocumented OAuth usage endpoint exists. It stays
@@ -166,13 +242,16 @@ scope (orchestrator, admin), as `GET /api/accounts` is. There is no MCP tool yet
 
 # 6. Implementation Consequences
 
-- Migration `0015_account_usage.sql`. Core models in `argus_core.accounts`.
+- Migrations `0015_account_usage.sql` and `0019_account_usage_runs.sql`
+  (`run_key` with a partial unique index, `measurement`, `token_limits`). Core models in `argus_core.accounts`.
 - `accounts/service.py` (ingest, quota upsert, aggregation),
   `accounts/quota_probe.py` (the probe and its loop), and routes.
 - Metrics in `ops.py`. `overview.quota_measured` becomes true once any account
   has a snapshot.
 - Dashboard `views/Accounts.tsx`, plus `charts.tsx`, `providerIcons.tsx` and
   `usage.ts` (pure helpers, unit-tested).
+- NanoClaw side: `engines/usage.mjs`, `argus-delegate.mjs` (§3.8) and the
+  context keys pinned by `argus.ts`.
 - Follow-ups:
-  - NanoClaw executors report usage and Cursor pool exhaustion;
+  - NanoClaw executors report Cursor pool exhaustion;
   - a NanoClaw harness patch forwards the main engine's usage and rate limits.

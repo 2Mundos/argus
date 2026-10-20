@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  allUnmeasured,
   hasModelUsage,
+  parseTokenLimits,
   poolState,
   type QuotaWindow,
   quotaFull,
+  quotaUnknownLabel,
   tokens,
+  unmeasuredNote,
   windowLabel,
   windowQuery,
 } from "./usage";
@@ -75,5 +79,37 @@ describe("formatting", () => {
   it("leaves repository accounts out of usage", () => {
     expect(hasModelUsage("gitea")).toBe(false);
     expect(hasModelUsage("cursor")).toBe(true);
+  });
+});
+
+describe("quota status and measurement helpers", () => {
+  it("labels every unknown reason and never leaves it mute", () => {
+    expect(quotaUnknownLabel({ reason: "no_usage_records" })).toBe("No usage reported yet");
+    expect(quotaUnknownLabel({ reason: "provider_does_not_expose" })).toBe(
+      "Provider does not expose quota",
+    );
+    expect(quotaUnknownLabel({ reason: "window_not_configured" })).toBe(
+      "No quota window configured",
+    );
+    expect(quotaUnknownLabel({ reason: null })).toBe("Quota unknown");
+  });
+
+  it("counts runs without measurement", () => {
+    expect(unmeasuredNote(0)).toBeNull();
+    expect(unmeasuredNote(undefined)).toBeNull();
+    expect(unmeasuredNote(1)).toBe("1 run without measurement");
+    expect(unmeasuredNote(3)).toBe("3 runs without measurement");
+    expect(allUnmeasured({ runs: 3, unmeasured_runs: 3 })).toBe(true);
+    expect(allUnmeasured({ runs: 3, unmeasured_runs: 1 })).toBe(false);
+    expect(allUnmeasured({ runs: 0, unmeasured_runs: 0 })).toBe(false);
+    expect(allUnmeasured({})).toBe(false);
+  });
+
+  it("parses token limits: positive integers only, all empty clears", () => {
+    const empty = { "5h": "", "24h": "", "7d": "" };
+    expect(parseTokenLimits(empty)).toEqual({ limits: null });
+    expect(parseTokenLimits({ ...empty, "24h": " 2000 " })).toEqual({ limits: { "24h": 2000 } });
+    for (const bad of ["0", "-1", "1.5", "abc"])
+      expect(parseTokenLimits({ ...empty, "5h": bad })).toHaveProperty("error");
   });
 });

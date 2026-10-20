@@ -19,6 +19,7 @@ const account = (id: string, name: string, provider: string) => ({
   active_leases: 0,
   usage_24h: usage,
   usage_total: usage,
+  quota_status: { state: "unknown", reason: "no_usage_records", windows: [] },
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 });

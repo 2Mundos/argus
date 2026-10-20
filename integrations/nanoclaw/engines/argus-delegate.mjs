@@ -9,7 +9,8 @@ import { spawn, spawnSync } from "node:child_process";
 // EXECUTOR is claude | codex | opencode | agent. The prompt comes from stdin or
 // --prompt-file. The last line on stdout is one JSON object: the identity of the
 // engine that delegated and the executor that did the work, how it ended, and
-// the artifacts. Exit codes: 0 ok, 1 executor failed, 64 usage, 77 cwd not
+// the artifacts, and the run's token usage (`usage`, `run_key`, `usage_report`; see
+// usage.mjs). Exit codes: 0 ok, 1 executor failed, 64 usage, 77 cwd not
 // allowed, 78 no credentials (nothing was run, nothing else was tried), 124
 // timeout, 127 executor not installed.
 //
@@ -22,6 +23,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createSink, createTracker, gitHead, waitingInput } from "./milestones.mjs";
 import { loadPolicy, selectModel } from "./model-policy.mjs";
+import { parseUsage, runKey, runKeyHash } from "./usage.mjs";
 
 export const EXECUTORS = ["claude", "codex", "opencode", "agent"];
 const KILL_GRACE_MS = 5000;
@@ -63,6 +65,7 @@ export async function giteaCiProbe(e) {
     return undefined;
   }
 }
+const USAGE_POST_TIMEOUT_MS = 5000;
 
 /** Prepended in --read-only mode; CLIs differ in real enforcement (see report field). */
 export const READ_ONLY_PROMPT_PREFIX =
@@ -583,6 +586,52 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
   finish(outcome.exit, { ...outcome.report, attempts });
 }
 
+/** The body of POST /api/accounts/{id}/usage: identifiers and figures only, never a credential. */
+export function usagePayload({ taskId, model, engine, role, usage, key }) {
+  const measured = usage.measurement === "measured";
+  return {
+    task_id: taskId ?? null,
+    model: model ? String(model).slice(0, 100) : null,
+    engine: engine ? String(engine).slice(0, 50) : null,
+    role,
+    measurement: usage.measurement,
+    input_tokens: measured ? usage.input_tokens : null,
+    output_tokens: measured ? usage.output_tokens : null,
+    cached_input_tokens: measured ? usage.cached_input_tokens : null,
+    cost_usd: measured ? usage.cost_usd : null,
+    run_key: key,
+  };
+}
+
+/**
+ * Best-effort report to Argus. Never throws, never changes the exit code; the reason is
+ * a short code (HTTP status or error name), never a message that could echo a header.
+ */
+export async function reportUsage({ e, accountId, payload, fetchImpl = fetch }) {
+  const base = (e.ARGUS_URL ?? "").trim();
+  const token = (e.ARGUS_AGENT_TOKEN ?? "").trim();
+  if (!accountId) return { status: "skipped", reason: "no_account_id" };
+  if (!base || !token) return { status: "skipped", reason: "no_api_env" };
+  try {
+    const res = await fetchImpl(
+      new URL(`/api/accounts/${encodeURIComponent(accountId)}/usage`, base),
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(USAGE_POST_TIMEOUT_MS),
+      },
+    );
+    if (res.ok) return { status: "sent", reason: res.status === 204 ? "recorded" : "ok" };
+    process.stderr.write(`argus-delegate: usage report failed (http_${res.status})\n`);
+    return { status: "failed", reason: `http_${res.status}` };
+  } catch (err) {
+    const reason = String(err?.name || "error").replace(/[^A-Za-z0-9_]/g, "_");
+    process.stderr.write(`argus-delegate: usage report failed (${reason})\n`);
+    return { status: "failed", reason };
+  }
+}
+
 async function runAttempt(
   executor,
   opts,
@@ -694,6 +743,29 @@ async function runAttempt(
   const tail = fs.readFileSync(tailSource, "utf8").slice(-TAIL_CHARS);
   const jsonFail = !timedOut && code === 0 ? executorJsonFailure(executor, stdoutText) : null;
   const exit = timedOut ? 124 : interrupted || jsonFail || code !== 0 ? 1 : 0;
+  const startedAt = new Date(started).toISOString();
+  const taskId = snapshot.context?.task_id ?? null;
+  const usage = parseUsage(executor, stdoutText);
+  const key = runKey({
+    taskId,
+    agentId: e.ARGUS_AGENT_ID || os.hostname(),
+    engine: identity.engine,
+    executor,
+    startedAt,
+  });
+  // The delegate always runs as the executor role: it reports against the executor account.
+  const accountId = snapshot.context?.executor_account_id ?? null;
+  const payload = usagePayload({
+    taskId,
+    model: usage.model ?? selection.configured_model,
+    engine: executor,
+    role: "executor",
+    usage,
+    key,
+  });
+  const spoolFile = path.join(out, `usage-${runKeyHash(key)}.json`);
+  fs.writeFileSync(spoolFile, JSON.stringify({ account_id: accountId, payload }, null, 2) + "\n");
+  const usageReport = await reportUsage({ e, accountId, payload });
   const report = {
     ...identity,
     ...evidence,
@@ -710,6 +782,10 @@ async function runAttempt(
     interrupted,
     duration_ms: Date.now() - started,
     artifacts,
+    usage,
+    run_key: key,
+    usage_spool: spoolFile,
+    usage_report: usageReport,
     tail,
     stderr_tail: fs.readFileSync(stderrFile, "utf8").slice(-TAIL_CHARS),
     ...(jsonFail ? { executor_error: jsonFail } : {}),

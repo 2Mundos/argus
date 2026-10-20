@@ -1741,9 +1741,14 @@ export interface components {
              * @default []
              */
             quota?: components["schemas"]["QuotaWindow"][];
+            quota_status: components["schemas"]["QuotaStatus"];
             /** Secret Ref */
             secret_ref: string;
             state: components["schemas"]["AccountState"];
+            /** Token Limits */
+            token_limits?: {
+                [key: string]: number;
+            } | null;
             /**
              * Updated At
              * Format: date-time
@@ -1789,6 +1794,10 @@ export interface components {
             provider: string;
             /** Secret Ref */
             secret_ref?: string | null;
+            /** Token Limits */
+            token_limits?: {
+                [key: string]: number;
+            } | null;
         };
         /**
          * AccountKind
@@ -1841,6 +1850,10 @@ export interface components {
             name?: string | null;
             /** Priority */
             priority?: number | null;
+            /** Token Limits */
+            token_limits?: {
+                [key: string]: number;
+            } | null;
         };
         /** AccountUsage */
         AccountUsage: {
@@ -2830,6 +2843,12 @@ export interface components {
             attempt: number;
             /** Error */
             error: string;
+            /**
+             * Reason
+             * @default worker_fail
+             * @enum {string}
+             */
+            reason?: "worker_fail" | "channel_error" | "provider_failure";
         };
         /** FallbackResult */
         FallbackResult: {
@@ -3916,6 +3935,46 @@ export interface components {
             /** Window Minutes */
             window_minutes?: number | null;
         };
+        /**
+         * QuotaStatus
+         * @description Whether Argus knows this account's quota, and if not, why (never a 0/100).
+         */
+        QuotaStatus: {
+            /** Reason */
+            reason?: ("no_usage_records" | "provider_does_not_expose" | "window_not_configured") | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "known" | "unknown";
+            /**
+             * Windows
+             * @default []
+             */
+            windows?: components["schemas"]["QuotaStatusWindow"][];
+        };
+        /** QuotaStatusWindow */
+        QuotaStatusWindow: {
+            /** Limit */
+            limit: number;
+            /**
+             * Period
+             * @enum {string}
+             */
+            period: "5h" | "24h" | "7d";
+            /** Remaining */
+            remaining: number;
+            /**
+             * Source
+             * @default estimated
+             * @constant
+             */
+            source?: "estimated";
+            /** Used */
+            used: number;
+            /** Used Percent */
+            used_percent: number;
+        };
         /** QuotaWindow */
         QuotaWindow: {
             /** Exhausted Until */
@@ -4712,6 +4771,11 @@ export interface components {
              * Format: date-time
              */
             start: string;
+            /**
+             * Unmeasured Runs
+             * @default 0
+             */
+            unmeasured_runs?: number;
         };
         /**
          * UsageReport
@@ -4726,6 +4790,12 @@ export interface components {
             engine?: string | null;
             /** Input Tokens */
             input_tokens?: number | null;
+            /**
+             * Measurement
+             * @default measured
+             * @enum {string}
+             */
+            measurement?: "measured" | "not_reported";
             /** Model */
             model?: string | null;
             /** Output Tokens */
@@ -4737,6 +4807,8 @@ export interface components {
             rate_limits?: components["schemas"]["QuotaReport"][];
             /** Role */
             role?: ("engine" | "executor") | null;
+            /** Run Key */
+            run_key?: string | null;
             /** Task Id */
             task_id?: string | null;
         };
@@ -4831,6 +4903,11 @@ export interface components {
              * @default 0
              */
             runs?: number;
+            /**
+             * Unmeasured Runs
+             * @default 0
+             */
+            unmeasured_runs?: number;
         };
         /**
          * Fact

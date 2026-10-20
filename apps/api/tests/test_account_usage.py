@@ -21,7 +21,7 @@ from argus_api.errors import ValidationFailedError
 from argus_api.events import Event
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
-from argus_core.accounts import AccountCreate, QuotaReport, UsageReport
+from argus_core.accounts import AccountCreate, AccountUpdate, QuotaReport, UsageReport
 from fastapi.testclient import TestClient
 from prometheus_client.parser import text_string_to_metric_families
 from pydantic import ValidationError
@@ -40,14 +40,24 @@ async def agent(db: Database) -> None:
 
 
 async def add(
-    db: Database, store: MemorySecretStore, name: str, provider: str, credential: dict
+    db: Database,
+    store: MemorySecretStore,
+    name: str,
+    provider: str,
+    credential: dict,
+    kind: str = "api_key",
 ) -> str:
     await store.put(name, credential)
     async with db.write() as tx:
         account = await accounts.create_account(
             tx,
             name,
-            AccountCreate(name=name, provider=provider, secret_ref=f"sops:{name}"),
+            AccountCreate(
+                name=name,
+                provider=provider,
+                kind=kind,  # ty: ignore[invalid-argument-type]
+                secret_ref=f"sops:{name}",
+            ),
             f"sops:{name}",
             "admin:test",
             store,
@@ -56,6 +66,9 @@ async def add(
 
 
 async def report(db: Database, account_id: str, **kw) -> None:
+    figures = ("input_tokens", "output_tokens", "cached_input_tokens", "cost_usd")
+    if not any(k in kw for k in figures):
+        kw.setdefault("measurement", "not_reported")  # e.g. a quota-only report
     async with db.write() as tx:
         await accounts.record_usage(tx, account_id, A, UsageReport(**kw))
 
@@ -409,3 +422,172 @@ async def test_metrics_report_tokens_and_quota(
         ]
         == 25
     )
+
+
+# -- run keys, measurement state, quota status ---------------------------------------
+
+
+async def held(
+    db: Database,
+    store: MemorySecretStore,
+    provider: str = "openai",
+    kind: str = "subscription",
+) -> str:
+    """An account of `provider` leased by A."""
+    c = await add(db, store, f"{provider}-x", provider, chatgpt_login(), kind)
+    async with db.write() as tx:
+        await accounts.lease(tx, A, [provider], store)
+    return c
+
+
+async def usage_of(db: Database, clock: FakeClock, account_id: str):
+    async with db.read() as conn:
+        return await accounts.get_account(conn, account_id, clock.now)
+
+
+async def test_a_repeated_run_key_adds_no_row(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c = await held(db, store)
+    for _ in range(2):
+        await report(db, c, input_tokens=10, output_tokens=5, run_key="t1:a:codex:0")
+    account = await usage_of(db, clock, c)
+    assert (account.usage_total.runs, account.usage_total.input_tokens) == (1, 10)
+
+
+async def test_distinct_run_keys_are_separate_rows(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c = await held(db, store)
+    for i in range(3):  # multi-turn / repeated runs of one task
+        await report(
+            db, c, task_id="t1", input_tokens=10, output_tokens=i, run_key=f"t1:a:e:{i}"
+        )
+    await report(db, c, input_tokens=1, output_tokens=1)  # no key: never deduped
+    await report(db, c, input_tokens=1, output_tokens=1)
+    total = (await usage_of(db, clock, c)).usage_total
+    assert (total.runs, total.input_tokens, total.output_tokens) == (5, 32, 5)
+
+
+async def test_not_reported_runs_count_but_add_no_tokens(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c = await held(db, store)
+    await report(db, c, input_tokens=10, output_tokens=5)
+    await report(db, c, measurement="not_reported", run_key="k")
+    account = await usage_of(db, clock, c)
+    for u in (account.usage_24h, account.usage_total):
+        assert (u.runs, u.unmeasured_runs, u.input_tokens, u.output_tokens) == (
+            2,
+            1,
+            10,
+            5,
+        )
+    async with db.read() as conn:
+        s = await usage.series(
+            conn,
+            clock.now - timedelta(hours=2),
+            clock.now + timedelta(hours=1),
+            "hour",
+            ZoneInfo("UTC"),
+            [c],
+        )
+    t = s[0].totals
+    assert (t.runs, t.unmeasured_runs, t.input_tokens) == (2, 1, 10)
+    assert sum(b.unmeasured_runs for b in s[0].buckets) == 1
+
+
+def test_measurement_validation() -> None:
+    with pytest.raises(ValidationError):  # nothing measured, nothing admitted
+        UsageReport()
+    with pytest.raises(ValidationError):
+        UsageReport(measurement="not_reported", input_tokens=0)
+    with pytest.raises(ValidationError):
+        UsageReport(measurement="not_reported", cost_usd=0.1)
+    with pytest.raises(ValidationError):
+        UsageReport(input_tokens=1, run_key="x" * 201)
+    assert UsageReport(measurement="not_reported").input_tokens is None
+    assert UsageReport(cost_usd=0.0).measurement == "measured"
+    for bad in ({"6h": 5}, {"5h": 0}):
+        with pytest.raises(ValidationError):
+            AccountCreate(name="n", provider="p", secret_ref="sops:n", token_limits=bad)
+
+
+async def test_quota_status_reasons(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    codex = await add(db, store, "codex", "openai", chatgpt_login(), "subscription")
+    claude = await add(db, store, "claude", "anthropic", {"x": 1}, "subscription")
+    cursor = await add(db, store, "cursor", "cursor", {"api_key": "k"}, "subscription")
+    apikey = await add(db, store, "oai-key", "openai", {"x": 1}, "api_key")
+    ids = (codex, claude, cursor, apikey)
+
+    async def status(account_id: str):
+        return (await usage_of(db, clock, account_id)).quota_status
+
+    for a in ids:  # nothing reported yet: never a guessed figure
+        s = await status(a)
+        assert (s.state, s.reason, s.windows) == ("unknown", "no_usage_records", [])
+    async with db.write() as tx:
+        for a in ids:
+            await usage.insert_usage(tx, a, A, None, input_tokens=1)
+    assert (await status(codex)).reason == "window_not_configured"
+    for a in (claude, cursor, apikey):
+        assert (await status(a)).reason == "provider_does_not_expose"
+    # a provider snapshot makes it known, with no local windows invented
+    async with db.write() as tx:
+        await usage.upsert_quota(
+            tx, codex, [QuotaReport(window_minutes=300, used_percent=5)], "polled", "t"
+        )
+    s = await status(codex)
+    assert (s.state, s.reason, s.windows) == ("known", None, [])
+
+
+async def test_token_limits_estimate_rolling_windows(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c = await held(db, store)
+    async with db.write() as tx:
+        await accounts.update_account(
+            tx,
+            c,
+            AccountUpdate(token_limits={"5h": 1000, "7d": 10_000}),
+            "admin:test",
+        )
+    await report(db, c, input_tokens=100, output_tokens=200, cached_input_tokens=999)
+    await report(db, c, measurement="not_reported")
+    clock.advance(6 * 3600)  # first row is now outside 5h, inside 7d
+    await report(db, c, input_tokens=50, output_tokens=50)
+    acc = await usage_of(db, clock, c)
+    s = acc.quota_status
+    assert (s.state, s.reason) == ("known", None)
+    w = {x.period: x for x in s.windows}
+    assert (w["5h"].used, w["5h"].remaining, w["5h"].used_percent) == (100, 900, 10.0)
+    assert (w["7d"].used, w["7d"].remaining, w["7d"].used_percent) == (400, 9600, 4.0)
+    assert {x.source for x in s.windows} == {"estimated"}
+    assert acc.token_limits == {"5h": 1000, "7d": 10_000}
+    async with db.write() as tx:  # null clears; usage exists -> unknown reason
+        await accounts.update_account(
+            tx, c, AccountUpdate(token_limits=None), "admin:test"
+        )
+    assert (await usage_of(db, clock, c)).quota_status.state == "unknown"
+
+
+async def test_totals_equal_the_sum_of_rows(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c = await held(db, store)
+    for i in range(4):
+        await report(db, c, input_tokens=i + 1, output_tokens=2 * i, cost_usd=0.5)
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT sum(input_tokens), sum(output_tokens), sum(cost_usd), count(*)"
+            " FROM account_usage WHERE account_id = ?",
+            (c,),
+        ) as cur,
+    ):
+        i, o, cost, n = tuple(await cur.fetchone())
+    acc = await usage_of(db, clock, c)
+    for u in (acc.usage_24h, acc.usage_total):
+        assert (u.input_tokens, u.output_tokens, u.cost_usd, u.runs) == (i, o, cost, n)

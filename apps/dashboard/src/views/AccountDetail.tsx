@@ -6,12 +6,13 @@ import {
   hasModelUsage,
   tokens,
   totalTokens,
+  unmeasuredNote,
   viewerTimeZone,
   WINDOWS,
   type WindowId,
   windowQuery,
 } from "../usage";
-import { QuotaMeter, StackedBars } from "./charts";
+import { QuotaMeter, QuotaStatusView, StackedBars } from "./charts";
 import { ProviderMark, StateIcon } from "./providerIcons";
 
 /** One account: quota per window and tokens over a chosen time window
@@ -88,7 +89,7 @@ export function AccountDetail(props: { account: Account; onClose: () => void }) 
               The provider's figures, with where they came from and when.
             </p>
             {(a.quota ?? []).length === 0 ? (
-              <p className="muted">Unknown: no figure has been reported or read yet.</p>
+              <QuotaStatusView status={a.quota_status} />
             ) : (
               <div className="quota-list">
                 {(a.quota ?? []).map((q) => (
@@ -156,6 +157,12 @@ export function AccountDetail(props: { account: Account; onClose: () => void }) 
                     </div>
                   )}
                 </dl>
+                {unmeasuredNote(usage.totals.unmeasured_runs) && (
+                  <p className="muted small">
+                    {unmeasuredNote(usage.totals.unmeasured_runs)}: the engine gave no figures, so
+                    they are not counted in the tokens above.
+                  </p>
+                )}
                 <StackedBars buckets={usage.buckets} bucket={data.bucket} tz={tz} />
               </>
             )}

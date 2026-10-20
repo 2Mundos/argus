@@ -4,6 +4,7 @@ See docs/specs/worker-lifecycle.spec.md 3.2 and 3.3.
 """
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -41,6 +42,7 @@ from argus_api.errors import (
 from argus_api.events import record
 from argus_api.kinds import service as kinds
 
+log = logging.getLogger(__name__)
 S = TaskState
 _JSON_FIELDS = ("acceptance", "input", "required_capabilities")
 
@@ -347,15 +349,28 @@ async def report_progress(
     return await get_task(tx.conn, task_id)
 
 
-async def fail(tx: Tx, agent_id: str, task_id: str, attempt: int, error: str) -> Task:
-    row = await _owned(tx, task_id, attempt, agent_id)
+async def fail(
+    tx: Tx,
+    agent_id: str,
+    task_id: str,
+    attempt: int,
+    error: str,
+    reason: str = "worker_fail",
+) -> Task:
+    """Fail the attempt with the worker's own text.
+
+    The one worker write accepted after the lease deadline (3.3): while the task
+    is still claimed by this agent at this attempt, nobody else can hold it, and
+    the fail is exactly the expiry the reaper is about to apply, with a better
+    `error`. Without this a FAIL sent just after a lapse would be lost."""
+    row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
     await _apply(
         tx,
         row,
         Action.FAIL,
         f"agent:{agent_id}",
         set_={"error": error, "failures": row["failures"] + 1},
-        data={"error": error},
+        data={"error": error, "reason": reason},
     )
     return await get_task(tx.conn, task_id)
 
@@ -581,39 +596,87 @@ async def review(
 # -- system ---------------------------------------------------------------------
 
 
-async def expire_leases(tx: Tx) -> list[str]:
-    """Expire every lease past its deadline, whether or not its agent is alive."""
-    return await _expire_where(tx, "lease_expires_at <= ?", ts(tx.now), "lease_expired")
+async def expire_leases(tx: Tx, failed: list[str] | None = None) -> list[str]:
+    """Expire every lease past its deadline, whether or not its agent is alive.
+
+    With `failed`, a row that cannot be expired is rolled back alone, logged and
+    appended there instead of aborting the others (3.4)."""
+    return await _expire_where(
+        tx, "lease_expires_at <= ?", ts(tx.now), "lease_expired", failed
+    )
 
 
-async def expire_timeouts(tx: Tx) -> list[str]:
+async def expire_timeouts(tx: Tx, failed: list[str] | None = None) -> list[str]:
     """Expire every attempt past its wall-clock deadline, however healthy its
     heartbeats: a holder that is alive but never finishes must not hold a task
     forever. It counts as a failure and retries until max_attempts."""
-    return await _expire_where(tx, "timeout_at <= ?", ts(tx.now), "timeout")
+    return await _expire_where(tx, "timeout_at <= ?", ts(tx.now), "timeout", failed)
 
 
 async def expire_agent_leases(tx: Tx, agent_id: str) -> list[str]:
-    """Expire every lease an agent holds, e.g. because it was lost or left."""
+    """Expire every lease an agent holds, e.g. because it was lost or left.
+
+    All or nothing: the caller ends the agent in the same savepoint."""
     return await _expire_where(tx, "assignee_agent_id = ?", agent_id, "agent_ended")
 
 
-async def _expire_where(tx: Tx, condition: str, param: str, reason: str) -> list[str]:
+def _expiry_error(row: aiosqlite.Row, reason: str) -> str:
+    holder = row["assignee_agent_id"]
+    match reason:
+        case "lease_expired":
+            return f"lease expired at {row['lease_expires_at']} (holder {holder})"
+        case "timeout":
+            return f"attempt timed out at {row['timeout_at']} (holder {holder})"
+        case _:
+            return f"holder {holder} ended; its lease was released"
+
+
+async def _expire_where(
+    tx: Tx,
+    condition: str,
+    param: str,
+    reason: str,
+    failed: list[str] | None = None,
+) -> list[str]:
     async with tx.conn.execute(
         f"SELECT * FROM tasks WHERE state = 'claimed' AND {condition} ORDER BY id",  # noqa: S608
         (param,),
     ) as cur:
         rows = await cur.fetchall()
+    expired: list[str] = []
     for row in rows:
-        await _apply(
-            tx,
-            row,
-            Action.EXPIRE,
-            "system",
-            set_={"failures": row["failures"] + 1},
-            data={"agent_id": row["assignee_agent_id"], "reason": reason},
-        )
-    return [r["id"] for r in rows]
+        error = _expiry_error(row, reason)
+        try:
+            async with tx.savepoint():
+                await _apply(
+                    tx,
+                    row,
+                    Action.EXPIRE,
+                    "system",
+                    set_={
+                        "failures": row["failures"] + 1,
+                        "error": error,
+                        "progress_message": (
+                            f"attempt {row['attempt']} ended: "
+                            f"{reason.replace('_', ' ')};"
+                            f" {'requeued' if row['failures'] + 1 < row['max_attempts'] else 'failed'}"
+                        ),
+                        "progress_percent": None,
+                    },
+                    data={
+                        "agent_id": row["assignee_agent_id"],
+                        "reason": reason,
+                        "error": error,
+                    },
+                )
+        except Exception:
+            if failed is None:
+                raise
+            log.exception("could not expire task %s (%s)", row["id"], reason)
+            failed.append(row["id"])
+            continue
+        expired.append(row["id"])
+    return expired
 
 
 # -- internals ------------------------------------------------------------------
@@ -624,8 +687,12 @@ async def check_lease(tx: Tx, task_id: str, attempt: int, agent_id: str) -> None
     await _owned(tx, task_id, attempt, agent_id)
 
 
-async def _owned(tx: Tx, task_id: str, attempt: int, agent_id: str) -> aiosqlite.Row:
-    """Check the caller holds the current, unexpired lease (3.3), inside `tx`."""
+async def _owned(
+    tx: Tx, task_id: str, attempt: int, agent_id: str, *, allow_expired: bool = False
+) -> aiosqlite.Row:
+    """Check the caller holds the current, unexpired lease (3.3), inside `tx`.
+
+    `allow_expired` skips only the deadline check (see `fail`)."""
     state = await _agent_state(tx.conn, agent_id)
     if state not in LIVE:
         raise LeaseConflictError(
@@ -646,7 +713,7 @@ async def _owned(tx: Tx, task_id: str, attempt: int, agent_id: str) -> aiosqlite
             f" {row['attempt']}; stop working on it",
             code="stale_attempt",
         )
-    if row["lease_expires_at"] <= ts(tx.now):
+    if not allow_expired and row["lease_expires_at"] <= ts(tx.now):
         raise LeaseConflictError(
             f"lease on task {task_id} expired at {row['lease_expires_at']};"
             " stop working on it",

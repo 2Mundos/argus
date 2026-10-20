@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from "react";
 import { GITEA_PROVIDER } from "../accountProviders";
 import { type Account, api, call } from "../api";
+import { parseTokenLimits, TOKEN_LIMIT_PERIODS } from "../usage";
 
 /** Edits registry fields only. The credential is never loaded, shown, or sent
  * from here; it is replaced through Renew credential. */
@@ -17,6 +18,11 @@ export function EditAccount({
   const [priority, setPriority] = useState(String(account.priority));
   const [maxLeases, setMaxLeases] = useState(account.max_leases?.toString() ?? "");
   const [enabled, setEnabled] = useState(account.state !== "disabled");
+  const [limits, setLimits] = useState({
+    "5h": account.token_limits?.["5h"]?.toString() ?? "",
+    "24h": account.token_limits?.["24h"]?.toString() ?? "",
+    "7d": account.token_limits?.["7d"]?.toString() ?? "",
+  });
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
 
@@ -37,7 +43,16 @@ export function EditAccount({
       setError("The lease limit must be a whole number of at least 1, or empty for unlimited.");
       return;
     }
+    const parsedLimits = parseTokenLimits(limits);
+    if ("error" in parsedLimits) {
+      setError(parsedLimits.error);
+      return;
+    }
     const body: Record<string, unknown> = {};
+    const canon = (o: Record<string, number> | null | undefined) =>
+      JSON.stringify(o ? Object.entries(o).sort() : null);
+    if (canon(parsedLimits.limits) !== canon(account.token_limits))
+      body.token_limits = parsedLimits.limits;
     if (name.trim() !== account.name) body.name = name.trim();
     if (nextPriority !== account.priority) body.priority = nextPriority;
     if (limit !== account.max_leases) body.max_leases = limit;
@@ -88,6 +103,23 @@ export function EditAccount({
             />
           </label>
         </div>
+        <fieldset className="row">
+          <legend className="muted small">
+            Token limits (total tokens per rolling window; empty: none). Used to estimate quota left
+            when the provider reports none.
+          </legend>
+          {TOKEN_LIMIT_PERIODS.map((period) => (
+            <label key={period}>
+              {period}
+              <input
+                type="number"
+                min={1}
+                value={limits[period]}
+                onChange={(e) => setLimits({ ...limits, [period]: e.target.value })}
+              />
+            </label>
+          ))}
+        </fieldset>
         <label className="check">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
           Enabled (a disabled account is never leased)

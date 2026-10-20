@@ -4,8 +4,11 @@
 import { relative } from "../format";
 import {
   bucketLabel,
+  type QuotaStatus,
+  type QuotaStatusWindow,
   type QuotaWindow,
   quotaFull,
+  quotaUnknownLabel,
   SOURCE_LABELS,
   tokens,
   totalTokens,
@@ -152,6 +155,44 @@ export function QuotaMeter(props: { q: QuotaWindow; compact?: boolean }) {
           {age}
         </span>
       )}
+    </div>
+  );
+}
+
+/** One locally estimated window (account.quota_status): used of limit, from measured runs only. */
+export function EstimatedWindow(props: { w: QuotaStatusWindow; compact?: boolean }) {
+  const { w, compact } = props;
+  const left = 100 - Math.min(Math.max(w.used_percent, 0), 100);
+  const detail = `${tokens(w.used)} of ${tokens(w.limit)} used · ${tokens(w.remaining)} left · estimated`;
+  return (
+    <div className={`meter ${left <= 0 ? "meter-full" : ""}`} title={detail}>
+      <span className="meter-label">
+        {w.period} <strong>{Math.round(left)}% left</strong>
+      </span>
+      <svg viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true">
+        <rect className="meter-track" width="100" height="6" rx="3" />
+        <rect className="meter-fill" width={left} height="6" rx="3" />
+      </svg>
+      <span className="small muted">
+        {compact ? `${tokens(w.used)} / ${tokens(w.limit)} (est.)` : detail}
+      </span>
+    </div>
+  );
+}
+
+/** Quota state for an account with no provider snapshot: estimated windows, or the reason it is unknown. */
+export function QuotaStatusView(props: { status: QuotaStatus; compact?: boolean }) {
+  const { status, compact } = props;
+  if (status.state === "unknown") {
+    return <span className={compact ? "muted small" : "muted"}>{quotaUnknownLabel(status)}</span>;
+  }
+  const windows = status.windows ?? [];
+  if (windows.length === 0) return null;
+  return (
+    <div className={compact ? "quota-cell" : "quota-list"}>
+      {windows.map((w) => (
+        <EstimatedWindow key={w.period} w={w} compact={compact} />
+      ))}
     </div>
   );
 }

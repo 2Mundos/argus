@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -736,4 +737,186 @@ test("withCliToolsPath adds existing tool dirs to PATH and ignores missing ones"
   assert.equal(withCliToolsPath({ PATH: `${dir}:/usr/bin` }, [dir]).PATH, `${dir}:/usr/bin`);
   fs.rmSync(dir, { recursive: true });
   assert.equal(withCliToolsPath({ PATH: "/usr/bin" }, [dir, "/no/such"]).PATH, "/usr/bin");
+});
+
+/** A local Argus stand-in that records usage POSTs and answers with `status`. */
+async function usageServer(t, status = 204) {
+  const calls = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      calls.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(body) });
+      res.statusCode = status;
+      res.end();
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  t.after(() => server.close());
+  return { calls, url: `http://127.0.0.1:${server.address().port}` };
+}
+
+/** A claude stub that prints the real (trimmed) result fixture, with a pinned executor account. */
+function usageSandbox(t, context = { task_id: "t1", attempt: 1, executor_account_id: "acc-9" }) {
+  const s = sandbox(t);
+  const fixture = path.join(s.dir, "claude-result.json");
+  fs.copyFileSync(new URL("./fixtures/claude-result.json", import.meta.url), fixture);
+  s.fake(
+    "claude",
+    `if [ "$1" = "--version" ]; then echo v; exit 0; fi\ncat >/dev/null; cat ${fixture}`,
+  );
+  const policy = { harness: { codex: ["luna"] }, implementation: { claude: ["sonnet", "opus"] } };
+  const file = path.join(s.dir, "argus-model-policy.json");
+  fs.writeFileSync(file, JSON.stringify(policySnapshot(policy, context)));
+  s.env = { ...s.env, ANTHROPIC_API_KEY: "x", ARGUS_MODEL_POLICY_FILE: file };
+  s.out = path.join(s.dir, "out");
+  return s;
+}
+
+test("usage: the report carries parsed usage and a run_key, and a spool file is always written", async (t) => {
+  const s = usageSandbox(t);
+  const { code, report } = await run(["claude", "--cwd", s.work, "--out", s.out], { env: s.env });
+  assert.equal(code, 0);
+  assert.equal(report.usage.measurement, "measured");
+  assert.equal(report.usage.output_tokens, 18073);
+  assert.match(report.run_key, /^r1:t1:.+:codex:claude:/);
+  assert.deepEqual(report.usage_report, { status: "skipped", reason: "no_api_env" });
+  const spool = JSON.parse(fs.readFileSync(report.usage_spool, "utf8"));
+  assert.equal(path.dirname(report.usage_spool), s.out);
+  assert.equal(spool.account_id, "acc-9");
+  assert.equal(spool.payload.run_key, report.run_key);
+  assert.deepEqual(JSON.parse(fs.readFileSync(report.report_file, "utf8")).usage, report.usage);
+});
+
+test("usage: POSTs to the executor account with the bearer token only in the header", async (t) => {
+  const s = usageSandbox(t);
+  const api = await usageServer(t);
+  const { code, report } = await run(["claude", "--cwd", s.work, "--out", s.out], {
+    env: { ...s.env, ARGUS_URL: api.url, ARGUS_AGENT_TOKEN: "tok-secret-123" },
+  });
+  assert.equal(code, 0);
+  assert.equal(api.calls.length, 1);
+  const [call] = api.calls;
+  assert.equal(call.url, "/api/accounts/acc-9/usage");
+  assert.equal(call.auth, "Bearer tok-secret-123");
+  assert.deepEqual(call.body, {
+    task_id: "t1",
+    model: "claude-sonnet-5-5",
+    engine: "claude",
+    role: "executor",
+    measurement: "measured",
+    input_tokens: 61637,
+    output_tokens: 18073,
+    cached_input_tokens: 1156589,
+    cost_usd: 0.5325657,
+    run_key: report.run_key,
+  });
+  assert.deepEqual(report.usage_report, { status: "sent", reason: "recorded" });
+  for (const text of [
+    JSON.stringify(call.body),
+    JSON.stringify(report),
+    fs.readFileSync(report.usage_spool, "utf8"),
+  ])
+    assert.equal(text.includes("tok-secret-123"), false);
+});
+
+test("usage: a failing or unreachable API never changes the exit code", async (t) => {
+  const s = usageSandbox(t);
+  const api = await usageServer(t, 500);
+  const failed = await run(["claude", "--cwd", s.work, "--out", s.out], {
+    env: { ...s.env, ARGUS_URL: api.url, ARGUS_AGENT_TOKEN: "tok" },
+  });
+  assert.equal(failed.code, 0);
+  assert.deepEqual(failed.report.usage_report, { status: "failed", reason: "http_500" });
+  const down = await run(["claude", "--cwd", s.work, "--out", s.out], {
+    env: { ...s.env, ARGUS_URL: "http://127.0.0.1:1", ARGUS_AGENT_TOKEN: "tok" },
+  });
+  assert.equal(down.code, 0);
+  assert.equal(down.report.usage_report.status, "failed");
+  assert.equal(fs.existsSync(down.report.usage_spool), true);
+});
+
+test("usage: never POSTs without an executor account id", async (t) => {
+  const s = usageSandbox(t, { task_id: "t1", attempt: 1, engine_account_id: "acc-engine" });
+  const api = await usageServer(t);
+  const { report } = await run(["claude", "--cwd", s.work, "--out", s.out], {
+    env: { ...s.env, ARGUS_URL: api.url, ARGUS_AGENT_TOKEN: "tok" },
+  });
+  assert.deepEqual(report.usage_report, { status: "skipped", reason: "no_account_id" });
+  assert.equal(api.calls.length, 0);
+});
+
+test("usage: output without figures is reported not_reported with null figures", async (t) => {
+  const s = sandbox(t);
+  s.fake(
+    "claude",
+    'if [ "$1" = "--version" ]; then echo v; exit 0; fi\ncat >/dev/null; echo \'{"result":"hi"}\'',
+  );
+  const policy = { harness: {}, implementation: { claude: ["sonnet"] } };
+  const file = path.join(s.dir, "policy.json");
+  fs.writeFileSync(
+    file,
+    JSON.stringify(
+      policySnapshot(policy, { task_id: "t2", attempt: 1, executor_account_id: "acc-1" }),
+    ),
+  );
+  const api = await usageServer(t);
+  const { code, report } = await run(
+    ["claude", "--cwd", s.work, "--out", path.join(s.dir, "out")],
+    {
+      env: {
+        ...s.env,
+        ANTHROPIC_API_KEY: "x",
+        ARGUS_MODEL_POLICY_FILE: file,
+        ARGUS_URL: api.url,
+        ARGUS_AGENT_TOKEN: "tok",
+      },
+    },
+  );
+  assert.equal(code, 0);
+  assert.equal(report.usage.measurement, "not_reported");
+  const [call] = api.calls;
+  assert.equal(call.body.measurement, "not_reported");
+  for (const k of ["input_tokens", "output_tokens", "cached_input_tokens", "cost_usd"])
+    assert.equal(call.body[k], null);
+});
+
+test("usage: each model attempt is its own run with its own key and spool file", async (t) => {
+  const s = sandbox(t);
+  s.fake(
+    "claude",
+    `if [ "$1" = "--version" ]; then echo v; exit 0; fi
+cat >/dev/null
+case "$*" in *sonnet*) echo '{"is_error":true,"result":"context exceeded"}';; *) echo '{"result":"ok","usage":{"input_tokens":3,"output_tokens":4}}';; esac`,
+  );
+  const policy = { harness: {}, implementation: { claude: ["sonnet", "opus"] } };
+  const file = path.join(s.dir, "policy.json");
+  fs.writeFileSync(
+    file,
+    JSON.stringify(
+      policySnapshot(policy, { task_id: "t3", attempt: 1, executor_account_id: "acc-1" }),
+    ),
+  );
+  const api = await usageServer(t);
+  const { report } = await run(["claude", "--cwd", s.work, "--out", path.join(s.dir, "out")], {
+    env: {
+      ...s.env,
+      ANTHROPIC_API_KEY: "x",
+      ARGUS_MODEL_POLICY_FILE: file,
+      ARGUS_URL: api.url,
+      ARGUS_AGENT_TOKEN: "tok",
+    },
+  });
+  assert.equal(report.attempts.length, 2);
+  assert.equal(api.calls.length, 2);
+  assert.notEqual(report.attempts[0].run_key, report.attempts[1].run_key);
+  assert.notEqual(report.attempts[0].usage_spool, report.attempts[1].usage_spool);
+  assert.deepEqual(
+    api.calls.map((c) => c.body.measurement),
+    ["not_reported", "measured"],
+  );
+  assert.deepEqual(
+    api.calls.map((c) => c.body.model),
+    ["sonnet", "opus"],
+  );
 });

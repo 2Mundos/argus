@@ -92,12 +92,29 @@
             "title": "Quota",
             "type": "array"
           },
+          "quota_status": {
+            "$ref": "#/components/schemas/QuotaStatus"
+          },
           "secret_ref": {
             "title": "Secret Ref",
             "type": "string"
           },
           "state": {
             "$ref": "#/components/schemas/AccountState"
+          },
+          "token_limits": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Limits"
           },
           "updated_at": {
             "format": "date-time",
@@ -126,6 +143,7 @@
           "active_leases",
           "usage_24h",
           "usage_total",
+          "quota_status",
           "created_at",
           "updated_at"
         ],
@@ -222,6 +240,20 @@
               }
             ],
             "title": "Secret Ref"
+          },
+          "token_limits": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Limits"
           }
         },
         "required": [
@@ -372,6 +404,20 @@
               }
             ],
             "title": "Priority"
+          },
+          "token_limits": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Limits"
           }
         },
         "title": "AccountUpdate",
@@ -3331,6 +3377,16 @@
           "error": {
             "minLength": 1,
             "title": "Error",
+            "type": "string"
+          },
+          "reason": {
+            "default": "worker_fail",
+            "enum": [
+              "worker_fail",
+              "channel_error",
+              "provider_failure"
+            ],
+            "title": "Reason",
             "type": "string"
           }
         },
@@ -6369,6 +6425,92 @@
         "title": "QuotaReport",
         "type": "object"
       },
+      "QuotaStatus": {
+        "description": "Whether Argus knows this account's quota, and if not, why (never a 0/100).",
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "no_usage_records",
+                  "provider_does_not_expose",
+                  "window_not_configured"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "state": {
+            "enum": [
+              "known",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "windows": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/QuotaStatusWindow"
+            },
+            "title": "Windows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "QuotaStatus",
+        "type": "object"
+      },
+      "QuotaStatusWindow": {
+        "properties": {
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "period": {
+            "enum": [
+              "5h",
+              "24h",
+              "7d"
+            ],
+            "title": "Period",
+            "type": "string"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "integer"
+          },
+          "source": {
+            "const": "estimated",
+            "default": "estimated",
+            "title": "Source",
+            "type": "string"
+          },
+          "used": {
+            "title": "Used",
+            "type": "integer"
+          },
+          "used_percent": {
+            "title": "Used Percent",
+            "type": "number"
+          }
+        },
+        "required": [
+          "period",
+          "limit",
+          "used",
+          "remaining",
+          "used_percent"
+        ],
+        "title": "QuotaStatusWindow",
+        "type": "object"
+      },
       "QuotaWindow": {
         "properties": {
           "exhausted_until": {
@@ -8746,6 +8888,11 @@
             "format": "date-time",
             "title": "Start",
             "type": "string"
+          },
+          "unmeasured_runs": {
+            "default": 0,
+            "title": "Unmeasured Runs",
+            "type": "integer"
           }
         },
         "required": [
@@ -8810,6 +8957,15 @@
             ],
             "title": "Input Tokens"
           },
+          "measurement": {
+            "default": "measured",
+            "enum": [
+              "measured",
+              "not_reported"
+            ],
+            "title": "Measurement",
+            "type": "string"
+          },
           "model": {
             "anyOf": [
               {
@@ -8857,6 +9013,19 @@
               }
             ],
             "title": "Role"
+          },
+          "run_key": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Key"
           },
           "task_id": {
             "anyOf": [
@@ -9097,6 +9266,11 @@
           "runs": {
             "default": 0,
             "title": "Runs",
+            "type": "integer"
+          },
+          "unmeasured_runs": {
+            "default": 0,
+            "title": "Unmeasured Runs",
             "type": "integer"
           }
         },

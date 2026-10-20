@@ -3,6 +3,7 @@ import { api, call, newestTasks, type TaskKind, type TaskState, type TaskSummary
 import { relative, shortId } from "../format";
 import { useLiveData } from "../live";
 import { TaskSignal } from "../milestones";
+import { TaskLabel } from "../TaskLabel";
 import { useNow } from "./Activity";
 import { TaskDetail } from "./TaskDetail";
 
@@ -60,7 +61,7 @@ function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
   const now = useNow(30_000);
   return (
     <button type="button" className="task-card" onClick={onOpen}>
-      <span className="title">{task.title}</span>
+      <TaskLabel className="title" title={task.title} project={task.project} />
       <span className="meta">
         <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
         {task.kind !== "generic" && <span className="badge">{task.kind}</span>}
