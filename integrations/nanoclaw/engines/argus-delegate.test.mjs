@@ -15,6 +15,7 @@ import {
   materializePrivateCursorConfig,
   prepareExecutorEnv,
   READ_ONLY_PROMPT_PREFIX,
+  withCliToolsPath,
 } from "./argus-delegate.mjs";
 import { policySnapshot } from "./model-policy.mjs";
 
@@ -726,4 +727,13 @@ await main(process.argv.slice(2), process.env, { claudeStub: ${JSON.stringify(pa
   assert.equal(report.blocked, "auth_missing");
   assert.equal(report.gateway_stub, "absent");
   assert.equal(fs.existsSync(path.join(g.work, "ran")), false, "claude never started");
+});
+
+test("withCliToolsPath adds existing tool dirs to PATH and ignores missing ones", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clitools-"));
+  fs.writeFileSync(path.join(dir, "codex"), "");
+  assert.equal(withCliToolsPath({ PATH: "/usr/bin" }, [dir]).PATH, `${dir}:/usr/bin`);
+  assert.equal(withCliToolsPath({ PATH: `${dir}:/usr/bin` }, [dir]).PATH, `${dir}:/usr/bin`);
+  fs.rmSync(dir, { recursive: true });
+  assert.equal(withCliToolsPath({ PATH: "/usr/bin" }, [dir, "/no/such"]).PATH, "/usr/bin");
 });
