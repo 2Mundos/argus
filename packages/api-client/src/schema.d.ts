@@ -2838,6 +2838,12 @@ export interface components {
             attempt: number;
             /** Error */
             error: string;
+            /**
+             * Reason
+             * @default worker_fail
+             * @enum {string}
+             */
+            reason?: "worker_fail" | "channel_error" | "provider_failure";
         };
         /** FallbackResult */
         FallbackResult: {

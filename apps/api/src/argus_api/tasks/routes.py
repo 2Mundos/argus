@@ -1,6 +1,6 @@
 import asyncio
 from datetime import timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 
 from argus_core.auth import Scope
 from argus_core.tasks import ClaimedTask, Task, TaskCreate, TaskResult, TaskState
@@ -38,6 +38,8 @@ class ProgressRequest(BaseModel):
 class FailRequest(BaseModel):
     attempt: int
     error: str = Field(min_length=1)
+    reason: Literal["worker_fail", "channel_error", "provider_failure"] = "worker_fail"
+    """Why the attempt failed: the worker said so, or the channel detected it."""
 
 
 class DependenciesRequest(BaseModel):
@@ -177,7 +179,9 @@ async def fail_task(
     task_id: str, body: FailRequest, db: DbDep, agent_id: AgentDep
 ) -> Task:
     async with db.write() as tx:
-        return await service.fail(tx, agent_id, task_id, body.attempt, body.error)
+        return await service.fail(
+            tx, agent_id, task_id, body.attempt, body.error, body.reason
+        )
 
 
 @router.post("/{task_id}/block")
