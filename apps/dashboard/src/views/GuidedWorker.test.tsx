@@ -249,7 +249,7 @@ describe("NewWorker", () => {
 });
 
 describe("pool editor", () => {
-  it("keeps runtime, sandbox and NanoClaw settings it does not show", async () => {
+  it("patches only what it shows, keeping the rest and stored env values", async () => {
     const pool = {
       name: "nc",
       target: "docker",
@@ -259,7 +259,7 @@ describe("pool editor", () => {
       agents_per_instance: 1,
       desired_replicas: 1,
       max_replicas: 3,
-      env: {},
+      env: { TOKEN: "***" },
       cpus: 2,
       memory_mb: 512,
       docker: {
@@ -274,21 +274,23 @@ describe("pool editor", () => {
       status: "ok",
       last_error: null,
       live_instances: 0,
+      version: "v1",
     } as unknown as Pool;
     const seen = stubFetch(async () => json(pool));
     render(<PoolEditor pool={pool} onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText(/Max replicas/), { target: { value: "5" } });
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(seen.length).toBe(1));
+    expect(seen[0]?.method).toBe("PATCH");
     const body = await seen[0]?.json();
     expect(body).toMatchObject({
-      runtime: "nanoclaw",
-      template: "nanoclaw-socket",
-      cpus: 2,
-      memory_mb: 512,
+      expected_version: "v1",
       max_replicas: 5,
-      nanoclaw: { install_dir: "/i", agent_image: "a:1" },
       docker: { runtime: "sysbox-runc", network: "br0" },
     });
+    // Unshown options stay on the server; the redacted value is not sent back.
+    for (const key of ["runtime", "nanoclaw", "cpus", "template", "env"]) {
+      expect(body).not.toHaveProperty(key);
+    }
   });
 });

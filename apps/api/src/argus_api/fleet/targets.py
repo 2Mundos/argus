@@ -83,6 +83,7 @@ class ProviderInstance:
     ref: str
     status: Status
     exit_code: int | None = None
+    image_digest: str | None = None  # the image the container actually runs
 
 
 @dataclass(frozen=True)
@@ -307,7 +308,11 @@ class DockerTarget:
             exit_code = (
                 c.attrs.get("State", {}).get("ExitCode") if status == "exited" else None
             )
-            result.append(ProviderInstance(instance_id, c.name, status, exit_code))
+            result.append(
+                ProviderInstance(
+                    instance_id, c.name, status, exit_code, c.attrs.get("Image")
+                )
+            )
         return result
 
     def _list_by_label(self, key: str) -> builtins.list[LabeledContainer]:
@@ -404,6 +409,7 @@ class KubernetesTarget:
                 p.metadata.labels[INSTANCE_LABEL],
                 p.metadata.name,
                 *pod_status(p),
+                image_digest=pod_image_id(p),
             )
             for p in pods
             if INSTANCE_LABEL in (p.metadata.labels or {})
@@ -541,6 +547,14 @@ def pod_status(pod: Any) -> tuple[Status, int | None]:
                 break
         return "exited", code
     return "running", None
+
+
+def pod_image_id(pod: Any) -> str | None:
+    """The image digest the kubelet resolved for the worker container, if any."""
+    for cs in (pod.status.container_statuses if pod.status else None) or []:
+        if image_id := getattr(cs, "image_id", None):
+            return image_id
+    return None
 
 
 def describe_waiting(pod: Any) -> str:

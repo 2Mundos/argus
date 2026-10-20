@@ -15,8 +15,8 @@ Invariants:
   longer exists. Timeouts and stop acknowledgements are not confirmation.
 - Ending an instance and ending its agents (tasks released, tokens revoked)
   happen in the same transaction.
-- Scale-down never stops a busy agent: idle instances are drained, and their
-  containers go away when their agents leave.
+- Scale-down and recycling never stop a busy agent: a draining instance is
+  stopped only once none of its agents holds a claimed task (or all have left).
 """
 
 import asyncio
@@ -137,6 +137,16 @@ async def _decide(
         known.add(inst["id"])
         obs = observed.get(inst["id"])
         state = inst["state"]
+        if (
+            obs is not None
+            and obs.status == "running"
+            and obs.image_digest
+            and obs.image_digest != inst["image_digest"]
+        ):  # observed before this transaction: no target call in here
+            await tx.conn.execute(
+                "UPDATE instances SET image_digest = ? WHERE id = ?",
+                (obs.image_digest, inst["id"]),
+            )
         if state == "reserved":
             if obs is not None and obs.status == "running":
                 await _mark_running(tx, inst["id"], obs.ref)
@@ -202,6 +212,8 @@ async def _why_terminate(
     live = by_state.get("active", 0) + by_state.get("draining", 0)
     if by_state and not live:
         return "all agents left"
+    if inst["draining"] and not await _busy(conn, inst["id"]):
+        return "drained"  # recycled or scaled down, and nothing is in progress
     running_at = fleet.parse_ts(inst["running_at"])
     if (
         not by_state
@@ -366,9 +378,9 @@ async def _act(
             for _ in range(pool.agents_per_instance)
         ]
         await tx.conn.execute(
-            "UPDATE instances SET start_attempts = start_attempts + 1, last_start_at = ?"
-            " WHERE id = ?",
-            (ts(tx.now), action.instance_id),
+            "UPDATE instances SET start_attempts = start_attempts + 1,"
+            " last_start_at = ?, image = ? WHERE id = ?",
+            (ts(tx.now), pool.image, action.instance_id),
         )
     assert settings.argus_url is not None
     try:

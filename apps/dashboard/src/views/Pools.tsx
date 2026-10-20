@@ -2,6 +2,7 @@ import { type FormEvent, useState } from "react";
 import { api, call, fetchText, type Instance, type Pool } from "../api";
 import { relative, shortId } from "../format";
 import { useLiveData } from "../live";
+import { envPatch } from "../pools";
 import { NewWorker } from "./GuidedWorker";
 
 export function Pools() {
@@ -214,48 +215,57 @@ export function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void
         .filter((line) => line.includes("="))
         .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
     );
+    const docker = {
+      ...(pool?.docker ?? {}),
+      host: form.dockerHost || null,
+      extra_hosts: list(form.extraHosts),
+    };
+    // Kubernetes placement is edited here too (a docker pool has none).
+    const kubernetes =
+      form.target === "kubernetes"
+        ? {
+            ...(pool?.kubernetes ?? {}),
+            context: form.k8sContext,
+            namespace: form.k8sNamespace,
+          }
+        : undefined;
     try {
-      await call(
-        api.PUT("/api/pools/{name}", {
-          params: { path: { name: form.name } },
-          body: {
-            // The editor shows only some fields; the rest of an existing pool
-            // (runtime, nanoclaw options, limits) must survive a full replace.
-            ...(pool
-              ? {
-                  target: pool.target,
-                  runtime: pool.runtime,
-                  agents_per_instance: pool.agents_per_instance,
-                  cpus: pool.cpus,
-                  memory_mb: pool.memory_mb,
-                  nanoclaw: pool.nanoclaw,
-                  template: pool.template,
-                }
-              : { target: form.target }),
-            // Kubernetes placement is edited here too (a docker pool has none).
-            ...(form.target === "kubernetes"
-              ? {
-                  kubernetes: {
-                    ...(pool?.kubernetes ?? {}),
-                    context: form.k8sContext,
-                    namespace: form.k8sNamespace,
-                  },
-                }
-              : {}),
-            image: form.image,
-            capabilities: list(form.capabilities),
-            desired_replicas: form.desired,
-            max_replicas: form.max,
-            env,
-            // Keep what the form does not show (e.g. the sandbox runtime, network).
-            docker: {
-              ...(pool?.docker ?? {}),
-              host: form.dockerHost || null,
-              extra_hosts: list(form.extraHosts),
+      if (pool) {
+        // A partial update guarded by the version we read: options the form does
+        // not show are kept, and env values (write-only, shown as ***) are only
+        // sent when changed.
+        await call(
+          api.PATCH("/api/pools/{name}", {
+            params: { path: { name: pool.name } },
+            body: {
+              expected_version: pool.version,
+              image: form.image,
+              capabilities: list(form.capabilities),
+              desired_replicas: form.desired,
+              max_replicas: form.max,
+              env: envPatch(pool.env, env),
+              docker,
+              ...(kubernetes && { kubernetes }),
             },
-          },
-        }),
-      );
+          }),
+        );
+      } else {
+        await call(
+          api.PUT("/api/pools/{name}", {
+            params: { path: { name: form.name } },
+            body: {
+              target: form.target,
+              ...(kubernetes && { kubernetes }),
+              image: form.image,
+              capabilities: list(form.capabilities),
+              desired_replicas: form.desired,
+              max_replicas: form.max,
+              env,
+              docker,
+            },
+          }),
+        );
+      }
       onClose();
     } catch (err) {
       setError((err as Error).message);
@@ -307,7 +317,7 @@ export function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void
           <input value={form.capabilities} onChange={(e) => set("capabilities", e.target.value)} />
         </label>
         <label>
-          Environment (KEY=value per line)
+          Environment (KEY=value per line; *** keeps a stored value)
           <textarea rows={3} value={form.env} onChange={(e) => set("env", e.target.value)} />
         </label>
         {!pool && (

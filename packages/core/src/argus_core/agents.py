@@ -24,6 +24,15 @@ class AgentState(StrEnum):
 LIVE = frozenset({AgentState.ACTIVE, AgentState.DRAINING})
 
 
+class AgentRuntime(BaseModel):
+    """What an agent says it runs, sent on heartbeat. Self-reported: it proves a
+    live process said so, not that the engine or model works."""
+
+    worker_version: str | None = Field(default=None, max_length=100)
+    engine: str | None = Field(default=None, max_length=100)
+    executor: str | None = Field(default=None, max_length=100)
+
+
 class Agent(BaseModel):
     id: str
     name: str
@@ -36,6 +45,7 @@ class Agent(BaseModel):
     created_at: datetime
     ended_at: datetime | None
     end_reason: str | None
+    runtime: AgentRuntime | None = None  # last reported on heartbeat
 
 
 class BootstrapTokenCreate(BaseModel):

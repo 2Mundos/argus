@@ -94,6 +94,7 @@ class FakeTarget:
             "pool": spec.labels["argus.pool"],
             "status": "running",
             "exit_code": None,
+            "image_digest": f"sha256:{spec.image}",
         }
         self.specs[spec.name] = spec
         self.started.append(spec.name)
@@ -116,7 +117,13 @@ class FakeTarget:
 
         self._check()
         return [
-            ProviderInstance(c["instance_id"], name, c["status"], c["exit_code"])
+            ProviderInstance(
+                c["instance_id"],
+                name,
+                c["status"],
+                c["exit_code"],
+                c.get("image_digest"),
+            )
             for name, c in self.containers.items()
             if c["pool"] == labels["argus.pool"]
         ]

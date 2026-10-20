@@ -913,6 +913,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/instances/{instance_id}/recycle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recycle Instance
+         * @description Replace a running instance without interrupting work: its agents drain, it
+         *     stops once none holds a claimed task, and a new one starts in its place.
+         */
+        post: operations["recycle_instance_api_instances__instance_id__recycle_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/instances/{instance_id}/terminate": {
         parameters: {
             query?: never;
@@ -1171,7 +1192,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Pools */
+        /**
+         * List Pools
+         * @description Every pool; `env` shows its keys with redacted values.
+         */
         get: operations["list_pools_api_pools_get"];
         put?: never;
         post?: never;
@@ -1188,14 +1212,46 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Pool */
+        /**
+         * Get Pool
+         * @description A pool; `env` values are redacted unless an admin asks for `reveal_env`.
+         */
         get: operations["get_pool_api_pools__name__get"];
         /**
          * Upsert Pool
          * @description Create or replace a pool definition, including its replica cap (admin only).
-         *     The reconciler converges instances to it within seconds.
+         *     The reconciler converges instances to it within seconds. This replaces `env`
+         *     whole; PATCH changes single variables without resending the others.
          */
         put: operations["upsert_pool_api_pools__name__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Pool
+         * @description Change some of a pool's options (admin only), keeping the rest. Requires
+         *     the `version` you read as `expected_version` (409 stale_version otherwise).
+         *     Name, target and runtime cannot change. `env` merges; null removes a key.
+         */
+        patch: operations["patch_pool_api_pools__name__patch"];
+        trace?: never;
+    };
+    "/api/pools/{name}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Inspect Pool
+         * @description The pool, its live instances and agents, and per instance what is proven
+         *     about what runs there: each fact says its source (configured, requested,
+         *     started, validated) or `unknown`.
+         */
+        get: operations["inspect_pool_api_pools__name__inspect_get"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1859,6 +1915,7 @@ export interface components {
             /** Name */
             name: string;
             role: components["schemas"]["Role"];
+            runtime?: components["schemas"]["AgentRuntime"] | null;
             state: components["schemas"]["AgentState"];
         };
         /** AgentRegister */
@@ -1875,6 +1932,19 @@ export interface components {
              * @default
              */
             name?: string;
+        };
+        /**
+         * AgentRuntime
+         * @description What an agent says it runs, sent on heartbeat. Self-reported: it proves a
+         *     live process said so, not that the engine or model works.
+         */
+        AgentRuntime: {
+            /** Engine */
+            engine?: string | null;
+            /** Executor */
+            executor?: string | null;
+            /** Worker Version */
+            worker_version?: string | null;
         };
         /**
          * AgentState
@@ -2648,20 +2718,11 @@ export interface components {
             until?: string | null;
         };
         /**
-         * Fact
-         * @description One readiness fact: true, false, or unknown (None) with its evidence.
+         * FactSource
+         * @description How far a runtime fact is proven, weakest first.
+         * @enum {string}
          */
-        Fact: {
-            /** At */
-            at: string | null;
-            /**
-             * Detail
-             * @default not checked
-             */
-            detail: string;
-            /** Ok */
-            ok: boolean | null;
-        };
+        FactSource: "configured" | "requested" | "started" | "validated" | "unknown";
         /** FailRequest */
         FailRequest: {
             /** Attempt */
@@ -2701,6 +2762,7 @@ export interface components {
              * @default []
              */
             leases?: components["schemas"]["LeaseRef"][];
+            runtime?: components["schemas"]["AgentRuntime"] | null;
         };
         /** HeartbeatResponse */
         HeartbeatResponse: {
@@ -2770,6 +2832,42 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /** InspectedInstance */
+        InspectedInstance: {
+            /** Agents */
+            agents: components["schemas"]["InstanceAgent"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Draining */
+            draining: boolean;
+            /** Exit Reason */
+            exit_reason: string | null;
+            /** Id */
+            id: string;
+            /** Image */
+            image?: string | null;
+            /** Image Digest */
+            image_digest?: string | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Pool */
+            pool: string;
+            /** Provider Ref */
+            provider_ref: string;
+            /** Running At */
+            running_at: string | null;
+            runtime: components["schemas"]["InstanceRuntime"];
+            /** Start Attempts */
+            start_attempts: number;
+            state: components["schemas"]["InstanceState"];
+            /** Terminated At */
+            terminated_at: string | null;
+            /** Terminating At */
+            terminating_at: string | null;
+        };
         /** Instance */
         Instance: {
             /** Agents */
@@ -2785,6 +2883,10 @@ export interface components {
             exit_reason: string | null;
             /** Id */
             id: string;
+            /** Image */
+            image?: string | null;
+            /** Image Digest */
+            image_digest?: string | null;
             /** Last Error */
             last_error: string | null;
             /** Pool */
@@ -2803,14 +2905,32 @@ export interface components {
         };
         /** InstanceAgent */
         InstanceAgent: {
+            /**
+             * Capabilities
+             * @default []
+             */
+            capabilities?: string[];
             /** Claimed Tasks */
             claimed_tasks: number;
             /** Id */
             id: string;
+            /** Last Heartbeat At */
+            last_heartbeat_at?: string | null;
             /** Name */
             name: string;
+            runtime?: components["schemas"]["AgentRuntime"] | null;
             /** State */
             state: string;
+        };
+        /** InstanceRuntime */
+        InstanceRuntime: {
+            capabilities: components["schemas"]["argus_core__fleet__Fact"];
+            engine: components["schemas"]["argus_core__fleet__Fact"];
+            executor: components["schemas"]["argus_core__fleet__Fact"];
+            image: components["schemas"]["argus_core__fleet__Fact"];
+            image_digest: components["schemas"]["argus_core__fleet__Fact"];
+            ready: components["schemas"]["argus_core__fleet__Fact"];
+            worker_version: components["schemas"]["argus_core__fleet__Fact"];
         };
         /**
          * InstanceState
@@ -3431,6 +3551,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Version */
+            version: string;
         };
         /** PoolCapability */
         PoolCapability: {
@@ -3446,6 +3568,12 @@ export interface components {
             name: string;
             runtime: components["schemas"]["RuntimeKind"];
             target: components["schemas"]["TargetKind"];
+        };
+        /** PoolInspection */
+        PoolInspection: {
+            /** Instances */
+            instances: components["schemas"]["InspectedInstance"][];
+            pool: components["schemas"]["Pool"];
         };
         /** PoolItem */
         PoolItem: {
@@ -3474,6 +3602,37 @@ export interface components {
             name: string;
             /** Status */
             status: string;
+        };
+        /**
+         * PoolPatch
+         * @description A partial pool update (MCP operations 3.3). Fields left out are kept; name,
+         *     target and runtime cannot change. `env` merges: a value sets a variable,
+         *     null removes it, and variables not named are kept (values are write-only).
+         */
+        PoolPatch: {
+            /** Agents Per Instance */
+            agents_per_instance?: number | null;
+            /** Capabilities */
+            capabilities?: string[] | null;
+            /** Cpus */
+            cpus?: number | null;
+            /** Desired Replicas */
+            desired_replicas?: number | null;
+            docker?: components["schemas"]["DockerOptions-Input"] | null;
+            /** Env */
+            env?: {
+                [key: string]: string | null;
+            } | null;
+            /** Expected Version */
+            expected_version: string;
+            /** Image */
+            image?: string | null;
+            kubernetes?: components["schemas"]["KubernetesOptions-Input"] | null;
+            /** Max Replicas */
+            max_replicas?: number | null;
+            /** Memory Mb */
+            memory_mb?: number | null;
+            nanoclaw?: components["schemas"]["NanoclawOptions-Input"] | null;
         };
         /**
          * PoolStatus
@@ -4554,6 +4713,21 @@ export interface components {
             runs?: number;
         };
         /**
+         * Fact
+         * @description One readiness fact: true, false, or unknown (None) with its evidence.
+         */
+        argus_core__engines__Fact: {
+            /** At */
+            at: string | null;
+            /**
+             * Detail
+             * @default not checked
+             */
+            detail: string;
+            /** Ok */
+            ok: boolean | null;
+        };
+        /**
          * Readiness
          * @description Installed != authenticated != validated; usable only if all three hold.
          */
@@ -4563,19 +4737,25 @@ export interface components {
              *       "detail": "not checked"
              *     }
              */
-            authenticated: components["schemas"]["Fact"];
+            authenticated: components["schemas"]["argus_core__engines__Fact"];
             /**
              * @default {
              *       "detail": "not checked"
              *     }
              */
-            installed: components["schemas"]["Fact"];
+            installed: components["schemas"]["argus_core__engines__Fact"];
             /**
              * @default {
              *       "detail": "not checked"
              *     }
              */
-            validated: components["schemas"]["Fact"];
+            validated: components["schemas"]["argus_core__engines__Fact"];
+        };
+        /** Fact */
+        argus_core__fleet__Fact: {
+            source: components["schemas"]["FactSource"];
+            /** Value */
+            value: string | boolean | string[] | null;
         };
         /** Readiness */
         argus_core__fleet__Readiness: {
@@ -6181,6 +6361,37 @@ export interface operations {
             };
         };
     };
+    recycle_instance_api_instances__instance_id__recycle_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instance"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     terminate_instance_api_instances__instance_id__terminate_post: {
         parameters: {
             query?: never;
@@ -6661,7 +6872,9 @@ export interface operations {
     };
     get_pool_api_pools__name__get: {
         parameters: {
-            query?: never;
+            query?: {
+                reveal_env?: boolean;
+            };
             header?: never;
             path: {
                 name: string;
@@ -6712,6 +6925,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Pool"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_pool_api_pools__name__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PoolPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pool"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_pool_api_pools__name__inspect_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolInspection"];
                 };
             };
             /** @description Validation Error */

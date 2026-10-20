@@ -11,6 +11,8 @@ from argus_core.fleet import (
     LaunchRequest,
     LaunchResult,
     Pool,
+    PoolInspection,
+    PoolPatch,
     PoolUpsert,
     ScaleRequest,
     ScaleResult,
@@ -89,20 +91,29 @@ async def create_worker(
     async with db.write() as tx:
         pool = await service.create_pool(tx, name, upsert, caller.actor)
     return CreateWorkerResult(
-        pool=pool, requested=body.quantity, desired_replicas=pool.desired_replicas
+        pool=service.redact(pool),
+        requested=body.quantity,
+        desired_replicas=pool.desired_replicas,
     )
 
 
 @router.get("/pools")
 async def list_pools(db: DbDep, _: ManagerDep) -> list[Pool]:
+    """Every pool; `env` shows its keys with redacted values."""
     async with db.read() as conn:
-        return await service.list_pools(conn)
+        return [service.redact(p) for p in await service.list_pools(conn)]
 
 
 @router.get("/pools/{name}")
-async def get_pool(name: PoolName, db: DbDep, _: ManagerDep) -> Pool:
+async def get_pool(
+    name: PoolName, db: DbDep, caller: ManagerDep, reveal_env: bool = False
+) -> Pool:
+    """A pool; `env` values are redacted unless an admin asks for `reveal_env`."""
+    if reveal_env and caller.scope is not Scope.ADMIN:
+        raise ForbiddenError("reveal_env needs an admin token")
     async with db.read() as conn:
-        return await service.get_pool(conn, name)
+        pool = await service.get_pool(conn, name)
+    return pool if reveal_env else service.redact(pool)
 
 
 @router.put("/pools/{name}")
@@ -110,9 +121,30 @@ async def upsert_pool(
     name: PoolName, body: PoolUpsert, db: DbDep, caller: AdminDep
 ) -> Pool:
     """Create or replace a pool definition, including its replica cap (admin only).
-    The reconciler converges instances to it within seconds."""
+    The reconciler converges instances to it within seconds. This replaces `env`
+    whole; PATCH changes single variables without resending the others."""
     async with db.write() as tx:
-        return await service.upsert_pool(tx, name, body, caller.actor)
+        return service.redact(await service.upsert_pool(tx, name, body, caller.actor))
+
+
+@router.patch("/pools/{name}")
+async def patch_pool(
+    name: PoolName, body: PoolPatch, db: DbDep, caller: AdminDep
+) -> Pool:
+    """Change some of a pool's options (admin only), keeping the rest. Requires
+    the `version` you read as `expected_version` (409 stale_version otherwise).
+    Name, target and runtime cannot change. `env` merges; null removes a key."""
+    async with db.write() as tx:
+        return service.redact(await service.patch_pool(tx, name, body, caller.actor))
+
+
+@router.get("/pools/{name}/inspect")
+async def inspect_pool(name: PoolName, db: DbDep, _: ManagerDep) -> PoolInspection:
+    """The pool, its live instances and agents, and per instance what is proven
+    about what runs there: each fact says its source (configured, requested,
+    started, validated) or `unknown`."""
+    async with db.snapshot() as snap:
+        return await service.inspect(snap.conn, name)
 
 
 @router.post("/pools/{name}/scale")
@@ -125,7 +157,7 @@ async def scale_pool(
         pool, decision_id = await service.scale(
             tx, name, body.desired_replicas, caller.actor, caller.scope
         )
-    return ScaleResult(pool=pool, decision_id=decision_id)
+    return ScaleResult(pool=service.redact(pool), decision_id=decision_id)
 
 
 @router.post("/pools/{name}/launch")
@@ -159,7 +191,9 @@ async def launch_worker(
             tx, name, body.expected_desired_replicas, caller.actor
         )
     return LaunchResult(
-        pool=pool, requested=True, desired_replicas=pool.desired_replicas
+        pool=service.redact(pool),
+        requested=True,
+        desired_replicas=pool.desired_replicas,
     )
 
 
@@ -185,6 +219,16 @@ async def terminate_instance(instance_id: str, db: DbDep, caller: AdminDep) -> I
         await service.request_termination(
             tx, instance_id, f"terminated by {caller.actor}"
         )
+    async with db.read() as conn:
+        return await service.get_instance(conn, instance_id)
+
+
+@router.post("/instances/{instance_id}/recycle")
+async def recycle_instance(instance_id: str, db: DbDep, caller: ManagerDep) -> Instance:
+    """Replace a running instance without interrupting work: its agents drain, it
+    stops once none holds a claimed task, and a new one starts in its place."""
+    async with db.write() as tx:
+        await service.recycle(tx, instance_id, caller.actor)
     async with db.read() as conn:
         return await service.get_instance(conn, instance_id)
 

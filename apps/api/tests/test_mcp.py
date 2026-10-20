@@ -69,7 +69,8 @@ def register(client: TestClient, role: str = "worker") -> str:
 def test_tools_are_listed_with_descriptions(client: TestClient) -> None:
     orchestrator = register(client, "orchestrator")
     tools = {t["name"]: t for t in rpc(client, orchestrator, "tools/list")["tools"]}
-    assert set(tools) == set(mcp_server.audiences)  # every tool, each with an audience
+    admin = {t["name"] for t in rpc(client, ADMIN_TOKEN, "tools/list")["tools"]}
+    assert set(tools) | admin == set(mcp_server.audiences)  # each has an audience
     for name, t in tools.items():
         assert t["description"], name
     assert "task_id" in tools["complete_task"]["inputSchema"]["properties"]
@@ -90,7 +91,9 @@ def test_tools_are_listed_by_scope(client: TestClient) -> None:
     assert "claim_task" in by_scope[Scope.WORKER]
     assert "claim_task" not in by_scope[Scope.ADMIN]
     assert "answer_decision" not in by_scope[Scope.WORKER]
-    assert by_scope[Scope.ORCHESTRATOR] == set(mcp_server.audiences)
+    admin_only = {n for n, a in mcp_server.audiences.items() if a == {Scope.ADMIN}}
+    assert admin_only == {"update_pool"}
+    assert by_scope[Scope.ORCHESTRATOR] == set(mcp_server.audiences) - admin_only
 
 
 @pytest.mark.parametrize("token", [None, "not-a-token"])
@@ -370,3 +373,81 @@ def test_answers_over_mcp_are_safe_to_retry(client: TestClient) -> None:
     assert [r["ok"] for r in batch["results"]] == [True, False]
     assert batch["results"][0]["decision"]["replayed"] is True
     assert batch["results"][1]["error"]["code"] == "invalid_choice"
+
+
+def test_fleet_tools_forward_and_redact(client: TestClient) -> None:
+    from api_support import FakeTarget
+    from argus_api.db import ts
+
+    admin = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+    client.put(
+        "/api/pools/web",
+        json={"image": "w:1", "max_replicas": 2, "env": {"KEY": "s3cret"}},
+        headers=admin,
+    )
+    client.app.state.targets.override("docker", None, FakeTarget())
+
+    async def add_instance() -> None:
+        async with client.app.state.db.write() as tx:
+            await tx.conn.execute(
+                "INSERT INTO instances (id, pool, provider_ref, state, created_at)"
+                " VALUES ('i-1', 'web', 'argus-i-1', 'running', ?)",
+                (ts(tx.now),),
+            )
+
+    client.portal.call(add_instance)
+    orchestrator = register(client, "orchestrator")
+
+    inspected = tool(client, orchestrator, "inspect_pool", name="web")
+    assert inspected["pool"]["env"] == {"KEY": "***"}
+    assert [i["id"] for i in inspected["instances"]] == ["i-1"]
+    assert tool(client, orchestrator, "get_instance", instance_id="i-1")["state"] == (
+        "running"
+    )
+    logs = tool(client, orchestrator, "get_instance_logs", instance_id="i-1", tail=5)
+    assert logs == {"logs": "logs of argus-i-1"}  # plain text passes through
+    too_long = tool(
+        client, orchestrator, "get_instance_logs", instance_id="i-1", tail=501
+    )
+    assert "error" in too_long
+
+    recycled = tool(client, orchestrator, "recycle_instance", instance_id="i-1")
+    assert recycled["draining"] is True
+    version = inspected["pool"]["version"]
+    assert "error" in tool(
+        client, orchestrator, "update_pool", name="web", expected_version=version
+    )
+    updated = tool(
+        client,
+        ADMIN_TOKEN,
+        "update_pool",
+        name="web",
+        expected_version=version,
+        max_replicas=3,
+        env={"OTHER": "v"},
+    )
+    assert (updated["max_replicas"], updated["env"]) == (
+        3,
+        {"KEY": "***", "OTHER": "***"},
+    )
+    stale = tool(
+        client, ADMIN_TOKEN, "update_pool", name="web", expected_version=version
+    )
+    assert stale["error"].startswith("409 stale_version")
+
+    worker = register(client)
+    [agent] = [
+        a
+        for a in client.get("/api/agents", headers=admin).json()
+        if a["role"] == "worker"
+    ]
+    tool(client, worker, "heartbeat", runtime={"worker_version": "2.0"})
+    assert tool(client, orchestrator, "drain_agent", agent_id=agent["id"])["state"] == (
+        "draining"
+    )
+    assert (
+        client.get(f"/api/agents/{agent['id']}", headers=admin).json()["runtime"][
+            "worker_version"
+        ]
+        == "2.0"
+    )
