@@ -493,3 +493,237 @@ test("invalid policies and invalid retry requests fail before CLI execution", as
   );
   assert.equal(fs.existsSync(marker), false);
 });
+
+// -- Claude gateway sentinel across Claude Code's tool-subprocess boundary ----------------
+
+import { createServer } from "node:http";
+import { isGatewaySentinel, restoreClaudeGatewayAuth } from "./argus-delegate.mjs";
+
+const SENTINEL = "onecli-managed-claude-sentinel";
+const REAL = "sk-ant-" + "oat01-" + "Z".repeat(96); // synthetic: shaped like a real token
+const PROXY = "http://agent:proxy-pass-SECRET@127.0.0.1:18080";
+const STUB_KEYS = { version: 1, provider: "anthropic", variable: "CLAUDE_CODE_OAUTH_TOKEN" };
+
+/** A gateway stub and the environment of a process running through that gateway. */
+function gateway(t, over = {}, envOver = {}) {
+  const s = sandbox(t);
+  const ca = path.join(s.dir, "ca.pem");
+  fs.writeFileSync(ca, "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n");
+  const stubPath = path.join(s.dir, "claude-gateway.json");
+  const doc = {
+    ...STUB_KEYS,
+    sentinel: SENTINEL,
+    proxy: "127.0.0.1:18080",
+    ca,
+    ...over,
+  };
+  fs.writeFileSync(stubPath, JSON.stringify(doc), { mode: 0o644 });
+  const env = { ...s.env, HTTPS_PROXY: PROXY, NODE_EXTRA_CA_CERTS: ca, ...envOver };
+  return { ...s, ca, stubPath, env, doc };
+}
+
+test("claude: the sentinel is restored only from a host stub that matches the gateway", (t) => {
+  const g = gateway(t);
+  const out = restoreClaudeGatewayAuth(g.env, g.stubPath);
+  assert.equal(out.source, "gateway_sentinel");
+  assert.equal(out.env.CLAUDE_CODE_OAUTH_TOKEN, SENTINEL);
+  assert.equal(authStatus("claude", out.env, g.home).ok, true);
+  assert.equal(g.env.CLAUDE_CODE_OAUTH_TOKEN, undefined, "the input environment is not mutated");
+  // authStatus itself stays strict: without the restore step it still fails closed.
+  assert.equal(authStatus("claude", g.env, g.home).ok, false);
+});
+
+test("claude: no assignment means no stub and a closed failure", (t) => {
+  const g = gateway(t);
+  const out = restoreClaudeGatewayAuth(g.env, path.join(g.dir, "missing.json"));
+  assert.deepEqual([out.source, out.stub], [null, "absent"]);
+  assert.equal(out.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  assert.equal(authStatus("claude", out.env, g.home).ok, false);
+});
+
+test("claude: a real credential in the environment is left alone (no stub involved)", (t) => {
+  const g = gateway(t, {}, { ANTHROPIC_API_KEY: "placeholder-key" });
+  const out = restoreClaudeGatewayAuth(g.env, g.stubPath);
+  assert.equal(out.source, "env");
+  assert.equal(out.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+});
+
+for (const [name, over, envOver, reason] of [
+  ["a real-looking token", { sentinel: REAL }, {}, "not_a_sentinel"],
+  ["a sentinel with whitespace", { sentinel: "onecli managed" }, {}, "not_a_sentinel"],
+  ["an unknown extra key", { extra: "x" }, {}, "malformed"],
+  ["another provider", { provider: "openai" }, {}, "malformed"],
+  ["another variable", { variable: "ANTHROPIC_API_KEY" }, {}, "malformed"],
+  ["a version bump", { version: 2 }, {}, "malformed"],
+  ["a different gateway proxy", { proxy: "127.0.0.1:9999" }, {}, "proxy_mismatch"],
+  ["no proxy at all", {}, { HTTPS_PROXY: "" }, "proxy_mismatch"],
+  ["a missing stub CA", { ca: "/nonexistent/ca.pem" }, {}, "ca_missing"],
+  ["no CA in the environment", {}, { NODE_EXTRA_CA_CERTS: "" }, "ca_not_in_environment"],
+  ["a redirected API", {}, { ANTHROPIC_BASE_URL: "https://evil.example" }, "api_redirected"],
+  ["an API unix socket", {}, { ANTHROPIC_UNIX_SOCKET: "/tmp/x.sock" }, "api_redirected"],
+]) {
+  test(`claude: fails closed for ${name}`, (t) => {
+    const g = gateway(t, over, envOver);
+    const out = restoreClaudeGatewayAuth(g.env, g.stubPath);
+    assert.equal(out.source, null);
+    assert.equal(out.stub, `rejected:${reason}`);
+    assert.equal(out.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+    assert.equal(authStatus("claude", out.env, g.home).ok, false);
+    assert.equal(JSON.stringify(out).includes(REAL), false);
+  });
+}
+
+test("claude: fails closed for a malformed, oversized, writable or symlinked stub", (t) => {
+  const g = gateway(t);
+  fs.writeFileSync(g.stubPath, "{not json");
+  assert.equal(restoreClaudeGatewayAuth(g.env, g.stubPath).stub, "rejected:malformed");
+  fs.writeFileSync(g.stubPath, JSON.stringify({ ...g.doc, pad: "x".repeat(5000) }));
+  assert.equal(
+    restoreClaudeGatewayAuth(g.env, g.stubPath).stub,
+    "rejected:not_a_small_regular_file",
+  );
+  fs.writeFileSync(g.stubPath, JSON.stringify(g.doc));
+  fs.chmodSync(g.stubPath, 0o666);
+  assert.equal(restoreClaudeGatewayAuth(g.env, g.stubPath).stub, "rejected:writable_by_others");
+  fs.chmodSync(g.stubPath, 0o644);
+  const link = path.join(g.dir, "link.json");
+  fs.symlinkSync(g.stubPath, link);
+  assert.equal(restoreClaudeGatewayAuth(g.env, link).stub, "rejected:not_a_small_regular_file");
+});
+
+test("isGatewaySentinel mirrors the host's rule", () => {
+  assert.equal(isGatewaySentinel(SENTINEL), true);
+  assert.equal(isGatewaySentinel("sk-ant-oat01-onecli-managed-placeholder"), true);
+  for (const bad of [REAL, "x".repeat(130), "short", "", null, 7, "a b c d e f g h"])
+    assert.equal(isGatewaySentinel(bad), false, String(bad));
+});
+
+/**
+ * What Claude Code 2.1.296 does to its Bash tool's environment: it removes
+ * CLAUDE_CODE_OAUTH_TOKEN (and a few other transport tokens) and keeps ANTHROPIC_API_KEY,
+ * proxy and CA variables. Verified against the real CLI binary and a local mock API
+ * (see the handoff report); reproduced here so the test needs no CLI.
+ */
+function runShell(command, env, input) {
+  return new Promise((resolve) => {
+    const child = spawn("bash", ["-lc", command], { env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (c) => (stdout += c));
+    child.stderr.on("data", (c) => (stderr += c));
+    child.stdin.end(input);
+    child.on("close", (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
+function claudeToolEnv(env) {
+  const out = { ...env };
+  for (const name of [
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_ARTIFACTS_API_TOKEN",
+  ])
+    delete out[name];
+  return out;
+}
+
+test("boundary: primary env -> sanitized Bash tool -> argus-delegate -> native request through the gateway", async (t) => {
+  const g = gateway(t, {}, {});
+  // A mock gateway: a forward proxy that sees what the native client sends, swaps in
+  // its own "real" credential for the upstream, and answers like the Messages API.
+  const seen = [];
+  const UPSTREAM_REAL = "gateway-held-REAL-credential";
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      seen.push({
+        url: req.url,
+        auth: req.headers.authorization,
+        upstreamAuth: `Bearer ${UPSTREAM_REAL}`,
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ result: "ok via gateway", is_error: false }));
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  t.after(() => server.close());
+  const port = server.address().port;
+  const proxy = `http://agent:proxy-pass-SECRET@127.0.0.1:${port}`;
+  fs.writeFileSync(g.stubPath, JSON.stringify({ ...g.doc, proxy: `127.0.0.1:${port}` }), {
+    mode: 0o644,
+  });
+  // The `claude` the delegate starts: a native-like client that authenticates with the
+  // bearer it finds in CLAUDE_CODE_OAUTH_TOKEN, only through HTTP_PROXY/HTTPS_PROXY.
+  g.fake(
+    "claude",
+    `if [ "$1" = "--version" ]; then echo "9.9.9 (Claude Code)"; exit 0; fi
+cat >/dev/null
+exec ${process.execPath} -e '
+const http = require("node:http");
+const proxy = new URL(process.env.HTTPS_PROXY);
+const req = http.request({ host: proxy.hostname, port: proxy.port, method: "POST",
+  path: "http://api.anthropic.com/v1/messages",
+  headers: { host: "api.anthropic.com", authorization: "Bearer " + process.env.CLAUDE_CODE_OAUTH_TOKEN } },
+  (res) => { let b = ""; res.on("data", (c) => (b += c)); res.on("end", () => { console.log(b); }); });
+req.end("{}");
+'`,
+  );
+  // The driver runs main() with the test's stub path (the production path is fixed).
+  const driver = path.join(g.dir, "driver.mjs");
+  fs.writeFileSync(
+    driver,
+    `import { main } from ${JSON.stringify(new URL("./argus-delegate.mjs", import.meta.url).href)};
+await main(process.argv.slice(2), process.env, { claudeStub: ${JSON.stringify(g.stubPath)} });`,
+  );
+  // 1. The primary Claude process has the sentinel; its tool subprocess does not.
+  const primary = {
+    ...g.env,
+    CLAUDE_CODE_OAUTH_TOKEN: SENTINEL,
+    HTTPS_PROXY: proxy,
+    HTTP_PROXY: proxy,
+  };
+  const toolEnv = claudeToolEnv(primary);
+  assert.equal(toolEnv.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  // 2. The tool runs a login shell that calls the delegate (the contract in the task text).
+  const r = await runShell(
+    `${process.execPath} ${driver} claude --cwd ${g.work} --timeout 20`,
+    toolEnv,
+    "do the thing",
+  );
+  const report = JSON.parse(r.stdout.trim().split("\n").pop());
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(report.auth_source, "gateway_sentinel");
+  assert.equal(report.blocked, undefined);
+  // 3. The native client's request reached the gateway carrying the sentinel only.
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].auth, `Bearer ${SENTINEL}`);
+  assert.equal(seen[0].url, "http://api.anthropic.com/v1/messages");
+  // 4. The gateway's own credential never reached the worker side.
+  const everything =
+    r.stdout + r.stderr + JSON.stringify(report) + fs.readFileSync(report.artifacts[0], "utf8");
+  assert.equal(everything.includes(UPSTREAM_REAL), false);
+  assert.equal(everything.includes("proxy-pass-SECRET"), false);
+});
+
+test("boundary: the same shell with no gateway stub still fails closed with auth_missing (78)", async (t) => {
+  const g = gateway(t);
+  g.fake("claude", 'if [ "$1" = "--version" ]; then echo v; exit 0; fi\ntouch ran');
+  const driver = path.join(g.dir, "driver.mjs");
+  fs.writeFileSync(
+    driver,
+    `import { main } from ${JSON.stringify(new URL("./argus-delegate.mjs", import.meta.url).href)};
+await main(process.argv.slice(2), process.env, { claudeStub: ${JSON.stringify(path.join(g.dir, "absent.json"))} });`,
+  );
+  const r = await runShell(
+    `${process.execPath} ${driver} claude --cwd ${g.work} --timeout 20`,
+    claudeToolEnv({ ...g.env, CLAUDE_CODE_OAUTH_TOKEN: SENTINEL }),
+    "x",
+  );
+  const report = JSON.parse(r.stdout.trim().split("\n").pop());
+  assert.equal(r.status, 78);
+  assert.equal(report.blocked, "auth_missing");
+  assert.equal(report.gateway_stub, "absent");
+  assert.equal(fs.existsSync(path.join(g.work, "ran")), false, "claude never started");
+});

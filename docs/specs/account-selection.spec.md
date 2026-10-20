@@ -79,6 +79,31 @@ isolation or sandbox/TLS restrictions.
   Codex is no longer primary and Claude no longer the fixed executor; the
   executor is advisory and named only when it differs from the engine.
 
+- **Claude subscription auth across Claude Code's tool boundary.** Claude Code
+  removes `CLAUDE_CODE_OAUTH_TOKEN` from the environment of every process its
+  Bash tool starts (verified on 2.1.296 against a local mock API: the CLI itself
+  authenticates with it, its tool subprocess sees it `absent`, while
+  `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`, proxy and CA variables stay). So
+  `argus-delegate claude` run from the primary's Bash tool saw no credential and
+  exited 78 even though the gateway serves the account. Fix, with no real token
+  anywhere in the worker: the trusted host, which holds OneCLI's container config
+  for the agent group, writes a read-only stub
+  `/home/node/.config/argus/claude-gateway.json` (`version`, `provider`,
+  `variable`, `sentinel`, `proxy` as `host:port` without credentials, `ca`) **only
+  when OneCLI issued a `CLAUDE_CODE_OAUTH_TOKEN` sentinel for that group** (an
+  Anthropic account is assigned), the value passes the sentinel rule (opaque, no
+  whitespace, ≤256 chars; a `sk-ant-…` or >120-char value must name itself a
+  placeholder), a proxy and CA path are present and the API is not redirected
+  (`ANTHROPIC_BASE_URL`/`ANTHROPIC_UNIX_SOCKET`). `argus-delegate claude`, only
+  when it has no credential variable of its own, restores the variable for its
+  `claude` child after checking the stub (regular, small, not other-writable,
+  exact keys), the sentinel rule, that its `HTTPS_PROXY` is the recorded gateway
+  address, and that a CA file exists; any doubt leaves the environment as is and
+  the run fails `auth_missing` with a `gateway_stub` reason code. `authStatus`
+  stays strict, the stub path is fixed, nothing else is exported, the report gets
+  `auth_source: gateway_sentinel`, and no executor, model, sandbox or TLS setting
+  changes. No assignment, no stub.
+
 # 4. Open Questions
 
 Priority is operator-set and static; there is no quota-aware weighting. Whether
@@ -100,6 +125,11 @@ the model-policy snapshot or `argus-delegate` output.
 - `apps/api`: `accounts/service.py` (`_try_lease`, `exhausted`, `earliest_reset`),
   `engines/router.py` and `routes.py`, `config.py`, `fleet/runtimes.py`,
   `fleet/templates.py`, `mcp_server.py`; OpenAPI and client types regenerated.
+- Rollout of the Claude sentinel stub needs two layers: the NanoClaw **host**
+  (`install.sh` adds `argus-claude-stub.ts` and wraps `onecli.ts`; rebuild and
+  restart the host) and the **agent image** (`argus-delegate.mjs`, via
+  `engines/install-engines.sh` and any project layer built on it). Running
+  containers keep their old mounts and delegate: recreate them.
 - `integrations/nanoclaw`: `argus.ts` (global leases, idle rebalance, held
   accounts to the model policy), `argus-accounts.ts` (`runtimeProviders`),
   `engines/` (policy context, delegate identity), `provision.sh`, README. Recreate

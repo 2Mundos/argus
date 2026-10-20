@@ -188,6 +188,12 @@ worker provider list (the retired `account_providers` / `executor_providers` /
    While idle the channel re-leases at most once a minute, so a recovered or
    higher-priority account is adopted between tasks; running work is never
    rotated.
+   For a Claude subscription account, Claude Code withholds
+   `CLAUDE_CODE_OAUTH_TOKEN` from its Bash tool, so `install.sh` also mounts a
+   read-only gateway stub (`/home/node/.config/argus/claude-gateway.json`, sentinel
+   only) from which `argus-delegate claude` restores the variable for its own
+   child when the proxy and CA match; see
+   [global account selection](../../docs/specs/account-selection.spec.md).
 3. With no replacement, Argus blocks the task as `no_account` and the channel
    lets go of it; it leases again (and claims) once an account is usable.
 4. Any other failure notice now fails the attempt with its text, so Argus retries
