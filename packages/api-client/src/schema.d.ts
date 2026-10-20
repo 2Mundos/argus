@@ -1427,8 +1427,9 @@ export interface paths {
         };
         /**
          * List Tasks
-         * @description Tasks newest first, in pages (max 100). `ids` (comma-separated, max 50) is
-         *     a batch read instead: no other filter, no paging, unknown ids in `missing`.
+         * @description Tasks newest first, in pages (max 100). `assignee` is the agent holding a
+         *     task now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read
+         *     instead: no other filter, no paging, unknown ids in `missing`.
          */
         get: operations["list_tasks_api_tasks_get"];
         put?: never;
@@ -7323,6 +7324,7 @@ export interface operations {
                 state?: components["schemas"]["TaskState"][] | null;
                 project?: string | null;
                 kind?: string | null;
+                assignee?: string | null;
                 ids?: string | null;
                 view?: "summary" | "detail";
                 limit?: number;

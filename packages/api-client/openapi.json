@@ -13352,7 +13352,7 @@
     },
     "/api/tasks": {
       "get": {
-        "description": "Tasks newest first, in pages (max 100). `ids` (comma-separated, max 50) is\na batch read instead: no other filter, no paging, unknown ids in `missing`.",
+        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`.",
         "operationId": "list_tasks_api_tasks_get",
         "parameters": [
           {
@@ -13404,6 +13404,22 @@
                 }
               ],
               "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "assignee",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Assignee"
             }
           },
           {

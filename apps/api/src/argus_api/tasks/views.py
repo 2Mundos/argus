@@ -76,6 +76,7 @@ async def list_tasks(
     states: list[TaskState] | None = None,
     project: str | None = None,
     kind: str | None = None,
+    assignee: str | None = None,
     view: View = "summary",
     limit: int = 25,
     cursor: str | None = None,
@@ -83,7 +84,7 @@ async def list_tasks(
     """Newest first, keyset-paged on (created_at, id)."""
     limit = clamp(limit)
     filters: dict[str, Any] = {"states": sorted(states or []), "project": project}
-    filters |= {"kind": kind}
+    filters |= {"kind": kind, "assignee": assignee}
     where, params = ["1 = 1"], []
     if states:
         where.append(f"state IN ({','.join('?' * len(states))})")
@@ -94,6 +95,9 @@ async def list_tasks(
     if kind is not None:
         where.append("kind = ?")
         params.append(kind)
+    if assignee is not None:
+        where.append("assignee_agent_id = ?")
+        params.append(assignee)
     conn = snap.conn
     async with conn.execute(
         f"SELECT count(*) FROM tasks WHERE {' AND '.join(where)}",  # noqa: S608

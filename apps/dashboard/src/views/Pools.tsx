@@ -1,8 +1,9 @@
 import { type FormEvent, useState } from "react";
-import { api, call, fetchText, type Instance, type Pool } from "../api";
+import { api, call, type Instance, type Pool } from "../api";
 import { relative, shortId } from "../format";
 import { useLiveData } from "../live";
 import { envPatch } from "../pools";
+import { LogTail } from "./AgentDetail";
 import { NewWorker } from "./GuidedWorker";
 
 export function Pools() {
@@ -160,10 +161,6 @@ function PoolCard({ pool, onEdit }: { pool: Pool; onEdit: () => void }) {
 }
 
 function Logs({ instance, onClose }: { instance: Instance; onClose: () => void }) {
-  const { data, error } = useLiveData(
-    () => fetchText(`/api/instances/${instance.id}/logs?tail=500`),
-    [instance.id],
-  );
   return (
     <div className="overlay">
       <div className="dialog wide">
@@ -173,8 +170,7 @@ function Logs({ instance, onClose }: { instance: Instance; onClose: () => void }
             Close
           </button>
         </div>
-        {error && <p className="error">{error.message}</p>}
-        <pre className="logs">{data || "No output."}</pre>
+        <LogTail instanceId={instance.id} tail={500} />
       </div>
     </div>
   );

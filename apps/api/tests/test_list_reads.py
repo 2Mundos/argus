@@ -108,6 +108,29 @@ def test_batch_read_keeps_order_and_reports_missing(client: TestClient) -> None:
     assert res.status_code == 422
 
 
+def test_assignee_lists_what_an_agent_holds_now(client: TestClient) -> None:
+    held = {}
+    for _ in range(2):
+        create(client)
+        boot = client.post("/api/agents/bootstrap-tokens", json={}).json()
+        reg = ok_created(
+            client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
+        )
+        auth = {"Authorization": f"Bearer {reg['token']}"}
+        task = ok(client.post("/api/tasks/claim", json={"wait_s": 0}, headers=auth))
+        held[reg["agent"]["id"]] = task["id"]
+    for agent_id, task_id in held.items():
+        page = ok(client.get("/api/tasks", params={"assignee": agent_id}))
+        assert [t["id"] for t in page["items"]] == [task_id]
+    res = client.get("/api/tasks", params={"ids": task_id, "assignee": agent_id})
+    assert res.json()["detail"]["code"] == "ids_exclusive"
+
+
+def ok_created(res) -> dict:
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
 def test_decisions_filter_by_project_and_kind(client: TestClient) -> None:
     create(client, requires_approval=True)
     create(client, "beta", requires_approval=True)

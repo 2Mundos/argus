@@ -609,12 +609,14 @@ async def list_tasks(
     states: list[TaskStateArg] | None = None,
     project: str | None = None,
     kind: str | None = None,
+    assignee: str | None = None,
     view: ViewArg = "summary",
     limit: int = 25,
     cursor: str | None = None,
 ) -> dict:
     """List tasks, newest first, in pages (limit ≤ 100). Summary rows carry state
-    and ids (decisions, artifacts, dependencies), not the spec or result."""
+    and ids (decisions, artifacts, dependencies), not the spec or result.
+    `assignee` (an agent id) narrows to the tasks that agent holds now."""
     return await _call(
         ctx,
         "GET",
@@ -623,6 +625,7 @@ async def list_tasks(
             "state": states,
             "project": project,
             "kind": kind,
+            "assignee": assignee,
             "view": view,
             "limit": limit,
             "cursor": cursor,
