@@ -3,6 +3,7 @@ import { api, call, type DecisionDetail } from "../api";
 import { actor, relative, shortId } from "../format";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
+import { TaskLabel } from "../TaskLabel";
 
 export function Inbox() {
   const { data: page, error } = useLiveData(
@@ -28,6 +29,22 @@ export function Inbox() {
       ))}
     </section>
   );
+}
+
+/** Task subjects get "<Project> - <title>"; the project is not on the decision, so it is looked up. */
+function DecisionSubject({ decision }: { decision: DecisionDetail }) {
+  const isTask = decision.subject_type === "task" && decision.subject_title != null;
+  const { data: task } = useLiveData(
+    () =>
+      isTask
+        ? call(
+            api.GET("/api/tasks/{task_id}", { params: { path: { task_id: decision.subject_id } } }),
+          )
+        : Promise.resolve(null),
+    [decision.subject_id],
+  );
+  if (isTask && task) return <TaskLabel title={task.title} project={task.project} />;
+  return <>{decision.subject_title ?? shortId(decision.subject_id)}</>;
 }
 
 function DecisionCard({ decision }: { decision: DecisionDetail }) {
@@ -64,8 +81,10 @@ function DecisionCard({ decision }: { decision: DecisionDetail }) {
         <span className="badge">{decision.kind}</span>
         <span className="muted small">
           for {decision.audience} · {decision.subject_type.replace("knowledge_", "")}{" "}
-          <strong>{decision.subject_title ?? shortId(decision.subject_id)}</strong> ·{" "}
-          {relative(decision.created_at)} by {actor(decision.requested_by)}
+          <strong>
+            <DecisionSubject decision={decision} />
+          </strong>{" "}
+          · {relative(decision.created_at)} by {actor(decision.requested_by)}
         </span>
       </header>
       <p className="question">{decision.question}</p>
