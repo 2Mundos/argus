@@ -838,6 +838,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/fleet/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Health
+         * @description Pool, queue, run-time, outcome and failure health over `window` hours.
+         */
+        get: operations["fleet_health_api_fleet_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/fleet/templates": {
         parameters: {
             query?: never;
@@ -1451,7 +1471,8 @@ export interface paths {
          * List Tasks
          * @description Tasks newest first, in pages (max 100). `assignee` is the agent holding a
          *     task now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read
-         *     instead: no other filter, no paging, unknown ids in `missing`.
+         *     instead: no other filter, no paging, unknown ids in `missing`. Archived tasks
+         *     are left out unless `archived=true`, which lists only those.
          */
         get: operations["list_tasks_api_tasks_get"];
         put?: never;
@@ -1462,6 +1483,28 @@ export interface paths {
          *     human approval (a `policy` decision) instead of being refused.
          */
         post: operations["create_task_api_tasks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Archive Tasks
+         * @description Archive terminal tasks by state, project and age, answering how many.
+         *     `dry_run` counts without writing, for a confirmation. Non-terminal states
+         *     are refused (422 `state_not_archivable`) before anything changes.
+         */
+        post: operations["archive_tasks_api_tasks_archive_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1499,6 +1542,27 @@ export interface paths {
         get: operations["get_task_api_tasks__task_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Archive Task
+         * @description Archive a `succeeded`, `failed` or `cancelled` task; repeating it changes
+         *     nothing. Any other state answers 409 `task_not_terminal` and changes nothing.
+         */
+        post: operations["archive_task_api_tasks__task_id__archive_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1680,6 +1744,26 @@ export interface paths {
          * @description Return a `failed` task to `ready` with a fresh window of attempts (409 otherwise).
          */
         post: operations["retry_task_api_tasks__task_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/unarchive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unarchive Task
+         * @description Return an archived task to listings and totals (admin). Idempotent.
+         */
+        post: operations["unarchive_task_api_tasks__task_id__unarchive_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1918,6 +2002,8 @@ export interface components {
         };
         /** AccountsOverview */
         AccountsOverview: {
+            /** Awaiting Quota */
+            awaiting_quota: boolean;
             /** By Provider */
             by_provider: {
                 [key: string]: {
@@ -2289,6 +2375,31 @@ export interface components {
             ttl_s?: number;
         };
         /**
+         * BulkArchiveRequest
+         * @description Which terminal tasks to archive: all of `states`, narrowed by project and
+         *     by how long ago they last changed. `dry_run` only counts.
+         */
+        BulkArchiveRequest: {
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run?: boolean;
+            /** Older Than Days */
+            older_than_days?: number | null;
+            /** Project */
+            project?: string | null;
+            /** States */
+            states: components["schemas"]["TaskState"][];
+        };
+        /** BulkArchiveResult */
+        BulkArchiveResult: {
+            /** Count */
+            count: number;
+            /** Dry Run */
+            dry_run: boolean;
+        };
+        /**
          * Check
          * @description One measured fact about a pool's readiness. `ok` is None when it could not
          *     be verified from here (`detail` says why); only False blocks a launch.
@@ -2329,6 +2440,8 @@ export interface components {
         ClaimedTask: {
             /** Acceptance */
             acceptance: string[];
+            /** Archived At */
+            archived_at: string | null;
             /** Assignee Agent Id */
             assignee_agent_id: string | null;
             /** Attempt */
@@ -2375,6 +2488,11 @@ export interface components {
             priority: number;
             /** Progress At */
             progress_at: string | null;
+            /** Progress Data */
+            progress_data?: {
+                [key: string]: unknown;
+            } | null;
+            progress_kind?: components["schemas"]["ProgressKind"] | null;
             /** Progress Message */
             progress_message: string | null;
             /** Progress Percent */
@@ -2836,6 +2954,21 @@ export interface components {
             /** Runtime */
             runtime: string | null;
         };
+        /** Durations */
+        Durations: {
+            /** Mean */
+            mean: number | null;
+            /** N */
+            n: number;
+            /** P50 */
+            p50: number | null;
+            /** P90 */
+            p90: number | null;
+            /** Source */
+            source: string;
+            /** Window Hours */
+            window_hours: number;
+        };
         /** EngineCatalog */
         EngineCatalog: {
             /** Engines */
@@ -2968,6 +3101,48 @@ export interface components {
             attempt: number;
             /** Error */
             error: string;
+            /**
+             * Reason
+             * @default worker_fail
+             * @enum {string}
+             */
+            reason?: "worker_fail" | "channel_error" | "provider_failure" | "quota";
+        };
+        /** FailureExample */
+        FailureExample: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Error */
+            error: string;
+            /** Task Id */
+            task_id: string;
+            /** Title */
+            title: string;
+        };
+        /** FailureGroup */
+        FailureGroup: {
+            /** Count */
+            count: number;
+            /** Examples */
+            examples: components["schemas"]["FailureExample"][];
+            /** Reason */
+            reason: string;
+        };
+        /** Failures */
+        Failures: {
+            /** Groups */
+            groups: components["schemas"]["FailureGroup"][];
+            /** Source */
+            source: string;
+            /** Total */
+            total: number;
+            /** Truncated */
+            truncated: boolean;
+            /** Window Hours */
+            window_hours: number;
         };
         /** FallbackResult */
         FallbackResult: {
@@ -2988,6 +3163,25 @@ export interface components {
             public_url_configured: boolean;
             /** Targets */
             targets: components["schemas"]["TargetCapability"][];
+        };
+        /** FleetHealth */
+        FleetHealth: {
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            failures: components["schemas"]["Failures"];
+            outcomes: components["schemas"]["Outcomes"];
+            /** Pools */
+            pools: components["schemas"]["PoolHealth"][];
+            queue_time: components["schemas"]["Durations"];
+            run_time: components["schemas"]["Durations"];
+            tasks_by_state: components["schemas"]["TasksByState"];
+            /** Truncated */
+            truncated: boolean;
+            /** Window Hours */
+            window_hours: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -3538,6 +3732,23 @@ export interface components {
             /** Version */
             version: string | null;
         };
+        /** Outcomes */
+        Outcomes: {
+            /** Failed */
+            failed: number;
+            /** Failure Rate */
+            failure_rate: number | null;
+            /** Source */
+            source: string;
+            /** Succeeded */
+            succeeded: number;
+            /** Success Rate */
+            success_rate: number | null;
+            /** Total */
+            total: number;
+            /** Window Hours */
+            window_hours: number;
+        };
         /** Overview */
         Overview: {
             accounts: components["schemas"]["AccountsOverview"];
@@ -3798,6 +4009,26 @@ export interface components {
             runtime: components["schemas"]["RuntimeKind"];
             target: components["schemas"]["TargetKind"];
         };
+        /** PoolHealth */
+        PoolHealth: {
+            /** Desired */
+            desired: number;
+            /** Last Heartbeat At */
+            last_heartbeat_at: string | null;
+            /** Live */
+            live: number;
+            /** Name */
+            name: string;
+            /** Running */
+            running: number;
+            /**
+             * Source
+             * @default pools, instances, agents.last_heartbeat_at
+             */
+            source?: string;
+            /** Status */
+            status: string;
+        };
         /** PoolInspection */
         PoolInspection: {
             /** Instances */
@@ -3953,10 +4184,22 @@ export interface components {
             /** Version */
             version: string;
         };
+        /**
+         * ProgressKind
+         * @description The closed set of structured progress milestones (progress-milestones spec 3.1).
+         * @enum {string}
+         */
+        ProgressKind: "commit_created" | "pr_opened" | "ci_running" | "ci_passed" | "ci_failed" | "gate_failed" | "waiting_input";
         /** ProgressRequest */
         ProgressRequest: {
             /** Attempt */
             attempt: number;
+            /** Data */
+            data?: {
+                [key: string]: unknown;
+            } | null;
+            /** Kind */
+            kind?: string | null;
             /** Message */
             message: string;
             /** Percent */
@@ -4415,6 +4658,8 @@ export interface components {
         Task: {
             /** Acceptance */
             acceptance: string[];
+            /** Archived At */
+            archived_at: string | null;
             /** Assignee Agent Id */
             assignee_agent_id: string | null;
             /** Attempt */
@@ -4456,6 +4701,11 @@ export interface components {
             priority: number;
             /** Progress At */
             progress_at: string | null;
+            /** Progress Data */
+            progress_data?: {
+                [key: string]: unknown;
+            } | null;
+            progress_kind?: components["schemas"]["ProgressKind"] | null;
             /** Progress Message */
             progress_message: string | null;
             /** Progress Percent */
@@ -4586,6 +4836,8 @@ export interface components {
             acceptance: string[];
             /** Age S */
             age_s: number;
+            /** Archived At */
+            archived_at: string | null;
             /** Artifact Ids */
             artifact_ids: string[];
             /** Assignee Agent Id */
@@ -4631,6 +4883,11 @@ export interface components {
             priority: number;
             /** Progress At */
             progress_at: string | null;
+            /** Progress Data */
+            progress_data?: {
+                [key: string]: unknown;
+            } | null;
+            progress_kind?: components["schemas"]["ProgressKind"] | null;
             /** Progress Message */
             progress_message: string | null;
             /** Progress Percent */
@@ -4793,6 +5050,8 @@ export interface components {
         TaskSummary: {
             /** Age S */
             age_s: number;
+            /** Archived At */
+            archived_at: string | null;
             /** Artifact Ids */
             artifact_ids: string[];
             /** Assignee Agent Id */
@@ -4822,6 +5081,13 @@ export interface components {
             parent_id: string | null;
             /** Priority */
             priority: number;
+            /** Progress At */
+            progress_at: string | null;
+            /** Progress Data */
+            progress_data?: {
+                [key: string]: unknown;
+            } | null;
+            progress_kind?: components["schemas"]["ProgressKind"] | null;
             /** Progress Message */
             progress_message: string | null;
             /** Progress Percent */
@@ -4841,6 +5107,15 @@ export interface components {
             };
             /** Version */
             version: string;
+        };
+        /** TasksByState */
+        TasksByState: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Source */
+            source: string;
         };
         /** TemplateCatalog */
         TemplateCatalog: {
@@ -6571,6 +6846,37 @@ export interface operations {
             };
         };
     };
+    fleet_health_api_fleet_health_get: {
+        parameters: {
+            query?: {
+                window?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetHealth"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     worker_templates_api_fleet_templates_get: {
         parameters: {
             query?: never;
@@ -7637,6 +7943,7 @@ export interface operations {
                 project?: string | null;
                 kind?: string | null;
                 assignee?: string | null;
+                archived?: boolean;
                 ids?: string | null;
                 view?: "summary" | "detail";
                 limit?: number;
@@ -7701,6 +8008,39 @@ export interface operations {
             };
         };
     };
+    archive_tasks_api_tasks_archive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkArchiveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkArchiveResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     claim_task_api_tasks_claim_post: {
         parameters: {
             query?: never;
@@ -7742,6 +8082,37 @@ export interface operations {
         };
     };
     get_task_api_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_task_api_tasks__task_id__archive_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -8087,6 +8458,37 @@ export interface operations {
         };
     };
     retry_task_api_tasks__task_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unarchive_task_api_tasks__task_id__unarchive_post: {
         parameters: {
             query?: never;
             header?: never;

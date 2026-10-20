@@ -570,6 +570,10 @@
       },
       "AccountsOverview": {
         "properties": {
+          "awaiting_quota": {
+            "title": "Awaiting Quota",
+            "type": "boolean"
+          },
           "by_provider": {
             "additionalProperties": {
               "additionalProperties": {
@@ -613,6 +617,7 @@
           "total",
           "by_provider",
           "next_reset_at",
+          "awaiting_quota",
           "quota_measured"
         ],
         "title": "AccountsOverview",
@@ -1649,6 +1654,70 @@
         "title": "BootstrapTokenCreate",
         "type": "object"
       },
+      "BulkArchiveRequest": {
+        "description": "Which terminal tasks to archive: all of `states`, narrowed by project and\nby how long ago they last changed. `dry_run` only counts.",
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "older_than_days": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Older Than Days"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/components/schemas/TaskState"
+            },
+            "minItems": 1,
+            "title": "States",
+            "type": "array"
+          }
+        },
+        "required": [
+          "states"
+        ],
+        "title": "BulkArchiveRequest",
+        "type": "object"
+      },
+      "BulkArchiveResult": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "dry_run": {
+            "title": "Dry Run",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "count",
+          "dry_run"
+        ],
+        "title": "BulkArchiveResult",
+        "type": "object"
+      },
       "Check": {
         "description": "One measured fact about a pool's readiness. `ok` is None when it could not\nbe verified from here (`detail` says why); only False blocks a launch.",
         "properties": {
@@ -1734,6 +1803,18 @@
             },
             "title": "Acceptance",
             "type": "array"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
           },
           "assignee_agent_id": {
             "anyOf": [
@@ -1867,6 +1948,28 @@
             ],
             "title": "Progress At"
           },
+          "progress_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Data"
+          },
+          "progress_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProgressKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "progress_message": {
             "anyOf": [
               {
@@ -1989,7 +2092,8 @@
           "knowledge",
           "created_by",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "archived_at"
         ],
         "title": "ClaimedTask",
         "type": "object"
@@ -3396,6 +3500,65 @@
         "title": "DockerOptions",
         "type": "object"
       },
+      "Durations": {
+        "properties": {
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p90": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P90"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "source",
+          "n",
+          "p50",
+          "p90",
+          "mean"
+        ],
+        "title": "Durations",
+        "type": "object"
+      },
       "EngineCatalog": {
         "properties": {
           "engines": {
@@ -3721,6 +3884,17 @@
             "minLength": 1,
             "title": "Error",
             "type": "string"
+          },
+          "reason": {
+            "default": "worker_fail",
+            "enum": [
+              "worker_fail",
+              "channel_error",
+              "provider_failure",
+              "quota"
+            ],
+            "title": "Reason",
+            "type": "string"
           }
         },
         "required": [
@@ -3728,6 +3902,97 @@
           "error"
         ],
         "title": "FailRequest",
+        "type": "object"
+      },
+      "FailureExample": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "title",
+          "error",
+          "at"
+        ],
+        "title": "FailureExample",
+        "type": "object"
+      },
+      "FailureGroup": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "examples": {
+            "items": {
+              "$ref": "#/components/schemas/FailureExample"
+            },
+            "title": "Examples",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "count",
+          "examples"
+        ],
+        "title": "FailureGroup",
+        "type": "object"
+      },
+      "Failures": {
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/FailureGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "source",
+          "total",
+          "groups",
+          "truncated"
+        ],
+        "title": "Failures",
         "type": "object"
       },
       "FallbackResult": {
@@ -3793,6 +4058,58 @@
           "pools"
         ],
         "title": "FleetCapabilities",
+        "type": "object"
+      },
+      "FleetHealth": {
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "failures": {
+            "$ref": "#/components/schemas/Failures"
+          },
+          "outcomes": {
+            "$ref": "#/components/schemas/Outcomes"
+          },
+          "pools": {
+            "items": {
+              "$ref": "#/components/schemas/PoolHealth"
+            },
+            "title": "Pools",
+            "type": "array"
+          },
+          "queue_time": {
+            "$ref": "#/components/schemas/Durations"
+          },
+          "run_time": {
+            "$ref": "#/components/schemas/Durations"
+          },
+          "tasks_by_state": {
+            "$ref": "#/components/schemas/TasksByState"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "as_of",
+          "window_hours",
+          "pools",
+          "tasks_by_state",
+          "queue_time",
+          "run_time",
+          "outcomes",
+          "failures",
+          "truncated"
+        ],
+        "title": "FleetHealth",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -5400,6 +5717,63 @@
         "title": "NodeOption",
         "type": "object"
       },
+      "Outcomes": {
+        "properties": {
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "failure_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Rate"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "succeeded": {
+            "title": "Succeeded",
+            "type": "integer"
+          },
+          "success_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success Rate"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "source",
+          "succeeded",
+          "failed",
+          "total",
+          "success_rate",
+          "failure_rate"
+        ],
+        "title": "Outcomes",
+        "type": "object"
+      },
       "Overview": {
         "properties": {
           "accounts": {
@@ -5991,6 +6365,57 @@
         "title": "PoolCapability",
         "type": "object"
       },
+      "PoolHealth": {
+        "properties": {
+          "desired": {
+            "title": "Desired",
+            "type": "integer"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
+          },
+          "live": {
+            "title": "Live",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "running": {
+            "title": "Running",
+            "type": "integer"
+          },
+          "source": {
+            "default": "pools, instances, agents.last_heartbeat_at",
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "desired",
+          "live",
+          "running",
+          "last_heartbeat_at"
+        ],
+        "title": "PoolHealth",
+        "type": "object"
+      },
       "PoolInspection": {
         "properties": {
           "instances": {
@@ -6459,11 +6884,48 @@
         "title": "PricingInfo",
         "type": "object"
       },
+      "ProgressKind": {
+        "description": "The closed set of structured progress milestones (progress-milestones spec 3.1).",
+        "enum": [
+          "commit_created",
+          "pr_opened",
+          "ci_running",
+          "ci_passed",
+          "ci_failed",
+          "gate_failed",
+          "waiting_input"
+        ],
+        "title": "ProgressKind",
+        "type": "string"
+      },
       "ProgressRequest": {
         "properties": {
           "attempt": {
             "title": "Attempt",
             "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
           },
           "message": {
             "maxLength": 2000,
@@ -7743,6 +8205,18 @@
             "title": "Acceptance",
             "type": "array"
           },
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
           "assignee_agent_id": {
             "anyOf": [
               {
@@ -7867,6 +8341,28 @@
             ],
             "title": "Progress At"
           },
+          "progress_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Data"
+          },
+          "progress_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProgressKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "progress_message": {
             "anyOf": [
               {
@@ -7989,7 +8485,8 @@
           "knowledge",
           "created_by",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "archived_at"
         ],
         "title": "Task",
         "type": "object"
@@ -8202,6 +8699,18 @@
             "title": "Age S",
             "type": "integer"
           },
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
           "artifact_ids": {
             "items": {
               "type": "string"
@@ -8340,6 +8849,28 @@
             ],
             "title": "Progress At"
           },
+          "progress_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Data"
+          },
+          "progress_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProgressKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "progress_message": {
             "anyOf": [
               {
@@ -8461,7 +8992,9 @@
           "block_reason",
           "progress_message",
           "progress_percent",
+          "progress_at",
           "created_at",
+          "archived_at",
           "version",
           "age_s",
           "spec",
@@ -8475,7 +9008,6 @@
           "failures",
           "result",
           "error",
-          "progress_at",
           "knowledge",
           "created_by",
           "updated_at"
@@ -8899,6 +9431,18 @@
             "title": "Age S",
             "type": "integer"
           },
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
           "artifact_ids": {
             "items": {
               "type": "string"
@@ -8990,6 +9534,40 @@
             "title": "Priority",
             "type": "integer"
           },
+          "progress_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress At"
+          },
+          "progress_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Data"
+          },
+          "progress_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProgressKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "progress_message": {
             "anyOf": [
               {
@@ -9058,11 +9636,34 @@
           "block_reason",
           "progress_message",
           "progress_percent",
+          "progress_at",
           "created_at",
+          "archived_at",
           "version",
           "age_s"
         ],
         "title": "TaskSummary",
+        "type": "object"
+      },
+      "TasksByState": {
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "counts"
+        ],
+        "title": "TasksByState",
         "type": "object"
       },
       "TemplateCatalog": {
@@ -12318,6 +12919,57 @@
         ]
       }
     },
+    "/api/fleet/health": {
+      "get": {
+        "description": "Pool, queue, run-time, outcome and failure health over `window` hours.",
+        "operationId": "fleet_health_api_fleet_health_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 720,
+              "minimum": 1,
+              "title": "Window",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetHealth"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Fleet Health",
+        "tags": [
+          "operations"
+        ]
+      }
+    },
     "/api/fleet/templates": {
       "get": {
         "description": "The worker templates Argus supports, per node: ready, or exactly what is\nmissing. Read-only; nothing is created by looking.",
@@ -14144,7 +14796,7 @@
     },
     "/api/tasks": {
       "get": {
-        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`.",
+        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`. Archived tasks\nare left out unless `archived=true`, which lists only those.",
         "operationId": "list_tasks_api_tasks_get",
         "parameters": [
           {
@@ -14212,6 +14864,16 @@
                 }
               ],
               "title": "Assignee"
+            }
+          },
+          {
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Archived",
+              "type": "boolean"
             }
           },
           {
@@ -14349,6 +15011,53 @@
         ]
       }
     },
+    "/api/tasks/archive": {
+      "post": {
+        "description": "Archive terminal tasks by state, project and age, answering how many.\n`dry_run` counts without writing, for a confirmation. Non-terminal states\nare refused (422 `state_not_archivable`) before anything changes.",
+        "operationId": "archive_tasks_api_tasks_archive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkArchiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkArchiveResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Archive Tasks",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
     "/api/tasks/claim": {
       "post": {
         "description": "Claim a ready task, long-polling up to `wait_s` seconds for one.",
@@ -14441,6 +15150,54 @@
           }
         ],
         "summary": "Get Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/archive": {
+      "post": {
+        "description": "Archive a `succeeded`, `failed` or `cancelled` task; repeating it changes\nnothing. Any other state answers 409 `task_not_terminal` and changes nothing.",
+        "operationId": "archive_task_api_tasks__task_id__archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Archive Task",
         "tags": [
           "tasks"
         ]
@@ -15051,6 +15808,54 @@
           }
         ],
         "summary": "Retry Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/unarchive": {
+      "post": {
+        "description": "Return an archived task to listings and totals (admin). Idempotent.",
+        "operationId": "unarchive_task_api_tasks__task_id__unarchive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Unarchive Task",
         "tags": [
           "tasks"
         ]

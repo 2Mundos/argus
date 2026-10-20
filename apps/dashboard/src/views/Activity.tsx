@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ArgusEvent, Task } from "../api";
 import { relative } from "../format";
+import { MilestoneLine, NoSignal } from "../milestones";
 
 /** The current time, re-read every `ms`, so "N s ago" keeps counting between events. */
 export function useNow(ms = 1000): number {
@@ -20,6 +21,8 @@ type Progress = Pick<
   | "progress_message"
   | "progress_percent"
   | "progress_at"
+  | "progress_kind"
+  | "progress_data"
   | "lease_expires_at"
 >;
 
@@ -46,6 +49,8 @@ export function Activity({ task, events }: { task: Progress; events: ArgusEvent[
             <span style={{ width: `${task.progress_percent}%` }} />
           </span>
         )}
+        <NoSignal task={task} now={now} />
+        <MilestoneLine task={task} now={now} />
         <span>{task.progress_message ?? "No progress note yet."}</span>
         <span className="muted small">
           {task.progress_at ? `updated ${relative(task.progress_at, now)}` : "silent so far"}

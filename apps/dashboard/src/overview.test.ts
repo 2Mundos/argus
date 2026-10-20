@@ -39,6 +39,7 @@ function overview(patch: Partial<Overview> = {}): Overview {
       total: 0,
       by_provider: {},
       next_reset_at: null,
+      awaiting_quota: false,
       quota_measured: false,
     },
     decisions: {

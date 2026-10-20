@@ -3,7 +3,8 @@
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 
 from argus_api.accounts import service as accounts
 from argus_api.agents import service as agents
@@ -21,16 +22,45 @@ class ReapResult:
     expired_tasks: list[str]
     lost_agents: list[str]
     recovered_accounts: list[str]
+    failed_tasks: list[str] = field(default_factory=list)
+    failed_agents: list[str] = field(default_factory=list)
+    failed_stages: list[str] = field(default_factory=list)
+
+    @property
+    def clean(self) -> bool:
+        return not (self.failed_tasks or self.failed_agents or self.failed_stages)
 
 
 async def reap(tx: Tx) -> ReapResult:
+    """One pass (3.4). The stages share the transaction but not their fate: each
+    runs in a savepoint, and so does every task or agent inside lease/timeout
+    expiry and loss, so one bad row or stage never keeps leases from expiring."""
+    failed_tasks: list[str] = []
+    failed_agents: list[str] = []
+    failed_stages: list[str] = []
+
+    async def stage(name: str, call: Callable[[], Awaitable[list[str]]]) -> list[str]:
+        try:
+            async with tx.savepoint():
+                return await call()
+        except Exception:
+            log.exception("reaper stage %s failed; continuing", name)
+            failed_stages.append(name)
+            return []
+
     # Lease expiry runs first and independently: a live agent's overdue lease
     # expires too. Then lost agents release whatever leases they still hold.
-    expired = await tasks.expire_leases(tx)
-    expired += await tasks.expire_timeouts(tx)
-    lost = await agents.mark_lost(tx)
-    recovered = await accounts.recover(tx)
-    return ReapResult(expired, lost, recovered)
+    expired = await stage(
+        "expire_leases", lambda: tasks.expire_leases(tx, failed_tasks)
+    )
+    expired += await stage(
+        "expire_timeouts", lambda: tasks.expire_timeouts(tx, failed_tasks)
+    )
+    lost = await stage("mark_lost", lambda: agents.mark_lost(tx, failed_agents))
+    recovered = await stage("accounts.recover", lambda: accounts.recover(tx))
+    return ReapResult(
+        expired, lost, recovered, failed_tasks, failed_agents, failed_stages
+    )
 
 
 async def run(
@@ -43,6 +73,13 @@ async def run(
                 result = await reap(tx)
             if stats:
                 stats.record(time.monotonic() - started)
+            if not result.clean:
+                log.error(
+                    "reaper: failed tasks=%s agents=%s stages=%s",
+                    result.failed_tasks,
+                    result.failed_agents,
+                    result.failed_stages,
+                )
             if result.expired_tasks or result.lost_agents:
                 log.info(
                     "reaper: expired %d leases, lost %d agents",

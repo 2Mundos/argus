@@ -132,7 +132,8 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   `failures + 1` reaches `max_attempts` on a failure goes to `failed`. Review
   rejections and unblocks lead to new claims (new `attempt`) without touching
   `failures`.
-- Terminal states: `succeeded`, `failed`, `cancelled`.
+- Terminal states: `succeeded`, `failed`, `cancelled`. Operators may archive them
+  out of lists and totals ([task archive](task-archive.spec.md)).
 - `POST /tasks/{id}/retry` (manager scope) is the one way out of `failed`, for
   when the environment changed and the work did not (provider quota, a
   credential, a missing binary). It is deliberately not a `transition` action:
@@ -188,6 +189,24 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   failure (retried until `max_attempts`), the assignee is cleared, and the holder's
   next write gets `409`. The expiry event carries `reason: timeout` (other
   expiries: `lease_expired`, `agent_ended`).
+- **Expiry is never silent.** Every expiry also stores a structured `error` on
+  the task (`lease expired at <ts> (holder <agent>)`, `attempt timed out at <ts>
+  (holder <agent>)`, or `holder <agent> ended (<reason>)`) and sets
+  `progress_message` to `attempt <n> ended: <reason>; <requeued|failed>`, so a
+  panel never shows a frozen "working" note for a task nobody holds. The expiry
+  event repeats `error`; attempts and events are append-only history and are
+  never deleted by expiry.
+- **A worker's own `FAIL` is never lost to a lapsed lease.** `POST
+  /tasks/{id}/fail` is the only worker write accepted after the lease deadline,
+  and only while the task is still `claimed` by the same agent at the same
+  attempt (nobody else has claimed it, so no two agents can run it). It then
+  behaves exactly like the expiry it pre-empts, but keeps the worker's text as
+  `error`. Once the reaper (or another claim) moved the task on, the fail gets
+  the usual `409` (`not_claimed`, `not_assignee`, `stale_attempt`). The fail
+  event carries `reason` (`worker_fail` by default; the channel also sends
+  `channel_error` or `provider_failure` for failures it detects itself, and
+  `quota` for a provider limit with no account left, which does not count as a
+  failure: see [account selection](account-selection.spec.md)).
 - Defaults: `lease_ttl = 120 s`, heartbeat every 30 s, `max_attempts = 3`.
   Per-task and per-kind override allowed.
 
@@ -221,6 +240,13 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   termination of their instances. Agent loss, credential revocation, task
   transitions, and events commit together in one write transaction. Provider
   calls happen after commit.
+- **Reaper isolation.** The stages (lease expiry, timeouts, lost agents, account
+  recovery) share one transaction but are independent: each runs in a savepoint,
+  and so does every task or agent inside a stage. A stage or row that raises is
+  rolled back alone (its events are discarded), logged with the task or agent
+  id, and counted in the pass result; it never blocks the other rows or stages,
+  and the pass still commits. A row that keeps failing is retried (and logged)
+  every pass.
 - `lost` is irreversible for that identity. A late heartbeat cannot restore it,
   renew a lease, or authorize another claim; the old instance cannot register
   again. A replacement gets a new instance id and bootstrap token.
@@ -587,7 +613,11 @@ admin access; the agent container has only the existing egress-proxy route,
 never the OneCLI admin API or raw token. Git/REST use HTTPS through the proxy,
 not SSH credentials. The worker API helper has no token parameter, verifies an
 exact repository allowlist, supports PR create/read/update and CI status reads
-tied to the PR head SHA, plus read-only `issue-get` (issue tracker item by
+tied to the PR head SHA (`create --repository URL --title T --head BRANCH --base
+BASE [--body TEXT | --body-file PATH]`, `update --repository URL --number N
+[--title T] [--base BASE] [--body TEXT | --body-file PATH] [--state open|closed]`; `renderTask`
+tells workers these exist; `--body-file` reads a regular file of at most 256 KiB
+so long PR bodies need no shell quoting and `--body` together with it is refused), plus read-only `issue-get` (issue tracker item by
 number) and `list-prs` (paginated PR list with explicit `--state` and capped
 `--limit`). The `get` command is pull-request-only; a 404 on `get` does not
 imply auth failure when the tracker number is an issue — use `issue-get`.
@@ -636,8 +666,15 @@ Consequences for Argus:
      the mandatory `argus-delegate` implementation contract from `renderTask`)
      as an inbound message, waking the agent container.
   4. Turns replies into Argus calls: a plain reply is a progress note;
-     `COMPLETE:`/`FAIL:`/`ASK:` prefixes complete, fail, or ask. A 409 drops the
-     reply and moves on.
+     `COMPLETE:`/`FAIL:`/`ASK:` prefixes complete, fail, or ask. The directive
+     is read at the start of the first non-blank line, tolerating markdown
+     decoration around it (`**FAIL:**`, `> FAIL:`, `- FAIL:`, `` `FAIL:` ``) and,
+     for an upper-case keyword, ` - `/` – `/` — ` as the separator (`FAIL - why`).
+     The rest of the reply, including further paragraphs, is the text. A 409
+     drops the reply and moves on (the task is no longer ours). A turn that ends
+     with no directive at all is left to the server: the lease lapses or the
+     attempt deadline passes, and the reaper requeues it with a structured
+     reason (3.3).
   **Results of any length.** `result.summary` holds at most 10 000 characters. A
   `COMPLETE:` reply within that is sent as the summary. A longer one is never
   truncated silently or dropped: the channel uploads the **whole** text as the

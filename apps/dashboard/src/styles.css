@@ -1104,3 +1104,13 @@ button.link.account-name {
 .swatch.bar-output {
   background: var(--ok);
 }
+.milestone {
+  display: block;
+}
+.no-signal {
+  color: var(--warn, #b45309);
+  font-weight: 600;
+}
+.progress.stale {
+  opacity: 0.6;
+}

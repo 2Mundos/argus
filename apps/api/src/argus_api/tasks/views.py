@@ -4,12 +4,13 @@
 `detail` carries the whole task with each long free-text field cut to TEXT_CAP.
 """
 
+import json
 from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
 import aiosqlite
-from argus_core.tasks import Review, Task, TaskState
+from argus_core.tasks import ProgressKind, Review, Task, TaskState
 from pydantic import BaseModel, Field
 
 from argus_api.db import Snapshot
@@ -49,7 +50,11 @@ class TaskSummary(Refs):
     block_reason: str | None
     progress_message: str | None
     progress_percent: int | None
+    progress_at: datetime | None
+    progress_kind: ProgressKind | None = None
+    progress_data: dict[str, Any] | None = None
     created_at: datetime
+    archived_at: datetime | None
     version: str  # updated_at; pass it back as expected_version
     age_s: int  # since creation
     truncated: dict[str, int] = {}  # field -> full length in bytes
@@ -77,15 +82,18 @@ async def list_tasks(
     project: str | None = None,
     kind: str | None = None,
     assignee: str | None = None,
+    archived: bool = False,
     view: View = "summary",
     limit: int = 25,
     cursor: str | None = None,
 ) -> TaskPage:
-    """Newest first, keyset-paged on (created_at, id)."""
+    """Newest first, keyset-paged on (created_at, id). Archived tasks are left out
+    unless `archived` asks for exactly those."""
     limit = clamp(limit)
     filters: dict[str, Any] = {"states": sorted(states or []), "project": project}
-    filters |= {"kind": kind, "assignee": assignee}
-    where, params = ["1 = 1"], []
+    filters |= {"kind": kind, "assignee": assignee, "archived": archived}
+    where = ["archived_at IS NOT NULL" if archived else "archived_at IS NULL"]
+    params: list[Any] = []
     if states:
         where.append(f"state IN ({','.join('?' * len(states))})")
         params += states
@@ -183,6 +191,9 @@ async def _page(snap: Snapshot, rows: list[aiosqlite.Row], view: View) -> TaskPa
             "version": row["updated_at"],
             "age_s": _age(snap.now, row["created_at"]),
             "block_reason": cap(row["block_reason"], "block_reason", truncated),
+            "progress_data": (
+                json.loads(row["progress_data"]) if row["progress_data"] else None
+            ),
             "progress_message": cap(
                 row["progress_message"], "progress_message", truncated
             ),

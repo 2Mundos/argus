@@ -1,6 +1,7 @@
 """Agent registration, heartbeats, draining, and loss (worker lifecycle 3.4)."""
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -28,6 +29,8 @@ from argus_api.errors import ConflictError, NotFoundError, UnauthorizedError
 from argus_api.events import record
 from argus_api.tasks import service as tasks
 from argus_api.tasks.service import RejectedLease, RenewedLease
+
+log = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL_S = 30
 LOST_AFTER_S = 3 * HEARTBEAT_INTERVAL_S
@@ -198,8 +201,11 @@ async def leave(tx: Tx, agent_id: str) -> Agent:
     return await get_agent(tx.conn, agent_id)
 
 
-async def mark_lost(tx: Tx) -> list[str]:
-    """Mark live agents whose heartbeat is older than LOST_AFTER_S as lost."""
+async def mark_lost(tx: Tx, failed: list[str] | None = None) -> list[str]:
+    """Mark live agents whose heartbeat is older than LOST_AFTER_S as lost.
+
+    Each agent is ended atomically in its own savepoint; with `failed`, one that
+    cannot be ended is rolled back alone, logged and appended there (3.4)."""
     cutoff = ts(tx.now - timedelta(seconds=LOST_AFTER_S))
     async with tx.conn.execute(
         "SELECT id FROM agents WHERE state IN ('active', 'draining')"
@@ -207,9 +213,19 @@ async def mark_lost(tx: Tx) -> list[str]:
         (cutoff,),
     ) as cur:
         ids = [r["id"] for r in await cur.fetchall()]
+    lost: list[str] = []
     for agent_id in ids:
-        await _end(tx, agent_id, AgentState.LOST, "heartbeat timeout", "system")
-    return ids
+        try:
+            async with tx.savepoint():
+                await _end(tx, agent_id, AgentState.LOST, "heartbeat timeout", "system")
+        except Exception:
+            if failed is None:
+                raise
+            log.exception("could not mark agent %s lost", agent_id)
+            failed.append(agent_id)
+            continue
+        lost.append(agent_id)
+    return lost
 
 
 async def end_instance(tx: Tx, instance_id: str, reason: str) -> list[str]:

@@ -55,14 +55,21 @@ every new dependency is judged against it.
   agents and people, delivered with every claim
 - [Home](specs/home.spec.md) — the default dashboard tab: what needs attention,
   complete totals for every core state, recent activity, and health
+- [Fleet health](specs/fleet-health.spec.md) — the Frota tab: pool liveness, queue
+  and run time, success rate, failures by reason, with `sem dados` when unknown
+  Screenshot: [2026-10-20.fleet-health.screenshot.png](evidence/2026-10-20.fleet-health.screenshot.png)
 - [Live work](specs/live-work.spec.md) — what an agent is doing now: task activity
   feed, agent drawer with its current work and container output
+- [Progress milestones](specs/progress-milestones.spec.md) — structured progress
+  signals (commit, PR, CI, gate) on task cards and a no-signal indicator
 - [Account usage](specs/account-usage.spec.md) — tokens spent and quota left per
   provider account: reported usage, Codex quota probe, Cursor pools, charts
 - [Cost view](specs/cost-view.spec.md) — the Custo tab: tokens and estimated cost
   per project and account over 24h/7d/30d, price table, unpriced models
 - [MCP operations](specs/mcp-operations.spec.md) — inbox and fleet journeys over
   MCP with compact, paged responses; REST/MCP coverage audit
+- [Task archive](specs/task-archive.spec.md) — archive terminal tasks out of lists
+  and totals; reversible, never deletes
 - [Task dependencies](specs/task-dependencies.spec.md) — edit a waiting task's
   dependencies with a cycle check; stuck dependents surface in the inbox
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes

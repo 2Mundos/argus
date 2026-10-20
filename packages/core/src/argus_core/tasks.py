@@ -3,10 +3,12 @@
 See docs/specs/worker-lifecycle.spec.md 3.2.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
@@ -23,6 +25,81 @@ class TaskState(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class ProgressKind(StrEnum):
+    """The closed set of structured progress milestones (progress-milestones spec 3.1)."""
+
+    COMMIT_CREATED = "commit_created"
+    PR_OPENED = "pr_opened"
+    CI_RUNNING = "ci_running"
+    CI_PASSED = "ci_passed"
+    CI_FAILED = "ci_failed"
+    GATE_FAILED = "gate_failed"
+    WAITING_INPUT = "waiting_input"
+
+
+_SHA = re.compile(r"[0-9a-f]{7,40}")
+_MILESTONE_KEYS: dict[ProgressKind, frozenset[str]] = {
+    ProgressKind.COMMIT_CREATED: frozenset({"branch", "sha"}),
+    ProgressKind.PR_OPENED: frozenset({"number", "url"}),
+    ProgressKind.CI_RUNNING: frozenset({"sha"}),
+    ProgressKind.CI_PASSED: frozenset({"sha"}),
+    ProgressKind.CI_FAILED: frozenset({"sha"}),
+    ProgressKind.GATE_FAILED: frozenset({"gate"}),
+    ProgressKind.WAITING_INPUT: frozenset(),
+}
+
+
+def _text(data: dict[str, Any], key: str, limit: int) -> str:
+    value = data[key]
+    if not isinstance(value, str) or not 1 <= len(value) <= limit:
+        raise ValueError(f"data.{key} must be a string of 1-{limit} characters")
+    return value
+
+
+def validate_milestone(kind: str | None, data: dict[str, Any] | None) -> None:
+    """Raise `ValueError` unless `kind` is a known milestone and `data` has exactly its shape."""
+    if kind is None:
+        if data:
+            raise ValueError("data requires kind")
+        return
+    try:
+        k = ProgressKind(kind)
+    except ValueError:
+        allowed = ", ".join(m.value for m in ProgressKind)
+        raise ValueError(f"unknown kind {kind!r}; one of {allowed}") from None
+    data = data or {}
+    keys = _MILESTONE_KEYS[k]
+    if set(data) != keys:
+        raise ValueError(
+            f"{k.value} data must have exactly: {sorted(keys) or 'no keys'}"
+        )
+    if "sha" in keys and not (
+        isinstance(data["sha"], str) and _SHA.fullmatch(data["sha"])
+    ):
+        raise ValueError("data.sha must be 7-40 lowercase hex characters")
+    if k is ProgressKind.COMMIT_CREATED:
+        _text(data, "branch", 250)
+    if k is ProgressKind.GATE_FAILED:
+        _text(data, "gate", 200)
+    if k is ProgressKind.PR_OPENED:
+        n = data["number"]
+        if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+            raise ValueError("data.number must be a positive integer")
+        url = _text(data, "url", 500)
+        parts = urlsplit(url)
+        if (
+            parts.scheme not in ("http", "https")
+            or not parts.hostname
+            or parts.username is not None
+            or parts.password is not None
+            or parts.query
+            or parts.fragment
+        ):
+            raise ValueError(
+                "data.url must be an http(s) URL without userinfo, query or fragment"
+            )
 
 
 TERMINAL = frozenset({TaskState.SUCCEEDED, TaskState.FAILED, TaskState.CANCELLED})
@@ -164,12 +241,15 @@ class Task(BaseModel):
     progress_message: str | None
     progress_percent: int | None
     progress_at: datetime | None
+    progress_kind: ProgressKind | None = None
+    progress_data: dict[str, Any] | None = None
     depends_on: list[str]
     project: str
     knowledge: list[str]
     created_by: str
     created_at: datetime
     updated_at: datetime
+    archived_at: datetime | None  # set while an operator has archived it
 
 
 class ClaimedTask(Task):

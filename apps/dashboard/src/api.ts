@@ -21,6 +21,7 @@ export type Pool = components["schemas"]["Pool"];
 export type SystemSummary = components["schemas"]["SystemSummary"];
 export type Instance = components["schemas"]["Instance"];
 export type FleetCapabilities = components["schemas"]["FleetCapabilities"];
+export type FleetHealth = components["schemas"]["FleetHealth"];
 export type Overview = components["schemas"]["Overview"];
 export type EngineCatalog = components["schemas"]["EngineCatalog"];
 export type TemplateCatalog = components["schemas"]["TemplateCatalog"];
@@ -97,13 +98,21 @@ export async function call<T>(
   return data as T;
 }
 
-/** The newest tasks, following the API's cursor for up to `pages` pages of 100. */
-export async function newestTasks(pages = 5): Promise<{ items: TaskSummary[]; total: number }> {
+/**
+ * The newest tasks, following the API's cursor for up to `pages` pages of 100.
+ * Archived tasks are left out unless `archived` asks for exactly those.
+ */
+export async function newestTasks(
+  pages = 5,
+  archived = false,
+): Promise<{ items: TaskSummary[]; total: number }> {
   const items: TaskSummary[] = [];
   let cursor: string | undefined;
   let total = 0;
   for (let n = 0; n < pages; n++) {
-    const page = await call(api.GET("/api/tasks", { params: { query: { limit: 100, cursor } } }));
+    const page = await call(
+      api.GET("/api/tasks", { params: { query: { limit: 100, cursor, archived } } }),
+    );
     items.push(...page.items);
     total = page.total;
     if (!page.next_cursor) break;

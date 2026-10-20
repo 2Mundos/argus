@@ -2,7 +2,10 @@ import { type FormEvent, useState } from "react";
 import { api, call, newestTasks, type TaskKind, type TaskState, type TaskSummary } from "../api";
 import { relative, shortId } from "../format";
 import { useLiveData } from "../live";
+import { TaskSignal } from "../milestones";
 import { TaskLabel } from "../TaskLabel";
+import { useNow } from "./Activity";
+import { ArchiveTasks } from "./ArchiveTasks";
 import { TaskDetail } from "./TaskDetail";
 
 const COLUMNS: { title: string; states: TaskState[] }[] = [
@@ -15,19 +18,38 @@ const COLUMNS: { title: string; states: TaskState[] }[] = [
 ];
 
 export function Tasks() {
-  const [selected, setSelected] = useState<string | null>(null);
+  // `#tasks/<id>` (linked from Frota) opens that task's detail.
+  const [selected, setSelected] = useState<string | null>(
+    () => window.location.hash.match(/^#tasks\/(.+)$/)?.[1] ?? null,
+  );
   const [creating, setCreating] = useState(false);
-  const { data, error } = useLiveData(() => newestTasks(), []);
+  const [archiving, setArchiving] = useState(false);
+  const [archived, setArchived] = useState(false);
+  const { data, error } = useLiveData(() => newestTasks(5, archived), [archived]);
   const tasks = data?.items;
 
   return (
     <section>
       <div className="toolbar">
         <h2>Tasks</h2>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={archived}
+            onChange={(e) => setArchived(e.target.checked)}
+          />
+          Archived
+        </label>
+        {!archived && (
+          <button type="button" onClick={() => setArchiving(true)}>
+            Archive…
+          </button>
+        )}
         <button type="button" className="primary" onClick={() => setCreating(true)}>
           New task
         </button>
       </div>
+      {archived && <p className="muted small">Showing archived tasks only.</p>}
       {error && <p className="error">{error.message}</p>}
       {data && data.total > data.items.length && (
         <p className="muted small">
@@ -49,13 +71,23 @@ export function Tasks() {
           );
         })}
       </div>
+      {archiving && <ArchiveTasks onClose={() => setArchiving(false)} />}
       {creating && <NewTask onClose={() => setCreating(false)} />}
-      {selected && <TaskDetail taskId={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <TaskDetail
+          taskId={selected}
+          onClose={() => {
+            setSelected(null);
+            if (window.location.hash.startsWith("#tasks/")) window.location.hash = "tasks";
+          }}
+        />
+      )}
     </section>
   );
 }
 
 function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
+  const now = useNow(30_000);
   return (
     <button type="button" className="task-card" onClick={onOpen}>
       <TaskLabel className="title" title={task.title} project={task.project} />
@@ -70,16 +102,7 @@ function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
           {shortId(task.assignee_agent_id ?? "")} · lease {relative(task.lease_expires_at)}
         </span>
       )}
-      {task.progress_message && task.state === "claimed" && (
-        <span className="progress">
-          {task.progress_percent != null && (
-            <span className="bar">
-              <span style={{ width: `${task.progress_percent}%` }} />
-            </span>
-          )}
-          <span className="small">{task.progress_message}</span>
-        </span>
-      )}
+      {task.state === "claimed" && <TaskSignal task={task} now={now} />}
       {task.block_reason && task.state === "blocked" && (
         <span className="small muted">{task.block_reason}</span>
       )}

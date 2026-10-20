@@ -127,6 +127,37 @@ describe("parseReply", () => {
     });
     expect(parseReply("Ask: Which region?")).toEqual({ kind: "ask", text: "Which region?" });
   });
+  it("finds a directive through markdown decoration, quotes and leading blank lines", () => {
+    for (const raw of [
+      "**FAIL:** no PR tool",
+      "**FAIL**: no PR tool",
+      "`FAIL:` no PR tool",
+      "> FAIL: no PR tool",
+      "- FAIL: no PR tool",
+      "\n\n  ## FAIL: no PR tool",
+      "FAIL - no PR tool",
+      "FAIL — no PR tool",
+      "fail：no PR tool",
+    ])
+      expect(parseReply(raw), raw).toEqual({ kind: "fail", text: "no PR tool" });
+    expect(parseReply("**COMPLETE:** shipped")).toEqual({ kind: "complete", text: "shipped" });
+  });
+  it("keeps the whole multi-paragraph text of a directive", () => {
+    expect(parseReply("FAIL: gates red\n\nDetails:\n- lint\n- tests")).toEqual({
+      kind: "fail",
+      text: "gates red\n\nDetails:\n- lint\n- tests",
+    });
+  });
+  it("does not read prose or mid-text look-alikes as a directive", () => {
+    for (const raw of [
+      "Ask - then wait",
+      "Failure analysis: x",
+      "Completed: step 1",
+      "Step 1 done.\nFAIL: later line",
+      "no FAIL: here",
+    ])
+      expect(parseReply(raw).kind, raw).toBe("progress");
+  });
   it("treats anything else as progress, including look-alikes mid-text", () => {
     expect(parseReply("working on it")).toEqual({ kind: "progress", text: "working on it" });
     expect(parseReply("almost COMPLETE: soon")).toEqual({
@@ -154,6 +185,12 @@ describe("renderTask", () => {
     expect(taskAuthorizesMerge(repoTask as any)).toBe(false);
     const text = renderTask(repoTask as any, new Map());
     expect(text).toContain("status = commit statuses for the PR head SHA");
+    expect(text).toContain(
+      "argus-gitea-api create --repository https://git.example.test/org/repo.git",
+    );
+    expect(text).toContain('--head <branch> --base <base-branch> --body "<text>"');
+    expect(text).toContain("idempotent");
+    expect(text).toContain("argus-gitea-api update --repository");
     expect(text).toContain("Do not merge pull requests unless");
     expect(text).not.toContain("force_merge");
     expect(text).not.toContain("This task explicitly authorizes merge");
@@ -256,6 +293,23 @@ describe("Argus channel", () => {
       expect(fake.calls.find((c) => c.path === path)!.body).toEqual(body);
       await h.adapter.teardown();
     }
+  });
+
+  it("delivers a markdown-wrapped FAIL as a failure, not as progress", async () => {
+    const fake = fakeArgus({ tasks: [task()] });
+    const h = harness(fake);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", null, {
+      kind: "chat",
+      content: { text: "**FAIL:** cannot open the PR\n\nNo PR tool was available." },
+    });
+    expect(fake.calls.find((c) => c.path === "/tasks/t1/fail")!.body).toEqual({
+      attempt: 1,
+      error: "cannot open the PR\n\nNo PR tool was available.",
+    });
+    expect(fake.calls.some((c) => c.path === "/tasks/t1/progress")).toBe(false);
   });
 
   it("sends progress at most once per interval and coalesces to the latest", async () => {
