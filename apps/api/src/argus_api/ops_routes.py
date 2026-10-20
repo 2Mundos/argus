@@ -1,14 +1,21 @@
 """Health, readiness, metrics and the system summary (operations spec)."""
 
 import time
+from typing import Annotated
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
+from argus_api import fleet_health as fleet_health_module
 from argus_api import ops
 from argus_api import overview as overview_module
 from argus_api.deps import AdminDep, CallerDep, DbDep, ManagerDep, SettingsDep
+from argus_api.fleet_health import (
+    DEFAULT_WINDOW_HOURS,
+    MAX_WINDOW_HOURS,
+    FleetHealth,
+)
 from argus_api.overview import Overview
 
 # Probes sit outside /api (like /healthz); the rest live under it.
@@ -150,3 +157,13 @@ async def system(
 async def overview(db: DbDep, _: ManagerDep) -> Overview:
     """Fleet-wide totals per state for the Home view (orchestrator or admin)."""
     return await overview_module.overview(db)
+
+
+@router.get("/fleet/health")
+async def fleet_health(
+    db: DbDep,
+    _: ManagerDep,
+    window: Annotated[int, Query(ge=1, le=MAX_WINDOW_HOURS)] = DEFAULT_WINDOW_HOURS,
+) -> FleetHealth:
+    """Pool, queue, run-time, outcome and failure health over `window` hours."""
+    return await fleet_health_module.fleet_health(db, window)

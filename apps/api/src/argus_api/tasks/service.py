@@ -202,6 +202,8 @@ async def claim(
             f"agent {agent_id} is {state}; it may not claim new tasks",
             code=f"agent_{state}",
         )
+    if await awaiting_quota(tx.conn):
+        return None
     async with tx.conn.execute(
         "SELECT * FROM tasks t WHERE state = 'ready' AND NOT EXISTS ("
         "  SELECT 1 FROM json_each(t.required_capabilities) rc"
@@ -233,6 +235,17 @@ async def claim(
         data={"attempt": attempt, "agent_id": agent_id},
     )
     return await get_task(tx.conn, row["id"])
+
+
+async def awaiting_quota(conn: aiosqlite.Connection) -> bool:
+    """True when the fleet manages accounts, some are exhausted and none is
+    available: a claim would only burn an attempt on a provider limit."""
+    async with conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM accounts WHERE state = 'exhausted')"
+        " AND NOT EXISTS (SELECT 1 FROM accounts WHERE state = 'available')"
+    ) as cur:
+        row = await cur.fetchone()
+    return bool(row and row[0])
 
 
 @dataclass(frozen=True)
@@ -370,15 +383,25 @@ async def fail(
     The one worker write accepted after the lease deadline (3.3): while the task
     is still claimed by this agent at this attempt, nobody else can hold it, and
     the fail is exactly the expiry the reaper is about to apply, with a better
-    `error`. Without this a FAIL sent just after a lapse would be lost."""
+    `error`. Without this a FAIL sent just after a lapse would be lost.
+
+    Reason `quota` (the provider's limit, not the task's fault) is not a failure:
+    `failures` stays, the task returns to ready and waits for an account."""
     row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
+    quota = reason == "quota"
     await _apply(
         tx,
         row,
         Action.FAIL,
         f"agent:{agent_id}",
-        set_={"error": error, "failures": row["failures"] + 1},
+        set_={"error": error}
+        | (
+            {"progress_message": f"provider quota; requeued: {error}"}
+            if quota
+            else {"failures": row["failures"] + 1}
+        ),
         data={"error": error, "reason": reason},
+        counts_failure=not quota,
     )
     return await get_task(tx.conn, task_id)
 
@@ -875,11 +898,15 @@ async def _apply(
     set_: dict[str, Any] | None = None,
     data: dict[str, Any] | None = None,
     deps_done: bool = True,
+    counts_failure: bool = True,
 ) -> TaskState:
-    """Validate and persist one transition, its event, and its knock-on effects."""
+    """Validate and persist one transition, its event, and its knock-on effects.
+
+    `counts_failure=False` evaluates a fail/expire as if no failure had counted, so it
+    can never exhaust the attempts (the caller leaves `failures` unchanged)."""
     old = S(row["state"])
     ctx = TransitionContext(
-        failures=row["failures"],
+        failures=row["failures"] if counts_failure else -1,
         max_attempts=row["max_attempts"],
         review=Review(row["review"]),
         deps_done=deps_done,

@@ -929,3 +929,96 @@ def test_replace_credential_keeps_state_and_validates_shape(
         "cursor-ish",
     )
     assert "new-secret-xyz" not in client.get("/api/accounts", headers=ADMIN).text
+
+
+# -- claim gate while every managed account is exhausted ---------------------------------
+
+
+async def _make_ready(db: Database) -> str:
+    async with db.write() as tx:
+        task = await tasks.create_task(
+            tx, TaskCreate(project="global", title="t", max_attempts=3), "admin:test"
+        )
+    return task.id
+
+
+async def _claim(db: Database):
+    async with db.write() as tx:
+        return await tasks.claim(tx, A, [])
+
+
+async def _task(db: Database, task_id: str):
+    async with db.read() as conn:
+        return await tasks.get_task(conn, task_id)
+
+
+async def test_claim_is_held_while_all_accounts_are_exhausted_then_resumes(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c1 = await add(db, store, "claude-1", "anthropic")
+    await lease(db, store)
+    await exhaust(db, store, c1, until=clock.now + timedelta(minutes=30))
+    task_id = await _make_ready(db)
+
+    assert await _claim(db) is None
+    held = await _task(db, task_id)
+    assert (held.state, held.attempt, held.failures) == (S.READY, 0, 0)
+
+    clock.advance(30 * 60)
+    async with db.write() as tx:
+        assert (await reap(tx)).recovered_accounts == [c1]
+    await insert_agent(db, "agent-c")  # the idle agents lapsed with the clock
+    async with db.write() as tx:
+        claimed = await tasks.claim(tx, "agent-c", [])
+    assert claimed is not None and claimed.id == task_id and claimed.attempt == 1
+
+
+async def test_claim_is_not_held_while_an_account_is_available_or_none_exist(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    task_id = await _make_ready(db)
+    claimed = await _claim(db)  # unmanaged fleet: no accounts rows
+    assert claimed is not None and claimed.id == task_id
+    async with db.write() as tx:
+        await tasks.fail(tx, A, task_id, 1, "boom")
+
+    c1 = await add(db, store, "claude-1", "anthropic")
+    await add(db, store, "claude-2", "anthropic")
+    await lease(db, store)
+    await exhaust(db, store, c1, until=clock.now + timedelta(hours=1))
+    async with db.read() as conn:
+        assert not await tasks.awaiting_quota(conn)  # claude-2 is still available
+    assert (await _claim(db)) is not None
+
+
+async def test_ordinary_fail_reasons_still_consume_the_attempt(
+    db: Database,
+) -> None:
+    for reason in ("worker_fail", "provider_failure", "channel_error"):
+        task_id = await _make_ready(db)
+        task = await _claim(db)
+        assert task is not None
+        async with db.write() as tx:
+            await tasks.fail(tx, A, task.id, task.attempt, "x", reason)
+        assert (await _task(db, task_id)).failures == 1
+        async with db.write() as tx:
+            await tx.conn.execute("UPDATE tasks SET state = 'cancelled'")
+
+
+async def test_quota_fail_keeps_failures_and_requeues_even_on_the_last_attempt(
+    db: Database,
+) -> None:
+    task_id = await _make_ready(db)
+    async with db.write() as tx:
+        await tx.conn.execute("UPDATE tasks SET failures = 2 WHERE id = ?", (task_id,))
+    task = await _claim(db)
+    assert task is not None
+    async with db.write() as tx:
+        await tasks.fail(tx, A, task.id, task.attempt, "hit your limit", "quota")
+    after = await _task(db, task_id)
+    assert (after.state, after.failures, after.attempt) == (S.READY, 2, 1)
+    assert after.error == "hit your limit"
+    assert (
+        after.progress_message is not None
+        and "hit your limit" in after.progress_message
+    )

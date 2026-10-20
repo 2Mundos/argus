@@ -55,6 +55,9 @@ every new dependency is judged against it.
   agents and people, delivered with every claim
 - [Home](specs/home.spec.md) — the default dashboard tab: what needs attention,
   complete totals for every core state, recent activity, and health
+- [Fleet health](specs/fleet-health.spec.md) — the Frota tab: pool liveness, queue
+  and run time, success rate, failures by reason, with `sem dados` when unknown
+  Screenshot: [2026-10-20.fleet-health.screenshot.png](evidence/2026-10-20.fleet-health.screenshot.png)
 - [Live work](specs/live-work.spec.md) — what an agent is doing now: task activity
   feed, agent drawer with its current work and container output
 - [Progress milestones](specs/progress-milestones.spec.md) — structured progress

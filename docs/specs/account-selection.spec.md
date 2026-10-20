@@ -133,7 +133,7 @@ isolation or sandbox/TLS restrictions.
     while any account is usable, and only blocks tasks that worker could claim.
   - *Channel.* When a run ends, the channel treats as exhaustion: a quota notice,
     a structured `providerFailure` `{provider:"claude", kind:"rate_limit",
-    resets_at?}` (anthropic account; fixed reason, never raw text), or the generic
+    resetsAt?}` (anthropic account; fixed reason, never raw text), or the generic
     "The agent run failed" notice plus a `Rate limit [..] (resets ..)` line in the
     agent log tail. The log is read through the optional `agentLogTail` hook of
     the channel config; a host that does not provide it only gets the notice and
@@ -154,6 +154,26 @@ isolation or sandbox/TLS restrictions.
     literal reason. Names only, never credentials.
   - *Exclusivity.* Unchanged and tested under concurrency: one lease per agent
     and role, a task is claimed by one agent, and `max_leases` holds.
+- **Who reports exhaustion.** `POST /accounts/{id}/exhausted` takes the **agent
+  token of the engine that holds the lease**: the NanoClaw channel runs in the
+  host, registered as an agent, and reports with its own token (it also matches
+  the lease holder, `not_leased` otherwise). Admin tokens get 403 and an unknown,
+  revoked or ended agent's token gets 401 by design; a channel whose agent was
+  ended (lost, left, re-registered) must re-register for a fresh token. Nothing in `authenticate` expires a live
+  agent's token, so a 401 here means a stale registration, not a bug.
+- **Claude's own wording counts.** The channel recognises, for `anthropic`
+  accounts, `Rate limit […]`, `Out of credits`, `Usage limit reached` and
+  `You've hit your [session ]limit` (straight or curly apostrophe), and a
+  structured `{provider:"claude", kind:"rate_limit", resetsAt?}`. The reset is
+  `(resets <ISO>)` or `resets 11:50pm (UTC)` (the next such UTC clock time,
+  strictly in the future); unparsable means no `until` and the default cooldown.
+  Structured reports carry a fixed reason, never log text.
+- **Claims wait for quota.** `POST /tasks/claim` returns nothing (no attempt
+  consumed, the task stays `ready`) while at least one account is `exhausted`
+  and none is `available`. Fleets with no accounts, or with any available
+  account, are unaffected. When `recover()` returns accounts to `available`
+  after `exhausted_until`, claims work again. The overview reports this as
+  `accounts.awaiting_quota`, with the refill time in `accounts.next_reset_at`.
 
 # 4. Open Questions
 

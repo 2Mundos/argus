@@ -204,7 +204,9 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   `error`. Once the reaper (or another claim) moved the task on, the fail gets
   the usual `409` (`not_claimed`, `not_assignee`, `stale_attempt`). The fail
   event carries `reason` (`worker_fail` by default; the channel also sends
-  `channel_error` or `provider_failure` for failures it detects itself).
+  `channel_error` or `provider_failure` for failures it detects itself, and
+  `quota` for a provider limit with no account left, which does not count as a
+  failure: see [account selection](account-selection.spec.md)).
 - Defaults: `lease_ttl = 120 s`, heartbeat every 30 s, `max_attempts = 3`.
   Per-task and per-kind override allowed.
 

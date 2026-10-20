@@ -615,8 +615,13 @@ export type FailureKind =
  * "Error:" prefix): a model that merely talks about limits never counts.
  */
 const QUOTA_NOTICES: Array<{ provider: string; pattern: RegExp }> = [
-  // Claude Code: "Rate limit [five_hour] (resets …)", "Out of credits".
-  { provider: "anthropic", pattern: /^(rate limit|out of credits)\b/i },
+  // Claude Code: "Rate limit [five_hour] (resets …)", "Out of credits",
+  // "You've hit your session limit · resets 11:50pm (UTC)", "Usage limit reached".
+  {
+    provider: "anthropic",
+    pattern:
+      /^(rate limit|out of credits|usage limit reached|you(?:'|\u2019)ve hit your (?:\w+ )?limit|you have hit your (?:\w+ )?limit)\b/i,
+  },
   // Codex / ChatGPT: the error code, or the app's own sentence.
   {
     provider: "openai",
@@ -635,13 +640,41 @@ const AUTH_EXPIRED_NOTICES: Array<{ provider: string; pattern: RegExp }> = [
 ];
 
 /**
+ * When a quota notice says the limit resets: "(resets <ISO>)" or a UTC clock time
+ * ("resets 11:50pm (UTC)", the next such time strictly after `now`). Undefined
+ * when absent or unparsable.
+ */
+function parseResetTime(body: string, now: Date): string | undefined {
+  const iso = /\(resets ([^)]+)\)/i.exec(body);
+  if (iso) {
+    const when = new Date(iso[1]!);
+    if (!Number.isNaN(when.getTime())) return when.toISOString();
+  }
+  const clock = /\bresets\s+(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\s*\(UTC\)/i.exec(body);
+  if (!clock) return undefined;
+  const hour12 = Number(clock[1]);
+  const minute = Number(clock[2] ?? "0");
+  if (hour12 < 1 || hour12 > 12 || minute > 59) return undefined;
+  const hour = (hour12 % 12) + (clock[3]!.toLowerCase() === "p" ? 12 : 0);
+  const at = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, minute),
+  );
+  if (at.getTime() <= now.getTime()) at.setUTCDate(at.getUTCDate() + 1);
+  return at.toISOString();
+}
+
+/**
  * Classify the text of an agent failure notice. NanoClaw's runner puts the
  * provider's own message there when a run was blocked; anything else is a plain
  * failure. With `provider` (the engine account's), only that provider's quota
  * messages count, so a limit of another provider's account (a delegated
  * executor's, say) never exhausts the engine lease.
  */
-export function classifyFailure(noticeText: string, provider?: string): FailureKind {
+export function classifyFailure(
+  noticeText: string,
+  provider?: string,
+  now: Date = new Date(),
+): FailureKind {
   const t = noticeText.trim();
   const body = t.replace(/^(?:error:\s*|reconnecting\.{3}\s*\d+\/\d+:\s*)/i, "");
   const authHit = AUTH_EXPIRED_NOTICES.find(
@@ -658,13 +691,7 @@ export function classifyFailure(noticeText: string, provider?: string): FailureK
     (q) => q.pattern.test(body) && (!provider || q.provider === provider),
   );
   if (hit) {
-    const m = /\(resets ([^)]+)\)/i.exec(body);
-    const when = m ? new Date(m[1]!) : null;
-    return {
-      kind: "exhausted",
-      reason: t.slice(0, 500),
-      until: when && !Number.isNaN(when.getTime()) ? when.toISOString() : undefined,
-    };
+    return { kind: "exhausted", reason: t.slice(0, 500), until: parseResetTime(body, now) };
   }
   return { kind: "failed", reason: t.slice(0, 1000) || "the agent run failed" };
 }
@@ -672,56 +699,38 @@ export function classifyFailure(noticeText: string, provider?: string): FailureK
 /** Fixed, non-sensitive reason for a structured auth expiry; never the notice or log text. */
 const STRUCTURED_AUTH_EXPIRED_REASON = "OpenAI/Codex authentication expired";
 
-/** The runner's placeholder when the provider's own message did not reach the notice. */
-export function isGenericFailureNotice(noticeText: string): boolean {
-  return /^the agent run failed\b/i.test(noticeText.trim());
-}
-
-/** `Rate limit reached`, plus the reset when it is a valid timestamp. Starts like Claude Code's own notice so Argus's server-side patterns match it too. */
-function rateLimitReason(resetsAt: unknown): { reason: string; until?: string } {
-  const when = typeof resetsAt === "string" ? new Date(resetsAt) : null;
-  if (!when || Number.isNaN(when.getTime())) return { reason: "Rate limit reached" };
-  const until = when.toISOString();
-  return { reason: `Rate limit reached (resets ${until})`, until };
-}
+/** Fixed, non-sensitive reason for a structured Claude rate limit. */
+const STRUCTURED_RATE_LIMIT_REASON = "Claude usage limit reached";
 
 /**
  * The structured `content.providerFailure` of a NanoClaw failure notice
- * (docs/specs/codex-accounts.spec.md §3, account-selection.spec.md 3.6).
- * `{provider:"codex", kind:"auth_expired"}` against a held `openai` account and
- * `{provider:"claude", kind:"rate_limit", resets_at?}` against a held `anthropic`
- * account exhaust it. Anything else (unknown value, other account provider, bad
- * shape) is not a decision: null. Reasons are fixed, never the raw text.
+ * (docs/specs/codex-accounts.spec.md §3). `{provider:"codex",
+ * kind:"auth_expired"}` against a held `openai` account, and `{provider:"claude",
+ * kind:"rate_limit", resetsAt?}` against a held `anthropic` one, exhaust it
+ * (`codex`/`claude` are the NanoClaw engines; Argus names the accounts by their
+ * vendor). Anything else (unknown value, other account provider, bad shape) is
+ * not a decision: null.
  */
 export function classifyProviderFailure(
   value: unknown,
   accountProvider?: string,
 ): FailureKind | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const { provider, kind, resets_at } = value as {
+  const { provider, kind, resetsAt } = value as {
     provider?: unknown;
     kind?: unknown;
-    resets_at?: unknown;
+    resetsAt?: unknown;
   };
   if (accountProvider === "openai" && provider === "codex" && kind === "auth_expired") {
     return { kind: "exhausted", reason: STRUCTURED_AUTH_EXPIRED_REASON, until: undefined };
   }
   if (accountProvider === "anthropic" && provider === "claude" && kind === "rate_limit") {
-    return { kind: "exhausted", ...rateLimitReason(resets_at) };
+    const when = typeof resetsAt === "string" ? new Date(resetsAt) : null;
+    return {
+      kind: "exhausted",
+      reason: STRUCTURED_RATE_LIMIT_REASON,
+      until: when && !Number.isNaN(when.getTime()) ? when.toISOString() : undefined,
+    };
   }
   return null;
-}
-
-/**
- * Claude Code's own `Rate limit [window] (resets …)` line in the agent log tail,
- * for runs whose notice is only the generic placeholder. The last occurrence
- * wins; only a held `anthropic` account is affected. The reason is rebuilt from
- * the parsed reset, never the log text.
- */
-export function classifyLogTail(logTail: string, accountProvider?: string): FailureKind | null {
-  if (accountProvider !== "anthropic") return null;
-  const hits = [...logTail.matchAll(/Rate limit \[[^\]\n]*\](?: \(resets ([^)\n]+)\))?/gi)];
-  const last = hits.at(-1);
-  if (!last) return null;
-  return { kind: "exhausted", ...rateLimitReason(last[1]) };
 }
