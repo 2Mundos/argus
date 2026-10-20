@@ -329,6 +329,14 @@ export function prepareExecutorEnv(
   return { ...e, CURSOR_CONFIG_DIR: privateDir };
 }
 
+/** Add the image's CLI-tool dir (normally /pnpm) to PATH before resolving executors. */
+export function withCliToolsPath(e = process.env, dirs = ["/pnpm"]) {
+  const parts = (e.PATH || "").split(":").filter(Boolean);
+  const present = dirs.filter((d) => fs.existsSync(d) && fs.readdirSync(d).length > 0);
+  const missing = present.filter((d) => !parts.includes(d));
+  return missing.length ? { ...e, PATH: [...missing, ...parts].join(":") } : e;
+}
+
 /** `cwd` must resolve (symlinks included) inside one of the allowed roots. */
 export function authorizedCwd(cwd, roots) {
   let real;
@@ -484,6 +492,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
     if (restored.stub) identity = { ...identity, gateway_stub: restored.stub };
   }
   e = prepareExecutorEnv(executor, e, path.join(cwd, ".argus-delegate-runtime"));
+  e = withCliToolsPath(e);
 
   // Auth first: a missing credential blocks, it never reroutes.
   const auth = authStatus(executor, e);
