@@ -17,6 +17,7 @@ CTX = TransitionContext()
 LEGAL: dict[tuple[TaskState, Action], TaskState] = {
     (S.AWAITING_APPROVAL, A.APPROVE): S.READY,
     (S.PENDING, A.DEPS_SATISFIED): S.READY,
+    (S.READY, A.DEPS_ADDED): S.PENDING,
     (S.READY, A.CLAIM): S.CLAIMED,
     (S.CLAIMED, A.COMPLETE): S.SUCCEEDED,
     (S.CLAIMED, A.FAIL): S.READY,

@@ -34,8 +34,9 @@ async def inbox(
     cursor: str | None = None,
 ) -> InboxPage:
     """What waits on a manager, oldest first: blocked, in-review and
-    awaiting-approval tasks with their open decision, plus open decisions about
-    pools and knowledge. `state` keeps only task rows in those states."""
+    awaiting-approval tasks with their open decision, pending tasks stuck behind a
+    failed or cancelled dependency (`failed_dependencies`), plus open decisions
+    about pools and knowledge. `state` keeps only task rows in those states."""
     async with db.snapshot() as snap:
         return await inbox_module.inbox(
             snap,

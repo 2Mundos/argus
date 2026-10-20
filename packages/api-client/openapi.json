@@ -2824,6 +2824,29 @@
         "title": "DecisionsOverview",
         "type": "object"
       },
+      "DependenciesRequest": {
+        "properties": {
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Depends On",
+            "type": "array"
+          },
+          "expected_version": {
+            "minLength": 1,
+            "title": "Expected Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "depends_on",
+          "expected_version"
+        ],
+        "title": "DependenciesRequest",
+        "type": "object"
+      },
       "DockerOptions-Input": {
         "properties": {
           "extra_hosts": {
@@ -3471,6 +3494,13 @@
               }
             ]
           },
+          "failed_dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failed Dependencies",
+            "type": "array"
+          },
           "kind": {
             "anyOf": [
               {
@@ -3557,7 +3587,8 @@
           "decision_kind",
           "audience",
           "age_s",
-          "artifact_ids"
+          "artifact_ids",
+          "failed_dependencies"
         ],
         "title": "InboxItem",
         "type": "object"
@@ -11602,7 +11633,7 @@
     },
     "/api/inbox": {
       "get": {
-        "description": "What waits on a manager, oldest first: blocked, in-review and\nawaiting-approval tasks with their open decision, plus open decisions about\npools and knowledge. `state` keeps only task rows in those states.",
+        "description": "What waits on a manager, oldest first: blocked, in-review and\nawaiting-approval tasks with their open decision, pending tasks stuck behind a\nfailed or cancelled dependency (`failed_dependencies`), plus open decisions\nabout pools and knowledge. `state` keeps only task rows in those states.",
         "operationId": "inbox_api_inbox_get",
         "parameters": [
           {
@@ -14022,6 +14053,64 @@
           }
         ],
         "summary": "Complete Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/dependencies": {
+      "put": {
+        "description": "Replace the dependencies of a task that is still waiting (pending,\nawaiting_approval or ready). A ready task with an unfinished new dependency\ngoes back to pending; a pending one whose dependencies all succeeded becomes\nready. Refuses cycles (422 dependency_cycle) and stale versions (409).",
+        "operationId": "set_dependencies_api_tasks__task_id__dependencies_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DependenciesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Dependencies",
         "tags": [
           "tasks"
         ]

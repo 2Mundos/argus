@@ -224,7 +224,7 @@ class Runtime(BaseModel):
 
 
 ViewArg = Literal["summary", "detail"]
-InboxState = Literal["blocked", "in_review", "awaiting_approval"]
+InboxState = Literal["blocked", "in_review", "awaiting_approval", "pending"]
 TaskStateArg = Literal[
     "awaiting_approval",
     "pending",
@@ -586,7 +586,8 @@ async def get_inbox(
 ) -> dict:
     """What waits on you, oldest first: blocked, in-review and awaiting-approval
     tasks with their open decision (id, kind, audience) and current artifact ids,
-    plus open pool and knowledge decisions. Totals by state and decision kind
+    pending tasks stuck on a failed or cancelled dependency (`failed_dependencies`:
+    retry it or set_task_dependencies), plus open pool and knowledge decisions. Totals by state and decision kind
     cover every match. view=detail adds each task and decision in full."""
     return await _call(
         ctx,
@@ -627,6 +628,21 @@ async def list_tasks(
             "limit": limit,
             "cursor": cursor,
         },
+    )
+
+
+@tool(MANAGERS)
+async def set_task_dependencies(
+    ctx: Context, task_id: str, depends_on: list[str], expected_version: str
+) -> dict:
+    """Replace a waiting task's dependencies (pending, awaiting_approval or ready);
+    pass its `version` as expected_version. Drop a failed or cancelled dependency
+    to release a stuck task. Cycles are refused (422 dependency_cycle)."""
+    return await _call(
+        ctx,
+        "PUT",
+        f"/tasks/{task_id}/dependencies",
+        json={"depends_on": depends_on, "expected_version": expected_version},
     )
 
 

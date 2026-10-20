@@ -96,6 +96,8 @@ Findings outside the gap list:
   same snapshot. A row about another subject counts under its subject type
   (`pool`), and a task with no open decision under `none`. `states` keeps only
   task rows. Order: oldest first, by when the row started waiting.
+  Pending tasks stuck behind a failed or cancelled dependency are rows too
+  ([task dependencies](task-dependencies.spec.md) 3.2).
 - **`GET /api/tasks`** gains `project`, `kind`, repeated `state`, `view` and
   `cursor`. It always returns the page envelope. The dashboard moves to the new
   shape in the same PR, so the generated client keeps a single response type.

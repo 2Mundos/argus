@@ -31,6 +31,7 @@ TERMINAL = frozenset({TaskState.SUCCEEDED, TaskState.FAILED, TaskState.CANCELLED
 class Action(StrEnum):
     APPROVE = "approve"
     DEPS_SATISFIED = "deps_satisfied"
+    DEPS_ADDED = "deps_added"  # an unfinished dependency was added to a ready task
     CLAIM = "claim"
     COMPLETE = "complete"
     FAIL = "fail"
@@ -75,6 +76,8 @@ def transition(state: TaskState, action: Action, ctx: TransitionContext) -> Task
             return S.READY if ctx.deps_done else S.PENDING
         case S.PENDING, A.DEPS_SATISFIED:
             return S.READY
+        case S.READY, A.DEPS_ADDED:
+            return S.PENDING
         case S.READY, A.CLAIM:
             return S.CLAIMED
         case S.CLAIMED, A.COMPLETE:

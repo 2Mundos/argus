@@ -1,8 +1,9 @@
 """What waits on a manager, in one page (MCP operations 3.2).
 
 Rows are tasks that are blocked, in review or awaiting approval, each joined
-with its open decision if any, plus open decisions about other subjects (pools,
-knowledge proposals). Totals come from the same snapshot as the page.
+with its open decision if any; pending tasks stuck behind a failed or cancelled
+dependency (task dependencies 3.2); and open decisions about other subjects
+(pools, knowledge proposals). Totals come from the same snapshot as the page.
 """
 
 from collections import defaultdict
@@ -26,8 +27,6 @@ from argus_api.paging import (
 from argus_api.tasks import views as tasks
 from argus_api.tasks.views import TaskDetail
 
-WAITING = (TaskState.BLOCKED, TaskState.IN_REVIEW, TaskState.AWAITING_APPROVAL)
-
 
 class InboxItem(BaseModel):
     subject_type: str  # task, pool, knowledge_proposal
@@ -43,6 +42,7 @@ class InboxItem(BaseModel):
     audience: Audience | None  # who may answer it
     age_s: int  # since it started waiting
     artifact_ids: list[str]  # the current attempt's
+    failed_dependencies: list[str]  # failed or cancelled; a pending task waits on them
     task: TaskDetail | None = None  # view=detail only
     decision: DecisionDetail | None = None  # view=detail only
 
@@ -62,6 +62,13 @@ _ROWS = (
     " FROM tasks t LEFT JOIN decisions d ON d.subject_type = 'task'"
     "  AND d.subject_id = t.id AND d.state = 'open'"
     " WHERE t.state IN ('blocked', 'in_review', 'awaiting_approval')"
+    " UNION ALL"
+    " SELECT 'task', t.id, t.title, t.project, t.state, t.kind, t.attempt,"
+    " t.updated_at, NULL, NULL, NULL, max(u.updated_at), t.id"
+    " FROM tasks t JOIN task_deps td ON td.task_id = t.id"
+    " JOIN tasks u ON u.id = td.depends_on_id"
+    " WHERE t.state = 'pending' AND u.state IN ('failed', 'cancelled')"
+    " GROUP BY t.id"
     " UNION ALL"
     " SELECT d.subject_type, d.subject_id, coalesce(kp.title, d.subject_id),"
     " kp.project, NULL, NULL, NULL, NULL, d.id, d.kind, d.audience,"
@@ -123,6 +130,9 @@ async def inbox(
 
     task_ids = [r["subject_id"] for r in rows if r["subject_type"] == "task"]
     artifacts = await _current_artifacts(snap, task_ids)
+    stuck = await _failed_dependencies(
+        snap, [r["subject_id"] for r in rows if r["state"] == TaskState.PENDING]
+    )
     details: dict[str, TaskDetail] = {}
     if view == "detail" and task_ids:
         page = await tasks.get_tasks(snap, task_ids, "detail")
@@ -135,6 +145,7 @@ async def inbox(
                 **dict(r),
                 "age_s": max(0, int((snap.now - _at(r["since"])).total_seconds())),
                 "artifact_ids": artifacts.get(r["subject_id"], []),
+                "failed_dependencies": stuck.get(r["subject_id"], []),
             }
         )
         if view == "detail":
@@ -176,6 +187,26 @@ async def _current_artifacts(snap: Snapshot, task_ids: list[str]) -> dict[str, l
         for task_id, artifact_id in await cur.fetchall():
             found[task_id].append(artifact_id)
     return found
+
+
+async def _failed_dependencies(
+    snap: Snapshot, task_ids: list[str]
+) -> dict[str, list[str]]:
+    if not task_ids:
+        return {}
+    found: dict[str, list[str]] = defaultdict(list)
+    marks = ",".join("?" * len(task_ids))
+    sql = f"{_FAILED_DEPS} AND d.task_id IN ({marks})"
+    async with snap.conn.execute(sql + " ORDER BY u.id", task_ids) as cur:
+        for task_id, dep_id in await cur.fetchall():
+            found[task_id].append(dep_id)
+    return found
+
+
+_FAILED_DEPS = (
+    "SELECT d.task_id, u.id FROM task_deps d JOIN tasks u ON u.id = d.depends_on_id"
+    " WHERE u.state IN ('failed', 'cancelled')"
+)
 
 
 async def _decision_row(snap: Snapshot, decision_id: str) -> Any:

@@ -870,8 +870,9 @@ export interface paths {
         /**
          * Inbox
          * @description What waits on a manager, oldest first: blocked, in-review and
-         *     awaiting-approval tasks with their open decision, plus open decisions about
-         *     pools and knowledge. `state` keeps only task rows in those states.
+         *     awaiting-approval tasks with their open decision, pending tasks stuck behind a
+         *     failed or cancelled dependency (`failed_dependencies`), plus open decisions
+         *     about pools and knowledge. `state` keeps only task rows in those states.
          */
         get: operations["inbox_api_inbox_get"];
         put?: never;
@@ -1577,6 +1578,29 @@ export interface paths {
         put?: never;
         /** Complete Task */
         post: operations["complete_task_api_tasks__task_id__complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/dependencies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Dependencies
+         * @description Replace the dependencies of a task that is still waiting (pending,
+         *     awaiting_approval or ready). A ready task with an unfinished new dependency
+         *     goes back to pending; a pending one whose dependencies all succeeded becomes
+         *     ready. Refuses cycles (422 dependency_cycle) and stale versions (409).
+         */
+        put: operations["set_dependencies_api_tasks__task_id__dependencies_put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2619,6 +2643,13 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /** DependenciesRequest */
+        DependenciesRequest: {
+            /** Depends On */
+            depends_on: string[];
+            /** Expected Version */
+            expected_version: string;
+        };
         /** DockerOptions */
         "DockerOptions-Input": {
             /**
@@ -2844,6 +2875,8 @@ export interface components {
             /** Decision Id */
             decision_id: string | null;
             decision_kind: components["schemas"]["DecisionKind"] | null;
+            /** Failed Dependencies */
+            failed_dependencies: string[];
             /** Kind */
             kind: string | null;
             /** Project */
@@ -7644,6 +7677,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["CompleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_dependencies_api_tasks__task_id__dependencies_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DependenciesRequest"];
             };
         };
         responses: {
