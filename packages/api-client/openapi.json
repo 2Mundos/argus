@@ -932,16 +932,30 @@
         "type": "object"
       },
       "AnswerOutcome": {
+        "description": "One item's result: what was decided, not the whole decision (its question\nis already known to the caller); get_decision reads it in full.",
         "properties": {
-          "decision": {
+          "answer_choice": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/AnsweredDecision"
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Answer Choice"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
           },
           "decision_id": {
             "title": "Decision Id",
@@ -960,6 +974,33 @@
           "ok": {
             "title": "Ok",
             "type": "boolean"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          },
+          "subject_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Type"
           }
         },
         "required": [
@@ -3089,6 +3130,32 @@
           "data"
         ],
         "title": "EventOut",
+        "type": "object"
+      },
+      "EventWait": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/EventOut"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "next_cursor": {
+            "title": "Next Cursor",
+            "type": "integer"
+          },
+          "timed_out": {
+            "title": "Timed Out",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "events",
+          "next_cursor",
+          "timed_out"
+        ],
+        "title": "EventWait",
         "type": "object"
       },
       "ExhaustedReport": {
@@ -11327,6 +11394,106 @@
           }
         ],
         "summary": "Stream Events",
+        "tags": [
+          "events"
+        ]
+      }
+    },
+    "/api/events/wait": {
+      "get": {
+        "description": "Events after the cursor `after`, oldest first, waiting up to `wait_s`\nseconds for one when none has happened yet (long-poll, like a claim). Without\n`after`, waits for the next event from now. Keep `next_cursor` for the next\ncall; nothing is missed between calls.",
+        "operationId": "wait_events_api_events_wait_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "wait_s",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 30,
+              "minimum": 0,
+              "title": "Wait S",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subject_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subject_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventWait"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Wait Events",
         "tags": [
           "events"
         ]

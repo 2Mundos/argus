@@ -1,5 +1,7 @@
 """Asking and answering decisions; answers drive task transitions (3.10)."""
 
+from datetime import datetime
+
 from argus_core.auth import Scope
 from argus_core.decisions import (
     Ask,
@@ -113,9 +115,16 @@ class ItemError(BaseModel):
 
 
 class AnswerOutcome(BaseModel):
+    """One item's result: what was decided, not the whole decision (its question
+    is already known to the caller); get_decision reads it in full."""
+
     decision_id: str
     ok: bool
-    decision: AnsweredDecision | None = None
+    replayed: bool = False
+    subject_type: str | None = None
+    subject_id: str | None = None
+    answer_choice: str | None = None
+    decided_at: datetime | None = None
     error: ItemError | None = None
 
 
@@ -142,7 +151,15 @@ async def answer_many(
             )
         else:
             outcomes.append(
-                AnswerOutcome(decision_id=item.decision_id, ok=True, decision=decision)
+                AnswerOutcome(
+                    decision_id=item.decision_id,
+                    ok=True,
+                    replayed=decision.replayed,
+                    subject_type=decision.subject_type,
+                    subject_id=decision.subject_id,
+                    answer_choice=decision.answer_choice,
+                    decided_at=decision.decided_at,
+                )
             )
     return outcomes
 

@@ -34,6 +34,7 @@
  *                             instance ends; only when ARGUS_INSTANCE_ID is set)
  */
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { log } from "../log.js";
@@ -113,6 +114,8 @@ export interface ArgusConfig {
   selectModels?: (task: ArgusTask) => Promise<ModelSelection>;
   /** Called once, after Argus drained this agent, its work is done, and it left. */
   onDrained?: () => void;
+  /** Reported on heartbeat as `runtime.worker_version`, e.g. "nanoclaw/1.2.3". */
+  workerVersion?: string;
   /** Test seams. */
   fetch?: typeof fetch;
   now?: () => number;
@@ -439,7 +442,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let attachFailures: string[] = [];
   let resends = 0;
   let account: { id: string; name: string; provider: string } | null = null;
-  let executor: { id: string; name: string } | null = null;
+  let executor: { id: string; name: string; provider: string } | null = null;
+  let engineInUse: string | null = null; // the harness the leased account selected
   let activeAccountLeases: AccountLease[] = [];
   let repositoryTarget: ApplyTarget | null = null;
   let repositoryLeaseHeld = false;
@@ -478,6 +482,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     try {
       const { data } = await client.call("POST", "/agents/me/heartbeat", {
         leases: current ? [{ task_id: current.id, attempt: current.attempt }] : [],
+        // Self-reported, shown by pool inspection as such; null means not known.
+        runtime: {
+          worker_version: cfg.workerVersion ?? null,
+          engine: engineInUse,
+          executor: executor?.provider ?? null,
+        },
       });
       if (data.state === "draining") {
         draining = true;
@@ -772,7 +782,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       await client.call("POST", "/accounts/release?role=executor").catch(() => undefined);
       engine = (await applyLeasesDetailed(acc.onecli, target, held, fetchImpl)).engine;
     }
-    executor = held[1] ? { id: held[1].account_id, name: held[1].name } : null;
+    executor = held[1]
+      ? { id: held[1].account_id, name: held[1].name, provider: held[1].provider }
+      : null;
     activeAccountLeases = [...held];
     if (activeRepositoryLease && activeRepositoryUrl) {
       await applyRepositoryLease(
@@ -785,6 +797,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       );
     }
     repositoryAssignmentReconciled = true;
+    engineInUse = engine;
     const changed = (await acc.selectEngine?.(engine)) ?? false;
     if (changed) log.info("Engine selected for the leased account", { engine, reason });
     // Best effort: the audit event must not block work.
@@ -1259,6 +1272,16 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
   };
 }
 
+/** The running NanoClaw's version, from its package.json (the host's cwd). */
+function nanoclawVersion(): string | undefined {
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+    return typeof pkg.version === "string" ? `nanoclaw/${pkg.version}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function fromEnv(): ChannelAdapter | null {
   const url = process.env.ARGUS_URL?.trim();
   if (!url) return null;
@@ -1279,6 +1302,7 @@ export function fromEnv(): ChannelAdapter | null {
       .map((c) => c.trim())
       .filter(Boolean),
     name: process.env.ARGUS_AGENT_NAME?.trim() || "nanoclaw",
+    workerVersion: nanoclawVersion(),
     accounts: accountsFromEnv(),
     selectModels: modelsFromEnv(),
     // Under an Argus instance, a drained agent means this host should go: ask

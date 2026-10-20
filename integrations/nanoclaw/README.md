@@ -201,8 +201,13 @@ Lists are paged: `total` counts every match; follow `next_cursor` while
 `has_more`. For the fleet, `inspect_pool` shows what each instance is proven to
 run (each fact's `source`, or `unknown`); `recycle_instance` and `drain_agent`
 never interrupt claimed work; admins change options with `update_pool`, passing
-the pool's `version`. If a tool is missing, say which and stop; do not script
-REST around it.
+the pool's `version`; `wait_for_events` waits for the effect instead of polling.
+If a tool is missing, say which and stop; do not script REST around it.
+
+The channel reports its `runtime` on every heartbeat: `nanoclaw/<version>` from
+the host's `package.json`, the engine the leased account selected, and the
+executor lease's provider. Parts it does not know are sent as null and shown as
+`unknown`.
 
 ## Not done yet
 

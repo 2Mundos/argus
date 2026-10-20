@@ -22,7 +22,8 @@ never change it. It runs only on the tree it was recorded on (8c14188): the
 tools it calls have changed shape since, so check that commit out to rerun it.
 
 `journey_after` uses the P0 read tools; its numbers are in `results/after.json`.
-`journey_answers` adds the batch answer (step 4), in `results/answers.json`.
+`journey_answers` adds the batch answer (step 4), in `results/answers.json`;
+rerun after its items became compact (step 6), in `results/answers-compact.json`.
 Each recorded journey stays as it was; a later step adds its own.
 
     uv run python apps/api/bench/mcp_inbox.py [answers|after|before] [--out FILE]

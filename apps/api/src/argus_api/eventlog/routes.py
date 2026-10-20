@@ -59,6 +59,92 @@ async def list_events(
     ]
 
 
+WAIT_LIMIT = 100
+
+
+class EventWait(BaseModel):
+    events: list[EventOut]  # oldest first, at most 100
+    next_cursor: int  # pass as `after` next time; unchanged when nothing came
+    timed_out: bool  # nothing matched within wait_s
+
+
+@router.get("/wait")
+async def wait_events(
+    db: DbDep,
+    _: CallerDep,
+    after: Annotated[int | None, Query(ge=0)] = None,
+    wait_s: Annotated[float, Query(ge=0, le=30)] = 0,
+    subject_type: str | None = None,
+    subject_id: str | None = None,
+) -> EventWait:
+    """Events after the cursor `after`, oldest first, waiting up to `wait_s`
+    seconds for one when none has happened yet (long-poll, like a claim). Without
+    `after`, waits for the next event from now. Keep `next_cursor` for the next
+    call; nothing is missed between calls."""
+    return await wait(db, after, wait_s, subject_type, subject_id)
+
+
+async def wait(
+    db: Database,
+    after: int | None,
+    wait_s: float,
+    subject_type: str | None = None,
+    subject_id: str | None = None,
+) -> EventWait:
+    def matches(e: Event) -> bool:
+        return (subject_type is None or e.subject_type == subject_type) and (
+            subject_id is None or e.subject_id == subject_id
+        )
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + wait_s
+    # Subscribe before reading, so an event committed in between is not missed.
+    with db.bus.subscribe() as sub:
+        if after is None:
+            async with (
+                db.read() as conn,
+                conn.execute("SELECT coalesce(max(id), 0) FROM events") as cur,
+            ):
+                row = await cur.fetchone()
+            after = row[0] if row else 0
+        while True:
+            events = await _events_after(db, after, subject_type, subject_id)
+            if events:
+                return EventWait(
+                    events=events, next_cursor=events[-1].id, timed_out=False
+                )
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return EventWait(events=[], next_cursor=after, timed_out=True)
+            try:
+                async with asyncio.timeout(remaining):
+                    await sub.next_matching(lambda e: e.id > after and matches(e))
+            except OverflowedError:
+                continue  # missed events on the bus: the table has them
+            except TimeoutError:
+                return EventWait(events=[], next_cursor=after, timed_out=True)
+
+
+async def _events_after(
+    db: Database, after: int, subject_type: str | None, subject_id: str | None
+) -> list[EventOut]:
+    sql = "SELECT * FROM events WHERE id > ?"
+    params: list[int | str] = [after]
+    for column, value in (("subject_type", subject_type), ("subject_id", subject_id)):
+        if value is not None:
+            sql += f" AND {column} = ?"
+            params.append(value)
+    async with (
+        db.read() as conn,
+        conn.execute(sql + " ORDER BY id LIMIT ?", (*params, WAIT_LIMIT)) as cur,
+    ):
+        rows = await cur.fetchall()
+    return [
+        EventOut.model_validate({**dict(r), "data": json.loads(r["data"])})
+        for r in rows
+    ]
+
+
 @router.get("/stream", response_class=StreamingResponse)
 async def stream_events(
     db: DbDep,

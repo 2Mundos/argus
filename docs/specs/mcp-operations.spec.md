@@ -131,8 +131,10 @@ Findings outside the gap list:
   no request id, or a decision that was cancelled rather than answered. The
   request id (≤200 characters) is stored on the decision.
   `answer_decisions([{decision_id, choice, text, request_id}])` (≤20) answers
-  each item in its own write transaction and returns one
-  `{decision_id, ok, decision | error}` per item, in order. REST serves it as
+  each item in its own write transaction and returns one compact
+  `{decision_id, ok, replayed, subject_type, subject_id, answer_choice,
+  decided_at}` or `{decision_id, ok: false, error}` per item, in order. It does
+  not repeat the decision's question; `get_decision` reads it in full. REST serves it as
   `POST /api/decisions/answers`; a malformed or oversized batch is a 422 as a
   whole, and an item's domain error (`{status, code, message}`) fails only it.
 - **Unblock and retry** are exposed as MCP `unblock_task` and `retry_task`.
@@ -184,10 +186,13 @@ Findings outside the gap list:
   is already draining changes nothing. The same stop rule now covers every
   draining instance, so an idle drained worker that never calls `leave` no
   longer holds its slot.
-- **Bounded wait:** `GET /api/events?after=<id>&wait_s≤30&subject_type&subject_id`
+- **Bounded wait:** `GET /api/events/wait?after=<id>&wait_s≤30&subject_type&subject_id`
   → MCP `wait_for_events`. It returns the events after the cursor at once, or
   long-polls on the bus up to `wait_s`, the same pattern as `claim_task`. It
-  returns `{events, next_cursor, timed_out}` with at most 100 events.
+  returns `{events, next_cursor, timed_out}` with at most 100 events, oldest
+  first. Without `after` it waits from the newest event. It has its own path, so
+  `GET /api/events` keeps its newest-first list. REST defaults `wait_s` to 0 (a
+  plain read); MCP to 20.
 
 ## 3.4 Discovery
 
@@ -257,6 +262,13 @@ Each item returns the whole decision, question included (13.4 KB for ten), and
 the new tool adds 1.0 KB to the orchestrator's `tools/list` (23,825 bytes, 38
 tools).
 
+**Measured after step 6** (`results/answers-compact.json`): with compact batch
+items the `answer_decisions` response drops from 13,386 to 3,580 bytes, and the
+batch journey's context to 69,672 bytes (17,418 est. tokens), against 77,422 for
+answering one at a time on the same tree. Against the frozen baseline (227,008)
+that is −69%, in 16 calls instead of 32. The orchestrator's `tools/list` is
+26,957 bytes (44 tools), `wait_for_events` included.
+
 **Schema cost of step 5** (no fleet journey is benchmarked): the orchestrator's
 `tools/list` grows to 26,148 bytes (43 tools, +2.3 KB), the admin's to 21,123
 (34 tools, +3.5 KB with `update_pool`), and the worker's to 13,796 (+0.5 KB, the
@@ -287,7 +299,7 @@ heartbeat's `runtime`). The inbox journey is unchanged in calls; its context is
 
 # 6. Implementation Consequences
 
-Delivered as small PRs, in order (1 to 5 are done):
+Delivered as small PRs, in order (all done):
 
 1. **This spec** and the index link.
 2. **Baseline and discovery:** the frozen "before" benchmark (script, seed,

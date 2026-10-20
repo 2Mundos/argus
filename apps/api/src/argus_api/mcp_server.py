@@ -50,7 +50,8 @@ tool you need is missing, say which and stop; do not script REST around it.
 For the fleet: inspect_pool shows what each instance is proven to run (a fact's
 `source`, or `unknown`); recycle_instance and drain_agent never interrupt claimed
 work; admins change options with update_pool(expected_version=the pool's version).
-Then inspect_pool again to read back the effect."""
+wait_for_events(subject_type, subject_id) waits for the change to happen instead
+of polling; then inspect_pool or get_tasks reads back the effect."""
 
 server = MCPServer("argus", version="0.1.0", instructions=INSTRUCTIONS)
 
@@ -824,6 +825,31 @@ async def answer_decisions(ctx: Context, answers: list[Answer]) -> dict:
         "POST",
         "/decisions/answers",
         json={"answers": [a.model_dump() for a in answers]},
+    )
+
+
+@tool(MANAGERS)
+async def wait_for_events(
+    ctx: Context,
+    after: int | None = None,
+    wait_s: Annotated[float, Field(ge=0, le=30)] = 20,
+    subject_type: str | None = None,
+    subject_id: str | None = None,
+) -> dict:
+    """Wait for what happens next instead of polling: events after cursor `after`
+    (oldest first, ≤100), or up to wait_s seconds (max 30) for the first one.
+    Without `after`, waits from now. Pass back `next_cursor`; `timed_out` means
+    nothing happened. Filter by subject, e.g. ("instance", id) or ("task", id)."""
+    return await _call(
+        ctx,
+        "GET",
+        "/events/wait",
+        params={
+            "after": after,
+            "wait_s": wait_s,
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+        },
     )
 
 
