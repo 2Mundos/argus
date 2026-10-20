@@ -159,23 +159,42 @@ test("actual harness hook applies config, stops stale containers and pins policy
   });
   const hook = modelsFromEnv();
   process.env.ARGUS_MODEL_POLICY = "invalid after startup";
-  const selection = await hook({ id: "task1", attempt: 2, failures: 1, spec: "" });
+  const held = {
+    engine: { provider: "anthropic", account_id: "a-claude" },
+    executor: { provider: "openai", account_id: "a-codex" },
+  };
+  const selection = await hook({ id: "task1", attempt: 2, failures: 1, spec: "" }, held);
   assert.equal(globalThis.argusModelTest.config.model, "claude-opus-5-5");
   assert.deepEqual(globalThis.argusModelTest.killed, ["session1"]);
   assert.equal(selection.fallback_reason, "previous_task_failure");
   const file = path.join(dir, "groups/worker/argus-model-policy.json");
   const saved = JSON.parse(readFileSync(file, "utf8"));
   assert.equal(saved.revision, selection.policy_revision);
-  assert.deepEqual(saved.context, { task_id: "task1", attempt: 2 });
+  // The pinned context carries the leased account's engine/provider (global priority
+  // chose it) so delegated runs trace to it; no secret or account id rides here.
+  assert.deepEqual(saved.context, {
+    task_id: "task1",
+    attempt: 2,
+    engine: "claude",
+    account_provider: "anthropic",
+    executor_account_provider: "openai",
+    preferred_executor: "codex",
+  });
   assert.equal(loadPolicy({}, file).policy.implementation.codex[0], "gpt-6-luna");
-  await hook({ id: "task2", attempt: 1, failures: 1, spec: "" });
+  await hook({ id: "task2", attempt: 1, failures: 1, spec: "" }, held);
   assert.equal(globalThis.argusModelTest.killed.length, 1, "unchanged model keeps warm sessions");
 });
 
 test("channel installer is idempotent and includes source and built policy assets", (t) => {
   const target = mkdtempSync(path.join(os.tmpdir(), "argus-install-"));
   t.after(() => rmSync(target, { recursive: true, force: true }));
-  for (const dir of ["src/channels", "src/gateway-providers", "scripts", "container"]) {
+  for (const dir of [
+    "src/channels",
+    "src/gateway-providers",
+    "src/drivers",
+    "scripts",
+    "container",
+  ]) {
     mkdirSync(path.join(target, dir), { recursive: true });
   }
   writeFileSync(path.join(target, "src/channels/index.ts"), "// fake NanoClaw barrel\n");

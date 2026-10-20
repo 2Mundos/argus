@@ -545,10 +545,18 @@ async def write_knowledge(
 
 
 @tool(AGENTS)
-async def lease_account(ctx: Context, providers: list[str]) -> dict:
-    """Get a provider account (with its credential) to do your work, from the
-    providers you can use, most preferred first (e.g. ["anthropic", "openai"])."""
-    return await _call(ctx, "POST", "/accounts/lease", json={"providers": providers})
+async def lease_account(
+    ctx: Context, runtime_providers: list[str] | None = None
+) -> dict:
+    """Get a provider account (with its credential) to do your work: the best
+    usable one across all providers, by priority. Pass `runtime_providers` only to
+    say which providers your runtime can technically use; it does not rank them."""
+    return await _call(
+        ctx,
+        "POST",
+        "/accounts/lease",
+        json={"runtime_providers": runtime_providers} if runtime_providers else {},
+    )
 
 
 @tool(AGENTS)

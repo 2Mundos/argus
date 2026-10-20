@@ -387,14 +387,15 @@ GATEWAY = pytest.mark.parametrize(
 
 
 @GATEWAY
-def test_guided_nanoclaw_worker_inherits_the_operator_gateway_and_providers(
+def test_guided_nanoclaw_worker_inherits_the_gateway_and_ignores_retired_provider_env(
     client: TestClient, target: FakeTarget, extra_env: dict
 ) -> None:
     ready_node(target)
     pool = create(client, template="nanoclaw-socket", name="inherits").json()["pool"]
     assert pool["nanoclaw"]["onecli_url"] == "http://onecli:10254"
-    assert pool["nanoclaw"]["account_providers"] == ["openai", "anthropic"]
-    assert pool["nanoclaw"]["executor_providers"] == ["cursor"]
+    # The retired provider env never becomes pool configuration.
+    assert "account_providers" not in pool["nanoclaw"]
+    assert "executor_providers" not in pool["nanoclaw"]
     assert pool["nanoclaw"]["agent_image"] == extra_env["ARGUS_NANOCLAW_AGENT_IMAGE"]
     assert pool["docker"]["network"] == "onecli-control"
     # The isolation is still the template's own.
@@ -410,8 +411,8 @@ def test_without_operator_gateway_settings_the_pool_keeps_its_defaults(
         "pool"
     ]
     assert pool["nanoclaw"]["onecli_url"] == "http://host.docker.internal:10254"
-    assert pool["nanoclaw"]["account_providers"] == []
-    assert pool["nanoclaw"]["executor_providers"] == []
+    assert "account_providers" not in pool["nanoclaw"]
+    assert "executor_providers" not in pool["nanoclaw"]
     assert pool["docker"]["network"] is None
 
 

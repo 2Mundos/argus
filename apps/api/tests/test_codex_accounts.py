@@ -685,10 +685,16 @@ def ledger(*engines: str) -> dict:
     return {e: {"installed": ok, "validated": ok} for e in engines}
 
 
-def counts(**by_provider: tuple[int, int, int]) -> dict[str, AccountsSummary]:
+def counts(**by_provider: tuple[int, ...]) -> dict[str, AccountsSummary]:
+    """provider -> (available, exhausted, disabled[, best available priority])."""
     return {
-        p: AccountsSummary(available=a, exhausted=e, disabled=d)
-        for p, (a, e, d) in by_provider.items()
+        p: AccountsSummary(
+            available=v[0],
+            exhausted=v[1],
+            disabled=v[2],
+            best_priority=(v[3] if len(v) > 3 else 0) if v[0] else None,
+        )
+        for p, v in by_provider.items()
     }
 
 
@@ -698,68 +704,78 @@ def route(request: RouteRequest, accounts: dict, engines=("codex", "claude")):
 
 
 def test_registry_makes_authenticated_true_and_unknown_quota_is_not_zero() -> None:
-    d, cat = route(HARD, counts(openai=(1, 0, 0), anthropic=(1, 0, 0)))
+    d, cat = route(HARD, counts(openai=(1, 0, 0, 10), anthropic=(1, 0, 0, 10)))
     codex = next(e for e in cat.engines if e.id == "codex")
     assert codex.readiness.authenticated.ok is True and codex.usable
-    assert (d.target, d.fallback_from, d.blocked) == ("codex", None, None)
+    assert (d.target, d.fallback_from, d.blocked) == ("claude", None, None)  # tie: id
 
 
-def test_no_codex_account_falls_back_explicitly_to_claude() -> None:
-    d, cat = route(HARD, counts(anthropic=(1, 0, 0)))
+def test_the_highest_priority_account_picks_the_engine_across_providers() -> None:
+    d, _ = route(HARD, counts(openai=(1, 0, 0, 10), anthropic=(1, 0, 0, 100)))
+    assert (d.target, d.blocked) == ("claude", None)
+    d, _ = route(HARD, counts(openai=(1, 0, 0, 100), anthropic=(1, 0, 0, 10)))
+    assert (d.target, d.blocked) == ("codex", None)  # no provider is favoured by name
+
+
+def test_no_codex_account_routes_to_claude_and_says_why() -> None:
+    d, cat = route(HARD, counts(anthropic=(1, 0, 0, 100)))
     codex = next(e for e in cat.engines if e.id == "codex")
     assert codex.readiness.authenticated.ok is False and not codex.usable
     assert d.target == "claude" and d.blocked is None
-    assert d.fallback_from and d.fallback_from.startswith("codex")
-    assert "fell back from codex" in d.reason
+    assert d.fallback_from is None  # nothing was passed over: codex has no account
 
 
-def test_all_codex_accounts_exhausted_or_disabled_fall_back() -> None:
-    d, cat = route(HARD, counts(openai=(0, 2, 1), anthropic=(2, 0, 0)))
+def test_exhausted_or_disabled_engine_accounts_are_passed_over() -> None:
+    d, cat = route(HARD, counts(openai=(0, 2, 1), anthropic=(2, 0, 0, 100)))
     codex = next(e for e in cat.engines if e.id == "codex")
     assert codex.readiness.authenticated.ok is True  # credentials exist
     assert codex.accounts == AccountsSummary(available=0, exhausted=2, disabled=1)
     assert d.target == "claude" and "2 exhausted" in (d.fallback_from or "")
+    d, _ = route(HARD, counts(openai=(1, 0, 0, 100), anthropic=(0, 2, 1)))
+    assert d.target == "codex" and "2 exhausted" in (d.fallback_from or "")
+    assert "fell back from claude" in d.reason
 
 
-def test_code_runs_on_codex_even_when_claude_is_unusable() -> None:
-    # Claude Code is the preferred executor, not the engine: an unusable one does
-    # not block or divert the task; Codex works directly.
-    d, _ = route(CODE, counts(openai=(1, 0, 0), anthropic=(0, 1, 0)))
-    assert (d.target, d.blocked, d.fallback_from, d.executor) == (
-        "codex",
-        None,
-        None,
-        None,
-    )
-    d, _ = route(CODE, counts(openai=(1, 0, 0)), engines=("codex",))
+def test_code_delegates_to_the_best_executor_when_it_is_not_the_engine() -> None:
+    d, _ = route(CODE, counts(openai=(1, 0, 0, 100), anthropic=(1, 0, 0, 10)))
+    assert (d.target, d.blocked, d.executor) == ("codex", None, None)  # works directly
+    d, _ = route(CODE, counts(openai=(1, 0, 0, 10)), engines=("codex",))
     assert (d.target, d.blocked, d.executor) == ("codex", None, None)
-
-
-def test_code_with_both_healthy_names_claude_as_executor() -> None:
-    d, _ = route(CODE, counts(openai=(1, 0, 0), anthropic=(1, 0, 0)))
-    assert (d.target, d.fallback_from, d.executor) == ("codex", None, "claude")
     plain, _ = route(HARD, counts(openai=(1, 0, 0), anthropic=(1, 0, 0)))
     assert plain.executor is None  # only code tasks delegate
 
 
-def test_code_without_a_codex_account_falls_back_to_claude_as_engine() -> None:
-    d, _ = route(CODE, counts(anthropic=(1, 0, 0)))
-    assert (d.target, d.blocked) == ("claude", None)
-    assert d.fallback_from and d.fallback_from.startswith("codex")
+def test_a_busy_top_account_is_not_routed_to_but_a_free_lower_one_is() -> None:
+    busy = AccountsSummary(
+        available=1, busy=1, leasable=0, best_priority=None, exhausted=0, disabled=0
+    )
+    free = AccountsSummary(available=1, leasable=1, best_priority=0)
+    d, cat = route(HARD, {"anthropic": busy, "openai": free})
+    claude = next(e for e in cat.engines if e.id == "claude")
+    assert not claude.usable
+    assert (d.target, d.blocked) == ("codex", None)
+    d, _ = route(HARD, {"anthropic": busy, "openai": busy})
+    assert d.blocked and "at capacity" in d.blocked
+
+
+def test_code_without_a_claude_account_runs_on_codex() -> None:
+    d, _ = route(CODE, counts(openai=(1, 0, 0, 10)))
+    assert (d.target, d.blocked) == ("codex", None)
 
 
 def test_code_with_no_account_at_all_is_blocked() -> None:
     d, _ = route(CODE, counts())
-    assert d.target == "codex" and d.blocked and d.fallback_from is None
+    assert d.blocked and d.fallback_from is None
 
 
 def test_no_account_anywhere_is_blocked_not_swapped() -> None:
     d, _ = route(HARD, counts())
-    assert d.target == "codex" and d.blocked and d.fallback_from is None
+    assert d.blocked and d.fallback_from is None
 
 
-def test_non_account_gaps_block_instead_of_falling_back() -> None:
-    # codex has accounts but was never validated: claude is not substituted.
+def test_non_account_gaps_skip_the_engine_but_never_block_a_usable_one() -> None:
+    # codex has the best account but was never validated: it is not usable, so the
+    # usable claude runs the task; with claude unusable too the task is blocked.
     cat = catalog_mod.build(
         {
             "codex": {"installed": {"ok": True, "detail": "x"}},
@@ -767,11 +783,18 @@ def test_non_account_gaps_block_instead_of_falling_back() -> None:
         },
         None,
         None,
-        accounts=counts(openai=(1, 0, 0), anthropic=(1, 0, 0)),
+        accounts=counts(openai=(1, 0, 0, 100), anthropic=(1, 0, 0, 10)),
     )
     d = routing.route(HARD, cat)
-    assert d.target == "codex" and d.blocked and "validated" in d.blocked
-    assert d.fallback_from is None
+    assert (d.target, d.blocked, d.fallback_from) == ("claude", None, None)
+    only_codex = catalog_mod.build(
+        {"codex": {"installed": {"ok": True, "detail": "x"}}},
+        None,
+        None,
+        accounts=counts(openai=(1, 0, 0, 100)),
+    )
+    blocked = routing.route(HARD, only_codex)
+    assert blocked.blocked and blocked.fallback_from is None
 
 
 def test_unknown_authentication_without_a_registry_is_not_fallback_material() -> None:
@@ -779,7 +802,7 @@ def test_unknown_authentication_without_a_registry_is_not_fallback_material() ->
     codex = next(e for e in cat.engines if e.id == "codex")
     assert codex.accounts is None and codex.readiness.authenticated.ok is None
     d = routing.route(HARD, cat)
-    assert d.target == "codex" and d.blocked and d.fallback_from is None
+    assert d.blocked and d.fallback_from is None
     assert Fact(ok=None).ok is None
 
 
@@ -789,7 +812,15 @@ def test_catalogue_over_rest_reads_the_registry(client: TestClient) -> None:
         return next(e for e in body["engines"] if e["id"] == "codex")
 
     assert codex_entry()["readiness"]["authenticated"]["ok"] is False
-    assert codex_entry()["accounts"] == {"available": 0, "exhausted": 0, "disabled": 0}
+    assert codex_entry()["accounts"] == {
+        "available": 0,
+        "exhausted": 0,
+        "disabled": 0,
+        "busy": 0,
+        "no_credential": 0,
+        "leasable": 0,
+        "best_priority": None,
+    }
     res = client.post(
         "/api/accounts",
         json={"name": "c", "provider": "openai", "credential": auth_doc()},
@@ -805,7 +836,15 @@ def test_catalogue_over_rest_reads_the_registry(client: TestClient) -> None:
     client.patch(
         f"/api/accounts/{res.json()['id']}", json={"enabled": False}, headers=ADMIN
     )
-    assert codex_entry()["accounts"] == {"available": 0, "exhausted": 0, "disabled": 1}
+    assert codex_entry()["accounts"] == {
+        "available": 0,
+        "exhausted": 0,
+        "disabled": 1,
+        "busy": 0,
+        "no_credential": 0,
+        "leasable": 0,
+        "best_priority": None,
+    }
 
 
 def test_engine_selection_is_recorded_for_agents_only(client: TestClient) -> None:
@@ -830,3 +869,149 @@ def test_engine_selection_is_recorded_for_agents_only(client: TestClient) -> Non
         "/api/events", params={"kind": "engine.selected"}, headers=ADMIN
     ).text
     assert "acc-1" in logged and "openai" in logged
+
+
+# -- routing follows what a lease could really take (capacity, credentials) -----------
+
+LEDGER_OK = {"ok": True, "detail": "checked"}
+
+
+def _routed(client: TestClient) -> dict:
+    res = client.post("/api/engines/route", json={"summary": "plan"}, headers=ADMIN)
+    assert res.status_code == 200
+    return res.json()
+
+
+def _summary(client: TestClient, engine: str) -> dict:
+    body = client.get("/api/engines", headers=ADMIN).json()
+    return next(e for e in body["engines"] if e["id"] == engine)["accounts"]
+
+
+def _worker(client: TestClient) -> dict:
+    boot = client.post("/api/agents/bootstrap-tokens", json={}, headers=ADMIN).json()
+    reg = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
+    return {"Authorization": f"Bearer {reg.json()['token']}"}
+
+
+def test_a_full_top_priority_account_does_not_win_routing_over_a_free_one(
+    client: TestClient, tmp_path: Path
+) -> None:
+    (tmp_path / "engines-ledger.json").write_text(
+        json.dumps(
+            {
+                "engines": {
+                    e: {"installed": LEDGER_OK, "validated": LEDGER_OK}
+                    for e in ("codex", "claude")
+                }
+            }
+        )
+    )
+    claude = client.post(
+        "/api/accounts",
+        json={
+            "name": "claude-top",
+            "provider": "anthropic",
+            "priority": 100,
+            "max_leases": 1,
+            "credential": {"api_key": "sk-ant-" + "api03-" + "TOPKEY" * 8},
+        },
+        headers=ADMIN,
+    ).json()
+    client.post(
+        "/api/accounts",
+        json={
+            "name": "codex-low",
+            "provider": "openai",
+            "priority": 0,
+            "credential": auth_doc(),
+        },
+        headers=ADMIN,
+    )
+    assert _routed(client)["target"] == "claude"  # free and highest priority
+    worker = _worker(client)
+    lease = client.post("/api/accounts/lease", json={}, headers=worker)
+    assert lease.json()["name"] == "claude-top"
+    # The top account is now full: lifecycle says available, capacity says busy.
+    anthropic = _summary(client, "claude")
+    assert (anthropic["available"], anthropic["busy"], anthropic["leasable"]) == (
+        1,
+        1,
+        0,
+    )
+    assert anthropic["best_priority"] is None
+    entry = next(
+        e
+        for e in client.get("/api/engines", headers=ADMIN).json()["engines"]
+        if e["id"] == "claude"
+    )
+    assert entry["usable"] is False
+    decision = _routed(client)
+    assert (decision["target"], decision["blocked"]) == ("codex", None)
+    # What a lease really does agrees with the route.
+    other = _worker(client)
+    assert (
+        client.post("/api/accounts/lease", json={}, headers=other).json()["name"]
+        == "codex-low"
+    )
+    # Releasing the slot makes the top account leasable and routable again.
+    client.post("/api/accounts/release", headers=worker)
+    assert _summary(client, "claude")["leasable"] == 1
+    assert _routed(client)["target"] == "claude"
+    assert claude["id"]
+
+
+def test_a_missing_secret_is_not_leasable_and_routing_never_writes_or_leaks(
+    client: TestClient, tmp_path: Path
+) -> None:
+    (tmp_path / "engines-ledger.json").write_text(
+        json.dumps(
+            {
+                "engines": {
+                    e: {"installed": LEDGER_OK, "validated": LEDGER_OK}
+                    for e in ("codex", "claude")
+                }
+            }
+        )
+    )
+    key = "sk-ant-" + "api03-" + "GONEKEY" * 8
+    created = client.post(
+        "/api/accounts",
+        json={
+            "name": "claude-top",
+            "provider": "anthropic",
+            "priority": 100,
+            "credential": {"api_key": key},
+        },
+        headers=ADMIN,
+    ).json()
+    client.post(
+        "/api/accounts",
+        json={"name": "codex-low", "provider": "openai", "credential": auth_doc()},
+        headers=ADMIN,
+    )
+    secret = created["secret_ref"].removeprefix("sops:")
+    store = app.state.secrets
+    del store._data[secret]  # the secret vanishes behind Argus's back
+    before = client.get(f"/api/accounts/{created['id']}", headers=ADMIN).json()
+    assert _routed(client)["target"] == "codex"
+    summary = _summary(client, "claude")
+    assert (summary["available"], summary["no_credential"], summary["leasable"]) == (
+        1,
+        1,
+        0,
+    )
+    # Read-only: the account row is untouched by the catalogue and the route...
+    after = client.get(f"/api/accounts/{created['id']}", headers=ADMIN).json()
+    assert after["state"] == before["state"] == "available"
+    assert after["updated_at"] == before["updated_at"]
+    # ...and nothing secret appears in what they return.
+    leaked = client.get("/api/engines", headers=ADMIN).text + json.dumps(
+        _routed(client)
+    )
+    assert key not in leaked and SECRET_REFRESH not in leaked
+    # A lease agrees: it skips the account (and only then disables it).
+    worker = _worker(client)
+    assert (
+        client.post("/api/accounts/lease", json={}, headers=worker).json()["name"]
+        == "codex-low"
+    )

@@ -11,7 +11,7 @@ Four axes are kept apart because one string ("anthropic", "codex") hides them:
 | Axis | Question | Examples |
 |---|---|---|
 | model provider / model | whose model answers? | `openai/gpt-*`, `anthropic/claude-*`, `local/qwen3.8-flash-next-iq3_xxs` |
-| **engine** (harness/runtime) | what runs the agent loop of the worker? | NanoClaw provider `codex` (default here), `claude` |
+| **engine** (harness/runtime) | what runs the agent loop of the worker? | NanoClaw provider `codex` or `claude`, whichever the best-priority leased account runs |
 | **executor** (CLI) | what a worker delegates non-interactive jobs to | `claude`, `codex`, `opencode`, `agent` (Cursor) |
 | account / auth | which credential or login makes it work? | Argus account (`provider` string), a native CLI login in a private volume |
 
@@ -75,8 +75,9 @@ In scope:
   `validated` for routing. `escalate` or insufficient answers do not. Changing
   the configured endpoint, served model, or `n_ctx` invalidates earlier events.
   Prompts, answers and credentials are not stored in the catalogue.
-- **Codex is the orchestration engine; Claude Code is the preferred code
-  executor.** The worker instructions say so; the catalogue carries the role.
+- **The engine follows the leased account.** Which of Codex or Claude Code runs the
+  worker loop, and which is the preferred executor, is decided by account priority
+  ([global account selection](account-selection.spec.md)), not by a fixed role.
 - **Codex turn deadline is configurable for Argus delivery.** Upstream NanoClaw
   hard-codes a ten-minute engine turn timeout in `container/agent-runner/src/providers/codex.ts`.
   Argus installs `codex-turn-timeout.ts` (overlay via `integrations/nanoclaw/install.sh`)
@@ -90,9 +91,8 @@ In scope:
   the agent image or session env without changing the global default.
 - **No silent fallback.** `argus-delegate` for an executor without
   credentials exits `78` and prints `{"blocked":"auth_missing"}`. It never
-  substitutes another executor or provider. A route whose wanted engine has no
-  available account falls back to the other engine only explicitly: the
-  decision names the engine it wanted and why it moved
+  substitutes another executor or provider. A route passes over an engine without
+  an available account explicitly: the decision names that engine and why
   ([codex accounts](codex-accounts.spec.md)); with nothing usable it is
   `blocked`.
 - **Delegation contract** (`argus-delegate EXECUTOR`): prompt on stdin or

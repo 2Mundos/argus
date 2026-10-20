@@ -579,8 +579,8 @@ It reconciles the complete currently-held engine/executor/repository lease set (
 repository secrets)
 because OneCLI's set-secrets endpoint replaces assignments, and the
 agent-list endpoint does not report assignments.
-Repository-write pools must also configure managed engine account providers so
-the worker has a known base lease set; it fails closed rather than changing
+Repository-write pools must also have managed engine accounts (an OneCLI URL)
+so the worker has a known base lease set; it fails closed rather than changing
 OneCLI assignments when that set is unavailable.
 The host retains OneCLI
 admin access; the agent container has only the existing egress-proxy route,
@@ -716,10 +716,11 @@ database never holds a secret.
   operator recovers it from the secrets file backup. An `account.deleted` event
   records name and provider, never a credential. The dashboard asks the operator to
   type the account's name.
-- **Leasing** (`POST /api/accounts/lease {providers}`, most preferred first):
-  Argus picks the highest-priority usable account among those providers (the
-  agent's provider order breaks ties, then the least-leased account) and returns
-  it **with its credential**. That response is how a plain-runtime worker gets
+- **Leasing** (`POST /api/accounts/lease {role?, runtime_providers?}`; see
+  [global account selection](account-selection.spec.md)): Argus picks the
+  highest-priority usable account across all providers (ties: least-leased, then
+  provider, name, id; `runtime_providers` only states what the runtime can apply,
+  the retired `providers` list is ignored) and returns it **with its credential**. That response is how a plain-runtime worker gets
   the secret; the NanoClaw module instead loads it into the gateway (3.8). An
   agent holds at most one lease per role (`engine`, the default: the account its
   harness runs on; `executor`: the account a CLI it delegates to uses, see
@@ -730,7 +731,7 @@ database never holds a secret.
   `POST /api/accounts/{id}/exhausted {until?, reason, task_id?, attempt?}`.
   Argus marks it exhausted until the reported reset time (or
   `ARGUS_ACCOUNT_COOLDOWN_MINUTES`, default 60) and immediately leases the next
-  account, **same provider first**, then the agent's other providers. Accounts
+  account: the best remaining usable account of any provider, by priority. Accounts
   return to `available` on their own when the reset time passes (reaper).
 - **No accounts left**: the response carries no lease and the earliest reset
   time; the given task is blocked with reason `no_account`. Such tasks return to

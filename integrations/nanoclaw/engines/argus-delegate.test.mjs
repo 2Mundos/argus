@@ -16,6 +16,7 @@ import {
   prepareExecutorEnv,
   READ_ONLY_PROMPT_PREFIX,
 } from "./argus-delegate.mjs";
+import { policySnapshot } from "./model-policy.mjs";
 
 const DELEGATE = path.join(path.dirname(fileURLToPath(import.meta.url)), "argus-delegate.mjs");
 
@@ -80,6 +81,37 @@ test("a successful run reports engine and executor identity and keeps artifacts"
   assert.equal(report.timed_out, false);
   assert.equal(fs.readFileSync(report.artifacts[0], "utf8").trim(), '{"result":"hi"}');
   assert.ok(report.artifacts[0].startsWith(fs.realpathSync(s.work)));
+});
+
+test("the pinned task context names the leased engine and account provider (global priority)", async (t) => {
+  const s = sandbox(t);
+  s.fake(
+    "claude",
+    'if [ "$1" = "--version" ]; then echo "9.9.9 (Claude Code)"; exit 0; fi\ncat >/dev/null; echo \'{"result":"hi"}\'',
+  );
+  const policy = JSON.parse(
+    fs.readFileSync(new URL("./model-policy.defaults.json", import.meta.url), "utf8"),
+  );
+  const snapshot = policySnapshot(policy, {
+    task_id: "t1",
+    attempt: 1,
+    engine: "claude",
+    account_provider: "anthropic",
+    executor_account_provider: "anthropic",
+    preferred_executor: "claude",
+  });
+  const file = path.join(s.dir, "argus-model-policy.json");
+  fs.writeFileSync(file, JSON.stringify(snapshot));
+  const env = { ...s.env, ANTHROPIC_API_KEY: "placeholder", ARGUS_MODEL_POLICY_FILE: file };
+  delete env.ARGUS_ENGINE;
+  const { code, report } = await run(["claude", "--cwd", s.work, "--timeout", "20"], { env });
+  assert.equal(code, 0);
+  assert.equal(report.engine, "claude"); // not "unknown", not a stale Codex default
+  assert.equal(report.account_provider, "anthropic");
+  // The caller's executor is the one the leased accounts prefer; no silent switch.
+  assert.deepEqual([report.preferred_executor, report.matches_preferred], ["claude", true]);
+  assert.equal(report.task.account_provider, "anthropic");
+  assert.equal(JSON.stringify(report).includes("placeholder"), false);
 });
 
 test("missing credentials block with 78 and run nothing, with no fallback", async (t) => {

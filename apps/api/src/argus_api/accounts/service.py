@@ -20,6 +20,7 @@ from argus_core.accounts import (
     LeaseRole,
     Usage,
     UsageReport,
+    role_accepts,
 )
 
 from argus_api.accounts import usage
@@ -234,19 +235,25 @@ async def reconcile_secrets(tx: Tx, store: SecretStore) -> None:
 async def lease(
     tx: Tx,
     agent_id: str,
-    providers: list[str],
+    runtime_providers: list[str] | None,
     store: SecretStore,
     role: LeaseRole = "engine",
+    *,
+    reuse_held: bool = False,
 ) -> AccountLease:
-    """Lease the best usable account among `providers`. An agent holds one lease
-    per role (`engine`: its harness; `executor`: a delegated CLI); a new lease
-    replaces the previous one of the same role. Raises NoAccountError."""
+    """Lease the best usable account for `role`, ranked globally by priority (then
+    least leased, then name). `runtime_providers` is only what the runtime can
+    technically apply, never an order or allowlist. An agent holds one lease per
+    role (`engine`: its harness; `executor`: a delegated CLI; `repository`); a new
+    lease replaces the previous one of the same role. Raises NoAccountError."""
     await release(tx, agent_id, "replaced", role)
-    result = await _try_lease(tx, agent_id, providers, store, role=role)
+    result = await _try_lease(
+        tx, agent_id, store, role, runtime_providers, reuse_held=reuse_held
+    )
     if result is None:
-        reset = await earliest_reset(tx, providers)
+        reset = await earliest_reset(tx, role, runtime_providers)
         raise NoAccountError(
-            f"no usable account for providers {', '.join(providers)}"
+            f"no usable {role} account"
             + (f"; earliest reset at {reset.isoformat()}" if reset else ""),
         )
     return result
@@ -261,8 +268,9 @@ async def exhausted(
     cooldown: timedelta = DEFAULT_COOLDOWN,
 ) -> FallbackResult:
     """The agent hit a quota on its leased account: mark it exhausted, then fall
-    back to another account, same provider first. With nothing left, the agent's
-    task (if given) is blocked as `no_account` and resumes when one frees up."""
+    back to the best remaining usable account of any provider (priority order, no
+    preference for the previous provider). With nothing left, the agent's task (if
+    given) is blocked as `no_account` and resumes when one frees up."""
     held = await _lease_on(tx.conn, agent_id, account_id, report.role)
     if held is None:
         raise ConflictError(
@@ -270,7 +278,6 @@ async def exhausted(
             code="not_leased",
         )
     role = held["role"]
-    account = await _row(tx.conn, account_id)
     until = (
         report.until if report.until and report.until > tx.now else tx.now + cooldown
     )
@@ -288,14 +295,7 @@ async def exhausted(
         {"until": until.isoformat(), "reason": report.reason},
     )
     await release(tx, agent_id, "exhausted", role)
-    requested: list[str] = json.loads(held["providers"])
-    preference = [
-        account["provider"],
-        *(p for p in requested if p != account["provider"]),
-    ]
-    next_lease = await _try_lease(
-        tx, agent_id, preference, store, provider_first=True, role=role
-    )
+    next_lease = await _try_lease(tx, agent_id, store, role, report.runtime_providers)
     if next_lease is not None:
         return FallbackResult(lease=next_lease)
     blocked = False
@@ -304,7 +304,7 @@ async def exhausted(
         blocked = True
     return FallbackResult(
         lease=None,
-        earliest_reset=await earliest_reset(tx, preference),
+        earliest_reset=await earliest_reset(tx, role, report.runtime_providers),
         task_blocked=blocked,
     )
 
@@ -320,15 +320,20 @@ async def release(
     )
 
 
-async def earliest_reset(tx: Tx, providers: list[str]) -> datetime | None:
-    marks = ",".join("?" * len(providers))
+async def earliest_reset(
+    tx: Tx, role: LeaseRole, runtime_providers: list[str] | None
+) -> datetime | None:
     async with tx.conn.execute(
-        f"SELECT min(exhausted_until) FROM accounts WHERE state = 'exhausted'"  # noqa: S608
-        f" AND provider IN ({marks})",
-        providers,
+        "SELECT provider, exhausted_until FROM accounts WHERE state = 'exhausted'"
+        " AND exhausted_until IS NOT NULL"
     ) as cur:
-        row = await cur.fetchone()
-    return datetime.fromisoformat(row[0]) if row and row[0] else None
+        rows = await cur.fetchall()
+    marks = [
+        datetime.fromisoformat(r["exhausted_until"])
+        for r in rows
+        if role_accepts(role, r["provider"], runtime_providers)
+    ]
+    return min(marks, default=None)
 
 
 async def recover(tx: Tx) -> list[str]:
@@ -437,36 +442,42 @@ async def disable_for_write_failure(tx: Tx, account_id: str, error: str) -> None
 async def _try_lease(
     tx: Tx,
     agent_id: str,
-    providers: list[str],
     store: SecretStore,
+    role: LeaseRole,
+    runtime_providers: list[str] | None,
     *,
-    provider_first: bool = False,
-    role: LeaseRole = "engine",
+    reuse_held: bool = False,
 ) -> AccountLease | None:
-    """Pick by priority across providers (provider order breaks ties), or, when
-    falling back, by provider order first so an agent stays on the same provider."""
-    order = {p: i for i, p in enumerate(providers)}
-    marks = ",".join("?" * len(providers))
-    sql = (  # only placeholders are interpolated
-        "SELECT a.*, (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"  # noqa: S608
-        "  AND l.released_at IS NULL) AS active FROM accounts a"
-        f" WHERE a.provider IN ({marks}) AND (a.state = 'available'"
-        "  OR (a.state = 'exhausted' AND a.exhausted_until <= ?))"
-    )
+    """The best usable account for `role` across every provider: priority first,
+    then the least leased, then provider/name/id so ties are deterministic. Skips
+    disabled, still-exhausted, full (`max_leases`) and credential-less accounts.
+
+    With `reuse_held` (executor role), an account the agent already holds as its
+    engine stays a candidate even at `max_leases`, and winning returns that
+    engine lease as is (no second row, no extra slot)."""
     async with tx.conn.execute(
-        sql,
-        (*providers, ts(tx.now)),
+        "SELECT a.*, (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
+        "  AND l.released_at IS NULL) AS active,"
+        " (SELECT id FROM account_leases l WHERE l.account_id = a.id"
+        "  AND l.agent_id = ? AND l.role = 'engine' AND l.released_at IS NULL) AS mine"
+        " FROM accounts a WHERE a.state = 'available'"
+        "  OR (a.state = 'exhausted' AND a.exhausted_until <= ?)",
+        (agent_id, ts(tx.now)),
     ) as cur:
         rows = await cur.fetchall()
+    reuse = reuse_held and role == "executor"
     candidates = sorted(
-        (r for r in rows if r["max_leases"] is None or r["active"] < r["max_leases"]),
-        key=lambda r: (
-            (order[r["provider"]], -r["priority"])
-            if provider_first
-            else (-r["priority"], order[r["provider"]]),
-            r["active"],
-            r["id"],
+        (
+            r
+            for r in rows
+            if role_accepts(role, r["provider"], runtime_providers)
+            and (
+                (reuse and r["mine"] is not None)
+                or r["max_leases"] is None
+                or r["active"] < r["max_leases"]
+            )
         ),
+        key=lambda r: (-r["priority"], r["active"], r["provider"], r["name"], r["id"]),
     )
     for row in candidates:
         name = ref_name(row["secret_ref"])
@@ -474,6 +485,16 @@ async def _try_lease(
         if credential is None:
             await _disable(tx, row["id"], f"secret not found: {row['secret_ref']}")
             continue
+        if reuse and row["mine"] is not None:
+            return AccountLease(
+                lease_id=row["mine"],
+                account_id=row["id"],
+                name=row["name"],
+                provider=row["provider"],
+                kind=row["kind"],
+                role="engine",
+                credential=credential,
+            )
         if row["state"] == "exhausted":  # reset time passed; recover() has not run yet
             await tx.conn.execute(
                 "UPDATE accounts SET state = 'available', exhausted_until = NULL,"
@@ -484,7 +505,14 @@ async def _try_lease(
         await tx.conn.execute(
             "INSERT INTO account_leases (id, account_id, agent_id, providers, leased_at,"
             " role) VALUES (?, ?, ?, ?, ?, ?)",
-            (lease_id, row["id"], agent_id, json.dumps(providers), ts(tx.now), role),
+            (
+                lease_id,
+                row["id"],
+                agent_id,
+                json.dumps(runtime_providers or []),
+                ts(tx.now),
+                role,
+            ),
         )
         await record(
             tx,

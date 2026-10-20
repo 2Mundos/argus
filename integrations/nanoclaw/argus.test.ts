@@ -197,7 +197,8 @@ describe("renderTask", () => {
     const text = renderTask(task() as any, new Map());
     expect(text).toContain("/usr/local/bin/argus-delegate EXECUTOR");
     expect(text).toContain("EXECUTOR agent");
-    expect(text).toContain("the NanoClaw engine remains Codex");
+    expect(text).toContain("use EXECUTOR agent.");
+    expect(text).not.toContain("remains Codex");
     expect(text).not.toContain("When the engine is Cursor");
     expect(text).toContain(
       "/usr/local/bin/argus-delegate agent \\\n    --cwd <task-checkout> --prompt-file <prompt.txt>",

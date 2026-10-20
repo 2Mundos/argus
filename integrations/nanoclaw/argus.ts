@@ -21,14 +21,13 @@
  *   ARGUS_AGENT_TOKEN         use an already-registered agent token instead
  *   ARGUS_CAPABILITIES        comma-separated capabilities to claim with
  *   ARGUS_AGENT_NAME          display name (default: the NanoClaw host name)
- *   ARGUS_ACCOUNT_PROVIDERS   comma-separated providers (e.g. "anthropic"): turns on
- *                             account leasing from Argus and OneCLI switching;
- *                             without it the channel uses whatever credential
- *                             the OneCLI vault already has
- *   ARGUS_EXECUTOR_PROVIDERS  comma-separated providers for the executor lease
- *                             (default: anthropic). Set to "cursor" on a pool that
- *                             should delegate to the Cursor CLI.
- *   ONECLI_URL / ONECLI_API_KEY  how to reach the OneCLI vault (accounts only)
+ *   ONECLI_URL / ONECLI_API_KEY  how to reach the OneCLI vault. Setting ONECLI_URL
+ *                             turns on account leasing from Argus (the best usable
+ *                             account across ALL providers, by priority) and OneCLI
+ *                             switching; without it the channel uses whatever
+ *                             credential the vault already has. The retired
+ *                             ARGUS_ACCOUNT_PROVIDERS / ARGUS_EXECUTOR_PROVIDERS
+ *                             are ignored (they never restrict selection).
  *   ARGUS_EXIT_ON_DRAIN       "false" to keep the host running once Argus has
  *                             drained this agent (default: exit, so the
  *                             instance ends; only when ARGUS_INSTANCE_ID is set)
@@ -48,9 +47,11 @@ import {
   CURSOR_EXPIRY_MARGIN_MS,
   classifyFailure,
   classifyProviderFailure,
+  executorFor,
   normalizeRepositoryUrl,
   OneCliClient,
   releaseRepositoryLease,
+  runtimeProviders,
 } from "./argus-accounts.js";
 import { registerChannelAdapter } from "./channel-registry.js";
 import {
@@ -82,7 +83,14 @@ const CLAIM_WAIT_S = 20;
 const MAX_PAGE_CHARS = 4000;
 const MAX_PAGES_INLINED = 3;
 const MAX_RESENDS = 3; // account switches for one attempt before giving up
+const REBALANCE_MS = 60_000; // idle re-evaluation of the engine lease (priority recovery)
 const RECYCLE_TIMEOUT_MS = 30_000; // wait for the old container to exit after an account rotation
+
+/** The accounts held when a task's models are chosen (null: not leased). */
+export interface HeldAccounts {
+  engine: { provider: string; account_id: string } | null;
+  executor: { provider: string; account_id: string } | null;
+}
 
 export interface ArgusConfig {
   url: string;
@@ -92,7 +100,17 @@ export interface ArgusConfig {
   name: string;
   /** Account leasing from Argus into the OneCLI vault. Off when absent. */
   accounts?: {
-    providers: string[];
+    /**
+     * Lease the engine's model account from Argus, which ranks every usable
+     * account globally by priority. False: repository leases only.
+     */
+    models: boolean;
+    /**
+     * While idle (no task in flight) re-evaluate the engine lease at most this
+     * often, so a recovered or newly added higher-priority account is adopted at
+     * a safe point; active work is never rotated. Default 60 s; 0 disables.
+     */
+    rebalanceMs?: number;
     onecli: OneCliClient;
     /** Which OneCLI agent (the NanoClaw agent group) the credential is for. */
     resolveTarget: () => Promise<ApplyTarget>;
@@ -109,17 +127,11 @@ export interface ArgusConfig {
      * rotation within one provider, where `selectEngine` stops nothing.
      */
     recycleRuntime?: () => Promise<void>;
-    /**
-     * Providers for the `executor` lease: the account a CLI the worker delegates
-     * to (argus-delegate) uses, held next to the engine's. Taken only when the
-     * engine's account is of another provider. Default: anthropic.
-     */
-    executorProviders?: string[];
     /** Explicit project -> HTTPS repository allowlist from this pool. */
     repositories?: Record<string, string>;
   };
   /** Apply a pinned policy before starting a task; absent only in test adapters. */
-  selectModels?: (task: ArgusTask) => Promise<ModelSelection>;
+  selectModels?: (task: ArgusTask, held: HeldAccounts) => Promise<ModelSelection>;
   /** Called once, after Argus drained this agent, its work is done, and it left. */
   onDrained?: () => void;
   /** Reported on heartbeat as `runtime.worker_version`, e.g. "nanoclaw/1.2.3". */
@@ -212,7 +224,11 @@ export function parseReply(raw: string): Directive {
 }
 
 /** The message a claimed task becomes. `pages` are inlined knowledge bodies by page id. */
-export function renderTask(task: ArgusTask, pages: Map<string, string>): string {
+export function renderTask(
+  task: ArgusTask,
+  pages: Map<string, string>,
+  preferredExecutor?: string | null,
+): string {
   const lines = [
     `[Argus task] ${task.title}`,
     `Project: ${task.project} · Task: ${task.id} · Attempt: ${task.attempt}`,
@@ -238,7 +254,12 @@ export function renderTask(task: ArgusTask, pages: Map<string, string>): string 
   lines.push(
     "",
     "Delegated implementation (mandatory): run all coding/model work through /usr/local/bin/argus-delegate EXECUTOR.",
-    "EXECUTOR is the leased CLI role (claude | codex | opencode | agent). When Cursor is the selected coding executor, use EXECUTOR agent; the NanoClaw engine remains Codex.",
+    "EXECUTOR is the leased CLI role (claude | codex | opencode | agent). When Cursor is the selected coding executor, use EXECUTOR agent.",
+    ...(preferredExecutor
+      ? [
+          `Preferred EXECUTOR for this task: ${preferredExecutor} (the CLI of the best-priority account Argus leased to this worker).`,
+        ]
+      : []),
     "Do not invoke agent, cursor-agent, claude, codex, or opencode directly for implementation — that bypasses",
     "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
     "Direct Git, gates, QA, and other non-delegated shell commands in the checkout are fine when they are not a",
@@ -451,6 +472,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let resends = 0;
   let account: { id: string; name: string; provider: string } | null = null;
   let executor: { id: string; name: string; provider: string } | null = null;
+  let leasedAt = 0; // when the engine lease was last confirmed (idle rebalance)
   let engineInUse: string | null = null; // the harness the leased account selected
   let activeAccountLeases: AccountLease[] = [];
   let repositoryTarget: ApplyTarget | null = null;
@@ -601,6 +623,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         until: f.until,
         reason: f.reason,
         role: "engine",
+        runtime_providers: runtimeProviders("engine"),
         task_id: task.id,
         attempt: task.attempt,
       });
@@ -609,6 +632,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         const lease = data.lease as AccountLease;
         await applyAndSelect(cfg.accounts, lease, "exhausted");
         account = { id: lease.account_id, name: lease.name, provider: lease.provider };
+        leasedAt = cfg.now?.() ?? Date.now();
         try {
           // The old container holds the previous account's stubs: it must be gone
           // before the task is sent again.
@@ -654,7 +678,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   async function prepareModels(task: ArgusTask): Promise<void> {
     if (!cfg.selectModels) return;
-    const selection = await cfg.selectModels(task);
+    const selection = await cfg.selectModels(task, {
+      engine: account ? { provider: account.provider, account_id: account.id } : null,
+      executor: executor ? { provider: executor.provider, account_id: executor.id } : null,
+    });
     const bytes = new TextEncoder().encode(JSON.stringify(selection, null, 2));
     const sha = createHash("sha256").update(bytes).digest("hex");
     const name = `model-policy-attempt-${task.attempt}.json`;
@@ -688,7 +715,6 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           throw new Error("cannot safely reconcile repository access without active base leases");
         const normalizedRepository = normalizeRepositoryUrl(repositoryUrl);
         const { data } = await client.call("POST", "/accounts/lease", {
-          providers: ["gitea"],
           role: "repository",
         });
         const lease = data as AccountLease;
@@ -710,7 +736,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const pages = await inlinePages(task);
       log.info("Argus task claimed", { task: task.id, attempt: task.attempt });
       resends = 0;
-      currentText = renderTask(task, pages);
+      const best = executor ?? account;
+      currentText = renderTask(task, pages, best ? executorFor(best.provider) : null);
       await injectTask(task.id, task.attempt, currentText);
       await finished;
     } catch {
@@ -756,21 +783,27 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     lease: AccountLease,
     reason: "lease" | "exhausted",
   ): Promise<void> {
-    const executorProviders = acc.executorProviders ?? ["anthropic"];
     const held: AccountLease[] = [lease];
-    if (executorProviders.length > 0 && !executorProviders.includes(lease.provider)) {
-      try {
-        const { data } = await client.call("POST", "/accounts/lease", {
-          providers: executorProviders,
-          role: "executor",
-        });
-        held.push({ ...(data as AccountLease), role: "executor" });
-      } catch (err) {
-        if (!(err instanceof ArgusError && err.code === "no_account")) throw err;
-        log.warn("No executor account is usable; delegation to a CLI will be blocked", {
-          message: err.message,
-        });
-      }
+    // The executor (a delegated CLI) is the best usable account across providers
+    // too. It is held only when it is of another provider than the engine's: the
+    // vault keeps one account per provider, and the engine's serves the CLI of its
+    // own provider.
+    try {
+      const { data } = await client.call("POST", "/accounts/lease", {
+        role: "executor",
+        runtime_providers: runtimeProviders("executor"),
+        // The engine's own credential already serves its provider's CLI: if that
+        // account is the best executor too, Argus returns it and takes no slot.
+        reuse_held: true,
+      });
+      const candidate = data as AccountLease;
+      if (candidate.role === "executor" && candidate.provider !== lease.provider)
+        held.push(candidate);
+    } catch (err) {
+      if (!(err instanceof ArgusError && err.code === "no_account")) throw err;
+      log.warn("No executor account is usable; delegation to a CLI will be blocked", {
+        message: err.message,
+      });
     }
     if (held.length === 1) {
       // Not needed (or none available): do not keep an executor lease around.
@@ -846,24 +879,41 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         return false;
       }
     }
-    if (acc.providers.length === 0 || account) return true;
+    if (!acc.models) return true;
+    const rebalancing = account !== null;
+    if (rebalancing) {
+      const every = acc.rebalanceMs ?? REBALANCE_MS;
+      if (every <= 0 || (cfg.now?.() ?? Date.now()) - leasedAt < every) return true;
+      leasedAt = cfg.now?.() ?? Date.now();
+    }
     try {
-      const { data } = await client.call("POST", "/accounts/lease", { providers: acc.providers });
+      const { data } = await client.call("POST", "/accounts/lease", {
+        runtime_providers: runtimeProviders("engine"),
+      });
       const lease = data as AccountLease;
+      if (rebalancing && lease.account_id === account?.id) return true; // still the best
       try {
         await applyAndSelect(acc, lease, "lease");
+        if (rebalancing) await acc.recycleRuntime?.();
       } catch (err) {
         // Do not sit on an account we cannot use: give it back, then retry later.
         await client.call("POST", "/accounts/release").catch(() => undefined);
+        account = null;
         throw err;
       }
       account = { id: lease.account_id, name: lease.name, provider: lease.provider };
+      leasedAt = cfg.now?.() ?? Date.now();
       log.info("Argus account leased and applied", {
         account: lease.name,
         provider: lease.provider,
       });
       return true;
     } catch (err) {
+      if (rebalancing && account) {
+        // The held lease is still valid (a failed lease rolls back); keep working.
+        log.warn("Could not re-evaluate the account lease; keeping the current one", { err });
+        return true;
+      }
       if (err instanceof ArgusError && err.code === "no_account") {
         log.warn("No Argus account is usable right now; not claiming work", {
           message: err.message,
@@ -1171,14 +1221,18 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 }
 
 export function accountsFromEnv(): ArgusConfig["accounts"] {
-  const providers = (process.env.ARGUS_ACCOUNT_PROVIDERS ?? "")
-    .split(",")
-    .map((p) => p.trim())
-    .filter(Boolean);
-  const executorProviders = (process.env.ARGUS_EXECUTOR_PROVIDERS ?? "")
-    .split(",")
-    .map((p) => p.trim())
-    .filter(Boolean);
+  // Account leasing is on when a vault is configured (the fleet always sets
+  // ONECLI_URL). The retired provider lists only signal "on" for pools that still
+  // carry them; they never restrict which accounts may be leased.
+  const retired = ["ARGUS_ACCOUNT_PROVIDERS", "ARGUS_EXECUTOR_PROVIDERS"].filter((name) =>
+    process.env[name]?.trim(),
+  );
+  if (retired.length > 0) {
+    log.warn("Ignoring retired provider lists; accounts are chosen globally by priority", {
+      retired,
+    });
+  }
+  const models = !!process.env.ONECLI_URL?.trim() || !!process.env.ARGUS_ACCOUNT_PROVIDERS?.trim();
   let repositories: Record<string, string> = {};
   const repositoriesJson = process.env.ARGUS_REPOSITORIES_JSON?.trim();
   if (repositoriesJson) {
@@ -1195,7 +1249,7 @@ export function accountsFromEnv(): ArgusConfig["accounts"] {
       throw new Error("ARGUS_REPOSITORIES_JSON must be a JSON project-to-URL object");
     }
   }
-  if (providers.length === 0 && Object.keys(repositories).length === 0) return undefined;
+  if (!models && Object.keys(repositories).length === 0) return undefined;
   // The OneCLI agent NanoClaw uses is keyed by the agent group wired to this
   // channel, read from NanoClaw's own database when first needed.
   async function resolveTarget(): Promise<ApplyTarget> {
@@ -1212,8 +1266,7 @@ export function accountsFromEnv(): ArgusConfig["accounts"] {
     return { identifier: group.id, name: group.name };
   }
   return {
-    providers,
-    ...(executorProviders.length > 0 ? { executorProviders } : {}),
+    models,
     repositories,
     onecli: new OneCliClient(
       process.env.ONECLI_URL?.trim() || "http://127.0.0.1:10254",
@@ -1278,7 +1331,7 @@ export function accountsFromEnv(): ArgusConfig["accounts"] {
 export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
   // Validate once at host startup. A pool update cannot mutate an in-flight policy.
   const snapshot = loadPolicy();
-  return async (task) => {
+  return async (task, held = { engine: null, executor: null }) => {
     const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
       "../db/messaging-groups.js"
     );
@@ -1296,13 +1349,24 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
     if (!config) throw new Error("no container config for model policy");
     const engine = (config.provider || "claude").toLowerCase();
     const selection = selectHarnessModel(snapshot, engine, task);
+    if (held.engine && !selection.configured_model) {
+      // Never leave the previous engine's model configured for the leased account's.
+      throw new Error(`model policy has no harness chain for engine ${engine}`);
+    }
     if (selection.configured_model && config.model !== selection.configured_model) {
       await updateContainerConfigScalars(group.id, { model: selection.configured_model });
       for (const session of await getSessionsByAgentGroup(group.id)) {
         killContainer(session.id, "argus: model policy changed");
       }
     }
-    const pinned = policySnapshot(snapshot.policy, { task_id: task.id, attempt: task.attempt });
+    const pinned = policySnapshot(snapshot.policy, {
+      task_id: task.id,
+      attempt: task.attempt,
+      engine,
+      account_provider: held.engine?.provider ?? null,
+      executor_account_provider: held.executor?.provider ?? held.engine?.provider ?? null,
+      preferred_executor: executorFor(held.executor?.provider ?? held.engine?.provider ?? ""),
+    });
     const dir = path.resolve("groups", group.folder);
     await mkdir(dir, { recursive: true });
     const file = path.join(dir, "argus-model-policy.json");

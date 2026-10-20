@@ -328,12 +328,19 @@ async def delete_account(
 async def lease_account(
     body: LeaseRequest, db: DbDep, agent_id: AgentDep, secrets: SecretsDep
 ) -> AccountLease:
-    """Lease the best usable account among `providers` (most preferred first),
-    with its credential. One active lease per role; it ends when released or
-    replaced.
+    """Lease the best usable account globally (priority, then least leased), with
+    its credential. `runtime_providers` only states what the runtime can apply.
+    One active lease per role; it ends when released or replaced.
     `409 no_account` when none is usable."""
     async with db.write() as tx:
-        return await service.lease(tx, agent_id, body.providers, secrets, body.role)
+        return await service.lease(
+            tx,
+            agent_id,
+            body.runtime_providers,
+            secrets,
+            body.role,
+            reuse_held=body.reuse_held,
+        )
 
 
 @router.post("/release", status_code=status.HTTP_204_NO_CONTENT)
@@ -355,7 +362,7 @@ async def report_exhausted(
     settings: SettingsDep,
 ) -> FallbackResult:
     """Report that the leased account hit a quota. Returns the next account to use
-    (same provider first), or none: then the given task is blocked as
+    (best remaining by priority, any provider), or none: then the given task is blocked as
     `no_account` and returns to ready when an account frees up."""
     async with db.write() as tx:
         return await service.exhausted(

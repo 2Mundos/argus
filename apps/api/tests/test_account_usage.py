@@ -134,7 +134,7 @@ async def test_a_pool_snapshot_has_no_percentage(
 ) -> None:
     c = await add(db, store, "cursor-1", "cursor", {"api_key": "k"})
     async with db.write() as tx:
-        await accounts.lease(tx, A, ["cursor"], store)
+        await accounts.lease(tx, A, ["cursor"], store, "executor")
     until = datetime(2026, 11, 3, tzinfo=UTC)
     await report(db, c, rate_limits=[{"pool": "third_party", "exhausted_until": until}])
     async with db.read() as conn:

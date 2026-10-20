@@ -8,6 +8,28 @@ from pydantic import BaseModel, Field, model_validator
 
 LeaseRole = Literal["engine", "executor", "repository"]
 
+# Technical facts, not operator policy (account selection spec 3): the account
+# provider of repository access, and the one provider that only a delegated CLI
+# (never a NanoClaw harness) can run on.
+REPOSITORY_PROVIDER = "gitea"
+EXECUTOR_ONLY = frozenset({"cursor"})
+
+
+def role_accepts(
+    role: LeaseRole, provider: str, runtime_providers: list[str] | None = None
+) -> bool:
+    """May an account of `provider` be leased for `role`? Repository accounts serve
+    only the repository role and never become model accounts; a harness cannot run
+    on an executor-only provider. `runtime_providers` is what the leasing runtime
+    reports it can technically apply (None: no statement), never a preference."""
+    if role == "repository":
+        return provider == REPOSITORY_PROVIDER
+    if provider == REPOSITORY_PROVIDER:
+        return False
+    if role == "engine" and provider in EXECUTOR_ONLY:
+        return False
+    return runtime_providers is None or provider in runtime_providers
+
 
 class AccountKind(StrEnum):
     API_KEY = "api_key"
@@ -114,12 +136,22 @@ class Account(BaseModel):
 
 
 class LeaseRequest(BaseModel):
-    """Providers the agent's runtime can use, most preferred first."""
+    """Lease the best usable account globally (priority, then least leased).
 
-    providers: list[str] = Field(min_length=1)
+    The retired `providers` list is accepted and ignored: no caller-side order or
+    allowlist restricts selection."""
+
+    # Providers the runtime can technically apply (it knows how to inject them);
+    # absent means no statement. Capability, not preference: it never orders.
+    runtime_providers: list[str] | None = Field(default=None, min_length=1)
     # `engine`: the account the worker's harness runs on; `executor`: the one a
     # CLI it delegates to uses. One active lease per role.
     role: LeaseRole = "engine"
+    # Executor role only: when the best account is one this agent already holds as
+    # its engine, return that lease unchanged and take no extra slot (a delegated
+    # CLI of the same provider runs on the engine's own credential). Otherwise the
+    # executor lease is an ordinary separate one.
+    reuse_held: bool = False
 
 
 class AccountLease(BaseModel):
@@ -137,6 +169,7 @@ class AccountLease(BaseModel):
 class ExhaustedReport(BaseModel):
     until: datetime | None = None  # the provider's reset time, if known
     reason: str = Field(default="", max_length=2000)
+    runtime_providers: list[str] | None = Field(default=None, min_length=1)
     # Which of the agent's leases hit the limit (it may hold one account twice).
     role: LeaseRole = "engine"
     # The task the agent was working on: blocked as `no_account` if nothing is left.

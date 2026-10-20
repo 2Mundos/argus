@@ -355,7 +355,7 @@ export async function main(argv, e = process.env) {
     finish(64, { error: "usage", detail: String(err.message), executors: EXECUTORS });
   }
   const { executor, opts } = parsed;
-  const identity = { engine: e.ARGUS_ENGINE || "unknown", executor };
+  let identity = { engine: e.ARGUS_ENGINE || "unknown", executor };
   if (!EXECUTORS.includes(executor))
     finish(64, { ...identity, error: "usage", detail: "unknown executor", executors: EXECUTORS });
 
@@ -366,6 +366,20 @@ export async function main(argv, e = process.env) {
       e,
       e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json",
     );
+    // The pinned task context names the engine/account the channel leased; it
+    // fills the identity when the process environment does not.
+    if (!e.ARGUS_ENGINE && snapshot.context?.engine)
+      identity = { ...identity, engine: snapshot.context.engine };
+    if (snapshot.context?.account_provider)
+      identity = { ...identity, account_provider: snapshot.context.account_provider };
+    // Policy never switches executor (no silent fallback): it reports whether the
+    // caller's choice is the one the leased accounts' priority prefers.
+    if (snapshot.context?.preferred_executor)
+      identity = {
+        ...identity,
+        preferred_executor: snapshot.context.preferred_executor,
+        matches_preferred: snapshot.context.preferred_executor === executor,
+      };
     selection = selectModel(
       snapshot,
       "implementation",

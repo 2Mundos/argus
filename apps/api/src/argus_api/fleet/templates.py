@@ -210,8 +210,6 @@ def _nanoclaw_options(settings: Settings, sandboxed: bool) -> NanoclawOptions:
         agent_image=s.nanoclaw_agent_image or "",
         docker_socket=s.nanoclaw_docker_socket,
         onecli_url=s.nanoclaw_onecli_url or "http://host.docker.internal:10254",
-        account_providers=list(s.nanoclaw_account_providers),
-        executor_providers=list(s.nanoclaw_executor_providers),
         agent_image_archive=s.nanoclaw_agent_image_archive if sandboxed else None,
         user=None if sandboxed else s.nanoclaw_user,
         group_add=[] if sandboxed else list(s.nanoclaw_group_add),

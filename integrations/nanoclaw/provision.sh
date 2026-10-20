@@ -50,10 +50,9 @@ ARGUS_NANOCLAW_INSTALL_DIR=$SRC
 ARGUS_NANOCLAW_INSTANCES_ROOT=$ROOT
 ARGUS_NANOCLAW_AGENT_IMAGE=$AGENT_TAG
 ARGUS_NANOCLAW_HOST_IMAGE=$HOST_IMAGE
-# -- optional, for guided workers to join your gateway and account order
-#    (uncomment and set; engines first for Codex: openai,anthropic)
+# -- optional, for guided workers to join your gateway (accounts are chosen
+#    globally by priority; there is no provider list to set)
 # ARGUS_NANOCLAW_ONECLI_URL=http://onecli:10254
-# ARGUS_NANOCLAW_ACCOUNT_PROVIDERS=openai,anthropic
 # ARGUS_NANOCLAW_NETWORK=<docker network that reaches the gateway>
 # -- nanoclaw-socket (host Docker socket: ROOT-EQUIVALENT on this Docker host)
 ARGUS_NANOCLAW_ALLOW_DOCKER_SOCKET=true
