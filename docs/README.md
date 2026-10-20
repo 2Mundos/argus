@@ -63,6 +63,10 @@ every new dependency is judged against it.
   dependencies with a cycle check; stuck dependents surface in the inbox
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes
   that say whether an upgrade can be rolled back, the tagged image
+- [Codex worker sandbox profile (candidate)](specs/codex-sandbox-profile.spec.md) —
+  WIP, not implemented: opt-in AppArmor/seccomp candidates so Codex's Bubblewrap
+  can run in a worker; [provenance](../integrations/nanoclaw/security/PROVENANCE.md)
+  and [runbook](../integrations/nanoclaw/security/RUNBOOK.md)
 
 ### Drafts
 
