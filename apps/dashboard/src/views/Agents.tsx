@@ -3,6 +3,7 @@ import { api, call, type FleetCapabilities } from "../api";
 import { relative, shortId } from "../format";
 import { launchGate, launchStatus } from "../launch";
 import { useLiveData } from "../live";
+import { AgentDetail } from "./AgentDetail";
 import { NewWorker } from "./GuidedWorker";
 
 function CreateWorker({ onError }: { onError: (message?: string) => void }) {
@@ -141,6 +142,7 @@ function CreateWorker({ onError }: { onError: (message?: string) => void }) {
 
 export function Agents() {
   const [showEnded, setShowEnded] = useState(false);
+  const [opened, setOpened] = useState<string | null>(null);
   const [issued, setIssued] = useState<{ token: string; expires_at: string }>();
   const [error, setError] = useState<string>();
   const { data: agents } = useLiveData(() => call(api.GET("/api/agents")), []);
@@ -221,7 +223,10 @@ export function Agents() {
           {visible.map((a) => (
             <tr key={a.id}>
               <td title={a.id}>
-                {a.name} <span className="muted small">{shortId(a.id)}</span>
+                <button type="button" className="link" onClick={() => setOpened(a.id)}>
+                  {a.name}
+                </button>{" "}
+                <span className="muted small">{shortId(a.id)}</span>
               </td>
               <td>{a.role}</td>
               <td>
@@ -253,6 +258,7 @@ export function Agents() {
           )}
         </tbody>
       </table>
+      {opened && <AgentDetail agentId={opened} onClose={() => setOpened(null)} />}
     </section>
   );
 }

@@ -73,16 +73,18 @@ async def list_tasks(
     state: Annotated[list[TaskState] | None, Query()] = None,
     project: str | None = None,
     kind: str | None = None,
+    assignee: str | None = None,
     ids: str | None = None,
     view: View = "summary",
     limit: int = DEFAULT_LIMIT,
     cursor: str | None = None,
 ) -> TaskPage:
-    """Tasks newest first, in pages (max 100). `ids` (comma-separated, max 50) is
-    a batch read instead: no other filter, no paging, unknown ids in `missing`."""
+    """Tasks newest first, in pages (max 100). `assignee` is the agent holding a
+    task now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read
+    instead: no other filter, no paging, unknown ids in `missing`."""
     async with db.snapshot() as snap:
         if ids is not None:
-            if state or project or kind or cursor:
+            if state or project or kind or assignee or cursor:
                 raise ValidationFailedError(
                     "ids is a batch read; it takes no other filter or cursor",
                     code="ids_exclusive",
@@ -93,6 +95,7 @@ async def list_tasks(
             states=state,
             project=project,
             kind=kind,
+            assignee=assignee,
             view=view,
             limit=limit,
             cursor=cursor,
