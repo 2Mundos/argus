@@ -81,6 +81,7 @@ describe("Home", () => {
         total: 0,
         by_provider: {},
         next_reset_at: null,
+        awaiting_quota: false,
         quota_measured: false,
       },
       decisions: { by_state: zeros("open"), open_by_kind: {}, open_by_audience: {} },
