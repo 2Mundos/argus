@@ -289,6 +289,22 @@ export const PROVIDERS: Record<string, ProviderMapping> = {
   },
 };
 
+/**
+ * Providers this runtime can technically apply for a lease role: capability of the
+ * installed code (a mapping exists, a harness exists for an engine), never an
+ * operator preference or order. Argus ranks the accounts of these globally.
+ */
+export function runtimeProviders(role: "engine" | "executor"): string[] {
+  return Object.entries(PROVIDERS)
+    .filter(([, mapping]) => role === "executor" || !mapping.executorOnly)
+    .map(([provider]) => provider);
+}
+
+/** The delegate CLI (`argus-delegate EXECUTOR`) that runs on a provider's account. */
+export function executorFor(provider: string): string | null {
+  return { anthropic: "claude", openai: "codex", cursor: "agent" }[provider] ?? null;
+}
+
 export class OneCliError extends Error {
   constructor(
     readonly status: number,

@@ -74,10 +74,6 @@ def container_spec(
             "ARGUS_REPOSITORIES_JSON": json.dumps(nc.repositories, sort_keys=True),
             "NO_PROXY": "host.docker.internal,127.0.0.1,localhost",
         }
-        if nc.account_providers:
-            env["ARGUS_ACCOUNT_PROVIDERS"] = ",".join(nc.account_providers)
-        if nc.executor_providers:
-            env["ARGUS_EXECUTOR_PROVIDERS"] = ",".join(nc.executor_providers)
         workdir = f"{nc.instances_root.rstrip('/')}/{instance_id}"
         sandboxed = pool.docker.runtime is not None
         mounts = [

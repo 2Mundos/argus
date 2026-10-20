@@ -56,9 +56,9 @@ async def add(
     return account.id
 
 
-async def lease(db: Database, store, agent=A, providers=("anthropic", "openai")):
+async def lease(db: Database, store, agent=A, runtime=None):
     async with db.write() as tx:
-        return await accounts.lease(tx, agent, list(providers), store)
+        return await accounts.lease(tx, agent, runtime, store)
 
 
 async def get(db: Database, account_id: str, clock: FakeClock):
@@ -76,15 +76,89 @@ async def exhaust(db: Database, store, account_id: str, agent=A, **kw):
 # -- leasing --------------------------------------------------------------------------
 
 
-async def test_lease_prefers_priority_then_provider_order(
+async def test_lease_ranks_globally_by_priority_then_deterministic_ties(
     db: Database, store: MemorySecretStore
 ) -> None:
     await add(db, store, "openai-1", "openai", priority=5)
     await add(db, store, "claude-1", "anthropic", priority=5)
     await add(db, store, "claude-low", "anthropic", priority=0)
     got = await lease(db, store)
-    assert got.name == "claude-1"  # same priority: the agent's preferred provider
+    assert got.name == "claude-1"  # tie on priority and load: provider, name
     assert got.credential == {"api_key": "key-claude-1"}
+
+
+async def test_higher_priority_beats_lower_across_providers(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "codex-1", "openai", priority=10)
+    await add(db, store, "cursor-1", "cursor", priority=10)
+    await add(db, store, "claude-1", "anthropic", priority=100)
+    await add(db, store, "claude-2", "anthropic", priority=100)
+    assert (await lease(db, store, A)).name == "claude-1"
+    assert (await lease(db, store, B)).name == "claude-2"  # least leased tie-break
+
+
+async def test_unusable_accounts_are_skipped_in_priority_order(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    disabled = await add(db, store, "claude-off", "anthropic", priority=100)
+    async with db.write() as tx:
+        await accounts.update_account(
+            tx, disabled, AccountUpdate(enabled=False), "admin:test"
+        )
+    full = await add(db, store, "claude-full", "anthropic", priority=99, max_leases=1)
+    await add(db, store, "claude-out", "anthropic", priority=98)
+    await store.put("claude-nocred", {"api_key": "x"})
+    nocred = await add(db, store, "claude-nocred", "anthropic", priority=97)
+    await store.delete("claude-nocred")
+    await add(db, store, "codex-1", "openai", priority=10)
+    assert (await lease(db, store, B)).account_id == full  # takes the only slot
+    out = await exhaust_lease(db, store, "claude-out", clock)
+    assert out is not None
+    got = await lease(db, store, A)
+    assert got.name == "codex-1"  # off, full, exhausted and credential-less skipped
+    assert (await get(db, nocred, clock)).state is AccountState.DISABLED
+
+
+async def exhaust_lease(db: Database, store, name: str, clock: FakeClock):
+    """Exhaust the named account through a lease of a helper agent."""
+    await insert_agent(db, "agent-x")
+    async with db.write() as tx:
+        async with tx.conn.execute(
+            "SELECT id FROM accounts WHERE name = ?", (name,)
+        ) as cur:
+            account_id = (await cur.fetchone())["id"]
+        await tx.conn.execute(
+            "INSERT INTO account_leases (id, account_id, agent_id, providers,"
+            " leased_at, role) VALUES ('l-x', ?, 'agent-x', '[]', ?, 'engine')",
+            (account_id, ts(clock.now)),
+        )
+    return await exhaust(
+        db, store, account_id, agent="agent-x", until=clock.now + timedelta(hours=5)
+    )
+
+
+async def test_gitea_and_executor_only_accounts_never_become_model_accounts(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "repo", "gitea", priority=1000)
+    await add(db, store, "cursor-1", "cursor", priority=500)
+    await add(db, store, "codex-1", "openai", priority=1)
+    assert (await lease(db, store, A)).name == "codex-1"  # not gitea, not an engine
+    async with db.write() as tx:
+        executor = await accounts.lease(tx, A, None, store, "executor")
+        repo = await accounts.lease(tx, A, None, store, "repository")
+    assert executor.name == "cursor-1"
+    assert repo.name == "repo"
+
+
+async def test_runtime_providers_state_capability_not_preference(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "exotic", "mistral", priority=100)
+    await add(db, store, "claude-1", "anthropic", priority=50)
+    assert (await lease(db, store, A, ["anthropic", "openai"])).name == "claude-1"
+    assert (await lease(db, store, B)).name == "exotic"  # no statement: global
 
 
 async def test_max_leases_and_least_used(
@@ -113,7 +187,7 @@ async def test_no_account(db: Database, store: MemorySecretStore) -> None:
 # -- exhaustion and fallback ---------------------------------------------------------------
 
 
-async def test_fallback_prefers_the_same_provider(
+async def test_fallback_ranks_remaining_accounts_globally(
     db: Database, store: MemorySecretStore, clock: FakeClock
 ) -> None:
     c1 = await add(db, store, "claude-1", "anthropic", priority=9)
@@ -122,10 +196,36 @@ async def test_fallback_prefers_the_same_provider(
     assert (await lease(db, store)).account_id == c1
     result = await exhaust(db, store, c1, until=clock.now + timedelta(hours=5))
     assert result.lease is not None
-    assert result.lease.name == "claude-2"  # same provider beats higher-priority openai
+    assert result.lease.name == "openai-1"  # no preference for the previous provider
     exhausted = await get(db, c1, clock)
     assert exhausted.state is AccountState.EXHAUSTED
     assert exhausted.exhausted_until == clock.now + timedelta(hours=5)
+
+
+async def test_recovery_is_considered_at_the_next_lease_without_preemption(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c1 = await add(db, store, "claude-1", "anthropic", priority=100)
+    o1 = await add(db, store, "openai-1", "openai", priority=10)
+    assert (await lease(db, store, A)).account_id == c1
+    fallback = await exhaust(db, store, c1, until=clock.now + timedelta(hours=1))
+    assert fallback.lease is not None and fallback.lease.account_id == o1
+    clock.advance(7200)
+    async with db.write() as tx:
+        await accounts.recover(tx)
+    assert (await active(db, A)) == [("engine", o1)]  # active work is not preempted
+    assert (await lease(db, store, B)).account_id == c1  # new work sees the recovery
+    assert (await lease(db, store, A)).account_id == c1  # A's next lease, too
+
+
+async def test_exhausted_report_with_nothing_left_blocks_across_providers(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c1 = await add(db, store, "claude-1", "anthropic", priority=100)
+    await lease(db, store, A)
+    result = await exhaust(db, store, c1, until=clock.now + timedelta(hours=3))
+    assert result.lease is None
+    assert result.earliest_reset == clock.now + timedelta(hours=3)
 
 
 async def test_default_cooldown_without_reset_time(
@@ -304,9 +404,9 @@ class FailingStore(MemorySecretStore):
         await super().put(name, value)
 
 
-async def lease_role(db, store, role, providers, agent=A):
+async def lease_role(db, store, role, runtime=None, agent=A):
     async with db.write() as tx:
-        return await accounts.lease(tx, agent, list(providers), store, role)
+        return await accounts.lease(tx, agent, runtime, store, role)
 
 
 async def active(db: Database, agent=A) -> list[tuple[str, str]]:
@@ -322,7 +422,7 @@ async def active(db: Database, agent=A) -> list[tuple[str, str]]:
 
 
 async def test_engine_and_executor_leases_coexist(db: Database, store) -> None:
-    codex = await add(db, store, "codex-1", "openai")
+    codex = await add(db, store, "codex-1", "openai", priority=10)
     claude = await add(db, store, "claude-1", "anthropic")
     engine = await lease_role(db, store, "engine", ["openai", "anthropic"])
     executor = await lease_role(db, store, "executor", ["anthropic"])
@@ -340,6 +440,46 @@ async def test_engine_and_executor_leases_coexist(db: Database, store) -> None:
     assert await active(db) == []
 
 
+async def test_a_lower_priority_executor_never_displaces_the_held_engine_account(
+    db: Database, store
+) -> None:
+    claude = await add(db, store, "claude-1", "anthropic", priority=100, max_leases=1)
+    codex = await add(db, store, "codex-1", "openai", priority=0)
+    engine = await lease_role(db, store, "engine")
+    assert engine.account_id == claude
+    # Plain executor lease: the engine's slot is taken, so the next best is chosen.
+    async with db.write() as tx:
+        plain = await accounts.lease(tx, A, None, store, "executor")
+    assert plain.account_id == codex
+    # With reuse_held the held, higher-priority account stays the executor's pick:
+    # its own lease is returned, no second row, no extra slot, no Codex lease.
+    async with db.write() as tx:
+        reused = await accounts.lease(tx, A, None, store, "executor", reuse_held=True)
+    assert (reused.account_id, reused.role) == (claude, "engine")
+    assert reused.lease_id == engine.lease_id
+    assert reused.credential == {"api_key": "key-claude-1"}
+    assert await active(db) == [("engine", claude)]  # the codex executor was replaced
+    # Another agent still finds Claude full (capacity is not inflated).
+    assert (await lease(db, store, B)).account_id == codex
+
+
+async def test_reuse_held_prefers_a_better_other_account_and_other_roles_ignore_it(
+    db: Database, store
+) -> None:
+    held = await add(db, store, "codex-1", "openai", priority=10)
+    better = await add(db, store, "claude-1", "anthropic", priority=100)
+    async with db.write() as tx:  # force the engine onto the lower account
+        await accounts.lease(tx, A, ["openai"], store)
+    async with db.write() as tx:
+        executor = await accounts.lease(tx, A, None, store, "executor", reuse_held=True)
+    assert (executor.account_id, executor.role) == (better, "executor")
+    assert ("engine", held) in await active(db)
+    # reuse_held means nothing for the engine role.
+    async with db.write() as tx:
+        again = await accounts.lease(tx, A, None, store, "engine", reuse_held=True)
+    assert again.role == "engine"
+
+
 async def test_executor_exhaustion_stays_in_its_role(db: Database, store) -> None:
     await add(db, store, "codex-1", "openai", priority=5)
     c1 = await add(db, store, "claude-1", "anthropic", priority=2)
@@ -349,8 +489,15 @@ async def test_executor_exhaustion_stays_in_its_role(db: Database, store) -> Non
     assert executor.account_id == c1
     async with db.write() as tx:
         result = await accounts.exhausted(
-            tx, A, c1, ExhaustedReport(reason="limit", role="executor"), store
+            tx,
+            A,
+            c1,
+            ExhaustedReport(
+                reason="limit", role="executor", runtime_providers=["anthropic"]
+            ),
+            store,
         )
+    # Ranked globally among what the runtime can apply; the role is kept.
     assert result.lease and (result.lease.account_id, result.lease.role) == (
         c2,
         "executor",
@@ -519,6 +666,45 @@ def _create(client: TestClient, name: str) -> dict:
     )
     assert res.status_code == 201
     return res.json()
+
+
+def test_rest_lease_is_global_and_the_retired_provider_list_restricts_nothing(
+    client: TestClient,
+) -> None:
+    for name, provider, priority in (
+        ("big", "acme", 100),
+        ("small", "zeta", 1),
+    ):
+        res = client.post(
+            "/api/accounts",
+            json={
+                "name": name,
+                "provider": provider,
+                "priority": priority,
+                "credential": {"api_key": f"key-{name}"},
+            },
+            headers=ADMIN,
+        )
+        assert res.status_code == 201
+    worker = register(client)
+    # The retired `providers` list is accepted and ignored.
+    legacy = client.post(
+        "/api/accounts/lease", json={"providers": ["zeta"]}, headers=worker
+    )
+    assert legacy.status_code == 200 and legacy.json()["name"] == "big"
+    # `runtime_providers` is capability: the best account the runtime can apply.
+    capable = client.post(
+        "/api/accounts/lease", json={"runtime_providers": ["zeta"]}, headers=worker
+    )
+    assert capable.status_code == 200 and capable.json()["name"] == "small"
+    # The credential rides only in the lease response, never in a listing.
+    listing = client.get("/api/accounts", headers=ADMIN)
+    assert "key-big" not in listing.text and "key-small" not in listing.text
+    # No account is usable for a runtime that supports none of them.
+    none = client.post(
+        "/api/accounts/lease", json={"runtime_providers": ["nope"]}, headers=worker
+    )
+    assert none.status_code == 409 and none.json()["detail"]["code"] == "no_account"
 
 
 def test_edit_fields_and_name_conflict(client: TestClient) -> None:

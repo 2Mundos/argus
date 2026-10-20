@@ -332,7 +332,7 @@ def test_simple_fitting_task_goes_local_with_escalation_target() -> None:
     d = router.route(EASY, cat(), chat_template_overhead=512)
     assert d.target == "local" and d.model == MODEL
     assert d.estimated_input_tokens == 4000 * 4 + 512 and d.context_tokens == 65536
-    assert d.escalate_to == "codex" and d.blocked is None
+    assert d.escalate_to == "claude" and d.blocked is None
 
 
 @pytest.mark.parametrize(
@@ -349,14 +349,14 @@ def test_simple_fitting_task_goes_local_with_escalation_target() -> None:
 )
 def test_anything_unproven_goes_to_a_real_engine(change: dict, why: str) -> None:
     d = router.route(EASY.model_copy(update=change), cat())
-    assert d.target == "codex" and why in d.reason
+    assert d.target == "claude" and why in d.reason
 
 
-def test_code_runs_on_codex_and_names_claude_as_executor() -> None:
+def test_equal_engines_tie_deterministically_and_need_no_separate_executor() -> None:
     d = router.route(
         EASY.model_copy(update={"is_code": True, "multi_file": True}), cat()
     )
-    assert d.target == "codex" and d.executor == "claude"
+    assert d.target == "claude" and d.executor is None
 
 
 def test_budget_counts_the_output_reserve_and_never_truncates() -> None:
@@ -365,9 +365,9 @@ def test_budget_counts_the_output_reserve_and_never_truncates() -> None:
     fits = EASY.model_copy(update={"input_chars": 1000})
     assert router.route(fits, cat(), chat_template_overhead=oh).target == "local"
     over = EASY.model_copy(update={"input_chars": 9000})
-    assert router.route(over, cat(), chat_template_overhead=oh).target == "codex"
+    assert router.route(over, cat(), chat_template_overhead=oh).target == "claude"
     big_out = fits.model_copy(update={"output_tokens": 30000})
-    assert router.route(big_out, cat(), chat_template_overhead=oh).target == "codex"
+    assert router.route(big_out, cat(), chat_template_overhead=oh).target == "claude"
 
 
 def test_unicode_and_adversarial_ascii_upper_bounds() -> None:
@@ -382,7 +382,7 @@ def test_unicode_and_adversarial_ascii_upper_bounds() -> None:
         cat(),
         chat_template_overhead=512,
     )
-    assert d.target == "codex" and "does not fit" in d.reason
+    assert d.target == "claude" and "does not fit" in d.reason
 
 
 def test_run_local_budget_counts_serialized_payload() -> None:
@@ -415,12 +415,12 @@ def test_schema_definition_rejects_pattern() -> None:
 
 def test_unvalidated_local_model_is_not_trusted() -> None:
     d = router.route(EASY, cat(local_ok=False))
-    assert d.target == "codex" and "not validated" in d.reason
+    assert d.target == "claude" and "not validated" in d.reason
 
 
 def test_unknown_served_context_routes_away() -> None:
     unknown = LocalModelInfo(reachable=True, model=MODEL, n_ctx=None)
-    ledger = full_ledger("codex")
+    ledger = full_ledger("claude")
     identity = local_identity("http://local.test:8080", MODEL, None)
     ledger["local"] = {"validated": ok_fact(), "validation_identity": identity}
     d = router.route(
@@ -433,20 +433,20 @@ def test_unknown_served_context_routes_away() -> None:
             local_validated_event=Fact(ok=True, detail="probe"),
         ),
     )
-    assert d.target == "codex" and "served context size unknown" in d.reason
+    assert d.target == "claude" and "served context size unknown" in d.reason
 
 
 def test_unusable_target_is_reported_blocked_not_swapped() -> None:
-    # codex is installed but not authenticated: the route says so
-    ledger = {"codex": {"installed": ok_fact()}}
+    # claude is installed but not authenticated: the route says so
+    ledger = {"claude": {"installed": ok_fact()}}
     hard = EASY.model_copy(update={"simple": False})
     d = router.route(hard, catalog.build(ledger, None, None))
-    assert d.target == "codex" and d.blocked and "authenticated" in d.blocked
+    assert d.target == "claude" and d.blocked and "authenticated" in d.blocked
 
 
 def test_no_local_model_configured() -> None:
     d = router.route(EASY, catalog.build({}, None, None))
-    assert d.target == "codex" and not d.local_considered
+    assert d.target == "claude" and not d.local_considered
 
 
 # -- catalogue --------------------------------------------------------------------------
@@ -682,7 +682,7 @@ def test_run_local_rejects_oversized_prompt_without_calling_the_model(
     )
     assert res.status_code == 200, res.text
     body = res.json()
-    assert body["verdict"] == "escalate" and body["escalate_to"] == "codex"
+    assert body["verdict"] == "escalate" and body["escalate_to"] == "claude"
     assert "does not fit" in body["attempts"][0]["failures"][0]
     assert server.chat == []
 
@@ -773,7 +773,7 @@ def test_served_model_change_invalidates_event_validation(
     route = client.post(
         "/api/engines/route", json={**EASY.model_dump()}, headers=ADMIN
     ).json()
-    assert route["target"] == "codex" and route["target"] != "local"
+    assert route["target"] == "claude" and route["target"] != "local"
 
 
 def test_served_context_change_invalidates_event_validation(

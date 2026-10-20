@@ -135,9 +135,9 @@ export interface paths {
         put?: never;
         /**
          * Lease Account
-         * @description Lease the best usable account among `providers` (most preferred first),
-         *     with its credential. One active lease per role; it ends when released or
-         *     replaced.
+         * @description Lease the best usable account globally (priority, then least leased), with
+         *     its credential. `runtime_providers` only states what the runtime can apply.
+         *     One active lease per role; it ends when released or replaced.
          *     `409 no_account` when none is usable.
          */
         post: operations["lease_account_api_accounts_lease_post"];
@@ -251,7 +251,7 @@ export interface paths {
         /**
          * Report Exhausted
          * @description Report that the leased account hit a quota. Returns the next account to use
-         *     (same provider first), or none: then the given task is blocked as
+         *     (best remaining by priority, any provider), or none: then the given task is blocked as
          *     `no_account` and returns to ready when an account frees up.
          */
         post: operations["report_exhausted_api_accounts__account_id__exhausted_post"];
@@ -1881,6 +1881,13 @@ export interface components {
              * @default 0
              */
             available: number;
+            /** Best Priority */
+            best_priority: number | null;
+            /**
+             * Busy
+             * @default 0
+             */
+            busy: number;
             /**
              * Disabled
              * @default 0
@@ -1891,6 +1898,13 @@ export interface components {
              * @default 0
              */
             exhausted: number;
+            /** Leasable */
+            leasable: number | null;
+            /**
+             * No Credential
+             * @default 0
+             */
+            no_credential: number;
         };
         /** AdminToken */
         AdminToken: {
@@ -2792,6 +2806,8 @@ export interface components {
              * @enum {string}
              */
             role?: "engine" | "executor" | "repository";
+            /** Runtime Providers */
+            runtime_providers?: string[] | null;
             /** Task Id */
             task_id?: string | null;
             /** Until */
@@ -3170,17 +3186,25 @@ export interface components {
         };
         /**
          * LeaseRequest
-         * @description Providers the agent's runtime can use, most preferred first.
+         * @description Lease the best usable account globally (priority, then least leased).
+         *
+         *     The retired `providers` list is accepted and ignored: no caller-side order or
+         *     allowlist restricts selection.
          */
         LeaseRequest: {
-            /** Providers */
-            providers: string[];
+            /**
+             * Reuse Held
+             * @default false
+             */
+            reuse_held?: boolean;
             /**
              * Role
              * @default engine
              * @enum {string}
              */
             role?: "engine" | "executor" | "repository";
+            /** Runtime Providers */
+            runtime_providers?: string[] | null;
         };
         /** LocalAttempt */
         LocalAttempt: {
@@ -3273,11 +3297,6 @@ export interface components {
          *     the identical path inside the NanoClaw host container.
          */
         "NanoclawOptions-Input": {
-            /**
-             * Account Providers
-             * @default []
-             */
-            account_providers?: string[];
             /** Agent Image */
             agent_image: string;
             /** Agent Image Archive */
@@ -3287,11 +3306,6 @@ export interface components {
              * @default /var/run/docker.sock
              */
             docker_socket?: string;
-            /**
-             * Executor Providers
-             * @default []
-             */
-            executor_providers?: string[];
             /**
              * Group Add
              * @default []
@@ -3325,11 +3339,6 @@ export interface components {
          *     the identical path inside the NanoClaw host container.
          */
         "NanoclawOptions-Output": {
-            /**
-             * Account Providers
-             * @default []
-             */
-            account_providers: string[];
             /** Agent Image */
             agent_image: string;
             /** Agent Image Archive */
@@ -3339,11 +3348,6 @@ export interface components {
              * @default /var/run/docker.sock
              */
             docker_socket: string;
-            /**
-             * Executor Providers
-             * @default []
-             */
-            executor_providers: string[];
             /**
              * Group Add
              * @default []

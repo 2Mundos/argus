@@ -1,6 +1,5 @@
 """Pools and instances (worker lifecycle 3.5)."""
 
-import re
 from datetime import datetime
 from enum import StrEnum
 from urllib.parse import urlsplit
@@ -55,9 +54,6 @@ class KubernetesOptions(BaseModel):
 
 # 107 (sun_path limit) - 1 ("/") - 36 (instance uuid) - len("/data/ncl.sock") = 56.
 NANOCLAW_MAX_ROOT_LEN = 107 - 1 - 36 - len("/data/ncl.sock")
-# Account providers that only a delegated CLI can use: NanoClaw has no harness for them.
-EXECUTOR_ONLY = frozenset({"cursor"})
-PROVIDER_ID = re.compile(r"^[a-z0-9_-]{1,50}$")
 
 
 class NanoclawOptions(BaseModel):
@@ -84,31 +80,24 @@ class NanoclawOptions(BaseModel):
     # daemon when `docker.runtime` is set (that daemon starts without images).
     # Absent: `agent_image` is pulled from its registry.
     agent_image_archive: str | None = Field(default=None, pattern=r"^/")
-    # Providers whose accounts Argus leases to this agent and switches in the
-    # OneCLI vault (e.g. ["anthropic"]). Empty: use the vault's own credential.
-    account_providers: list[str] = []
-    # Providers for the one `executor` lease: the account a CLI the worker
-    # delegates to (argus-delegate) uses, taken when the engine's account is of
-    # another provider. Empty keeps the default (anthropic); set it to say
-    # explicitly that this pool delegates elsewhere, e.g. ["cursor"].
-    executor_providers: list[str] = []
     # Explicit project -> HTTPS repository allowlist; values are not secrets.
     repositories: dict[str, str] = {}
     user: str | None = None  # "uid:gid" to run the host container as
     group_add: list[str] = []  # e.g. the docker socket's group id
 
-    @model_validator(mode="after")
-    def validate_providers(self) -> "NanoclawOptions":
-        for name in (*self.account_providers, *self.executor_providers):
-            if not PROVIDER_ID.match(name):
-                raise ValueError(f"provider {name!r} must match [a-z0-9_-]{{1,50}}")
-        engine_only = [p for p in self.account_providers if p in EXECUTOR_ONLY]
-        if engine_only:
-            raise ValueError(
-                f"{', '.join(engine_only)} is an executor, not an engine: "
-                "put it in executor_providers"
-            )
-        return self
+    @model_validator(mode="before")
+    @classmethod
+    def drop_retired_provider_lists(cls, data: object) -> object:
+        """`account_providers` / `executor_providers` were allowlists that narrowed
+        account selection. Persisted pools may still carry them; they are dropped
+        on read so they can no longer restrict anything (account selection spec)."""
+        if isinstance(data, dict):
+            return {
+                k: v
+                for k, v in data.items()
+                if k not in ("account_providers", "executor_providers")
+            }
+        return data
 
     @model_validator(mode="after")
     def validate_repositories(self) -> "NanoclawOptions":

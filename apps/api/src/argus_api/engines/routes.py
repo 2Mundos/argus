@@ -17,12 +17,20 @@ from pydantic import BaseModel, Field
 from argus_api import events
 from argus_api.accounts import service as accounts_service
 from argus_api.db import utcnow
-from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
+from argus_api.deps import (
+    AgentDep,
+    CallerDep,
+    DbDep,
+    ManagerDep,
+    SecretsDep,
+    SettingsDep,
+)
 from argus_api.engines import catalog as catalog_mod
 from argus_api.engines import router as routing
 from argus_api.engines.local import LocalModel, build_chat_completion_payload
 from argus_api.engines.local_readiness import local_identity, validated_from_events
 from argus_api.errors import DomainError
+from argus_api.secrets import SecretStore, ref_name
 
 router = APIRouter(tags=["engines"])
 
@@ -36,15 +44,20 @@ def _local(request: Request) -> LocalModel | None:
     return request.app.state.local_model
 
 
-async def _account_summaries(db: DbDep) -> dict[str, AccountsSummary]:
-    """Registry counts per provider; an exhausted account past its reset counts
-    as available, as the lease logic treats it."""
+async def _account_summaries(
+    db: DbDep, secrets: SecretStore
+) -> dict[str, AccountsSummary]:
+    """Registry counts per provider. `available`/`exhausted`/`disabled` are
+    lifecycle (an exhausted account past its reset counts as available, as the
+    lease logic treats it); `busy`, `no_credential`, `leasable` and
+    `best_priority` mirror what a lease could take now. Read-only: a missing
+    secret is counted, never repaired, and no credential is read out."""
     now = utcnow()
     out: dict[str, AccountsSummary] = {}
     async with db.read() as conn:
         listed = await accounts_service.list_accounts(conn, now)
     for a in listed:
-        s = out.setdefault(a.provider, AccountsSummary())
+        s = out.setdefault(a.provider, AccountsSummary(leasable=0))
         if a.state is AccountState.DISABLED:
             s.disabled += 1
         elif a.state is AccountState.EXHAUSTED and (
@@ -53,10 +66,21 @@ async def _account_summaries(db: DbDep) -> dict[str, AccountsSummary]:
             s.exhausted += 1
         else:
             s.available += 1
+            name = ref_name(a.secret_ref)
+            if name is None or secrets.get(name) is None:
+                s.no_credential += 1
+            elif a.max_leases is not None and a.active_leases >= a.max_leases:
+                s.busy += 1
+            else:
+                s.leasable = (s.leasable or 0) + 1
+                if s.best_priority is None or a.priority > s.best_priority:
+                    s.best_priority = a.priority
     return out
 
 
-async def _catalog(request: Request, settings: Any, db: DbDep) -> EngineCatalog:
+async def _catalog(
+    request: Request, settings: Any, db: DbDep, secrets: SecretStore
+) -> EngineCatalog:
     local = _local(request)
     info = await local.probe() if local else None
     model = local.model if local else None
@@ -71,17 +95,21 @@ async def _catalog(request: Request, settings: Any, db: DbDep) -> EngineCatalog:
         model,
         local_identity=identity,
         local_validated_event=event_validated,
-        accounts=await _account_summaries(db),
+        accounts=await _account_summaries(db, secrets),
     )
 
 
 @router.get("/engines")
 async def list_engines(
-    request: Request, settings: SettingsDep, db: DbDep, _: CallerDep
+    request: Request,
+    settings: SettingsDep,
+    db: DbDep,
+    secrets: SecretsDep,
+    _: CallerDep,
 ) -> EngineCatalog:
     """Engines, executors and the local model: axes, auth methods and the three
     readiness facts (installed, authenticated, validated). Read-only."""
-    return await _catalog(request, settings, db)
+    return await _catalog(request, settings, db, secrets)
 
 
 @router.post("/engines/route")
@@ -90,12 +118,13 @@ async def route_task(
     request: Request,
     db: DbDep,
     settings: SettingsDep,
+    secrets: SecretsDep,
     caller: ManagerDep,
 ) -> RouteDecision:
     """Where should this task run? Deterministic; the decision is recorded."""
     decision = routing.route(
         body,
-        await _catalog(request, settings, db),
+        await _catalog(request, settings, db, secrets),
         max_input_fraction=settings.local_max_input_fraction,
         output_reserve=settings.local_output_reserve,
         chat_template_overhead=settings.local_chat_template_overhead,
@@ -149,6 +178,7 @@ async def run_local(
     request: Request,
     db: DbDep,
     settings: SettingsDep,
+    secrets: SecretsDep,
     caller: CallerDep,
 ) -> LocalRunResult:
     """One bounded completion on the local model, checked against `criteria`.
@@ -161,6 +191,9 @@ async def run_local(
             "no local model: set ARGUS_LOCAL_MODEL_URL and ARGUS_LOCAL_MODEL"
         )
     info = await local.probe()
+    escalate_to = routing.escalation_target(
+        await _catalog(request, settings, db, secrets)
+    )
     payload = build_chat_completion_payload(body, local.model)
     est = routing.estimate_local_run_input_tokens(
         body,
@@ -190,7 +223,7 @@ async def run_local(
                 )
             ],
             text=None,
-            escalate_to="codex",
+            escalate_to=escalate_to,
         )
     elif not fits:
         result = LocalRunResult(
@@ -210,10 +243,10 @@ async def run_local(
                 )
             ],
             text=None,
-            escalate_to="codex",
+            escalate_to=escalate_to,
         )
     else:
-        result = await local.run(body, escalate_to="codex")
+        result = await local.run(body, escalate_to=escalate_to)
     last = result.attempts[-1] if result.attempts else None
     vid = local_identity(local.url, local.model, info.n_ctx)
     async with db.write() as tx:

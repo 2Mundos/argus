@@ -5,7 +5,16 @@ export interface ModelPolicy {
 export interface PolicySnapshot {
   policy: ModelPolicy;
   revision: string;
-  context: { task_id: string; attempt: number } | null;
+  context: {
+    task_id: string;
+    attempt: number;
+    /** The harness the leased account selected, and that account's provider. */
+    engine?: string;
+    account_provider?: string | null;
+    executor_account_provider?: string | null;
+    /** The delegate CLI of the best-priority leased account (claude | codex | agent). */
+    preferred_executor?: string | null;
+  } | null;
 }
 export interface ModelSelection {
   scope: string;

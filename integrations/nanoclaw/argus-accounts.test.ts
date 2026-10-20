@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
-import { accountsFromEnv, createArgusAdapter } from "./argus.js";
+import { accountsFromEnv, createArgusAdapter, renderTask } from "./argus.js";
 import {
   type AccountLease,
   applyLease,
@@ -44,7 +44,7 @@ vi.mock("../container-runner.js", () => ({
 
 describe("recycleRuntime (real hook, NanoClaw modules faked)", () => {
   const recycle = () => {
-    vi.stubEnv("ARGUS_ACCOUNT_PROVIDERS", "codex");
+    vi.stubEnv("ONECLI_URL", "http://onecli.test");
     return accountsFromEnv()!.recycleRuntime!;
   };
   afterEach(() => {
@@ -157,6 +157,8 @@ function world(opts: {
   exhaustedResponse?: (n: number) => any;
   heartbeatIntervalS?: number;
   rejectHeartbeat?: boolean;
+  /** Answer an empty claim after this many ms (an idle long-poll) instead of hanging. */
+  idleClaimMs?: number;
 }) {
   const calls: Call[] = [];
   const leases = [...opts.leases];
@@ -234,7 +236,10 @@ function world(opts: {
       });
     if (path === "/agents/me/leave") return json(200, {});
     if (path === "/accounts/lease") {
-      const next = leases.shift();
+      // The first queued item for this role (a bare "no_account" serves any role).
+      const role = body?.role ?? "engine";
+      const index = leases.findIndex((l) => l === "no_account" || (l.role ?? "engine") === role);
+      const next = index < 0 ? undefined : leases.splice(index, 1)[0];
       if (next === undefined || next === "no_account") {
         return json(409, { detail: { code: "no_account", message: "no usable account" } });
       }
@@ -250,6 +255,10 @@ function world(opts: {
     if (path === "/tasks/claim") {
       const t = tasks.shift();
       if (t) return json(200, t);
+      if (opts.idleClaimMs !== undefined) {
+        await new Promise((r) => setTimeout(r, opts.idleClaimMs));
+        return new Response(null, { status: 204 });
+      }
       return new Promise<Response>((_, reject) => {
         init.signal?.addEventListener("abort", () =>
           reject(new DOMException("aborted", "AbortError")),
@@ -294,7 +303,7 @@ function harness(
     claimWaitS: 1,
     accounts: withAccounts
       ? {
-          providers: ["anthropic"],
+          models: true,
           onecli: new OneCliClient("http://onecli.test", w.fetchImpl),
           resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
           ...extra,
@@ -548,7 +557,7 @@ describe("channel with accounts", () => {
       fetch: failing,
       claimWaitS: 1,
       accounts: {
-        providers: ["anthropic"],
+        models: true,
         onecli: new OneCliClient("http://onecli.test", failing),
         resolveTarget: async () => ({ identifier: "g", name: "n" }),
       },
@@ -680,7 +689,6 @@ describe("engine and executor leases in the channel", () => {
     });
     const selectEngine = vi.fn(async () => true);
     const { adapter, setup } = harness(w, true, {
-      providers: ["openai", "anthropic"],
       selectEngine,
     });
     live.push(adapter);
@@ -688,9 +696,10 @@ describe("engine and executor leases in the channel", () => {
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
     const leaseCalls = w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body);
     expect(leaseCalls).toEqual([
-      { providers: ["openai", "anthropic"] },
-      { providers: ["anthropic"], role: "executor" },
+      { runtime_providers: ["anthropic", "openai"] },
+      { role: "executor", runtime_providers: ["anthropic", "openai", "cursor"], reuse_held: true },
     ]);
+    expect(JSON.stringify(leaseCalls)).not.toContain('"providers"');
     expect(selectEngine).toHaveBeenCalledWith("codex");
     const selected = w.calls.find((c) => c.path === "/engines/selected")!.body;
     expect(selected).toEqual({
@@ -703,24 +712,29 @@ describe("engine and executor leases in the channel", () => {
     expect(w.onecli.agents[0]!.secrets).toHaveLength(2);
   });
 
-  it("takes no executor lease when the engine is already the executor's provider", async () => {
-    const w = world({ leases: [lease("claude-1", "sk-ant")], tasks: [task()] });
+  it("holds no executor lease when the best executor is the engine's own provider", async () => {
+    const w = world({
+      leases: [lease("claude-1", "sk-ant"), lease("claude-2", "sk-ant2", { role: "executor" })],
+      tasks: [task()],
+    });
     const selectEngine = vi.fn(async () => false);
     const { adapter, setup } = harness(w, true, {
-      providers: ["openai", "anthropic"],
       selectEngine,
     });
     live.push(adapter);
     await adapter.setup(setup);
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
-    expect(w.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(1);
+    expect(w.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(2);
+    expect(
+      w.calls.some((c) => c.path === "/accounts/release" && c.search === "?role=executor"),
+    ).toBe(true);
     expect(selectEngine).toHaveBeenCalledWith("claude");
     expect(w.onecli.agents[0]!.secrets).toHaveLength(1);
   });
 
   it("still serves Codex when no executor account is usable, and holds no residual secret", async () => {
     const w = world({ leases: [codexLease(), "no_account"], tasks: [task()] });
-    const { adapter, setup } = harness(w, true, { providers: ["openai", "anthropic"] });
+    const { adapter, setup } = harness(w, true);
     live.push(adapter);
     await adapter.setup(setup);
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
@@ -740,7 +754,7 @@ describe("an unusable executor account", () => {
       credential: { claudeAiOauth: { accessToken: "t-SECRET", expiresAt: Date.now() - 1000 } },
     });
     const w = world({ leases: [codexLease(), expired], tasks: [task()] });
-    const { adapter, setup } = harness(w, true, { providers: ["openai", "anthropic"] });
+    const { adapter, setup } = harness(w, true);
     live.push(adapter);
     await adapter.setup(setup);
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
@@ -935,21 +949,18 @@ describe("exchangeCursorApiKey", () => {
 });
 
 describe("cursor executor selection in the channel", () => {
-  it("leases cursor for the executor when executorProviders says so", async () => {
+  it("leases cursor for the executor when it is the best usable executor, with no pool list", async () => {
     const w = world({
       leases: [codexLease(), cursorLease()],
       tasks: [task()],
     });
-    const { adapter, setup } = harness(w, true, {
-      providers: ["openai"],
-      executorProviders: ["cursor"],
-    });
+    const { adapter, setup } = harness(w, true);
     live.push(adapter);
     await adapter.setup(setup);
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
     expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
-      { providers: ["openai"] },
-      { providers: ["cursor"], role: "executor" },
+      { runtime_providers: ["anthropic", "openai"] },
+      { role: "executor", runtime_providers: ["anthropic", "openai", "cursor"], reuse_held: true },
     ]);
     expect(w.onecli.secrets.filter((s) => s.name.includes("cursor"))).toHaveLength(2);
   });
@@ -975,7 +986,7 @@ describe("a limit of the executor's provider leaves the Codex engine lease alone
       leases: [codexLease(), lease("claude-1", "sk-ant", { role: "executor" })],
       tasks: [task()],
     });
-    const h = harness(w, true, { providers: ["openai", "anthropic"] });
+    const h = harness(w, true);
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
@@ -990,7 +1001,7 @@ describe("a limit of the executor's provider leaves the Codex engine lease alone
 
   it("reports an openai quota error as exhausted for the engine role", async () => {
     const w = world({ leases: [codexLease(), "no_account"], tasks: [task()] });
-    const h = harness(w, true, { providers: ["openai", "anthropic"] });
+    const h = harness(w, true);
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
@@ -1010,7 +1021,7 @@ describe("structured providerFailure on a failure notice", () => {
   });
   const run = async (leases: Array<AccountLease | "no_account">, msg: unknown) => {
     const w = world({ leases, tasks: [task()] });
-    const h = harness(w, true, { providers: ["openai", "anthropic"] });
+    const h = harness(w, true);
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
@@ -1039,6 +1050,7 @@ describe("structured providerFailure on a failure notice", () => {
     expect(call?.body).toEqual({
       reason: "OpenAI/Codex authentication expired",
       role: "engine",
+      runtime_providers: ["anthropic", "openai"],
       task_id: "t1",
       attempt: 1,
     });
@@ -1073,7 +1085,7 @@ describe("structured providerFailure on a failure notice", () => {
 
   it("ignores providerFailure without failureNotice", async () => {
     const w = world({ leases: [codexLease()], tasks: [task()] });
-    const h = harness(w, true, { providers: ["openai"] });
+    const h = harness(w, true);
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
@@ -1125,8 +1137,13 @@ describe("task-scoped repository auth", () => {
       );
       expect(h.inbound[0].content.text).not.toContain("dummy-gitea-token");
       expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
-        { providers: ["anthropic"] },
-        { providers: ["gitea"], role: "repository" },
+        { runtime_providers: ["anthropic", "openai"] },
+        {
+          role: "executor",
+          runtime_providers: ["anthropic", "openai", "cursor"],
+          reuse_held: true,
+        },
+        { role: "repository" },
       ]);
       await h.adapter.deliver("local", null, {
         kind: "chat",
@@ -1156,7 +1173,9 @@ describe("task-scoped repository auth", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
-    expect(w.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(1);
+    expect(
+      w.calls.filter((c) => c.path === "/accounts/lease" && c.body?.role === "repository"),
+    ).toHaveLength(0);
     expect(h.inbound[0].content.text).not.toContain("Repository (allowlisted)");
   });
 
@@ -1211,7 +1230,7 @@ describe("task-scoped repository auth", () => {
       tasks: [{ ...task(), required_capabilities: ["repository:write"] }],
     });
     const h = harness(w, true, {
-      providers: [],
+      models: false,
       repositories: { global: "https://git.example.test/org/repo" },
     });
     live.push(h.adapter);
@@ -1248,7 +1267,6 @@ describe("runtime recycling on an account rotation", () => {
       order.push(`recycle(inbound=${h.inbound.length}, secret=${w.onecli.secrets.length})`);
     });
     const h = harness(w, true, {
-      providers: ["openai", "anthropic"],
       selectEngine: vi.fn(async () => false), // codex -> codex: the harness does not change
       recycleRuntime,
     });
@@ -1274,7 +1292,6 @@ describe("runtime recycling on an account rotation", () => {
     });
     const calls: string[] = [];
     const h = harness(w, true, {
-      providers: ["openai", "anthropic"],
       selectEngine: vi.fn(async (engine: string) => (calls.push(`select:${engine}`), true)),
       recycleRuntime: vi.fn(async () => void calls.push("recycle")),
     });
@@ -1289,7 +1306,7 @@ describe("runtime recycling on an account rotation", () => {
   it("does not recycle when no replacement account exists", async () => {
     const w = world({ leases: [codexLease(), "no_account"], tasks: [task()] });
     const recycleRuntime = vi.fn(async () => undefined);
-    const h = harness(w, true, { providers: ["openai"], recycleRuntime });
+    const h = harness(w, true, { recycleRuntime });
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
@@ -1306,7 +1323,7 @@ describe("runtime recycling on an account rotation", () => {
     const recycleRuntime = vi.fn(async () => {
       throw new Error("session s1 did not stop");
     });
-    const h = harness(w, true, { providers: ["openai", "anthropic"], recycleRuntime });
+    const h = harness(w, true, { recycleRuntime });
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
@@ -1317,5 +1334,199 @@ describe("runtime recycling on an account rotation", () => {
     expect(fail.body.error).toContain("could not be stopped");
     expect(h.inbound).toHaveLength(1); // the old process got nothing more
     expect(w.calls.some((c) => c.path === "/tasks/t1/complete")).toBe(false);
+  });
+});
+
+describe("global account selection in the channel", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("never sends a provider list or order: Argus ranks every account", async () => {
+    const w = world({ leases: [lease("claude-1", "sk-ant")], tasks: [task()] });
+    const h = harness(w, true);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    for (const c of w.calls.filter((c) => c.path === "/accounts/lease"))
+      expect(c.body).not.toHaveProperty("providers");
+    expect(w.calls.find((c) => c.path === "/engines/selected")!.body).toMatchObject({
+      engine: "claude",
+      provider: "anthropic",
+    });
+  });
+
+  it("leases the engine account whatever the provider the best one is", async () => {
+    // Argus picked openai (the only usable one): the harness follows the account.
+    const w = world({ leases: [codexLease(), "no_account"], tasks: [task()] });
+    const selectEngine = vi.fn(async (_engine: string) => true);
+    const h = harness(w, true, { selectEngine });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    expect(selectEngine).toHaveBeenCalledWith("codex");
+  });
+
+  it("ignores the retired provider lists in the environment", () => {
+    vi.stubEnv("ONECLI_URL", "http://onecli.test");
+    vi.stubEnv("ARGUS_ACCOUNT_PROVIDERS", "openai");
+    vi.stubEnv("ARGUS_EXECUTOR_PROVIDERS", "cursor");
+    const accounts = accountsFromEnv()!;
+    expect(accounts.models).toBe(true);
+    expect(accounts).not.toHaveProperty("providers");
+    expect(accounts).not.toHaveProperty("executorProviders");
+  });
+
+  it("turns accounts on with a vault URL alone, and stays off without any", () => {
+    vi.stubEnv("ONECLI_URL", "");
+    vi.stubEnv("ARGUS_ACCOUNT_PROVIDERS", "");
+    vi.stubEnv("ARGUS_REPOSITORIES_JSON", "");
+    expect(accountsFromEnv()).toBeUndefined();
+    vi.stubEnv("ONECLI_URL", "http://onecli.test");
+    expect(accountsFromEnv()?.models).toBe(true);
+  });
+
+  it("leases no model account when models are off (repository-only configuration)", async () => {
+    const w = world({ leases: [lease("claude-1", "sk-ant")], tasks: [task()] });
+    const h = harness(w, true, { models: false });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    expect(w.calls.some((c) => c.path === "/accounts/lease")).toBe(false);
+  });
+
+  it("passes the held engine and executor accounts to the model policy", async () => {
+    const w = world({
+      leases: [codexLease(), lease("claude-1", "sk-ant", { role: "executor" })],
+      tasks: [task()],
+    });
+    const selectModels = vi.fn(async (_task: unknown, _held: unknown) => ({}) as any);
+    const adapter = createArgusAdapter({
+      url: "http://argus.test",
+      bootstrapToken: "boot",
+      capabilities: [],
+      name: "w",
+      fetch: w.fetchImpl,
+      claimWaitS: 1,
+      selectModels,
+      accounts: {
+        models: true,
+        onecli: new OneCliClient("http://onecli.test", w.fetchImpl),
+        resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
+      },
+    });
+    live.push(adapter);
+    const setup = {
+      onInbound: vi.fn(),
+      onInboundEvent: vi.fn(),
+      onMetadata: vi.fn(),
+      onAction: vi.fn(),
+    } as unknown as ChannelSetup;
+    await adapter.setup(setup);
+    await until(() => selectModels.mock.calls.length > 0);
+    expect(selectModels.mock.calls[0]![1]).toEqual({
+      engine: { provider: "openai", account_id: "a-codex-1" },
+      executor: { provider: "anthropic", account_id: "a-claude-1" },
+    });
+  });
+
+  it("keeps the higher-priority engine account as the executor instead of a lower one", async () => {
+    // Claude 100 (max_leases 1) is the engine; Argus, asked to reuse held accounts,
+    // answers the executor request with that same engine lease, not Codex 0.
+    const engine = lease("claude-1", "sk-ant");
+    const w = world({ leases: [engine, "no_account"] });
+    const calls: any[] = [];
+    const inner = w.fetchImpl;
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      const body = init.body ? JSON.parse(init.body as string) : undefined;
+      if (String(url).endsWith("/accounts/lease") && body?.role === "executor") {
+        calls.push(body);
+        return new Response(JSON.stringify({ ...engine, role: "engine" }), { status: 200 });
+      }
+      return inner(url, init);
+    }) as unknown as typeof fetch;
+    const selectEngine = vi.fn(async (_engine: string) => true);
+    const h = createArgusAdapter({
+      url: "http://argus.test",
+      bootstrapToken: "boot",
+      capabilities: [],
+      name: "w",
+      fetch: fetchImpl,
+      claimWaitS: 1,
+      accounts: {
+        models: true,
+        onecli: new OneCliClient("http://onecli.test", fetchImpl),
+        resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
+        selectEngine,
+      },
+    });
+    live.push(h);
+    await h.setup({
+      onInbound: vi.fn(),
+      onInboundEvent: vi.fn(),
+      onMetadata: vi.fn(),
+      onAction: vi.fn(),
+    } as unknown as ChannelSetup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    expect(calls).toEqual([
+      {
+        role: "executor",
+        runtime_providers: ["anthropic", "openai", "cursor"],
+        reuse_held: true,
+      },
+    ]);
+    expect(w.onecli.agents[0]!.secrets).toHaveLength(1); // no Codex secret in the vault
+    expect(selectEngine).toHaveBeenCalledWith("claude");
+    expect(
+      w.calls.some((c) => c.path === "/accounts/release" && c.search === "?role=executor"),
+    ).toBe(true);
+  });
+
+  it("names the preferred executor of the leased account in the task", () => {
+    const text = renderTask(task() as any, new Map(), "claude");
+    expect(text).toContain("Preferred EXECUTOR for this task: claude");
+    expect(renderTask(task() as any, new Map())).not.toContain("Preferred EXECUTOR");
+  });
+
+  it("adopts a recovered higher-priority account while idle, without touching active work", async () => {
+    // Initially only openai was usable; once idle, Argus ranks anthropic first again.
+    const w = world({
+      leases: [codexLease(), "no_account", lease("claude-1", "sk-ant")],
+      idleClaimMs: 15,
+    });
+    const recycleRuntime = vi.fn(async () => undefined);
+    const selectEngine = vi.fn(async (_engine: string) => true);
+    const h = harness(w, true, { rebalanceMs: 30, recycleRuntime, selectEngine });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => selectEngine.mock.calls.some((c) => c[0] === "claude"), 5000);
+    expect(selectEngine.mock.calls.map((c) => c[0])).toEqual(["codex", "claude"]);
+    expect(recycleRuntime).toHaveBeenCalledTimes(1);
+    const selected = w.calls.filter((c) => c.path === "/engines/selected").map((c) => c.body);
+    expect(selected.map((b) => b.provider)).toEqual(["openai", "anthropic"]);
+  });
+
+  it("keeps the established account when a re-evaluation finds nothing better or nothing usable", async () => {
+    const w = world({ leases: [codexLease(), "no_account", "no_account"], idleClaimMs: 10 });
+    const selectEngine = vi.fn(async (_engine: string) => true);
+    const h = harness(w, true, { rebalanceMs: 20, selectEngine });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.filter((c) => c.path === "/accounts/lease").length >= 3, 5000);
+    expect(selectEngine).toHaveBeenCalledTimes(1);
+    expect(w.calls.some((c) => /\/exhausted$/.test(c.path))).toBe(false);
+  });
+
+  it("never rotates while a task is in flight", async () => {
+    const w = world({
+      leases: [codexLease(), "no_account", lease("claude-1", "sk-ant")],
+      tasks: [task()],
+    });
+    const selectEngine = vi.fn(async (_engine: string) => true);
+    const h = harness(w, true, { rebalanceMs: 5, selectEngine });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    await new Promise((r) => setTimeout(r, 100)); // the task is never finished
+    expect(selectEngine).toHaveBeenCalledTimes(1);
+    expect(w.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(2);
   });
 });

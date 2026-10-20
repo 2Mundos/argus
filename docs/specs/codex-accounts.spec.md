@@ -106,13 +106,12 @@ equal paths that end in the same record, and let the pool choose the engine:
   kind, another account provider, a bad shape, or the field outside a failure
   notice is an ordinary failed attempt. Free text never exhausts an account
   beyond the recognised quota/auth notices above.
-- **Lease order is the fallback order.** Workers list providers by preference,
-  Codex first (`ARGUS_ACCOUNT_PROVIDERS=openai,anthropic`). Within a provider
-  the pool picks by priority; when an account reports exhaustion the next
-  account of the same provider is tried before the next provider; only when no
-  `openai` account is usable does the pool lease `anthropic`. A fixed executor
-  (`argus-delegate EXECUTOR`) never changes engine silently; the switch happens
-  at the lease, is explicit, and is an event.
+- **Lease order is global priority.** Superseding the earlier Codex-first
+  provider order: the pool ranks every usable account across providers by
+  priority ([global account selection](account-selection.spec.md)), and an
+  exhaustion fallback does the same. The engine follows the leased account's
+  provider. A fixed executor (`argus-delegate EXECUTOR`) never changes engine
+  silently; the switch happens at the lease, is explicit, and is an event.
 - **Catalogue authenticated fact comes from the registry.** For engines with an
   `account_provider`, `authenticated` is `true` when an account exists that is
   not disabled (exhausted ones count: the credential exists); with none, the
@@ -121,15 +120,15 @@ equal paths that end in the same record, and let the pool choose the engine:
   accounts. `usable` additionally needs one **available** account: only a
   reported `exhausted` or a disabled account removes it; quota that is unknown
   stays available.
-- **Routing: Codex is the engine, also for code.** Claude Code is the preferred
-  code *executor* the engine delegates to, not a substitute engine. A code task
-  routes to `codex` and carries `executor: "claude"` when Claude is usable; an
-  unusable Claude never blocks or diverts it (Codex works directly). The engine
-  falls back to `claude` only when Codex has no available account (none
-  registered, or all exhausted or disabled) and Claude is usable; the decision
-  carries `fallback_from` and the reason, and the `engine.routed` event too. Any
-  other gap (not installed, not validated, an unknown quota) is `blocked`;
-  nothing is substituted.
+- **Routing follows account priority.** The engine router picks the usable
+  harness engine (`codex` or `claude`) whose best available account has the
+  highest priority (ties: engine id); Codex is no longer primary. A code task
+  carries `executor` only when the best executor differs from the engine; an
+  unusable one never blocks it. `fallback_from` and the reason name an engine
+  that was passed over for lack of an available account (none registered, or
+  all exhausted or disabled), and the `engine.routed` event carries it too. Any
+  other gap (not installed, not validated, an unknown quota) makes that engine
+  unusable; with no usable engine the decision is `blocked`.
 - **Selection is reported.** The channel reports each engine switch with
   `POST /api/engines/selected` (agent token): `engine.selected` with the
   engine, provider and account id.

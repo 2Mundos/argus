@@ -166,21 +166,34 @@ default; set `ARGUS_EXIT_ON_DRAIN=false` to keep the host running.
 
 ## Accounts: leasing and switching
 
-With `ARGUS_ACCOUNT_PROVIDERS=anthropic` (pool option `account_providers`) the
-channel takes its credential from Argus's account pool instead of the one in the
-OneCLI vault:
+With `ONECLI_URL` set (the fleet always sets it) the channel takes its credential
+from Argus's account pool instead of the one in the OneCLI vault. Argus ranks
+**every** usable account by priority, across providers; there is no pool or
+worker provider list (the retired `account_providers` / `executor_providers` /
+`ARGUS_ACCOUNT_PROVIDERS` / `ARGUS_EXECUTOR_PROVIDERS` are ignored, see
+[global account selection](../../docs/specs/account-selection.spec.md)):
 
-1. Before claiming work it leases an account (`POST /api/accounts/lease`) and
-   writes the credential into OneCLI: a secret `argus-<agent group id>` for
-   `api.anthropic.com`, assigned to that group's OneCLI agent in **selective** mode
+1. Before claiming work it leases an account (`POST /api/accounts/lease`, stating
+   only the providers this installed code can apply) and
+   writes the credential into OneCLI: a secret `argus-<agent group id>` (with
+   `-openai` / `-cursor…` suffixes for other providers) for the provider's host, assigned to that group's OneCLI agent in **selective** mode
    so it is the only secret the agent can use. The credential reaches the vault
    from the host process; the agent container never sees it.
 2. When a run is blocked by the provider (the agent's failure notice reads
    `Rate limit …` / `Out of credits`, with the reset time when given), it reports
-   the account exhausted. Argus returns the next account (same provider first),
+   the account exhausted. Argus returns the next best usable account (any provider, by priority),
    the channel `PATCH`es the vault secret's value, and re-sends the task to the
    agent. A switch needs no restart: OneCLI applies a changed value to the next
    request.
+   While idle the channel re-leases at most once a minute, so a recovered or
+   higher-priority account is adopted between tasks; running work is never
+   rotated.
+   For a Claude subscription account, Claude Code withholds
+   `CLAUDE_CODE_OAUTH_TOKEN` from its Bash tool, so `install.sh` also mounts a
+   read-only gateway stub (`/home/node/.config/argus/claude-gateway.json`, sentinel
+   only) from which `argus-delegate claude` restores the variable for its own
+   child when the proxy and CA match; see
+   [global account selection](../../docs/specs/account-selection.spec.md).
 3. With no replacement, Argus blocks the task as `no_account` and the channel
    lets go of it; it leases again (and claims) once an account is usable.
 4. Any other failure notice now fails the attempt with its text, so Argus retries

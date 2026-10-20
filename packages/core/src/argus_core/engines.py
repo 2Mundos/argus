@@ -61,6 +61,20 @@ class AccountsSummary(BaseModel):
     available: int = 0
     exhausted: int = 0
     disabled: int = 0
+    # Lifecycle counts above ignore load. These add capacity, so routing matches
+    # what a lease would really do: `busy` accounts are available but at
+    # `max_leases`; `no_credential` ones are available but their secret is
+    # missing (a lease would disable them). `leasable` = available - busy -
+    # no_credential; None means capacity was not computed (counts only).
+    busy: int = 0
+    no_credential: int = 0
+    leasable: int | None = None
+    # Highest priority among the leasable accounts; None when there is none.
+    best_priority: int | None = None
+
+    @property
+    def leasable_count(self) -> int:
+        return self.available if self.leasable is None else self.leasable
 
 
 class EngineEntry(BaseModel):

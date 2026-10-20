@@ -32,11 +32,11 @@ on create and replace, and deliver it to the **delegated** Cursor CLI
   secrets, one per path family). **`CURSOR_API_KEY` is never set in the worker**
   (the native CLI would call `/auth/exchange_user_api_key` locally). Other hosts
   and paths are forwarded untouched.
-- **Pool configuration**: `nanoclaw.executor_providers` (env
-  `ARGUS_NANOCLAW_EXECUTOR_PROVIDERS` on the pool, `ARGUS_EXECUTOR_PROVIDERS` on
-  channel) lists providers for the executor lease, for example `["cursor"]`
-  to direct one worker at Cursor while the default executor remains
-  `["anthropic"]` when unset.
+- **Executor selection**: the executor lease is the best usable account across
+  all runtime-supported providers by priority
+  ([global account selection](account-selection.spec.md)); a Cursor account is
+  leased as the executor when it ranks first. The former pool/env
+  `executor_providers` list is retired and ignored.
 
 # 2. Non-Goals
 
@@ -54,9 +54,8 @@ on create and replace, and deliver it to the **delegated** Cursor CLI
 - **Account shape** (`packages/core/src/argus_core/cursor_auth.py`): two shapes,
   never mixed; validation on REST create/replace and in the channel before
   OneCLI apply. Responses never echo token values.
-- **Executor-only provider**: `cursor` is listed in `EXECUTOR_ONLY`; pool
-  validation rejects it in `account_providers` and accepts it only in
-  `executor_providers`.
+- **Executor-only provider**: `cursor` is listed in `EXECUTOR_ONLY`; the `engine`
+  lease role never returns it, the `executor` role may.
 - **OneCLI mapping** (`integrations/nanoclaw/argus-accounts.ts`): two generic
   secrets per agent group (`argus-<group>-cursor-agent` and
   `argus-<group>-cursor-aiserver`), same access token value, distinct path
@@ -95,15 +94,14 @@ on create and replace, and deliver it to the **delegated** Cursor CLI
 - API key exchange and lease apply run on the NanoClaw host, not in the worker
   container.
 - No credential value in a response, listing, event, log, or error.
-- Default executor providers remain `anthropic` when unset.
 
 # 6. Implementation Consequences
 
-- `packages/core`: `cursor_auth.py`; fleet `executor_providers` validation.
-- `apps/api`: cursor validation on create/replace; pool env
-  `ARGUS_EXECUTOR_PROVIDERS`; tests in `test_cursor_accounts.py`.
+- `packages/core`: `cursor_auth.py`; `accounts.py` role eligibility.
+- `apps/api`: cursor validation on create/replace; tests in
+  `test_cursor_accounts.py`.
 - `integrations/nanoclaw`: `argus-accounts.ts` (mapping, exchange, apply),
-  `argus-cursor-stub.ts`, `argus.ts` (`ARGUS_EXECUTOR_PROVIDERS`),
+  `argus-cursor-stub.ts`, `argus.ts` (executor lease),
   `argus-delegate` (`prepareExecutorEnv`, `--trust`, private `CURSOR_CONFIG_DIR`),
   `install.sh` hooks into `onecli.ts`.
 - **Acceptance (automated)**: `make check`; channel/gateway tests after

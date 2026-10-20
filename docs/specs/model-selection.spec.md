@@ -27,6 +27,12 @@ At each claim, the channel applies the harness selection before injecting work,
 using the existing NanoClaw model setting, killing stale session containers when
 it changes. Task failures advance the harness chain (bounded at the last model);
 review rejection also advances it. Questions/account exhaustion alone do not.
+The harness chain used is the one of the engine the leased account selected
+(global account priority, [account selection](account-selection.spec.md)); a
+policy without a chain for it fails the task rather than keeping another
+engine's model. The copy pinned to the workspace carries `engine`,
+`account_provider` and `executor_account_provider` in its context (never a
+credential) and `argus-delegate` reports them.
 An attempt artifact stores policy revision, requested model, configured model,
 `resolved_model: null` (provider resolution is not observable), and fallback
 reason. The entire policy and task identity are copied to the agent workspace

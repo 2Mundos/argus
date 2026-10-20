@@ -78,40 +78,92 @@ def _why_unusable(entry: EngineEntry | None, name: str) -> str:
         )
         if fact.ok is not True
     )
-    if not missing and entry.accounts is not None and entry.accounts.available == 0:
+    if (
+        not missing
+        and entry.accounts is not None
+        and entry.accounts.leasable_count == 0
+    ):
         a = entry.accounts
         missing = (
-            f"no available account ({a.exhausted} exhausted, {a.disabled} disabled)"
+            f"no leasable account ({a.exhausted} exhausted, {a.disabled} disabled"
+            + (f", {a.busy} at capacity" if a.busy else "")
+            + (f", {a.no_credential} without credential" if a.no_credential else "")
+            + ")"
         )
     return f"{name} is not usable ({missing or 'not in the catalogue'})"
 
 
-def _fallback(
-    request: RouteRequest, catalog: EngineCatalog
-) -> tuple[str, str | None, str | None]:
-    """The engine that runs the task (always Codex first, code or not: Claude Code
-    is the preferred *executor* it delegates code to, not the engine); why it is
-    blocked, if it is; and the engine it moved from when it falls back. The move
-    is explicit and only for lack of a Codex account (codex accounts spec 3):
-    every other gap blocks instead."""
-    want, other = "codex", "claude"
+# Engines a NanoClaw harness can run (an engine id is also its executor name).
+_HARNESSES = ("claude", "codex")
+
+
+def _rank(entry: EngineEntry | None) -> int | None:
+    """The priority of the best available account behind a usable engine, or None
+    when it cannot run. An engine without accounts data counts as priority 0."""
+    if entry is None or not entry.usable:
+        return None
+    if entry.accounts is None:
+        return 0
+    return entry.accounts.best_priority if entry.accounts.leasable_count else None
+
+
+def _ranked(catalog: EngineCatalog) -> list[tuple[int, str]]:
+    """Usable harness engines, best account priority first; ties by engine id."""
     by_id = {e.id: e for e in catalog.engines}
-    entry, alt = by_id.get(want), by_id.get(other)
-    if entry is not None and entry.usable:
-        return want, None, None
-    reason = _why_unusable(entry, want)
-    if _lacks_account(entry) and alt is not None and alt.usable:
-        return other, None, f"{want} ({reason.removeprefix(f'{want} is not usable ')})"
-    return want, reason, None
+    ranked = [
+        (rank, name)
+        for name in _HARNESSES
+        if (rank := _rank(by_id.get(name))) is not None
+    ]
+    return sorted(ranked, key=lambda r: (-r[0], r[1]))
 
 
-def _executor(request: RouteRequest, catalog: EngineCatalog) -> str | None:
-    """Preferred code executor when the engine delegates: Claude Code, if usable.
-    Advisory: an unusable one never blocks the task, Codex then works directly."""
+def escalation_target(catalog: EngineCatalog) -> str:
+    """The engine an escalated task goes to: the one `route` would pick."""
+    return _fallback(catalog)[0]
+
+
+def _fallback(catalog: EngineCatalog) -> tuple[str, str | None, str | None]:
+    """The engine that runs the task: the usable one whose best account has the
+    highest priority, across providers (account selection spec). Returns it, why
+    the task is blocked when no engine is usable, and the engine it moved from.
+    The move is only for lack of a usable account on the higher-priority engine;
+    every other gap blocks instead."""
+    by_id = {e.id: e for e in catalog.engines}
+    ranked = _ranked(catalog)
+    if ranked:
+        target = ranked[0][1]
+        # An engine with accounts registered but none available was passed over.
+        for name in _HARNESSES:
+            entry = by_id.get(name)
+            if (
+                name != target
+                and entry is not None
+                and entry.accounts is not None
+                and entry.accounts.exhausted + entry.accounts.disabled > 0
+                and _lacks_account(entry)
+            ):
+                reason = _why_unusable(entry, name)
+                return (
+                    target,
+                    None,
+                    f"{name} ({reason.removeprefix(f'{name} is not usable ')})",
+                )
+        return target, None, None
+    entry = by_id.get("claude") or by_id.get("codex")
+    name = entry.id if entry is not None else "claude"
+    return name, _why_unusable(entry, name), None
+
+
+def _executor(request: RouteRequest, catalog: EngineCatalog, target: str) -> str | None:
+    """Preferred code executor when the engine delegates: the usable harness CLI
+    whose best account ranks highest, when that is not the engine itself (which
+    then works directly). Advisory: it never blocks the task."""
     if not request.is_code:
         return None
-    claude = next((e for e in catalog.engines if e.id == "claude"), None)
-    return "claude" if claude is not None and claude.usable else None
+    ranked = _ranked(catalog)
+    best = ranked[0][1] if ranked else None
+    return best if best is not None and best != target else None
 
 
 def local_rejections(
@@ -179,8 +231,8 @@ def route(
     )
     n_ctx = local.n_ctx if local else None
     local_entry = next((e for e in catalog.engines if e.id == "local"), None)
-    fallback, blocked, moved_from = _fallback(request, catalog)
-    executor = _executor(request, catalog)
+    fallback, blocked, moved_from = _fallback(catalog)
+    executor = _executor(request, catalog, fallback)
     if not rejections:
         # Fits and is simple; but a local model that never passed a real run
         # is not trusted with work (installed != validated).

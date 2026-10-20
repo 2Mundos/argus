@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from api_support import DONE, FakeClock, FakeTarget
 from argus_api.agents import service as agents
@@ -405,7 +407,6 @@ async def test_nanoclaw_runtime_spec(
                     agent_image="nanoclaw-agent:1",
                     user="1000:1000",
                     group_add=["999"],
-                    account_providers=["anthropic"],
                     repositories={"argus": "https://git.example.test/team/argus"},
                 ),
             ),
@@ -423,8 +424,9 @@ async def test_nanoclaw_runtime_spec(
     ]
     assert spec.mounts[1].create_owner == "1000:1000"
     assert spec.env["CONTAINER_IMAGE"] == "nanoclaw-agent:1"
-    assert spec.env["ARGUS_ACCOUNT_PROVIDERS"] == "anthropic"
-    assert "ARGUS_EXECUTOR_PROVIDERS" not in spec.env  # unset keeps the channel default
+    # Selection is global by account priority: no provider list reaches the worker.
+    assert "ARGUS_ACCOUNT_PROVIDERS" not in spec.env
+    assert "ARGUS_EXECUTOR_PROVIDERS" not in spec.env
     assert (
         spec.env["ARGUS_REPOSITORIES_JSON"]
         == '{"argus": "https://git.example.test/team/argus"}'
@@ -434,50 +436,44 @@ async def test_nanoclaw_runtime_spec(
     assert (spec.user, spec.group_add) == ("1000:1000", ["999"])
 
 
-def test_executor_providers_are_explicit_and_cursor_is_never_an_engine() -> None:
+def test_retired_provider_lists_are_dropped_not_enforced() -> None:
     from argus_core.fleet import NanoclawOptions
-    from pydantic import ValidationError
 
     ok = {"install_dir": "/opt/nc", "instances_root": "/srv/i", "agent_image": "a:1"}
     opts = NanoclawOptions(
-        account_providers=["openai", "anthropic"], executor_providers=["cursor"], **ok
-    )
-    assert opts.executor_providers == ["cursor"]
-    assert NanoclawOptions(**ok).executor_providers == []  # default: not set
-    with pytest.raises(ValidationError, match="cursor is an executor"):
-        NanoclawOptions(account_providers=["cursor"], **ok)
-    with pytest.raises(ValidationError, match="must match"):
-        NanoclawOptions(executor_providers=["Cursor,anthropic"], **ok)
+        account_providers=["openai"], executor_providers=["cursor"], **ok
+    )  # type: ignore[call-arg]
+    dumped = opts.model_dump()
+    assert "account_providers" not in dumped
+    assert "executor_providers" not in dumped
+    # Even values the old validation rejected no longer matter: nothing filters.
+    NanoclawOptions(account_providers=["cursor"], **ok)  # type: ignore[call-arg]
 
 
-async def test_nanoclaw_runtime_passes_the_executor_providers(
+async def test_a_persisted_legacy_pool_cannot_keep_filtering_accounts(
     db: Database, registry: TargetRegistry, target: FakeTarget
 ) -> None:
-    from argus_core.fleet import NanoclawOptions
-
+    await _nanoclaw_pool(db)
     async with db.write() as tx:
-        await fleet.upsert_pool(
-            tx,
-            "web",
-            PoolUpsert(
-                runtime="nanoclaw",
-                image="host:dev",
-                desired_replicas=1,
-                max_replicas=2,
-                nanoclaw=NanoclawOptions(
-                    install_dir="/opt/nc",
-                    instances_root="/srv/i",
-                    agent_image="a:1",
-                    account_providers=["openai"],
-                    executor_providers=["cursor", "anthropic"],
-                ),
-            ),
-            "admin:test",
+        async with tx.conn.execute(
+            "SELECT config FROM pools WHERE name = 'web'"
+        ) as cur:
+            config = json.loads((await cur.fetchone())["config"])
+        config["nanoclaw"] |= {
+            "account_providers": ["openai"],
+            "executor_providers": ["cursor", "anthropic"],
+        }
+        await tx.conn.execute(
+            "UPDATE pools SET config = ? WHERE name = 'web'", (json.dumps(config),)
         )
     await tick(db, registry)
     [spec] = target.specs.values()
-    assert spec.env["ARGUS_ACCOUNT_PROVIDERS"] == "openai"
-    assert spec.env["ARGUS_EXECUTOR_PROVIDERS"] == "cursor,anthropic"
+    assert "ARGUS_ACCOUNT_PROVIDERS" not in spec.env
+    assert "ARGUS_EXECUTOR_PROVIDERS" not in spec.env
+    async with db.read() as conn:
+        pool = await fleet.get_pool(conn, "web")
+    assert pool.nanoclaw is not None
+    assert "account_providers" not in pool.nanoclaw.model_dump()
 
 
 async def _nanoclaw_pool(db: Database) -> None:

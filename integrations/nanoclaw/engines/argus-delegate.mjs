@@ -74,6 +74,81 @@ export function authStatus(executor, e = process.env, home = os.homedir()) {
   }
 }
 
+/** Where the trusted host mounts the gateway stub (argus-claude-stub.ts); never configurable. */
+export const CLAUDE_GATEWAY_STUB = "/home/node/.config/argus/claude-gateway.json";
+const CLAUDE_OAUTH = "CLAUDE_CODE_OAUTH_TOKEN";
+const SENTINEL_MARKER = /placeholder|sentinel|managed|gateway|onecli/i;
+
+/** Can `v` be a gateway placeholder (not shaped like a real credential)? Mirrors argus-claude-stub.ts. */
+export function isGatewaySentinel(v) {
+  if (typeof v !== "string" || v.length < 8 || v.length > 256) return false;
+  if (!/^[A-Za-z0-9._~+/=-]+$/.test(v)) return false;
+  if (v.startsWith("sk-ant-") && !SENTINEL_MARKER.test(v)) return false;
+  if (v.length > 120 && !SENTINEL_MARKER.test(v)) return false;
+  return true;
+}
+
+const proxyAddress = (raw) => {
+  try {
+    const u = new URL(raw);
+    if ((u.protocol !== "http:" && u.protocol !== "https:") || !u.hostname) return null;
+    return `${u.hostname.toLowerCase()}:${u.port || (u.protocol === "https:" ? "443" : "80")}`;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Claude Code removes CLAUDE_CODE_OAUTH_TOKEN from every process its Bash tool starts,
+ * so a delegate started from there sees no credential even though the gateway
+ * serves the worker an Anthropic account. When (and only when) the trusted host
+ * mounted its stub, and the process runs through that very gateway, restore the
+ * sentinel for the `claude` child. Everything is checked; any doubt keeps the
+ * environment as it is and `authStatus` keeps failing closed. Returns the
+ * environment, how it got its credential, and (when a stub exists but was not
+ * used) a reason code that never contains a value.
+ */
+export function restoreClaudeGatewayAuth(e, stubPath = CLAUDE_GATEWAY_STUB) {
+  if (env(e, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", CLAUDE_OAUTH))
+    return { env: e, source: "env" };
+  let st;
+  try {
+    st = fs.lstatSync(stubPath);
+  } catch {
+    return { env: e, source: null, stub: "absent" };
+  }
+  const reject = (reason) => ({ env: e, source: null, stub: `rejected:${reason}` });
+  if (!st.isFile() || st.size > 4096) return reject("not_a_small_regular_file");
+  if (st.mode & 0o022) return reject("writable_by_others");
+  let doc;
+  try {
+    doc = JSON.parse(fs.readFileSync(stubPath, "utf8"));
+  } catch {
+    return reject("malformed");
+  }
+  const keys = ["version", "provider", "variable", "sentinel", "proxy", "ca"];
+  if (
+    !doc ||
+    typeof doc !== "object" ||
+    Array.isArray(doc) ||
+    Object.keys(doc).sort().join() !== [...keys].sort().join() ||
+    doc.version !== 1 ||
+    doc.provider !== "anthropic" ||
+    doc.variable !== CLAUDE_OAUTH
+  )
+    return reject("malformed");
+  if (!isGatewaySentinel(doc.sentinel)) return reject("not_a_sentinel");
+  // The sentinel is only ever sent to the gateway the host recorded.
+  if (e.ANTHROPIC_BASE_URL || e.ANTHROPIC_UNIX_SOCKET) return reject("api_redirected");
+  const proxy = proxyAddress(e.HTTPS_PROXY ?? e.https_proxy ?? "");
+  if (!proxy || proxy !== doc.proxy) return reject("proxy_mismatch");
+  if (typeof doc.ca !== "string" || !path.isAbsolute(doc.ca) || !present(doc.ca))
+    return reject("ca_missing");
+  const trusted = [e.NODE_EXTRA_CA_CERTS, e.SSL_CERT_FILE].filter(Boolean);
+  if (!trusted.some((f) => present(f))) return reject("ca_not_in_environment");
+  return { env: { ...e, [CLAUDE_OAUTH]: doc.sentinel }, source: "gateway_sentinel" };
+}
+
 /** The exact argv for one non-interactive run. `prompt` is passed on stdin or as an argument. */
 export function buildCommand(executor, { cwd, model, readOnly, lastMessageFile }, e = process.env) {
   switch (executor) {
@@ -347,7 +422,7 @@ export function executorJsonFailure(executor, stdoutText) {
   return null;
 }
 
-export async function main(argv, e = process.env) {
+export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_STUB } = {}) {
   let parsed;
   try {
     parsed = parseArgs(argv);
@@ -355,7 +430,7 @@ export async function main(argv, e = process.env) {
     finish(64, { error: "usage", detail: String(err.message), executors: EXECUTORS });
   }
   const { executor, opts } = parsed;
-  const identity = { engine: e.ARGUS_ENGINE || "unknown", executor };
+  let identity = { engine: e.ARGUS_ENGINE || "unknown", executor };
   if (!EXECUTORS.includes(executor))
     finish(64, { ...identity, error: "usage", detail: "unknown executor", executors: EXECUTORS });
 
@@ -366,6 +441,20 @@ export async function main(argv, e = process.env) {
       e,
       e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json",
     );
+    // The pinned task context names the engine/account the channel leased; it
+    // fills the identity when the process environment does not.
+    if (!e.ARGUS_ENGINE && snapshot.context?.engine)
+      identity = { ...identity, engine: snapshot.context.engine };
+    if (snapshot.context?.account_provider)
+      identity = { ...identity, account_provider: snapshot.context.account_provider };
+    // Policy never switches executor (no silent fallback): it reports whether the
+    // caller's choice is the one the leased accounts' priority prefers.
+    if (snapshot.context?.preferred_executor)
+      identity = {
+        ...identity,
+        preferred_executor: snapshot.context.preferred_executor,
+        matches_preferred: snapshot.context.preferred_executor === executor,
+      };
     selection = selectModel(
       snapshot,
       "implementation",
@@ -388,6 +477,12 @@ export async function main(argv, e = process.env) {
       allowed_roots: roots,
     });
 
+  if (executor === "claude") {
+    const restored = restoreClaudeGatewayAuth(e, claudeStub);
+    e = restored.env;
+    if (restored.source) identity = { ...identity, auth_source: restored.source };
+    if (restored.stub) identity = { ...identity, gateway_stub: restored.stub };
+  }
   e = prepareExecutorEnv(executor, e, path.join(cwd, ".argus-delegate-runtime"));
 
   // Auth first: a missing credential blocks, it never reroutes.

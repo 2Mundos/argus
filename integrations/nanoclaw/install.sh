@@ -24,6 +24,8 @@ cp "$here/argus-codex-stub.ts" "$target/src/gateway-providers/argus-codex-stub.t
 cp "$here/argus-codex-stub.test.ts" "$target/src/gateway-providers/argus-codex-stub.test.ts"
 cp "$here/argus-cursor-stub.ts" "$target/src/gateway-providers/argus-cursor-stub.ts"
 cp "$here/argus-cursor-stub.test.ts" "$target/src/gateway-providers/argus-cursor-stub.test.ts"
+cp "$here/argus-claude-stub.ts" "$target/src/gateway-providers/argus-claude-stub.ts"
+cp "$here/argus-claude-stub.test.ts" "$target/src/gateway-providers/argus-claude-stub.test.ts"
 cp "$here/argus-onecli-git-ca.ts" "$target/src/gateway-providers/argus-onecli-git-ca.ts"
 cp "$here/argus-onecli-git-ca.test.ts" "$target/src/gateway-providers/argus-onecli-git-ca.test.ts"
 cp "$here/onecli-path-match.ts" "$target/src/gateway-providers/onecli-path-match.ts"
@@ -116,6 +118,25 @@ assert "withCursorDelegateRuntime" in s
 open(p, "w").write(s)
 PY
   echo "patched $onecli_ts (cursor delegate runtime)"
+fi
+# Claude Code strips CLAUDE_CODE_OAUTH_TOKEN from its tool subprocesses: hand the gateway's
+# sentinel (never a real token) to argus-delegate through a read-only stub (argus-claude-stub.ts).
+if [ -f "$onecli_ts" ] && ! grep -q "withClaudeDelegateRuntime" "$onecli_ts"; then
+  python3 - "$onecli_ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+needle = "import { cursorExecutorAssigned, withCursorDelegateRuntime } from './argus-cursor-stub.js';"
+assert needle in s, "run install after the cursor delegate hook is present"
+s = s.replace(needle, needle + "\nimport { withClaudeDelegateRuntime } from './argus-claude-stub.js';", 1)
+old_head = "  const config = await withCursorDelegateRuntime("
+old_tail = "        : false,\n  );\n  log.info('OneCLI gateway applied'"
+assert old_head in s and old_tail in s, "onecli.ts ensureSession shape changed upstream"
+s = s.replace(old_head, "  const config = withClaudeDelegateRuntime(await withCursorDelegateRuntime(", 1)
+s = s.replace(old_tail, "        : false,\n  ));\n  log.info('OneCLI gateway applied'", 1)
+open(p, "w").write(s)
+PY
+  echo "patched $onecli_ts (Claude delegate sentinel stub)"
 fi
 onecli_test="$target/src/gateway-providers/onecli.test.ts"
 if [ -f "$onecli_test" ] && grep -q 'expect(fetchMock).toHaveBeenCalledTimes(1);' "$onecli_test"; then

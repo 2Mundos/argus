@@ -32,8 +32,8 @@ _DECLARED: list[tuple[str, str, EngineRole, Axes, list[str], str]] = [
             account_provider="openai",
         ),
         ["chatgpt-device-login", "chatgpt-auth-json-import", "openai-api-key"],
-        "Main engine: orchestration and review. Its login is an Argus account "
-        "(imported or made with the dedicated device login).",
+        "Engine and executor, chosen by account priority like any other. Its login "
+        "is an Argus account (imported or made with the dedicated device login).",
     ),
     (
         "claude",
@@ -47,7 +47,7 @@ _DECLARED: list[tuple[str, str, EngineRole, Axes, list[str], str]] = [
             account_provider="anthropic",
         ),
         ["argus-account", "claude-login"],
-        "Preferred executor for code changes.",
+        "Engine and executor, chosen by account priority like any other.",
     ),
     (
         "opencode",
@@ -156,7 +156,7 @@ def build(
         r = _with_tools(_readiness(rec), rec.get("tools"))
         summary: AccountsSummary | None = None
         if accounts is not None and axes.account_provider:
-            summary = accounts.get(axes.account_provider, AccountsSummary())
+            summary = accounts.get(axes.account_provider, AccountsSummary(leasable=0))
             r = _with_registry(r, summary)
         entries.append(
             EngineEntry(
@@ -169,7 +169,7 @@ def build(
                 readiness=r,
                 accounts=summary,
                 # Reported exhaustion removes the engine; unknown quota does not.
-                usable=r.usable and (summary is None or summary.available > 0),
+                usable=r.usable and (summary is None or summary.leasable_count > 0),
                 notes=notes,
             )
         )
