@@ -9,7 +9,7 @@ dist/
 build/
 
 # Node
-node_modules/
+node_modules
 .pnpm-store/
 .turbo/
 *.tsbuildinfo
