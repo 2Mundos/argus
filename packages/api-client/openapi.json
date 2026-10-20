@@ -3130,6 +3130,65 @@
         "title": "DockerOptions",
         "type": "object"
       },
+      "Durations": {
+        "properties": {
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p90": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P90"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "source",
+          "n",
+          "p50",
+          "p90",
+          "mean"
+        ],
+        "title": "Durations",
+        "type": "object"
+      },
       "EngineCatalog": {
         "properties": {
           "engines": {
@@ -3474,6 +3533,97 @@
         "title": "FailRequest",
         "type": "object"
       },
+      "FailureExample": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "title",
+          "error",
+          "at"
+        ],
+        "title": "FailureExample",
+        "type": "object"
+      },
+      "FailureGroup": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "examples": {
+            "items": {
+              "$ref": "#/components/schemas/FailureExample"
+            },
+            "title": "Examples",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "count",
+          "examples"
+        ],
+        "title": "FailureGroup",
+        "type": "object"
+      },
+      "Failures": {
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/FailureGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "source",
+          "total",
+          "groups",
+          "truncated"
+        ],
+        "title": "Failures",
+        "type": "object"
+      },
       "FallbackResult": {
         "properties": {
           "earliest_reset": {
@@ -3537,6 +3687,58 @@
           "pools"
         ],
         "title": "FleetCapabilities",
+        "type": "object"
+      },
+      "FleetHealth": {
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "failures": {
+            "$ref": "#/components/schemas/Failures"
+          },
+          "outcomes": {
+            "$ref": "#/components/schemas/Outcomes"
+          },
+          "pools": {
+            "items": {
+              "$ref": "#/components/schemas/PoolHealth"
+            },
+            "title": "Pools",
+            "type": "array"
+          },
+          "queue_time": {
+            "$ref": "#/components/schemas/Durations"
+          },
+          "run_time": {
+            "$ref": "#/components/schemas/Durations"
+          },
+          "tasks_by_state": {
+            "$ref": "#/components/schemas/TasksByState"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "as_of",
+          "window_hours",
+          "pools",
+          "tasks_by_state",
+          "queue_time",
+          "run_time",
+          "outcomes",
+          "failures",
+          "truncated"
+        ],
+        "title": "FleetHealth",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -5144,6 +5346,63 @@
         "title": "NodeOption",
         "type": "object"
       },
+      "Outcomes": {
+        "properties": {
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "failure_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Rate"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "succeeded": {
+            "title": "Succeeded",
+            "type": "integer"
+          },
+          "success_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success Rate"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "source",
+          "succeeded",
+          "failed",
+          "total",
+          "success_rate",
+          "failure_rate"
+        ],
+        "title": "Outcomes",
+        "type": "object"
+      },
       "Overview": {
         "properties": {
           "accounts": {
@@ -5733,6 +5992,57 @@
           "blockers"
         ],
         "title": "PoolCapability",
+        "type": "object"
+      },
+      "PoolHealth": {
+        "properties": {
+          "desired": {
+            "title": "Desired",
+            "type": "integer"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
+          },
+          "live": {
+            "title": "Live",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "running": {
+            "title": "Running",
+            "type": "integer"
+          },
+          "source": {
+            "default": "pools, instances, agents.last_heartbeat_at",
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "desired",
+          "live",
+          "running",
+          "last_heartbeat_at"
+        ],
+        "title": "PoolHealth",
         "type": "object"
       },
       "PoolInspection": {
@@ -8820,6 +9130,27 @@
           "age_s"
         ],
         "title": "TaskSummary",
+        "type": "object"
+      },
+      "TasksByState": {
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "counts"
+        ],
+        "title": "TasksByState",
         "type": "object"
       },
       "TemplateCatalog": {
@@ -12008,6 +12339,57 @@
         "summary": "Fleet Capabilities",
         "tags": [
           "fleet"
+        ]
+      }
+    },
+    "/api/fleet/health": {
+      "get": {
+        "description": "Pool, queue, run-time, outcome and failure health over `window` hours.",
+        "operationId": "fleet_health_api_fleet_health_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 720,
+              "minimum": 1,
+              "title": "Window",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetHealth"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Fleet Health",
+        "tags": [
+          "operations"
         ]
       }
     },

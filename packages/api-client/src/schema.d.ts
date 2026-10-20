@@ -817,6 +817,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/fleet/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Health
+         * @description Pool, queue, run-time, outcome and failure health over `window` hours.
+         */
+        get: operations["fleet_health_api_fleet_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/fleet/templates": {
         parameters: {
             query?: never;
@@ -2802,6 +2822,21 @@ export interface components {
             /** Runtime */
             runtime: string | null;
         };
+        /** Durations */
+        Durations: {
+            /** Mean */
+            mean: number | null;
+            /** N */
+            n: number;
+            /** P50 */
+            p50: number | null;
+            /** P90 */
+            p90: number | null;
+            /** Source */
+            source: string;
+            /** Window Hours */
+            window_hours: number;
+        };
         /** EngineCatalog */
         EngineCatalog: {
             /** Engines */
@@ -2941,6 +2976,42 @@ export interface components {
              */
             reason?: "worker_fail" | "channel_error" | "provider_failure";
         };
+        /** FailureExample */
+        FailureExample: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Error */
+            error: string;
+            /** Task Id */
+            task_id: string;
+            /** Title */
+            title: string;
+        };
+        /** FailureGroup */
+        FailureGroup: {
+            /** Count */
+            count: number;
+            /** Examples */
+            examples: components["schemas"]["FailureExample"][];
+            /** Reason */
+            reason: string;
+        };
+        /** Failures */
+        Failures: {
+            /** Groups */
+            groups: components["schemas"]["FailureGroup"][];
+            /** Source */
+            source: string;
+            /** Total */
+            total: number;
+            /** Truncated */
+            truncated: boolean;
+            /** Window Hours */
+            window_hours: number;
+        };
         /** FallbackResult */
         FallbackResult: {
             /** Earliest Reset */
@@ -2960,6 +3031,25 @@ export interface components {
             public_url_configured: boolean;
             /** Targets */
             targets: components["schemas"]["TargetCapability"][];
+        };
+        /** FleetHealth */
+        FleetHealth: {
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            failures: components["schemas"]["Failures"];
+            outcomes: components["schemas"]["Outcomes"];
+            /** Pools */
+            pools: components["schemas"]["PoolHealth"][];
+            queue_time: components["schemas"]["Durations"];
+            run_time: components["schemas"]["Durations"];
+            tasks_by_state: components["schemas"]["TasksByState"];
+            /** Truncated */
+            truncated: boolean;
+            /** Window Hours */
+            window_hours: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -3510,6 +3600,23 @@ export interface components {
             /** Version */
             version: string | null;
         };
+        /** Outcomes */
+        Outcomes: {
+            /** Failed */
+            failed: number;
+            /** Failure Rate */
+            failure_rate: number | null;
+            /** Source */
+            source: string;
+            /** Succeeded */
+            succeeded: number;
+            /** Success Rate */
+            success_rate: number | null;
+            /** Total */
+            total: number;
+            /** Window Hours */
+            window_hours: number;
+        };
         /** Overview */
         Overview: {
             accounts: components["schemas"]["AccountsOverview"];
@@ -3769,6 +3876,26 @@ export interface components {
             name: string;
             runtime: components["schemas"]["RuntimeKind"];
             target: components["schemas"]["TargetKind"];
+        };
+        /** PoolHealth */
+        PoolHealth: {
+            /** Desired */
+            desired: number;
+            /** Last Heartbeat At */
+            last_heartbeat_at: string | null;
+            /** Live */
+            live: number;
+            /** Name */
+            name: string;
+            /** Running */
+            running: number;
+            /**
+             * Source
+             * @default pools, instances, agents.last_heartbeat_at
+             */
+            source?: string;
+            /** Status */
+            status: string;
         };
         /** PoolInspection */
         PoolInspection: {
@@ -4806,6 +4933,15 @@ export interface components {
             };
             /** Version */
             version: string;
+        };
+        /** TasksByState */
+        TasksByState: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Source */
+            source: string;
         };
         /** TemplateCatalog */
         TemplateCatalog: {
@@ -6500,6 +6636,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FleetCapabilities"];
+                };
+            };
+        };
+    };
+    fleet_health_api_fleet_health_get: {
+        parameters: {
+            query?: {
+                window?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetHealth"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

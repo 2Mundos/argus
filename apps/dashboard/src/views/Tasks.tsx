@@ -18,7 +18,10 @@ const COLUMNS: { title: string; states: TaskState[] }[] = [
 ];
 
 export function Tasks() {
-  const [selected, setSelected] = useState<string | null>(null);
+  // `#tasks/<id>` (linked from Frota) opens that task's detail.
+  const [selected, setSelected] = useState<string | null>(
+    () => window.location.hash.match(/^#tasks\/(.+)$/)?.[1] ?? null,
+  );
   const [creating, setCreating] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [archived, setArchived] = useState(false);
@@ -70,7 +73,15 @@ export function Tasks() {
       </div>
       {archiving && <ArchiveTasks onClose={() => setArchiving(false)} />}
       {creating && <NewTask onClose={() => setCreating(false)} />}
-      {selected && <TaskDetail taskId={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <TaskDetail
+          taskId={selected}
+          onClose={() => {
+            setSelected(null);
+            if (window.location.hash.startsWith("#tasks/")) window.location.hash = "tasks";
+          }}
+        />
+      )}
     </section>
   );
 }
