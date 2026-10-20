@@ -3,6 +3,7 @@ import { api, call, download } from "../api";
 import { bytes, relative, shortId } from "../format";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
+import { TaskLabel } from "../TaskLabel";
 import { Activity } from "./Activity";
 import { AgentDetail } from "./AgentDetail";
 import { EventList } from "./Events";
@@ -42,7 +43,7 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
       <div className="overlay" onClick={onClose} onKeyDown={(e) => e.key === "Escape" && onClose()}>
         <aside className="drawer" onClick={(e) => e.stopPropagation()} onKeyDown={() => {}}>
           <div className="toolbar">
-            <h2>{task?.title ?? "…"}</h2>
+            <h2>{task ? <TaskLabel title={task.title} project={task.project} /> : "…"}</h2>
             <button type="button" className="link" onClick={onClose}>
               Close
             </button>

@@ -2,6 +2,7 @@ import { type FormEvent, useState } from "react";
 import { api, call, newestTasks, type TaskKind, type TaskState, type TaskSummary } from "../api";
 import { relative, shortId } from "../format";
 import { useLiveData } from "../live";
+import { TaskLabel } from "../TaskLabel";
 import { TaskDetail } from "./TaskDetail";
 
 const COLUMNS: { title: string; states: TaskState[] }[] = [
@@ -57,7 +58,7 @@ export function Tasks() {
 function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
   return (
     <button type="button" className="task-card" onClick={onOpen}>
-      <span className="title">{task.title}</span>
+      <TaskLabel className="title" title={task.title} project={task.project} />
       <span className="meta">
         <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
         {task.kind !== "generic" && <span className="badge">{task.kind}</span>}
