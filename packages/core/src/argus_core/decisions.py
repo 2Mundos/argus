@@ -45,6 +45,7 @@ class Decision(BaseModel):
     created_at: datetime
     decided_at: datetime | None
     subject_title: str | None = None  # the task's title, for display
+    project: str | None = None  # the subject's project; None for pools
     payload: dict[str, Any] | None = None  # structured context, e.g. a requested scale
 
 

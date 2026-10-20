@@ -1,9 +1,11 @@
 import { type components, createArgusClient } from "@argus/api-client";
 
 export type Task = components["schemas"]["Task"];
+export type TaskSummary = components["schemas"]["TaskSummary"];
 export type TaskState = components["schemas"]["TaskState"];
 export type Agent = components["schemas"]["Agent"];
 export type Decision = components["schemas"]["Decision"];
+export type DecisionDetail = components["schemas"]["DecisionDetail"];
 export type ArgusEvent = components["schemas"]["EventOut"];
 export type Artifact = components["schemas"]["Artifact"];
 export type TaskKind = components["schemas"]["TaskKind"];
@@ -93,6 +95,21 @@ export async function call<T>(
     throw new ApiError(response.status, "error", String(detail ?? response.statusText));
   }
   return data as T;
+}
+
+/** The newest tasks, following the API's cursor for up to `pages` pages of 100. */
+export async function newestTasks(pages = 5): Promise<{ items: TaskSummary[]; total: number }> {
+  const items: TaskSummary[] = [];
+  let cursor: string | undefined;
+  let total = 0;
+  for (let n = 0; n < pages; n++) {
+    const page = await call(api.GET("/api/tasks", { params: { query: { limit: 100, cursor } } }));
+    items.push(...page.items);
+    total = page.total;
+    if (!page.next_cursor) break;
+    cursor = page.next_cursor;
+  }
+  return { items, total };
 }
 
 /** Fetch an authenticated file (artifacts) and trigger a download. */

@@ -818,6 +818,16 @@
             "title": "Name",
             "type": "string"
           },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "sha256": {
             "title": "Sha256",
             "type": "string"
@@ -843,6 +853,70 @@
           "created_at"
         ],
         "title": "Artifact",
+        "type": "object"
+      },
+      "ArtifactRole": {
+        "description": "What an artifact is for, declared by its uploader (MCP operations 3.2).",
+        "enum": [
+          "report",
+          "delegate_report",
+          "policy_snapshot",
+          "qa_receipt",
+          "other"
+        ],
+        "title": "ArtifactRole",
+        "type": "string"
+      },
+      "ArtifactText": {
+        "description": "A byte range of an artifact, decoded as UTF-8 when it is text.",
+        "properties": {
+          "artifact": {
+            "$ref": "#/components/schemas/Artifact"
+          },
+          "binary": {
+            "title": "Binary",
+            "type": "boolean"
+          },
+          "length": {
+            "title": "Length",
+            "type": "integer"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "required": [
+          "artifact",
+          "offset",
+          "length",
+          "next_offset",
+          "binary",
+          "text"
+        ],
+        "title": "ArtifactText",
         "type": "object"
       },
       "Ask": {
@@ -1835,6 +1909,17 @@
             ],
             "title": "Payload"
           },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
           "question": {
             "title": "Question",
             "type": "string"
@@ -1918,6 +2003,168 @@
         "title": "DecisionAnswer",
         "type": "object"
       },
+      "DecisionDetail": {
+        "properties": {
+          "age_s": {
+            "title": "Age S",
+            "type": "integer"
+          },
+          "answer_choice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Choice"
+          },
+          "answer_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Text"
+          },
+          "audience": {
+            "$ref": "#/components/schemas/Audience"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DecisionKind"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "requested_by": {
+            "title": "Requested By",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DecisionState"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Title"
+          },
+          "subject_type": {
+            "title": "Subject Type",
+            "type": "string"
+          },
+          "truncated": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Truncated",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "subject_type",
+          "subject_id",
+          "kind",
+          "audience",
+          "state",
+          "options",
+          "answer_choice",
+          "requested_by",
+          "decided_by",
+          "created_at",
+          "decided_at",
+          "age_s",
+          "question",
+          "answer_text"
+        ],
+        "title": "DecisionDetail",
+        "type": "object"
+      },
       "DecisionKind": {
         "enum": [
           "question",
@@ -1929,6 +2176,59 @@
         "title": "DecisionKind",
         "type": "string"
       },
+      "DecisionPage": {
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DecisionSummary"
+                },
+                {
+                  "$ref": "#/components/schemas/DecisionDetail"
+                }
+              ]
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "omitted": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Omitted",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "has_more",
+          "next_cursor",
+          "omitted",
+          "items"
+        ],
+        "title": "DecisionPage",
+        "type": "object"
+      },
       "DecisionState": {
         "enum": [
           "open",
@@ -1937,6 +2237,141 @@
         ],
         "title": "DecisionState",
         "type": "string"
+      },
+      "DecisionSummary": {
+        "properties": {
+          "age_s": {
+            "title": "Age S",
+            "type": "integer"
+          },
+          "answer_choice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Choice"
+          },
+          "audience": {
+            "$ref": "#/components/schemas/Audience"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DecisionKind"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "requested_by": {
+            "title": "Requested By",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DecisionState"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Title"
+          },
+          "subject_type": {
+            "title": "Subject Type",
+            "type": "string"
+          },
+          "truncated": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Truncated",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "subject_type",
+          "subject_id",
+          "subject_title",
+          "project",
+          "kind",
+          "audience",
+          "state",
+          "options",
+          "answer_choice",
+          "requested_by",
+          "decided_by",
+          "created_at",
+          "decided_at",
+          "age_s"
+        ],
+        "title": "DecisionSummary",
+        "type": "object"
       },
       "DecisionsOverview": {
         "properties": {
@@ -2542,6 +2977,224 @@
           "source"
         ],
         "title": "ImageChoice",
+        "type": "object"
+      },
+      "InboxItem": {
+        "properties": {
+          "age_s": {
+            "title": "Age S",
+            "type": "integer"
+          },
+          "artifact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Artifact Ids",
+            "type": "array"
+          },
+          "attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Audience"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
+          },
+          "decision_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_type": {
+            "title": "Subject Type",
+            "type": "string"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "subject_type",
+          "subject_id",
+          "title",
+          "project",
+          "state",
+          "kind",
+          "attempt",
+          "version",
+          "decision_id",
+          "decision_kind",
+          "audience",
+          "age_s",
+          "artifact_ids"
+        ],
+        "title": "InboxItem",
+        "type": "object"
+      },
+      "InboxPage": {
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/InboxItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "omitted": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Omitted",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "totals_by_decision_kind": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Totals By Decision Kind",
+            "type": "object"
+          },
+          "totals_by_state": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Totals By State",
+            "type": "object"
+          }
+        },
+        "required": [
+          "total",
+          "has_more",
+          "next_cursor",
+          "omitted",
+          "items",
+          "totals_by_state",
+          "totals_by_decision_kind"
+        ],
+        "title": "InboxPage",
         "type": "object"
       },
       "Instance": {
@@ -5779,6 +6432,75 @@
         "title": "Task",
         "type": "object"
       },
+      "TaskArtifact": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "in_result": {
+            "title": "In Result",
+            "type": "boolean"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "task_id",
+          "attempt",
+          "name",
+          "media_type",
+          "size",
+          "sha256",
+          "created_by",
+          "created_at",
+          "in_result"
+        ],
+        "title": "TaskArtifact",
+        "type": "object"
+      },
       "TaskCreate": {
         "properties": {
           "acceptance": {
@@ -5903,6 +6625,300 @@
           "title"
         ],
         "title": "TaskCreate",
+        "type": "object"
+      },
+      "TaskDetail": {
+        "properties": {
+          "acceptance": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Acceptance",
+            "type": "array"
+          },
+          "age_s": {
+            "title": "Age S",
+            "type": "integer"
+          },
+          "artifact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Artifact Ids",
+            "type": "array"
+          },
+          "assignee_agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Agent Id"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "block_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Reason"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "decision_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Decision Ids",
+            "type": "array"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "failures": {
+            "title": "Failures",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input": {
+            "additionalProperties": true,
+            "title": "Input",
+            "type": "object"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "knowledge": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Knowledge",
+            "type": "array"
+          },
+          "lease_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Expires At"
+          },
+          "lease_ttl_s": {
+            "title": "Lease Ttl S",
+            "type": "integer"
+          },
+          "max_attempts": {
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "progress_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress At"
+          },
+          "progress_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Message"
+          },
+          "progress_percent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Percent"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "required_capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Capabilities",
+            "type": "array"
+          },
+          "requires_approval": {
+            "title": "Requires Approval",
+            "type": "boolean"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskResult-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review": {
+            "$ref": "#/components/schemas/Review"
+          },
+          "spec": {
+            "title": "Spec",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "timeout_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout At"
+          },
+          "timeout_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout S"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "truncated": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Truncated",
+            "type": "object"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "depends_on",
+          "decision_ids",
+          "artifact_ids",
+          "id",
+          "parent_id",
+          "kind",
+          "title",
+          "project",
+          "state",
+          "priority",
+          "review",
+          "attempt",
+          "max_attempts",
+          "assignee_agent_id",
+          "lease_expires_at",
+          "block_reason",
+          "progress_message",
+          "progress_percent",
+          "created_at",
+          "version",
+          "age_s",
+          "spec",
+          "acceptance",
+          "input",
+          "required_capabilities",
+          "requires_approval",
+          "lease_ttl_s",
+          "timeout_s",
+          "timeout_at",
+          "failures",
+          "result",
+          "error",
+          "progress_at",
+          "knowledge",
+          "created_by",
+          "updated_at"
+        ],
+        "title": "TaskDetail",
         "type": "object"
       },
       "TaskKind": {
@@ -6148,6 +7164,66 @@
         "title": "TaskKindUpsert",
         "type": "object"
       },
+      "TaskPage": {
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TaskSummary"
+                },
+                {
+                  "$ref": "#/components/schemas/TaskDetail"
+                }
+              ]
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "omitted": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Omitted",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "has_more",
+          "next_cursor",
+          "omitted",
+          "items"
+        ],
+        "title": "TaskPage",
+        "type": "object"
+      },
       "TaskResult-Input": {
         "description": "The one result envelope every task completes with (3.11).",
         "properties": {
@@ -6254,6 +7330,178 @@
         ],
         "title": "TaskState",
         "type": "string"
+      },
+      "TaskSummary": {
+        "properties": {
+          "age_s": {
+            "title": "Age S",
+            "type": "integer"
+          },
+          "artifact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Artifact Ids",
+            "type": "array"
+          },
+          "assignee_agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Agent Id"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "block_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Reason"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Decision Ids",
+            "type": "array"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "lease_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Expires At"
+          },
+          "max_attempts": {
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "progress_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Message"
+          },
+          "progress_percent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Percent"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "review": {
+            "$ref": "#/components/schemas/Review"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "truncated": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Truncated",
+            "type": "object"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "depends_on",
+          "decision_ids",
+          "artifact_ids",
+          "id",
+          "parent_id",
+          "kind",
+          "title",
+          "project",
+          "state",
+          "priority",
+          "review",
+          "attempt",
+          "max_attempts",
+          "assignee_agent_id",
+          "lease_expires_at",
+          "block_reason",
+          "progress_message",
+          "progress_percent",
+          "created_at",
+          "version",
+          "age_s"
+        ],
+        "title": "TaskSummary",
+        "type": "object"
       },
       "TemplateCatalog": {
         "properties": {
@@ -6644,6 +7892,54 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "Verification": {
+        "description": "Whether the stored bytes are the ones uploaded. Says nothing about whether\nthe content is acceptable.",
+        "properties": {
+          "expected_sha256": {
+            "title": "Expected Sha256",
+            "type": "string"
+          },
+          "expected_size": {
+            "title": "Expected Size",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          }
+        },
+        "required": [
+          "ok",
+          "size",
+          "sha256",
+          "expected_size",
+          "expected_sha256"
+        ],
+        "title": "Verification",
         "type": "object"
       },
       "WorkerTemplate": {
@@ -8346,8 +9642,56 @@
         ]
       }
     },
+    "/api/artifacts/{artifact_id}": {
+      "get": {
+        "operationId": "get_artifact_api_artifacts__artifact_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Artifact"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Artifact",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/api/artifacts/{artifact_id}/content": {
       "get": {
+        "description": "The raw bytes. Honours `Range: bytes=\u2026` for partial reads.",
         "operationId": "download_artifact_api_artifacts__artifact_id__content_get",
         "parameters": [
           {
@@ -8386,9 +9730,128 @@
         ]
       }
     },
+    "/api/artifacts/{artifact_id}/text": {
+      "get": {
+        "description": "Up to `max_bytes` of a text or JSON artifact from `offset`, as UTF-8;\ncontinue from `next_offset`. Other media types return `binary` and no bytes.",
+        "operationId": "read_artifact_text_api_artifacts__artifact_id__text_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_bytes",
+            "required": false,
+            "schema": {
+              "default": 16384,
+              "maximum": 65536,
+              "minimum": 64,
+              "title": "Max Bytes",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactText"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Artifact Text",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/artifacts/{artifact_id}/verify": {
+      "post": {
+        "description": "Re-hash the stored bytes against the size and SHA-256 recorded at upload.\n`ok` means intact, not acceptable.",
+        "operationId": "verify_artifact_api_artifacts__artifact_id__verify_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Verification"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Verify Artifact",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/api/decisions": {
       "get": {
-        "description": "The inbox: open decisions by default, oldest first.",
+        "description": "Decisions oldest first, in pages (max 100); open ones by default.",
         "operationId": "list_decisions_api_decisions_get",
         "parameters": [
           {
@@ -8423,6 +9886,81 @@
               ],
               "title": "Subject Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/DecisionKind"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "summary",
+              "enum": [
+                "summary",
+                "detail"
+              ],
+              "title": "View",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
           }
         ],
         "responses": {
@@ -8430,11 +9968,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/Decision"
-                  },
-                  "title": "Response List Decisions Api Decisions Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/DecisionPage"
                 }
               }
             },
@@ -8977,6 +10511,139 @@
         "summary": "Create Worker",
         "tags": [
           "fleet"
+        ]
+      }
+    },
+    "/api/inbox": {
+      "get": {
+        "description": "What waits on a manager, oldest first: blocked, in-review and\nawaiting-approval tasks with their open decision, plus open decisions about\npools and knowledge. `state` keeps only task rows in those states.",
+        "operationId": "inbox_api_inbox_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/TaskState"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "decision_kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/DecisionKind"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Decision Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "summary",
+              "enum": [
+                "summary",
+                "detail"
+              ],
+              "title": "View",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Inbox",
+        "tags": [
+          "decisions"
         ]
       }
     },
@@ -10433,6 +12100,7 @@
     },
     "/api/tasks": {
       "get": {
+        "description": "Tasks newest first, in pages (max 100). `ids` (comma-separated, max 50) is\na batch read instead: no other filter, no paging, unknown ids in `missing`.",
         "operationId": "list_tasks_api_tasks_get",
         "parameters": [
           {
@@ -10442,7 +12110,10 @@
             "schema": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/TaskState"
+                  "items": {
+                    "$ref": "#/components/schemas/TaskState"
+                  },
+                  "type": "array"
                 },
                 {
                   "type": "null"
@@ -10453,12 +12124,90 @@
           },
           {
             "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ids"
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "summary",
+              "enum": [
+                "summary",
+                "detail"
+              ],
+              "title": "View",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
-              "default": 100,
+              "default": 25,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           }
         ],
@@ -10467,11 +12216,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/Task"
-                  },
-                  "title": "Response List Tasks Api Tasks Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/TaskPage"
                 }
               }
             },
@@ -10643,6 +12388,7 @@
     },
     "/api/tasks/{task_id}/artifacts": {
       "get": {
+        "description": "A task's artifacts (metadata only), by attempt then name; `in_result` says\nwhether the task's result lists one.",
         "operationId": "list_artifacts_api_tasks__task_id__artifacts_get",
         "parameters": [
           {
@@ -10653,6 +12399,38 @@
               "title": "Task Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "attempt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Attempt"
+            }
+          },
+          {
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ArtifactRole"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Role"
+            }
           }
         ],
         "responses": {
@@ -10661,7 +12439,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/Artifact"
+                    "$ref": "#/components/schemas/TaskArtifact"
                   },
                   "title": "Response List Artifacts Api Tasks  Task Id  Artifacts Get",
                   "type": "array"
@@ -10692,7 +12470,7 @@
         ]
       },
       "post": {
-        "description": "Upload the raw request body as an artifact of the attempt you hold.\n\nList the returned id in `result.artifacts` when completing the task.",
+        "description": "Upload the raw request body as an artifact of the attempt you hold.\n\nList the returned id in `result.artifacts` when completing the task. `role`\nsays what it is for (report, delegate_report, \u2026); it is never inferred.",
         "operationId": "upload_artifact_api_tasks__task_id__artifacts_post",
         "parameters": [
           {
@@ -10720,6 +12498,22 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ArtifactRole"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Role"
             }
           }
         ],

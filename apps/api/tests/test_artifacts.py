@@ -110,3 +110,112 @@ def test_artifacts_are_immutable(
     res = upload(client, worker, claimed, body=b"changed")
     assert res.status_code == 409
     assert res.json()["detail"]["code"] == "artifact_exists"
+
+
+def test_roles_filters_and_in_result(
+    client: TestClient, worker: dict[str, str], claimed: dict
+) -> None:
+    def put(name: str, role: str | None) -> dict:
+        params = {"attempt": claimed["attempt"], "name": name}
+        res = client.post(
+            f"/api/tasks/{claimed['id']}/artifacts",
+            params={**params, "role": role} if role else params,
+            content=b"x",
+            headers=worker,
+        )
+        assert res.status_code == 201, res.text
+        return res.json()
+
+    report, other = put("report.md", "report"), put("log.txt", None)
+    assert (report["role"], other["role"]) == ("report", None)
+    bad = client.post(
+        f"/api/tasks/{claimed['id']}/artifacts",
+        params={"attempt": claimed["attempt"], "name": "x", "role": "verdict"},
+        content=b"x",
+        headers=worker,
+    )
+    assert bad.status_code == 422
+    client.post(
+        f"/api/tasks/{claimed['id']}/complete",
+        json={
+            "attempt": claimed["attempt"],
+            "result": {"summary": "s", "artifacts": [report["id"]]},
+        },
+        headers=worker,
+    )
+    path = f"/api/tasks/{claimed['id']}/artifacts"
+    listed = {a["name"]: a for a in client.get(path, headers=ADMIN).json()}
+    assert listed["report.md"]["in_result"] is True
+    assert listed["log.txt"]["in_result"] is False
+    by_role = client.get(path, params={"role": "report"}, headers=ADMIN).json()
+    assert [a["id"] for a in by_role] == [report["id"]]
+    assert client.get(path, params={"attempt": 9}, headers=ADMIN).json() == []
+    meta = client.get(f"/api/artifacts/{report['id']}", headers=ADMIN).json()
+    assert meta == {k: v for k, v in listed["report.md"].items() if k != "in_result"}
+
+
+def test_text_reads_in_ranges_without_splitting_characters(
+    client: TestClient, worker: dict[str, str], claimed: dict
+) -> None:
+    body = ("a" * 63 + "é" + "z" * 100).encode()  # é straddles byte 64
+    art = upload(client, worker, claimed, body=body).json()
+    path = f"/api/artifacts/{art['id']}/text"
+    first = client.get(path, params={"max_bytes": 64}, headers=ADMIN).json()
+    assert first["text"] == "a" * 63
+    assert (first["length"], first["next_offset"]) == (63, 63)
+    assert first["artifact"]["sha256"] == art["sha256"]
+    rest = client.get(
+        path, params={"offset": 63, "max_bytes": 1024}, headers=ADMIN
+    ).json()
+    assert rest["text"] == "é" + "z" * 100
+    assert rest["next_offset"] is None
+    assert (
+        client.get(path, params={"max_bytes": 10**6}, headers=ADMIN).status_code == 422
+    )
+
+
+def test_binary_artifacts_return_no_bytes(
+    client: TestClient, worker: dict[str, str], claimed: dict
+) -> None:
+    art = client.post(
+        f"/api/tasks/{claimed['id']}/artifacts",
+        params={"attempt": claimed["attempt"], "name": "shot.png"},
+        content=b"\x89PNG",
+        headers={**worker, "Content-Type": "image/png"},
+    ).json()
+    read = client.get(f"/api/artifacts/{art['id']}/text", headers=ADMIN).json()
+    assert (read["binary"], read["text"], read["length"]) == (True, None, 0)
+
+
+def test_content_honours_range(
+    client: TestClient, worker: dict[str, str], claimed: dict
+) -> None:
+    art = upload(client, worker, claimed, body=b"0123456789").json()
+    res = client.get(
+        f"/api/artifacts/{art['id']}/content",
+        headers={**ADMIN, "Range": "bytes=2-4"},
+    )
+    assert (res.status_code, res.content) == (206, b"234")
+
+
+def test_verify_detects_changed_and_missing_bytes(
+    client: TestClient, worker: dict[str, str], claimed: dict, data_dir: Path
+) -> None:
+    art = upload(client, worker, claimed).json()
+    path = f"/api/artifacts/{art['id']}/verify"
+    good = client.post(path, headers=ADMIN).json()
+    assert good == {
+        "ok": True,
+        "size": 4,
+        "sha256": art["sha256"],
+        "expected_size": 4,
+        "expected_sha256": art["sha256"],
+    }
+    stored = data_dir / "artifacts" / "tasks" / claimed["id"] / "1" / "report.md"
+    stored.write_bytes(b"# ho")
+    changed = client.post(path, headers=ADMIN).json()
+    assert (changed["ok"], changed["size"]) == (False, 4)
+    assert changed["sha256"] != art["sha256"]
+    stored.unlink()
+    missing = client.post(path, headers=ADMIN).json()
+    assert (missing["ok"], missing["size"], missing["sha256"]) == (False, None, None)

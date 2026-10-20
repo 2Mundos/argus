@@ -137,7 +137,7 @@ def test_no_listed_tool_is_refused_for_scope(client: TestClient, role: str) -> N
 
 def test_unlisted_tools_still_follow_rest_rules(client: TestClient) -> None:
     worker = register(client)
-    assert tool(client, worker, "list_tasks") == []  # REST lets any caller read
+    assert tool(client, worker, "list_tasks")["total"] == 0  # any caller may read
     assert "requires scope" in tool(client, worker, "cancel_task", task_id="t")["error"]
 
 
@@ -237,7 +237,7 @@ def test_ask_and_answer_over_mcp(client: TestClient) -> None:
         question="Postgres or SQLite?",
         options=["postgres", "sqlite"],
     )
-    [open_decision] = tool(client, orchestrator, "list_decisions")
+    [open_decision] = tool(client, orchestrator, "list_decisions")["items"]
     assert open_decision["id"] == asked["id"]
     tool(
         client,
@@ -259,3 +259,66 @@ def test_dict_results_also_come_as_text_content(client: TestClient) -> None:
     )
     text = result["content"][0]["text"]
     assert json.loads(text)["title"] == "t"  # for clients that only read content
+
+
+def test_inbox_journey_tools_match_rest(client: TestClient) -> None:
+    worker, orchestrator = register(client), register(client, "orchestrator")
+    rest = {"Authorization": f"Bearer {orchestrator}"}
+    tool(client, orchestrator, "create_task", title="Review me", project="global")
+    claimed = tool(client, worker, "claim_task", wait_s=0)["task"]
+    task_id, attempt = claimed["id"], claimed["attempt"]
+    artifact = tool(
+        client,
+        worker,
+        "upload_text_artifact",
+        task_id=task_id,
+        attempt=attempt,
+        name="report.md",
+        content="verdict: pass",
+        role="report",
+    )
+    asked = tool(
+        client,
+        worker,
+        "ask_question",
+        task_id=task_id,
+        attempt=attempt,
+        question="Ship it?",
+        options=["yes", "no"],
+    )
+
+    def without_ages(page: dict) -> dict:
+        return {**page, "items": [{**r, "age_s": 0} for r in page["items"]]}
+
+    inbox = tool(client, orchestrator, "get_inbox", project="global")
+    direct = client.get("/api/inbox?project=global", headers=rest).json()
+    assert without_ages(inbox) == without_ages(direct)
+    [row] = inbox["items"]
+    assert (row["decision_id"], row["artifact_ids"]) == (asked["id"], [artifact["id"]])
+    page = tool(
+        client, orchestrator, "list_decisions", kinds=["question"], view="detail"
+    )
+    assert page["items"][0]["question"] == "Ship it?"
+    assert tool(client, orchestrator, "get_decision", decision_id=asked["id"])[
+        "options"
+    ] == ["yes", "no"]
+
+    [listed] = tool(client, orchestrator, "list_artifacts", task_id=task_id)
+    assert (listed["role"], listed["in_result"]) == ("report", False)
+    assert tool(client, orchestrator, "verify_artifact", artifact_id=artifact["id"])[
+        "ok"
+    ]
+    read = tool(client, orchestrator, "read_artifact", artifact_id=artifact["id"])
+    assert (read["text"], read["next_offset"]) == ("verdict: pass", None)
+
+    unblocked = tool(client, orchestrator, "unblock_task", task_id=task_id)
+    assert unblocked["state"] == "ready"
+    batch = tool(client, orchestrator, "get_tasks", ids=[task_id, "gone"])
+    assert ([t["state"] for t in batch["items"]], batch["missing"]) == (
+        ["ready"],
+        ["gone"],
+    )
+    retry = tool(client, orchestrator, "retry_task", task_id=task_id)
+    assert retry["error"].startswith("409 task_not_failed")
+    tasks = tool(client, orchestrator, "list_tasks", states=["ready"], limit=1)
+    assert (tasks["total"], tasks["has_more"]) == (1, False)

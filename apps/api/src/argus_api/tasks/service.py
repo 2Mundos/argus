@@ -52,24 +52,6 @@ async def get_task(conn: aiosqlite.Connection, task_id: str) -> Task:
     return await _to_task(conn, row)
 
 
-async def list_tasks(
-    conn: aiosqlite.Connection,
-    *,
-    state: TaskState | None = None,
-    limit: int = 100,
-) -> list[Task]:
-    sql = "SELECT * FROM tasks"
-    params: list[Any] = []
-    if state is not None:
-        sql += " WHERE state = ?"
-        params.append(state)
-    sql += " ORDER BY created_at DESC, id LIMIT ?"
-    params.append(limit)
-    async with conn.execute(sql, params) as cur:
-        rows = await cur.fetchall()
-    return [await _to_task(conn, r) for r in rows]
-
-
 # -- creation ----------------------------------------------------------------
 
 

@@ -1,11 +1,16 @@
 import { useState } from "react";
-import { api, call, type Decision } from "../api";
+import { api, call, type DecisionDetail } from "../api";
 import { actor, relative, shortId } from "../format";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
 
 export function Inbox() {
-  const { data: decisions, error } = useLiveData(() => call(api.GET("/api/decisions")), []);
+  const { data: page, error } = useLiveData(
+    () => call(api.GET("/api/decisions", { params: { query: { view: "detail", limit: 100 } } })),
+    [],
+  );
+  // view=detail returns only details; the guard narrows the generated union.
+  const decisions = page?.items.filter((d): d is DecisionDetail => "question" in d);
   return (
     <section>
       <div className="toolbar">
@@ -13,6 +18,11 @@ export function Inbox() {
       </div>
       {error && <p className="error">{error.message}</p>}
       {decisions?.length === 0 && <p className="muted">Nothing waiting for a decision.</p>}
+      {page && page.total > page.items.length && (
+        <p className="muted small">
+          Showing the oldest {page.items.length} of {page.total} open decisions.
+        </p>
+      )}
       {(decisions ?? []).map((d) => (
         <DecisionCard key={d.id} decision={d} />
       ))}
@@ -20,7 +30,7 @@ export function Inbox() {
   );
 }
 
-function DecisionCard({ decision }: { decision: Decision }) {
+function DecisionCard({ decision }: { decision: DecisionDetail }) {
   const [text, setText] = useState("");
   const [saveTo, setSaveTo] = useState<string | null>(null); // null: don't save; "": new page
   const [error, setError] = useState<string>();

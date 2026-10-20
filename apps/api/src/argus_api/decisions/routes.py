@@ -1,10 +1,49 @@
-from argus_core.decisions import Ask, Decision, DecisionAnswer, DecisionState
-from fastapi import APIRouter, status
+from typing import Annotated
 
-from argus_api.decisions import service, store
+from argus_core.decisions import (
+    Ask,
+    Decision,
+    DecisionAnswer,
+    DecisionKind,
+    DecisionState,
+)
+from argus_core.tasks import TaskState
+from fastapi import APIRouter, Query, status
+
+from argus_api import inbox as inbox_module
+from argus_api.decisions import service, store, views
+from argus_api.decisions.views import DecisionPage
 from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep
+from argus_api.inbox import InboxPage
+from argus_api.paging import DEFAULT_LIMIT, View
 
 router = APIRouter(tags=["decisions"])
+
+
+@router.get("/inbox")
+async def inbox(
+    db: DbDep,
+    _: ManagerDep,
+    project: str | None = None,
+    state: Annotated[list[TaskState] | None, Query()] = None,
+    decision_kind: Annotated[list[DecisionKind] | None, Query()] = None,
+    view: View = "summary",
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> InboxPage:
+    """What waits on a manager, oldest first: blocked, in-review and
+    awaiting-approval tasks with their open decision, plus open decisions about
+    pools and knowledge. `state` keeps only task rows in those states."""
+    async with db.snapshot() as snap:
+        return await inbox_module.inbox(
+            snap,
+            project=project,
+            states=state,
+            decision_kinds=decision_kind,
+            view=view,
+            limit=limit,
+            cursor=cursor,
+        )
 
 
 @router.get("/decisions")
@@ -13,10 +52,24 @@ async def list_decisions(
     _: CallerDep,
     state: DecisionState | None = DecisionState.OPEN,
     subject_id: str | None = None,
-) -> list[Decision]:
-    """The inbox: open decisions by default, oldest first."""
-    async with db.read() as conn:
-        return await service.list_decisions(conn, state=state, subject_id=subject_id)
+    project: str | None = None,
+    kind: Annotated[list[DecisionKind] | None, Query()] = None,
+    view: View = "summary",
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> DecisionPage:
+    """Decisions oldest first, in pages (max 100); open ones by default."""
+    async with db.snapshot() as snap:
+        return await views.list_decisions(
+            snap,
+            state=state,
+            subject_id=subject_id,
+            project=project,
+            kinds=kind,
+            view=view,
+            limit=limit,
+            cursor=cursor,
+        )
 
 
 @router.get("/decisions/{decision_id}")

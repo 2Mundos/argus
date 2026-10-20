@@ -425,14 +425,17 @@ as a managed pool of size 1 uses the same model and comes later.
   REST API with the caller's own token, so scopes, validation, leases, and
   error codes are identical to HTTP; REST errors come back as tool errors
   (`409 stale_attempt: …`). The MCP layer holds no state or logic of its own.
-  Tools: `claim_task`, `heartbeat`, `get_task`, `report_progress`,
+  Tools: `claim_task`, `heartbeat`, `get_task`, `get_tasks`, `report_progress`,
   `complete_task`, `fail_task`, `ask_question`, `create_task`,
-  `upload_text_artifact`, `leave`; `search_knowledge`, `get_knowledge_page`,
-  `write_knowledge`; `lease_account`, `report_account_exhausted`; and for
-  orchestrators `list_tasks`, `cancel_task`, `list_agents`, `list_pools`,
-  `scale_pool`, `get_fleet_capabilities`, `launch_worker`, `list_worker_templates`,
-  `create_worker` (see
-  [worker launch](worker-launch.spec.md)), `list_decisions`, `answer_decision`.
+  `upload_text_artifact`, `list_artifacts`, `read_artifact`, `verify_artifact`,
+  `leave`; `search_knowledge`, `get_knowledge_page`, `write_knowledge`;
+  `lease_account`, `report_account_exhausted`; `list_engines`, `run_local`; and
+  for orchestrators `get_inbox`, `list_tasks`, `unblock_task`, `retry_task`,
+  `cancel_task`, `list_agents`, `list_pools`, `scale_pool`,
+  `get_fleet_capabilities`, `launch_worker`, `list_worker_templates`,
+  `create_worker` (see [worker launch](worker-launch.spec.md)), `route_task`,
+  `list_decisions`, `get_decision`, `answer_decision`. Lists return the page
+  envelope ([MCP operations](mcp-operations.spec.md) 3.1).
   `tools/list` shows each token only the tools its scope can use
   ([MCP operations](mcp-operations.spec.md) 3.4). The server's instructions
   tell agents the working loop (claim, heartbeat, progress, complete; a 409

@@ -296,7 +296,7 @@ def test_worker_proposal_goes_through_the_inbox(proposing: TestClient) -> None:
     assert res.json()["status"] == "proposed"
     assert client.get("/api/knowledge/pages", headers=ADMIN_H).json() == []
 
-    [decision] = client.get("/api/decisions", headers=ADMIN_H).json()
+    [decision] = client.get("/api/decisions", headers=ADMIN_H).json()["items"]
     assert decision["kind"] == "knowledge"
     assert decision["subject_title"] == "Flaky test list"
     client.post(
@@ -326,7 +326,7 @@ def test_accepting_a_stale_edit_proposal_conflicts(proposing: TestClient) -> Non
         json={"base_revision_id": base, "title": "Page", "body": "admin"},
         headers=ADMIN_H,
     )
-    [decision] = client.get("/api/decisions", headers=ADMIN_H).json()
+    [decision] = client.get("/api/decisions", headers=ADMIN_H).json()["items"]
     res = client.post(
         f"/api/decisions/{decision['id']}/answer",
         json={"choice": "accept"},
@@ -334,7 +334,9 @@ def test_accepting_a_stale_edit_proposal_conflicts(proposing: TestClient) -> Non
     )
     assert res.status_code == 409
     assert res.json()["detail"]["code"] == "knowledge_conflict"
-    assert len(client.get("/api/decisions", headers=ADMIN_H).json()) == 1  # still open
+    assert (
+        client.get("/api/decisions", headers=ADMIN_H).json()["total"] == 1
+    )  # still open
 
 
 def test_publish_setting_lets_workers_publish(tmp_path, monkeypatch) -> None:

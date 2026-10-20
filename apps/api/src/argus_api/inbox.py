@@ -1,0 +1,189 @@
+"""What waits on a manager, in one page (MCP operations 3.2).
+
+Rows are tasks that are blocked, in review or awaiting approval, each joined
+with its open decision if any, plus open decisions about other subjects (pools,
+knowledge proposals). Totals come from the same snapshot as the page.
+"""
+
+from collections import defaultdict
+from datetime import datetime
+from typing import Any
+
+from argus_core.decisions import Audience, DecisionKind
+from argus_core.tasks import TaskState
+from pydantic import BaseModel
+
+from argus_api.db import Snapshot
+from argus_api.decisions import store as decisions
+from argus_api.decisions.views import DecisionDetail, project_row
+from argus_api.paging import (
+    PageInfo,
+    View,
+    clamp,
+    decode_cursor,
+    encode_cursor,
+)
+from argus_api.tasks import views as tasks
+from argus_api.tasks.views import TaskDetail
+
+WAITING = (TaskState.BLOCKED, TaskState.IN_REVIEW, TaskState.AWAITING_APPROVAL)
+
+
+class InboxItem(BaseModel):
+    subject_type: str  # task, pool, knowledge_proposal
+    subject_id: str
+    title: str | None
+    project: str | None  # None for pools
+    state: TaskState | None  # tasks only
+    kind: str | None  # the task's kind
+    attempt: int | None
+    version: str | None  # the task's updated_at
+    decision_id: str | None  # the open decision, if any
+    decision_kind: DecisionKind | None
+    audience: Audience | None  # who may answer it
+    age_s: int  # since it started waiting
+    artifact_ids: list[str]  # the current attempt's
+    task: TaskDetail | None = None  # view=detail only
+    decision: DecisionDetail | None = None  # view=detail only
+
+
+class InboxPage(PageInfo):
+    items: list[InboxItem]
+    totals_by_state: dict[str, int]  # task state, else the subject type
+    totals_by_decision_kind: dict[str, int]  # "none": no open decision
+
+
+_ROWS = (
+    "SELECT 'task' AS subject_type, t.id AS subject_id, t.title, t.project,"
+    " t.state, t.kind, t.attempt, t.updated_at AS version, d.id AS decision_id,"
+    " d.kind AS decision_kind, d.audience,"
+    " coalesce(d.created_at, t.updated_at) AS since,"
+    " coalesce(d.id, t.id) AS row_key"
+    " FROM tasks t LEFT JOIN decisions d ON d.subject_type = 'task'"
+    "  AND d.subject_id = t.id AND d.state = 'open'"
+    " WHERE t.state IN ('blocked', 'in_review', 'awaiting_approval')"
+    " UNION ALL"
+    " SELECT d.subject_type, d.subject_id, coalesce(kp.title, d.subject_id),"
+    " kp.project, NULL, NULL, NULL, NULL, d.id, d.kind, d.audience,"
+    " d.created_at, d.id"
+    " FROM decisions d LEFT JOIN knowledge_proposals kp"
+    "  ON d.subject_type = 'knowledge_proposal' AND kp.id = d.subject_id"
+    " WHERE d.state = 'open' AND d.subject_type != 'task'"
+)
+
+_TOTALS = "coalesce(state, subject_type), coalesce(decision_kind, 'none'), count(*)"
+_CURRENT_ARTIFACTS = (
+    "SELECT a.task_id, a.id FROM artifacts a JOIN tasks t ON t.id = a.task_id"
+    " WHERE a.attempt = t.attempt"
+)
+
+
+async def inbox(
+    snap: Snapshot,
+    *,
+    project: str | None = None,
+    states: list[TaskState] | None = None,
+    decision_kinds: list[DecisionKind] | None = None,
+    view: View = "summary",
+    limit: int = 25,
+    cursor: str | None = None,
+) -> InboxPage:
+    """Oldest first. `states` keeps only task rows in those states."""
+    limit = clamp(limit)
+    filters: dict[str, Any] = {"project": project, "states": sorted(states or [])}
+    filters |= {"decision_kinds": sorted(decision_kinds or [])}
+    where, params = ["1 = 1"], []
+    if project is not None:
+        where.append("project = ?")
+        params.append(project)
+    if states:
+        where.append(f"state IN ({','.join('?' * len(states))})")
+        params += states
+    if decision_kinds:
+        where.append(f"decision_kind IN ({','.join('?' * len(decision_kinds))})")
+        params += decision_kinds
+    rows_sql = f"SELECT * FROM ({_ROWS}) WHERE {' AND '.join(where)}"  # noqa: S608
+    conn = snap.conn
+    by_state: dict[str, int] = defaultdict(int)
+    by_kind: dict[str, int] = defaultdict(int)
+    totals_sql = f"SELECT {_TOTALS} FROM ({rows_sql}) GROUP BY 1, 2"  # noqa: S608
+    async with conn.execute(totals_sql, params) as cur:
+        for state, kind, n in await cur.fetchall():
+            by_state[state] += n
+            by_kind[kind] += n
+    if (after := decode_cursor(cursor, filters)) is not None:
+        rows_sql += " AND (since, row_key) > (?, ?)"
+        params += after
+    async with conn.execute(
+        rows_sql + " ORDER BY since, row_key LIMIT ?", [*params, limit + 1]
+    ) as cur:
+        rows = list(await cur.fetchall())
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    task_ids = [r["subject_id"] for r in rows if r["subject_type"] == "task"]
+    artifacts = await _current_artifacts(snap, task_ids)
+    details: dict[str, TaskDetail] = {}
+    if view == "detail" and task_ids:
+        page = await tasks.get_tasks(snap, task_ids, "detail")
+        details = {t.id: t for t in page.items if isinstance(t, TaskDetail)}
+    items: list[InboxItem] = []
+    omitted: set[str] = set()
+    for r in rows:
+        item = InboxItem.model_validate(
+            {
+                **dict(r),
+                "age_s": max(0, int((snap.now - _at(r["since"])).total_seconds())),
+                "artifact_ids": artifacts.get(r["subject_id"], []),
+            }
+        )
+        if view == "detail":
+            item.task = details.get(r["subject_id"])
+            if r["decision_id"] is not None:
+                decision = project_row(
+                    snap.now, await _decision_row(snap, r["decision_id"]), "detail"
+                )
+                assert isinstance(decision, DecisionDetail)
+                item.decision = decision
+            for part, prefix in ((item.task, "task."), (item.decision, "decision.")):
+                if part is not None:
+                    omitted |= {prefix + f for f in part.truncated}
+        items.append(item)
+    if view == "summary":
+        omitted |= {"task", "decision"}
+    last = rows[-1] if has_more else None
+    return InboxPage(
+        items=items,
+        total=sum(by_state.values()),
+        has_more=has_more,
+        next_cursor=encode_cursor([last["since"], last["row_key"]], filters)
+        if last is not None
+        else None,
+        omitted=sorted(omitted),
+        totals_by_state=dict(sorted(by_state.items())),
+        totals_by_decision_kind=dict(sorted(by_kind.items())),
+    )
+
+
+async def _current_artifacts(snap: Snapshot, task_ids: list[str]) -> dict[str, list]:
+    """Artifact ids of each task's current attempt: the evidence under review."""
+    if not task_ids:
+        return {}
+    found: dict[str, list[str]] = defaultdict(list)
+    marks = ",".join("?" * len(task_ids))
+    sql = f"{_CURRENT_ARTIFACTS} AND a.task_id IN ({marks})"
+    async with snap.conn.execute(sql + " ORDER BY a.created_at, a.id", task_ids) as cur:
+        for task_id, artifact_id in await cur.fetchall():
+            found[task_id].append(artifact_id)
+    return found
+
+
+async def _decision_row(snap: Snapshot, decision_id: str) -> Any:
+    async with snap.conn.execute(
+        decisions.SELECT + " WHERE d.id = ?", (decision_id,)
+    ) as cur:
+        return await cur.fetchone()
+
+
+def _at(value: str) -> datetime:
+    return datetime.fromisoformat(value)

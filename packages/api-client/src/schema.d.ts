@@ -489,6 +489,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Artifact */
+        get: operations["get_artifact_api_artifacts__artifact_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/artifacts/{artifact_id}/content": {
         parameters: {
             query?: never;
@@ -496,10 +513,55 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Download Artifact */
+        /**
+         * Download Artifact
+         * @description The raw bytes. Honours `Range: bytes=…` for partial reads.
+         */
         get: operations["download_artifact_api_artifacts__artifact_id__content_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/artifacts/{artifact_id}/text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Artifact Text
+         * @description Up to `max_bytes` of a text or JSON artifact from `offset`, as UTF-8;
+         *     continue from `next_offset`. Other media types return `binary` and no bytes.
+         */
+        get: operations["read_artifact_text_api_artifacts__artifact_id__text_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/artifacts/{artifact_id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify Artifact
+         * @description Re-hash the stored bytes against the size and SHA-256 recorded at upload.
+         *     `ok` means intact, not acceptable.
+         */
+        post: operations["verify_artifact_api_artifacts__artifact_id__verify_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -515,7 +577,7 @@ export interface paths {
         };
         /**
          * List Decisions
-         * @description The inbox: open decisions by default, oldest first.
+         * @description Decisions oldest first, in pages (max 100); open ones by default.
          */
         get: operations["list_decisions_api_decisions_get"];
         put?: never;
@@ -746,6 +808,28 @@ export interface paths {
          *     happen before anything is written. Success means *requested*.
          */
         post: operations["create_worker_api_fleet_workers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Inbox
+         * @description What waits on a manager, oldest first: blocked, in-review and
+         *     awaiting-approval tasks with their open decision, plus open decisions about
+         *     pools and knowledge. `state` keeps only task rows in those states.
+         */
+        get: operations["inbox_api_inbox_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1239,7 +1323,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Tasks */
+        /**
+         * List Tasks
+         * @description Tasks newest first, in pages (max 100). `ids` (comma-separated, max 50) is
+         *     a batch read instead: no other filter, no paging, unknown ids in `missing`.
+         */
         get: operations["list_tasks_api_tasks_get"];
         put?: never;
         /**
@@ -1299,14 +1387,19 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Artifacts */
+        /**
+         * List Artifacts
+         * @description A task's artifacts (metadata only), by attempt then name; `in_result` says
+         *     whether the task's result lists one.
+         */
         get: operations["list_artifacts_api_tasks__task_id__artifacts_get"];
         put?: never;
         /**
          * Upload Artifact
          * @description Upload the raw request body as an artifact of the attempt you hold.
          *
-         *     List the returned id in `result.artifacts` when completing the task.
+         *     List the returned id in `result.artifacts` when completing the task. `role`
+         *     says what it is for (report, delegate_report, …); it is never inferred.
          */
         post: operations["upload_artifact_api_tasks__task_id__artifacts_post"];
         delete?: never;
@@ -1801,12 +1894,36 @@ export interface components {
             media_type: string;
             /** Name */
             name: string;
+            role?: components["schemas"]["ArtifactRole"] | null;
             /** Sha256 */
             sha256: string;
             /** Size */
             size: number;
             /** Task Id */
             task_id: string;
+        };
+        /**
+         * ArtifactRole
+         * @description What an artifact is for, declared by its uploader (MCP operations 3.2).
+         * @enum {string}
+         */
+        ArtifactRole: "report" | "delegate_report" | "policy_snapshot" | "qa_receipt" | "other";
+        /**
+         * ArtifactText
+         * @description A byte range of an artifact, decoded as UTF-8 when it is text.
+         */
+        ArtifactText: {
+            artifact: components["schemas"]["Artifact"];
+            /** Binary */
+            binary: boolean;
+            /** Length */
+            length: number;
+            /** Next Offset */
+            next_offset: number | null;
+            /** Offset */
+            offset: number;
+            /** Text */
+            text: string | null;
         };
         /** Ask */
         Ask: {
@@ -2133,6 +2250,8 @@ export interface components {
             payload?: {
                 [key: string]: unknown;
             } | null;
+            /** Project */
+            project?: string | null;
             /** Question */
             question: string;
             /** Requested By */
@@ -2156,16 +2275,117 @@ export interface components {
              */
             text?: string;
         };
+        /** DecisionDetail */
+        DecisionDetail: {
+            /** Age S */
+            age_s: number;
+            /** Answer Choice */
+            answer_choice: string | null;
+            /** Answer Text */
+            answer_text: string | null;
+            audience: components["schemas"]["Audience"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decided At */
+            decided_at: string | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** Id */
+            id: string;
+            kind: components["schemas"]["DecisionKind"];
+            /** Options */
+            options: string[] | null;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            } | null;
+            /** Project */
+            project?: string | null;
+            /** Question */
+            question: string;
+            /** Requested By */
+            requested_by: string;
+            state: components["schemas"]["DecisionState"];
+            /** Subject Id */
+            subject_id: string;
+            /** Subject Title */
+            subject_title?: string | null;
+            /** Subject Type */
+            subject_type: string;
+            /**
+             * Truncated
+             * @default {}
+             */
+            truncated?: {
+                [key: string]: number;
+            };
+        };
         /**
          * DecisionKind
          * @enum {string}
          */
         DecisionKind: "question" | "approval" | "review" | "policy" | "knowledge";
+        /** DecisionPage */
+        DecisionPage: {
+            /** Has More */
+            has_more: boolean;
+            /** Items */
+            items: (components["schemas"]["DecisionSummary"] | components["schemas"]["DecisionDetail"])[];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Omitted */
+            omitted: string[];
+            /** Total */
+            total: number;
+        };
         /**
          * DecisionState
          * @enum {string}
          */
         DecisionState: "open" | "answered" | "cancelled";
+        /** DecisionSummary */
+        DecisionSummary: {
+            /** Age S */
+            age_s: number;
+            /** Answer Choice */
+            answer_choice: string | null;
+            audience: components["schemas"]["Audience"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decided At */
+            decided_at: string | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** Id */
+            id: string;
+            kind: components["schemas"]["DecisionKind"];
+            /** Options */
+            options: string[] | null;
+            /** Project */
+            project: string | null;
+            /** Requested By */
+            requested_by: string;
+            state: components["schemas"]["DecisionState"];
+            /** Subject Id */
+            subject_id: string;
+            /** Subject Title */
+            subject_title: string | null;
+            /** Subject Type */
+            subject_type: string;
+            /**
+             * Truncated
+             * @default {}
+             */
+            truncated?: {
+                [key: string]: number;
+            };
+        };
         /** DecisionsOverview */
         DecisionsOverview: {
             /** By State */
@@ -2391,6 +2611,55 @@ export interface components {
             image: string;
             /** Source */
             source: string;
+        };
+        /** InboxItem */
+        InboxItem: {
+            /** Age S */
+            age_s: number;
+            /** Artifact Ids */
+            artifact_ids: string[];
+            /** Attempt */
+            attempt: number | null;
+            audience: components["schemas"]["Audience"] | null;
+            decision?: components["schemas"]["DecisionDetail"] | null;
+            /** Decision Id */
+            decision_id: string | null;
+            decision_kind: components["schemas"]["DecisionKind"] | null;
+            /** Kind */
+            kind: string | null;
+            /** Project */
+            project: string | null;
+            state: components["schemas"]["TaskState"] | null;
+            /** Subject Id */
+            subject_id: string;
+            /** Subject Type */
+            subject_type: string;
+            task?: components["schemas"]["TaskDetail"] | null;
+            /** Title */
+            title: string | null;
+            /** Version */
+            version: string | null;
+        };
+        /** InboxPage */
+        InboxPage: {
+            /** Has More */
+            has_more: boolean;
+            /** Items */
+            items: components["schemas"]["InboxItem"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Omitted */
+            omitted: string[];
+            /** Total */
+            total: number;
+            /** Totals By Decision Kind */
+            totals_by_decision_kind: {
+                [key: string]: number;
+            };
+            /** Totals By State */
+            totals_by_state: {
+                [key: string]: number;
+            };
         };
         /** Instance */
         Instance: {
@@ -3624,6 +3893,33 @@ export interface components {
              */
             updated_at: string;
         };
+        /** TaskArtifact */
+        TaskArtifact: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Id */
+            id: string;
+            /** In Result */
+            in_result: boolean;
+            /** Media Type */
+            media_type: string;
+            /** Name */
+            name: string;
+            role?: components["schemas"]["ArtifactRole"] | null;
+            /** Sha256 */
+            sha256: string;
+            /** Size */
+            size: number;
+            /** Task Id */
+            task_id: string;
+        };
         /** TaskCreate */
         TaskCreate: {
             /**
@@ -3694,6 +3990,93 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** TaskDetail */
+        TaskDetail: {
+            /** Acceptance */
+            acceptance: string[];
+            /** Age S */
+            age_s: number;
+            /** Artifact Ids */
+            artifact_ids: string[];
+            /** Assignee Agent Id */
+            assignee_agent_id: string | null;
+            /** Attempt */
+            attempt: number;
+            /** Block Reason */
+            block_reason: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Decision Ids */
+            decision_ids: string[];
+            /** Depends On */
+            depends_on: string[];
+            /** Error */
+            error: string | null;
+            /** Failures */
+            failures: number;
+            /** Id */
+            id: string;
+            /** Input */
+            input: {
+                [key: string]: unknown;
+            };
+            /** Kind */
+            kind: string;
+            /** Knowledge */
+            knowledge: string[];
+            /** Lease Expires At */
+            lease_expires_at: string | null;
+            /** Lease Ttl S */
+            lease_ttl_s: number;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Priority */
+            priority: number;
+            /** Progress At */
+            progress_at: string | null;
+            /** Progress Message */
+            progress_message: string | null;
+            /** Progress Percent */
+            progress_percent: number | null;
+            /** Project */
+            project: string;
+            /** Required Capabilities */
+            required_capabilities: string[];
+            /** Requires Approval */
+            requires_approval: boolean;
+            result: components["schemas"]["TaskResult-Output"] | null;
+            review: components["schemas"]["Review"];
+            /** Spec */
+            spec: string;
+            state: components["schemas"]["TaskState"];
+            /** Timeout At */
+            timeout_at: string | null;
+            /** Timeout S */
+            timeout_s: number | null;
+            /** Title */
+            title: string;
+            /**
+             * Truncated
+             * @default {}
+             */
+            truncated?: {
+                [key: string]: number;
+            };
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Version */
+            version: string;
+        };
         /** TaskKind */
         TaskKind: {
             /**
@@ -3760,6 +4143,21 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** TaskPage */
+        TaskPage: {
+            /** Has More */
+            has_more: boolean;
+            /** Items */
+            items: (components["schemas"]["TaskSummary"] | components["schemas"]["TaskDetail"])[];
+            /** Missing */
+            missing?: string[];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Omitted */
+            omitted: string[];
+            /** Total */
+            total: number;
+        };
         /**
          * TaskResult
          * @description The one result envelope every task completes with (3.11).
@@ -3801,6 +4199,59 @@ export interface components {
          * @enum {string}
          */
         TaskState: "awaiting_approval" | "pending" | "ready" | "claimed" | "blocked" | "in_review" | "succeeded" | "failed" | "cancelled";
+        /** TaskSummary */
+        TaskSummary: {
+            /** Age S */
+            age_s: number;
+            /** Artifact Ids */
+            artifact_ids: string[];
+            /** Assignee Agent Id */
+            assignee_agent_id: string | null;
+            /** Attempt */
+            attempt: number;
+            /** Block Reason */
+            block_reason: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decision Ids */
+            decision_ids: string[];
+            /** Depends On */
+            depends_on: string[];
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Lease Expires At */
+            lease_expires_at: string | null;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Priority */
+            priority: number;
+            /** Progress Message */
+            progress_message: string | null;
+            /** Progress Percent */
+            progress_percent: number | null;
+            /** Project */
+            project: string;
+            review: components["schemas"]["Review"];
+            state: components["schemas"]["TaskState"];
+            /** Title */
+            title: string;
+            /**
+             * Truncated
+             * @default {}
+             */
+            truncated?: {
+                [key: string]: number;
+            };
+            /** Version */
+            version: string;
+        };
         /** TemplateCatalog */
         TemplateCatalog: {
             /** Default Node */
@@ -3924,6 +4375,23 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /**
+         * Verification
+         * @description Whether the stored bytes are the ones uploaded. Says nothing about whether
+         *     the content is acceptable.
+         */
+        Verification: {
+            /** Expected Sha256 */
+            expected_sha256: string;
+            /** Expected Size */
+            expected_size: number;
+            /** Ok */
+            ok: boolean;
+            /** Sha256 */
+            sha256: string | null;
+            /** Size */
+            size: number | null;
         };
         /** WorkerTemplate */
         WorkerTemplate: {
@@ -4947,6 +5415,37 @@ export interface operations {
             };
         };
     };
+    get_artifact_api_artifacts__artifact_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Artifact"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     download_artifact_api_artifacts__artifact_id__content_get: {
         parameters: {
             query?: never;
@@ -4976,11 +5475,81 @@ export interface operations {
             };
         };
     };
+    read_artifact_text_api_artifacts__artifact_id__text_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                max_bytes?: number;
+            };
+            header?: never;
+            path: {
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactText"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_artifact_api_artifacts__artifact_id__verify_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Verification"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_decisions_api_decisions_get: {
         parameters: {
             query?: {
                 state?: components["schemas"]["DecisionState"] | null;
                 subject_id?: string | null;
+                project?: string | null;
+                kind?: components["schemas"]["DecisionKind"][] | null;
+                view?: "summary" | "detail";
+                limit?: number;
+                cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -4994,7 +5563,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Decision"][];
+                    "application/json": components["schemas"]["DecisionPage"];
                 };
             };
             /** @description Validation Error */
@@ -5314,6 +5883,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateWorkerResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inbox_api_inbox_get: {
+        parameters: {
+            query?: {
+                project?: string | null;
+                state?: components["schemas"]["TaskState"][] | null;
+                decision_kind?: components["schemas"]["DecisionKind"][] | null;
+                view?: "summary" | "detail";
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxPage"];
                 };
             };
             /** @description Validation Error */
@@ -6201,8 +6806,13 @@ export interface operations {
     list_tasks_api_tasks_get: {
         parameters: {
             query?: {
-                state?: components["schemas"]["TaskState"] | null;
+                state?: components["schemas"]["TaskState"][] | null;
+                project?: string | null;
+                kind?: string | null;
+                ids?: string | null;
+                view?: "summary" | "detail";
                 limit?: number;
+                cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -6216,7 +6826,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Task"][];
+                    "application/json": components["schemas"]["TaskPage"];
                 };
             };
             /** @description Validation Error */
@@ -6336,7 +6946,10 @@ export interface operations {
     };
     list_artifacts_api_tasks__task_id__artifacts_get: {
         parameters: {
-            query?: never;
+            query?: {
+                attempt?: number | null;
+                role?: components["schemas"]["ArtifactRole"] | null;
+            };
             header?: never;
             path: {
                 task_id: string;
@@ -6351,7 +6964,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Artifact"][];
+                    "application/json": components["schemas"]["TaskArtifact"][];
                 };
             };
             /** @description Validation Error */
@@ -6370,6 +6983,7 @@ export interface operations {
             query: {
                 attempt: number;
                 name: string;
+                role?: components["schemas"]["ArtifactRole"] | null;
             };
             header?: never;
             path: {
