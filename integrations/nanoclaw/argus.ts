@@ -82,6 +82,7 @@ const CLAIM_WAIT_S = 20;
 const MAX_PAGE_CHARS = 4000;
 const MAX_PAGES_INLINED = 3;
 const MAX_RESENDS = 3; // account switches for one attempt before giving up
+const RECYCLE_TIMEOUT_MS = 30_000; // wait for the old container to exit after an account rotation
 
 export interface ArgusConfig {
   url: string;
@@ -101,6 +102,13 @@ export interface ArgusConfig {
      * provider name. Resolves true when the harness changed.
      */
     selectEngine?: (engine: string) => Promise<boolean>;
+    /**
+     * Stop the group's running session containers and resolve only once each has
+     * exited, so the next one starts with the stubs of the account just applied.
+     * Rejects when a container could not be stopped. Called on an account
+     * rotation within one provider, where `selectEngine` stops nothing.
+     */
+    recycleRuntime?: () => Promise<void>;
     /**
      * Providers for the `executor` lease: the account a CLI the worker delegates
      * to (argus-delegate) uses, held next to the engine's. Taken only when the
@@ -601,6 +609,19 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         const lease = data.lease as AccountLease;
         await applyAndSelect(cfg.accounts, lease, "exhausted");
         account = { id: lease.account_id, name: lease.name, provider: lease.provider };
+        try {
+          // The old container holds the previous account's stubs: it must be gone
+          // before the task is sent again.
+          await cfg.accounts.recycleRuntime?.();
+        } catch (err) {
+          log.error("The previous runtime could not be stopped; not resending the task", { err });
+          await client.call("POST", `/tasks/${task.id}/fail`, {
+            attempt: task.attempt,
+            error: "The account was switched but the previous worker runtime could not be stopped",
+          });
+          finishTask();
+          return;
+        }
         log.info("Switched to another Argus account", { account: lease.name });
         if (currentClaim) await prepareModels(currentClaim);
         if (currentText && resends < MAX_RESENDS) {
@@ -1149,7 +1170,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   return adapter;
 }
 
-function accountsFromEnv(): ArgusConfig["accounts"] {
+export function accountsFromEnv(): ArgusConfig["accounts"] {
   const providers = (process.env.ARGUS_ACCOUNT_PROVIDERS ?? "")
     .split(",")
     .map((p) => p.trim())
@@ -1227,6 +1248,29 @@ function accountsFromEnv(): ArgusConfig["accounts"] {
         }
       }
       return changed;
+    },
+    async recycleRuntime(): Promise<void> {
+      const { identifier: groupId } = await resolveTarget();
+      const { getSessionsByAgentGroup } = await import("../db/sessions.js");
+      const { isContainerRunning, killContainer } = await import("../container-runner.js");
+      const stopped = (await getSessionsByAgentGroup(groupId))
+        .filter((session) => isContainerRunning(session.id))
+        .map(
+          (session) =>
+            new Promise<void>((resolve, reject) => {
+              // onExit fires only after a complete teardown, so a failed stop
+              // never resolves and the timeout turns it into a rejection.
+              const timer = setTimeout(
+                () => reject(new Error(`session ${session.id} did not stop`)),
+                RECYCLE_TIMEOUT_MS,
+              );
+              killContainer(session.id, "argus: account rotated", () => {
+                clearTimeout(timer);
+                resolve();
+              });
+            }),
+        );
+      await Promise.all(stopped);
     },
   };
 }

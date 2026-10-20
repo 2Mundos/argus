@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
-import { createArgusAdapter } from "./argus.js";
+import { accountsFromEnv, createArgusAdapter } from "./argus.js";
 import {
   type AccountLease,
   applyLease,
@@ -15,6 +15,80 @@ import {
   OneCliClient,
   releaseRepositoryLease,
 } from "./argus-accounts.js";
+
+// NanoClaw's own modules are replaced, so the real `recycleRuntime` runs against a
+// fake registry of containers, not NanoClaw's database or a real container runtime.
+const nanoclaw = vi.hoisted(() => ({
+  running: new Set<string>(),
+  killed: [] as string[],
+  exits: new Map<string, () => void>(),
+  sessions: [] as { id: string }[],
+}));
+vi.mock("../db/messaging-groups.js", () => ({
+  getMessagingGroupByPlatform: async () => ({ id: "mg-1" }),
+  getMessagingGroupAgents: async () => [{ agent_group_id: "group-1" }],
+}));
+vi.mock("../db/agent-groups.js", () => ({
+  getAgentGroup: async (id: string) => ({ id, name: "argus worker" }),
+}));
+vi.mock("../db/sessions.js", () => ({
+  getSessionsByAgentGroup: async (id: string) => (id === "group-1" ? nanoclaw.sessions : []),
+}));
+vi.mock("../container-runner.js", () => ({
+  isContainerRunning: (id: string) => nanoclaw.running.has(id),
+  killContainer: (id: string, _reason: string, onExit?: () => void) => {
+    nanoclaw.killed.push(id);
+    if (onExit) nanoclaw.exits.set(id, onExit);
+  },
+}));
+
+describe("recycleRuntime (real hook, NanoClaw modules faked)", () => {
+  const recycle = () => {
+    vi.stubEnv("ARGUS_ACCOUNT_PROVIDERS", "codex");
+    return accountsFromEnv()!.recycleRuntime!;
+  };
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    nanoclaw.running.clear();
+    nanoclaw.killed.length = 0;
+    nanoclaw.exits.clear();
+    nanoclaw.sessions = [];
+  });
+
+  it("stops only running sessions and resolves once every one has exited", async () => {
+    nanoclaw.sessions = [{ id: "s-run-1" }, { id: "s-idle" }, { id: "s-run-2" }];
+    nanoclaw.running.add("s-run-1").add("s-run-2");
+    let done = false;
+    const pending = recycle()().then(() => {
+      done = true;
+    });
+    await vi.waitFor(() => expect(nanoclaw.exits.size).toBe(2));
+    expect(nanoclaw.killed).toEqual(["s-run-1", "s-run-2"]);
+    nanoclaw.exits.get("s-run-1")!();
+    await Promise.resolve();
+    expect(done).toBe(false);
+    nanoclaw.exits.get("s-run-2")!();
+    await pending;
+    expect(done).toBe(true);
+  });
+
+  it("resolves without killing anything when no container runs", async () => {
+    nanoclaw.sessions = [{ id: "s-idle" }];
+    await recycle()();
+    expect(nanoclaw.killed).toEqual([]);
+  });
+
+  it("rejects when a container never reports its exit", async () => {
+    vi.useFakeTimers();
+    nanoclaw.sessions = [{ id: "s-stuck" }];
+    nanoclaw.running.add("s-stuck");
+    const pending = recycle()();
+    const outcome = expect(pending).rejects.toThrow("s-stuck did not stop");
+    await vi.advanceTimersByTimeAsync(30_000);
+    await outcome;
+  });
+});
 
 // -- fakes ------------------------------------------------------------------------
 
@@ -1145,5 +1219,103 @@ describe("task-scoped repository auth", () => {
     await until(() => w.calls.some((call) => call.path === "/tasks/t1/fail"));
     expect(w.calls.some((call) => call.path === "/accounts/lease")).toBe(false);
     expect(h.inbound).toHaveLength(0);
+  });
+});
+
+describe("runtime recycling on an account rotation", () => {
+  const expired = {
+    kind: "chat",
+    content: {
+      text: "The agent run failed.",
+      failureNotice: true,
+      providerFailure: { provider: "codex", kind: "auth_expired" },
+    },
+  };
+  const codex2 = {
+    ...codexLease(),
+    lease_id: "l-codex-2",
+    account_id: "a-codex-2",
+    name: "codex-2",
+  };
+
+  it("stops the old runtime after the new account is applied and before the task is resent", async () => {
+    const w = world({
+      leases: [codexLease(), "no_account", codex2, "no_account"],
+      tasks: [task()],
+    });
+    const order: string[] = [];
+    const recycleRuntime = vi.fn(async () => {
+      order.push(`recycle(inbound=${h.inbound.length}, secret=${w.onecli.secrets.length})`);
+    });
+    const h = harness(w, true, {
+      providers: ["openai", "anthropic"],
+      selectEngine: vi.fn(async () => false), // codex -> codex: the harness does not change
+      recycleRuntime,
+    });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    expect(recycleRuntime).not.toHaveBeenCalled(); // the initial lease kills nothing
+    await h.adapter.deliver("local", null, expired as any);
+    await until(() => h.inbound.length === 2);
+    expect(recycleRuntime).toHaveBeenCalledTimes(1);
+    expect(order[0]).toMatch(/^recycle\(inbound=1,/);
+    expect(h.inbound[1].content.text).toContain("account was switched");
+    // Same task and attempt: nothing was failed or retried to renew the session.
+    expect(w.calls.some((c) => /\/tasks\/t1\/fail$/.test(c.path))).toBe(false);
+    const selected = w.calls.filter((c) => c.path === "/engines/selected").map((c) => c.body);
+    expect(selected.map((b) => b.account_id)).toEqual(["a-codex-1", "a-codex-2"]);
+  });
+
+  it("also runs on a cross-provider fallback, after the engine is selected", async () => {
+    const w = world({
+      leases: [codexLease(), "no_account", lease("claude-1", "sk-ant")],
+      tasks: [task()],
+    });
+    const calls: string[] = [];
+    const h = harness(w, true, {
+      providers: ["openai", "anthropic"],
+      selectEngine: vi.fn(async (engine: string) => (calls.push(`select:${engine}`), true)),
+      recycleRuntime: vi.fn(async () => void calls.push("recycle")),
+    });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", null, expired as any);
+    await until(() => h.inbound.length === 2);
+    expect(calls).toEqual(["select:codex", "select:claude", "recycle"]);
+  });
+
+  it("does not recycle when no replacement account exists", async () => {
+    const w = world({ leases: [codexLease(), "no_account"], tasks: [task()] });
+    const recycleRuntime = vi.fn(async () => undefined);
+    const h = harness(w, true, { providers: ["openai"], recycleRuntime });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", null, expired as any);
+    await until(() => w.calls.some((c) => /\/exhausted$/.test(c.path)));
+    expect(recycleRuntime).not.toHaveBeenCalled();
+  });
+
+  it("does not resend or report success when the old runtime cannot be stopped", async () => {
+    const w = world({
+      leases: [codexLease(), "no_account", codex2, "no_account"],
+      tasks: [task()],
+    });
+    const recycleRuntime = vi.fn(async () => {
+      throw new Error("session s1 did not stop");
+    });
+    const h = harness(w, true, { providers: ["openai", "anthropic"], recycleRuntime });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", null, expired as any);
+    await until(() => w.calls.some((c) => /\/tasks\/t1\/fail$/.test(c.path)));
+    const fail = w.calls.find((c) => /\/tasks\/t1\/fail$/.test(c.path))!;
+    expect(fail.body.attempt).toBe(1);
+    expect(fail.body.error).toContain("could not be stopped");
+    expect(h.inbound).toHaveLength(1); // the old process got nothing more
+    expect(w.calls.some((c) => c.path === "/tasks/t1/complete")).toBe(false);
   });
 });

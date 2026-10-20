@@ -479,6 +479,12 @@ pluggable provider interface (Claude Code by default), supports user-added MCP
 servers, and is administered locally by the `ncl` CLI over a Unix socket (no
 HTTP admin API). See https://docs.nanoclaw.dev/concepts/architecture.
 
+When the channel rotates the engine account after a limit or expired auth, it
+stops the old session container and waits for its exit before resending the same
+task attempt, so the new container gets the new account's credential stubs
+([codex accounts spec](codex-accounts.spec.md)); a container that will not stop
+fails the attempt instead of receiving the task.
+
 For repository-backed tasks, NanoClaw is the execution/delivery plane. A task
 completion should include worker-reported repository, branch, base/head SHA,
 commit(s), PR number/URL/state, project-gate results, and CI/review status tied
