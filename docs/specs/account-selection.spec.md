@@ -104,6 +104,56 @@ isolation or sandbox/TLS restrictions.
   `auth_source: gateway_sentinel`, and no executor, model, sandbox or TLS setting
   changes. No assignment, no stub.
 
+- **Quota failover (3.6).** A provider quota never costs an attempt.
+  - *Server path.* A task `FAIL` with reason `provider_failure` whose error is a
+    quota notice for the engine lease's provider (the one pattern set in
+    `argus_core.quota`: Claude `Rate limit …` / `Out of credits`, Codex
+    `usage_limit_reached`, `insufficient_quota`, usage-limit sentences) is not a
+    failure: Argus marks the holder's engine account exhausted (until the parsed
+    reset, else the cooldown; an existing later mark is never shortened),
+    releases the lease, leases the next usable account, and puts the task back to
+    `ready` on the **same attempt** with `failures` unchanged. With no account
+    left it becomes `blocked` / `awaiting_quota`. A claim still bumps `attempt`
+    (that is how stale writers are fenced), but the attempt is "not consumed":
+    `max_attempts` counts `failures`, which a quota pause never touches. It is
+    fenced on owner and attempt (an expired lease is accepted, as for `fail`); a
+    repeat or a stale report is refused (409) and changes nothing, so it is
+    idempotent. The same fence now guards `POST /accounts/{id}/exhausted` with
+    `task_id`/`attempt`. The pattern set is mirrored in
+    `integrations/nanoclaw/argus-accounts.ts` and both are tested against
+    `packages/core/tests/fixtures/quota-notices.json`.
+  - *Awaiting quota.* `blocked` with `block_reason=awaiting_quota` replaces
+    `no_account` (rows with the old value are still read and released the same
+    way; no migration). `Task.refill_at` is the earliest `exhausted_until` of the
+    accounts that would serve it, derived on read. `recover()` (reaper), a new or
+    re-enabled account and a secrets reload return these tasks to `ready`. A
+    `ready` task nobody can lease for is also marked: the channel calls
+    `POST /accounts/awaiting-quota` (capabilities, runtime providers) when its
+    lease fails with `no_account`; the endpoint refuses (409 `account_available`)
+    while any account is usable, and only blocks tasks that worker could claim.
+  - *Channel.* When a run ends, the channel treats as exhaustion: a quota notice,
+    a structured `providerFailure` `{provider:"claude", kind:"rate_limit",
+    resetsAt?}` (anthropic account; fixed reason, never raw text), or the generic
+    "The agent run failed" notice plus a `Rate limit [..] (resets ..)` line in the
+    agent log tail. The log is read through the optional `agentLogTail` hook of
+    the channel config; a host that does not provide it only gets the notice and
+    structured cases (documented limit). On exhaustion it reports the account,
+    leases the next one, recycles the runtime and resends the task on the same
+    attempt, and it does not report a failure. If Argus itself recognised a
+    quota notice on `/fail` and switched the account, the channel drops its stale
+    account and recycles when it re-leases.
+  - *Dynamic priority.* Exhausted accounts are out of the ranking until
+    `exhausted_until`; an `exhausted` account past its reset is recovered on lease,
+    never demoted. There is no priority editing.
+  - *Visibility.* Every switch logs `account_failover {from,to,reason,task_id,
+    attempt}` on the API and the channel and records an `account.failover` event
+    (subject: the task; data `from`, `to`, `reason`, `attempt`). The Task view
+    adds `serving_account` (id, name, provider), `failover` (`from_account`,
+    `to_account`, `reason`, `at`, `attempt`) and `refill_at`, all derived from
+    accounts, leases and events; the dashboard task detail shows them with the
+    literal reason. Names only, never credentials.
+  - *Exclusivity.* Unchanged and tested under concurrency: one lease per agent
+    and role, a task is claimed by one agent, and `max_leases` holds.
 - **Who reports exhaustion.** `POST /accounts/{id}/exhausted` takes the **agent
   token of the engine that holds the lease**: the NanoClaw channel runs in the
   host, registered as an agent, and reports with its own token (it also matches
@@ -118,13 +168,6 @@ isolation or sandbox/TLS restrictions.
   `(resets <ISO>)` or `resets 11:50pm (UTC)` (the next such UTC clock time,
   strictly in the future); unparsable means no `until` and the default cooldown.
   Structured reports carry a fixed reason, never log text.
-- **Quota is not a task failure.** When the account is exhausted and no other
-  can be leased, the channel fails the attempt with reason `quota`
-  (`POST /tasks/{id}/fail`). Unlike every other reason it does **not** increment
-  `failures`: the task returns to `ready` (never `failed`, even at
-  `max_attempts - 1`) with the reason text in `error` and `progress_message`,
-  and the attempt stays in the history. Other reasons (`worker_fail`,
-  `channel_error`, `provider_failure`) still consume an attempt.
 - **Claims wait for quota.** `POST /tasks/claim` returns nothing (no attempt
   consumed, the task stays `ready`) while at least one account is `exhausted`
   and none is `available`. Fleets with no accounts, or with any available
@@ -139,7 +182,8 @@ a rate-limited-but-not-exhausted account should rank lower is not decided.
 
 # 5. Constraints
 
-Single-node spec applies: no new service, no migration (the lease row's
+Single-node spec applies: no new service, no migration (3.6 derives its Task
+fields from accounts, leases and events; the lease row's
 `providers` column is kept and now records the runtime capability list). No
 network calls inside a write transaction. Credentials are returned only in the
 lease response, are written only to the OneCLI vault, and never to logs, events,
@@ -163,3 +207,14 @@ the model-policy snapshot or `argus-delegate` output.
   `engines/` (policy context, delegate identity), `provision.sh`, README. Recreate
   worker instances (and re-run `install.sh`) to pick the change up; no deployment
   is part of this change.
+- Quota failover (3.6): `packages/core` `quota.py` (patterns), `tasks.py`
+  (`Action.REQUEUE`, `ready → blocked`, `refill_at`, `serving_account`,
+  `failover`), `accounts.py` (`AwaitingQuotaRequest/Result`); `apps/api`
+  `accounts/service.py` (`fail_task`, `exhausted`, `mark_awaiting_quota`),
+  `tasks/service.py` (`pause_for_quota`, `await_quota_ready`), `tasks/routes.py`,
+  `accounts/routes.py`; dashboard `failover.tsx`; OpenAPI and client regenerated.
+- Rollout: the channel change (`argus.ts`, `argus-accounts.ts`) needs the NanoClaw
+  **host rebuilt and restarted** (it loads the channel) and Argus upgraded first
+  (the channel calls `/accounts/awaiting-quota`; an older Argus answers 404, which
+  the channel logs and ignores). Provide `agentLogTail` from the host to enable the
+  log-derived case.

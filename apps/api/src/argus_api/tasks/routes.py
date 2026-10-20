@@ -14,8 +14,17 @@ from argus_core.tasks import (
 from fastapi import APIRouter, Query, Response, status
 from pydantic import BaseModel, Field, model_validator
 
+from argus_api.accounts import service as accounts
 from argus_api.db import utcnow
-from argus_api.deps import AdminDep, AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
+from argus_api.deps import (
+    AdminDep,
+    AgentDep,
+    CallerDep,
+    DbDep,
+    ManagerDep,
+    SecretsDep,
+    SettingsDep,
+)
 from argus_api.errors import ValidationFailedError
 from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
@@ -218,11 +227,26 @@ async def report_progress(
 
 @router.post("/{task_id}/fail")
 async def fail_task(
-    task_id: str, body: FailRequest, db: DbDep, agent_id: AgentDep
+    task_id: str,
+    body: FailRequest,
+    db: DbDep,
+    agent_id: AgentDep,
+    secrets: SecretsDep,
+    settings: SettingsDep,
 ) -> Task:
+    """Fail the attempt. A `provider_failure` that is a known quota notice of the
+    agent's engine account is not a failure: the account is exhausted, the task
+    returns to ready (or waits as `awaiting_quota`) and `failures` is unchanged."""
     async with db.write() as tx:
-        return await service.fail(
-            tx, agent_id, task_id, body.attempt, body.error, body.reason
+        return await accounts.fail_task(
+            tx,
+            agent_id,
+            task_id,
+            body.attempt,
+            body.error,
+            body.reason,
+            secrets,
+            timedelta(minutes=settings.account_cooldown_minutes),
         )
 
 

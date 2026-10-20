@@ -114,6 +114,7 @@ class Action(StrEnum):
     FAIL = "fail"
     EXPIRE = "expire"
     BLOCK = "block"
+    REQUEUE = "requeue"  # a provider quota ended the attempt: ready again, no failure
     UNBLOCK = "unblock"
     ACCEPT = "accept"
     REJECT = "reject"
@@ -161,7 +162,9 @@ def transition(state: TaskState, action: Action, ctx: TransitionContext) -> Task
             return S.SUCCEEDED if ctx.review is Review.NONE else S.IN_REVIEW
         case S.CLAIMED, A.FAIL | A.EXPIRE:
             return S.READY if ctx.failures + 1 < ctx.max_attempts else S.FAILED
-        case S.CLAIMED, A.BLOCK:
+        case S.CLAIMED, A.REQUEUE:
+            return S.READY
+        case S.CLAIMED | S.READY, A.BLOCK:  # a ready task may wait for quota (3.9)
             return S.BLOCKED
         case S.BLOCKED, A.UNBLOCK:
             return S.READY
@@ -214,6 +217,22 @@ class TaskCreate(BaseModel):
     timeout_s: int | None = Field(default=None, ge=60, le=7 * 24 * 3600)
 
 
+class Failover(BaseModel):
+    """The last switch of the account serving a task (account selection 3.6)."""
+
+    from_account: str | None  # account names, never credentials
+    to_account: str | None  # None: nothing usable was left (awaiting quota)
+    reason: str
+    at: datetime
+    attempt: int
+
+
+class ServingAccount(BaseModel):
+    id: str
+    name: str
+    provider: str
+
+
 class Task(BaseModel):
     id: str
     parent_id: str | None
@@ -250,6 +269,12 @@ class Task(BaseModel):
     created_at: datetime
     updated_at: datetime
     archived_at: datetime | None  # set while an operator has archived it
+    # Derived on read, never stored: when the earliest exhausted account is usable
+    # again (blocked as awaiting_quota), the account running the current attempt,
+    # and the last account switch.
+    refill_at: datetime | None = None
+    serving_account: ServingAccount | None = None
+    failover: Failover | None = None
 
 
 class ClaimedTask(Task):

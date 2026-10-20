@@ -259,7 +259,7 @@ async def test_nothing_left_blocks_task_until_an_account_recovers(
     )
     async with db.read() as conn:
         blocked = await tasks.get_task(conn, task.id)
-    assert (blocked.state, blocked.block_reason) == (S.BLOCKED, "no_account")
+    assert (blocked.state, blocked.block_reason) == (S.BLOCKED, "awaiting_quota")
 
     clock.advance(30 * 60)
     async with db.write() as tx:

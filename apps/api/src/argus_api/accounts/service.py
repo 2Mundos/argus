@@ -5,6 +5,7 @@ store and are only ever handed to the agent holding a lease.
 """
 
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -23,6 +24,8 @@ from argus_core.accounts import (
     UsageReport,
     role_accepts,
 )
+from argus_core.quota import classify_quota
+from argus_core.tasks import Task
 
 from argus_api.accounts import usage
 from argus_api.db import Tx, ts
@@ -31,8 +34,9 @@ from argus_api.events import record
 from argus_api.secrets import SecretStore, ref_name
 from argus_api.tasks import service as tasks
 
+log = logging.getLogger(__name__)
 DEFAULT_COOLDOWN = timedelta(hours=1)
-NO_ACCOUNT = "no_account"
+NO_ACCOUNT = "no_account"  # the lease error code; tasks wait as `awaiting_quota`
 
 
 class NoAccountError(ConflictError):
@@ -277,21 +281,135 @@ async def exhausted(
     """The agent hit a quota on its leased account: mark it exhausted, then fall
     back to the best remaining usable account of any provider (priority order, no
     preference for the previous provider). With nothing left, the agent's task (if
-    given) is blocked as `no_account` and resumes when one frees up."""
+    given) is blocked as `awaiting_quota` and resumes when one frees up. The task
+    keeps its attempt and failures either way."""
     held = await _lease_on(tx.conn, agent_id, account_id, report.role)
     if held is None:
         raise ConflictError(
             f"agent {agent_id} does not hold a lease on account {account_id}",
             code="not_leased",
         )
+    task_id = report.task_id if report.attempt is not None else None
+    if task_id is not None and report.attempt is not None:
+        # Fence before any write: a stale attempt must not exhaust anything.
+        await tasks.check_lease(
+            tx, task_id, report.attempt, agent_id, allow_expired=True
+        )
     role = held["role"]
-    until = (
-        report.until if report.until and report.until > tx.now else tx.now + cooldown
+    previous = await _mark_exhausted(
+        tx, agent_id, account_id, report.until, report.reason, cooldown
     )
+    await release(tx, agent_id, "exhausted", role)
+    next_lease = await _try_lease(tx, agent_id, store, role, report.runtime_providers)
+    if next_lease is not None:
+        if task_id is not None and report.attempt is not None:
+            await _failover(
+                tx,
+                agent_id,
+                task_id,
+                report.attempt,
+                previous,
+                next_lease.name,
+                report.reason,
+            )
+        return FallbackResult(lease=next_lease)
+    blocked = False
+    if task_id is not None and report.attempt is not None:
+        await tasks.block(tx, agent_id, task_id, report.attempt, tasks.AWAITING_QUOTA)
+        await _failover(
+            tx, agent_id, task_id, report.attempt, previous, None, report.reason
+        )
+        blocked = True
+    return FallbackResult(
+        lease=None,
+        earliest_reset=await earliest_reset(tx, role, report.runtime_providers),
+        task_blocked=blocked,
+    )
+
+
+async def fail_task(
+    tx: Tx,
+    agent_id: str,
+    task_id: str,
+    attempt: int,
+    error: str,
+    reason: str,
+    store: SecretStore,
+    cooldown: timedelta = DEFAULT_COOLDOWN,
+) -> Task:
+    """`POST /tasks/{id}/fail`. A `provider_failure` whose error is a known quota
+    notice of the provider the agent's engine account belongs to is not a task
+    failure: the account is exhausted, the agent moves to the next one, and the task
+    returns to `ready` (or waits as `awaiting_quota` when nothing is left) with
+    `failures` unchanged. Anything else fails the attempt as before."""
+    held = None
+    if reason == "provider_failure":
+        async with tx.conn.execute(
+            "SELECT l.providers, a.id, a.name, a.provider FROM account_leases l"
+            " JOIN accounts a ON a.id = l.account_id WHERE l.agent_id = ?"
+            " AND l.role = 'engine' AND l.released_at IS NULL",
+            (agent_id,),
+        ) as cur:
+            held = await cur.fetchone()
+    hit = classify_quota(error, held["provider"]) if held else None
+    if held is None or hit is None:
+        return await tasks.fail(tx, agent_id, task_id, attempt, error, reason)
+    await tasks.check_lease(tx, task_id, attempt, agent_id, allow_expired=True)
+    previous = await _mark_exhausted(
+        tx, agent_id, held["id"], hit.until, hit.reason, cooldown
+    )
+    await release(tx, agent_id, "exhausted", "engine")
+    runtime = json.loads(held["providers"]) or None
+    next_lease = await _try_lease(tx, agent_id, store, "engine", runtime)
+    task = await tasks.pause_for_quota(
+        tx, agent_id, task_id, attempt, hit.reason, wait=next_lease is None
+    )
+    await _failover(
+        tx,
+        agent_id,
+        task_id,
+        attempt,
+        previous,
+        next_lease.name if next_lease else None,
+        hit.reason,
+    )
+    return await tasks.get_task(tx.conn, task.id)
+
+
+async def mark_awaiting_quota(
+    tx: Tx, agent_id: str, capabilities: list[str], runtime_providers: list[str] | None
+) -> list[str]:
+    """The agent found no usable account, so it never claims. Mark the `ready` tasks
+    it could have claimed as `awaiting_quota` (refill time shown from the exhausted
+    accounts). Refused while any account is usable: nobody can park work by asking."""
+    if await _ranked(tx, agent_id, "engine", runtime_providers):
+        raise ConflictError("a usable account exists", code="account_available")
+    return await tasks.await_quota_ready(tx, agent_id, capabilities)
+
+
+async def _mark_exhausted(
+    tx: Tx,
+    agent_id: str,
+    account_id: str,
+    until: datetime | None,
+    reason: str,
+    cooldown: timedelta,
+) -> str:
+    """Exhaust the account until the reported reset (else the cooldown); never
+    shorten an existing mark. Returns the account name."""
+    row = await _row(tx.conn, account_id)
+    new = until if until and until > tx.now else tx.now + cooldown
+    current = row["exhausted_until"]
+    if (
+        row["state"] == "exhausted"
+        and current
+        and datetime.fromisoformat(current) > new
+    ):
+        new = datetime.fromisoformat(current)
     await tx.conn.execute(
         "UPDATE accounts SET state = 'exhausted', exhausted_until = ?, updated_at = ?"
         " WHERE id = ? AND state != 'disabled'",
-        (ts(until), ts(tx.now), account_id),
+        (ts(new), ts(tx.now), account_id),
     )
     await record(
         tx,
@@ -299,20 +417,34 @@ async def exhausted(
         "account",
         account_id,
         "account.exhausted",
-        {"until": until.isoformat(), "reason": report.reason},
+        {"until": new.isoformat(), "reason": reason},
     )
-    await release(tx, agent_id, "exhausted", role)
-    next_lease = await _try_lease(tx, agent_id, store, role, report.runtime_providers)
-    if next_lease is not None:
-        return FallbackResult(lease=next_lease)
-    blocked = False
-    if report.task_id is not None and report.attempt is not None:
-        await tasks.block(tx, agent_id, report.task_id, report.attempt, NO_ACCOUNT)
-        blocked = True
-    return FallbackResult(
-        lease=None,
-        earliest_reset=await earliest_reset(tx, role, report.runtime_providers),
-        task_blocked=blocked,
+    return row["name"]
+
+
+async def _failover(
+    tx: Tx,
+    agent_id: str,
+    task_id: str,
+    attempt: int,
+    from_name: str,
+    to_name: str | None,
+    reason: str,
+) -> None:
+    """The visible record of an account switch: an event on the task and one
+    structured log line. Names only; no credential ever reaches either."""
+    data = {
+        "from": from_name,
+        "to": to_name,
+        "reason": reason[:500],
+        "task_id": task_id,
+        "attempt": attempt,
+    }
+    await record(tx, f"agent:{agent_id}", "task", task_id, "account.failover", data)
+    log.info(
+        "account_failover %s",
+        json.dumps({"event": "account_failover", **data}),
+        extra={"event": "account_failover", **data},
     )
 
 
@@ -363,16 +495,18 @@ async def recover(tx: Tx) -> list[str]:
 
 
 async def release_waiting_tasks(tx: Tx) -> list[str]:
-    """Unblock tasks blocked for lack of an account, if any account is usable.
-    They return to ready; whichever agent claims them leases afresh."""
+    """Unblock tasks waiting for quota (`awaiting_quota`, or the older `no_account`)
+    as soon as any account is available. They return to ready; whichever agent
+    claims them leases afresh, and one that still finds nothing parks them again."""
     async with tx.conn.execute(
         "SELECT 1 FROM accounts WHERE state = 'available' LIMIT 1"
     ) as cur:
         if await cur.fetchone() is None:
             return []
     async with tx.conn.execute(
-        "SELECT id FROM tasks WHERE state = 'blocked' AND block_reason = ? ORDER BY id",
-        (NO_ACCOUNT,),
+        "SELECT id FROM tasks WHERE state = 'blocked' AND block_reason IN (?, ?)"
+        " ORDER BY id",
+        tasks.QUOTA_WAIT_REASONS,
     ) as cur:
         ids = [r["id"] for r in await cur.fetchall()]
     for task_id in ids:
@@ -462,30 +596,8 @@ async def _try_lease(
     With `reuse_held` (executor role), an account the agent already holds as its
     engine stays a candidate even at `max_leases`, and winning returns that
     engine lease as is (no second row, no extra slot)."""
-    async with tx.conn.execute(
-        "SELECT a.*, (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
-        "  AND l.released_at IS NULL) AS active,"
-        " (SELECT id FROM account_leases l WHERE l.account_id = a.id"
-        "  AND l.agent_id = ? AND l.role = 'engine' AND l.released_at IS NULL) AS mine"
-        " FROM accounts a WHERE a.state = 'available'"
-        "  OR (a.state = 'exhausted' AND a.exhausted_until <= ?)",
-        (agent_id, ts(tx.now)),
-    ) as cur:
-        rows = await cur.fetchall()
     reuse = reuse_held and role == "executor"
-    candidates = sorted(
-        (
-            r
-            for r in rows
-            if role_accepts(role, r["provider"], runtime_providers)
-            and (
-                (reuse and r["mine"] is not None)
-                or r["max_leases"] is None
-                or r["active"] < r["max_leases"]
-            )
-        ),
-        key=lambda r: (-r["priority"], r["active"], r["provider"], r["name"], r["id"]),
-    )
+    candidates = await _ranked(tx, agent_id, role, runtime_providers, reuse=reuse)
     for row in candidates:
         name = ref_name(row["secret_ref"])
         credential = store.get(name) if name else None
@@ -539,6 +651,41 @@ async def _try_lease(
             credential=credential,
         )
     return None
+
+
+async def _ranked(
+    tx: Tx,
+    agent_id: str,
+    role: LeaseRole,
+    runtime_providers: list[str] | None,
+    *,
+    reuse: bool = False,
+) -> list[aiosqlite.Row]:
+    """The usable accounts for `role` in lease order (priority, least leased, then
+    provider/name/id). An exhausted account past its reset is usable."""
+    async with tx.conn.execute(
+        "SELECT a.*, (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
+        "  AND l.released_at IS NULL) AS active,"
+        " (SELECT id FROM account_leases l WHERE l.account_id = a.id"
+        "  AND l.agent_id = ? AND l.role = 'engine' AND l.released_at IS NULL) AS mine"
+        " FROM accounts a WHERE a.state = 'available'"
+        "  OR (a.state = 'exhausted' AND a.exhausted_until <= ?)",
+        (agent_id, ts(tx.now)),
+    ) as cur:
+        rows = await cur.fetchall()
+    return sorted(
+        (
+            r
+            for r in rows
+            if role_accepts(role, r["provider"], runtime_providers)
+            and (
+                (reuse and r["mine"] is not None)
+                or r["max_leases"] is None
+                or r["active"] < r["max_leases"]
+            )
+        ),
+        key=lambda r: (-r["priority"], r["active"], r["provider"], r["name"], r["id"]),
+    )
 
 
 async def _disable(tx: Tx, account_id: str, reason: str, *, auto: bool = True) -> None:
