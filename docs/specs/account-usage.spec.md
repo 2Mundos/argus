@@ -60,6 +60,14 @@ scope (orchestrator, admin), as `GET /api/accounts` is. There is no MCP tool yet
 - The body carries:
   - `input_tokens`, `output_tokens`, `cached_input_tokens`;
   - `model`, `engine`, `role`, `cost_usd`, `task_id`;
+  - optional `run_key` (at most 200 characters; the client builds it from
+    task, agent, engine and start): a repeated report of the same key for the
+    account returns `204` and adds no row. Without a key every report is a row;
+  - `measurement`: `measured` (default) or `not_reported`. A `not_reported` run
+    happened but the engine gave no figures, so every token and cost field must
+    be null. A `measured` report needs at least one of the token or cost
+    fields. Both rules are validation errors: a missing figure is never
+    stored as 0;
   - optional `rate_limits: [{window_minutes | pool, used_percent, resets_at,
     exhausted_until}]`.
 - `result.usage` on task completion maps to the same insert.
@@ -104,8 +112,25 @@ scope (orchestrator, admin), as `GET /api/accounts` is. There is no MCP tool yet
 
 ## 3.5 Read API
 
-- `GET /api/accounts` gains `quota: [...]`, plus `cached_input_tokens` and
-  `runs` in its usage totals.
+- `GET /api/accounts` gains `quota: [...]`, plus `cached_input_tokens`,
+  `runs` and `unmeasured_runs` in its usage totals. `runs` counts every row,
+  `unmeasured_runs` the `not_reported` ones; tokens and cost sum measured rows
+  only. The series totals and buckets carry the same two counts.
+- Accounts gain `token_limits` (create and update API): an optional object of
+  positive integers under `5h`, `24h`, `7d`, the most total (input + output)
+  tokens the account may spend in that rolling window. Null clears it.
+- The account read model carries `quota_status`:
+  `{state: known|unknown, reason, windows: [{period, limit, used, remaining,
+  used_percent, source: "estimated"}]}`. The first rule that applies wins:
+  1. provider snapshots exist in `quota`: `known` (`windows` may be empty; the
+     snapshots are in `quota`);
+  2. `token_limits` is set: `known`, with `windows` computed from the local
+     rolling sums of measured rows (`estimated`);
+  3. the account has no usage rows: `unknown`, `no_usage_records`;
+  4. an API-key account, or provider `anthropic` or `cursor`:
+     `unknown`, `provider_does_not_expose`;
+  5. otherwise `unknown`, `window_not_configured`.
+  No figure is ever invented: `unknown` has no windows.
 - `GET /api/accounts/usage?from&to&bucket=hour|day&tz=<IANA>[&account_id]`
   returns totals and a time series per account.
   - Buckets follow the viewer's timezone, so "Today" matches their clock.
@@ -166,7 +191,8 @@ scope (orchestrator, admin), as `GET /api/accounts` is. There is no MCP tool yet
 
 # 6. Implementation Consequences
 
-- Migration `0015_account_usage.sql`. Core models in `argus_core.accounts`.
+- Migrations `0015_account_usage.sql` and `0019_account_usage_runs.sql`
+  (`run_key` with a partial unique index, `measurement`, `token_limits`). Core models in `argus_core.accounts`.
 - `accounts/service.py` (ingest, quota upsert, aggregation),
   `accounts/quota_probe.py` (the probe and its loop), and routes.
 - Metrics in `ops.py`. `overview.quota_measured` becomes true once any account
