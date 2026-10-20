@@ -57,6 +57,8 @@ every new dependency is judged against it.
   provider account: reported usage, Codex quota probe, Cursor pools, charts
 - [MCP operations](specs/mcp-operations.spec.md) — inbox and fleet journeys over
   MCP with compact, paged responses; REST/MCP coverage audit
+- [Task dependencies](specs/task-dependencies.spec.md) — edit a waiting task's
+  dependencies with a cycle check; stuck dependents surface in the inbox
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes
   that say whether an upgrade can be rolled back, the tagged image
 

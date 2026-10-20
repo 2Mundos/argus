@@ -40,6 +40,11 @@ class FailRequest(BaseModel):
     error: str = Field(min_length=1)
 
 
+class DependenciesRequest(BaseModel):
+    depends_on: list[str] = Field(max_length=service.MAX_DEPENDENCIES)
+    expected_version: str = Field(min_length=1)  # the task's `version`
+
+
 class BlockRequest(BaseModel):
     attempt: int
     reason: str = Field(min_length=1)
@@ -191,6 +196,20 @@ async def retry_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
     """Return a `failed` task to `ready` with a fresh window of attempts (409 otherwise)."""
     async with db.write() as tx:
         return await service.retry(tx, task_id, caller.actor)
+
+
+@router.put("/{task_id}/dependencies")
+async def set_dependencies(
+    task_id: str, body: DependenciesRequest, db: DbDep, caller: ManagerDep
+) -> Task:
+    """Replace the dependencies of a task that is still waiting (pending,
+    awaiting_approval or ready). A ready task with an unfinished new dependency
+    goes back to pending; a pending one whose dependencies all succeeded becomes
+    ready. Refuses cycles (422 dependency_cycle) and stale versions (409)."""
+    async with db.write() as tx:
+        return await service.set_dependencies(
+            tx, task_id, body.depends_on, body.expected_version, caller.actor
+        )
 
 
 @router.post("/{task_id}/cancel")

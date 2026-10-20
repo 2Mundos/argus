@@ -398,6 +398,104 @@ async def retry(tx: Tx, task_id: str, actor: str) -> Task:
     return await get_task(tx.conn, task_id)
 
 
+MAX_DEPENDENCIES = 100
+_DEPS_EDITABLE = (S.PENDING, S.AWAITING_APPROVAL, S.READY)
+
+
+async def set_dependencies(
+    tx: Tx, task_id: str, depends_on: list[str], expected_version: str, actor: str
+) -> Task:
+    """Replace a waiting task's dependencies (task dependencies 3.1)."""
+    row = await _row(tx.conn, task_id)
+    if row["updated_at"] != expected_version:
+        raise ConflictError(
+            f"task {task_id} changed since you read it (version"
+            f" {row['updated_at']}); read it again and reapply your change",
+            code="stale_version",
+            details=[row["updated_at"]],
+        )
+    state = S(row["state"])
+    if state not in _DEPS_EDITABLE:
+        raise ConflictError(
+            f"task {task_id} is {state}; dependencies change only while it waits"
+            " (pending, awaiting_approval or ready)",
+            code="task_not_waiting",
+        )
+    deps = sorted(set(depends_on))
+    if len(deps) > MAX_DEPENDENCIES:
+        raise ValidationFailedError(f"at most {MAX_DEPENDENCIES} dependencies")
+    if task_id in deps:
+        raise ValidationFailedError(
+            "a task cannot depend on itself",
+            code="dependency_cycle",
+            details=[task_id, task_id],
+        )
+    dep_states = await _states(tx.conn, deps)
+    if missing := set(deps) - dep_states.keys():
+        raise NotFoundError(f"dependency not found: {', '.join(sorted(missing))}")
+    if cycle := await _path_back(tx.conn, deps, task_id):
+        raise ValidationFailedError(
+            "these dependencies would close a cycle: " + " -> ".join(cycle),
+            code="dependency_cycle",
+            details=cycle,
+        )
+
+    old = await _deps(tx.conn, task_id)
+    await tx.conn.execute("DELETE FROM task_deps WHERE task_id = ?", (task_id,))
+    await tx.conn.executemany(
+        "INSERT INTO task_deps (task_id, depends_on_id) VALUES (?, ?)",
+        [(task_id, d) for d in deps],
+    )
+    await tx.conn.execute(
+        "UPDATE tasks SET updated_at = ? WHERE id = ?", (ts(tx.now), task_id)
+    )
+    added = sorted(set(deps) - set(old))
+    await record(
+        tx,
+        actor,
+        "task",
+        task_id,
+        "task.dependencies_changed",
+        {"added": added, "removed": sorted(set(old) - set(deps))},
+    )
+    for dep in added:
+        if dep_states[dep] in (S.FAILED, S.CANCELLED):
+            await _dependency_failed_event(tx, task_id, dep, dep_states[dep])
+    deps_done = all(s is S.SUCCEEDED for s in dep_states.values())
+    if state is S.READY and not deps_done:
+        await _apply(tx, row, Action.DEPS_ADDED, actor)
+    elif state is S.PENDING and deps_done:
+        await _apply(tx, row, Action.DEPS_SATISFIED, actor)
+    return await get_task(tx.conn, task_id)
+
+
+async def _path_back(
+    conn: aiosqlite.Connection, starts: list[str], target: str
+) -> list[str] | None:
+    """A dependency path from one of `starts` back to `target`, if any, as
+    [target, start, ..., target]: adding target -> start would close it."""
+    parent: dict[str, str | None] = dict.fromkeys(starts)
+    frontier = list(starts)
+    while frontier:
+        marks = ",".join("?" * len(frontier))
+        sql = f"SELECT task_id, depends_on_id FROM task_deps WHERE task_id IN ({marks})"  # noqa: S608
+        async with conn.execute(sql, frontier) as cur:
+            edges = await cur.fetchall()
+        frontier = []
+        for node, dep in edges:
+            if dep in parent:
+                continue
+            parent[dep] = node
+            if dep == target:
+                path, at = [], dep
+                while at is not None:
+                    path.append(at)
+                    at = parent[at]
+                return [target, *reversed(path)]
+            frontier.append(dep)
+    return None
+
+
 async def add_clarification(
     tx: Tx, task_id: str, question: str, answer: str, actor: str
 ) -> None:
