@@ -9,9 +9,11 @@ from argus_core.decisions import (
 )
 from argus_core.tasks import TaskState
 from fastapi import APIRouter, Query, status
+from pydantic import BaseModel
 
 from argus_api import inbox as inbox_module
 from argus_api.decisions import service, store, views
+from argus_api.decisions.service import AnswerBatch, AnsweredDecision, AnswerOutcome
 from argus_api.decisions.views import DecisionPage
 from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep
 from argus_api.inbox import InboxPage
@@ -81,11 +83,28 @@ async def get_decision(decision_id: str, db: DbDep, _: CallerDep) -> Decision:
 @router.post("/decisions/{decision_id}/answer")
 async def answer_decision(
     decision_id: str, body: DecisionAnswer, db: DbDep, caller: ManagerDep
-) -> Decision:
+) -> AnsweredDecision:
     """Answer an open decision. Approvals take `approve`/`reject`, reviews
-    `accept`/`reject` (with `text` as notes), questions their options or text."""
+    `accept`/`reject` (with `text` as notes), questions their options or text.
+    With a `request_id`, a retry of the same answer by the same caller returns
+    the stored decision with `replayed: true` instead of 409 decision_not_open."""
     async with db.write() as tx:
         return await service.answer(tx, decision_id, body, caller)
+
+
+class AnswerBatchResult(BaseModel):
+    results: list[AnswerOutcome]  # one per answer, in order
+
+
+@router.post("/decisions/answers")
+async def answer_decisions(
+    body: AnswerBatch, db: DbDep, caller: ManagerDep
+) -> AnswerBatchResult:
+    """Answer up to 20 decisions, each with its own explicit answer and in its own
+    transaction. Each item succeeds or fails on its own (`ok`, `error`)."""
+    return AnswerBatchResult(
+        results=await service.answer_many(db, body.answers, caller)
+    )
 
 
 @router.post("/tasks/{task_id}/ask", status_code=status.HTTP_201_CREATED)

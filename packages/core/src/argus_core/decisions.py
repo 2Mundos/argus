@@ -47,12 +47,15 @@ class Decision(BaseModel):
     subject_title: str | None = None  # the task's title, for display
     project: str | None = None  # the subject's project; None for pools
     payload: dict[str, Any] | None = None  # structured context, e.g. a requested scale
+    request_id: str | None = None  # the answering caller's, for safe retries
 
 
 class DecisionAnswer(BaseModel):
     choice: str | None = None  # required when the decision has options
     text: str = Field(default="", max_length=10_000)
     save_to_knowledge: SaveToKnowledge | None = None  # questions only
+    # Retrying with the same id, choice and text replays the stored answer.
+    request_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class Ask(BaseModel):

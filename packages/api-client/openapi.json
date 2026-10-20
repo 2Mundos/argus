@@ -791,6 +791,296 @@
         "title": "AgentsOverview",
         "type": "object"
       },
+      "AnswerBatch": {
+        "properties": {
+          "answers": {
+            "items": {
+              "$ref": "#/components/schemas/AnswerItem"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Answers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "answers"
+        ],
+        "title": "AnswerBatch",
+        "type": "object"
+      },
+      "AnswerBatchResult": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/AnswerOutcome"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "AnswerBatchResult",
+        "type": "object"
+      },
+      "AnswerItem": {
+        "properties": {
+          "choice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Choice"
+          },
+          "decision_id": {
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "save_to_knowledge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SaveToKnowledge"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "default": "",
+            "maxLength": 10000,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision_id"
+        ],
+        "title": "AnswerItem",
+        "type": "object"
+      },
+      "AnswerOutcome": {
+        "properties": {
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnsweredDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decision_id": {
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ItemError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "decision_id",
+          "ok"
+        ],
+        "title": "AnswerOutcome",
+        "type": "object"
+      },
+      "AnsweredDecision": {
+        "properties": {
+          "answer_choice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Choice"
+          },
+          "answer_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Text"
+          },
+          "audience": {
+            "$ref": "#/components/schemas/Audience"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DecisionKind"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "requested_by": {
+            "title": "Requested By",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DecisionState"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Title"
+          },
+          "subject_type": {
+            "title": "Subject Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "subject_type",
+          "subject_id",
+          "kind",
+          "question",
+          "options",
+          "audience",
+          "state",
+          "answer_choice",
+          "answer_text",
+          "requested_by",
+          "decided_by",
+          "created_at",
+          "decided_at"
+        ],
+        "title": "AnsweredDecision",
+        "type": "object"
+      },
       "Artifact": {
         "properties": {
           "attempt": {
@@ -1924,6 +2214,17 @@
             "title": "Question",
             "type": "string"
           },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
           "requested_by": {
             "title": "Requested By",
             "type": "string"
@@ -1982,6 +2283,19 @@
               }
             ],
             "title": "Choice"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
           },
           "save_to_knowledge": {
             "anyOf": [
@@ -2109,6 +2423,17 @@
           "question": {
             "title": "Question",
             "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
           },
           "requested_by": {
             "title": "Requested By",
@@ -3387,6 +3712,36 @@
           "expires_at"
         ],
         "title": "IssuedToken",
+        "type": "object"
+      },
+      "ItemError": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Details",
+            "type": "array"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "code",
+          "message"
+        ],
+        "title": "ItemError",
         "type": "object"
       },
       "KnowledgeOverview": {
@@ -9996,6 +10351,53 @@
         ]
       }
     },
+    "/api/decisions/answers": {
+      "post": {
+        "description": "Answer up to 20 decisions, each with its own explicit answer and in its own\ntransaction. Each item succeeds or fails on its own (`ok`, `error`).",
+        "operationId": "answer_decisions_api_decisions_answers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnswerBatchResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Answer Decisions",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
     "/api/decisions/{decision_id}": {
       "get": {
         "operationId": "get_decision_api_decisions__decision_id__get",
@@ -10045,7 +10447,7 @@
     },
     "/api/decisions/{decision_id}/answer": {
       "post": {
-        "description": "Answer an open decision. Approvals take `approve`/`reject`, reviews\n`accept`/`reject` (with `text` as notes), questions their options or text.",
+        "description": "Answer an open decision. Approvals take `approve`/`reject`, reviews\n`accept`/`reject` (with `text` as notes), questions their options or text.\nWith a `request_id`, a retry of the same answer by the same caller returns\nthe stored decision with `replayed: true` instead of 409 decision_not_open.",
         "operationId": "answer_decision_api_decisions__decision_id__answer_post",
         "parameters": [
           {
@@ -10073,7 +10475,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Decision"
+                  "$ref": "#/components/schemas/AnsweredDecision"
                 }
               }
             },

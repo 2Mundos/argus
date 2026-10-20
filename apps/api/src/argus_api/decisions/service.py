@@ -9,11 +9,17 @@ from argus_core.decisions import (
     DecisionKind,
     DecisionState,
 )
+from pydantic import BaseModel, Field
 
 from argus_api.auth import Identity
-from argus_api.db import Tx, ts
+from argus_api.db import Database, Tx, ts
 from argus_api.decisions import store
-from argus_api.errors import ConflictError, ForbiddenError, ValidationFailedError
+from argus_api.errors import (
+    ConflictError,
+    DomainError,
+    ForbiddenError,
+    ValidationFailedError,
+)
 from argus_api.events import record
 from argus_api.fleet import service as fleet
 from argus_api.knowledge import service as knowledge
@@ -39,11 +45,17 @@ async def ask(tx: Tx, agent_id: str, task_id: str, body: Ask) -> Decision:
     return await store.get(tx.conn, decision_id)
 
 
+class AnsweredDecision(Decision):
+    replayed: bool = False  # a retry of the stored answer; nothing changed
+
+
 async def answer(
     tx: Tx, decision_id: str, body: DecisionAnswer, caller: Identity
-) -> Decision:
+) -> AnsweredDecision:
     decision = await store.get(tx.conn, decision_id)
     if decision.state is not DecisionState.OPEN:
+        if body.request_id is not None and _same_answer(decision, body, caller):
+            return AnsweredDecision(**decision.model_dump(), replayed=True)
         raise ConflictError(
             f"decision {decision_id} is {decision.state}", code="decision_not_open"
         )
@@ -60,8 +72,15 @@ async def answer(
     # as moot (store.WAITS_IN).
     await tx.conn.execute(
         "UPDATE decisions SET state = 'answered', answer_choice = ?, answer_text = ?,"
-        " decided_by = ?, decided_at = ? WHERE id = ?",
-        (body.choice, body.text or None, caller.actor, ts(tx.now), decision_id),
+        " decided_by = ?, decided_at = ?, request_id = ? WHERE id = ?",
+        (
+            body.choice,
+            body.text or None,
+            caller.actor,
+            ts(tx.now),
+            body.request_id,
+            decision_id,
+        ),
     )
     await record(
         tx,
@@ -72,7 +91,70 @@ async def answer(
         {"choice": body.choice},
     )
     await _apply_answer(tx, decision, body, caller)
-    return await store.get(tx.conn, decision_id)
+    return AnsweredDecision(**(await store.get(tx.conn, decision_id)).model_dump())
+
+
+class AnswerItem(DecisionAnswer):
+    decision_id: str
+
+
+MAX_BATCH = 20
+
+
+class AnswerBatch(BaseModel):
+    answers: list[AnswerItem] = Field(min_length=1, max_length=MAX_BATCH)
+
+
+class ItemError(BaseModel):
+    status: int
+    code: str
+    message: str
+    details: list[str] = Field(default_factory=list)
+
+
+class AnswerOutcome(BaseModel):
+    decision_id: str
+    ok: bool
+    decision: AnsweredDecision | None = None
+    error: ItemError | None = None
+
+
+async def answer_many(
+    db: Database, items: list[AnswerItem], caller: Identity
+) -> list[AnswerOutcome]:
+    """Answer each item in its own transaction, in order; one failure never
+    rolls back or skips the others."""
+    outcomes = []
+    for item in items:
+        body = DecisionAnswer(**item.model_dump(exclude={"decision_id"}))
+        try:
+            async with db.write() as tx:
+                decision = await answer(tx, item.decision_id, body, caller)
+        except DomainError as exc:
+            error = ItemError(
+                status=exc.status,
+                code=exc.code,
+                message=exc.message,
+                details=exc.details,
+            )
+            outcomes.append(
+                AnswerOutcome(decision_id=item.decision_id, ok=False, error=error)
+            )
+        else:
+            outcomes.append(
+                AnswerOutcome(decision_id=item.decision_id, ok=True, decision=decision)
+            )
+    return outcomes
+
+
+def _same_answer(decision: Decision, body: DecisionAnswer, caller: Identity) -> bool:
+    return (
+        decision.state is DecisionState.ANSWERED
+        and decision.request_id == body.request_id
+        and decision.decided_by == caller.actor
+        and decision.answer_choice == body.choice
+        and (decision.answer_text or "") == body.text
+    )
 
 
 async def _apply_answer(
