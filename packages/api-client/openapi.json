@@ -1534,6 +1534,70 @@
         "title": "BootstrapTokenCreate",
         "type": "object"
       },
+      "BulkArchiveRequest": {
+        "description": "Which terminal tasks to archive: all of `states`, narrowed by project and\nby how long ago they last changed. `dry_run` only counts.",
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "older_than_days": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Older Than Days"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/components/schemas/TaskState"
+            },
+            "minItems": 1,
+            "title": "States",
+            "type": "array"
+          }
+        },
+        "required": [
+          "states"
+        ],
+        "title": "BulkArchiveRequest",
+        "type": "object"
+      },
+      "BulkArchiveResult": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "dry_run": {
+            "title": "Dry Run",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "count",
+          "dry_run"
+        ],
+        "title": "BulkArchiveResult",
+        "type": "object"
+      },
       "Check": {
         "description": "One measured fact about a pool's readiness. `ok` is None when it could not\nbe verified from here (`detail` says why); only False blocks a launch.",
         "properties": {
@@ -1619,6 +1683,18 @@
             },
             "title": "Acceptance",
             "type": "array"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
           },
           "assignee_agent_id": {
             "anyOf": [
@@ -1896,7 +1972,8 @@
           "knowledge",
           "created_by",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "archived_at"
         ],
         "title": "ClaimedTask",
         "type": "object"
@@ -7305,6 +7382,18 @@
             "title": "Acceptance",
             "type": "array"
           },
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
           "assignee_agent_id": {
             "anyOf": [
               {
@@ -7573,7 +7662,8 @@
           "knowledge",
           "created_by",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "archived_at"
         ],
         "title": "Task",
         "type": "object"
@@ -7785,6 +7875,18 @@
           "age_s": {
             "title": "Age S",
             "type": "integer"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
           },
           "artifact_ids": {
             "items": {
@@ -8069,6 +8171,7 @@
           "progress_percent",
           "progress_at",
           "created_at",
+          "archived_at",
           "version",
           "age_s",
           "spec",
@@ -8505,6 +8608,18 @@
             "title": "Age S",
             "type": "integer"
           },
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
           "artifact_ids": {
             "items": {
               "type": "string"
@@ -8700,6 +8815,7 @@
           "progress_percent",
           "progress_at",
           "created_at",
+          "archived_at",
           "version",
           "age_s"
         ],
@@ -13721,7 +13837,7 @@
     },
     "/api/tasks": {
       "get": {
-        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`.",
+        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`. Archived tasks\nare left out unless `archived=true`, which lists only those.",
         "operationId": "list_tasks_api_tasks_get",
         "parameters": [
           {
@@ -13789,6 +13905,16 @@
                 }
               ],
               "title": "Assignee"
+            }
+          },
+          {
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Archived",
+              "type": "boolean"
             }
           },
           {
@@ -13926,6 +14052,53 @@
         ]
       }
     },
+    "/api/tasks/archive": {
+      "post": {
+        "description": "Archive terminal tasks by state, project and age, answering how many.\n`dry_run` counts without writing, for a confirmation. Non-terminal states\nare refused (422 `state_not_archivable`) before anything changes.",
+        "operationId": "archive_tasks_api_tasks_archive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkArchiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkArchiveResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Archive Tasks",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
     "/api/tasks/claim": {
       "post": {
         "description": "Claim a ready task, long-polling up to `wait_s` seconds for one.",
@@ -14018,6 +14191,54 @@
           }
         ],
         "summary": "Get Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/archive": {
+      "post": {
+        "description": "Archive a `succeeded`, `failed` or `cancelled` task; repeating it changes\nnothing. Any other state answers 409 `task_not_terminal` and changes nothing.",
+        "operationId": "archive_task_api_tasks__task_id__archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Archive Task",
         "tags": [
           "tasks"
         ]
@@ -14628,6 +14849,54 @@
           }
         ],
         "summary": "Retry Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/unarchive": {
+      "post": {
+        "description": "Return an archived task to listings and totals (admin). Idempotent.",
+        "operationId": "unarchive_task_api_tasks__task_id__unarchive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Unarchive Task",
         "tags": [
           "tasks"
         ]

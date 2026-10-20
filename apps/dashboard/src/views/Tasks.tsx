@@ -5,6 +5,7 @@ import { useLiveData } from "../live";
 import { TaskSignal } from "../milestones";
 import { TaskLabel } from "../TaskLabel";
 import { useNow } from "./Activity";
+import { ArchiveTasks } from "./ArchiveTasks";
 import { TaskDetail } from "./TaskDetail";
 
 const COLUMNS: { title: string; states: TaskState[] }[] = [
@@ -19,17 +20,33 @@ const COLUMNS: { title: string; states: TaskState[] }[] = [
 export function Tasks() {
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const { data, error } = useLiveData(() => newestTasks(), []);
+  const [archiving, setArchiving] = useState(false);
+  const [archived, setArchived] = useState(false);
+  const { data, error } = useLiveData(() => newestTasks(5, archived), [archived]);
   const tasks = data?.items;
 
   return (
     <section>
       <div className="toolbar">
         <h2>Tasks</h2>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={archived}
+            onChange={(e) => setArchived(e.target.checked)}
+          />
+          Archived
+        </label>
+        {!archived && (
+          <button type="button" onClick={() => setArchiving(true)}>
+            Archive…
+          </button>
+        )}
         <button type="button" className="primary" onClick={() => setCreating(true)}>
           New task
         </button>
       </div>
+      {archived && <p className="muted small">Showing archived tasks only.</p>}
       {error && <p className="error">{error.message}</p>}
       {data && data.total > data.items.length && (
         <p className="muted small">
@@ -51,6 +68,7 @@ export function Tasks() {
           );
         })}
       </div>
+      {archiving && <ArchiveTasks onClose={() => setArchiving(false)} />}
       {creating && <NewTask onClose={() => setCreating(false)} />}
       {selected && <TaskDetail taskId={selected} onClose={() => setSelected(null)} />}
     </section>

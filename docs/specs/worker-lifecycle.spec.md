@@ -132,7 +132,8 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   `failures + 1` reaches `max_attempts` on a failure goes to `failed`. Review
   rejections and unblocks lead to new claims (new `attempt`) without touching
   `failures`.
-- Terminal states: `succeeded`, `failed`, `cancelled`.
+- Terminal states: `succeeded`, `failed`, `cancelled`. Operators may archive them
+  out of lists and totals ([task archive](task-archive.spec.md)).
 - `POST /tasks/{id}/retry` (manager scope) is the one way out of `failed`, for
   when the environment changed and the work did not (provider quota, a
   credential, a missing binary). It is deliberately not a `transition` action:

@@ -1430,7 +1430,8 @@ export interface paths {
          * List Tasks
          * @description Tasks newest first, in pages (max 100). `assignee` is the agent holding a
          *     task now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read
-         *     instead: no other filter, no paging, unknown ids in `missing`.
+         *     instead: no other filter, no paging, unknown ids in `missing`. Archived tasks
+         *     are left out unless `archived=true`, which lists only those.
          */
         get: operations["list_tasks_api_tasks_get"];
         put?: never;
@@ -1441,6 +1442,28 @@ export interface paths {
          *     human approval (a `policy` decision) instead of being refused.
          */
         post: operations["create_task_api_tasks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Archive Tasks
+         * @description Archive terminal tasks by state, project and age, answering how many.
+         *     `dry_run` counts without writing, for a confirmation. Non-terminal states
+         *     are refused (422 `state_not_archivable`) before anything changes.
+         */
+        post: operations["archive_tasks_api_tasks_archive_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1478,6 +1501,27 @@ export interface paths {
         get: operations["get_task_api_tasks__task_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Archive Task
+         * @description Archive a `succeeded`, `failed` or `cancelled` task; repeating it changes
+         *     nothing. Any other state answers 409 `task_not_terminal` and changes nothing.
+         */
+        post: operations["archive_task_api_tasks__task_id__archive_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1659,6 +1703,26 @@ export interface paths {
          * @description Return a `failed` task to `ready` with a fresh window of attempts (409 otherwise).
          */
         post: operations["retry_task_api_tasks__task_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/unarchive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unarchive Task
+         * @description Return an archived task to listings and totals (admin). Idempotent.
+         */
+        post: operations["unarchive_task_api_tasks__task_id__unarchive_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2238,6 +2302,31 @@ export interface components {
             ttl_s?: number;
         };
         /**
+         * BulkArchiveRequest
+         * @description Which terminal tasks to archive: all of `states`, narrowed by project and
+         *     by how long ago they last changed. `dry_run` only counts.
+         */
+        BulkArchiveRequest: {
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run?: boolean;
+            /** Older Than Days */
+            older_than_days?: number | null;
+            /** Project */
+            project?: string | null;
+            /** States */
+            states: components["schemas"]["TaskState"][];
+        };
+        /** BulkArchiveResult */
+        BulkArchiveResult: {
+            /** Count */
+            count: number;
+            /** Dry Run */
+            dry_run: boolean;
+        };
+        /**
          * Check
          * @description One measured fact about a pool's readiness. `ok` is None when it could not
          *     be verified from here (`detail` says why); only False blocks a launch.
@@ -2278,6 +2367,8 @@ export interface components {
         ClaimedTask: {
             /** Acceptance */
             acceptance: string[];
+            /** Archived At */
+            archived_at: string | null;
             /** Assignee Agent Id */
             assignee_agent_id: string | null;
             /** Attempt */
@@ -4266,6 +4357,8 @@ export interface components {
         Task: {
             /** Acceptance */
             acceptance: string[];
+            /** Archived At */
+            archived_at: string | null;
             /** Assignee Agent Id */
             assignee_agent_id: string | null;
             /** Attempt */
@@ -4442,6 +4535,8 @@ export interface components {
             acceptance: string[];
             /** Age S */
             age_s: number;
+            /** Archived At */
+            archived_at: string | null;
             /** Artifact Ids */
             artifact_ids: string[];
             /** Assignee Agent Id */
@@ -4654,6 +4749,8 @@ export interface components {
         TaskSummary: {
             /** Age S */
             age_s: number;
+            /** Archived At */
+            archived_at: string | null;
             /** Artifact Ids */
             artifact_ids: string[];
             /** Assignee Agent Id */
@@ -7473,6 +7570,7 @@ export interface operations {
                 project?: string | null;
                 kind?: string | null;
                 assignee?: string | null;
+                archived?: boolean;
                 ids?: string | null;
                 view?: "summary" | "detail";
                 limit?: number;
@@ -7537,6 +7635,39 @@ export interface operations {
             };
         };
     };
+    archive_tasks_api_tasks_archive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkArchiveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkArchiveResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     claim_task_api_tasks_claim_post: {
         parameters: {
             query?: never;
@@ -7578,6 +7709,37 @@ export interface operations {
         };
     };
     get_task_api_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_task_api_tasks__task_id__archive_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -7923,6 +8085,37 @@ export interface operations {
         };
     };
     retry_task_api_tasks__task_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unarchive_task_api_tasks__task_id__unarchive_post: {
         parameters: {
             query?: never;
             header?: never;

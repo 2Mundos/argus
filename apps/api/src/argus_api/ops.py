@@ -162,7 +162,10 @@ async def snapshot(
                 return [tuple(r) for r in await cur.fetchall()]
 
         tasks = {s.value: 0 for s in TaskState} | dict(
-            await grouped("SELECT state, count(*) FROM tasks GROUP BY state")
+            await grouped(
+                "SELECT state, count(*) FROM tasks"
+                " WHERE archived_at IS NULL GROUP BY state"
+            )
         )
         oldest = await one("SELECT min(created_at) FROM tasks WHERE state = 'ready'")
         age = (now - datetime.fromisoformat(oldest)).total_seconds() if oldest else 0.0

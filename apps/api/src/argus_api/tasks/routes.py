@@ -15,7 +15,7 @@ from fastapi import APIRouter, Query, Response, status
 from pydantic import BaseModel, Field, model_validator
 
 from argus_api.db import utcnow
-from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
+from argus_api.deps import AdminDep, AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
 from argus_api.errors import ValidationFailedError
 from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
@@ -62,6 +62,21 @@ class DependenciesRequest(BaseModel):
     expected_version: str = Field(min_length=1)  # the task's `version`
 
 
+class BulkArchiveRequest(BaseModel):
+    """Which terminal tasks to archive: all of `states`, narrowed by project and
+    by how long ago they last changed. `dry_run` only counts."""
+
+    states: list[TaskState] = Field(min_length=1)
+    project: str | None = None
+    older_than_days: int | None = Field(default=None, ge=0)
+    dry_run: bool = False
+
+
+class BulkArchiveResult(BaseModel):
+    count: int  # tasks archived, or that would be with `dry_run`
+    dry_run: bool
+
+
 class BlockRequest(BaseModel):
     attempt: int
     reason: str = Field(min_length=1)
@@ -91,6 +106,7 @@ async def list_tasks(
     project: str | None = None,
     kind: str | None = None,
     assignee: str | None = None,
+    archived: bool = False,
     ids: str | None = None,
     view: View = "summary",
     limit: int = DEFAULT_LIMIT,
@@ -98,10 +114,11 @@ async def list_tasks(
 ) -> TaskPage:
     """Tasks newest first, in pages (max 100). `assignee` is the agent holding a
     task now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read
-    instead: no other filter, no paging, unknown ids in `missing`."""
+    instead: no other filter, no paging, unknown ids in `missing`. Archived tasks
+    are left out unless `archived=true`, which lists only those."""
     async with db.snapshot() as snap:
         if ids is not None:
-            if state or project or kind or assignee or cursor:
+            if state or project or kind or assignee or archived or cursor:
                 raise ValidationFailedError(
                     "ids is a batch read; it takes no other filter or cursor",
                     code="ids_exclusive",
@@ -113,6 +130,7 @@ async def list_tasks(
             project=project,
             kind=kind,
             assignee=assignee,
+            archived=archived,
             view=view,
             limit=limit,
             cursor=cursor,
@@ -245,3 +263,37 @@ async def set_dependencies(
 async def cancel_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
     async with db.write() as tx:
         return await service.cancel(tx, task_id, caller.actor)
+
+
+@router.post("/archive")
+async def archive_tasks(
+    body: BulkArchiveRequest, db: DbDep, caller: ManagerDep
+) -> BulkArchiveResult:
+    """Archive terminal tasks by state, project and age, answering how many.
+    `dry_run` counts without writing, for a confirmation. Non-terminal states
+    are refused (422 `state_not_archivable`) before anything changes."""
+    async with db.write() as tx:
+        count = await service.archive_matching(
+            tx,
+            caller.actor,
+            states=body.states,
+            project=body.project,
+            older_than_days=body.older_than_days,
+            dry_run=body.dry_run,
+        )
+    return BulkArchiveResult(count=count, dry_run=body.dry_run)
+
+
+@router.post("/{task_id}/archive")
+async def archive_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
+    """Archive a `succeeded`, `failed` or `cancelled` task; repeating it changes
+    nothing. Any other state answers 409 `task_not_terminal` and changes nothing."""
+    async with db.write() as tx:
+        return await service.archive(tx, task_id, caller.actor)
+
+
+@router.post("/{task_id}/unarchive")
+async def unarchive_task(task_id: str, db: DbDep, caller: AdminDep) -> Task:
+    """Return an archived task to listings and totals (admin). Idempotent."""
+    async with db.write() as tx:
+        return await service.unarchive(tx, task_id, caller.actor)
