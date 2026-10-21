@@ -27,8 +27,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
       <form onSubmit={submit} className="card">
         <h1>Argus</h1>
         <p className="muted">
-          Paste an admin token. The first one is in <code>/data/admin-token</code> and in the server
-          log from the first start.
+          Paste an admin token. The first one is in <code>/data/admin-token</code>.
         </p>
         <label>
           Token
