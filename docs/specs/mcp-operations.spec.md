@@ -82,6 +82,15 @@ Findings outside the gap list:
   Detail carries the full model, but every free-text field over **4 KB** is cut,
   and each item says so with `truncated: {field: full length in bytes}`. A
   single-item read (`GET /tasks/{id}`, `GET /decisions/{id}`) stays whole.
+- **Summary reads skip bodies.** `list_tasks` and `get_tasks` select the summary
+  columns only (`LIST_COLUMNS` in `tasks/views.py`): not `spec`, `acceptance`,
+  `input`, `required_capabilities`, `result`, or `error`. `view=detail` still
+  returns those fields, loaded per id. The JSON shape does not change.
+- **Newest-first indexes.** Partial indexes `tasks_active_newest` and
+  `tasks_archived_newest` on `(created_at, id)` match `archived_at IS NULL` and
+  `IS NOT NULL`. The list's `ORDER BY created_at DESC, id DESC` uses them, and
+  `COUNT(*)` of active tasks uses `tasks_active_newest` (migration
+  `0035_tasks_newest`).
 - **Version:** each task and pool exposes `version` (its `updated_at`, ISO). Writes
   that need concurrency protection take `expected_version` and fail with
   `409 stale_version` and the current version.
@@ -103,6 +112,9 @@ Findings outside the gap list:
 - **`GET /api/tasks`** gains `project`, `kind`, repeated `state`, `view` and
   `cursor`. It always returns the page envelope. The dashboard moves to the new
   shape in the same PR, so the generated client keeps a single response type.
+  The Tasks tab requests up to five pages of 100 summaries, draws the first page
+  when it arrives, and appends the rest. Changing active/archived drops the list
+  on screen; a live refetch of the same list does not.
 - **Batch read:** `GET /api/tasks?ids=a,b,c&view=detail` (≤50 ids) → MCP
   `get_tasks(ids, view)`. Unknown ids come back in `missing: [...]`; nothing
   fails as a whole. `ids` takes no other filter or cursor (`422 ids_exclusive`).

@@ -4,7 +4,7 @@ import { ModelPreferences } from "./ModelPreferences";
 
 /** Engines, executors and the local model — from GET /api/engines (read-only). */
 export function Engines() {
-  const { data: catalog, error, reload } = useLiveData(() => fetchEngineCatalog(), []);
+  const { data: catalog, error, reload } = useLiveData((signal) => fetchEngineCatalog(signal), []);
 
   return (
     <section>

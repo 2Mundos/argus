@@ -11,28 +11,37 @@ const LOG_EVERY_MS = 5000;
 /** An agent, the task it holds and its container output (live work spec 3.2). */
 export function AgentDetail({ agentId, onClose }: { agentId: string; onClose: () => void }) {
   const now = useNow();
-  const { data } = useLiveData(async () => {
-    const [agent, page] = await Promise.all([
-      call(api.GET("/api/agents/{agent_id}", { params: { path: { agent_id: agentId } } })),
-      call(
-        api.GET("/api/tasks", {
-          params: { query: { assignee: agentId, state: ["claimed"], view: "detail" } },
-        }),
-      ),
-    ]);
-    const work = await Promise.all(
-      page.items.flatMap((task) =>
-        "progress_at" in task
-          ? [
-              call(
-                api.GET("/api/events", { params: { query: { subject_id: task.id, limit: 50 } } }),
-              ).then((events) => ({ task, events })),
-            ]
-          : [],
-      ),
-    );
-    return { agent, work };
-  }, [agentId]);
+  const { data } = useLiveData(
+    async (signal) => {
+      const [agent, page] = await Promise.all([
+        call(
+          api.GET("/api/agents/{agent_id}", { params: { path: { agent_id: agentId } }, signal }),
+        ),
+        call(
+          api.GET("/api/tasks", {
+            params: { query: { assignee: agentId, state: ["claimed"], view: "detail" } },
+            signal,
+          }),
+        ),
+      ]);
+      const work = await Promise.all(
+        page.items.flatMap((task) =>
+          "progress_at" in task
+            ? [
+                call(
+                  api.GET("/api/events", {
+                    params: { query: { subject_id: task.id, limit: 50 } },
+                    signal,
+                  }),
+                ).then((events) => ({ task, events })),
+              ]
+            : [],
+        ),
+      );
+      return { agent, work };
+    },
+    [agentId],
+  );
   const agent = data?.agent;
 
   return (

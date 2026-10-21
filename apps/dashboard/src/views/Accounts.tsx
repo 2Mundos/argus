@@ -43,12 +43,13 @@ export function Accounts() {
     data: accounts,
     error: loadError,
     reload: reloadList,
-  } = useLiveData(() => call(api.GET("/api/accounts")), []);
+  } = useLiveData((signal) => call(api.GET("/api/accounts", { signal })), []);
   const { data: week } = useLiveData(
-    () =>
+    (signal) =>
       call(
         api.GET("/api/accounts/usage", {
           params: { query: { ...windowQuery("7d", new Date()), tz: viewerTimeZone() } },
+          signal,
         }),
       ),
     [],
@@ -321,7 +322,7 @@ function AddAccount({ onClose }: { onClose: () => void }) {
     data: catalog,
     error: catalogError,
     reload: reloadCatalog,
-  } = useLiveData(() => call(api.GET("/api/engines")), []);
+  } = useLiveData((signal) => call(api.GET("/api/engines", { signal })), []);
   const providerOptions = catalog ? providerOptionsFromCatalog(catalog) : [];
   const [providerPick, setProviderPick] = useState("");
   const [customProvider, setCustomProvider] = useState("");

@@ -9,22 +9,27 @@ export function Knowledge() {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const { data: projects } = useLiveData(() => call(api.GET("/api/projects")), []);
+  const { data: projects } = useLiveData(
+    (signal) => call(api.GET("/api/projects", { signal })),
+    [],
+  );
   const { data: pages } = useLiveData(
-    () =>
+    (signal) =>
       call(
         api.GET("/api/knowledge/pages", {
           params: { query: project ? { project } : {} },
+          signal,
         }),
       ),
     [project],
   );
   const { data: hits } = useLiveData(
-    () =>
+    (signal) =>
       query.trim()
         ? call(
             api.GET("/api/knowledge/search", {
               params: { query: { q: query, ...(project ? { project } : {}) } },
+              signal,
             }),
           )
         : Promise.resolve(null),
@@ -115,8 +120,13 @@ function PageView({ pageId }: { pageId: string }) {
   const [history, setHistory] = useState(false);
   const [error, setError] = useState<string>();
   const { data: page } = useLiveData(
-    () =>
-      call(api.GET("/api/knowledge/pages/{page_id}", { params: { path: { page_id: pageId } } })),
+    (signal) =>
+      call(
+        api.GET("/api/knowledge/pages/{page_id}", {
+          params: { path: { page_id: pageId } },
+          signal,
+        }),
+      ),
     [pageId],
   );
   if (!page) return null;
@@ -180,10 +190,11 @@ function PageView({ pageId }: { pageId: string }) {
 function History({ page }: { page: Page }) {
   const [error, setError] = useState<string>();
   const { data: revisions } = useLiveData(
-    () =>
+    (signal) =>
       call(
         api.GET("/api/knowledge/pages/{page_id}/revisions", {
           params: { path: { page_id: page.id } },
+          signal,
         }),
       ),
     [page.id, page.revision_id],

@@ -9,7 +9,10 @@ import { NewWorker } from "./GuidedWorker";
 export function Pools() {
   const [editing, setEditing] = useState<Pool | "new" | null>(null);
   const [guided, setGuided] = useState(false);
-  const { data: pools, error } = useLiveData(() => call(api.GET("/api/pools")), []);
+  const { data: pools, error } = useLiveData(
+    (signal) => call(api.GET("/api/pools", { signal })),
+    [],
+  );
   return (
     <section>
       <div className="toolbar">
@@ -42,7 +45,7 @@ function PoolCard({ pool, onEdit }: { pool: Pool; onEdit: () => void }) {
   const [error, setError] = useState<string>();
   const [logsOf, setLogsOf] = useState<Instance | null>(null);
   const { data: instances } = useLiveData(
-    () => call(api.GET("/api/instances", { params: { query: { pool: pool.name } } })),
+    (signal) => call(api.GET("/api/instances", { params: { query: { pool: pool.name } }, signal })),
     [pool.name],
   );
 

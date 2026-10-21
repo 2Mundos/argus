@@ -106,16 +106,24 @@ export async function call<T>(
 export async function newestTasks(
   pages = 5,
   archived = false,
+  opts?: {
+    signal?: AbortSignal;
+    onPage?: (page: { items: TaskSummary[]; total: number }) => void;
+  },
 ): Promise<{ items: TaskSummary[]; total: number }> {
   const items: TaskSummary[] = [];
   let cursor: string | undefined;
   let total = 0;
   for (let n = 0; n < pages; n++) {
     const page = await call(
-      api.GET("/api/tasks", { params: { query: { limit: 100, cursor, archived } } }),
+      api.GET("/api/tasks", {
+        params: { query: { limit: 100, cursor, archived } },
+        signal: opts?.signal,
+      }),
     );
     items.push(...page.items);
     total = page.total;
+    opts?.onPage?.({ items: items.slice(), total });
     if (!page.next_cursor) break;
     cursor = page.next_cursor;
   }

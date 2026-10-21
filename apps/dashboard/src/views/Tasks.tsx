@@ -1,7 +1,7 @@
 import { type FormEvent, useState } from "react";
 import { api, call, newestTasks, type TaskKind, type TaskState, type TaskSummary } from "../api";
 import { relative, shortId } from "../format";
-import { useLiveData } from "../live";
+import { reportPage, useLiveData } from "../live";
 import { TaskSignal } from "../milestones";
 import { TaskLabel } from "../TaskLabel";
 import { useNow } from "./Activity";
@@ -25,7 +25,10 @@ export function Tasks() {
   const [creating, setCreating] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [archived, setArchived] = useState(false);
-  const { data, error } = useLiveData(() => newestTasks(5, archived), [archived]);
+  const { data, error } = useLiveData(
+    (signal) => newestTasks(5, archived, { signal, onPage: (page) => reportPage(signal, page) }),
+    [archived],
+  );
   const tasks = data?.items;
 
   return (
@@ -111,8 +114,14 @@ function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
 }
 
 function NewTask({ onClose }: { onClose: () => void }) {
-  const { data: kinds } = useLiveData<TaskKind[]>(() => call(api.GET("/api/task-kinds")), []);
-  const { data: projects } = useLiveData(() => call(api.GET("/api/projects")), []);
+  const { data: kinds } = useLiveData<TaskKind[]>(
+    (signal) => call(api.GET("/api/task-kinds", { signal })),
+    [],
+  );
+  const { data: projects } = useLiveData(
+    (signal) => call(api.GET("/api/projects", { signal })),
+    [],
+  );
   const [form, setForm] = useState({
     title: "",
     spec: "",

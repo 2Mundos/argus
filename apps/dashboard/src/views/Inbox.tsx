@@ -7,7 +7,10 @@ import { TaskLabel } from "../TaskLabel";
 
 export function Inbox() {
   const { data: page, error } = useLiveData(
-    () => call(api.GET("/api/decisions", { params: { query: { view: "detail", limit: 100 } } })),
+    (signal) =>
+      call(
+        api.GET("/api/decisions", { params: { query: { view: "detail", limit: 100 } }, signal }),
+      ),
     [],
   );
   // view=detail returns only details; the guard narrows the generated union.
@@ -35,10 +38,13 @@ export function Inbox() {
 function DecisionSubject({ decision }: { decision: DecisionDetail }) {
   const isTask = decision.subject_type === "task" && decision.subject_title != null;
   const { data: task } = useLiveData(
-    () =>
+    (signal) =>
       isTask
         ? call(
-            api.GET("/api/tasks/{task_id}", { params: { path: { task_id: decision.subject_id } } }),
+            api.GET("/api/tasks/{task_id}", {
+              params: { path: { task_id: decision.subject_id } },
+              signal,
+            }),
           )
         : Promise.resolve(null),
     [decision.subject_id],
@@ -125,10 +131,11 @@ function DecisionCard({ decision }: { decision: DecisionDetail }) {
 
 function ProposalPreview({ proposalId }: { proposalId: string }) {
   const { data: proposal } = useLiveData(
-    () =>
+    (signal) =>
       call(
         api.GET("/api/knowledge/proposals/{proposal_id}", {
           params: { path: { proposal_id: proposalId } },
+          signal,
         }),
       ),
     [proposalId],
@@ -147,7 +154,10 @@ function ProposalPreview({ proposalId }: { proposalId: string }) {
 }
 
 function SaveToKnowledge(props: { value: string | null; onChange: (v: string | null) => void }) {
-  const { data: pages } = useLiveData(() => call(api.GET("/api/knowledge/pages")), []);
+  const { data: pages } = useLiveData(
+    (signal) => call(api.GET("/api/knowledge/pages", { signal })),
+    [],
+  );
   return (
     <div className="row">
       <label className="check">

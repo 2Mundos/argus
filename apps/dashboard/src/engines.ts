@@ -40,10 +40,11 @@ export type EngineCatalog = {
   } | null;
 };
 
-export async function fetchEngineCatalog(): Promise<EngineCatalog> {
+export async function fetchEngineCatalog(signal?: AbortSignal): Promise<EngineCatalog> {
   const token = loadToken();
   const res = await fetch("/api/engines", {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
+    signal,
   });
   if (!res.ok) {
     throw new Error(`engines catalogue: HTTP ${res.status}`);
