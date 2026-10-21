@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
@@ -410,23 +412,34 @@ describe("anthropic credential documents", () => {
 
 describe("classifyFailure", () => {
   it("recognizes the provider's blocked-run messages and the reset time", () => {
-    expect(classifyFailure("Rate limit [five_hour] (resets 2026-10-15T01:00:00.000Z)")).toEqual({
+    expect(classifyFailure("Rate limit [five_hour] (resets 2026-10-15T01:00:00.000Z)")).toMatchObject({
       kind: "exhausted",
+      code: "quota_exhausted",
+      source: "notice",
       reason: "Rate limit [five_hour] (resets 2026-10-15T01:00:00.000Z)",
       until: "2026-10-15T01:00:00.000Z",
+      resetStatus: "stated",
     });
     expect(classifyFailure("Out of credits")).toMatchObject({
       kind: "exhausted",
-      until: undefined,
+      code: "quota_exhausted",
+      source: "notice",
+      resetStatus: "absent",
     });
+    const outOfCredits = classifyFailure("Out of credits");
+    expect(outOfCredits.kind === "exhausted" && outOfCredits.until).toBeUndefined();
   });
   it("recognizes Claude's session-limit wording and the UTC clock reset", () => {
     const now = new Date("2026-10-20T20:00:00.000Z");
     const text = "You've hit your session limit · resets 11:50pm (UTC)";
-    expect(classifyFailure(text, "anthropic", now)).toEqual({
+    expect(classifyFailure(text, "anthropic", now)).toMatchObject({
       kind: "exhausted",
+      code: "quota_exhausted",
+      source: "notice",
       reason: text,
       until: "2026-10-20T23:50:00.000Z",
+      resetStatus: "stated",
+      resetText: "11:50pm (UTC)",
     });
     expect(
       classifyFailure("You\u2019ve hit your limit · resets 11:50 pm (UTC)", "anthropic", now),
@@ -437,11 +450,14 @@ describe("classifyFailure", () => {
     ).toMatchObject({ until: "2026-10-21T01:05:00.000Z" });
     expect(classifyFailure("Usage limit reached", "anthropic", now)).toMatchObject({
       kind: "exhausted",
-      until: undefined,
+      code: "quota_exhausted",
+      resetStatus: "absent",
     });
-    expect(
-      classifyFailure("You've hit your limit · resets sometime", "anthropic", now),
-    ).toMatchObject({ kind: "exhausted", until: undefined });
+    const usageLimit = classifyFailure("Usage limit reached", "anthropic", now);
+    expect(usageLimit.kind === "exhausted" && usageLimit.until).toBeUndefined();
+    const vagueReset = classifyFailure("You've hit your limit · resets sometime", "anthropic", now);
+    expect(vagueReset).toMatchObject({ kind: "exhausted", code: "quota_exhausted", resetStatus: "ambiguous" });
+    expect(vagueReset.kind === "exhausted" && vagueReset.until).toBeUndefined();
     expect(
       classifyFailure("Rate limit [five_hour] (resets 2026-10-20T23:50:00.000Z)", "anthropic"),
     ).toMatchObject({ until: "2026-10-20T23:50:00.000Z" });
@@ -832,11 +848,13 @@ describe("engine and executor leases in the channel", () => {
     expect(JSON.stringify(leaseCalls)).not.toContain('"providers"');
     expect(selectEngine).toHaveBeenCalledWith("codex");
     const selected = w.calls.find((c) => c.path === "/engines/selected")!.body;
-    expect(selected).toEqual({
+    expect(selected).toMatchObject({
       engine: "codex",
       provider: "openai",
       account_id: "a-codex-1",
       reason: "lease",
+      task_id: "t1",
+      attempt: 1,
     });
     expect(JSON.stringify(w.calls.filter((c) => c.who === "argus"))).not.toContain("SECRET");
     expect(w.onecli.agents[0]!.secrets).toHaveLength(2);
@@ -1190,8 +1208,11 @@ describe("structured providerFailure on a failure notice", () => {
     );
     const [call] = exhaustedCalls(w);
     expect(call?.path).toBe("/accounts/a-codex-1/exhausted");
-    expect(call?.body).toEqual({
+    expect(call?.body).toMatchObject({
       reason: "OpenAI/Codex authentication expired",
+      reason_code: "auth_expired",
+      source: "structured",
+      reset_status: "absent",
       role: "engine",
       runtime_providers: ["anthropic", "openai", "local", "custom"],
       task_id: "t1",
@@ -1247,9 +1268,12 @@ describe("structured providerFailure on a failure notice", () => {
   it("classifyProviderFailure fails closed without an openai account", () => {
     expect(classifyProviderFailure(ok, undefined)).toBeNull();
     expect(classifyProviderFailure(ok, "anthropic")).toBeNull();
-    expect(classifyProviderFailure(ok, "openai")).toEqual({
+    expect(classifyProviderFailure(ok, "openai")).toMatchObject({
       kind: "exhausted",
+      code: "auth_expired",
+      source: "structured",
       reason: "OpenAI/Codex authentication expired",
+      resetStatus: "absent",
       until: undefined,
     });
   });
@@ -1465,7 +1489,7 @@ describe("runtime recycling on an account rotation", () => {
     await until(() => h.inbound.length === 1);
     await h.adapter.deliver("local", null, expired as any);
     await until(() => h.inbound.length === 2);
-    expect(calls).toEqual(["select:codex", "select:claude", "recycle"]);
+    expect(calls).toEqual(["select:codex", "recycle", "select:claude"]);
   });
 
   it("does not recycle when no replacement account exists", async () => {
@@ -1869,15 +1893,24 @@ describe("a Claude rate limit that only the structured field or the log shows", 
     const line = "You've hit your session limit · resets 2am (UTC)";
     const transcript = `{"type":"assistant","error":"rate_limit","message":{"model":"<synthetic>","content":[{"type":"text","text":"${line}"}]}}\n`;
     for (const tail of [`x\n${line}\n`, transcript]) {
-      expect(classifyLogTail(tail, "anthropic", now)).toEqual({
+      expect(classifyLogTail(tail, "anthropic", now)).toMatchObject({
         kind: "exhausted",
+        code: "quota_exhausted",
+        source: "log",
         reason: "Rate limit reached (resets 2026-10-21T02:00:00.000Z)",
         until: "2026-10-21T02:00:00.000Z",
+        resetStatus: "stated",
       });
     }
-    expect(classifyLogTail("You've hit your weekly limit · resets soon", "anthropic", now)).toEqual(
-      { kind: "exhausted", reason: "Rate limit reached" },
-    );
+    expect(
+      classifyLogTail("You've hit your weekly limit · resets soon", "anthropic", now),
+    ).toMatchObject({
+      kind: "exhausted",
+      code: "quota_exhausted",
+      source: "log",
+      reason: "Rate limit reached",
+      resetStatus: "absent",
+    });
     expect(classifyLogTail(line, "openai", now)).toBeNull();
   });
 
@@ -2110,5 +2143,88 @@ describe("Codex usage limit and expired login (account-selection.spec.md 3.6)", 
       "> Error handling: insufficient_quota is returned by the API",
     ].join("\n");
     expect(classifyLogTail(tail, "openai", NOW)).toBeNull();
+  });
+});
+
+// -- usage relay: the host posts what the container reports -------------------------------
+
+describe("usage relay in the channel", () => {
+  const usageRecord = (over: Record<string, unknown> = {}, payload: Record<string, unknown> = {}) => ({
+    v: 1,
+    kind: "usage",
+    source: "delegate",
+    role: "executor",
+    task_id: "t1",
+    attempt: 1,
+    account_id: "a-claude-1",
+    payload: {
+      task_id: "t1",
+      model: "claude-sonnet-5-5",
+      engine: "claude",
+      measurement: "measured",
+      input_tokens: 10,
+      output_tokens: 5,
+      cached_input_tokens: 2,
+      cost_usd: null,
+      run_key: "r1:t1:ag:codex:claude:s",
+      ...payload,
+    },
+    ...over,
+  });
+  const write = (file: string, ...records: unknown[]) =>
+    appendFileSync(file, records.map((r) => `${JSON.stringify(r)}\n`).join(""));
+
+  async function run(leases: ReturnType<typeof world>["leases"], reply = "COMPLETE: done") {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "argus-usage-"));
+    const file = path.join(dir, "argus-task-log.jsonl");
+    const w = world({ leases, tasks: [task()] });
+    const h = harness(w, true, {}, { delegateLogFile: async () => file, logPollMs: 20 });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    const usageFile = path.join(dir, "argus-usage.jsonl");
+    return {
+      w,
+      dir,
+      usageFile,
+      finish: () => h.adapter.deliver("local", null, { kind: "chat", content: reply }),
+      posts: () => w.calls.filter((c) => /^\/accounts\/[^/]+\/usage$/.test(c.path)),
+    };
+  }
+
+  it("posts engine and executor usage to the accounts this host holds, before completing", async () => {
+    const r = await run([codexLease(), lease("claude-1", "sk-ant", { role: "executor" })]);
+    write(
+      r.usageFile,
+      usageRecord(),
+      // the harness (engine role) on the codex account
+      usageRecord(
+        { source: "harness", role: "engine", account_id: "a-codex-1" },
+        { engine: "codex", run_key: "h1:t1:1:th:1", model: "gpt-x" },
+      ),
+      // wrong account, other task, forged role: none of these may be posted
+      usageRecord({ account_id: "a-someone-else" }, { run_key: "bad-account" }),
+      usageRecord({ task_id: "t9", attempt: 1 }, { task_id: "t9", run_key: "other-task" }),
+      usageRecord({ role: "admin" }, { run_key: "bad-role" }),
+    );
+    await r.finish();
+    const posts = r.posts();
+    expect(posts.map((c) => [c.path, c.body.run_key, c.body.role]).sort()).toEqual([
+      ["/accounts/a-claude-1/usage", "r1:t1:ag:codex:claude:s", "executor"],
+      ["/accounts/a-codex-1/usage", "h1:t1:1:th:1", "engine"],
+    ]);
+    const order = r.w.calls.map((c) => c.path);
+    expect(order.lastIndexOf("/accounts/a-claude-1/usage")).toBeLessThan(order.indexOf("/tasks/t1/complete"));
+    expect(JSON.stringify(posts)).not.toContain("account_id");
+    rmSync(r.dir, { recursive: true });
+  });
+
+  it("an executor on the engine's own account posts once against it and takes no second lease", async () => {
+    const r = await run([lease("claude-1", "sk-ant")]);
+    write(r.usageFile, usageRecord({ account_id: "a-claude-1" }));
+    await r.finish();
+    expect(r.posts().map((c) => c.path)).toEqual(["/accounts/a-claude-1/usage"]);
+    expect(r.w.calls.filter((c) => c.path === "/accounts/lease" && c.body?.role === "executor").length).toBeLessThanOrEqual(1);
+    rmSync(r.dir, { recursive: true });
   });
 });

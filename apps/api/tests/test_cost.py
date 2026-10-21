@@ -160,7 +160,7 @@ async def test_account_without_usage_is_not_a_measured_zero(db: Database) -> Non
     assert by[zero].measured_runs == 1 and by[zero].input_tokens == 0
     assert by[zero].estimated_cost_usd == 0.0  # priced and measured: a real 0
     assert by[idle].quota_status.state == "unknown"
-    assert by[idle].quota_status.reason == "no_usage_records"
+    assert by[idle].quota_status.reason == "api_key_account"
     assert r.by_account[-1].account_id == idle  # no usage sorts last
 
 

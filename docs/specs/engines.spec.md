@@ -125,9 +125,10 @@ In scope:
   `engine` (`ARGUS_ENGINE`), `executor`, the executor version, `model` when
   known, `cwd`, `exit_code`, `timed_out`, `duration_ms`, `artifacts`, and the
   run's `usage`, `run_key` and `usage_report`. Each attempt's token usage is
-  parsed, spooled to `<out>/usage-*.json` and reported best-effort to the
-  executor's account; it never changes the exit code
-  ([account usage](account-usage.spec.md) §3.8).
+  parsed, spooled to `<out>/usage-*.json`, reported best-effort to the
+  executor's account or appended to `argus-usage.jsonl` for the NanoClaw host
+  when the child has no API env; it never changes the exit code
+  ([account usage](account-usage.spec.md) §3.8–3.9).
   The Argus NanoClaw channel states this contract in every claimed task body
   (`integrations/nanoclaw/argus.ts` `renderTask`; see
   [prompt-data isolation](prompt-data-isolation.spec.md)): implementation must use

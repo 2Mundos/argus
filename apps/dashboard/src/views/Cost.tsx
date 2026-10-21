@@ -78,7 +78,7 @@ export function Report({ report, tz }: { report: CostReport; tz: string }) {
           key: a.account_id,
           name: a.name,
           f: a,
-          extra: <AccountQuota quota={a.quota} status={a.quota_status} />,
+          extra: <AccountQuota quota={a.quota} status={a.quota_status} provider={a.provider} />,
         }))}
         currency={currency}
         label="Conta"

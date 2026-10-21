@@ -12,8 +12,12 @@ import { type Account, api, call } from "../api";
 import { relative } from "../format";
 import { useLiveData } from "../live";
 import {
-  allUnmeasured,
+  bucketTokens,
   hasModelUsage,
+  NOT_MEASURED,
+  notMeasured,
+  reasonsNote,
+  roleSplit,
   tokens,
   totalTokens,
   unmeasuredNote,
@@ -150,7 +154,7 @@ export function Accounts() {
                   {!model ? (
                     <span className="muted small">—</span>
                   ) : (
-                    <AccountQuota quota={a.quota} status={a.quota_status} />
+                    <AccountQuota quota={a.quota} status={a.quota_status} provider={a.provider} />
                   )}
                 </td>
                 <td data-label="Tokens, 7 days">
@@ -158,19 +162,32 @@ export function Accounts() {
                     <span className="muted small">—</span>
                   ) : series?.reported ? (
                     <span className="spark-cell">
-                      {!allUnmeasured(series.totals) && (
+                      {notMeasured(series.totals) ? (
+                        <span
+                          className="muted small"
+                          title={reasonsNote(series.totals.unmeasured_reasons) ?? "no reason given"}
+                        >
+                          {NOT_MEASURED}
+                        </span>
+                      ) : (
                         <>
                           <Sparkline
-                            values={series.buckets.map(totalTokens)}
+                            values={series.buckets.map(bucketTokens)}
                             label={`${a.name}: tokens per day, last 7 days`}
                           />
                           <span className="small">{tokens(totalTokens(series.totals))}</span>
                         </>
                       )}
                       {unmeasuredNote(series.totals.unmeasured_runs) && (
-                        <span className="muted small">
+                        <span
+                          className="muted small"
+                          title={reasonsNote(series.totals.unmeasured_reasons) ?? undefined}
+                        >
                           {unmeasuredNote(series.totals.unmeasured_runs)}
                         </span>
+                      )}
+                      {roleSplit(series.totals.runs_by_role) && (
+                        <span className="muted small">{roleSplit(series.totals.runs_by_role)}</span>
                       )}
                     </span>
                   ) : (

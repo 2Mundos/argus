@@ -19,6 +19,8 @@ cp "$here/argus.ts" "$target/src/channels/argus.ts"
 cp "$here/argus-local-forward.ts" "$target/src/channels/argus-local-forward.ts"
 cp "$here/argus-local-forward.test.ts" "$target/src/channels/argus-local-forward.test.ts"
 cp "$here/argus-accounts.ts" "$target/src/channels/argus-accounts.ts"
+cp "$here/argus-usage-relay.ts" "$target/src/channels/argus-usage-relay.ts"
+cp "$here/argus-usage-relay.test.ts" "$target/src/channels/argus-usage-relay.test.ts"
 cp "$here/argus.test.ts" "$target/src/channels/argus.test.ts"
 cp "$here/argus-accounts.test.ts" "$target/src/channels/argus-accounts.test.ts"
 # The quota patterns' shared fixture (Argus's packages/core), read by argus-accounts.test.ts.
@@ -271,6 +273,44 @@ PY
     echo "patched $onecli_test (expects GIT_SSL_CAINFO on gateway contribution)"
   fi
 fi
+# Upstream's onecli.test.ts never opens NanoClaw's database, but the local-harness
+# hook patched into ensureSession above looks the agent group up there, so the
+# lookup threw "Database not initialized". The test now stubs only getAgentGroup
+# to find no group, which takes the hook's no-group path (config unchanged); the
+# group-found path is covered by argus-local-harness.test.ts. The mock goes right
+# after the test's vitest import (vi.mock is hoisted; an import list split over
+# lines matches too, checked in the script); no such import stops the install,
+# like every other anchor here.
+if [ -f "$onecli_test" ] && grep -q "withLocalHarnessRuntimeForGroup" "$onecli_ts" \
+    && ! grep -q "vi.mock('../db/agent-groups.js'" "$onecli_test"; then
+  patch_result="$(
+    python3 - "$onecli_test" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+import re
+mock = """
+// Argus: the local-harness hook in ensureSession looks the agent group up in
+// NanoClaw's database, which this test never opens; stub the lookup (install.sh).
+// The rest of the module stays real: other modules in the graph import it.
+vi.mock('../db/agent-groups.js', async (original) => ({
+  ...(await original<typeof import('../db/agent-groups.js')>()),
+  getAgentGroup: async () => undefined,
+}));
+"""
+vitest_import = re.compile(r"^import [^;]*\bfrom ['\"]vitest['\"];?[ \t]*\n", re.M)
+assert vitest_import.search("import {\n  describe,\n  it,\n} from 'vitest';\n")
+first = vitest_import.search(s)
+assert first, "onecli test has no vitest import to anchor the mock on"
+at = first.end()
+open(p, "w").write(s[:at] + mock + s[at:])
+print("patched")
+PY
+  )"
+  if [ "$patch_result" = patched ]; then
+    echo "patched $onecli_test (agent group lookup for the local-harness hook)"
+  fi
+fi
 
 codex_ts="$target/container/agent-runner/src/providers/codex-app-server.ts"
 if [ -f "$codex_ts" ]; then
@@ -404,6 +444,9 @@ cp "$here/overlays/claude-rate-limit.ts" "$here/overlays/claude-rate-limit.test.
 # Codex's usage limit ("You've hit your usage limit … try again at …") likewise.
 cp "$here/overlays/codex-usage-limit.ts" "$here/overlays/codex-usage-limit.test.ts" "$providers_dir/"
 python3 "$here/patch-claude-rate-limit.py" "$target"
+# The harness's own token usage (claude.ts, codex.ts) for the host to post (account usage spec 3.9).
+cp "$here/overlays/harness-usage.ts" "$here/overlays/harness-usage.test.ts" "$providers_dir/"
+python3 "$here/patch-harness-usage.py" "$target"
 
 codex_provider="$providers_dir/codex.ts"
 if [ -f "$codex_provider" ]; then

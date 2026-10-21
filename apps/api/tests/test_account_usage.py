@@ -1,6 +1,7 @@
 """Account usage: reports, quota snapshots, aggregation, and the Codex quota probe
 (docs/specs/account-usage.spec.md)."""
 
+import asyncio
 import base64
 import json
 import sys
@@ -12,11 +13,12 @@ from zoneinfo import ZoneInfo
 import pytest
 from api_support import FakeClock, insert_agent
 from argus_api import ops
+from argus_api.accounts import quota_probe, usage
 from argus_api.accounts import service as accounts
-from argus_api.accounts import usage
 from argus_api.accounts.quota_probe import QuotaProber
 from argus_api.config import Settings
 from argus_api.db import Database, ts
+from argus_api.db.migrate import load_migrations
 from argus_api.errors import ValidationFailedError
 from argus_api.events import Event
 from argus_api.main import app
@@ -537,27 +539,360 @@ async def test_quota_status_reasons(
     claude = await add(db, store, "claude", "anthropic", {"x": 1}, "subscription")
     cursor = await add(db, store, "cursor", "cursor", {"api_key": "k"}, "subscription")
     apikey = await add(db, store, "oai-key", "openai", {"x": 1}, "api_key")
-    ids = (codex, claude, cursor, apikey)
+    expected = {
+        codex: "not_yet_probed",
+        claude: "unsupported_provider",
+        cursor: "unsupported_provider",
+        apikey: "api_key_account",
+    }
 
     async def status(account_id: str):
         return (await usage_of(db, clock, account_id)).quota_status
 
-    for a in ids:  # nothing reported yet: never a guessed figure
-        s = await status(a)
-        assert (s.state, s.reason, s.windows) == ("unknown", "no_usage_records", [])
-    async with db.write() as tx:
-        for a in ids:
-            await usage.insert_usage(tx, a, A, None, input_tokens=1)
-    assert (await status(codex)).reason == "window_not_configured"
-    for a in (claude, cursor, apikey):
-        assert (await status(a)).reason == "provider_does_not_expose"
-    # a provider snapshot makes it known, with no local windows invented
+    # Usage rows say nothing about quota: the reason is the same with or without.
+    for with_usage in (False, True):
+        if with_usage:
+            async with db.write() as tx:
+                for a in expected:
+                    await usage.insert_usage(tx, a, A, None, input_tokens=1)
+        for a, reason in expected.items():
+            s = await status(a)
+            assert (s.state, s.reason, s.windows) == ("unknown", reason, [])
+            assert (s.observed_at, s.collector, s.last_probe) == (None, None, None)
+
+
+async def test_quota_status_known_then_stale(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c = await add(db, store, "codex", "openai", chatgpt_login(), "subscription")
     async with db.write() as tx:
         await usage.upsert_quota(
-            tx, codex, [QuotaReport(window_minutes=300, used_percent=5)], "polled", "t"
+            tx,
+            c,
+            [
+                QuotaReport(
+                    window_minutes=300,
+                    used_percent=5,
+                    resets_at=clock.now + timedelta(hours=3),
+                )
+            ],
+            "polled",
+            "t",
         )
-    s = await status(codex)
-    assert (s.state, s.reason, s.windows) == ("known", None, [])
+    observed = clock.now
+    s = (await usage_of(db, clock, c)).quota_status
+    assert (s.state, s.reason, s.collector, s.observed_at) == (
+        "known",
+        None,
+        "codex_rate_limits",
+        observed,
+    )
+    clock.advance(3601)  # observed over an hour ago
+    account = await usage_of(db, clock, c)
+    assert account.quota_status.state == "stale"
+    assert account.quota_status.reason is None
+    assert [q.window for q in account.quota] == ["300m"]  # still listed
+    # a window that has already reset is stale even when freshly observed
+    async with db.write() as tx:
+        await usage.upsert_quota(
+            tx,
+            c,
+            [
+                QuotaReport(
+                    window_minutes=300,
+                    used_percent=5,
+                    resets_at=clock.now - timedelta(minutes=1),
+                )
+            ],
+            "reported",
+            "t",
+        )
+    s = (await usage_of(db, clock, c)).quota_status
+    assert (s.state, s.collector) == ("stale", "worker_report")
+
+
+async def test_quota_status_follows_the_last_probe(
+    db: Database, store: MemorySecretStore, tmp_path: Path, clock: FakeClock
+) -> None:
+    c = await add(db, store, "codex", "openai", chatgpt_login(), "subscription")
+    # no binary: skipped, and the reason is explicit
+    p = prober(db, store, tmp_path, None)
+    assert (await p.probe(c)).status == "skipped"
+    s = (await usage_of(db, clock, c)).quota_status
+    assert (s.state, s.reason) == ("unknown", "probe_skipped")
+    assert s.last_probe is not None
+    assert (s.last_probe.status, s.last_probe.at) == (
+        "skipped",
+        clock.now,
+    )
+    assert "ARGUS_CODEX_BIN" in (s.last_probe.reason or "")
+    # a client that dies is a failure, named by type only
+    broken = tmp_path / "broken"
+    broken.write_text("#!/bin/sh\nexit 1\n")
+    broken.chmod(0o755)
+    p = prober(db, store, tmp_path, broken)
+    assert (await p.probe(c)).status == "failed"
+    s = (await usage_of(db, clock, c)).quota_status
+    assert (s.reason, s.last_probe.status) == ("probe_failed", "failed")
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT count(*) FROM account_quota_probe") as cur,
+    ):
+        assert (await cur.fetchone())[0] == 1  # one row per account
+    # the floor does not overwrite what the earlier probe stored
+    assert (await p.probe(c)).status == "rate_limited"
+    s = (await usage_of(db, clock, c)).quota_status
+    assert s.last_probe.status == "failed"
+    # a good probe makes it known
+    p = prober(db, store, tmp_path, fake_codex(tmp_path))
+    assert (await p.probe(c)).status == "updated"
+    s = (await usage_of(db, clock, c)).quota_status
+    assert (s.state, s.last_probe.status) == ("known", "updated")
+
+
+async def test_probe_of_other_providers_is_skipped_and_recorded(
+    db: Database, store: MemorySecretStore, tmp_path: Path, clock: FakeClock
+) -> None:
+    c = await add(db, store, "claude", "anthropic", {"x": 1}, "subscription")
+    p = prober(db, store, tmp_path, fake_codex(tmp_path))
+    result = await p.refresh(c)
+    assert (result.status, result.quota) == ("skipped", [])
+    s = (await usage_of(db, clock, c)).quota_status
+    assert (s.reason, s.last_probe.status) == ("unsupported_provider", "skipped")
+    ghost = await p.probe("no-such-account")  # nothing to attach the outcome to
+    assert ghost.status == "skipped"
+
+
+# -- unmeasured reasons and roles ------------------------------------------------------
+
+
+def test_reason_is_only_for_not_reported_runs() -> None:
+    ok = UsageReport(measurement="not_reported", reason="no_usage_in_output")
+    assert ok.reason == "no_usage_in_output"
+    assert UsageReport(measurement="not_reported").reason is None
+    with pytest.raises(ValidationError, match="only allowed with"):
+        UsageReport(input_tokens=1, reason="no_usage_in_output")
+    for bad in ("Has Caps", "", "x" * 61, "dash-ed"):
+        with pytest.raises(ValidationError):
+            UsageReport(measurement="not_reported", reason=bad)
+
+
+async def test_unmeasured_runs_keep_their_reason_and_never_read_as_zero(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    c = await held(db, store)
+    await report(db, c, measurement="not_reported", reason="no_usage_in_output")
+    await report(db, c, measurement="not_reported", reason="no_usage_in_output")
+    await report(db, c, measurement="not_reported", role="executor")
+    account = await usage_of(db, clock, c)
+    for u in (account.usage_24h, account.usage_total):
+        assert (u.runs, u.unmeasured_runs, u.measured_runs) == (3, 3, 0)
+        assert u.unmeasured_reasons == {"no_usage_in_output": 2, "unknown": 1}
+        assert u.runs_by_role == {"unknown": 2, "executor": 1}
+    await report(db, c, input_tokens=4, output_tokens=1, role="engine")
+    await report(db, c, input_tokens=0, output_tokens=0, role="engine")  # measured 0
+    total = (await usage_of(db, clock, c)).usage_total
+    assert (total.runs, total.measured_runs, total.input_tokens) == (5, 2, 4)
+    assert total.runs_by_role == {"unknown": 2, "executor": 1, "engine": 2}
+    async with db.read() as conn:
+        series = await usage.series(
+            conn,
+            clock.now - timedelta(hours=1),
+            clock.now + timedelta(hours=1),
+            "day",
+            ZoneInfo("UTC"),
+            [c],
+        )
+    t = series[0].totals
+    assert (t.runs, t.measured_runs, t.unmeasured_runs) == (5, 2, 3)
+    assert t.unmeasured_reasons == {"no_usage_in_output": 2, "unknown": 1}
+    assert t.runs_by_role == {"unknown": 2, "executor": 1, "engine": 2}
+    assert sum(b.measured_runs for b in series[0].buckets) == 2
+
+
+async def test_metrics_skip_accounts_with_only_unmeasured_runs(
+    db: Database, store: MemorySecretStore, tmp_path: Path
+) -> None:
+    c = await held(db, store)
+    await report(db, c, measurement="not_reported")
+    snap = await ops.snapshot(db, tmp_path / "argus.db", tmp_path)
+    assert snap.account_tokens == {}
+    await report(db, c, input_tokens=2)
+    snap = await ops.snapshot(db, tmp_path / "argus.db", tmp_path)
+    assert list(snap.account_tokens.values()) == [(2, 0, 0)]
+
+
+# -- the prober's inventory --------------------------------------------------------
+
+
+class Clocks:
+    """Wall time for the prober, and a sleep that only records."""
+
+    def __init__(self, clock: FakeClock) -> None:
+        self.clock, self.slept = clock, []
+        self.mono = 0.0
+
+    async def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+
+
+def timed_prober(db, store, tmp_path, codex, fake: Clocks) -> QuotaProber:
+    settings = Settings(data_dir=tmp_path, codex_bin=str(codex) if codex else None)
+    return QuotaProber(
+        db, store, settings, clock=lambda: fake.mono, now=fake.clock, sleep=fake.sleep
+    )
+
+
+async def observe(db: Database, account_id: str) -> None:
+    async with db.write() as tx:
+        await usage.upsert_quota(
+            tx,
+            account_id,
+            [QuotaReport(window_minutes=300, used_percent=1)],
+            "polled",
+            "t",
+        )
+
+
+async def test_sweep_queues_only_stale_or_missing_codex_chatgpt_accounts(
+    db: Database, store: MemorySecretStore, tmp_path: Path, clock: FakeClock
+) -> None:
+    fresh = await add(db, store, "fresh", "openai", chatgpt_login(), "subscription")
+    stale = await add(db, store, "stale", "openai", chatgpt_login(), "subscription")
+    never = await add(db, store, "never", "openai", chatgpt_login(), "subscription")
+    off = await add(db, store, "off", "openai", chatgpt_login(), "subscription")
+    await add(db, store, "key", "openai", {"x": 1}, "api_key")
+    await add(db, store, "claude", "anthropic", {"x": 1}, "subscription")
+    await observe(db, stale)
+    clock.advance(31 * 60)
+    await observe(db, fresh)
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE accounts SET state = 'disabled', disabled_reason = 't'"
+            " WHERE id = ?",
+            (off,),
+        )
+    fake = Clocks(clock)
+    p = timed_prober(db, store, tmp_path, None, fake)
+    assert sorted(await p.sweep()) == sorted([stale, never])
+    assert await p.sweep() == []  # already queued: no duplicates
+
+
+async def drain(p: QuotaProber) -> list[str]:
+    out = []
+    while not p._queue.empty():
+        account_id = p._queue.get_nowait()
+        p._queued.discard(account_id)
+        out.append(account_id)
+    return out
+
+
+async def test_sweep_is_capped_and_backs_off_after_a_recent_probe(
+    db: Database, store: MemorySecretStore, tmp_path: Path, clock: FakeClock
+) -> None:
+    ids = [
+        await add(db, store, f"c{i:02d}", "openai", chatgpt_login(), "subscription")
+        for i in range(13)
+    ]
+    fake = Clocks(clock)
+    p = timed_prober(db, store, tmp_path, None, fake)
+    assert len(await p.sweep()) == 10  # SWEEP_CAP: no storm
+    queued = await drain(p)
+    assert set(queued) <= set(ids)
+    # the rest come with the next sweep
+    assert len(await p.sweep()) == 10
+    await drain(p)
+    # a probe (here: skipped, no binary) defers its account for the next sweeps
+    target = ids[0]
+    assert (await p.probe(target)).status == "skipped"
+    fake.mono += 301
+    clock.advance(10 * 60)
+    assert target not in await p.sweep()
+    await drain(p)
+    assert target in await p.sweep(backoff=False)  # the start-up inventory
+    await drain(p)
+    clock.advance(31 * 60)  # older than the refresh age: due again
+    assert target in await p.sweep()
+
+
+async def test_run_loop_sweeps_after_a_delay_probes_one_at_a_time_with_a_gap(
+    db: Database, store: MemorySecretStore, tmp_path: Path, clock: FakeClock
+) -> None:
+    a = await add(db, store, "a", "openai", chatgpt_login(), "subscription")
+    b = await add(db, store, "b", "openai", chatgpt_login(), "subscription")
+    fake = Clocks(clock)
+    gate = asyncio.Event()
+    sleeps = fake.slept
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if seconds == quota_probe.SWEEP_INTERVAL_S:
+            gate.set()
+            await asyncio.Event().wait()  # park the sweeper after the first sweep
+
+    p = QuotaProber(
+        db,
+        store,
+        Settings(data_dir=tmp_path, codex_bin=str(fake_codex(tmp_path))),
+        clock=lambda: fake.mono,
+        now=clock,
+        sleep=sleep,
+    )
+    task = asyncio.create_task(p.run())
+    await asyncio.wait_for(gate.wait(), 10)
+    for _ in range(200):  # let both probes finish
+        await asyncio.sleep(0.05)
+        async with (
+            db.read() as conn,
+            conn.execute("SELECT count(*) FROM account_quota_probe") as cur,
+        ):
+            if (await cur.fetchone())[0] == 2:
+                break
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert sleeps[0] == quota_probe.STARTUP_DELAY_S
+    assert sleeps.count(quota_probe.PROBE_GAP_S) >= 2  # a gap after every probe
+    for account_id in (a, b):
+        s = (await usage_of(db, clock, account_id)).quota_status
+        assert (s.state, s.last_probe.status) == ("known", "updated")
+
+
+async def test_migration_0038_applies_to_a_database_at_0037(
+    tmp_path: Path,
+) -> None:
+    migrations = load_migrations()
+    assert [m.version for m in migrations][36:38] == [37, 38]
+    path = tmp_path / "old.db"
+    old = await Database.open(path, migrations=migrations[:37])
+    async with old.write() as tx:
+        await tx.conn.execute(
+            "INSERT INTO accounts (id, name, provider, kind, secret_ref, state,"
+            " created_at, updated_at) VALUES ('a', 'a', 'p', 'api_key', 'sops:a',"
+            " 'available', 'x', 'x')"
+        )
+        await tx.conn.execute(
+            "INSERT INTO account_usage (account_id, input_tokens, at)"
+            " VALUES ('a', 1, 'x')"
+        )
+    await old.close()
+    db = await Database.open(path)
+    try:
+        async with (
+            db.read() as c,
+            c.execute("SELECT unmeasured_reason FROM account_usage") as cur,
+        ):
+            assert [tuple(r) for r in await cur.fetchall()] == [(None,)]
+        async with db.write() as tx:
+            await usage.record_probe(tx, "a", "failed", "boom")
+            await usage.record_probe(tx, "a", "skipped", None)
+            await usage.record_probe(tx, "ghost", "failed", None)  # no account: no row
+        async with db.read() as c:
+            p = await usage.last_probe(c, "a")
+            assert p is not None and p.status == "skipped"
+            assert await usage.last_probe(c, "ghost") is None
+    finally:
+        await db.close()
 
 
 async def test_token_limits_estimate_rolling_windows(

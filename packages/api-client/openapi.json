@@ -9244,6 +9244,43 @@
         "title": "ProposalState",
         "type": "string"
       },
+      "QuotaProbe": {
+        "description": "The latest quota probe of an account (one per account), whatever came of it.",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "enum": [
+              "updated",
+              "skipped",
+              "rate_limited",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "at"
+        ],
+        "title": "QuotaProbe",
+        "type": "object"
+      },
       "QuotaRefresh": {
         "properties": {
           "quota": {
@@ -9351,15 +9388,58 @@
         "type": "object"
       },
       "QuotaStatus": {
-        "description": "Whether Argus knows this account's quota, and if not, why (never a 0/100).",
+        "description": "Whether Argus knows this account's quota, and if not, why (never a 0/100).\n\n`known`: provider snapshots all fresh, or local estimates against\n`token_limits`. `stale`: snapshots exist (listed in `quota`) but one was\nobserved over an hour ago or its window has already reset. `unknown`: no\nfigure, with the reason.",
         "properties": {
+          "collector": {
+            "anyOf": [
+              {
+                "enum": [
+                  "codex_rate_limits",
+                  "worker_report"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collector"
+          },
+          "last_probe": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuotaProbe"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
           "reason": {
             "anyOf": [
               {
                 "enum": [
                   "no_usage_records",
                   "provider_does_not_expose",
-                  "window_not_configured"
+                  "window_not_configured",
+                  "unsupported_provider",
+                  "api_key_account",
+                  "not_yet_probed",
+                  "probe_failed",
+                  "probe_skipped",
+                  "probe_rate_limited"
                 ],
                 "type": "string"
               },
@@ -9372,6 +9452,7 @@
           "state": {
             "enum": [
               "known",
+              "stale",
               "unknown"
             ],
             "title": "State",
@@ -13100,6 +13181,11 @@
             "title": "Input Tokens",
             "type": "integer"
           },
+          "measured_runs": {
+            "default": 0,
+            "title": "Measured Runs",
+            "type": "integer"
+          },
           "output_tokens": {
             "title": "Output Tokens",
             "type": "integer"
@@ -13284,6 +13370,18 @@
             "maxItems": 10,
             "title": "Rate Limits",
             "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9_]{1,60}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
           },
           "role": {
             "anyOf": [
@@ -13545,6 +13643,11 @@
             "title": "Input Tokens",
             "type": "integer"
           },
+          "measured_runs": {
+            "default": 0,
+            "title": "Measured Runs",
+            "type": "integer"
+          },
           "output_tokens": {
             "title": "Output Tokens",
             "type": "integer"
@@ -13553,6 +13656,22 @@
             "default": 0,
             "title": "Runs",
             "type": "integer"
+          },
+          "runs_by_role": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Runs By Role",
+            "type": "object"
+          },
+          "unmeasured_reasons": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Unmeasured Reasons",
+            "type": "object"
           },
           "unmeasured_runs": {
             "default": 0,

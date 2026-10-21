@@ -64,6 +64,7 @@ import {
   writeCustomHarnessFile,
 } from "./argus-custom-harness.js";
 import { syncLocalStrataForward } from "./argus-local-forward.js";
+import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
 import {
   localHarnessFromCredential,
   removeLocalHarnessFile,
@@ -869,6 +870,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let taskDone: (() => void) | null = null;
   let logRelay: ReturnType<typeof createDelegateLogRelay> | null = null;
   let logTimer: ReturnType<typeof setInterval> | null = null;
+  let usageRelay: ReturnType<typeof createUsageRelay> | null = null;
+  let usageTimer: ReturnType<typeof setInterval> | null = null;
 
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -976,7 +979,46 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
+  /**
+   * Post the usage the container reports (delegate runs and the harness's own turns) with
+   * this host's token, for the accounts it really holds (account usage spec 3.9). Best
+   * effort: a measurement never fails the task.
+   */
+  async function startUsageRelay(task: { id: string; attempt: number }): Promise<void> {
+    try {
+      const logFile = await cfg.delegateLogFile?.();
+      if (!logFile) return;
+      const file = path.join(path.dirname(logFile), USAGE_RELAY_FILE);
+      await resetRelayFile(file); // only this attempt's records are relayed
+      const relay = createUsageRelay({
+        file,
+        task,
+        now: nowMs,
+        held: () => ({ engine: account?.id ?? null, executor: executor?.id ?? null }),
+        post: (accountId, body) =>
+          client.call("POST", `/accounts/${encodeURIComponent(accountId)}/usage`, body),
+      });
+      usageRelay = relay;
+      usageTimer = setInterval(() => void relay.poll(), cfg.logPollMs ?? LOG_POLL_MS);
+      usageTimer.unref?.();
+    } catch (err) {
+      log.warn("Could not start the usage relay", { err: String(err).slice(0, 200) });
+    }
+  }
+
+  /** The last usage of the attempt, posted while its leases still exist. */
+  async function drainUsage(): Promise<void> {
+    const relay = usageRelay;
+    if (!relay) return;
+    const { left } = await relay.drain();
+    if (left > 0) log.warn("Usage records left unposted at the end of the attempt", { left });
+  }
+
   function finishTask(): void {
+    usageRelay?.stop();
+    usageRelay = null;
+    if (usageTimer) clearInterval(usageTimer);
+    usageTimer = null;
     logRelay?.stop();
     logRelay = null;
     if (logTimer) clearInterval(logTimer);
@@ -1249,6 +1291,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const pages = await inlinePages(task);
       log.info("Argus task claimed", { task: task.id, attempt: task.attempt });
       if (!logRelay) await startLogRelay(task);
+      if (!usageRelay) await startUsageRelay(task);
       resends = 0;
       const best = executor ?? account;
       renderCurrent = () =>
@@ -1521,6 +1564,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         log.warn("Could not re-evaluate the account lease; keeping the current one", { err });
         return true;
       }
+      if (switchFailure) {
+        // recycleRuntime failed: runTask must fail fast with runtime_switch_failed.
+        return false;
+      }
       if (err instanceof ArgusError && err.code === "no_account") {
         log.warn("No Argus account is usable for this claimed task", {
           message: err.message,
@@ -1787,6 +1834,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const d = parseReply(text);
       // The last lines of the run, before the attempt ends and Argus stops taking them.
       if (d.kind !== "progress" && !isFailureNotice) await logRelay?.drain();
+      // Usage first, on every way out (a failure notice may rotate the leases it is billed to).
+      if (d.kind !== "progress" || isFailureNotice) await drainUsage();
       try {
         if (isFailureNotice) {
           await handleFailure(task, text, (content as Record<string, unknown>).providerFailure);

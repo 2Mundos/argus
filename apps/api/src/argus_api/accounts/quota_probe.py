@@ -17,7 +17,7 @@ import shutil
 import signal
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -38,6 +38,13 @@ log = logging.getLogger(__name__)
 PROBE_TIMEOUT_S = 15.0
 MIN_INTERVAL_S = 300.0  # per account
 MIN_TOKEN_LIFE = timedelta(minutes=10)
+
+# Inventory and staleness refresh (account usage 3.3): bounded, never a storm.
+STARTUP_DELAY_S = 10.0  # first sweep, after the app is up
+SWEEP_INTERVAL_S = 900.0  # then every 15 minutes
+REFRESH_AFTER = timedelta(minutes=30)  # a snapshot (or probe) older than this is due
+PROBE_GAP_S = 2.0  # pause after each probe that ran
+SWEEP_CAP = 10  # accounts queued per sweep
 
 
 class Skip(Exception):
@@ -60,9 +67,13 @@ class QuotaProber:
         secrets: SecretStore,
         settings: Settings,
         clock: Callable[[], float] = time.monotonic,
+        now: Callable[[], datetime] = utcnow,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._db, self._secrets, self._settings = db, secrets, settings
-        self._clock = clock
+        self._clock = clock  # monotonic seconds: the per-account floor
+        self._now = now  # wall time: how old a snapshot is
+        self._sleep = sleep
         self._last: dict[str, float] = {}
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._queued: set[str] = set()
@@ -91,17 +102,37 @@ class QuotaProber:
         async with self._lock:
             last = self._last.get(account_id)
             if last is not None and self._clock() - last < MIN_INTERVAL_S:
-                return Outcome("rate_limited", "probed less than 5 minutes ago")
+                outcome = Outcome("rate_limited", "probed less than 5 minutes ago")
+                # The probe inside the floor already stored its own outcome.
+                await self._store(account_id, outcome, keep=True)
+                return outcome
             self._last[account_id] = self._clock()
+            windows: list[QuotaReport] = []
+            rotated = False
             try:
                 windows, rotated = await self._read(account_id)
+                outcome = (
+                    Outcome("updated") if windows else Outcome("skipped", "no windows")
+                )
             except Skip as exc:
-                return Outcome("skipped", str(exc))
+                outcome = Outcome("skipped", str(exc))
             except Exception as exc:  # the client, its protocol, the filesystem
                 log.warning(
                     "quota probe of %s failed: %s", account_id, type(exc).__name__
                 )
-                return Outcome("failed", type(exc).__name__)
+                outcome = Outcome("failed", type(exc).__name__)
+        await self._store(account_id, outcome, windows, rotated)
+        return outcome
+
+    async def _store(
+        self,
+        account_id: str,
+        outcome: Outcome,
+        windows: list[QuotaReport] | None = None,
+        rotated: bool = False,
+        keep: bool = False,
+    ) -> None:
+        """Outside the probe, in one short write: the snapshots and the outcome."""
         async with self._db.write() as tx:
             if rotated:
                 await record(
@@ -109,11 +140,59 @@ class QuotaProber:
                 )
             if windows:
                 await usage.upsert_quota(tx, account_id, windows, "polled", "system")
-        return Outcome("updated") if windows else Outcome("skipped", "no windows")
+            await usage.record_probe(
+                tx, account_id, outcome.status, outcome.reason, keep=keep
+            )
+
+    async def sweep(self, *, backoff: bool = True) -> list[str]:
+        """Queue the Codex ChatGPT accounts whose quota is missing or stale: at most
+        `SWEEP_CAP`, the longest-unobserved first. A recent probe (any outcome)
+        defers an account, unless `backoff` is off (the start-up inventory)."""
+        cutoff = ts(self._now() - REFRESH_AFTER)
+        async with (
+            self._db.read() as conn,
+            conn.execute(
+                "SELECT a.id,"
+                " (SELECT max(observed_at) FROM account_quota q"
+                "  WHERE q.account_id = a.id) AS seen,"
+                " (SELECT at FROM account_quota_probe p"
+                "  WHERE p.account_id = a.id) AS probed"
+                " FROM accounts a WHERE a.provider = ? AND a.kind = 'subscription'"
+                " AND a.state != 'disabled'",
+                (codex_auth.PROVIDER,),
+            ) as cur,
+        ):
+            rows = await cur.fetchall()
+        due = [
+            r
+            for r in rows
+            if (r["seen"] is None or r["seen"] <= cutoff)
+            and (not backoff or r["probed"] is None or r["probed"] <= cutoff)
+        ]
+        due.sort(key=lambda r: (r["seen"] or "", r["id"]))
+        queued = []
+        for r in due[:SWEEP_CAP]:
+            if r["id"] not in self._queued:
+                self.request(r["id"])
+                queued.append(r["id"])
+        return queued
+
+    async def _sweeper(self) -> None:
+        await self._sleep(STARTUP_DELAY_S)
+        backoff = False  # the inventory ignores earlier outcomes, later sweeps do not
+        while True:
+            try:
+                await self.sweep(backoff=backoff)
+            except Exception:  # a failed sweep must not end the loop
+                log.exception("quota sweep failed")
+            backoff = True
+            await self._sleep(SWEEP_INTERVAL_S)
 
     async def run(self, stats: LoopStats | None = None) -> None:
-        """Queue probes when runs end, and work the queue (account usage 3.3)."""
+        """Queue probes when runs end and as the inventory ages, and work the queue
+        one account at a time (account usage 3.3)."""
         watcher = asyncio.create_task(self._watch())
+        sweeper = asyncio.create_task(self._sweeper())
         try:
             while True:
                 account_id = await self._queue.get()
@@ -122,10 +201,13 @@ class QuotaProber:
                 outcome = await self.probe(account_id)
                 if stats:
                     stats.record(time.monotonic() - started, outcome.status != "failed")
+                if outcome.status != "rate_limited":
+                    await self._sleep(PROBE_GAP_S)
         finally:
-            watcher.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await watcher
+            for task in (watcher, sweeper):
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
     # -- triggers ------------------------------------------------------------------
 

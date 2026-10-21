@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   allUnmeasured,
+  bucketTokens,
+  measuredRuns,
+  notMeasured,
+  probeNote,
+  reasonsNote,
+  roleSplit,
+  snapshotStale,
+  tokensOrDash,
   hasModelUsage,
   parseTokenLimits,
   poolState,
@@ -111,5 +119,83 @@ describe("quota status and measurement helpers", () => {
     expect(parseTokenLimits({ ...empty, "24h": " 2000 " })).toEqual({ limits: { "24h": 2000 } });
     for (const bad of ["0", "-1", "1.5", "abc"])
       expect(parseTokenLimits({ ...empty, "5h": bad })).toHaveProperty("error");
+  });
+});
+
+describe("telemetry honesty helpers", () => {
+  it("names a sentence per reason code, with the provider", () => {
+    expect(quotaUnknownLabel({ reason: "unsupported_provider" }, "anthropic")).toBe(
+      "Claude does not expose a quota Argus can read",
+    );
+    expect(quotaUnknownLabel({ reason: "unsupported_provider" }, "acme")).toBe(
+      "acme does not expose a quota Argus can read",
+    );
+    expect(quotaUnknownLabel({ reason: "unsupported_provider" })).toBe(
+      "This provider does not expose a quota Argus can read",
+    );
+    for (const reason of [
+      "api_key_account",
+      "not_yet_probed",
+      "probe_failed",
+      "probe_skipped",
+      "probe_rate_limited",
+    ] as const) {
+      expect(quotaUnknownLabel({ reason })).not.toBe("Quota unknown");
+    }
+  });
+
+  it("tells a measured zero from not measured", () => {
+    expect(notMeasured({ runs: 3, unmeasured_runs: 3, measured_runs: 0 })).toBe(true);
+    expect(notMeasured({ runs: 3, unmeasured_runs: 3 })).toBe(true); // older server
+    expect(notMeasured({ runs: 3, unmeasured_runs: 1, measured_runs: 2 })).toBe(false);
+    expect(notMeasured({ runs: 0, measured_runs: 0 })).toBe(false); // nothing ran
+    expect(measuredRuns({ runs: 5, unmeasured_runs: 2 })).toBe(3);
+    expect(tokensOrDash({ runs: 2, unmeasured_runs: 2 }, 0)).toBe("—");
+    expect(tokensOrDash({ runs: 2, unmeasured_runs: 1 }, 0)).toBe("0");
+    const b = (runs: number, unmeasured_runs: number) =>
+      ({
+        start: "x",
+        input_tokens: 0,
+        output_tokens: 0,
+        cached_input_tokens: 0,
+        cost_usd: 0,
+        runs,
+        unmeasured_runs,
+      }) as Parameters<typeof bucketTokens>[0];
+    expect(bucketTokens(b(0, 0))).toBe(0); // no rows: a measured zero
+    expect(bucketTokens(b(2, 2))).toBeNull(); // all unmeasured: a gap
+  });
+
+  it("summarises reasons and roles", () => {
+    expect(reasonsNote({})).toBeNull();
+    expect(reasonsNote({ unknown: 1, no_usage_in_output: 2 })).toBe(
+      "no usage in output ×2, unknown ×1",
+    );
+    expect(roleSplit({})).toBeNull();
+    expect(roleSplit({ unknown: 1, executor: 2, engine: 3 })).toBe(
+      "Harness 3 · Executor 2 · Role unknown 1",
+    );
+  });
+
+  it("judges a snapshot stale by age and by an elapsed reset", () => {
+    const now = Date.parse("2026-10-18T12:00:00Z");
+    expect(snapshotStale(quota({ observed_at: "2026-10-18T11:30:00Z" }), now)).toBe(false);
+    expect(snapshotStale(quota({ observed_at: "2026-10-18T10:30:00Z" }), now)).toBe(true);
+    expect(
+      snapshotStale(
+        quota({ observed_at: "2026-10-18T11:59:00Z", resets_at: "2026-10-18T11:00:00Z" }),
+        now,
+      ),
+    ).toBe(true);
+  });
+
+  it("describes the last probe", () => {
+    expect(probeNote(null, "now")).toBeNull();
+    expect(
+      probeNote({ status: "skipped", reason: "codex binary not configured", at: "x" }, "2h ago"),
+    ).toBe("Last read skipped (codex binary not configured), 2h ago");
+    expect(probeNote({ status: "updated", reason: null, at: "x" }, "1m ago")).toBe(
+      "Last read updated, 1m ago",
+    );
   });
 });

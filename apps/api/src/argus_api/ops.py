@@ -229,7 +229,7 @@ async def snapshot(
                 " coalesce(sum(u.output_tokens), 0),"
                 " coalesce(sum(u.cached_input_tokens), 0)"
                 " FROM accounts a JOIN account_usage u ON u.account_id = a.id"
-                " GROUP BY a.id"
+                " WHERE u.measurement = 'measured' GROUP BY a.id"
             )
         }
         account_quota = {

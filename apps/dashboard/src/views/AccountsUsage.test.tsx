@@ -87,6 +87,46 @@ const ACCOUNTS: Account[] = [
   }),
   account({ id: "m1", name: "unmeasured-only", provider: "openai" }),
   account({ id: "g1", name: "gitea-bot", provider: "gitea", kind: "api_key" }),
+  account({
+    id: "s1",
+    name: "codex-stale",
+    provider: "openai",
+    quota: [
+      {
+        window: "300m",
+        window_minutes: 300,
+        used_percent: 40,
+        resets_at: null,
+        exhausted_until: null,
+        observed_at: "2026-10-01T00:00:00Z",
+        source: "polled",
+      },
+    ],
+    quota_status: {
+      state: "stale",
+      reason: null,
+      windows: [],
+      observed_at: "2026-10-01T00:00:00Z",
+      collector: "codex_rate_limits",
+    },
+  }),
+  account({
+    id: "u1",
+    name: "claude-sub",
+    provider: "anthropic",
+    quota_status: { state: "unknown", reason: "unsupported_provider", windows: [] },
+  }),
+  account({
+    id: "p1",
+    name: "codex-failed",
+    provider: "openai",
+    quota_status: {
+      state: "unknown",
+      reason: "probe_failed",
+      windows: [],
+      last_probe: { status: "failed", reason: "TimeoutError", at: "2026-10-20T00:00:00Z" },
+    },
+  }),
 ];
 
 const bucket = (start: string, input: number) => ({
@@ -133,7 +173,14 @@ vi.mock("../api", () => ({
           reported: ["c1", "k1", "m1"].includes(id),
           totals:
             id === "m1"
-              ? { ...usage, runs: 4, unmeasured_runs: 4 }
+              ? {
+                  ...usage,
+                  runs: 4,
+                  unmeasured_runs: 4,
+                  measured_runs: 0,
+                  unmeasured_reasons: { no_usage_in_output: 3, unknown: 1 },
+                  runs_by_role: { executor: 4 },
+                }
               : {
                   ...usage,
                   input_tokens: 300,
@@ -189,6 +236,34 @@ describe("accounts usage", () => {
     expect(within(none).getByText("No usage reported yet")).toBeTruthy();
     expect(within(none).getByText("4 runs without measurement")).toBeTruthy();
     expect(within(none).queryByRole("img", { name: /tokens per day/ })).toBeNull();
+    const label = within(none).getByText("Not measured");
+    expect(label.getAttribute("title")).toBe("no usage in output ×3, unknown ×1");
+    expect(within(none).getByText("Executor 4")).toBeTruthy();
+  });
+
+  it("flags stale snapshots, names why quota is unknown, and shows the last probe", async () => {
+    render(<Accounts />);
+    const stale = (await screen.findByText("codex-stale")).closest("tr") as HTMLElement;
+    expect(within(stale).getByText("60% left")).toBeTruthy();
+    expect(within(stale).getByText(/stale, observed/)).toBeTruthy();
+    const claude = screen.getByText("claude-sub").closest("tr") as HTMLElement;
+    expect(
+      within(claude).getByText("Claude does not expose a quota Argus can read"),
+    ).toBeTruthy();
+    const failed = screen.getByText("codex-failed").closest("tr") as HTMLElement;
+    const why = within(failed).getByText("The last quota read failed");
+    expect(why.getAttribute("title")).toMatch(/Last read failed \(TimeoutError\)/);
+  });
+
+  it("shows the detail of a not-measured account with dashes and reasons", async () => {
+    render(<Accounts />);
+    fireEvent.click(await screen.findByText("unmeasured-only"));
+    const detail = await screen.findByRole("complementary", { name: "Account unmeasured-only" });
+    expect(await within(detail).findByText(/no run gave figures/)).toBeTruthy();
+    expect(within(detail).getByText(/no usage in output ×3/)).toBeTruthy();
+    expect(within(detail).getByText("Runs: Executor 4")).toBeTruthy();
+    // Total, input, cached input and output read "—", never 0.
+    expect(within(detail).getAllByText("—")).toHaveLength(4);
   });
 
   it("opens the detail with a time window filter and quota refresh", async () => {

@@ -31,7 +31,13 @@ import { anthropicRedirectRejection, LOCAL_HARNESS_AUTH_TOKEN } from "./anthropi
 import { createFileRelay, envSecrets, RELAY_FILE, startLiveLog } from "./livelog.mjs";
 import { createSink, createTracker, gitHead, waitingInput } from "./milestones.mjs";
 import { implementationScope, loadPolicy, selectModel } from "./model-policy.mjs";
-import { parseUsage, runKey, runKeyHash } from "./usage.mjs";
+import {
+  appendUsageRecord,
+  parseUsage,
+  runKey,
+  runKeyHash,
+  USAGE_RELAY_FILE,
+} from "./usage.mjs";
 
 export const EXECUTORS = ["claude", "codex", "opencode", "agent"];
 const KILL_GRACE_MS = 5000;
@@ -729,6 +735,7 @@ export function usagePayload({ taskId, model, engine, role, usage, key }) {
     output_tokens: measured ? usage.output_tokens : null,
     cached_input_tokens: measured ? usage.cached_input_tokens : null,
     cost_usd: measured ? usage.cost_usd : null,
+    reason: measured ? null : (usage.reason ?? "unknown"),
     run_key: key,
   };
 }
@@ -934,7 +941,26 @@ async function runAttempt(
   });
   const spoolFile = path.join(out, `usage-${runKeyHash(key)}.json`);
   fs.writeFileSync(spoolFile, JSON.stringify({ account_id: accountId, payload }, null, 2) + "\n");
-  const usageReport = await reportUsage({ e, accountId, payload });
+  let usageReport = await reportUsage({ e, accountId, payload });
+  // Inside the worker container there is no Argus token (and there must not be): the NanoClaw
+  // host reads this file and posts with its own, after checking the task, attempt and account.
+  if (accountId && taskId && usageReport.status !== "sent") {
+    const relayFile =
+      e.ARGUS_USAGE_RELAY_FILE ||
+      path.join(
+        path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
+        USAGE_RELAY_FILE,
+      );
+    const queued = appendUsageRecord(relayFile, {
+      source: "delegate",
+      role: "executor",
+      task_id: taskId,
+      attempt: snapshot.context?.attempt ?? null,
+      account_id: accountId,
+      payload,
+    });
+    if (queued) usageReport = { status: "queued", reason: "host_relay", direct: usageReport };
+  }
   const report = {
     ...identity,
     ...evidence,

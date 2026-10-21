@@ -1084,6 +1084,12 @@ button.link.account-name {
 .bar-output {
   fill: var(--ok);
 }
+.bar-unmeasured {
+  fill: var(--border);
+}
+.stale {
+  opacity: 0.65;
+}
 .legend {
   display: flex;
   gap: 1rem;
@@ -1103,6 +1109,9 @@ button.link.account-name {
 }
 .swatch.bar-output {
   background: var(--ok);
+}
+.swatch.bar-unmeasured {
+  background: var(--border);
 }
 .milestone {
   display: block;

@@ -4,27 +4,40 @@
 import { relative } from "../format";
 import {
   bucketLabel,
+  bucketTokens,
+  NOT_MEASURED,
+  notMeasured,
+  probeNote,
   type QuotaStatus,
   type QuotaStatusWindow,
   type QuotaWindow,
   quotaFull,
   quotaUnknownLabel,
   SOURCE_LABELS,
+  snapshotStale,
   tokens,
   totalTokens,
   type UsageBucket,
   windowLabel,
 } from "../usage";
 
-export function Sparkline(props: { values: number[]; label: string }) {
+/** Tokens per bucket. A null value is a bucket nobody measured: a gap in the line. */
+export function Sparkline(props: { values: (number | null)[]; label: string }) {
   const { values } = props;
   const w = 96;
   const h = 24;
-  const max = Math.max(...values, 1);
+  const max = Math.max(...values.map((v) => v ?? 0), 1);
   const step = values.length > 1 ? w / (values.length - 1) : w;
-  const points = values.map(
-    (v, i) => `${(i * step).toFixed(1)},${(h - 2 - (v / max) * (h - 4)).toFixed(1)}`,
-  );
+  const runs: string[][] = [[]];
+  values.forEach((v, i) => {
+    if (v == null) {
+      if (runs[runs.length - 1]?.length) runs.push([]);
+      return;
+    }
+    runs[runs.length - 1]?.push(
+      `${(i * step).toFixed(1)},${(h - 2 - (v / max) * (h - 4)).toFixed(1)}`,
+    );
+  });
   return (
     <svg
       className="spark"
@@ -34,7 +47,27 @@ export function Sparkline(props: { values: number[]; label: string }) {
       role="img"
       aria-label={props.label}
     >
-      <polyline points={points.join(" ")} fill="none" stroke="currentColor" strokeWidth="1.5" />
+      {runs
+        .filter((points) => points.length > 0)
+        .map((points) =>
+          points.length === 1 ? (
+            <circle
+              key={points[0]}
+              cx={points[0]?.split(",")[0]}
+              cy={points[0]?.split(",")[1]}
+              r="1.5"
+              fill="currentColor"
+            />
+          ) : (
+            <polyline
+              key={points[0]}
+              points={points.join(" ")}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            />
+          ),
+        )}
     </svg>
   );
 }
@@ -52,11 +85,12 @@ export function StackedBars(props: { buckets: UsageBucket[]; bucket: "hour" | "d
   const h = 180;
   const pad = { top: 8, bottom: 22, left: 44 };
   const plotH = h - pad.top - pad.bottom;
-  const max = Math.max(...buckets.map(totalTokens), 1);
+  const max = Math.max(...buckets.map((b) => bucketTokens(b) ?? 0), 1);
   const slot = (w - pad.left) / Math.max(buckets.length, 1);
   const barW = Math.max(Math.min(slot * 0.7, 28), 1);
   const labelEvery = Math.ceil(buckets.length / 8);
-  const total = buckets.reduce((s, b) => s + totalTokens(b), 0);
+  const total = buckets.reduce((s, b) => s + (bucketTokens(b) ?? 0), 0);
+  const anyUnmeasured = buckets.some(notMeasured);
   return (
     <figure className="chart">
       <svg
@@ -83,13 +117,25 @@ export function StackedBars(props: { buckets: UsageBucket[]; bucket: "hour" | "d
           };
           const x = pad.left + i * slot + (slot - barW) / 2;
           let y = pad.top + plotH;
+          const unmeasured = notMeasured(b);
           return (
             <g key={b.start}>
               <title>
-                {`${bucketLabel(b.start, bucket, tz)}: ${tokens(totalTokens(b))} tokens` +
-                  ` (input ${tokens(b.input_tokens)}, cached ${tokens(b.cached_input_tokens)},` +
-                  ` output ${tokens(b.output_tokens)}), ${b.runs} runs`}
+                {unmeasured
+                  ? `${bucketLabel(b.start, bucket, tz)}: ${NOT_MEASURED} (${b.runs} runs gave no figures)`
+                  : `${bucketLabel(b.start, bucket, tz)}: ${tokens(totalTokens(b))} tokens` +
+                    ` (input ${tokens(b.input_tokens)}, cached ${tokens(b.cached_input_tokens)},` +
+                    ` output ${tokens(b.output_tokens)}), ${b.runs} runs`}
               </title>
+              {unmeasured && (
+                <rect
+                  className="bar-unmeasured"
+                  x={x}
+                  y={pad.top + plotH - 4}
+                  width={barW}
+                  height={4}
+                />
+              )}
               {SERIES.map((s) => {
                 const height = (parts[s.key] / max) * plotH;
                 y -= height;
@@ -119,6 +165,11 @@ export function StackedBars(props: { buckets: UsageBucket[]; bucket: "hour" | "d
             <i className={`swatch ${s.className}`} /> {s.label}
           </span>
         ))}
+        {anyUnmeasured && (
+          <span>
+            <i className="swatch bar-unmeasured" /> {NOT_MEASURED} (no figures reported)
+          </span>
+        )}
       </figcaption>
     </figure>
   );
@@ -128,11 +179,13 @@ export function StackedBars(props: { buckets: UsageBucket[]; bucket: "hour" | "d
  * with its source and age: the figure is the provider's, not Argus's. */
 export function QuotaMeter(props: { q: QuotaWindow; compact?: boolean }) {
   const { q, compact } = props;
-  const full = quotaFull(q);
-  const age = `${SOURCE_LABELS[q.source]} ${relative(q.observed_at)}`;
+  const stale = snapshotStale(q);
+  const full = !stale && quotaFull(q);
+  const seen = `${SOURCE_LABELS[q.source]} ${relative(q.observed_at)}`;
+  const age = stale ? `stale, observed ${relative(q.observed_at)} · ${seen}` : seen;
   if (q.used_percent == null) {
     return (
-      <span className={`pill ${full ? "pill-full" : ""}`} title={age}>
+      <span className={`pill ${full ? "pill-full" : ""} ${stale ? "stale" : ""}`} title={age}>
         {windowLabel(q)}:{" "}
         {full ? `exhausted · resets ${relative(q.exhausted_until)}` : "within limit"}
         {q.source === "estimated" && " (estimated)"}
@@ -141,18 +194,19 @@ export function QuotaMeter(props: { q: QuotaWindow; compact?: boolean }) {
   }
   const left = 100 - Math.min(Math.max(q.used_percent, 0), 100);
   return (
-    <div className={`meter ${full ? "meter-full" : ""}`} title={age}>
+    <div className={`meter ${full ? "meter-full" : ""} ${stale ? "stale" : ""}`} title={age}>
       <span className="meter-label">
         {windowLabel(q)} <strong>{Math.round(left)}% left</strong>
+        {stale && <span className="muted small"> (stale)</span>}
       </span>
       <svg viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true">
         <rect className="meter-track" width="100" height="6" rx="3" />
         <rect className="meter-fill" width={left} height="6" rx="3" />
       </svg>
-      {!compact && (
+      {(!compact || stale) && (
         <span className="small muted">
-          {q.resets_at && `resets ${relative(q.resets_at)} · `}
-          {age}
+          {!stale && q.resets_at && `resets ${relative(q.resets_at)} · `}
+          {compact ? `stale, observed ${relative(q.observed_at)}` : age}
         </span>
       )}
     </div>
@@ -180,11 +234,21 @@ export function EstimatedWindow(props: { w: QuotaStatusWindow; compact?: boolean
   );
 }
 
-/** Quota state for an account with no provider snapshot: estimated windows, or the reason it is unknown. */
-export function QuotaStatusView(props: { status: QuotaStatus; compact?: boolean }) {
-  const { status, compact } = props;
+/** Quota state apart from the provider's snapshots: estimated windows, or the
+ * reason it is unknown, with the last probe as a tooltip. */
+export function QuotaStatusView(props: {
+  status: QuotaStatus;
+  provider?: string;
+  compact?: boolean;
+}) {
+  const { status, provider, compact } = props;
   if (status.state === "unknown") {
-    return <span className={compact ? "muted small" : "muted"}>{quotaUnknownLabel(status)}</span>;
+    const probe = probeNote(status.last_probe, relative(status.last_probe?.at));
+    return (
+      <span className={compact ? "muted small" : "muted"} title={probe ?? undefined}>
+        {quotaUnknownLabel(status, provider)}
+      </span>
+    );
   }
   const windows = status.windows ?? [];
   if (windows.length === 0) return null;
@@ -197,15 +261,24 @@ export function QuotaStatusView(props: { status: QuotaStatus; compact?: boolean 
   );
 }
 
-/** The quota cell shared by Accounts and Cost: provider windows, else the estimated/unknown status. */
-export function AccountQuota(props: { quota?: QuotaWindow[]; status: QuotaStatus }) {
+/** The quota cell shared by Accounts and Cost: provider windows (flagged when
+ * stale), estimated windows, or the reason nothing is known. */
+export function AccountQuota(props: {
+  quota?: QuotaWindow[];
+  status: QuotaStatus;
+  provider?: string;
+}) {
   const quota = props.quota ?? [];
-  if (quota.length === 0) return <QuotaStatusView status={props.status} compact />;
+  if (quota.length === 0)
+    return <QuotaStatusView status={props.status} provider={props.provider} compact />;
   return (
     <div className="quota-cell">
       {quota.map((q) => (
         <QuotaMeter key={q.window} q={q} compact />
       ))}
+      {(props.status.windows ?? []).length > 0 && (
+        <QuotaStatusView status={props.status} provider={props.provider} compact />
+      )}
     </div>
   );
 }
