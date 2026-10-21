@@ -3,6 +3,7 @@
  * (docs/specs/custom-harness.spec.md). The upstream URL and key are fixed at
  * bridge start; requests cannot retarget another host.
  */
+import { timingSafeEqual } from "node:crypto";
 import http from "node:http";
 import { URL } from "node:url";
 
@@ -327,18 +328,43 @@ function writeAnthropicError(res, status, notice) {
   );
 }
 
-/** Start a loopback bridge; `settings` has base_url, model, provider (no api_key). */
+/** Header a caller presents when the bridge was started with a `bridgeKey`. */
+export const BRIDGE_KEY_HEADER = "x-argus-bridge-key";
+
+/** Constant-time check of the caller's bridge key header. */
+export function bridgeKeyMatches(presented, expected) {
+  if (typeof presented !== "string" || !expected) return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * Start the bridge; `settings` has base_url, model, provider (no api_key). It listens
+ * on loopback by default; a bridge that listens beyond loopback (`listenHost`
+ * 0.0.0.0, so agent containers reach it through a published port) must be given a
+ * `bridgeKey`: every request then has to present it in BRIDGE_KEY_HEADER.
+ */
 export async function startAnthropicOpenAIBridge({
   settings,
   apiKey,
   listenHost = "127.0.0.1",
+  listenPort = 0,
+  bridgeKey = null,
   fetchImpl = fetch,
 }) {
   if (!apiKey || typeof apiKey !== "string") throw new Error("bridge needs an api_key");
+  const loopback = listenHost === "127.0.0.1" || listenHost === "::1" || listenHost === "localhost";
+  if (!loopback && !bridgeKey) throw new Error("a bridge beyond loopback needs a bridgeKey");
   const upstream = settings.base_url.replace(/\/+$/, "");
   const chatUrl = `${upstream}/chat/completions`;
 
   const server = http.createServer(async (req, res) => {
+    if (bridgeKey && !bridgeKeyMatches(req.headers[BRIDGE_KEY_HEADER], bridgeKey)) {
+      req.resume();
+      writeAnthropicError(res, 401, "bridge key missing or wrong");
+      return;
+    }
     if (req.method !== "POST" || !req.url?.startsWith("/v1/messages")) {
       res.writeHead(404);
       res.end();
@@ -407,7 +433,7 @@ export async function startAnthropicOpenAIBridge({
 
   await new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, listenHost, resolve);
+    server.listen(listenPort, listenHost, resolve);
   });
   const addr = server.address();
   const port = typeof addr === "object" && addr ? addr.port : 0;

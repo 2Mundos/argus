@@ -133,3 +133,23 @@ test("openAIChoiceToAnthropic maps tool calls", () => {
   assert.equal(msg.stop_reason, "tool_use");
   assert.equal(msg.content[0].type, "tool_use");
 });
+
+test("a bridge beyond loopback requires a bridge key", async () => {
+  const { startAnthropicOpenAIBridge } = await import("./anthropic-openai-bridge.mjs");
+  await assert.rejects(
+    startAnthropicOpenAIBridge({
+      settings: { base_url: "http://127.0.0.1:9/v1" },
+      apiKey: "k",
+      listenHost: "0.0.0.0",
+    }),
+    /bridgeKey/,
+  );
+});
+
+test("bridgeKeyMatches is exact", async () => {
+  const { bridgeKeyMatches } = await import("./anthropic-openai-bridge.mjs");
+  assert.equal(bridgeKeyMatches("abc", "abc"), true);
+  assert.equal(bridgeKeyMatches("abd", "abc"), false);
+  assert.equal(bridgeKeyMatches(undefined, "abc"), false);
+  assert.equal(bridgeKeyMatches(["abc"], "abc"), false);
+});

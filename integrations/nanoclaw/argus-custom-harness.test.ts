@@ -52,3 +52,30 @@ describe("withCustomHarnessRuntime", () => {
     expect(env.ARGUS_ALLOWED_ANTHROPIC_BASE_URL).toBe("http://host.docker.internal:1");
   });
 });
+
+describe("bridge key", () => {
+  const settings = {
+    base_url: "https://openrouter.ai/api/v1",
+    label: "openrouter",
+    model: "m",
+    provider: null,
+  };
+
+  it("the container sends the bridge key as a custom header", () => {
+    const key = "ab".repeat(32);
+    const h = customHarnessFromLease("http://host.docker.internal:9", settings, key)!;
+    expect(h.bridge_key).toBe(key);
+    expect(customHarnessEnv(h).ANTHROPIC_CUSTOM_HEADERS).toBe(`x-argus-bridge-key: ${key}`);
+  });
+
+  it("ignores a malformed key and clears the header without a harness", () => {
+    expect(
+      customHarnessFromLease("http://host.docker.internal:9", settings, "x y")!.bridge_key,
+    ).toBeUndefined();
+    const out = withCustomHarnessRuntime(
+      { env: { ANTHROPIC_CUSTOM_HEADERS: "x-argus-bridge-key: old" } } as never,
+      null,
+    );
+    expect(out.env?.ANTHROPIC_CUSTOM_HEADERS).toBeUndefined();
+  });
+});

@@ -1384,18 +1384,31 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       removeLocalHarnessFile(dataDir, group.folder);
       const key =
         typeof lease.credential.api_key === "string" ? lease.credential.api_key.trim() : "";
-      const containerUrl = await syncCustomHarnessBridge(
-        group.folder,
-        lease.settings ?? null,
-        key || null,
-        fetchImpl,
-      );
-      if (!containerUrl || !lease.settings) {
+      let endpoint: Awaited<ReturnType<typeof syncCustomHarnessBridge>> = null;
+      try {
+        endpoint = await syncCustomHarnessBridge(
+          group.folder,
+          lease.settings ?? null,
+          key || null,
+          fetchImpl,
+        );
+      } catch (err) {
+        log.warn("Custom harness bridge could not start; harness not applied", {
+          err: String(err instanceof Error ? err.message : err),
+        });
+        removeCustomHarnessFile(dataDir, group.folder);
+        return;
+      }
+      if (!endpoint || !lease.settings) {
         log.warn("Custom engine lease is missing settings or api_key; harness not applied");
         removeCustomHarnessFile(dataDir, group.folder);
         return;
       }
-      const harness = customHarnessFromLease(containerUrl, lease.settings);
+      const harness = customHarnessFromLease(
+        endpoint.containerBaseUrl,
+        lease.settings,
+        endpoint.bridgeKey,
+      );
       if (!harness) {
         removeCustomHarnessFile(dataDir, group.folder);
         return;

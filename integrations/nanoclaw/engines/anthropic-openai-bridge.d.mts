@@ -13,5 +13,9 @@ export declare function startAnthropicOpenAIBridge(opts: {
   settings: BridgeSettings;
   apiKey: string;
   listenHost?: string;
+  listenPort?: number;
+  bridgeKey?: string | null;
   fetchImpl?: typeof fetch;
 }): Promise<AnthropicOpenAIBridge>;
+export declare const BRIDGE_KEY_HEADER: string;
+export declare function bridgeKeyMatches(presented: unknown, expected: string | null): boolean;

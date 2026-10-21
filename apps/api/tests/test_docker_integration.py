@@ -344,3 +344,111 @@ def test_kubernetes_target_scales_runs_work_and_cleans_up(argus: httpx.Client) -
         argus.put(f"/pools/{pool}", json={**body, "desired_replicas": 0})
         for name in pods():
             api.delete_namespaced_pod(name, K8S_NAMESPACE, grace_period_seconds=0)
+
+
+BRIDGE_NODE_IMAGE = os.environ.get("ARGUS_BRIDGE_SMOKE_IMAGE", "node:22-slim")
+
+
+def test_custom_bridge_published_port_reaches_agent_containers() -> None:
+    """The custom-harness bridge runs in the NanoClaw host container, on its own
+    network; agent containers run on the default bridge. Started the way the fleet
+    starts a NanoClaw host (DockerTarget, published on HOST_GATEWAY), the bridge must
+    answer an agent container at host.docker.internal:<published port>, and refuse a
+    request without its key."""
+    import json as _json
+    import uuid
+
+    from argus_api.fleet.runtimes import CUSTOM_BRIDGE_PORT
+    from argus_api.fleet.targets import HOST_GATEWAY, ContainerSpec, DockerTarget, Mount
+
+    engines = ROOT / "integrations/nanoclaw/engines"
+    net = f"argus-it-bridge-{uuid.uuid4().hex[:8]}"
+    key = uuid.uuid4().hex + uuid.uuid4().hex
+    subprocess.run(
+        ["docker", "network", "create", net], check=True, capture_output=True
+    )
+    target = DockerTarget(host=None)
+    spec = ContainerSpec(
+        instance_id=f"it-bridge-{uuid.uuid4().hex[:8]}",
+        image=BRIDGE_NODE_IMAGE,
+        env={},
+        labels={"argus.it": "bridge"},
+        network=net,
+        mounts=[Mount(str(engines), "/engines", "ro")],
+        ports={f"{CUSTOM_BRIDGE_PORT}/tcp": (HOST_GATEWAY, None)},
+    )
+    try:
+        subprocess.run(
+            ["docker", "pull", "-q", BRIDGE_NODE_IMAGE], check=True, capture_output=True
+        )
+        # The image's default command is node; run the smoke server instead.
+        spec_cmd = [
+            "node",
+            "/engines/bridge-smoke-server.mjs",
+            str(CUSTOM_BRIDGE_PORT),
+            key,
+        ]
+        client = target._docker()
+        client.containers.run(
+            spec.image,
+            spec_cmd,
+            name=spec.name,
+            detach=True,
+            network=spec.network,
+            volumes={str(engines): {"bind": "/engines", "mode": "ro"}},
+            ports=target._ports(client, spec.ports),
+            labels=spec.labels,
+        )
+        wait_for(
+            lambda: (
+                "bridge-smoke listening"
+                in subprocess.run(
+                    ["docker", "logs", spec.name], capture_output=True, text=True
+                ).stdout
+            ),
+            60,
+            "the smoke bridge",
+        )
+        published = subprocess.run(
+            ["docker", "port", spec.name, f"{CUSTOM_BRIDGE_PORT}/tcp"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        host_port = published.strip().splitlines()[0].rsplit(":", 1)[1]
+        probe = (
+            "const u='http://host.docker.internal:" + host_port + "/v1/messages';"
+            "const body=JSON.stringify({model:'smoke',max_tokens:8,"
+            "messages:[{role:'user',content:'hi'}]});"
+            "const h={'content-type':'application/json'};"
+            "const a=await fetch(u,{method:'POST',headers:h,body});"
+            "const b=await fetch(u,{method:'POST',headers:{...h,'x-argus-bridge-key':process.argv[1]},body});"
+            "console.log(JSON.stringify({nokey:a.status,key:b.status,body:await b.json()}));"
+        )
+        out = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "bridge",
+                "--add-host",
+                "host.docker.internal:host-gateway",
+                BRIDGE_NODE_IMAGE,
+                "node",
+                "--input-type=module",
+                "-e",
+                probe,
+                key,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        result = _json.loads(out.stdout.strip().splitlines()[-1])
+        assert result["nokey"] == 401
+        assert result["key"] == 200
+        assert "bridge-ok" in _json.dumps(result["body"])
+    finally:
+        subprocess.run(["docker", "rm", "-f", spec.name], capture_output=True)
+        subprocess.run(["docker", "network", "rm", net], capture_output=True)

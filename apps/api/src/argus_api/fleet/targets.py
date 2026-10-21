@@ -9,12 +9,15 @@ creating a second one.
 import asyncio
 import builtins
 import json
+import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
+
+log = logging.getLogger(__name__)
 
 MANAGED_LABEL = "argus.managed"
 POOL_LABEL = "argus.pool"
@@ -41,6 +44,10 @@ class TargetError(Exception):
 
 def container_name(instance_id: str) -> str:
     return f"argus-{instance_id}"
+
+
+# ContainerSpec.ports host address: the default bridge gateway of the daemon.
+HOST_GATEWAY = "host-gateway"
 
 
 @dataclass(frozen=True)
@@ -71,6 +78,11 @@ class ContainerSpec:
     memory_mb: int | None = None
     network: str | None = None
     extra_hosts: list[str] = field(default_factory=list)
+    # Published ports, Docker target only: "<port>/tcp" -> (host address, host port).
+    # Host address HOST_GATEWAY means the daemon's default bridge gateway (what
+    # containers resolve host.docker.internal:host-gateway to); host port None lets
+    # Docker pick a free one.
+    ports: dict[str, tuple[str, int | None]] = field(default_factory=dict)
     mounts: list[Mount] = field(default_factory=list)
     user: str | None = None
     group_add: list[str] = field(default_factory=list)
@@ -270,6 +282,7 @@ class DockerTarget:
                 labels=spec.labels,
                 network=spec.network,
                 extra_hosts=_extra_hosts(spec.extra_hosts),
+                ports=self._ports(client, spec.ports),
                 nano_cpus=int(spec.cpus * 1e9) if spec.cpus else None,
                 mem_limit=f"{spec.memory_mb}m" if spec.memory_mb else None,
                 volumes={
@@ -289,6 +302,27 @@ class DockerTarget:
             if exc.status_code != 409:  # 409: created concurrently under our name
                 raise
         return spec.name
+
+    def _ports(
+        self, client: Any, ports: dict[str, tuple[str, int | None]]
+    ) -> dict[str, tuple[str, int | None]] | None:
+        """Docker `ports` for the spec, with HOST_GATEWAY resolved to the default
+        bridge's gateway: published there, a port is reachable from containers on
+        that bridge (as host.docker.internal) but not from the LAN."""
+        if not ports:
+            return None
+        gateway: str | None = None
+        out: dict[str, tuple[str, int | None]] = {}
+        for cport, (addr, hport) in ports.items():
+            if addr == HOST_GATEWAY:
+                if gateway is None:
+                    gateway = _bridge_gateway(client)
+                if not gateway:  # no docker0: nothing in a container could reach it
+                    log.warning("no default bridge gateway; %s is not published", cport)
+                    continue
+                addr = gateway
+            out[cport] = (addr, hport)
+        return out or None
 
     def _prepare_dir(self, client: Any, image: str, mount: Mount) -> None:
         """Create a bind-mount source owned by the instance user.
@@ -394,6 +428,21 @@ class DockerTarget:
         except NotFound:
             return ""
         return raw.decode(errors="replace")
+
+
+def _bridge_gateway(client: Any) -> str:
+    """IPv4 gateway of the daemon's default `bridge` network (docker0), or ""."""
+    from docker.errors import NotFound
+
+    try:
+        net = client.networks.get("bridge")
+    except NotFound:
+        return ""
+    for cfg in (net.attrs.get("IPAM") or {}).get("Config") or []:
+        gw = (cfg or {}).get("Gateway") or ""
+        if gw and ":" not in gw:
+            return gw
+    return ""
 
 
 def _extra_hosts(entries: list[str]) -> dict[str, str] | None:
