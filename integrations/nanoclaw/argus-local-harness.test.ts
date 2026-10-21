@@ -95,6 +95,29 @@ describe("withLocalHarnessRuntime", () => {
   });
 });
 
+describe("withLocalHarnessRuntime without a harness (cloud mode)", () => {
+  it("keeps the Claude gateway stub and drops only stale redirect env", () => {
+    const withStub = withClaudeDelegateRuntime({
+      env: {
+        CLAUDE_CODE_OAUTH_TOKEN: "onecli-managed-sentinel",
+        HTTPS_PROXY: "http://x@host.docker.internal:10255",
+        ARGUS_ALLOWED_ANTHROPIC_BASE_URL: "http://host.docker.internal:8080",
+      },
+      caCertificateContainerPath: "/tmp/ca.pem",
+      credentialStubs: [],
+    } as never);
+    expect(
+      withStub.credentialStubs?.some((s) => s.containerPath === CLAUDE_GATEWAY_STUB_PATH),
+    ).toBe(true);
+    const out = withLocalHarnessRuntime(withStub, null);
+    expect(out.credentialStubs?.some((s) => s.containerPath === CLAUDE_GATEWAY_STUB_PATH)).toBe(
+      true,
+    );
+    expect(out.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("onecli-managed-sentinel");
+    expect(out.env?.ARGUS_ALLOWED_ANTHROPIC_BASE_URL).toBeUndefined();
+  });
+});
+
 describe("localCredentialProblem", () => {
   it("rejects a public-network base URL", () => {
     expect(localCredentialProblem({ base_url: "http://192.168.1.5:8080" })).toContain(

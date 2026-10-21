@@ -114,11 +114,10 @@ export function withLocalHarnessRuntime(
       "ANTHROPIC_MODEL",
     ])
       delete env[key];
-    const droppedStubs =
-      stubs.length === (config.credentialStubs ?? []).length ? config.credentialStubs : stubs;
-    return droppedStubs === config.credentialStubs
-      ? { ...config, env }
-      : { ...config, env, credentialStubs: stubs };
+    // Cloud mode: keep the Claude gateway stub (argus-claude-stub.ts adds it only
+    // for a real gateway sentinel); dropping it leaves `argus-delegate claude`
+    // with auth_missing. Only local harness mode removes it.
+    return { ...config, env };
   }
   const env = { ...(config.env ?? {}) };
   for (const key of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_UNIX_SOCKET"])
