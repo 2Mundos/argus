@@ -51,6 +51,29 @@ for router delegations.
   sentinel env from the container config.
 - **Observability.** `POST /engines/selected` records `provider: local`; task
   views already show `serving_account` and milestones from existing fields.
+- **Per-task provider restriction.** A task may carry `account_providers`: a
+  non-empty list of engine-capable providers (e.g. `["local"]`), or null
+  (unrestricted, the default and the only behaviour before this rule). It is
+  validated on create and update against the known engine providers (never
+  `gitea`, never a provider unknown to the schema) and is editable only while the
+  task is `ready` and unclaimed, under the same rules as other task fields
+  ([task edit](task-edit.spec.md)). It is stored in one nullable column on
+  `tasks` (migration `0030`).
+  - *Lease.* `POST /accounts/lease` with `task_id` intersects the engine candidates
+    with the task's list. With `["local"]` only the `local` account is eligible,
+    even when cloud accounts are usable. Without a list the ranking is unchanged.
+    The restriction only narrows: the live claim, `task_id` and `attempt` rules of
+    account selection 3 still apply, and it never lets a worker take an account
+    for another task. The executor role is not restricted
+    (the `local` account is engine-only anyway).
+  - *Claim.* `POST /tasks/claim` skips a restricted task when the caller's
+    `runtime_providers` do not intersect its list, or when no account of its
+    listed providers is usable right now (available, not exhausted before reset,
+    below `max_leases`, probe healthy for `local`). A skipped task stays `ready`
+    and spends no attempt, so a busy or offline `local` account holds only the
+    restricted task, not the whole queue. Unrestricted tasks are claimed as before.
+  - *Surfaces.* The dashboard task form, MCP `create_task` and the API client show
+    and accept the field; OpenAPI and client types are regenerated.
 
 # 4. Open Questions
 
