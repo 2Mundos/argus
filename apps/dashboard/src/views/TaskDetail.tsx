@@ -80,12 +80,12 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                 </dd>
                 <dt>Kind</dt>
                 <dd>{task.kind}</dd>
-                <dt>Complexity</dt>
+                <dt>Difficulty</dt>
                 <dd>
-                  <span className={`badge complexity-${task.complexity ?? "standard"}`}>
-                    {task.complexity ?? "standard"}
+                  <span className={`badge difficulty-${task.difficulty ?? "standard"}`}>
+                    {task.difficulty ?? "standard"}
                   </span>{" "}
-                  <span className="muted small">({task.complexity_source ?? "heuristic"})</span>
+                  <span className="muted small">({task.difficulty_source ?? "inferred"})</span>
                 </dd>
                 {task.project && (
                   <>

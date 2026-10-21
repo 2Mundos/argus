@@ -115,13 +115,15 @@ every new dependency is judged against it.
   channels, credentials, drivers
 
 - [Preferred models](specs/model-selection.spec.md)
-- [Task complexity and local routing](specs/task-complexity.spec.md) — trivial tasks prefer
-  the local Strata account and Cursor `composer-2.5`.
+- [Task difficulty, executor routing and escalation](specs/task-difficulty.spec.md) — trivial tasks prefer
+  the local Strata account and Cursor `composer-2.5`; the executor chain and escalation follow the level.
 - [Task models](specs/task-models.spec.md) — pin a queued task's harness engine/model
   and executor/model; narrows its leases, no fallback chain
 - [Model policy operation](runbooks/2026-10-17.model-selection.ref.md)
 - [Project agent images](runbooks/2026-10-17.project-agent-images.ref.md) —
   base × tools × project layers, building and pointing a pool at one
+- [Validating Claude and Codex as executors](runbooks/2026-10-21.executor-layer-validation.ref.md) —
+  procedure, not yet run
 - [Cursor executor fleet smoke](runbooks/2026-10-18.cursor-fleet-smoke.ref.md) —
   completed parent verification of delegated `composer-2.5` (2026-10-18)
 

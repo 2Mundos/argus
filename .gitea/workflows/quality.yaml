@@ -113,6 +113,57 @@ jobs:
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
+  # The NanoClaw tools layer builds from this checkout alone (apply-tools-layer.sh's
+  # staged context) and argus-delegate loads every module it imports. The base is
+  # node:22-slim plus git, the part of NanoClaw's image the layer relies on; the
+  # full agent image (6 GB, pinned CLIs) stays a host build (provision.sh). The
+  # engines Dockerfile patch is covered by pytest on real Dockerfile states. On
+  # PRs, skips when integrations/nanoclaw/ did not change.
+  tools-layer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decide whether tools-layer inputs changed
+        id: need
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE"
+          if git diff --name-only "$BASE" HEAD | grep -E '^(integrations/nanoclaw/|\.gitea/workflows/quality\.yaml$)' >/dev/null; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping tools-layer build: integrations/nanoclaw/ unchanged"
+          fi
+      - name: Build the tools layer on a minimal base
+        if: steps.need.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          printf 'FROM node:22-slim\nRUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*\n' \
+            | docker build -t argus-tools-layer-ci-base -
+          integrations/nanoclaw/engines/apply-tools-layer.sh argus-tools-layer-ci-base argus-tools-layer:ci
+      - name: Smoke the layer
+        if: steps.need.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          # 64 is argus-delegate's usage exit (no EXECUTOR): it got past every import;
+          # a missing module exits 1 before that.
+          docker run --rm argus-tools-layer:ci sh -c '
+            argus-delegate >/dev/null 2>&1; rc=$?; [ "$rc" = 64 ] || { echo "argus-delegate exited $rc"; exit 1; }
+            for m in account-settings model-policy milestones livelog usage anthropic-redirect; do
+              node -e "import(\"/usr/local/bin/$m.mjs\")" || exit 1
+            done
+            for b in ssh rsync git python3 uv make argus-gitea-api; do command -v "$b" >/dev/null || { echo "missing $b"; exit 1; }; done'
+      - name: Remove the CI images
+        if: always() && steps.need.outputs.build == 'true'
+        run: docker rmi -f argus-tools-layer:ci argus-tools-layer-ci-base >/dev/null 2>&1 || true
+
   # Real Docker: Argus starts echo-worker containers that must reach it back via
   # host.docker.internal. Manual until verified on the runner's network layout.
   docker-integration:

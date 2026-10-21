@@ -1,5 +1,5 @@
-"""Task complexity: classification, create/edit, and the soft local preference of the
-lease ranking (docs/specs/task-complexity.spec.md)."""
+"""Task difficulty: classification, create/edit, and the soft local preference of the
+lease ranking (docs/specs/task-difficulty.spec.md)."""
 
 import json
 from datetime import timedelta
@@ -17,7 +17,7 @@ from argus_api.errors import (
 from argus_api.secrets import MemorySecretStore
 from argus_api.tasks import service as tasks
 from argus_core.accounts import AccountUpdate, ExhaustedReport
-from argus_core.complexity import Complexity
+from argus_core.difficulty import Difficulty
 from argus_core.task_edit import TaskChanges
 from argus_core.tasks import TaskCreate
 from fastapi.testclient import TestClient
@@ -27,7 +27,7 @@ from test_mcp import ADMIN_TOKEN, tool
 client = test_mcp.client  # the same app fixture as the MCP tests
 
 A, B = "agent-a", "agent-b"
-TRIVIAL, STANDARD, HARD = Complexity.TRIVIAL, Complexity.STANDARD, Complexity.HARD
+TRIVIAL, STANDARD, HARD = Difficulty.TRIVIAL, Difficulty.STANDARD, Difficulty.HARD
 
 
 @pytest.fixture
@@ -69,36 +69,36 @@ async def lease(db: Database, store, task, agent: str = A):
 
 async def test_default_is_standard_by_heuristic(db: Database) -> None:
     task = await create(db, title="Add retries to the worker")
-    assert (task.complexity, task.complexity_source) == (STANDARD, "heuristic")
+    assert (task.difficulty, task.difficulty_source) == (STANDARD, "inferred")
 
 
 async def test_heuristic_marks_a_clear_copy_change_trivial(db: Database) -> None:
     task = await create(db, title="Corrigir erro de digitação no rodapé")
-    assert (task.complexity, task.complexity_source) == (TRIVIAL, "heuristic")
+    assert (task.difficulty, task.difficulty_source) == (TRIVIAL, "inferred")
 
 
 async def test_explicit_value_always_wins(db: Database) -> None:
-    standard = await create(db, title="Fix typo", complexity=STANDARD)
-    assert (standard.complexity, standard.complexity_source) == (STANDARD, "explicit")
-    trivial = await create(db, title="Refactor the API", complexity=TRIVIAL)
-    assert (trivial.complexity, trivial.complexity_source) == (TRIVIAL, "explicit")
+    standard = await create(db, title="Fix typo", difficulty=STANDARD)
+    assert (standard.difficulty, standard.difficulty_source) == (STANDARD, "declared")
+    trivial = await create(db, title="Refactor the API", difficulty=TRIVIAL)
+    assert (trivial.difficulty, trivial.difficulty_source) == (TRIVIAL, "declared")
 
 
-async def test_edit_sets_complexity_and_marks_it_explicit(db: Database) -> None:
+async def test_edit_sets_difficulty_and_marks_it_explicit(db: Database) -> None:
     task = await create(db, title="Add retries")
     async with db.write() as tx:
         edited = await tasks.edit_task(
             tx,
             task.id,
-            TaskChanges(complexity=TRIVIAL),
+            TaskChanges(difficulty=TRIVIAL),
             task.version,
             "admin:test",
         )
-    assert (edited.complexity, edited.complexity_source) == (TRIVIAL, "explicit")
+    assert (edited.difficulty, edited.difficulty_source) == (TRIVIAL, "declared")
     async with db.read() as conn:
         events = [e async for e in _events(conn, task.id)]
     assert {"from": "standard", "to": "trivial"} in [
-        e.get("changes", {}).get("complexity") for e in events
+        e.get("changes", {}).get("difficulty") for e in events
     ]
 
 
@@ -111,7 +111,7 @@ async def _events(conn, task_id):
             yield json.loads(payload)
 
 
-async def test_complexity_cannot_be_cleared_or_edited_once_claimed(
+async def test_difficulty_cannot_be_cleared_or_edited_once_claimed(
     db: Database, agents
 ) -> None:
     task = await create(db, title="Add retries")
@@ -120,7 +120,7 @@ async def test_complexity_cannot_be_cleared_or_edited_once_claimed(
             await tasks.edit_task(
                 tx,
                 task.id,
-                TaskChanges.model_validate({"complexity": None}),
+                TaskChanges.model_validate({"difficulty": None}),
                 task.version,
                 "admin:test",
             )
@@ -130,7 +130,7 @@ async def test_complexity_cannot_be_cleared_or_edited_once_claimed(
             await tasks.edit_task(
                 tx,
                 claimed.id,
-                TaskChanges(complexity=TRIVIAL),
+                TaskChanges(difficulty=TRIVIAL),
                 claimed.version,
                 "admin:test",
             )
@@ -140,15 +140,15 @@ def test_rest_and_mcp_create_and_edit(client: TestClient) -> None:
     auth = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
     res = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "t", "complexity": "trivial"},
+        json={"project": "global", "title": "t", "difficulty": "trivial"},
         headers=auth,
     )
     assert res.status_code == 201
-    assert res.json()["complexity"] == "trivial"
-    assert res.json()["complexity_source"] == "explicit"
+    assert res.json()["difficulty"] == "trivial"
+    assert res.json()["difficulty_source"] == "declared"
     bad = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "t", "complexity": "easy"},
+        json={"project": "global", "title": "t", "difficulty": "easy"},
         headers=auth,
     )
     assert bad.status_code == 422
@@ -158,13 +158,13 @@ def test_rest_and_mcp_create_and_edit(client: TestClient) -> None:
         "create_task",
         title="t",
         project="global",
-        complexity="trivial",
+        difficulty="trivial",
     )
-    assert made["complexity"] == "trivial"
+    assert made["difficulty"] == "trivial"
     plain = tool(client, ADMIN_TOKEN, "create_task", title="Add auth", project="global")
-    assert (plain["complexity"], plain["complexity_source"]) == (
+    assert (plain["difficulty"], plain["difficulty_source"]) == (
         "standard",
-        "heuristic",
+        "inferred",
     )
     edited = tool(
         client,
@@ -172,15 +172,15 @@ def test_rest_and_mcp_create_and_edit(client: TestClient) -> None:
         "edit_task",
         task_id=plain["id"],
         expected_version=plain["version"],
-        changes={"complexity": "trivial"},
+        changes={"difficulty": "trivial"},
     )
-    assert edited["complexity"] == "trivial"
+    assert edited["difficulty"] == "trivial"
     got = client.get(f"/api/tasks/{plain['id']}", headers=auth).json()
-    assert got["complexity"] == "trivial"
-    assert got["complexity_source"] == "explicit"
+    assert got["difficulty"] == "trivial"
+    assert got["difficulty_source"] == "declared"
     refused = client.patch(
         f"/api/tasks/{plain['id']}",
-        json={"expected_version": got["version"], "changes": {"complexity": "nope"}},
+        json={"expected_version": got["version"], "changes": {"difficulty": "nope"}},
         headers=auth,
     )
     assert refused.status_code == 422
@@ -197,7 +197,7 @@ async def pool(db: Database, store) -> tuple[str, str]:
 
 async def test_trivial_task_leases_local_first(db: Database, store, agents) -> None:
     await pool(db, store)
-    await create(db, title="t", complexity=TRIVIAL)
+    await create(db, title="t", difficulty=TRIVIAL)
     task = await claim(db)
     got = await lease(db, store, task)
     assert got.provider == "local"
@@ -205,7 +205,7 @@ async def test_trivial_task_leases_local_first(db: Database, store, agents) -> N
 
 async def test_standard_task_keeps_cloud_first(db: Database, store, agents) -> None:
     await pool(db, store)
-    await create(db, title="t", complexity=STANDARD)
+    await create(db, title="t", difficulty=STANDARD)
     got = await lease(db, store, await claim(db))
     assert got.provider == "anthropic"
 
@@ -214,10 +214,10 @@ async def test_trivial_falls_back_to_cloud_when_local_is_full(
     db: Database, store, agents
 ) -> None:
     await pool(db, store)
-    await create(db, title="holder", complexity=TRIVIAL)
+    await create(db, title="holder", difficulty=TRIVIAL)
     first = await claim(db, A)
     assert (await lease(db, store, first, A)).provider == "local"
-    await create(db, title="next", complexity=TRIVIAL)
+    await create(db, title="next", difficulty=TRIVIAL)
     second = await claim(db, B)
     got = await lease(db, store, second, B)  # one call, no wait
     assert got.provider == "anthropic"
@@ -236,7 +236,7 @@ async def test_trivial_falls_back_to_cloud_when_local_is_down(
         await accounts.update_account(
             tx, local, AccountUpdate(enabled=False), "admin:test"
         )
-    await create(db, title="t", complexity=TRIVIAL)
+    await create(db, title="t", difficulty=TRIVIAL)
     got = await lease(db, store, await claim(db))
     assert got.provider == "anthropic"
 
@@ -245,7 +245,7 @@ async def test_trivial_with_no_cloud_still_uses_local(
     db: Database, store, agents
 ) -> None:
     await add_local(db, store, "strata")
-    await create(db, title="t", complexity=TRIVIAL)
+    await create(db, title="t", difficulty=TRIVIAL)
     assert (await lease(db, store, await claim(db))).provider == "local"
 
 
@@ -253,7 +253,7 @@ async def test_lease_checks_still_apply_to_trivial_tasks(
     db: Database, store, agents
 ) -> None:
     await pool(db, store)
-    await create(db, title="t", complexity=TRIVIAL)
+    await create(db, title="t", difficulty=TRIVIAL)
     task = await claim(db)
     async with db.write() as tx:
         with pytest.raises(LeaseConflictError):
@@ -271,11 +271,11 @@ async def test_failover_after_exhaustion_also_prefers_local_for_trivial(
     db: Database, store, agents, clock
 ) -> None:
     cloud, _ = await pool(db, store)
-    await create(db, title="holder", complexity=TRIVIAL)
+    await create(db, title="holder", difficulty=TRIVIAL)
     holder = await claim(db, A)
     held = await lease(db, store, holder, A)
     assert held.provider == "local"
-    await create(db, title="next", complexity=TRIVIAL)
+    await create(db, title="next", difficulty=TRIVIAL)
     task = await claim(db, B)
     assert (await lease(db, store, task, B)).provider == "anthropic"
     async with db.write() as tx:  # the local slot frees up
@@ -301,40 +301,40 @@ async def test_failover_after_exhaustion_also_prefers_local_for_trivial(
 
 
 async def test_hard_is_set_explicitly_or_by_two_hard_signals(db: Database) -> None:
-    explicit = await create(db, title="Add retries", complexity=HARD)
-    assert (explicit.complexity, explicit.complexity_source) == (HARD, "explicit")
+    explicit = await create(db, title="Add retries", difficulty=HARD)
+    assert (explicit.difficulty, explicit.difficulty_source) == (HARD, "declared")
     guessed = await create(db, title="Data migration across multi-service accounts")
-    assert (guessed.complexity, guessed.complexity_source) == (HARD, "heuristic")
+    assert (guessed.difficulty, guessed.difficulty_source) == (HARD, "inferred")
     one = await create(db, title="Melhorar a segurança do login")
-    assert one.complexity == STANDARD
+    assert one.difficulty == STANDARD
 
 
 async def test_edit_to_hard(db: Database) -> None:
     task = await create(db, title="Add retries")
     async with db.write() as tx:
         edited = await tasks.edit_task(
-            tx, task.id, TaskChanges(complexity=HARD), task.version, "admin:test"
+            tx, task.id, TaskChanges(difficulty=HARD), task.version, "admin:test"
         )
-    assert (edited.complexity, edited.complexity_source) == (HARD, "explicit")
+    assert (edited.difficulty, edited.difficulty_source) == (HARD, "declared")
 
 
 async def test_hard_task_keeps_cloud_first(db: Database, store, agents) -> None:
     await pool(db, store)
-    await create(db, title="Add retries", complexity=HARD)
+    await create(db, title="Add retries", difficulty=HARD)
     held = await lease(db, store, await claim(db))
     assert held.provider == "anthropic"
 
 
 async def test_the_column_rejects_unknown_values(db: Database) -> None:
-    task = await create(db, title="Add retries", complexity=TRIVIAL)
+    task = await create(db, title="Add retries", difficulty=TRIVIAL)
     async with db.write() as tx:
         with pytest.raises(Exception, match="CHECK"):
             await tx.conn.execute(
-                "UPDATE tasks SET complexity = 'epic' WHERE id = ?", (task.id,)
+                "UPDATE tasks SET difficulty = 'epic' WHERE id = ?", (task.id,)
             )
 
 
-def test_migration_0033_keeps_values_and_widens_the_check() -> None:
+def test_migration_0036_maps_complexity_to_difficulty() -> None:
     import sqlite3
     from pathlib import Path
 
@@ -344,21 +344,71 @@ def test_migration_0033_keeps_values_and_widens_the_check() -> None:
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY)")
     conn.executescript((migrations / "0032_task_complexity.sql").read_text())
-    conn.execute(
-        "INSERT INTO tasks (id, complexity) VALUES ('a', 'trivial'), ('b', 'standard')"
-    )
     conn.executescript((migrations / "0033_task_complexity_hard.sql").read_text())
+    conn.execute(
+        "INSERT INTO tasks (id, complexity, complexity_source) VALUES"
+        " ('a', 'trivial', 'heuristic'), ('b', 'standard', 'explicit'),"
+        " ('c', 'hard', 'explicit'), ('d', 'standard', 'heuristic')"
+    )
+    conn.executescript((migrations / "0036_task_difficulty.sql").read_text())
     rows = conn.execute(
-        "SELECT id, complexity, complexity_source FROM tasks ORDER BY id"
+        "SELECT id, difficulty, difficulty_source FROM tasks ORDER BY id"
     )
     assert rows.fetchall() == [
-        ("a", "trivial", "heuristic"),
-        ("b", "standard", "heuristic"),
+        ("a", "trivial", "inferred"),
+        ("b", "standard", "declared"),
+        ("c", "hard", "declared"),
+        ("d", "standard", "inferred"),
     ]
-    conn.execute("INSERT INTO tasks (id, complexity) VALUES ('c', 'hard')")
-    conn.execute("INSERT INTO tasks (id) VALUES ('d')")
-    assert conn.execute("SELECT complexity FROM tasks WHERE id = 'd'").fetchone() == (
-        "standard",
-    )
+    conn.execute("INSERT INTO tasks (id, difficulty) VALUES ('e', 'simple')")
+    conn.execute("INSERT INTO tasks (id) VALUES ('f')")  # a row written by old code
+    assert conn.execute(
+        "SELECT difficulty, difficulty_source FROM tasks WHERE id = 'f'"
+    ).fetchone() == ("standard", "inferred")
     with pytest.raises(sqlite3.IntegrityError):
-        conn.execute("INSERT INTO tasks (id, complexity) VALUES ('e', 'epic')")
+        conn.execute("INSERT INTO tasks (id, difficulty) VALUES ('g', 'epic')")
+
+
+# -- escalation --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("reason", ["context_overflow", "verification_failed"])
+async def test_overflow_and_failed_verification_raise_difficulty_one_level(
+    db: Database, agents, reason: str
+) -> None:
+    task = await create(db, title="Rewrite the engine", difficulty="simple")
+    claimed = await claim(db)
+    async with db.write() as tx:
+        after = await tasks.fail(tx, A, claimed.id, claimed.attempt, "too big", reason)
+    assert (after.difficulty, after.difficulty_source) == ("standard", "inferred")
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT data FROM events WHERE subject_id = ? AND kind = 'task.fail'",
+            (task.id,),
+        ) as cur,
+    ):
+        rows = [json.loads(r[0]) for r in await cur.fetchall()]
+    assert rows[-1]["difficulty_escalated"] == {
+        "from": "simple",
+        "to": "standard",
+        "reason": reason,
+    }
+
+
+async def test_an_ordinary_failure_keeps_the_difficulty(db: Database, agents) -> None:
+    await create(db, title="Rewrite the engine", difficulty="simple")
+    claimed = await claim(db)
+    async with db.write() as tx:
+        after = await tasks.fail(tx, A, claimed.id, claimed.attempt, "oops")
+    assert after.difficulty == "simple"
+
+
+async def test_hard_cannot_escalate_further(db: Database, agents) -> None:
+    await create(db, title="Rewrite the engine", difficulty="hard")
+    claimed = await claim(db)
+    async with db.write() as tx:
+        after = await tasks.fail(
+            tx, A, claimed.id, claimed.attempt, "x", "context_overflow"
+        )
+    assert (after.difficulty, after.difficulty_source) == ("hard", "declared")

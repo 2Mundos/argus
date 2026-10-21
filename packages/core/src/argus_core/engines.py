@@ -6,15 +6,23 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from argus_core.criteria_safe import assert_schema_definition, criteria_is_effective
+from argus_core.difficulty import Difficulty
 
 _DEFAULTS = ConfigDict(json_schema_serialization_defaults_required=True)
 
 
 class EngineRole(StrEnum):
-    ORCHESTRATOR = "orchestrator"  # runs the worker's own agent loop
-    CODE_EXECUTOR = "code_executor"  # preferred target for code delegation
-    EXECUTOR = "executor"  # delegated non-interactive CLI
+    """Deprecated single-role view of an engine; `EngineEntry.layers` is the truth."""
+
+    ORCHESTRATOR = "orchestrator"  # harness only
+    CODE_EXECUTOR = "code_executor"  # harness and executor
+    EXECUTOR = "executor"  # executor only
     LOCAL = "local"  # local model reached through Argus
+
+
+class EngineLayer(StrEnum):
+    HARNESS = "harness"  # the NanoClaw provider that runs the worker's agent loop
+    EXECUTOR = "executor"  # the CLI `argus-delegate` runs for implementation
 
 
 class Fact(BaseModel):
@@ -77,20 +85,40 @@ class AccountsSummary(BaseModel):
         return self.available if self.leasable is None else self.leasable
 
 
+class LayerState(BaseModel):
+    """One layer of an engine with its own readiness: validating Claude as a harness
+    proves nothing about Claude as an executor, nor the reverse."""
+
+    model_config = _DEFAULTS
+
+    layer: EngineLayer
+    readiness: Readiness = Readiness()
+    # None: no account provider (or no registry was consulted).
+    accounts: AccountsSummary | None = None
+    usable: bool = False
+
+
 class EngineEntry(BaseModel):
     model_config = _DEFAULTS
 
     id: str
     label: str
-    role: EngineRole
+    role: EngineRole  # deprecated, derived from `layers`
+    # The layers the engine can play: claude and codex both, cursor-agent and
+    # opencode the executor only.
+    layers: list[LayerState] = []
     axes: Axes
     auth_methods: list[str]  # real ways to authenticate, never secrets
     version: str | None = None
+    # Deprecated: the primary layer's (the harness when there is one), kept for
+    # clients that predate `layers`.
     readiness: Readiness = Readiness()
-    # None: the engine has no account provider (or no registry was consulted).
     accounts: AccountsSummary | None = None
     usable: bool = False
     notes: str = ""
+
+    def layer(self, which: EngineLayer) -> LayerState | None:
+        return next((layer for layer in self.layers if layer.layer is which), None)
 
 
 class LocalModelInfo(BaseModel):
@@ -126,6 +154,9 @@ class RouteRequest(BaseModel):
     # schemas, history, inputs. Unknown (None) never routes to the local model.
     input_chars: int | None = Field(default=None, ge=0)
     output_tokens: int = Field(default=512, ge=1)
+    # The task's difficulty, when it has one: replaces `simple` (trivial and simple
+    # mean simple) and picks the executor chain (task difficulty spec).
+    difficulty: Difficulty | None = None
 
 
 class RouteDecision(BaseModel):
@@ -143,6 +174,11 @@ class RouteDecision(BaseModel):
     # Preferred code executor the engine delegates to (code tasks), when usable.
     executor: str | None = None
     escalate_to: str | None = None
+    # With a difficulty: the level used, the executor and model chosen from its
+    # chain (None: none usable) and why, naming every executor passed over.
+    difficulty: Difficulty | None = None
+    executor_model: str | None = None
+    executor_reason: str | None = None
 
 
 class Criteria(BaseModel):

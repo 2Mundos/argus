@@ -202,7 +202,7 @@ def test_editable_fields_come_from_one_source_in_task_and_tool_text(
         "required_capabilities",
         "knowledge",
         "depends_on",
-        "complexity",
+        "difficulty",
         "account_providers",
         "harness_model",
         "executor_model",

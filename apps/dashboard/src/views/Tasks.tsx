@@ -135,7 +135,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
     timeoutMinutes: "",
     requires_approval: false,
     review: "none" as "none" | "human" | "orchestrator",
-    complexity: "" as "" | "trivial" | "standard" | "hard",
+    difficulty: "" as "" | "trivial" | "simple" | "standard" | "hard",
     harnessModel: "",
     executorModel: "",
   });
@@ -166,7 +166,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
             priority: form.priority,
             requires_approval: form.requires_approval,
             review: form.review,
-            ...(form.complexity ? { complexity: form.complexity } : {}),
+            ...(form.difficulty ? { difficulty: form.difficulty } : {}),
             ...(form.timeoutMinutes ? { timeout_s: Number(form.timeoutMinutes) * 60 } : {}),
             ...(capabilities.length ? { required_capabilities: capabilities } : {}),
             ...(accountProviders.length ? { account_providers: accountProviders } : {}),
@@ -233,16 +233,16 @@ function NewTask({ onClose }: { onClose: () => void }) {
           </label>
         </div>
         <label>
-          Complexity (trivial work, such as a copy change, prefers the local model; hard work runs
-          Claude on Opus)
+          Difficulty (trivial and simple work goes to a cheap executor; hard work to the strongest)
           <select
-            value={form.complexity}
-            onChange={(e) => set("complexity", e.target.value as typeof form.complexity)}
+            value={form.difficulty}
+            onChange={(e) => set("difficulty", e.target.value as typeof form.difficulty)}
           >
             <option value="">decide from the title and spec</option>
             <option value="trivial">trivial</option>
+            <option value="simple">simple</option>
             <option value="standard">standard</option>
-            <option value="hard">hard (Claude runs on Opus)</option>
+            <option value="hard">hard</option>
           </select>
         </label>
         <label>

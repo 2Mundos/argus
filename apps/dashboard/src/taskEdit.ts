@@ -9,7 +9,7 @@ export const EDIT_FIELDS = [
   "required_capabilities",
   "knowledge",
   "depends_on",
-  "complexity",
+  "difficulty",
   "account_providers",
   "harness_model",
   "executor_model",
@@ -30,7 +30,7 @@ export type Changes = {
   required_capabilities?: string[];
   knowledge?: string[];
   depends_on?: string[];
-  complexity?: "trivial" | "standard" | "hard";
+  difficulty?: "trivial" | "simple" | "standard" | "hard";
   account_providers?: string[];
   harness_model?: HarnessPin | null;
   executor_model?: ExecutorPin | null;
@@ -85,7 +85,7 @@ export function toDraft(task: Task): Draft {
     required_capabilities: task.required_capabilities.join("\n"),
     knowledge: task.knowledge.join("\n"),
     depends_on: task.depends_on.join("\n"),
-    complexity: task.complexity ?? "standard",
+    difficulty: task.difficulty ?? "standard",
     account_providers: (task.account_providers ?? []).join("\n"),
     harness_model: pinText(task.harness_model),
     executor_model: pinText(task.executor_model),
@@ -122,8 +122,8 @@ export function buildChanges(base: Task, draft: Draft): { changes: Changes; erro
       if (value.trim() === "" || !Number.isInteger(n))
         errors.priority = "Priority is a whole number.";
       else changes.priority = n;
-    } else if (field === "complexity") {
-      changes.complexity = value as "trivial" | "standard" | "hard";
+    } else if (field === "difficulty") {
+      changes.difficulty = value as "trivial" | "simple" | "standard" | "hard";
     } else if (field === "harness_model" || field === "executor_model") {
       const pin = parsePin(value);
       if (pin && !MODEL_ID.test(pin.model)) errors[field] = "Enter a model ID.";

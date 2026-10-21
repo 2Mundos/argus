@@ -15,12 +15,13 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    computed_field,
     field_validator,
     model_validator,
 )
 
 from argus_core.accounts import ENGINE_PROVIDERS
-from argus_core.complexity import Complexity, ComplexitySource
+from argus_core.difficulty import Difficulty, DifficultySource
 from argus_core.knowledge import KnowledgeRef
 from argus_core.model_trace import ModelsSummary
 
@@ -305,8 +306,10 @@ class TaskCreate(BaseModel):
     # Wall-clock cap per attempt, counted from the claim; heartbeats and progress
     # notes do not extend it. Unset: the kind's default, then the server's.
     timeout_s: int | None = Field(default=None, ge=60, le=7 * 24 * 3600)
-    # Unset: derived from the title and spec (task complexity spec).
-    complexity: Complexity | None = None
+    # Unset: derived from the title and spec (task difficulty spec). The source
+    # defaults to `declared`; an orchestrator suggesting a level sends `inferred`.
+    difficulty: Difficulty | None = None
+    difficulty_source: DifficultySource | None = None
     # Restrict the task to these engine account providers (e.g. ["local"]); None:
     # unrestricted (local harness spec 3).
     account_providers: list[str] | None = None
@@ -382,8 +385,8 @@ class Task(BaseModel):
     depends_on: list[str]
     project: str
     knowledge: list[str]
-    complexity: Complexity = Complexity.STANDARD
-    complexity_source: ComplexitySource = ComplexitySource.HEURISTIC
+    difficulty: Difficulty = Difficulty.STANDARD
+    difficulty_source: DifficultySource = DifficultySource.INFERRED
     account_providers: list[str] | None = None
     harness_model: HarnessModel | None = None
     executor_model: ExecutorModel | None = None
@@ -402,6 +405,15 @@ class Task(BaseModel):
     failover: Failover | None = None
     # Models per layer (model observability 3.6): derived, never stored here.
     models: ModelsSummary = ModelsSummary()
+
+    @computed_field  # deprecated: read `difficulty`
+    @property
+    def complexity(self) -> Literal["trivial", "standard", "hard"]:
+        """The pre-difficulty three-level view, for clients that still read it:
+        `simple` is `trivial` there, as both prefer the cheap executor."""
+        if self.difficulty is Difficulty.SIMPLE:
+            return "trivial"
+        return self.difficulty.value  # type: ignore[return-value]
 
 
 class ClaimedTask(Task):

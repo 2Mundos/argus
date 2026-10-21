@@ -3,14 +3,19 @@
 
 import json
 
+from argus_core.difficulty import Difficulty
 from argus_core.engines import (
     EngineCatalog,
     EngineEntry,
+    EngineLayer,
     LocalModelInfo,
     LocalRunRequest,
     RouteDecision,
     RouteRequest,
 )
+
+# The model policy's scope -> engine -> model chain (argus_api.model_policy.Policy).
+Policy = dict[str, dict[str, list[str]]]
 
 # Worst-case UTF-8 width per Unicode codepoint when only a character count is known.
 MAX_UTF8_BYTES_PER_CODEPOINT = 4
@@ -166,6 +171,91 @@ def _executor(request: RouteRequest, catalog: EngineCatalog, target: str) -> str
     return best if best is not None and best != target else None
 
 
+# Executor order per difficulty (task difficulty spec 3); `ARGUS_DIFFICULTY_EXECUTORS`
+# overrides a level. The first usable one runs the task: an executor that is missing,
+# unvalidated or out of quota is passed over in order, never waited for.
+DEFAULT_EXECUTORS: dict[Difficulty, tuple[str, ...]] = {
+    Difficulty.TRIVIAL: ("agent", "claude", "codex"),
+    Difficulty.SIMPLE: ("agent", "claude", "codex"),
+    Difficulty.STANDARD: ("claude", "codex"),
+    Difficulty.HARD: ("claude", "codex"),
+}
+_CHEAP = (Difficulty.TRIVIAL, Difficulty.SIMPLE)
+
+
+def executor_model(
+    difficulty: Difficulty, executor: str, policy: Policy | None
+) -> str | None:
+    """The model the model policy pins for this executor at this level: the `trivial`
+    map for trivial and simple, `hard_implementation` for hard, else `implementation`.
+    None means the CLI's own default (`auto` for Cursor)."""
+    if policy is None:
+        return None
+    maps = (
+        ["trivial"]
+        if difficulty in _CHEAP
+        else ["hard_implementation"]
+        if difficulty is Difficulty.HARD
+        else []
+    )
+    for scope in (*maps, "implementation"):
+        if chain := policy.get(scope, {}).get(executor):
+            return chain[0]
+    return None
+
+
+def _executor_entry(catalog: EngineCatalog, executor: str) -> EngineEntry | None:
+    return next(
+        (
+            e
+            for e in catalog.engines
+            if e.id != "local"
+            and e.axes.executor == executor
+            and e.layer(EngineLayer.EXECUTOR) is not None
+        ),
+        None,
+    )
+
+
+def difficulty_executor(
+    difficulty: Difficulty,
+    catalog: EngineCatalog,
+    policy: Policy | None,
+    chains: dict[str, tuple[str, ...]] | None = None,
+) -> tuple[str | None, str | None, str]:
+    """(executor, model, reason): the first executor of the level's chain whose
+    executor layer is usable, with every one passed over named."""
+    chain = (chains or {}).get(difficulty, DEFAULT_EXECUTORS[difficulty])
+    skipped: list[str] = []
+    for name in chain:
+        entry = _executor_entry(catalog, name)
+        layer = entry.layer(EngineLayer.EXECUTOR) if entry else None
+        if layer is not None and layer.usable:
+            model = executor_model(difficulty, name, policy)
+            via = f"{name} ({model or 'auto'})"
+            reason = f"{difficulty} runs on {via}"
+            if skipped:
+                reason += "; passed over " + "; ".join(skipped)
+            return name, model, reason
+        view = (
+            entry.model_copy(
+                update={
+                    "readiness": layer.readiness,
+                    "accounts": layer.accounts,
+                    "usable": False,
+                }
+            )
+            if entry is not None and layer is not None
+            else None
+        )
+        skipped.append(_why_unusable(view, name).replace(" is not usable", ""))
+    return (
+        None,
+        None,
+        f"no executor in the {difficulty} chain is usable: " + "; ".join(skipped),
+    )
+
+
 def local_rejections(
     request: RouteRequest,
     local: LocalModelInfo | None,
@@ -220,7 +310,13 @@ def route(
     max_input_fraction: float = 0.5,
     output_reserve: int = 2048,
     chat_template_overhead: int = 512,
+    policy: Policy | None = None,
+    executor_chains: dict[str, tuple[str, ...]] | None = None,
 ) -> RouteDecision:
+    """`difficulty`, when the request has one, replaces `simple` and also picks the
+    executor and model; without it the decision is what it always was."""
+    if request.difficulty is not None:
+        request = request.model_copy(update={"simple": request.difficulty in _CHEAP})
     local = catalog.local
     rejections, est = local_rejections(
         request,
@@ -233,6 +329,16 @@ def route(
     local_entry = next((e for e in catalog.engines if e.id == "local"), None)
     fallback, blocked, moved_from = _fallback(catalog)
     executor = _executor(request, catalog, fallback)
+    plan: dict[str, object] = {}
+    if request.difficulty is not None:
+        executor, model, why = difficulty_executor(
+            request.difficulty, catalog, policy, executor_chains
+        )
+        plan = {
+            "difficulty": request.difficulty,
+            "executor_model": model,
+            "executor_reason": why,
+        }
     if not rejections:
         # Fits and is simple; but a local model that never passed a real run
         # is not trusted with work (installed != validated).
@@ -248,7 +354,7 @@ def route(
                 escalate_to=fallback,
                 fallback_from=moved_from,
                 executor=executor,
-            )
+            ).model_copy(update=plan)
         rejections = ["local model is not validated by a real run yet"]
     return RouteDecision(
         target=fallback,
@@ -262,4 +368,4 @@ def route(
         blocked=blocked,
         fallback_from=moved_from,
         executor=executor,
-    )
+    ).model_copy(update=plan)

@@ -19,7 +19,7 @@ const LABELS: Record<EditField, string> = {
   required_capabilities: "Required capabilities (one per line)",
   knowledge: "Pinned page ids (one per line)",
   depends_on: "Depends on (task ids, one per line)",
-  complexity: "Complexity",
+  difficulty: "Difficulty",
   account_providers: "Restrict to account providers (one per line, e.g. local; empty: any)",
   harness_model: "Harness engine and model (pinned for every attempt)",
   executor_model: "Coding executor and model (pinned for every attempt)",
@@ -136,10 +136,11 @@ export function TaskEditForm({ task, onDone }: { task: Task; onDone: (saved?: Ta
             <label htmlFor={id}>{LABELS[field]}</label>
             {MULTILINE.has(field) ? (
               <textarea rows={field === "spec" ? 8 : 3} {...common} />
-            ) : field === "complexity" ? (
+            ) : field === "difficulty" ? (
               <select {...common}>
                 <option value="standard">standard</option>
-                <option value="trivial">trivial (prefers the local model)</option>
+                <option value="trivial">trivial (cheapest executor)</option>
+                <option value="simple">simple (cheap executor)</option>
                 <option value="hard">hard (Claude runs on Opus)</option>
               </select>
             ) : field === "harness_model" || field === "executor_model" ? (

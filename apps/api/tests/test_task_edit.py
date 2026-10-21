@@ -413,7 +413,7 @@ async def test_each_state_permits_exactly_its_documented_fields(
         "required_capabilities": ["c"],
         "knowledge": [],
         "depends_on": [],
-        "complexity": "trivial",
+        "difficulty": "trivial",
         "account_providers": ["anthropic", "local"],
         "harness_model": HarnessModel(engine="claude", model="claude-opus-5-5"),
         "executor_model": ExecutorModel(executor="codex", model="gpt-6.1-sol"),

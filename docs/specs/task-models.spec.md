@@ -78,7 +78,7 @@ every attempt, failures and review rejections included.
 
 # 5. Constraints
 
-- One additive migration (`0036_task_model_pins.sql`): two nullable JSON columns.
+- One additive migration (`0037_task_model_pins.sql`): two nullable JSON columns.
 - Rules live in `argus_core` and `tasks.service`; REST, MCP and the dashboard
   hold none of their own.
 - No new service, no credential in a pin, the audit or the snapshot.
