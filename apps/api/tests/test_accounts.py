@@ -1392,14 +1392,14 @@ def test_lease_requires_a_claim_and_declared_providers_and_exhausted_hides_secre
         json={"runtime_providers": ["acme"], "task_id": "nope", "attempt": 1},
         headers=worker,
     )
-    assert unclaimed.status_code in (404, 409) and "sec-a1" not in unclaimed.text
+    assert unclaimed.status_code == 404 and "sec-a1" not in unclaimed.text
     task = claimed_task(client, worker)
     # Undeclared provider: no account, no credential.
     undeclared = client.post(
         "/api/accounts/lease", json=lease_payload(task, ["other"]), headers=worker
     )
     assert undeclared.status_code == 409 and "sec-a1" not in undeclared.text
-    # The agent token cannot be replaced by an admin-only path or no token.
+    # Without a token the lease route refuses.
     assert (
         client.post(
             "/api/accounts/lease", json=lease_payload(task, ["acme"])

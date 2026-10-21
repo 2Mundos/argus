@@ -120,9 +120,13 @@ isolation or sandbox/TLS restrictions.
   that account lease **and** the live claim named by the `task_id` and `attempt`
   in the request (both required for agents; checked like a lease: claimed by the
   caller, current attempt, unexpired). A lease that outlived its claim cannot
-  write. The new document must keep the provider credential kind and nested
-  document structure, and a `gitea` rotation must keep its `username`. Anything
-  else is `422` and the stored secret is untouched. Admin renewal remains the
+  write. Missing `task_id`/`attempt` is `422`; a stale, foreign or expired claim
+  is `409`; no lease on the account is `403`. The new document must keep the
+  provider credential kind and nested document structure, and a `gitea` rotation
+  must keep its `username` (`422` otherwise). The stored secret is untouched on
+  any refusal. The claim is checked before the secret store write, not inside
+  one transaction (the store does I/O), so a claim that ends in that short
+  window can still land one write for the credential the agent already held. Admin renewal remains the
   operator path for changing kind or identity and needs neither.
 - **Quota failover (3.6).** A provider quota never costs an attempt.
   - *Server path.* A task `FAIL` with reason `provider_failure` whose error is a

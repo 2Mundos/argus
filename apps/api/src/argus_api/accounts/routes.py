@@ -498,7 +498,8 @@ async def update_credential(
     holding a lease on the account, or an admin. If it cannot be persisted, the
     account is disabled rather than left with a token that would be lost.
 
-    An agent must also hold the live task claim named by `task_id` and `attempt`."""
+    An agent must also hold the live task claim named by `task_id` and `attempt`,
+    checked before the store write (no transaction spans the store's I/O)."""
     if caller.agent_id is None and caller.scope != "admin":
         raise ForbiddenError("requires the leasing agent or an admin")
     async with db.read() as conn:
