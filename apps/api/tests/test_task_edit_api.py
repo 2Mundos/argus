@@ -223,3 +223,42 @@ def test_attempt_snapshots_are_listed_over_rest(client: TestClient) -> None:
         client.get("/api/tasks/ghost/attempts", headers=bearer(worker)).status_code
         == 404
     )
+
+
+def page(client: TestClient, project: str, body: str) -> str:
+    res = client.post(
+        "/api/knowledge/pages",
+        json={"project": project, "title": f"page {body}", "body": body},
+        headers=bearer(ADMIN_TOKEN),
+    )
+    assert res.status_code == 201, res.text
+    return res.json()["page"]["id"]
+
+
+def test_pins_edit_alike_and_never_cross_projects_on_both_surfaces(
+    client: TestClient,
+) -> None:
+    pin = page(client, "global", "shared notes")
+    put = client.put(
+        "/api/projects/other", json={"name": "other"}, headers=bearer(ADMIN_TOKEN)
+    )
+    assert put.status_code == 200, put.text
+    foreign = page(client, "other", "other-project-secret")
+    via_rest, via_mcp = make(client), make(client)
+
+    rest = rest_edit(client, ADMIN_TOKEN, via_rest, knowledge=[pin]).json()
+    mcp = mcp_edit(client, ADMIN_TOKEN, via_mcp, knowledge=[pin])
+    assert rest["knowledge"] == mcp["knowledge"] == [pin]
+    assert read_mcp(client, via_mcp["id"])["version"] == mcp["version"]
+
+    refused = rest_edit(client, ADMIN_TOKEN, rest, knowledge=[pin, foreign])
+    assert refused.status_code == 422
+    assert refused.json()["detail"]["code"] == "validation_failed"
+    error = mcp_edit(client, ADMIN_TOKEN, mcp, knowledge=[pin, foreign])["error"]
+    assert "422 validation_failed" in error and foreign in error
+    for text in (refused.text, error):
+        assert "other-project-secret" not in text
+    assert read_rest(client, via_rest["id"]) == rest
+
+    unpinned = mcp_edit(client, ADMIN_TOKEN, mcp, knowledge=None)
+    assert unpinned["knowledge"] == []
