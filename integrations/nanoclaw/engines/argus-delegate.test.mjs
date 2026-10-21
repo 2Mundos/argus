@@ -529,6 +529,29 @@ function gateway(t, over = {}, envOver = {}) {
   return { ...s, ca, stubPath, env, doc };
 }
 
+test("claude: rejects an allowed local redirect paired with a cloud oauth token", () => {
+  const base = "http://host.docker.internal:8080";
+  const out = restoreClaudeGatewayAuth({
+    ANTHROPIC_BASE_URL: base,
+    ARGUS_ALLOWED_ANTHROPIC_BASE_URL: base,
+    CLAUDE_CODE_OAUTH_TOKEN: SENTINEL,
+  });
+  assert.equal(out.source, null);
+  assert.equal(out.stub, "rejected:api_redirected");
+  assert.equal(authStatus("claude", out.env).ok, false);
+});
+
+test("claude: accepts an exact allowed local redirect with only the harness placeholder", () => {
+  const base = "http://host.docker.internal:8080";
+  const out = restoreClaudeGatewayAuth({
+    ANTHROPIC_BASE_URL: base,
+    ARGUS_ALLOWED_ANTHROPIC_BASE_URL: base,
+    ANTHROPIC_AUTH_TOKEN: "argus-local-harness",
+  });
+  assert.equal(out.source, "local_harness");
+  assert.equal(authStatus("claude", out.env).ok, true);
+});
+
 test("claude: the sentinel is restored only from a host stub that matches the gateway", (t) => {
   const g = gateway(t);
   const out = restoreClaudeGatewayAuth(g.env, g.stubPath);

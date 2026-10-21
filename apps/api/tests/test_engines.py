@@ -524,7 +524,8 @@ def test_axes_keep_provider_engine_executor_and_account_apart() -> None:
     assert by_id["codex"].axes.executor == "codex"
     assert by_id["claude"].role == "code_executor"
     assert by_id["cursor-agent"].axes.executor == "agent"
-    assert by_id["local"].axes.executor is None
+    assert by_id["local"].axes.executor == "agent"
+    assert by_id["local"].axes.account_provider == "local"
     assert by_id["local"].axes.model == MODEL
 
 

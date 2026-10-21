@@ -48,14 +48,20 @@ import {
   classifyFailure,
   classifyLogTail,
   classifyProviderFailure,
-  executorFor,
   type FailureKind,
   isGenericFailureNotice,
   normalizeRepositoryUrl,
   OneCliClient,
+  preferredExecutorForLease,
   releaseRepositoryLease,
   runtimeProviders,
 } from "./argus-accounts.js";
+import { syncLocalStrataForward } from "./argus-local-forward.js";
+import {
+  localHarnessFromCredential,
+  removeLocalHarnessFile,
+  writeLocalHarnessFile,
+} from "./argus-local-harness.js";
 import { registerChannelAdapter } from "./channel-registry.js";
 import {
   loadPolicy,
@@ -1151,7 +1157,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (!logRelay) await startLogRelay(task);
       resends = 0;
       const best = executor ?? account;
-      currentText = renderTask(task, pages, best ? executorFor(best.provider) : null);
+      currentText = renderTask(task, pages, preferredExecutorForLease(account, executor));
       await injectTask(task.id, task.attempt, currentText);
       await finished;
     } catch {
@@ -1281,6 +1287,39 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         reason,
       })
       .catch((err) => log.warn("Could not report the engine selection", { err }));
+    await syncLocalHarnessFile(lease);
+  }
+
+  async function syncLocalHarnessFile(lease: AccountLease): Promise<void> {
+    const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
+      "../db/messaging-groups.js"
+    );
+    const { getAgentGroup } = await import("../db/agent-groups.js");
+    const mg = await getMessagingGroupByPlatform(CHANNEL_TYPE, PLATFORM_ID);
+    const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
+    const group = wiring ? await getAgentGroup(wiring.agent_group_id) : undefined;
+    if (!group) return;
+    let dataDir = process.cwd();
+    try {
+      const { DATA_DIR } = await import("../config.js");
+      dataDir = DATA_DIR;
+    } catch {
+      /* integrations tests: no NanoClaw config module */
+    }
+    if (lease.provider === "local") {
+      const harness = localHarnessFromCredential(lease.credential);
+      if (!harness) {
+        log.warn("Local account lease has an invalid harness credential; not writing env file");
+        removeLocalHarnessFile(dataDir, group.folder);
+        await syncLocalStrataForward(null);
+        return;
+      }
+      await writeLocalHarnessFile(dataDir, group.folder, harness);
+      await syncLocalStrataForward(harness);
+      return;
+    }
+    removeLocalHarnessFile(dataDir, group.folder);
+    await syncLocalStrataForward(null);
   }
 
   /** Lease and apply an account for the currently claimed task. */
@@ -1806,7 +1845,7 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
       // Opaque lease ids (no credential): the delegate reports executor usage against them.
       engine_account_id: held.engine?.account_id ?? null,
       executor_account_id: (held.executor ?? held.engine)?.account_id ?? null,
-      preferred_executor: executorFor(held.executor?.provider ?? held.engine?.provider ?? ""),
+      preferred_executor: preferredExecutorForLease(held.engine, held.executor),
     });
     const dir = path.resolve("groups", group.folder);
     await mkdir(dir, { recursive: true });

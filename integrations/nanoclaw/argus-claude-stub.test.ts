@@ -105,6 +105,7 @@ describe("withClaudeDelegateRuntime", () => {
     ["no proxy", { HTTPS_PROXY: undefined }],
     ["a non-http proxy", { HTTPS_PROXY: "socks5://gw:1" }],
     ["a redirected API base URL", { ANTHROPIC_BASE_URL: "https://evil.example" }],
+    ["a local harness redirect", { ANTHROPIC_BASE_URL: "http://host.docker.internal:8080" }],
     ["an API unix socket", { ANTHROPIC_UNIX_SOCKET: "/tmp/s.sock" }],
   ])("emits no stub for %s", (_name, env) => {
     const out = withClaudeDelegateRuntime(config(env as ContainerConfig["env"]));

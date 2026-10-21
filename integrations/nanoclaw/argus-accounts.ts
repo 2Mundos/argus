@@ -12,6 +12,8 @@
  * use; a switch is a `PATCH` of its value.
  */
 
+import { localCredentialProblem } from "./argus-local-harness.js";
+
 export interface AccountLease {
   lease_id: string;
   account_id: string;
@@ -51,6 +53,8 @@ interface ProviderMapping {
   exchange?(credential: Record<string, unknown>, fetchImpl: typeof fetch): Promise<string | null>;
   /** No NanoClaw harness runs on this provider: only a delegated CLI uses it. */
   executorOnly?: boolean;
+  /** Engine lease env is applied on the host (local Strata); no OneCLI secret row. */
+  harnessEnvOnly?: boolean;
   /**
    * Inject with a generic header secret, one per endpoint (host + path pattern),
    * instead of a typed secret. A request that matches no endpoint is forwarded
@@ -266,6 +270,15 @@ export const PROVIDERS: Record<string, ProviderMapping> = {
   // container holds a sentinel token; the gateway swaps in the real access token
   // for exactly the paths below, over HTTP/1.1 (it does not negotiate h2). Observed
   // with the shipped CLI against a mock and the real gateway (cursor accounts spec).
+  local: {
+    type: "generic",
+    host: "local",
+    engine: "claude",
+    secretSuffix: "-local",
+    harnessEnvOnly: true,
+    problem: (c) => localCredentialProblem(c),
+    pick: (c) => JSON.stringify(c),
+  },
   cursor: {
     type: "generic",
     host: CURSOR_HOST,
@@ -303,6 +316,21 @@ export function runtimeProviders(role: "engine" | "executor"): string[] {
 /** The delegate CLI (`argus-delegate EXECUTOR`) that runs on a provider's account. */
 export function executorFor(provider: string): string | null {
   return { anthropic: "claude", openai: "codex", cursor: "agent" }[provider] ?? null;
+}
+
+/**
+ * Preferred delegated CLI for a task: the executor lease when present, otherwise
+ * the engine's. Local is engine-only; when the harness is local Strata, Cursor
+ * `agent` is still preferred for implementation work.
+ */
+export function preferredExecutorForLease(
+  engine: AccountLease | null,
+  executor: AccountLease | null,
+): string | null {
+  const best = executor ?? engine;
+  if (!best) return null;
+  if (engine?.provider === "local") return "agent";
+  return executorFor(best.provider);
 }
 
 export class OneCliError extends Error {
@@ -540,6 +568,7 @@ export async function applyLeasesDetailed(
     const names = secretNames(target.identifier, mapping);
     if (done.has(names[0]!)) continue; // one account per provider: the first lease wins
     done.add(names[0]!);
+    if (mapping.harnessEnvOnly) continue;
     if (lease.role === "executor") executorExpiresAt = jwtExpiryMs(value);
     for (const [index, secretName] of names.entries()) {
       const endpoint = mapping.generic?.endpoints[index];

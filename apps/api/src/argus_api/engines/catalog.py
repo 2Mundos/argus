@@ -4,6 +4,7 @@ from the ledger and the local server, never assumed (engines spec 3)."""
 import json
 from pathlib import Path
 
+from argus_core.accounts import LOCAL_PROVIDER
 from argus_core.engines import (
     AccountsSummary,
     Axes,
@@ -175,6 +176,13 @@ def build(
         )
     if local is not None:
         rec = ledger.get(LOCAL_ID, {})
+        # The local account tells routing whether a worker could lease the harness;
+        # readiness stays the probe's and the ledger's business (no credential).
+        local_accounts = (
+            accounts.get(LOCAL_PROVIDER, AccountsSummary(leasable=0))
+            if accounts is not None
+            else None
+        )
         installed = Fact(
             ok=local.reachable and local.model == local_model,
             detail=local.error
@@ -201,14 +209,23 @@ def build(
                 axes=Axes(
                     model_provider="local",
                     model=local.model,
-                    harness="argus-router (chat completions, delegated)",
-                    executor=None,
-                    account_provider=None,
+                    harness=(
+                        "argus-router (chat completions, delegated); "
+                        "nanoclaw provider claude on the local Anthropic API "
+                        "when a local account is leased"
+                    ),
+                    executor="agent",
+                    account_provider=LOCAL_PROVIDER,
                 ),
-                auth_methods=[],
+                auth_methods=["argus-account"],
                 readiness=r,
+                accounts=local_accounts,
                 usable=r.usable,
-                notes="Delegated executor for simple tasks, not a Codex backend.",
+                notes=(
+                    "Delegated executor for simple tasks, and the harness of last "
+                    "resort when no cloud account can serve (local harness spec); "
+                    "never a Codex backend."
+                ),
             )
         )
     return EngineCatalog(engines=entries, local=local)
