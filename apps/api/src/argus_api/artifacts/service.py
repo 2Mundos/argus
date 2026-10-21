@@ -13,7 +13,12 @@ from pydantic import BaseModel
 
 from argus_api.artifacts.store import LocalArtifactStore
 from argus_api.db import Database, ts
-from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
+from argus_api.errors import (
+    ConflictError,
+    DomainError,
+    NotFoundError,
+    ValidationFailedError,
+)
 from argus_api.events import record
 from argus_api.tasks import service as tasks
 
@@ -73,6 +78,16 @@ def key(task_id: str, attempt: int, name: str) -> str:
     return f"tasks/{task_id}/{attempt}/{name}"
 
 
+async def agent_bytes_used(conn: aiosqlite.Connection, agent_id: str) -> int:
+    async with conn.execute(
+        "SELECT coalesce(sum(size), 0) FROM artifacts WHERE created_by = ?",
+        (f"agent:{agent_id}",),
+    ) as cur:
+        row = await cur.fetchone()
+    assert row is not None
+    return int(row[0])
+
+
 async def upload(
     db: Database,
     store: LocalArtifactStore,
@@ -84,6 +99,7 @@ async def upload(
     media_type: str,
     chunks: AsyncIterator[bytes],
     role: ArtifactRole | None = None,
+    agent_quota_bytes: int | None = None,
 ) -> Artifact:
     """Stage the bytes first (no lock held), then check the lease and commit."""
     if not _NAME.match(name):
@@ -92,8 +108,25 @@ async def upload(
             " and must not start with '.', '_' or '-'",
             code="invalid_name",
         )
+    if agent_quota_bytes is not None:
+        async with db.read() as conn:
+            used = await agent_bytes_used(conn, agent_id)
+        if used >= agent_quota_bytes:
+            raise DomainError(
+                f"agent artifact quota of {agent_quota_bytes} bytes would be exceeded"
+                f" (already using {used})",
+                code="artifact_quota",
+            )
+    else:
+        used = 0
     staged = await store.stage(chunks)
     try:
+        if agent_quota_bytes is not None and used + staged.size > agent_quota_bytes:
+            raise DomainError(
+                f"agent artifact quota of {agent_quota_bytes} bytes would be exceeded"
+                f" (using {used}, upload {staged.size})",
+                code="artifact_quota",
+            )
         async with db.write() as tx:
             await tasks.check_lease(tx, task_id, attempt, agent_id)
             async with tx.conn.execute(

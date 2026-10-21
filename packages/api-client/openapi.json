@@ -11585,6 +11585,7 @@
           "spec": {
             "anyOf": [
               {
+                "maxLength": 200000,
                 "type": "string"
               },
               {
@@ -11759,6 +11760,7 @@
           },
           "spec": {
             "default": "",
+            "maxLength": 200000,
             "title": "Spec",
             "type": "string"
           },
