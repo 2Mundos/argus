@@ -1,4 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -412,7 +419,9 @@ describe("anthropic credential documents", () => {
 
 describe("classifyFailure", () => {
   it("recognizes the provider's blocked-run messages and the reset time", () => {
-    expect(classifyFailure("Rate limit [five_hour] (resets 2026-10-15T01:00:00.000Z)")).toMatchObject({
+    expect(
+      classifyFailure("Rate limit [five_hour] (resets 2026-10-15T01:00:00.000Z)"),
+    ).toMatchObject({
       kind: "exhausted",
       code: "quota_exhausted",
       source: "notice",
@@ -456,7 +465,11 @@ describe("classifyFailure", () => {
     const usageLimit = classifyFailure("Usage limit reached", "anthropic", now);
     expect(usageLimit.kind === "exhausted" && usageLimit.until).toBeUndefined();
     const vagueReset = classifyFailure("You've hit your limit · resets sometime", "anthropic", now);
-    expect(vagueReset).toMatchObject({ kind: "exhausted", code: "quota_exhausted", resetStatus: "ambiguous" });
+    expect(vagueReset).toMatchObject({
+      kind: "exhausted",
+      code: "quota_exhausted",
+      resetStatus: "ambiguous",
+    });
     expect(vagueReset.kind === "exhausted" && vagueReset.until).toBeUndefined();
     expect(
       classifyFailure("Rate limit [five_hour] (resets 2026-10-20T23:50:00.000Z)", "anthropic"),
@@ -2149,7 +2162,10 @@ describe("Codex usage limit and expired login (account-selection.spec.md 3.6)", 
 // -- usage relay: the host posts what the container reports -------------------------------
 
 describe("usage relay in the channel", () => {
-  const usageRecord = (over: Record<string, unknown> = {}, payload: Record<string, unknown> = {}) => ({
+  const usageRecord = (
+    over: Record<string, unknown> = {},
+    payload: Record<string, unknown> = {},
+  ) => ({
     v: 1,
     kind: "usage",
     source: "delegate",
@@ -2214,7 +2230,9 @@ describe("usage relay in the channel", () => {
       ["/accounts/a-codex-1/usage", "h1:t1:1:th:1", "engine"],
     ]);
     const order = r.w.calls.map((c) => c.path);
-    expect(order.lastIndexOf("/accounts/a-claude-1/usage")).toBeLessThan(order.indexOf("/tasks/t1/complete"));
+    expect(order.lastIndexOf("/accounts/a-claude-1/usage")).toBeLessThan(
+      order.indexOf("/tasks/t1/complete"),
+    );
     expect(JSON.stringify(posts)).not.toContain("account_id");
     rmSync(r.dir, { recursive: true });
   });
@@ -2224,7 +2242,9 @@ describe("usage relay in the channel", () => {
     write(r.usageFile, usageRecord({ account_id: "a-claude-1" }));
     await r.finish();
     expect(r.posts().map((c) => c.path)).toEqual(["/accounts/a-claude-1/usage"]);
-    expect(r.w.calls.filter((c) => c.path === "/accounts/lease" && c.body?.role === "executor").length).toBeLessThanOrEqual(1);
+    expect(
+      r.w.calls.filter((c) => c.path === "/accounts/lease" && c.body?.role === "executor").length,
+    ).toBeLessThanOrEqual(1);
     rmSync(r.dir, { recursive: true });
   });
 });

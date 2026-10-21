@@ -30,7 +30,10 @@ def edit(root: Path, path: str, hooks: list[tuple[str, str, str]]) -> None:
         if new in s:
             continue
         # harness-usage.ts inserts a line between resultAsError and the rate-limit hook.
-        if what == "result error" and "claudeRateLimitError(m.result, rateLimited)" in s:
+        if (
+            what == "result error"
+            and "claudeRateLimitError(m.result, rateLimited)" in s
+        ):
             continue
         if s.count(anchor) != 1:
             raise SystemExit(f"{p}: {what}: upstream shape changed")

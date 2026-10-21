@@ -35,9 +35,7 @@ def edit(root: Path, name: str, hooks: list[tuple[str, str, str]]) -> None:
 
 
 REGISTER = "import { registerProvider } from './provider-registry.js';\n"
-CLAUDE_IMPORT = (
-    "import { createClaudeUsageTracker, newQueryId, recordHarnessUsage } from './harness-usage.js';\n"
-)
+CLAUDE_IMPORT = "import { createClaudeUsageTracker, newQueryId, recordHarnessUsage } from './harness-usage.js';\n"
 # Before `lastStreamActivityAt`: patch-claude-rate-limit.py anchors on the lines that follow it.
 CLAUDE_LOOP = "      let messageCount = 0;\n"
 CLAUDE_STATE = (
@@ -46,14 +44,12 @@ CLAUDE_STATE = (
     "      const usageQuery = newQueryId();\n"
     "      let usageSeq = 0;\n"
 )
-CLAUDE_RESULT = "          const resultAsError = hint ? `${candidate}\\n${hint}` : '';\n"
-CLAUDE_RECORD = (
-    "          recordHarnessUsage('claude', usageTracker.observe(message), usageQuery, ++usageSeq);\n"
+CLAUDE_RESULT = (
+    "          const resultAsError = hint ? `${candidate}\\n${hint}` : '';\n"
 )
+CLAUDE_RECORD = "          recordHarnessUsage('claude', usageTracker.observe(message), usageQuery, ++usageSeq);\n"
 
-CODEX_IMPORT = (
-    "import { createCodexUsageTracker, newQueryId, recordHarnessUsage } from './harness-usage.js';\n"
-)
+CODEX_IMPORT = "import { createCodexUsageTracker, newQueryId, recordHarnessUsage } from './harness-usage.js';\n"
 CODEX_FN = "async function* runOneTurn(\n"
 CODEX_STATE = (
     "// Argus: token usage per thread and per process, for the NanoClaw host (harness-usage.ts).\n"
@@ -96,7 +92,11 @@ def main(root: Path) -> None:
         [
             ("import", REGISTER, REGISTER + CODEX_IMPORT),
             ("usage state", CODEX_FN, CODEX_STATE + CODEX_FN),
-            ("usage update", CODEX_COMPLETED, CODEX_UPDATED + CODEX_COMPLETED + CODEX_RECORD),
+            (
+                "usage update",
+                CODEX_COMPLETED,
+                CODEX_UPDATED + CODEX_COMPLETED + CODEX_RECORD,
+            ),
         ],
     )
 

@@ -64,12 +64,12 @@ import {
   writeCustomHarnessFile,
 } from "./argus-custom-harness.js";
 import { syncLocalStrataForward } from "./argus-local-forward.js";
-import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
 import {
   localHarnessFromCredential,
   removeLocalHarnessFile,
   writeLocalHarnessFile,
 } from "./argus-local-harness.js";
+import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
 import { registerChannelAdapter } from "./channel-registry.js";
 import {
   loadPolicy,
