@@ -14,6 +14,8 @@ interface Live {
   status: StreamStatus;
   /** Bumped (debounced) whenever events arrive; use as a refetch dependency. */
   version: number;
+  /** Bumped each time the stream (re)connects; transient events sent while it was down are gone. */
+  connection: number;
   subscribe: (listener: (event: ArgusEvent) => void) => () => void;
 }
 
@@ -26,6 +28,7 @@ export function LiveProvider(props: {
 }) {
   const [status, setStatus] = useState<StreamStatus>("connecting");
   const [version, setVersion] = useState(0);
+  const [connection, setConnection] = useState(0);
   const listeners = useRef(new Set<(event: ArgusEvent) => void>());
   const { token, onUnauthorized } = props;
 
@@ -37,7 +40,10 @@ export function LiveProvider(props: {
       onUnauthorized,
       onStatus: (s) => {
         setStatus(s);
-        if (s === "live") setVersion((v) => v + 1); // refetch after (re)connecting
+        if (s === "live") {
+          setVersion((v) => v + 1); // refetch after (re)connecting
+          setConnection((c) => c + 1);
+        }
       },
       onMessage: (data) => {
         const event = JSON.parse(data) as ArgusEvent;
@@ -60,7 +66,7 @@ export function LiveProvider(props: {
   }, []);
 
   return (
-    <LiveContext.Provider value={{ status, version, subscribe }}>
+    <LiveContext.Provider value={{ status, version, connection, subscribe }}>
       {props.children}
     </LiveContext.Provider>
   );

@@ -3,20 +3,25 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskLog } from "./TaskLog";
 
+type Page = { attempt: number; lines: unknown[]; last_seq: number };
 const mock = vi.hoisted(() => ({
-  page: { attempt: 2, lines: [] as unknown[], last_seq: 0 },
+  page: { attempt: 2, lines: [], last_seq: 0 } as Page,
+  after: { attempt: 2, lines: [], last_seq: 0 } as Page, // the answer to `after` reads
   query: undefined as unknown,
+  queries: [] as { after?: number }[],
+  connection: 1,
   listener: undefined as undefined | ((e: unknown) => void),
 }));
 
 vi.mock("../api", () => ({
   api: {
-    GET: (path: string, opts: { params: { query: unknown } }) => {
-      mock.query = opts.params.query;
-      return { path };
+    GET: (path: string, opts: { params: { query: { after?: number } } }) => {
+      mock.query ??= opts.params.query;
+      mock.queries.push(opts.params.query);
+      return { path, after: opts.params.query.after };
     },
   },
-  call: async () => mock.page,
+  call: async (req: { after?: number }) => (req.after == null ? mock.page : mock.after),
 }));
 
 vi.mock("../live", () => {
@@ -28,7 +33,8 @@ vi.mock("../live", () => {
       };
     },
   };
-  return { useLive: () => live }; // stable, like the real context value
+  // `subscribe` is stable, like the real context value.
+  return { useLive: () => ({ ...live, connection: mock.connection }) };
 });
 
 const at = "2026-10-19T12:00:00Z";
@@ -43,6 +49,10 @@ beforeEach(() => {
     lines: [{ seq: 1, source: "worker", at, line: "first" }],
     last_seq: 1,
   };
+  mock.after = { attempt: 2, lines: [], last_seq: 0 };
+  mock.query = undefined;
+  mock.queries = [];
+  mock.connection = 1;
 });
 afterEach(cleanup);
 
@@ -113,5 +123,40 @@ describe("TaskLog", () => {
     fireEvent.scroll(box);
     emit("t1", 2, 3, ["again"]);
     expect(box.scrollTop).toBe(500);
+  });
+
+  it("reads back what it missed after the stream reconnects", async () => {
+    const { rerender } = render(<TaskLog taskId="t1" attempt={2} />);
+    await screen.findByText("first");
+    expect(mock.queries).toHaveLength(1); // no catch-up without a reconnect
+    mock.after = {
+      attempt: 2,
+      lines: [{ seq: 2, source: "worker", at, line: "missed" }],
+      last_seq: 2,
+    };
+    mock.connection = 2;
+    rerender(<TaskLog taskId="t1" attempt={2} />);
+    await screen.findByText("missed");
+    expect(mock.queries.at(-1)).toEqual({ attempt: 2, after: 1, limit: 1000 });
+  });
+
+  it("reads back the lines of a seq gap", async () => {
+    render(<TaskLog taskId="t1" attempt={2} />);
+    await screen.findByText("first");
+    mock.after = {
+      attempt: 2,
+      lines: [
+        { seq: 2, source: "worker", at, line: "gap a" },
+        { seq: 3, source: "delegate", at, line: "gap b" },
+      ],
+      last_seq: 3,
+    };
+    emit("t1", 2, 4, ["after the gap"]);
+    await screen.findByText("gap a");
+    expect(mock.queries.at(-1)).toEqual({ attempt: 2, after: 1, limit: 1000 });
+    const shown = [...document.querySelectorAll(".log-line")].map((el) => el.textContent);
+    expect(shown).toEqual(["first", "gap a", "[delegate] gap b", "after the gap"]);
+    emit("t1", 2, 5, ["contiguous"]);
+    expect(mock.queries).toHaveLength(2); // no gap, no read
   });
 });

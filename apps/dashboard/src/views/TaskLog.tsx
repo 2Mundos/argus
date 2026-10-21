@@ -3,6 +3,8 @@ import { api, call } from "../api";
 import { useLive } from "../live";
 import { filterLines, type LogFilter, type LogLine, logEvent, mergeLines } from "../taskLog";
 
+const READ_LIMIT = 1000; // the API's largest page
+
 const FILTERS: [LogFilter, string][] = [
   ["all", "Tudo"],
   ["worker", "Worker"],
@@ -11,25 +13,73 @@ const FILTERS: [LogFilter, string][] = [
 
 /** The "Ao vivo" panel: the attempt's log tail, then its `task.log` events as they arrive. */
 export function TaskLog({ taskId, attempt }: { taskId: string; attempt: number }) {
-  const { subscribe } = useLive();
+  const { subscribe, connection } = useLive();
   const [lines, setLines] = useState<LogLine[]>([]);
   const [filter, setFilter] = useState<LogFilter>("all");
   const [pausedAt, setPausedAt] = useState<number | null>(null); // last seq shown while paused
   const [error, setError] = useState<string>();
   const box = useRef<HTMLPreElement>(null);
   const atEnd = useRef(true); // the reader is at the end: keep following
+  const catchUp = useRef(() => {});
 
   useEffect(() => {
+    let cancelled = false;
     let loaded = false;
+    let last = 0; // newest seq shown
+    let filling = false;
+    let refill: number | null = null; // a catch-up asked for while another runs
     const early: LogLine[] = [];
     setLines([]);
     setError(undefined);
+    const add = (more: LogLine[]) => {
+      for (const l of more) last = Math.max(last, l.seq);
+      setLines((have) => mergeLines(have, more));
+    };
+    // Task.log events are transient: whatever the stream dropped (a reconnect, a
+    // seq gap) is read back from the API, after the newest line held.
+    const backfill = (after: number) => {
+      if (filling) {
+        refill = Math.min(refill ?? after, after);
+        return;
+      }
+      filling = true;
+      call(
+        api.GET("/api/tasks/{task_id}/log", {
+          params: { path: { task_id: taskId }, query: { attempt, after, limit: READ_LIMIT } },
+        }),
+      )
+        .then(
+          (page) => {
+            if (cancelled) return;
+            add(page.lines);
+            if (page.lines.length === READ_LIMIT)
+              refill = Math.min(refill ?? page.last_seq, page.last_seq);
+          },
+          () => {}, // the next reconnect or gap tries again
+        )
+        .finally(() => {
+          filling = false;
+          if (cancelled || refill == null) return;
+          const next = refill;
+          refill = null;
+          backfill(next);
+        });
+    };
+    catchUp.current = () => {
+      if (loaded) backfill(last);
+      else refill = 0; // the tail read may predate the stream: catch up after it
+    };
     // Subscribe first, then backfill, so nothing slips in between; merging dedupes by seq.
     const unsubscribe = subscribe((event) => {
       const got = logEvent(event, taskId);
       if (!got || got.attempt !== attempt) return;
-      if (loaded) setLines((have) => mergeLines(have, got.lines));
-      else early.push(...got.lines);
+      if (!loaded) {
+        early.push(...got.lines);
+        return;
+      }
+      const before = last;
+      add(got.lines);
+      if (before > 0 && (got.lines[0]?.seq ?? 0) > before + 1) backfill(before);
     });
     call(
       api.GET("/api/tasks/{task_id}/log", {
@@ -37,16 +87,34 @@ export function TaskLog({ taskId, attempt }: { taskId: string; attempt: number }
       }),
     ).then(
       (page) => {
+        if (cancelled) return;
         loaded = true;
+        for (const l of [...page.lines, ...early]) last = Math.max(last, l.seq);
         setLines(mergeLines(mergeLines([], page.lines), early));
+        if (refill != null) {
+          refill = null;
+          backfill(page.last_seq);
+        }
       },
       (err: Error) => {
+        if (cancelled) return;
         loaded = true;
         setError(err.message);
       },
     );
-    return unsubscribe;
+    return () => {
+      cancelled = true;
+      catchUp.current = () => {};
+      unsubscribe();
+    };
   }, [subscribe, taskId, attempt]);
+
+  const connected = useRef(connection);
+  useEffect(() => {
+    if (connection === connected.current) return;
+    connected.current = connection;
+    catchUp.current();
+  }, [connection]);
 
   const shown = filterLines(
     pausedAt == null ? lines : lines.filter((l) => l.seq <= pausedAt),
