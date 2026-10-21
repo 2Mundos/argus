@@ -56,6 +56,7 @@ class TaskSummary(Refs):
     progress_kind: ProgressKind | None = None
     progress_data: dict[str, Any] | None = None
     models: ModelsSummary = ModelsSummary()
+    output_at: datetime | None = None
     created_at: datetime
     archived_at: datetime | None
     version: str  # updated_at; pass it back as expected_version
@@ -89,14 +90,21 @@ async def list_tasks(
     view: View = "summary",
     limit: int = 25,
     cursor: str | None = None,
+    task_scope: tuple[str, list[str]] | None = None,
 ) -> TaskPage:
     """Newest first, keyset-paged on (created_at, id). Archived tasks are left out
-    unless `archived` asks for exactly those."""
+    unless `archived` asks for exactly those. `task_scope` is an optional SQL
+    fragment (worker lease grants) that further restricts which tasks appear."""
     limit = clamp(limit)
     filters: dict[str, Any] = {"states": sorted(states or []), "project": project}
     filters |= {"kind": kind, "assignee": assignee, "archived": archived}
     where = ["archived_at IS NOT NULL" if archived else "archived_at IS NULL"]
     params: list[Any] = []
+    if task_scope is not None:
+        clause, scope_params = task_scope
+        where.append(clause)
+        params += scope_params
+        filters["task_scope"] = scope_params
     if states:
         where.append(f"state IN ({','.join('?' * len(states))})")
         params += states
@@ -137,15 +145,25 @@ async def list_tasks(
     return page
 
 
-async def get_tasks(snap: Snapshot, ids: list[str], view: View = "summary") -> TaskPage:
-    """A batch read in the order asked; unknown ids come back in `missing`."""
+async def get_tasks(
+    snap: Snapshot,
+    ids: list[str],
+    view: View = "summary",
+    *,
+    task_scope: tuple[str, list[str]] | None = None,
+) -> TaskPage:
+    """A batch read in the order asked; unknown ids come back in `missing`.
+    Out-of-scope ids for a worker are treated as missing (no existence leak)."""
     ids = list(dict.fromkeys(ids))
     if not 1 <= len(ids) <= MAX_IDS:
         raise ValidationFailedError(f"ids takes 1 to {MAX_IDS} task ids")
-    async with snap.conn.execute(
-        f"SELECT * FROM tasks WHERE id IN ({','.join('?' * len(ids))})",  # noqa: S608
-        ids,
-    ) as cur:
+    sql = f"SELECT * FROM tasks WHERE id IN ({','.join('?' * len(ids))})"  # noqa: S608
+    params: list[Any] = list(ids)
+    if task_scope is not None:
+        clause, scope_params = task_scope
+        sql += f" AND ({clause})"
+        params += scope_params
+    async with snap.conn.execute(sql, params) as cur:
         found = {r["id"]: r for r in await cur.fetchall()}
     page = await _page(snap, [found[i] for i in ids if i in found], view)
     page.missing = [i for i in ids if i not in found]

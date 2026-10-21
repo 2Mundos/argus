@@ -21,6 +21,13 @@ export function TaskFailover({ task, now = Date.now() }: { task: FailoverInfo; n
           <dd>
             {task.serving_account.name}{" "}
             <span className="muted">({task.serving_account.provider})</span>
+            {task.serving_account.model && (
+              <span className="muted">
+                {" "}
+                · {task.serving_account.model}
+                {task.serving_account.host && ` @ ${task.serving_account.host}`}
+              </span>
+            )}
           </dd>
         </>
       )}

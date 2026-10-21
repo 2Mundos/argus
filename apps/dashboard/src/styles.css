@@ -1125,3 +1125,14 @@ button.link.account-name {
 .edit-form [aria-invalid="true"] {
   border-color: var(--danger, #c0392b);
 }
+
+.task-log .log {
+  max-height: 18rem;
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.task-log .log-line.delegate {
+  opacity: 0.85;
+}

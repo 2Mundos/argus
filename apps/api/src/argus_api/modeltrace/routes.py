@@ -1,6 +1,7 @@
 from argus_core.model_trace import ModelTrace, ModelTraceReport
 from fastapi import APIRouter
 
+from argus_api.access import require_task_readable
 from argus_api.deps import AgentDep, CallerDep, DbDep
 from argus_api.modeltrace import service
 from argus_api.tasks import service as tasks
@@ -25,8 +26,9 @@ async def report_models(
 
 
 @router.get("/{task_id}/models")
-async def get_models(task_id: str, db: DbDep, _: CallerDep) -> ModelTrace:
+async def get_models(task_id: str, db: DbDep, caller: CallerDep) -> ModelTrace:
     """Every execution (both layers, all attempts, oldest first) with its evidence,
     and the selection/switch timeline. Cards use the compact `models` summary."""
     async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
         return await service.get_trace(conn, task_id)

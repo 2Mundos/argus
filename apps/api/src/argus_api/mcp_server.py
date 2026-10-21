@@ -286,6 +286,26 @@ async def get_task(ctx: Context, task_id: str) -> dict:
 
 
 @tool(ANYONE)
+async def get_task_log(
+    ctx: Context,
+    task_id: str,
+    attempt: int | None = None,
+    after: int | None = None,
+    limit: int = 200,
+) -> dict:
+    """Read the live output log of a task attempt (default: the current one), as the
+    dashboard's "Ao vivo" panel shows it: {attempt, lines: [{seq, source, at, line}],
+    last_seq}. Without `after` you get the newest `limit` lines (max 1000); pass
+    `after`=last_seq to read on. Secrets are redacted. Workers read leased tasks only."""
+    return await _call(
+        ctx,
+        "GET",
+        f"/tasks/{task_id}/log",
+        params={"attempt": attempt, "after": after, "limit": limit},
+    )
+
+
+@tool(ANYONE)
 async def get_tasks(ctx: Context, ids: list[str], view: ViewArg = "summary") -> dict:
     """Read up to 50 tasks in one call, in the order given; unknown ids come back in
     `missing`. view=detail adds spec and result (long text cut, see `truncated`)."""
@@ -1049,6 +1069,37 @@ async def create_worker(
             "advanced": advanced,
         },
     )
+
+
+# -- preferred models -------------------------------------------------------------------
+
+
+@tool(ANYONE)
+async def get_model_policy(ctx: Context) -> dict:
+    """The effective model policy: `harness` and `implementation` maps (engine -> ordered
+    model chain), `revision`, `source` (env | file | defaults), and `env_overrides` (true
+    means ARGUS_MODEL_POLICY wins over saved edits). IDs are opaque; availability at the
+    provider is not checked."""
+    return await _call(ctx, "GET", "/models")
+
+
+@tool(ADMINS)
+async def set_model_policy(ctx: Context, harness: dict, implementation: dict) -> dict:
+    """Replace the whole model policy (admin only). Both maps are required; each maps an
+    engine (codex, claude, opencode, agent) to a nonempty chain of at most 10 distinct
+    model IDs. A bad chain is a 422 naming it. New NanoClaw instances pick it up."""
+    return await _call(
+        ctx,
+        "PUT",
+        "/models",
+        json={"harness": harness, "implementation": implementation},
+    )
+
+
+@tool(ADMINS)
+async def reset_model_policy(ctx: Context) -> dict:
+    """Remove the saved model policy so the shipped defaults apply again (admin only)."""
+    return await _call(ctx, "DELETE", "/models")
 
 
 # -- engines and the local model ---------------------------------------------------------

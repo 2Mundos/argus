@@ -4,3 +4,13 @@ title = "argus gitleaks config"
 
 [extend]
 useDefault = true
+
+# Redaction tests must contain secret-shaped strings (fake values, never real credentials).
+# History is scanned per commit, so a `gitleaks:allow` added later cannot clear earlier commits.
+[[allowlists]]
+description = "Fake secret fixtures in the live-log redaction tests"
+paths = [
+  '''packages/core/tests/test_redact\.py''',
+  '''apps/api/tests/test_task_log\.py''',
+  '''integrations/nanoclaw/engines/livelog\.test\.mjs''',
+]

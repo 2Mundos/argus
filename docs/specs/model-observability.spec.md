@@ -125,7 +125,7 @@ therefore can never be labelled a model switch.
 
 # 6. Implementation Consequences
 
-- Migration `0026_model_trace.sql` (`model_executions`, `model_selections`).
+- Migration `0029_model_trace.sql` (`model_executions`, `model_selections`).
 - Core `argus_core/model_trace.py`; API `argus_api/modeltrace/` (service and
   routes), `Task.models`, `GET /api/agents/{id}/models`, the account failover
   hook and three MCP tools. Regenerated `openapi.json` and `schema.d.ts`.

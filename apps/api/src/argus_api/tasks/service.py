@@ -15,6 +15,7 @@ import aiosqlite
 from argus_core.accounts import EXECUTOR_ONLY, REPOSITORY_PROVIDER
 from argus_core.agents import LIVE, AgentState
 from argus_core.auth import Scope
+from argus_core.custom_accounts import CustomConfig
 from argus_core.decisions import Audience, DecisionKind
 from argus_core.kinds import TaskKind
 from argus_core.task_edit import CLEARABLE, TaskAttempt, TaskChanges, editable_fields
@@ -35,8 +36,9 @@ from argus_core.tasks import (
 )
 from pydantic import ValidationError
 
+from argus_api.access import record_lease_grant
 from argus_api.accounts.usage import insert_usage
-from argus_api.db import Tx, ts
+from argus_api.db import Snapshot, Tx, ts
 from argus_api.decisions import store as decisions
 from argus_api.errors import (
     ConflictError,
@@ -238,6 +240,7 @@ async def claim(
             "attempt": attempt,
             "progress_kind": None,  # a milestone belongs to one attempt
             "progress_data": None,
+            "output_at": None,
             "lease_expires_at": _deadline(tx.now, row["lease_ttl_s"]),
             "timeout_at": (
                 _deadline(tx.now, timeout)
@@ -247,6 +250,7 @@ async def claim(
         },
         data={"attempt": attempt, "agent_id": agent_id},
     )
+    await record_lease_grant(tx, row["id"], agent_id, attempt)
     task = await get_task(tx.conn, row["id"])
     await _snapshot_attempt(tx, task, agent_id)
     return task
@@ -513,10 +517,11 @@ async def retry(tx: Tx, task_id: str, actor: str) -> Task:
         "UPDATE tasks SET state = ?, attempt = 0, failures = 0, error = NULL,"
         " assignee_agent_id = NULL, lease_expires_at = NULL, timeout_at = NULL,"
         " progress_message = NULL, progress_percent = NULL, progress_at = NULL,"
-        " progress_kind = NULL, progress_data = NULL,"
+        " progress_kind = NULL, progress_data = NULL, output_at = NULL,"
         " block_reason = NULL, archived_at = NULL, updated_at = ? WHERE id = ?",
         (S.READY, ts(tx.now), task_id),
     )
+    await tx.conn.execute("DELETE FROM task_log WHERE task_id = ?", (task_id,))
     error = row["error"] or ""
     await record(
         tx,
@@ -1090,14 +1095,25 @@ async def _expire_where(
 
 
 async def check_lease(
-    tx: Tx, task_id: str, attempt: int, agent_id: str, *, allow_expired: bool = False
-) -> None:
-    """Public ownership check for writes owned by other modules (artifacts, accounts)."""
-    await _owned(tx, task_id, attempt, agent_id, allow_expired=allow_expired)
+    tx: Tx | Snapshot,
+    task_id: str,
+    attempt: int,
+    agent_id: str,
+    *,
+    allow_expired: bool = False,
+) -> aiosqlite.Row:
+    """Public ownership check for writes owned by other modules (artifacts, accounts).
+    On a read `Snapshot` it is only a cheap early refusal; the write repeats it."""
+    return await _owned(tx, task_id, attempt, agent_id, allow_expired=allow_expired)
 
 
 async def _owned(
-    tx: Tx, task_id: str, attempt: int, agent_id: str, *, allow_expired: bool = False
+    tx: Tx | Snapshot,
+    task_id: str,
+    attempt: int,
+    agent_id: str,
+    *,
+    allow_expired: bool = False,
 ) -> aiosqlite.Row:
     """Check the caller holds the current, unexpired lease (3.3), inside `tx`.
 
@@ -1441,16 +1457,21 @@ async def _serving_account(
     if row["state"] != S.CLAIMED:
         return None
     async with conn.execute(
-        "SELECT a.id, a.name, a.provider FROM account_leases l"
+        "SELECT a.id, a.name, a.provider, a.config FROM account_leases l"
         " JOIN accounts a ON a.id = l.account_id WHERE l.agent_id = ?"
         " AND l.role = 'engine' AND l.released_at IS NULL",
         (row["assignee_agent_id"],),
     ) as cur:
         acc = await cur.fetchone()
-    return (
-        ServingAccount(id=acc["id"], name=acc["name"], provider=acc["provider"])
-        if acc
-        else None
+    if acc is None:
+        return None
+    config = CustomConfig.model_validate_json(acc["config"]) if acc["config"] else None
+    return ServingAccount(
+        id=acc["id"],
+        name=acc["name"],
+        provider=acc["provider"],
+        model=config.engine.model if config else None,
+        host=config.host if config else None,
     )
 
 

@@ -244,6 +244,10 @@ class ServingAccount(BaseModel):
     id: str
     name: str
     provider: str
+    # Custom accounts only (custom accounts spec 3): the configured engine model and
+    # the host calls go to. Not provider-observed: the model actually served may differ.
+    model: str | None = None
+    host: str | None = None
 
 
 class Task(BaseModel):
@@ -276,6 +280,9 @@ class Task(BaseModel):
     progress_at: datetime | None
     progress_kind: ProgressKind | None = None
     progress_data: dict[str, Any] | None = None
+    output_at: datetime | None = (
+        None  # last accepted live-log batch (task-live-log spec)
+    )
     depends_on: list[str]
     project: str
     knowledge: list[str]

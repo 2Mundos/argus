@@ -1,6 +1,6 @@
 # Thin layer: refreshed argus-delegate only (parent image unchanged).
 FROM argus-nanoclaw-agent:8fbacc91b6e2-engines1
 COPY --chmod=0755 argus-delegate.mjs /usr/local/bin/argus-delegate
-COPY model-policy.mjs model-policy.defaults.json milestones.mjs /usr/local/bin/
+COPY model-policy.mjs model-policy.defaults.json milestones.mjs livelog.mjs /usr/local/bin/
 COPY gitea-api.mjs /usr/local/bin/gitea-api.mjs
 COPY --chmod=0755 gitea-api.mjs /usr/local/bin/argus-gitea-api

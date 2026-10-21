@@ -342,7 +342,12 @@ def test_authorization(client, agent) -> None:
     assert client.post(url, json=body).status_code == 403  # admin is not an agent
     assert client.post(url, json=body, headers={"Authorization": ""}).status_code == 401
     assert client.get(url, headers={"Authorization": ""}).status_code == 401
-    assert client.get(url, headers=stranger).status_code == 200  # reads: any token
+    # reads follow the worker read scope: a worker that never leased it is refused
+    refused = client.get(url, headers=stranger)
+    assert refused.status_code == 403
+    assert refused.json()["detail"]["code"] == "not_leased"
+    assert client.get(url, headers=agent).status_code == 200  # the leaseholder
+    assert client.get(url).status_code == 200  # managers stay global
     assert client.post(url, json={"attempt": attempt}, headers=agent).status_code == 422
     done = client.post(
         f"/api/tasks/{task_id}/complete",

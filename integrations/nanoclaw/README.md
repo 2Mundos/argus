@@ -188,6 +188,18 @@ the channel leaves Argus, stops claiming, and signals the NanoClaw host to shut
 down (SIGTERM) so the instance ends. Under an Argus instance this is on by
 default; set `ARGUS_EXIT_ON_DRAIN=false` to keep the host running.
 
+## Live task log
+
+While `argus-delegate` runs claude (`stream-json`), it turns the stream into short,
+redacted lines plus a keepalive when silent, and appends them as JSON lines to
+`argus-task-log.jsonl` in the agent group directory (`/workspace/agent/` in the
+container; same mount as the model-policy snapshot). The delegate never has the Argus
+token. The channel polls that file and posts batches to `POST /api/tasks/{id}/log`
+with `source: "delegate"`, backing off on 429 and stopping on a stale attempt. See
+[task-live-log.spec.md](../../docs/specs/task-live-log.spec.md) section 3.7. Overrides
+for tests: `ARGUS_TASK_LOG_FILE`, `ARGUS_LIVELOG_FLUSH_S`, `ARGUS_LIVELOG_KEEPALIVE_S`,
+`ARGUS_LIVELOG_TICK_S`. Executors other than claude only send keepalives.
+
 ## Accounts: leasing and switching
 
 With `ONECLI_URL` set (the fleet always sets it) the channel takes its credential

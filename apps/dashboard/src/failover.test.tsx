@@ -58,3 +58,20 @@ describe("TaskFailover", () => {
     expect(container.querySelector("dt")).toBeNull();
   });
 });
+
+describe("TaskFailover custom account", () => {
+  it("shows the configured model and host", () => {
+    const { container } = renderDl({
+      ...base,
+      serving_account: {
+        id: "a-c",
+        name: "or",
+        provider: "custom",
+        model: "deepseek/deepseek-chat",
+        host: "openrouter.ai",
+      },
+      failover: null,
+    });
+    expect(container.textContent).toContain("deepseek/deepseek-chat @ openrouter.ai");
+  });
+});

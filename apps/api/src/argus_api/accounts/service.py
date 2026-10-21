@@ -24,6 +24,10 @@ from argus_core.accounts import (
     UsageReport,
     role_accepts,
 )
+from argus_core.custom_accounts import (
+    PROVIDER as CUSTOM_PROVIDER,
+)
+from argus_core.custom_accounts import CustomConfig, LeaseSettings, lease_settings
 from argus_core.quota import classify_quota
 from argus_core.tasks import Task
 
@@ -87,7 +91,7 @@ async def create_account(
     await tx.conn.execute(
         "INSERT INTO accounts (id, name, provider, kind, secret_ref, priority, max_leases,"
         " state, disabled_reason, auto_disabled, labels, created_at, updated_at,"
-        " token_limits) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " token_limits, config) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             account_id,
             body.name,
@@ -103,6 +107,7 @@ async def create_account(
             now,
             now,
             json.dumps(body.token_limits) if body.token_limits else None,
+            body.config.model_dump_json() if body.config else None,
         ),
     )
     await record(
@@ -139,6 +144,10 @@ async def update_account(
         fields["token_limits"] = (
             json.dumps(body.token_limits) if body.token_limits else None
         )
+    if body.config is not None:
+        if row["provider"] != CUSTOM_PROVIDER:
+            raise ValidationFailedError("config applies to custom accounts only")
+        fields["config"] = body.config.model_dump_json()
     if body.enabled is False and row["state"] != "disabled":
         fields |= {
             "state": "disabled",
@@ -648,6 +657,7 @@ async def _try_lease(
                 kind=row["kind"],
                 role="engine",
                 credential=credential,
+                settings=_settings(row, "engine"),
             )
         if row["state"] == "exhausted":  # reset time passed; recover() has not run yet
             await tx.conn.execute(
@@ -684,8 +694,16 @@ async def _try_lease(
             kind=row["kind"],
             role=role,
             credential=credential,
+            settings=_settings(row, role),
         )
     return None
+
+
+def _settings(row: aiosqlite.Row, role: LeaseRole) -> LeaseSettings | None:
+    """Where and how to call a custom account, for the role it is leased in."""
+    if row["provider"] != CUSTOM_PROVIDER or not row["config"]:
+        return None
+    return lease_settings(CustomConfig.model_validate_json(row["config"]), role)
 
 
 async def _ranked(
@@ -808,4 +826,5 @@ async def _to_account(
     data["token_limits"] = (
         json.loads(data["token_limits"]) if data["token_limits"] else None
     )
+    data["config"] = json.loads(data["config"]) if data["config"] else None
     return Account.model_validate(data)
