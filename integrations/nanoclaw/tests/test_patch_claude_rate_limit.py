@@ -132,3 +132,69 @@ def test_upstream_drift_stops_the_install(tmp_path: Path, old: str, new: str) ->
     assert result.returncode != 0
     assert "upstream shape changed" in result.stderr
     assert (src / "providers" / "claude.ts").read_text() == claude
+
+
+# What the script wrote before the Codex usage-limit hook (#74): a checkout patched
+# then must converge on the current hooks, not stop the install.
+FORMATTER_BEFORE_CODEX = FORMATTER_TS.replace(
+    """export type ProviderFailureKind = 'auth_expired';
+
+export interface ProviderFailure {
+  provider: string;
+  kind: ProviderFailureKind;
+}""",
+    """export type ProviderFailureKind = 'auth_expired' | 'rate_limit';
+
+export interface ProviderFailure {
+  provider: string;
+  kind: ProviderFailureKind;
+  /** ISO time a rate limit resets, when the provider states one. */
+  resets_at?: string;
+}""",
+)
+CLAUDE_IMPORT = (
+    "import { claudeRateLimitFailure } from './providers/claude-rate-limit.js';\n"
+)
+CODEX_IMPORT = (
+    "import { codexUsageLimitFailure } from './providers/codex-usage-limit.js';\n"
+)
+POLL_IMPORT = "import { stripHarnessTagArtifacts } from './harness-tag-strip.js';\n"
+CLAUDE_HOOK = "  if (providerName === 'claude') return claudeRateLimitFailure(error);\n"
+POLL_LOOP_BEFORE_CODEX = POLL_LOOP_TS.replace(
+    POLL_IMPORT, POLL_IMPORT + CLAUDE_IMPORT
+).replace(
+    "ProviderFailure | undefined {\n", "ProviderFailure | undefined {\n" + CLAUDE_HOOK
+)
+
+
+def fresh_result(tmp_path: Path) -> dict[str, str]:
+    src = runner(tmp_path / "fresh")
+    assert patch(tmp_path / "fresh").returncode == 0
+    return {p.relative_to(src).as_posix(): p.read_text() for p in src.rglob("*.ts")}
+
+
+@pytest.mark.parametrize(
+    "poll_loop",
+    [
+        POLL_LOOP_BEFORE_CODEX,
+        # The duplicate claude import an upgrade without the earlier text left behind.
+        POLL_LOOP_BEFORE_CODEX.replace(
+            POLL_IMPORT + CLAUDE_IMPORT,
+            POLL_IMPORT + CLAUDE_IMPORT + CODEX_IMPORT + CLAUDE_IMPORT,
+        ),
+    ],
+    ids=["patched-before-codex", "duplicate-import"],
+)
+def test_a_checkout_patched_before_the_codex_hook_converges(
+    tmp_path: Path, poll_loop: str
+) -> None:
+    src = runner(tmp_path / "old", formatter=FORMATTER_BEFORE_CODEX)
+    (src / "poll-loop.ts").write_text(poll_loop)
+    first = patch(tmp_path / "old")
+    assert first.returncode == 0, first.stderr
+    got = {p.relative_to(src).as_posix(): p.read_text() for p in src.rglob("*.ts")}
+    assert got == fresh_result(tmp_path)
+    assert got["poll-loop.ts"].count(CLAUDE_IMPORT) == 1
+    assert got["poll-loop.ts"].count(CODEX_IMPORT) == 1
+    again = patch(tmp_path / "old")
+    assert (again.returncode, again.stdout) == (0, "")
