@@ -3,7 +3,7 @@
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -42,7 +42,7 @@ async def authenticate(conn: aiosqlite.Connection, token: str) -> Identity:
     """Resolve an agent or admin token. Bootstrap, revoked, unknown tokens, and
     tokens of agents that have ended, all fail."""
     async with conn.execute(
-        "SELECT t.id, t.kind, t.role, t.agent_id, t.label FROM tokens t"
+        "SELECT t.id, t.kind, t.role, t.agent_id, t.label, t.expires_at FROM tokens t"
         " LEFT JOIN agents a ON a.id = t.agent_id"
         " WHERE t.token_hash = ? AND t.revoked_at IS NULL AND ("
         "  t.kind = 'admin' OR (t.kind = 'agent' AND a.state IN ('active', 'draining')))",
@@ -51,6 +51,12 @@ async def authenticate(conn: aiosqlite.Connection, token: str) -> Identity:
         row = await cur.fetchone()
     if row is None:
         raise UnauthorizedError("unknown, revoked, or ended token")
+    if row["expires_at"] is not None:
+        expires = datetime.fromisoformat(row["expires_at"])
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=UTC)
+        if expires <= datetime.now(UTC):
+            raise UnauthorizedError("token expired", code="token_expired")
     return Identity(row["id"], Scope(row["role"]), row["agent_id"], row["label"])
 
 

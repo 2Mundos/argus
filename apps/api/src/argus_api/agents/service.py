@@ -94,7 +94,9 @@ class Registration:
     token: str
 
 
-async def register(tx: Tx, body: AgentRegister) -> Registration:
+async def register(
+    tx: Tx, body: AgentRegister, *, token_ttl_s: int = 7 * 24 * 3600
+) -> Registration:
     """Redeem a one-time bootstrap token for a new agent identity and token."""
     async with tx.conn.execute(
         "SELECT * FROM tokens WHERE token_hash = ? AND kind = 'bootstrap'",
@@ -111,6 +113,7 @@ async def register(tx: Tx, body: AgentRegister) -> Registration:
 
     agent_id = str(uuid4())
     now = ts(tx.now)
+    agent_expires = ts(tx.now + timedelta(seconds=token_ttl_s))
     await tx.conn.execute(
         "INSERT INTO agents (id, name, role, instance_id, capabilities, state,"
         " last_heartbeat_at, created_at) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)",
@@ -130,7 +133,7 @@ async def register(tx: Tx, body: AgentRegister) -> Registration:
     token = new_token(AGENT_PREFIX)
     await tx.conn.execute(
         "INSERT INTO tokens (id, token_hash, kind, role, agent_id, instance_id,"
-        " created_by, created_at) VALUES (?, ?, 'agent', ?, ?, ?, ?, ?)",
+        " created_by, created_at, expires_at) VALUES (?, ?, 'agent', ?, ?, ?, ?, ?, ?)",
         (
             str(uuid4()),
             hash_token(token),
@@ -139,6 +142,7 @@ async def register(tx: Tx, body: AgentRegister) -> Registration:
             boot["instance_id"],
             f"bootstrap:{boot['id']}",
             now,
+            agent_expires,
         ),
     )
     await record(
@@ -167,6 +171,8 @@ async def heartbeat(
     agent_id: str,
     leases: list[tuple[str, int]],
     runtime: AgentRuntime | None = None,
+    *,
+    token_ttl_s: int = 7 * 24 * 3600,
 ) -> Heartbeat:
     """Refresh the agent and renew the leases it lists, in one transaction. A
     reported `runtime` replaces the last one; without it the last one stays."""
@@ -180,8 +186,28 @@ async def heartbeat(
             agent_id,
         ),
     )
+    await _slide_agent_token(tx, agent_id, token_ttl_s)
     renewed, rejected = await tasks.renew(tx, agent_id, leases)
     return Heartbeat(state, renewed, rejected)
+
+
+async def _slide_agent_token(tx: Tx, agent_id: str, token_ttl_s: int) -> None:
+    """Extend expires_at when less than half the TTL remains (security-hardening)."""
+    async with tx.conn.execute(
+        "SELECT id, expires_at FROM tokens WHERE agent_id = ? AND kind = 'agent'"
+        " AND revoked_at IS NULL",
+        (agent_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None or row["expires_at"] is None:
+        return
+    expires = datetime.fromisoformat(row["expires_at"])
+    remaining = (expires - tx.now).total_seconds()
+    if remaining < token_ttl_s / 2:
+        await tx.conn.execute(
+            "UPDATE tokens SET expires_at = ? WHERE id = ?",
+            (ts(tx.now + timedelta(seconds=token_ttl_s)), row["id"]),
+        )
 
 
 async def drain(tx: Tx, agent_id: str, actor: str) -> Agent:
