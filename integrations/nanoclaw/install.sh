@@ -33,6 +33,16 @@ cp "$here/argus-claude-stub.test.ts" "$target/src/gateway-providers/argus-claude
 cp "$here/engines/anthropic-redirect.mjs" "$target/src/gateway-providers/anthropic-redirect.mjs"
 cp "$here/argus-local-harness.ts" "$target/src/gateway-providers/argus-local-harness.ts"
 cp "$here/argus-local-harness.test.ts" "$target/src/gateway-providers/argus-local-harness.test.ts"
+# The harness and forwarder import "./engines/anthropic-redirect.mjs" (repo layout); give both
+# installed directories that path, with types for tsc and the runtime copy in dist/.
+for dir in channels gateway-providers; do
+  mkdir -p "$target/src/$dir/engines" "$target/dist/$dir/engines"
+  cp "$here/engines/anthropic-redirect.mjs" "$target/src/$dir/engines/anthropic-redirect.mjs"
+  cp "$here/engines/anthropic-redirect.mjs" "$target/dist/$dir/engines/anthropic-redirect.mjs"
+  cp "$here/engines/anthropic-redirect.d.mts" "$target/src/$dir/engines/anthropic-redirect.d.mts"
+done
+# The channel imports the harness helpers from its own directory.
+printf '%s\n' "export * from '../gateway-providers/argus-local-harness.js';" > "$target/src/channels/argus-local-harness.ts"
 cp "$here/argus-onecli-git-ca.ts" "$target/src/gateway-providers/argus-onecli-git-ca.ts"
 cp "$here/argus-onecli-git-ca.test.ts" "$target/src/gateway-providers/argus-onecli-git-ca.test.ts"
 cp "$here/onecli-path-match.ts" "$target/src/gateway-providers/onecli-path-match.ts"
@@ -161,7 +171,7 @@ old = "  const config = withClaudeDelegateRuntime(await withCursorDelegateRuntim
 new = "  const config = await withLocalHarnessRuntimeForGroup(withClaudeDelegateRuntime(await withCursorDelegateRuntime("
 assert old in s, "onecli.ts ensureSession shape changed upstream"
 s = s.replace(old, new, 1)
-old_tail = "        : false,\n  )));\n  log.info('OneCLI gateway applied'"
+old_tail = "        : false,\n  ));\n  log.info('OneCLI gateway applied'"
 new_tail = "        : false,\n  )), DATA_DIR, input.key.agentGroupId);\n  log.info('OneCLI gateway applied'"
 assert old_tail in s, "onecli.ts ensureSession tail changed upstream"
 open(p, "w").write(s.replace(old_tail, new_tail, 1))

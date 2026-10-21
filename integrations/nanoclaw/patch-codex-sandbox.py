@@ -252,6 +252,17 @@ COMPOSE = """  // Codex sandbox (ARGUS_CODEX_SANDBOX_PROFILE; default codex-bwra
   if (securityProfile) agent.securityProfile = securityProfile;
 
 """
+# The same hook as installed before the comment was reworded: upgrade it in place
+# instead of inserting a second `const securityProfile` (tsc: redeclared variable).
+COMPOSE_V1 = """  // Per-worker opt-in (ARGUS_CODEX_SANDBOX_PROFILE on this host's env): the native Codex
+  // provider's AGENT container only, never an auxiliary one. Throws on an unknown value.
+  const securityProfile = securityProfileForProvider(
+    resolveProviderName(session.agent_provider, containerConfig.provider),
+    process.env,
+  );
+  if (securityProfile) agent.securityProfile = securityProfile;
+
+"""
 GATE = "    assertDriverSupportsSecurityProfiles(driver.capabilities(), spec, driver.kind);\n\n    log.info('Spawning session',"
 edit(
     "src/container-runner.ts",
@@ -273,6 +284,7 @@ edit(
             "composeSessionSpec hook",
             COMPOSE,
             {
+                "replace": (COMPOSE_V1,),
                 "insert": (
                     "  // The folder label (D9) rides the spec",
                     COMPOSE + "  // The folder label (D9) rides the spec",
