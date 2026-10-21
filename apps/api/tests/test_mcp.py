@@ -130,7 +130,7 @@ def test_no_listed_tool_is_refused_for_scope(client: TestClient, role: str) -> N
             name: _placeholder(schema["properties"][name])
             for name in schema.get("required", [])
         }
-        if t["name"] == "claim_task":
+        if t["name"] in ("claim_task", "wait_for_events"):
             args["wait_s"] = 0
         result = tool(client, token, t["name"], **args)
         error = result.get("error", "") if isinstance(result, dict) else ""
