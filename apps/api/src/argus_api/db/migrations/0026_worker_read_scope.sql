@@ -7,7 +7,7 @@ CREATE TABLE task_lease_grants (
     agent_id  TEXT NOT NULL,
     attempt   INTEGER NOT NULL,
     leased_at TEXT NOT NULL,
-    PRIMARY KEY (task_id, attempt)
+    PRIMARY KEY (task_id, agent_id, attempt)
 ) STRICT;
 
 CREATE INDEX task_lease_grants_agent ON task_lease_grants (agent_id);
@@ -25,4 +25,4 @@ WHERE e.subject_type = 'task'
   AND json_extract(e.data, '$.agent_id') IS NOT NULL
   AND json_extract(e.data, '$.attempt') IS NOT NULL
   AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = e.subject_id)
-ON CONFLICT (task_id, attempt) DO NOTHING;
+ON CONFLICT (task_id, agent_id, attempt) DO NOTHING;

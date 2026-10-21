@@ -36,7 +36,8 @@ def _worker_id(caller: Identity) -> str | None:
 
 
 async def record_lease_grant(tx: Tx, task_id: str, agent_id: str, attempt: int) -> None:
-    """Remember that this agent leased this attempt (idempotent per attempt)."""
+    """Remember that this agent leased this attempt (idempotent per agent and attempt; retry resets
+    `attempt`, so another agent may lease the same number)."""
     await tx.conn.execute(
         "INSERT OR IGNORE INTO task_lease_grants"
         " (task_id, agent_id, attempt, leased_at) VALUES (?, ?, ?, ?)",

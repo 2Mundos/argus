@@ -334,3 +334,24 @@ def test_worker_can_read_page_pinned_on_leased_task(client: TestClient) -> None:
     ).is_success
     denied = client.get(f"/api/knowledge/pages/{page['id']}", headers=bob)
     assert denied.status_code == 403
+
+
+def test_grant_survives_attempt_reset_by_retry(client: TestClient) -> None:
+    a, b = register(client), register(client)
+    task = create_task(client, "alpha", max_attempts=1)
+    first = client.post("/api/tasks/claim", json={}, headers=a).json()
+    assert first["id"] == task["id"]
+    failed = client.post(
+        f"/api/tasks/{task['id']}/fail",
+        json={"attempt": first["attempt"], "error": "boom"},
+        headers=a,
+    )
+    assert failed.json()["state"] == "failed"
+    assert client.post(f"/api/tasks/{task['id']}/retry").status_code == 200
+
+    second = client.post("/api/tasks/claim", json={}, headers=b).json()
+    assert second["id"] == task["id"]
+    assert second["attempt"] == first["attempt"]  # same number, different agent
+
+    assert client.get(f"/api/tasks/{task['id']}", headers=b).status_code == 200
+    assert client.get(f"/api/tasks/{task['id']}", headers=a).status_code == 200
