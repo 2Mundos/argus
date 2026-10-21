@@ -32,9 +32,18 @@ export type PoolCapability = components["schemas"]["PoolCapability"];
 
 const TOKEN_KEY = "argus.token";
 
+/** Prefer sessionStorage; migrate a leftover localStorage value once on read. */
 export function loadToken(): string | null {
   try {
-    return localStorage.getItem(TOKEN_KEY);
+    const fromSession = sessionStorage.getItem(TOKEN_KEY);
+    if (fromSession) return fromSession;
+    const fromLocal = localStorage.getItem(TOKEN_KEY);
+    if (fromLocal) {
+      sessionStorage.setItem(TOKEN_KEY, fromLocal);
+      localStorage.removeItem(TOKEN_KEY);
+      return fromLocal;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -42,8 +51,9 @@ export function loadToken(): string | null {
 
 export function saveToken(token: string | null): void {
   try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_KEY);
+    if (token) sessionStorage.setItem(TOKEN_KEY, token);
+    else sessionStorage.removeItem(TOKEN_KEY);
   } catch {
     // Storage unavailable (private mode): the token lives for this page only.
   }

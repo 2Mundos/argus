@@ -5,10 +5,15 @@
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
-from argus_api.main import app
+# Docs routes are off unless ARGUS_API_DOCS=1; enable before importing the app
+# so FastAPI still builds the schema for export (security-hardening spec).
+os.environ["ARGUS_API_DOCS"] = "1"
+
+from argus_api.main import app  # noqa: E402
 
 OUT = Path(__file__).resolve().parent.parent / "packages/api-client/openapi.json"
 

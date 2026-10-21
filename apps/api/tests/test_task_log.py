@@ -516,7 +516,8 @@ def test_rest_permissions_and_contract(client: TestClient) -> None:
     assert view["output_at"]
     listed = client.get("/api/tasks?view=summary").json()["items"][0]
     assert listed["output_at"] == view["output_at"]
-    assert "output_at" in client.get("/openapi.json").text
+    # Docs/OpenAPI routes are off unless ARGUS_API_DOCS=1; schema still builds.
+    assert "output_at" in json.dumps(app.openapi())
 
 
 def test_a_refused_batch_is_never_cleaned(
