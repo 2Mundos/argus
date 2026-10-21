@@ -34,7 +34,7 @@
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { log } from "../log.js";
 import type { ChannelAdapter, ChannelDefaults, ChannelSetup, OutboundMessage } from "./adapter.js";
@@ -133,6 +133,12 @@ export interface ArgusConfig {
     /** Explicit project -> HTTPS repository allowlist from this pool. */
     repositories?: Record<string, string>;
   };
+  /**
+   * The file `argus-delegate` appends its live log to (the agent group's directory, which
+   * the container mounts). The host reads it and posts it; the container has no token.
+   * Absent: the delegate log is not relayed.
+   */
+  delegateLogFile?: () => Promise<string | null>;
   /** Apply a pinned policy before starting a task; absent only in test adapters. */
   selectModels?: (task: ArgusTask, held: HeldAccounts) => Promise<ModelSelection>;
   /**
@@ -151,6 +157,7 @@ export interface ArgusConfig {
   fetch?: typeof fetch;
   now?: () => number;
   progressIntervalMs?: number;
+  logPollMs?: number;
   claimWaitS?: number;
 }
 
@@ -462,6 +469,142 @@ class ArgusClient {
   }
 }
 
+/** Where `argus-delegate` (in the container) appends its live log; keep in step with livelog.mjs. */
+export const DELEGATE_LOG_FILE = "argus-task-log.jsonl";
+const LOG_BATCH_LINES = 200; // POST /api/tasks/{id}/log limits (task-live-log spec 3.1)
+const LOG_BATCH_BYTES = 60 * 1024; // under the 64 KiB server limit
+const LOG_LINE_CHARS = 2000;
+const LOG_PENDING_MAX = 2000;
+const LOG_POLL_MS = 2000;
+const LOG_BACKOFF_MIN_MS = 2000;
+const LOG_BACKOFF_MAX_MS = 30_000;
+
+/** The lines of the relay records written for this very task and attempt; anything else is ignored. */
+export function relayLines(text: string, task: { id: string; attempt: number }): string[] {
+  const out: string[] = [];
+  for (const raw of text.split("\n")) {
+    if (!raw.trim()) continue;
+    try {
+      const rec = JSON.parse(raw);
+      if (rec?.task_id !== task.id || rec?.attempt !== task.attempt || !Array.isArray(rec.lines))
+        continue;
+      for (const l of rec.lines) if (typeof l === "string") out.push(l.slice(0, LOG_LINE_CHARS));
+    } catch {
+      // a torn or foreign line
+    }
+  }
+  return out;
+}
+
+/** The first batch of `lines` within the line and byte limits (at least one line). */
+export function takeLogBatch(lines: string[]): string[] {
+  let bytes = 0;
+  let n = 0;
+  for (const l of lines) {
+    bytes += utf8ByteLength(l) + 4;
+    if (n >= LOG_BATCH_LINES || (n > 0 && bytes > LOG_BATCH_BYTES)) break;
+    n += 1;
+  }
+  return lines.slice(0, n);
+}
+
+/**
+ * Posts the delegate's relayed log to the task, one batch per poll (the server allows one
+ * per second per source). 409 `stale_attempt` / `not_assignee` / `not_claimed` stop it for
+ * good; 429, a network error or a 5xx back off and keep the batch; any other refusal drops
+ * the batch. Only status and code are logged, never a header.
+ */
+export function createDelegateLogRelay(opts: {
+  file: string;
+  task: { id: string; attempt: number };
+  post: (body: { attempt: number; source: "delegate"; lines: string[] }) => Promise<unknown>;
+  now?: () => number;
+}) {
+  const now = opts.now ?? Date.now;
+  let offset = 0;
+  let pending: string[] = [];
+  let stopped = false;
+  let busy = false;
+  let backoffMs = 0;
+  let notBefore = 0;
+
+  async function readNew(): Promise<void> {
+    let size: number;
+    try {
+      size = (await stat(opts.file)).size;
+    } catch {
+      return; // not written yet
+    }
+    if (size < offset) offset = 0; // truncated: start over
+    if (size === offset) return;
+    const handle = await open(opts.file, "r");
+    try {
+      const buf = Buffer.alloc(Math.min(size - offset, 4 * 1024 * 1024));
+      const { bytesRead } = await handle.read(buf, 0, buf.length, offset);
+      const end = buf.subarray(0, bytesRead).lastIndexOf(0x0a) + 1; // whole records only
+      offset += end;
+      pending.push(...relayLines(buf.subarray(0, end).toString("utf8"), opts.task));
+      if (pending.length > LOG_PENDING_MAX) pending = pending.slice(-LOG_PENDING_MAX);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  const retryLater = () => {
+    backoffMs = Math.min(Math.max(backoffMs * 2, LOG_BACKOFF_MIN_MS), LOG_BACKOFF_MAX_MS);
+    notBefore = now() + backoffMs;
+  };
+
+  return {
+    get stopped(): boolean {
+      return stopped;
+    },
+    stop(): void {
+      stopped = true;
+    },
+    /** Read what is new and post at most one batch. Never throws. */
+    async poll(): Promise<void> {
+      if (stopped || busy) return;
+      busy = true;
+      try {
+        await readNew();
+        if (!pending.length || now() < notBefore) return;
+        const batch = takeLogBatch(pending);
+        try {
+          await opts.post({ attempt: opts.task.attempt, source: "delegate", lines: batch });
+          pending = pending.slice(batch.length);
+          backoffMs = 0;
+        } catch (err) {
+          if (err instanceof ArgusError && err.status === 409) {
+            if (["stale_attempt", "not_assignee", "not_claimed"].includes(err.code)) {
+              stopped = true;
+              log.warn("Argus refuses the delegate log; relay stopped", {
+                task: opts.task.id,
+                code: err.code,
+              });
+            } else pending = pending.slice(batch.length);
+          } else if (err instanceof ArgusError && err.status === 401) {
+            stopped = true;
+          } else if (err instanceof ArgusError && err.permanent) {
+            pending = pending.slice(batch.length); // 413 / 422: this batch can never be accepted
+            log.warn("Argus rejected a delegate log batch; dropped", {
+              task: opts.task.id,
+              status: err.status,
+              code: err.code,
+            });
+          } else {
+            retryLater(); // 429, 5xx, network
+          }
+        }
+      } catch (err) {
+        log.warn("Delegate log relay failed (will retry)", { err: String(err).slice(0, 200) });
+      } finally {
+        busy = false;
+      }
+    },
+  };
+}
+
 const chars = (s: string): string[] => Array.from(s);
 
 /**
@@ -560,6 +703,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let pendingProgress: string | null = null;
   let progressTimer: ReturnType<typeof setTimeout> | null = null;
   let taskDone: (() => void) | null = null;
+  let logRelay: ReturnType<typeof createDelegateLogRelay> | null = null;
+  let logTimer: ReturnType<typeof setInterval> | null = null;
 
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -628,7 +773,32 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     cfg.onDrained?.();
   }
 
+  /** Relay the delegate's live log for the claimed task; best effort, never fails the task. */
+  async function startLogRelay(task: { id: string; attempt: number }): Promise<void> {
+    try {
+      const file = await cfg.delegateLogFile?.();
+      if (!file) return;
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, ""); // only this attempt's output is relayed
+      const relay = createDelegateLogRelay({
+        file,
+        task,
+        now: nowMs,
+        post: (body) => client.call("POST", `/tasks/${task.id}/log`, body),
+      });
+      logRelay = relay;
+      logTimer = setInterval(() => void relay.poll(), cfg.logPollMs ?? LOG_POLL_MS);
+      logTimer.unref?.();
+    } catch (err) {
+      log.warn("Could not start the delegate log relay", { err: String(err).slice(0, 200) });
+    }
+  }
+
   function finishTask(): void {
+    logRelay?.stop();
+    logRelay = null;
+    if (logTimer) clearInterval(logTimer);
+    logTimer = null;
     current = null;
     currentClaim = null;
     currentText = null;
@@ -871,6 +1041,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       }
       const pages = await inlinePages(task);
       log.info("Argus task claimed", { task: task.id, attempt: task.attempt });
+      if (!logRelay) await startLogRelay(task);
       resends = 0;
       const best = executor ?? account;
       currentText = renderTask(task, pages, best ? executorFor(best.provider) : null);
@@ -1306,6 +1477,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const isFailureNotice =
         typeof content === "object" && content !== null && content.failureNotice === true;
       const d = parseReply(text);
+      // The last lines of the run, before the attempt ends and Argus stops taking them.
+      if (d.kind !== "progress" && !isFailureNotice) await logRelay?.poll();
       try {
         if (isFailureNotice) {
           await handleFailure(task, text, (content as Record<string, unknown>).providerFailure);
@@ -1474,6 +1647,18 @@ export function accountsFromEnv(): ArgusConfig["accounts"] {
   };
 }
 
+/** The Argus agent group's directory on the host (what the container mounts as its workspace). */
+export async function argusGroupDir(): Promise<string | null> {
+  const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
+    "../db/messaging-groups.js"
+  );
+  const { getAgentGroup } = await import("../db/agent-groups.js");
+  const mg = await getMessagingGroupByPlatform(CHANNEL_TYPE, PLATFORM_ID);
+  const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
+  const group = wiring ? await getAgentGroup(wiring.agent_group_id) : undefined;
+  return group ? path.resolve("groups", group.folder) : null;
+}
+
 export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
   // Validate once at host startup. A pool update cannot mutate an in-flight policy.
   const snapshot = loadPolicy();
@@ -1562,6 +1747,10 @@ export function fromEnv(): ChannelAdapter | null {
     workerVersion: nanoclawVersion(),
     accounts: accountsFromEnv(),
     selectModels: modelsFromEnv(),
+    delegateLogFile: async () => {
+      const dir = await argusGroupDir();
+      return dir ? path.join(dir, DELEGATE_LOG_FILE) : null;
+    },
     // Under an Argus instance, a drained agent means this host should go: ask
     // NanoClaw to shut down through its own SIGTERM handling.
     onDrained:

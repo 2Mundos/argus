@@ -1,14 +1,21 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChannelSetup } from "./adapter.js";
 import {
   type ArgusConfig,
+  ArgusError,
   createArgusAdapter,
+  createDelegateLogRelay,
   frameUntrustedTaskData,
   fromEnv,
   parseFramedUntrustedTaskData,
   parseReply,
+  relayLines,
   renderTask,
+  takeLogBatch,
   taskAuthorizesMerge,
   UNTRUSTED_TASK_DATA_RULES,
   utf8ByteLength,
@@ -993,5 +1000,166 @@ describe("describeError", () => {
       "<html>oops</html>",
     );
     expect(describeError({ detail: { weird: true } }, "x").message).toBe('{"weird":true}');
+  });
+});
+
+describe("delegate live log relay", () => {
+  const rec = (lines: string[], over: Record<string, unknown> = {}) =>
+    `${JSON.stringify({ v: 1, task_id: "t1", attempt: 1, at: "x", lines, ...over })}\n`;
+  const tmp = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-"));
+    return { dir, file: path.join(dir, "argus-task-log.jsonl") };
+  };
+
+  it("only takes records of this task and attempt and ignores torn lines", () => {
+    const text =
+      rec(["a", "b"]) +
+      rec(["other attempt"], { attempt: 2 }) +
+      rec(["other task"], { task_id: "t9" }) +
+      "{torn\n" +
+      rec(["c", 5 as unknown as string, "d".repeat(3000)]);
+    const got = relayLines(text, { id: "t1", attempt: 1 });
+    expect(got.slice(0, 3)).toEqual(["a", "b", "c"]);
+    expect(got[3]).toHaveLength(2000);
+    expect(got).toHaveLength(4);
+  });
+
+  it("batches stay within 200 lines and 64 KiB", () => {
+    expect(takeLogBatch(Array.from({ length: 450 }, (_, i) => `l${i}`))).toHaveLength(200);
+    const big = Array.from({ length: 100 }, () => "x".repeat(2000));
+    const batch = takeLogBatch(big);
+    expect(batch.length).toBeLessThan(100);
+    expect(JSON.stringify({ attempt: 1, source: "delegate", lines: batch }).length).toBeLessThan(
+      64 * 1024,
+    );
+    expect(takeLogBatch(["only"])).toEqual(["only"]);
+  });
+
+  it("posts what the delegate wrote, in order, as source delegate; a half-written record waits", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      post: async (b) => void posts.push(b),
+    });
+    await relay.poll(); // no file yet
+    fs.writeFileSync(file, rec(["one", "two"]) + rec(["three"]).slice(0, 20));
+    await relay.poll();
+    expect(posts).toEqual([{ attempt: 1, source: "delegate", lines: ["one", "two"] }]);
+    fs.appendFileSync(file, rec(["three"]).slice(20));
+    await relay.poll();
+    expect(posts[1].lines).toEqual(["three"]);
+    await relay.poll();
+    expect(posts).toHaveLength(2);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("backs off on 429 without losing the batch", async () => {
+    const { dir, file } = tmp();
+    let clock = 0;
+    let status = 429;
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      now: () => clock,
+      post: async (b) => {
+        posts.push(b);
+        if (status !== 200) throw new ArgusError(status, "rate_limited", "slow down");
+      },
+    });
+    fs.writeFileSync(file, rec(["a"]));
+    await relay.poll();
+    expect(posts).toHaveLength(1);
+    clock += 500;
+    await relay.poll(); // still backing off: no request
+    expect(posts).toHaveLength(1);
+    clock += 3000;
+    status = 200;
+    await relay.poll();
+    expect(posts).toHaveLength(2);
+    expect(posts[1].lines).toEqual(["a"]);
+    expect(relay.stopped).toBe(false);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("stops for good on stale_attempt / not_assignee, but only drops the batch on other 409s", async () => {
+    for (const [code, stops] of [
+      ["stale_attempt", true],
+      ["not_assignee", true],
+      ["lease_expired", false],
+    ] as const) {
+      const { dir, file } = tmp();
+      const posts: any[] = [];
+      const relay = createDelegateLogRelay({
+        file,
+        task: { id: "t1", attempt: 1 },
+        post: async (b) => {
+          posts.push(b);
+          throw new ArgusError(409, code, "no");
+        },
+      });
+      fs.writeFileSync(file, rec(["a"]));
+      await relay.poll();
+      expect(relay.stopped).toBe(stops);
+      fs.appendFileSync(file, rec(["b"]));
+      await relay.poll();
+      expect(posts.length).toBe(stops ? 1 : 2);
+      expect(posts.at(-1).lines).toEqual(stops ? ["a"] : ["b"]); // the refused batch is not resent
+      fs.rmSync(dir, { recursive: true });
+    }
+  });
+
+  it("drops a batch the server can never accept (413/422)", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      post: async (b) => {
+        posts.push(b);
+        throw new ArgusError(422, "validation_failed", "bad");
+      },
+    });
+    fs.writeFileSync(file, rec(["a"]));
+    await relay.poll();
+    await relay.poll();
+    expect(posts).toHaveLength(1);
+    expect(relay.stopped).toBe(false);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("the adapter relays the delegate log with the token on the host side only", async () => {
+    const { dir, file } = tmp();
+    fs.writeFileSync(file, rec(["stale line from a previous run"]));
+    const fake = fakeArgus({ tasks: [task()] });
+    const authHeaders: string[] = [];
+    const inner = fake.fetchImpl;
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      if (String(url).endsWith("/tasks/t1/log"))
+        authHeaders.push((init.headers as Record<string, string>).Authorization);
+      return inner(url as never, init);
+    }) as unknown as typeof fetch;
+    const h = harness(
+      { calls: fake.calls, fetchImpl },
+      {
+        delegateLogFile: async () => file,
+        logPollMs: 20,
+      },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    // The relay file is the only thing the container can write; it starts empty.
+    expect(fs.readFileSync(file, "utf8")).toBe("");
+    fs.appendFileSync(file, rec(["▸ Bash ls", "  ↳ ok"]));
+    await until(() => fake.calls.some((c) => c.path === "/tasks/t1/log"));
+    const post = fake.calls.find((c) => c.path === "/tasks/t1/log")!;
+    expect(post.body).toEqual({ attempt: 1, source: "delegate", lines: ["▸ Bash ls", "  ↳ ok"] });
+    expect(authHeaders[0]).toBe("Bearer argus_agent_x");
+    expect(JSON.stringify(post.body)).not.toContain("argus_agent_x");
+    expect(fs.readFileSync(file, "utf8")).not.toContain("argus_agent_x");
+    fs.rmSync(dir, { recursive: true });
   });
 });
