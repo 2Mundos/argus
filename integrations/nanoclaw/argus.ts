@@ -708,7 +708,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       });
       log.warn("Argus account exhausted", { account: exhausted.name, until: f.until });
       const nextInfo = data.next_account_id
-        ? { account_id: data.next_account_id, name: data.next_account_name, provider: data.next_provider }
+        ? {
+            account_id: data.next_account_id,
+            name: data.next_account_name,
+            provider: data.next_provider,
+          }
         : undefined;
       log.warn(
         `account_failover ${JSON.stringify({
@@ -807,15 +811,19 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     });
     currentClaim = task;
     if (!(await ensureAccount(task))) {
-      await client.call("POST", `/tasks/${task.id}/fail`, {
-        attempt: task.attempt,
-        error: "no usable provider account for claimed task",
-        reason: "quota",
-      }).catch(() => undefined);
-      await client.call("POST", "/accounts/awaiting-quota", {
-        capabilities: cfg.capabilities,
-        runtime_providers: runtimeProviders("engine"),
-      }).catch(() => undefined);
+      await client
+        .call("POST", `/tasks/${task.id}/fail`, {
+          attempt: task.attempt,
+          error: "no usable provider account for claimed task",
+          reason: "quota",
+        })
+        .catch(() => undefined);
+      await client
+        .call("POST", "/accounts/awaiting-quota", {
+          capabilities: cfg.capabilities,
+          runtime_providers: runtimeProviders("engine"),
+        })
+        .catch(() => undefined);
       finishTask();
       return;
     }

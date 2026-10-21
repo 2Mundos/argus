@@ -764,7 +764,13 @@ describe("engine and executor leases in the channel", () => {
     const leaseCalls = w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body);
     expect(leaseCalls).toEqual([
       { runtime_providers: ["anthropic", "openai"], task_id: "t1", attempt: 1 },
-      { role: "executor", runtime_providers: ["anthropic", "openai", "cursor"], reuse_held: true, task_id: "t1", attempt: 1 },
+      {
+        role: "executor",
+        runtime_providers: ["anthropic", "openai", "cursor"],
+        reuse_held: true,
+        task_id: "t1",
+        attempt: 1,
+      },
     ]);
     expect(JSON.stringify(leaseCalls)).not.toContain('"providers"');
     expect(selectEngine).toHaveBeenCalledWith("codex");
@@ -1027,7 +1033,13 @@ describe("cursor executor selection in the channel", () => {
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
     expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
       { runtime_providers: ["anthropic", "openai"], task_id: "t1", attempt: 1 },
-      { role: "executor", runtime_providers: ["anthropic", "openai", "cursor"], reuse_held: true, task_id: "t1", attempt: 1 },
+      {
+        role: "executor",
+        runtime_providers: ["anthropic", "openai", "cursor"],
+        reuse_held: true,
+        task_id: "t1",
+        attempt: 1,
+      },
     ]);
     expect(w.onecli.secrets.filter((s) => s.name.includes("cursor"))).toHaveLength(2);
   });
