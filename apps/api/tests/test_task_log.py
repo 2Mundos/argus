@@ -14,7 +14,7 @@ from argus_api.errors import (
     RateLimitedError,
     TooLargeError,
 )
-from argus_api.eventlog.routes import event_stream
+from argus_api.eventlog.routes import event_stream, wait
 from argus_api.main import app
 from argus_api.tasks import log
 from argus_api.tasks import service as tasks
@@ -352,6 +352,18 @@ async def test_stream_checks_the_lease_once_per_task(
     pending.cancel()
     await owner.aclose()
     assert checks == [claimed.id]
+
+
+async def test_wait_ignores_the_transient_log_and_keeps_its_cursor(
+    db: Database, claimed
+) -> None:
+    async with db.read() as conn, conn.execute("SELECT max(id) FROM events") as cur:
+        head = (await cur.fetchone())[0]
+    pending = asyncio.ensure_future(wait(db, head, 0.3))
+    await asyncio.sleep(0.05)
+    await post(db, claimed, ["output only"])
+    result = await asyncio.wait_for(pending, 2)
+    assert result.timed_out and result.events == [] and result.next_cursor == head
 
 
 async def test_a_rolled_back_batch_publishes_nothing(db: Database, claimed) -> None:
