@@ -294,9 +294,12 @@ async def edit_task(
 
 
 @router.get("/{task_id}/attempts")
-async def list_attempts(task_id: str, db: DbDep, _: CallerDep) -> list[TaskAttempt]:
+async def list_attempts(
+    task_id: str, db: DbDep, caller: CallerDep
+) -> list[TaskAttempt]:
     """The definition each attempt was handed at claim, oldest first."""
     async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
         return await service.attempt_definitions(conn, task_id)
 
 

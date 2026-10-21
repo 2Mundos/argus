@@ -34,6 +34,11 @@ that work. Orchestrators and admins keep global reads.
   disallowed task, artifact, page, or decision returns `403` with
   `code=not_leased` (task/artifact) or `code=project_scope` (knowledge /
   project-bound resources).
+- **Edit routes stay manager-only.** `PATCH /tasks/{id}` and MCP `edit_task`
+  (and `PUT /tasks/{id}/dependencies`) are refused to every worker, leased or
+  not ([task edit](task-edit.spec.md) 3.8); this spec widens nothing. The
+  per-attempt definitions (`GET /tasks/{id}/attempts`) carry the spec text and
+  follow the task rule: `403 not_leased` for a task the worker never leased.
 - **Migration backfill.** Existing `task.claim` events seed `task_lease_grants`
   so prior leases keep working after upgrade.
 
@@ -49,10 +54,11 @@ None.
 
 # 6. Implementation Consequences
 
-- Migration `0025_worker_read_scope.sql`: table + backfill.
+- Migration `0026_worker_read_scope.sql`: table + backfill.
 - `argus_api/access.py`: grant helpers and require_* checks.
 - Claim records a grant; task/artifact/decision/knowledge/event routes apply
   scope.
-- Negative regression tests for cross-worker access on task spec, artifact,
-  events, knowledge, and decisions.
+- Negative regression tests for cross-worker access on task spec, attempts,
+  artifact, events, knowledge, and decisions, over REST and the real MCP tools,
+  plus worker refusal on REST/MCP task edit.
 - Supersedes the open "Worker read scope" note in `mcp-operations.spec.md`.
