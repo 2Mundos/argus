@@ -42,7 +42,7 @@ async def create(db: Database, **kw):
 async def post(db: Database, task, lines, *, agent=A, source="worker", attempt=None):
     async with db.write() as tx:
         return await log.append(
-            tx, agent, task.id, attempt or task.attempt, source, lines
+            tx, agent, task.id, attempt or task.attempt, source, log.prepare(lines)
         )
 
 
@@ -176,6 +176,44 @@ async def test_text_is_cleaned(db: Database, claimed, clock: FakeClock) -> None:
     clock.advance(2)
     again = await post(db, claimed, ["", " "])  # nothing left: not a sign of life
     assert again.accepted == 0
+
+
+def test_escapes_are_stripped_before_redacting() -> None:
+    token = "ghp_" + "a" * 36
+    split = "ghp_\x1b[0m" + "a" * 36
+    assert log.clean([f"pushing with {split}", f"\x1b[1m{token}\x1b[0m"], ()) == [
+        "pushing with [redacted]",
+        "[redacted]",
+    ]
+    # Idempotent: a line that is already clean comes out the same.
+    once = log.clean(["Authorization: Bearer abcdefgh12345 and " + split], ())
+    assert log.clean(once, ()) == once
+
+
+def test_long_lines_are_cut_but_never_unmask_a_secret() -> None:
+    token = "ghp_" + "b" * 36
+    near_cut = "x" * (log.MAX_LINE_CHARS - 10) + " " + token
+    [line] = log.clean([near_cut], ())
+    assert "bbbbbbbbbb" not in line and len(line) <= log.MAX_LINE_CHARS
+    # A key block whose lines are longer than the pre-cut is still masked whole.
+    pem = (
+        "-----BEGIN PRIVATE KEY-----\n"
+        + "M" * (log.REDACT_LINE_CHARS * 2)
+        + "\n-----END PRIVATE KEY-----"
+    )
+    assert log.clean(["a", pem, "b"], ()) == ["a", "[redacted private key]", "b"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["a." * 32_000, "a-" * 32_000, "--" + "a-" * 32_000, "x://a:" * 10_000],
+)
+def test_cleaning_a_worst_case_batch_is_fast(line: str) -> None:
+    import time
+
+    started = time.perf_counter()
+    log.prepare([line], ("argus_agent_" + "t" * 32,))
+    assert time.perf_counter() - started < 1.0
 
 
 async def test_ring_buffer_evicts_oldest_and_seq_keeps_counting(

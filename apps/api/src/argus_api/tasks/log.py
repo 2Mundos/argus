@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Literal
 
 import aiosqlite
-from argus_core.redact import redact
+from argus_core.redact import redact, redact_private_keys
 from pydantic import BaseModel
 
 from argus_api.db import Tx, ts
@@ -15,6 +15,9 @@ from argus_api.tasks import service
 
 MAX_LINES = 200  # per batch
 MAX_LINE_CHARS = 2000  # longer lines are cut, with "…"
+REDACT_LINE_CHARS = (
+    8 * 1024
+)  # lines are cut to this before redaction, bounding its cost
 MAX_BATCH_BYTES = 64 * 1024  # UTF-8, before cleaning
 MIN_INTERVAL_S = 1.0  # per task and source
 RING_LINES = 2000  # per attempt
@@ -47,19 +50,33 @@ class LogAccepted(BaseModel):
 
 
 def clean(lines: list[str], secrets: tuple[str, ...]) -> list[str]:
-    """Redact, split on newlines, strip terminal escapes, cut long lines, drop blanks.
-    Redaction runs on the whole batch first so a private key block spanning its
-    lines, or a secret about to be cut, cannot slip through."""
-    text = redact("\n".join(lines), secrets)
+    """Strip terminal escapes, redact, split on newlines, cut long lines, drop blanks.
+    Escapes go first, so none can split a secret (`ghp_\x1b[0m…`). Private key blocks
+    are masked on the whole batch, so one spanning lines cannot slip through; the
+    other rules run on the batch with each line cut to REDACT_LINE_CHARS, before the
+    final cut (so a secret about to be cut is still whole), and again after it."""
+    text = redact_private_keys(_CONTROL.sub("", "\n".join(lines)))
+    text = "\n".join(raw[:REDACT_LINE_CHARS] for raw in text.splitlines())
     out: list[str] = []
-    for raw in text.splitlines():
-        line = _CONTROL.sub("", raw).rstrip()
+    for raw in redact(text, secrets).splitlines():
+        line = raw.rstrip()
         if not line:
             continue
-        out.append(
-            line if len(line) <= MAX_LINE_CHARS else line[: MAX_LINE_CHARS - 1] + "…"
-        )
+        if len(line) > MAX_LINE_CHARS:
+            line = line[: MAX_LINE_CHARS - 1] + "…"
+        out.append(redact(line, secrets))
     return out
+
+
+def prepare(lines: list[str], secrets: tuple[str, ...] = ()) -> list[str]:
+    """Check a batch's size and clean it: the CPU-bound part of `append`, done before
+    taking the writer."""
+    if sum(len(line.encode()) for line in lines) > MAX_BATCH_BYTES:
+        raise TooLargeError(
+            f"a log batch is at most {MAX_BATCH_BYTES} bytes",
+            code="log_batch_too_large",
+        )
+    return clean(lines, secrets)
 
 
 async def append(
@@ -68,17 +85,11 @@ async def append(
     task_id: str,
     attempt: int,
     source: Source,
-    lines: list[str],
-    secrets: tuple[str, ...] = (),
+    kept: list[str],
 ) -> LogAccepted:
-    """Store a batch for the attempt the caller holds the live lease on, then publish
-    it as a transient `task.log` event. Does not renew the lease (heartbeats and
-    progress do)."""
-    if sum(len(line.encode()) for line in lines) > MAX_BATCH_BYTES:
-        raise TooLargeError(
-            f"a log batch is at most {MAX_BATCH_BYTES} bytes",
-            code="log_batch_too_large",
-        )
+    """Store a batch (already through `prepare`) for the attempt the caller holds the
+    live lease on, then publish it as a transient `task.log` event. Does not renew
+    the lease (heartbeats and progress do)."""
     row = await service.check_lease(tx, task_id, attempt, agent_id)
     async with tx.conn.execute(
         "SELECT at FROM task_log WHERE task_id = ? AND attempt = ? AND source = ?"
@@ -96,7 +107,6 @@ async def append(
                 f"at most one {source} log batch per {MIN_INTERVAL_S:g} s;"
                 f" retry in {wait:.1f} s"
             )
-    kept = clean(lines, secrets)
     first = row["log_seq"] + 1
     if kept:
         at = ts(tx.now)

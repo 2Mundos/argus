@@ -253,10 +253,9 @@ async def post_log(
     token = (
         (authorization or "").removeprefix("Bearer ").removeprefix("bearer ").strip()
     )
+    lines = log.prepare(body.lines, (token,))  # redaction stays outside the writer
     async with db.write() as tx:
-        return await log.append(
-            tx, agent_id, task_id, body.attempt, body.source, body.lines, (token,)
-        )
+        return await log.append(tx, agent_id, task_id, body.attempt, body.source, lines)
 
 
 @router.get("/{task_id}/log")
