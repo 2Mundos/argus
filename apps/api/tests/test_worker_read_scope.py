@@ -223,3 +223,114 @@ def test_previous_lease_still_allows_read_after_complete(client: TestClient) -> 
     assert res.status_code == 200
     assert res.json()["state"] == "succeeded"
     assert res.json()["assignee_agent_id"] is None
+
+
+def _event_kinds(events: list[dict]) -> set[tuple[str, str]]:
+    return {(e["subject_type"], e["subject_id"]) for e in events}
+
+
+def test_worker_events_limited_to_leased_tasks_in_project(client: TestClient) -> None:
+    alice = register(client)
+    task_a = create_task(client, "alpha", title="a")
+    claimed = client.post("/api/tasks/claim", json={}, headers=alice).json()
+    # A second, unleased task in the same project, plus a decision on it.
+    task_b = create_task(client, "alpha", title="b")
+    leased_id = claimed["id"]
+    other_id = task_b["id"] if leased_id == task_a["id"] else task_a["id"]
+    assert leased_id != other_id
+
+    listed = client.get("/api/events", params={"limit": 500}, headers=alice).json()
+    subjects = _event_kinds(listed)
+    assert ("task", leased_id) in subjects
+    assert ("task", other_id) not in subjects
+    assert (
+        client.get("/api/events", params={"subject_id": other_id}, headers=alice).json()
+        == []
+    )
+
+    waited = client.get("/api/events/wait", params={"after": 0}, headers=alice).json()
+    assert ("task", leased_id) in _event_kinds(waited["events"])
+    assert ("task", other_id) not in _event_kinds(waited["events"])
+    assert (
+        client.get(
+            "/api/events/wait",
+            params={"after": 0, "subject_id": other_id},
+            headers=alice,
+        ).json()["events"]
+        == []
+    )
+
+    # Admin still sees the unleased task's events.
+    admin = client.get("/api/events", params={"subject_id": other_id}).json()
+    assert admin
+
+
+def test_worker_decision_events_limited_to_leased_tasks(client: TestClient) -> None:
+    alice, bob = register(client), register(client)
+    create_task(client, "alpha")
+    claimed = client.post("/api/tasks/claim", json={}, headers=alice).json()
+    decision = client.post(
+        f"/api/tasks/{claimed['id']}/ask",
+        json={"attempt": claimed["attempt"], "question": "q?", "options": ["a", "b"]},
+        headers=alice,
+    ).json()
+    # Bob leases another task in the same project.
+    create_task(client, "alpha")
+    assert client.post("/api/tasks/claim", json={}, headers=bob).is_success
+
+    def decision_ids(headers: dict[str, str]) -> set[str]:
+        events = client.get(
+            "/api/events", params={"subject_type": "decision"}, headers=headers
+        ).json()
+        return {e["subject_id"] for e in events}
+
+    assert decision["id"] in decision_ids(alice)
+    assert decision["id"] not in decision_ids(bob)
+
+
+def test_live_stream_filter_matches_replay_rule(client: TestClient) -> None:
+    from datetime import UTC, datetime
+
+    from argus_api.eventlog.routes import _live_allowed
+    from argus_api.events import Event
+
+    alice = register(client)
+    create_task(client, "alpha", title="a")
+    claimed = client.post("/api/tasks/claim", json={}, headers=alice).json()
+    other = create_task(client, "alpha", title="b")
+    agent_id = claimed["assignee_agent_id"]
+    db = client.app.state.db  # type: ignore[attr-defined]
+    assert client.portal is not None
+
+    def allowed(task_id: str) -> bool:
+        event = Event(1, datetime.now(UTC), "x", "task", task_id, "task.updated", {})
+        return client.portal.call(_live_allowed, db, event, {"alpha"}, agent_id)  # type: ignore[union-attr]
+
+    assert allowed(claimed["id"])
+    assert not allowed(other["id"])
+
+
+def test_worker_can_read_page_pinned_on_leased_task(client: TestClient) -> None:
+    alice, bob = register(client), register(client)
+    page = client.post(
+        "/api/knowledge/pages",
+        json={
+            "project": "beta",
+            "slug": "pinned",
+            "title": "Pinned",
+            "summary": "s",
+            "body": "pinned-body",
+            "tags": [],
+        },
+    ).json()["page"]
+    create_task(client, "alpha", knowledge=[page["id"]])
+    claimed = client.post("/api/tasks/claim", json={}, headers=alice).json()
+    assert [r["page_id"] for r in claimed["knowledge_refs"]] == [page["id"]]
+
+    res = client.get(f"/api/knowledge/pages/{page['id']}", headers=alice)
+    assert res.status_code == 200, res.text
+    assert client.get(
+        f"/api/knowledge/pages/{page['id']}/revisions", headers=alice
+    ).is_success
+    denied = client.get(f"/api/knowledge/pages/{page['id']}", headers=bob)
+    assert denied.status_code == 403

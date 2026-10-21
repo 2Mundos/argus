@@ -10,7 +10,12 @@ from fastapi import APIRouter, Header, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from argus_api.access import is_global_reader, leased_projects, worker_event_filter
+from argus_api.access import (
+    has_leased_task,
+    is_global_reader,
+    leased_projects,
+    worker_event_filter,
+)
 from argus_api.auth import Identity
 from argus_api.db import Database
 from argus_api.deps import CallerDep, DbDep
@@ -191,7 +196,9 @@ async def stream_events(
             )
         )
     return StreamingResponse(
-        event_stream(db, after, scope=scope, projects=projects),
+        event_stream(
+            db, after, scope=scope, projects=projects, agent_id=caller.agent_id
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -204,14 +211,16 @@ async def event_stream(
     *,
     scope: tuple[str, list[str]] | None = None,
     projects: Collection[str] | None = None,
+    agent_id: str | None = None,
 ) -> AsyncGenerator[str]:
     """Replay committed events after `after` from the table, then go live.
 
     Subscribing happens before the replay, so an event committed in between is
     seen either in the replay or live; ids dedupe the overlap. A subscriber that
     overflows ends the stream; the client reconnects with Last-Event-ID.
-    Workers only receive events for their leased projects (live filter uses the
-    project set captured at subscribe time).
+    Workers only receive events for leased tasks and their leased projects (live
+    filter uses the project set captured at subscribe time; task grants are
+    checked per event).
     """
     with db.bus.subscribe() as sub:
         if after is None:
@@ -261,7 +270,9 @@ async def event_stream(
                 continue
             except OverflowedError:
                 return
-            if projects is not None and not await _live_allowed(db, event, projects):
+            if projects is not None and not await _live_allowed(
+                db, event, projects, agent_id
+            ):
                 cursor = event.id
                 continue
             yield to_sse(event)
@@ -280,21 +291,20 @@ async def _scope(conn, caller: Identity) -> tuple[str, list[str]] | None:
     return worker_event_filter(caller, projects)
 
 
-async def _live_allowed(db: Database, event: Event, projects: Collection[str]) -> bool:
-    """Whether a live bus event belongs to one of the worker's projects."""
+async def _live_allowed(
+    db: Database, event: Event, projects: Collection[str], agent_id: str | None
+) -> bool:
+    """Whether a live bus event is readable by the worker; same rule as
+    worker_event_filter."""
+    if agent_id is None:
+        return False
+    if event.subject_type == "task":
+        async with db.read() as conn:
+            return await has_leased_task(conn, agent_id, event.subject_id)
     if not projects:
         return False
     if event.subject_type == "project":
         return event.subject_id in projects
-    if event.subject_type == "task":
-        async with (
-            db.read() as conn,
-            conn.execute(
-                "SELECT project FROM tasks WHERE id = ?", (event.subject_id,)
-            ) as cur,
-        ):
-            row = await cur.fetchone()
-        return row is not None and row[0] in projects
     if event.subject_type == "knowledge_page":
         async with (
             db.read() as conn,
@@ -308,8 +318,7 @@ async def _live_allowed(db: Database, event: Event, projects: Collection[str]) -
         async with (
             db.read() as conn,
             conn.execute(
-                "SELECT coalesce(t.project, kp.project) FROM decisions d"
-                " LEFT JOIN tasks t ON d.subject_type = 'task' AND t.id = d.subject_id"
+                "SELECT d.subject_type, d.subject_id, kp.project FROM decisions d"
                 " LEFT JOIN knowledge_proposals kp"
                 "  ON d.subject_type = 'knowledge_proposal' AND kp.id = d.subject_id"
                 " WHERE d.id = ?",
@@ -317,5 +326,10 @@ async def _live_allowed(db: Database, event: Event, projects: Collection[str]) -
             ) as cur,
         ):
             row = await cur.fetchone()
-        return row is not None and row[0] in projects
+        if row is None:
+            return False
+        if row["subject_type"] == "task":
+            async with db.read() as conn:
+                return await has_leased_task(conn, agent_id, row["subject_id"])
+        return row["project"] in projects
     return False

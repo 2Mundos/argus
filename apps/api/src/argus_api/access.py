@@ -92,6 +92,24 @@ async def require_project_readable(
         )
 
 
+async def require_page_readable(
+    conn: aiosqlite.Connection, caller: Identity, page_id: str, project: str
+) -> None:
+    """A page is readable when its project is leased, or when a task the worker
+    leased pins it (pinned pages may live in another project, e.g. `global`)."""
+    agent_id = _worker_id(caller)
+    if agent_id is None:
+        return
+    async with conn.execute(
+        "SELECT 1 FROM task_knowledge k JOIN task_lease_grants g"
+        " ON g.task_id = k.task_id WHERE k.page_id = ? AND g.agent_id = ? LIMIT 1",
+        (page_id, agent_id),
+    ) as cur:
+        if await cur.fetchone() is not None:
+            return
+    await require_project_readable(conn, caller, project)
+
+
 async def require_decision_readable(
     conn: aiosqlite.Connection, caller: Identity, decision_id: str
 ) -> None:
@@ -207,28 +225,37 @@ def worker_project_filter(
 def worker_event_filter(
     caller: Identity, projects: Collection[str]
 ) -> tuple[str, list[str]] | None:
-    """Limit events to subjects in the worker's leased projects. Managers: None."""
+    """Limit events to what the worker may read. Managers: None.
+
+    Task events (and decisions on tasks) need a lease grant for that very task;
+    project, knowledge page, and knowledge-proposal decision events need the
+    subject's project to be in `projects`. Everything else is fleet-wide and
+    hidden."""
     if is_global_reader(caller):
         return None
+    agent_id = _worker_id(caller)
+    assert agent_id is not None  # non-global callers always have one
+    leased = "SELECT task_id FROM task_lease_grants WHERE agent_id = ?"
     if not projects:
+        # No leased projects means no grants, hence nothing readable.
         return ("0", [])
     marks = ", ".join("?" * len(projects))
     allowed = list(projects)
-    # Four subject shapes that carry a project. Everything else is fleet-wide.
     # `marks` is only "?" placeholders; values are bound separately.
     in_projects = " IN (" + marks + ")"
-    # Built from fixed SQL text plus "?" placeholders only (bound as params).
     clause = (
-        "(subject_type = 'task' AND subject_id IN ("  # noqa: S608
-        "  SELECT id FROM tasks WHERE project" + in_projects + "))"
+        "(subject_type = 'task' AND subject_id IN (" + leased + "))"  # noqa: S608
         " OR (subject_type = 'project' AND subject_id" + in_projects + ")"
         " OR (subject_type = 'knowledge_page' AND subject_id IN ("
         "  SELECT id FROM knowledge_pages WHERE project" + in_projects + "))"
         " OR (subject_type = 'decision' AND subject_id IN ("
         "  SELECT d.id FROM decisions d"
-        "  LEFT JOIN tasks t ON d.subject_type = 'task' AND t.id = d.subject_id"
         "  LEFT JOIN knowledge_proposals kp"
         "   ON d.subject_type = 'knowledge_proposal' AND kp.id = d.subject_id"
-        "  WHERE coalesce(t.project, kp.project)" + in_projects + "))"
+        "  WHERE (d.subject_type = 'task' AND d.subject_id IN (" + leased + "))"
+        "   OR kp.project" + in_projects + "))"
     )
-    return ("(" + clause + ")", allowed * 4)
+    return (
+        "(" + clause + ")",
+        [agent_id, *allowed, *allowed, agent_id, *allowed],
+    )

@@ -29,6 +29,15 @@ that work. Orchestrators and admins keep global reads.
   visible only when that project is in the set. Non-project subjects (accounts,
   pools, instances, agents, task kinds) are hidden from workers on the event
   APIs.
+- **Events follow leases, not just projects.** `task` events, and `decision`
+  events on tasks, are visible to a worker only for tasks it holds a grant for;
+  other tasks in the same project stay hidden. `project`, `knowledge_page`, and
+  knowledge-proposal `decision` events use the leased-project set. The replay
+  (`/events`, `/events/wait`, stream resume) and live stream paths apply the
+  same rule.
+- **Pinned pages.** A page pinned (`task_knowledge`) on a task the worker has
+  leased is readable (page and revisions) even if its project is not leased;
+  lists and search stay project-scoped.
 - **Lists filter; single GETs refuse.** List/search/wait/stream return only
   allowed rows (empty when the worker has never leased). `GET` by id of a
   disallowed task, artifact, page, or decision returns `403` with

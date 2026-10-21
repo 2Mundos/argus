@@ -22,6 +22,7 @@ from fastapi import APIRouter, Path, Query, status
 from argus_api.access import (
     is_global_reader,
     leased_projects,
+    require_page_readable,
     require_project_readable,
     worker_project_filter,
 )
@@ -161,7 +162,7 @@ async def get_page(
         page = await service.get_page(
             conn, page_id, now=utcnow(), stale_after=_stale(settings), revision=revision
         )
-        await require_project_readable(conn, caller, page.project)
+        await require_page_readable(conn, caller, page.id, page.project)
         return page
 
 
@@ -173,7 +174,7 @@ async def list_revisions(
         page = await service.get_page(
             conn, page_id, now=utcnow(), stale_after=_stale(settings)
         )
-        await require_project_readable(conn, caller, page.project)
+        await require_page_readable(conn, caller, page.id, page.project)
         return await service.list_revisions(conn, page_id)
 
 
