@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -77,7 +78,10 @@ def _git(cwd: Path, *args: str) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> Path:
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    # Under a git hook (pre-push) GIT_DIR and friends point at the real repo.
+    for k in [k for k in os.environ if k.startswith("GIT_")]:
+        monkeypatch.delenv(k)
     remote, work = tmp_path / "remote.git", tmp_path / "work"
     _git(tmp_path, "init", "--quiet", "--bare", "-b", "main", str(remote))
     _git(tmp_path, "init", "--quiet", "-b", "main", str(work))
