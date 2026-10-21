@@ -1,11 +1,14 @@
 import { api, call, type ModelPolicy } from "./api";
 
 export type { ModelPolicy };
-export type Scope = "harness" | "implementation";
+export type Scope = "harness" | "implementation" | "trivial";
 export type Chains = Record<string, string[]>;
-export type Draft = Record<Scope, Chains>;
+/** `trivial` is optional: a policy without it keeps its revision, so it is only sent when present. */
+export type Draft = { harness: Chains; implementation: Chains; trivial?: Chains };
 
 export const SCOPES: Scope[] = ["harness", "implementation"];
+/** The scopes a draft edits: the optional `trivial` one only while the policy has it. */
+export const scopesOf = (d: Draft): Scope[] => (d.trivial ? [...SCOPES, "trivial"] : SCOPES);
 export const KNOWN_ENGINES = ["codex", "claude", "opencode", "agent"];
 /** The `agent` executor is the Cursor CLI. */
 export const engineLabel = (e: string) => (e === "agent" ? "agent (Cursor)" : e);
@@ -16,21 +19,31 @@ export const fetchModelPolicy = () => call(api.GET("/api/models"));
 export const saveModelPolicy = (draft: Draft) =>
   call(
     api.PUT("/api/models", {
-      body: { harness: draft.harness, implementation: draft.implementation },
+      body: {
+        harness: draft.harness,
+        implementation: draft.implementation,
+        ...(draft.trivial ? { trivial: draft.trivial } : {}),
+      },
     }),
   );
 export const restoreModelDefaults = () => call(api.DELETE("/api/models"));
 
-export function toDraft(p: Pick<ModelPolicy, Scope>): Draft {
+export function toDraft(p: Pick<ModelPolicy, "harness" | "implementation" | "trivial">): Draft {
   const copy = (c: Chains): Chains =>
     Object.fromEntries(Object.entries(c).map(([k, v]) => [k, [...v]]));
-  return { harness: copy(p.harness), implementation: copy(p.implementation) };
+  return {
+    harness: copy(p.harness),
+    implementation: copy(p.implementation),
+    ...(p.trivial ? { trivial: copy(p.trivial) } : {}),
+  };
 }
 
 export function withChain(d: Draft, scope: Scope, engine: string, chain: string[] | null): Draft {
   const next = toDraft(d);
-  if (chain === null) delete next[scope][engine];
-  else next[scope][engine] = chain;
+  const chains = next[scope] ?? {};
+  if (chain === null) delete chains[engine];
+  else chains[engine] = chain;
+  next[scope] = chains;
   return next;
 }
 

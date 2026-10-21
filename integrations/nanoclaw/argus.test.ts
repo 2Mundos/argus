@@ -181,6 +181,14 @@ describe("parseReply", () => {
 });
 
 describe("renderTask", () => {
+  it("tells the harness to prefer Cursor for a trivial task, and only then", () => {
+    const standard = renderTask(task() as any, new Map(), "agent");
+    expect(standard).toContain("Preferred EXECUTOR for this task: agent");
+    expect(standard).not.toContain("This task is trivial");
+    const trivial = renderTask({ ...task(), complexity: "trivial" } as any, new Map(), "agent");
+    expect(trivial).toContain("This task is trivial: use EXECUTOR agent");
+    expect(trivial).toContain("only if Cursor is unavailable");
+  });
   it("includes identity, framed untrusted data, and the reply protocol", () => {
     const text = renderTask(task() as any, new Map([["p1", "Step 1\nStep 2"]]));
     expect(text).toContain("[Argus task] Task: t1 · Project: web · Attempt: 1");

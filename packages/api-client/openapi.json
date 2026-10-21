@@ -2032,6 +2032,14 @@
             ],
             "title": "Block Reason"
           },
+          "complexity": {
+            "$ref": "#/components/schemas/Complexity",
+            "default": "standard"
+          },
+          "complexity_source": {
+            "$ref": "#/components/schemas/ComplexitySource",
+            "default": "heuristic"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -2600,6 +2608,22 @@
         ],
         "title": "CompleteRequest",
         "type": "object"
+      },
+      "Complexity": {
+        "enum": [
+          "trivial",
+          "standard"
+        ],
+        "title": "Complexity",
+        "type": "string"
+      },
+      "ComplexitySource": {
+        "enum": [
+          "explicit",
+          "heuristic"
+        ],
+        "title": "ComplexitySource",
+        "type": "string"
       },
       "CostFigures": {
         "description": "What one group spent. `runs = measured_runs + not_reported_runs`. A token\nfield is null when no measured run carried it, never 0 (cost view 3.1).",
@@ -6855,6 +6879,23 @@
             ],
             "title": "Source",
             "type": "string"
+          },
+          "trivial": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trivial"
           }
         },
         "required": [
@@ -6876,6 +6917,9 @@
           },
           "implementation": {
             "title": "Implementation"
+          },
+          "trivial": {
+            "title": "Trivial"
           }
         },
         "required": [
@@ -10369,6 +10413,14 @@
             ],
             "title": "Block Reason"
           },
+          "complexity": {
+            "$ref": "#/components/schemas/Complexity",
+            "default": "standard"
+          },
+          "complexity_source": {
+            "$ref": "#/components/schemas/ComplexitySource",
+            "default": "heuristic"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -10803,6 +10855,16 @@
             ],
             "title": "Acceptance"
           },
+          "complexity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Complexity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "depends_on": {
             "anyOf": [
               {
@@ -10891,6 +10953,16 @@
             },
             "title": "Acceptance",
             "type": "array"
+          },
+          "complexity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Complexity"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "depends_on": {
             "default": [],
@@ -11065,6 +11137,14 @@
               }
             ],
             "title": "Block Reason"
+          },
+          "complexity": {
+            "$ref": "#/components/schemas/Complexity",
+            "default": "standard"
+          },
+          "complexity_source": {
+            "$ref": "#/components/schemas/ComplexitySource",
+            "default": "heuristic"
           },
           "created_at": {
             "format": "date-time",

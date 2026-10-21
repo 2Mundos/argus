@@ -249,3 +249,45 @@ def test_write_is_atomic_with_unique_temp_files(tmp_path: Path) -> None:
     model_policy._write(path, model_policy.validate(chains()))
     assert json.loads(path.read_text()) == chains()
     assert [p.name for p in tmp_path.iterdir()] == [path.name]
+
+
+def test_trivial_map_is_optional_validated_and_last_in_the_canonical_form() -> None:
+    plain = model_policy.revision(POLICY)
+    with_light = {**POLICY, "trivial": {"agent": ["composer-2.5"]}}
+    assert model_policy.revision(with_light) != plain
+    assert model_policy.canonical(with_light).endswith(
+        '"trivial":{"agent":["composer-2.5"]}}'
+    )
+    for bad in ({"agent": []}, {"typo": ["x"]}, {"agent": ["--x"]}, [], "x"):
+        with pytest.raises(ValidationFailedError):
+            model_policy.validate({**POLICY, "trivial": bad})
+    with pytest.raises(ValidationFailedError):
+        model_policy.validate({**POLICY, "extra": {}})
+
+
+def test_defaults_ship_composer_for_cursor_on_trivial(client: TestClient) -> None:
+    body = client.get("/api/models", headers=ADMIN).json()
+    assert body["trivial"] == {"agent": ["composer-2.5"]}
+
+
+def test_put_roundtrips_the_trivial_map_and_null_means_absent(
+    client: TestClient,
+) -> None:
+    light = {**POLICY, "trivial": {"agent": ["composer-2.5"], "claude": ["haiku"]}}
+    res = client.put("/api/models", json=light, headers=ADMIN)
+    assert res.status_code == 200, res.text
+    assert res.json()["trivial"] == light["trivial"]
+    assert json.loads(file_of(client).read_text())["trivial"] == light["trivial"]
+    assert res.json()["revision"] == model_policy.revision(light)
+
+    res = client.put("/api/models", json={**POLICY, "trivial": None}, headers=ADMIN)
+    assert res.status_code == 200
+    assert res.json()["trivial"] is None
+    assert res.json()["revision"] == model_policy.revision(POLICY)
+    assert "trivial" not in json.loads(file_of(client).read_text())
+
+    bad = client.put(
+        "/api/models", json={**POLICY, "trivial": {"agent": []}}, headers=ADMIN
+    )
+    assert bad.status_code == 422
+    assert "invalid model chain: trivial.agent" in bad.text

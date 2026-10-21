@@ -24,7 +24,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { anthropicRedirectRejection } from "./anthropic-redirect.mjs";
 import { createFileRelay, envSecrets, RELAY_FILE, startLiveLog } from "./livelog.mjs";
 import { createSink, createTracker, gitHead, waitingInput } from "./milestones.mjs";
-import { loadPolicy, selectModel } from "./model-policy.mjs";
+import { implementationScope, loadPolicy, selectModel } from "./model-policy.mjs";
 import { parseUsage, runKey, runKeyHash } from "./usage.mjs";
 
 export const EXECUTORS = ["claude", "codex", "opencode", "agent"];
@@ -654,7 +654,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
     // --model, then the account's model (a fixed choice: no chain), then the policy chain.
     selection = selectModel(
       snapshot,
-      "implementation",
+      implementationScope(snapshot, executor),
       executor,
       opts.modelAttempt ?? 1,
       opts.fallbackReason,
@@ -726,7 +726,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
       break;
     selection = selectModel(
       snapshot,
-      "implementation",
+      selection.scope,
       executor,
       selection.model_attempt + 1,
       outcome.report.executor_error?.kind || "executor_failed",
@@ -961,6 +961,7 @@ async function runAttempt(
     version,
     model: selection.configured_model,
     model_source: modelChoice.source,
+    policy_map: selection.scope,
     provider_block_applied:
       Boolean(settings?.provider) && settingsSupport(executor).includes("provider"),
     cwd,

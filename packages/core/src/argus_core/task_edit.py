@@ -9,6 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from argus_core.complexity import Complexity
 from argus_core.tasks import TaskState
 
 EDITABLE = (
@@ -19,9 +20,10 @@ EDITABLE = (
     "required_capabilities",
     "knowledge",
     "depends_on",
+    "complexity",
 )
-# `null` clears these to their empty value; title and priority cannot be cleared.
-CLEARABLE = frozenset(EDITABLE) - {"title", "priority"}
+# `null` clears these to their empty value; title, priority and complexity cannot be.
+CLEARABLE = frozenset(EDITABLE) - {"title", "priority", "complexity"}
 
 _ALL = frozenset(EDITABLE)
 _PRIORITY_ONLY = frozenset({"priority"})
@@ -62,6 +64,7 @@ class TaskChanges(BaseModel):
     required_capabilities: list[str] | None = None
     knowledge: list[str] | None = None
     depends_on: list[str] | None = None
+    complexity: Complexity | None = None
 
     def given(self) -> dict[str, Any]:
         """Editable fields the caller named (even as null), by name."""

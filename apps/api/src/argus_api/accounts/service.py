@@ -283,7 +283,8 @@ async def lease(
 ) -> AccountLease:
     """Lease the best usable account for `role`, ranked globally by priority (then
     least leased, then name); the local model is a tier below every cloud account,
-    so it serves only when none of them can. `runtime_providers` is only what the
+    so it serves only when none of them can, unless the task is trivial, which tries
+    it first and takes the cloud in the same call when it cannot serve. `runtime_providers` is only what the
     runtime can technically apply, never an order or allowlist. An agent holds one lease per
     role (`engine`: its harness; `executor`: a delegated CLI; `repository`); a new
     lease replaces the previous one of the same role. Raises NoAccountError."""
@@ -292,7 +293,13 @@ async def lease(
     await tasks.check_lease(tx, task_id, attempt, agent_id)
     await release(tx, agent_id, "replaced", role)
     result = await _try_lease(
-        tx, agent_id, store, role, runtime_providers, reuse_held=reuse_held
+        tx,
+        agent_id,
+        store,
+        role,
+        runtime_providers,
+        reuse_held=reuse_held,
+        prefer_local=await _prefer_local(tx, task_id, role),
     )
     if result is None:
         reset = await earliest_reset(tx, role, runtime_providers)
@@ -342,7 +349,13 @@ async def exhausted(
         tx, agent_id, account_id, report.until, report.reason, cooldown
     )
     await release(tx, agent_id, "exhausted", role)
-    next_candidate = await _ranked(tx, agent_id, role, report.runtime_providers)
+    next_candidate = await _ranked(
+        tx,
+        agent_id,
+        role,
+        report.runtime_providers,
+        prefer_local=await _prefer_local(tx, task_id, role),
+    )
     if next_candidate:
         await _failover(
             tx,
@@ -407,7 +420,14 @@ async def fail_task(
     )
     await release(tx, agent_id, "exhausted", "engine")
     runtime = json.loads(held["providers"]) or None
-    next_lease = await _try_lease(tx, agent_id, store, "engine", runtime)
+    next_lease = await _try_lease(
+        tx,
+        agent_id,
+        store,
+        "engine",
+        runtime,
+        prefer_local=await _prefer_local(tx, task_id, "engine"),
+    )
     task = await tasks.pause_for_quota(
         tx, agent_id, task_id, attempt, hit.reason, wait=next_lease is None
     )
@@ -689,6 +709,12 @@ async def disable_for_write_failure(tx: Tx, account_id: str, error: str) -> None
 # -- internals -----------------------------------------------------------------------------
 
 
+async def _prefer_local(tx: Tx, task_id: str, role: LeaseRole) -> bool:
+    """Does this task rank the local model first? Only a trivial task, only for the
+    engine role (task complexity spec 3); never a restriction, just the order."""
+    return role == "engine" and await tasks.prefers_local(tx.conn, task_id)
+
+
 async def _try_lease(
     tx: Tx,
     agent_id: str,
@@ -697,9 +723,11 @@ async def _try_lease(
     runtime_providers: list[str] | None,
     *,
     reuse_held: bool = False,
+    prefer_local: bool = False,
 ) -> AccountLease | None:
     """The best usable account for `role` across every provider: cloud before the
-    local model, then priority, the least leased, and provider/name/id so ties are
+    local model (the reverse with `prefer_local`, whose fallback is the cloud in this
+    same call), then priority, the least leased, and provider/name/id so ties are
     deterministic. Skips
     disabled, still-exhausted, full (`max_leases`) and credential-less accounts.
 
@@ -707,7 +735,9 @@ async def _try_lease(
     engine stays a candidate even at `max_leases`, and winning returns that
     engine lease as is (no second row, no extra slot)."""
     reuse = reuse_held and role == "executor"
-    candidates = await _ranked(tx, agent_id, role, runtime_providers, reuse=reuse)
+    candidates = await _ranked(
+        tx, agent_id, role, runtime_providers, reuse=reuse, prefer_local=prefer_local
+    )
     for row in candidates:
         name = ref_name(row["secret_ref"])
         credential = store.get(name) if name else None
@@ -779,9 +809,10 @@ async def _ranked(
     runtime_providers: list[str] | None,
     *,
     reuse: bool = False,
+    prefer_local: bool = False,
 ) -> list[aiosqlite.Row]:
     """The usable accounts for `role` in lease order (cloud before the local
-    model, then priority, least leased, then provider/name/id). An exhausted
+    model, or the reverse with `prefer_local`, then priority, least leased, then provider/name/id). An exhausted
     account past its reset is usable."""
     async with tx.conn.execute(
         "SELECT a.*, (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
@@ -805,7 +836,7 @@ async def _ranked(
             )
         ),
         key=lambda r: (
-            fallback_tier(r["provider"]),
+            fallback_tier(r["provider"], prefer_local=prefer_local),
             -r["priority"],
             r["active"],
             r["provider"],

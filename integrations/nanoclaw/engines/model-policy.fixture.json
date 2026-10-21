@@ -9,6 +9,24 @@
       "implementation": {
         "codex": ["gpt-6.1-sol"],
         "claude": ["claude-sonnet-5-5", "claude-opus-5-5"]
+      },
+      "trivial": {
+        "agent": ["composer-2.5"]
+      }
+    },
+    "canonical": "{\"harness\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6-luna\"]},\"implementation\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6.1-sol\"]},\"trivial\":{\"agent\":[\"composer-2.5\"]}}",
+    "revision": "2b05ba03cb83c36e9c5c92d3c4821b6ca4e240061eef35d44d0c38fa629539be"
+  },
+  {
+    "name": "defaults without trivial",
+    "policy": {
+      "harness": {
+        "codex": ["gpt-6-luna"],
+        "claude": ["claude-sonnet-5-5", "claude-opus-5-5"]
+      },
+      "implementation": {
+        "codex": ["gpt-6.1-sol"],
+        "claude": ["claude-sonnet-5-5", "claude-opus-5-5"]
       }
     },
     "canonical": "{\"harness\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6-luna\"]},\"implementation\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6.1-sol\"]}}",
@@ -39,5 +57,20 @@
     },
     "canonical": "{\"harness\":{},\"implementation\":{\"agent\":[\"vendor/model:v1.2_x\"]}}",
     "revision": "3f70fd3c619b53604f12d50760f70a7e06611d12ac98376b765eb9e99f6b3c7f"
+  },
+  {
+    "name": "trivial map, unsorted keys",
+    "policy": {
+      "trivial": {
+        "claude": ["a"],
+        "agent": ["composer-2.5", "x"]
+      },
+      "implementation": {
+        "agent": ["m"]
+      },
+      "harness": {}
+    },
+    "canonical": "{\"harness\":{},\"implementation\":{\"agent\":[\"m\"]},\"trivial\":{\"agent\":[\"composer-2.5\",\"x\"],\"claude\":[\"a\"]}}",
+    "revision": "a941f4e374620d7b1223818299b03ca49650c768311272e006239c2f08b44b0f"
   }
 ]

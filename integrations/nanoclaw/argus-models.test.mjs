@@ -181,6 +181,7 @@ test("actual harness hook applies config, stops stale containers and pins policy
     engine_account_id: "a-claude",
     executor_account_id: "a-codex",
     preferred_executor: "codex",
+    complexity: "standard",
   });
   assert.equal(loadPolicy({}, file).policy.implementation.codex[0], "gpt-6.1-sol");
   // Without a separate executor lease the engine's account is the executor account too.
@@ -192,6 +193,10 @@ test("actual harness hook applies config, stops stale containers and pins policy
   assert.deepEqual([same.engine_account_id, same.executor_account_id], ["a-claude", "a-claude"]);
   await hook({ id: "task2", attempt: 1, failures: 1, spec: "" }, held);
   assert.equal(globalThis.argusModelTest.killed.length, 1, "unchanged model keeps warm sessions");
+  // A trivial task is pinned as such, and Cursor becomes its preferred executor.
+  await hook({ id: "task3", attempt: 1, failures: 1, spec: "", complexity: "trivial" }, held);
+  const light = JSON.parse(readFileSync(file, "utf8")).context;
+  assert.deepEqual([light.complexity, light.preferred_executor], ["trivial", "agent"]);
 });
 
 test("channel installer is idempotent and includes source and built policy assets", (t) => {

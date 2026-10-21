@@ -43,11 +43,13 @@ def role_accepts(
     return not (role != "engine" and provider in ENGINE_ONLY)
 
 
-def fallback_tier(provider: str) -> int:
+def fallback_tier(provider: str, *, prefer_local: bool = False) -> int:
     """Lease tier, ahead of priority: every cloud account (0) outranks the local
     model (1), whatever the operator set, so the node's own GPU serves only when
-    nothing in the cloud can (local harness spec 3)."""
-    return 1 if provider == LOCAL_PROVIDER else 0
+    nothing in the cloud can (local harness spec 3). A trivial task inverts it for
+    itself: local first, the cloud as the immediate fallback (task complexity spec)."""
+    is_local = provider == LOCAL_PROVIDER
+    return int(is_local != prefer_local)
 
 
 def quota_exempt(provider: str) -> bool:
