@@ -288,14 +288,15 @@ import re
 mock = """
 // Argus: the local-harness hook in ensureSession looks the agent group up in
 // NanoClaw's database, which this test never opens; stub the lookup (install.sh).
+// The rest of the module stays real: other modules in the graph import it.
 vi.mock('../db/agent-groups.js', async (original) => ({
   ...(await original<typeof import('../db/agent-groups.js')>()),
   getAgentGroup: async () => undefined,
 }));
 """
-imports = list(re.finditer(r"^import [^;]* from 'vitest';\n", s, re.M))
-assert len(imports) == 1, "onecli test has no single vitest import"
-at = imports[0].end()
+first = re.search(r"^import [^;]*\bfrom ['\"]vitest['\"];?[ \t]*\n", s, re.M)
+assert first, "onecli test has no vitest import to anchor the mock on"
+at = first.end()
 open(p, "w").write(s[:at] + mock + s[at:])
 PY
   echo "patched $onecli_test (agent group lookup for the local-harness hook)"

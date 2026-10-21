@@ -15,16 +15,24 @@ import {
   withLocalHarnessRuntimeForGroup,
   writeLocalHarnessFile,
 } from "./argus-local-harness.js";
+import { writeCustomHarnessFile } from "./argus-custom-harness.js";
 import {
   anthropicRedirectRejection,
   normalizeAnthropicBaseUrl,
 } from "./engines/anthropic-redirect.mjs";
 
 // The OneCLI hook looks the agent group up in NanoClaw's database; here one group
-// is known and every other id is not.
-vi.mock("../db/agent-groups.js", () => ({
+// is known and every other id is not. Whether a custom bridge runs in this process
+// is the test's to say.
+const live = vi.hoisted(() => ({ bridges: new Set<string>() }));
+vi.mock("../db/agent-groups.js", async (original) => ({
+  ...(await original<typeof import("../db/agent-groups.js")>()),
   getAgentGroup: async (id: string) =>
     id === "ag-local" ? { id, folder: "argus-local-group", name: "local" } : undefined,
+}));
+vi.mock("./argus-custom-bridge.js", async (original) => ({
+  ...(await original<typeof import("./argus-custom-bridge.js")>()),
+  hasCustomBridge: (folder: string) => live.bridges.has(folder),
 }));
 
 describe("normalizeAnthropicBaseUrl", () => {
@@ -194,6 +202,7 @@ describe("withLocalHarnessRuntimeForGroup (the OneCLI ensureSession hook)", () =
   };
   afterEach(() => {
     for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+    live.bridges.clear();
   });
   const cloud = () =>
     withClaudeDelegateRuntime({
@@ -216,6 +225,36 @@ describe("withLocalHarnessRuntimeForGroup (the OneCLI ensureSession hook)", () =
     const config = cloud();
     const out = await withLocalHarnessRuntimeForGroup(config, dataDir(), "ag-local");
     expect(out.env?.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(out.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("onecli-managed-sentinel");
+  });
+
+  it("prefers the custom harness while its bridge runs in this process", async () => {
+    const dir = dataDir();
+    const key = "a".repeat(32);
+    await writeCustomHarnessFile(dir, "argus-local-group", {
+      version: 1,
+      anthropic_base_url: "http://host.docker.internal:32774",
+      bridge_key: key,
+    });
+    const local = localHarnessFromCredential({ base_url: "http://host.docker.internal:8080" })!;
+    await writeLocalHarnessFile(dir, "argus-local-group", local);
+    live.bridges.add("argus-local-group");
+    const out = await withLocalHarnessRuntimeForGroup(cloud(), dir, "ag-local");
+    expect(out.env?.ANTHROPIC_BASE_URL).toBe("http://host.docker.internal:32774");
+    expect(out.env?.ANTHROPIC_CUSTOM_HEADERS).toContain(key);
+    expect(out.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+
+  it("ignores a custom harness file whose bridge is gone (a restart)", async () => {
+    const dir = dataDir();
+    await writeCustomHarnessFile(dir, "argus-local-group", {
+      version: 1,
+      anthropic_base_url: "http://host.docker.internal:32774",
+      bridge_key: "b".repeat(32),
+    });
+    const out = await withLocalHarnessRuntimeForGroup(cloud(), dir, "ag-local");
+    expect(out.env?.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(out.env?.ANTHROPIC_CUSTOM_HEADERS).toBeUndefined();
     expect(out.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("onecli-managed-sentinel");
   });
 
