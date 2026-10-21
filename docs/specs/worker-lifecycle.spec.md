@@ -229,7 +229,7 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
     released and claimed again still has that last attempt;
   - `error` is cleared (nothing failed), `progress_message` becomes `attempt <n>
     released: <reason>; requeued`, and the attempt's row in `task_attempts` gets
-    `outcome: released` and `outcome_reason` (migration 0030; the only outcome a
+    `outcome: released` and `outcome_reason` (migration 0031; the only outcome a
     row records, other endings are in the events);
   - event `task.released` with `from`, `to`, `attempt`, `reason` and
     `previous_holder`; the actor is the caller. It is not `task.fail` or

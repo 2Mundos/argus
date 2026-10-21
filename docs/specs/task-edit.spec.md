@@ -108,7 +108,7 @@ At every claim Argus stores the definition the worker is given in
 `task_attempts` (`task_id`, `attempt`, `agent_id`, `claimed_at`, `definition`:
 the seven editable fields plus `kind`, `project`). The definition is never
 updated and rows are never deleted; an operator release only sets the row's
-`outcome` (`released`) and `outcome_reason` (migration 0030,
+`outcome` (`released`) and `outcome_reason` (migration 0031,
 [worker lifecycle](worker-lifecycle.spec.md) 3.3); `attempt` restarts at 1 after a retry, so they are listed in claim order. `GET /api/tasks/{id}/attempts` lists them, oldest first, so the
 definition of any attempt can be told apart from a later edit.
 
