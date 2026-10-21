@@ -1251,6 +1251,50 @@ describe("delegate live log relay", () => {
     fs.rmSync(dir, { recursive: true });
   }, 10_000);
 
+  it("the final drain paces from the last post, so a drain right after a poll is not refused", async () => {
+    const { dir, file } = tmp();
+    const pace = 300;
+    const accepted: number[] = [];
+    const refused: number[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      paceMs: pace,
+      post: async () => {
+        const t = Date.now();
+        if (accepted.length && t - (accepted.at(-1) as number) < pace) {
+          refused.push(t);
+          throw new ArgusError(429, "rate_limited", "slow down");
+        }
+        accepted.push(t);
+      },
+    });
+    fs.writeFileSync(file, rec(["periodic"]));
+    await relay.poll();
+    fs.appendFileSync(file, rec(["last"]));
+    await relay.drain(5000);
+    expect(refused).toEqual([]);
+    expect(accepted).toHaveLength(2);
+    expect(accepted[1] - accepted[0]).toBeGreaterThanOrEqual(pace - 5);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("the final drain keeps reading while unread bytes remain", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      paceMs: 5,
+      post: async (b) => void posts.push(b),
+    });
+    // A record longer than one read: the first poll only skips, nothing is pending yet.
+    fs.writeFileSync(file, `${"x".repeat(5 * 1024 * 1024)}\n${rec(["after"])}`);
+    await relay.drain(5000);
+    expect(posts.map((p) => p.lines)).toEqual([["after"]]);
+    fs.rmSync(dir, { recursive: true });
+  });
+
   it("the adapter relays the delegate log with the token on the host side only", async () => {
     const { dir, file } = tmp();
     fs.writeFileSync(file, rec(["stale line from a previous run"]));

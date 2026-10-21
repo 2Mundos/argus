@@ -550,6 +550,9 @@ export function createDelegateLogRelay(opts: {
   let busy = false;
   let backoffMs = 0;
   let notBefore = 0;
+  let lastPostAt = Number.NEGATIVE_INFINITY; // of the last accepted batch
+  let gapMs = 0; // least time between accepted batches: the pace while draining
+  let fileSize = 0; // at the last read: bytes beyond `offset` are still unread
 
   let skipping = false; // inside a record longer than LOG_READ_MAX: drop it up to its newline
 
@@ -575,6 +578,7 @@ export function createDelegateLogRelay(opts: {
     try {
       const st = await handle.stat();
       if (!st.isFile() || st.nlink !== 1) return unsafe(st.isFile() ? "hard link" : "not a file");
+      fileSize = st.size;
       if (st.size < offset) offset = 0; // truncated or replaced: start over
       if (st.size === offset) return;
       const buf = Buffer.alloc(Math.min(st.size - offset, LOG_READ_MAX));
@@ -611,10 +615,11 @@ export function createDelegateLogRelay(opts: {
 
   async function step(): Promise<void> {
     await readNew();
-    if (!pending.length || now() < notBefore) return;
+    if (!pending.length || now() < Math.max(notBefore, lastPostAt + gapMs)) return;
     const batch = takeLogBatch(pending);
     try {
       await opts.post({ attempt: opts.task.attempt, source: "delegate", lines: batch });
+      lastPostAt = now();
       pending = pending.slice(batch.length);
       backoffMs = 0;
     } catch (err) {
@@ -665,16 +670,27 @@ export function createDelegateLogRelay(opts: {
     },
     poll: async (): Promise<void> => void (await poll()),
     /**
-     * The last lines of the run: poll until everything written is posted, the relay
-     * stops, or `timeoutMs` passes (wall clock). Never throws.
+     * The last lines of the run: poll until everything written is read and posted, the
+     * relay stops, or `timeoutMs` passes (wall clock). Each post waits the pace from the
+     * last accepted one (a periodic poll may just have posted) and any back-off, so the
+     * server's rate limit is not hit needlessly. Never throws.
      */
     async drain(timeoutMs = LOG_DRAIN_MS): Promise<void> {
       const deadline = Date.now() + timeoutMs;
-      for (;;) {
-        const ran = await poll();
-        if (stopped || (ran && !pending.length) || Date.now() >= deadline) return;
-        const wait = ran ? (opts.paceMs ?? LOG_DRAIN_PACE_MS) : 50;
-        await new Promise((r) => setTimeout(r, Math.min(wait, deadline - Date.now())));
+      const sleep = (ms: number) =>
+        new Promise((r) => setTimeout(r, Math.max(0, Math.min(ms, deadline - Date.now()))));
+      gapMs = opts.paceMs ?? LOG_DRAIN_PACE_MS;
+      try {
+        for (;;) {
+          const ran = await poll();
+          const unread = fileSize > offset;
+          if (stopped || (ran && !pending.length && !unread) || Date.now() >= deadline) return;
+          // the next post is due at the pace or the back-off; else a poll was in flight
+          // or a record is still being written
+          await sleep(ran && pending.length ? Math.max(notBefore, lastPostAt + gapMs) - now() : 50);
+        }
+      } finally {
+        gapMs = 0;
       }
     },
   };
