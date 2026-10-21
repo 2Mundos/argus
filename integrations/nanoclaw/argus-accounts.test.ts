@@ -9,6 +9,7 @@ import {
   applyLeases,
   applyLeasesDetailed,
   applyRepositoryLease,
+  assertOneCliUrl,
   CURSOR_EXPIRY_MARGIN_MS,
   classifyFailure,
   classifyLogTail,
@@ -49,9 +50,43 @@ vi.mock("../container-runner.js", () => ({
   },
 }));
 
+describe("assertOneCliUrl", () => {
+  it("accepts the default host.docker.internal URL", () => {
+    expect(assertOneCliUrl("http://host.docker.internal:10254")).toBe(
+      "http://host.docker.internal:10254",
+    );
+  });
+
+  it("rejects http to a non-allowlisted host", () => {
+    expect(() => assertOneCliUrl("http://onecli.example:10254")).toThrow(/https/);
+  });
+
+  it("rejects embedded credentials", () => {
+    expect(() => assertOneCliUrl("https://user:pass@onecli.example")).toThrow(/credential/);
+  });
+});
+
+describe("OneCliClient error bodies", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("omits the response body unless ARGUS_ONECLI_DEBUG_BODY=1", async () => {
+    const secretBody = '{"error":"vault-secret-xyz","detail":"do-not-leak"}';
+    const fetchImpl = (async () => new Response(secretBody, { status: 503 })) as typeof fetch;
+    const client = new OneCliClient("http://127.0.0.1:10254", fetchImpl);
+    await expect(client.call("GET", "/agents")).rejects.toThrow(/503 vault-secret-xyz/);
+    await expect(client.call("GET", "/agents")).rejects.not.toThrow(/do-not-leak/);
+
+    vi.stubEnv("ARGUS_ONECLI_DEBUG_BODY", "1");
+    const debugClient = new OneCliClient("http://127.0.0.1:10254", fetchImpl);
+    await expect(debugClient.call("GET", "/agents")).rejects.toThrow(/do-not-leak/);
+  });
+});
+
 describe("recycleRuntime (real hook, NanoClaw modules faked)", () => {
   const recycle = () => {
-    vi.stubEnv("ONECLI_URL", "http://onecli.test");
+    vi.stubEnv("ONECLI_URL", "http://127.0.0.1:10254");
     return accountsFromEnv()!.recycleRuntime!;
   };
   afterEach(() => {
@@ -114,7 +149,7 @@ const lease = (name: string, key: string, over: Partial<AccountLease> = {}): Acc
 describe("repository lease vault mapping", () => {
   it("assigns a generic Authorization secret for only the allowlisted Gitea host and unassigns on release", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     const target = { identifier: "group-r", name: "repo worker" };
     await applyRepositoryLease(
       onecli,
@@ -193,7 +228,7 @@ function world(opts: {
     const u = new URL(url);
     const body = init.body ? JSON.parse(init.body as string) : undefined;
     const method = init.method ?? "GET";
-    if (u.host === "onecli.test") {
+    if (u.hostname === "127.0.0.1") {
       const path = u.pathname.replace(/^\/api/, "");
       calls.push({ who: "onecli", method, path, body });
       if (method === "GET" && path === "/agents") return json(200, onecli.agents);
@@ -321,7 +356,7 @@ function harness(
     accounts: withAccounts
       ? {
           models: true,
-          onecli: new OneCliClient("http://onecli.test", w.fetchImpl),
+          onecli: new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
           resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
           ...extra,
         }
@@ -354,7 +389,7 @@ describe("anthropic credential documents", () => {
   const apply = async (credential: Record<string, unknown>) => {
     const w = world({ leases: [] });
     await applyLease(
-      new OneCliClient("http://onecli.test", w.fetchImpl),
+      new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
       { identifier: "g", name: "G" },
       lease("x", "", { credential }),
     );
@@ -475,7 +510,7 @@ describe("classifyFailure", () => {
 describe("applyLease", () => {
   it("creates the agent and a selective secret, then updates it in place on a switch", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     const target = { identifier: "ag-group-1", name: "Worker" };
 
     await applyLease(onecli, target, lease("a", "sk-ant-AAAA"));
@@ -498,7 +533,7 @@ describe("applyLease", () => {
   it("uses an OAuth token for subscription accounts", async () => {
     const w = world({ leases: [] });
     await applyLease(
-      new OneCliClient("http://onecli.test", w.fetchImpl),
+      new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
       { identifier: "g", name: "n" },
       lease("sub", "", { kind: "subscription", credential: { oauth_token: "sk-ant-oat01-XYZ" } }),
     );
@@ -507,7 +542,7 @@ describe("applyLease", () => {
 
   it("rejects unknown providers and credentials with no usable field, without echoing values", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     await expect(
       applyLease(onecli, { identifier: "g", name: "n" }, lease("x", "k", { provider: "mystery" })),
     ).rejects.toThrow(/cannot be applied/);
@@ -652,7 +687,7 @@ describe("channel with accounts", () => {
   it("gives the account back when it cannot be applied to the vault", async () => {
     const w = world({ leases: [lease("a", "sk-ant-AAAA")], tasks: [task()] });
     const failing = ((url: string, init: RequestInit) =>
-      new URL(url).host === "onecli.test"
+      new URL(url).hostname === "127.0.0.1"
         ? Promise.resolve(new Response('{"error":"down"}', { status: 503 }))
         : w.fetchImpl(url, init)) as typeof fetch;
     const inbound: any[] = [];
@@ -665,7 +700,7 @@ describe("channel with accounts", () => {
       claimWaitS: 1,
       accounts: {
         models: true,
-        onecli: new OneCliClient("http://onecli.test", failing),
+        onecli: new OneCliClient("http://127.0.0.1:10254", failing),
         resolveTarget: async () => ({ identifier: "g", name: "n" }),
       },
     });
@@ -756,7 +791,7 @@ describe("openai (Codex) credential documents", () => {
   it("gives OneCLI the whole ChatGPT auth.json as an openai secret for chatgpt.com", async () => {
     const w = world({ leases: [] });
     const engine = await applyLease(
-      new OneCliClient("http://onecli.test", w.fetchImpl),
+      new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
       target,
       codexLease(),
     );
@@ -773,7 +808,7 @@ describe("openai (Codex) credential documents", () => {
   it("maps an API-key document to api.openai.com", async () => {
     const w = world({ leases: [] });
     await applyLease(
-      new OneCliClient("http://onecli.test", w.fetchImpl),
+      new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
       target,
       codexLease({ kind: "api_key", credential: { auth_mode: "apikey", OPENAI_API_KEY: "sk-1" } }),
     );
@@ -786,7 +821,7 @@ describe("openai (Codex) credential documents", () => {
     let message = "";
     try {
       await applyLease(
-        new OneCliClient("http://onecli.test", w.fetchImpl),
+        new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
         target,
         codexLease({ credential: bad }),
       );
@@ -800,7 +835,7 @@ describe("openai (Codex) credential documents", () => {
 
   it("assigns exactly the secrets of the leases held", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     const claude = lease("claude-1", "sk-ant", { role: "executor" });
     expect(await applyLeases(onecli, target, [codexLease(), claude])).toBe("codex");
     const agent = w.onecli.agents[0]!;
@@ -994,7 +1029,7 @@ describe("cursor credential documents", () => {
 
   it("maps an OAuth login to two generic secrets on api2.cursor.sh only", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     await applyLeases(onecli, target, [codexLease(), cursorLease()]);
     const posts = w.calls.filter((c) => c.path === "/secrets" && c.method === "POST");
     const agent = posts.find((c) => c.body.name === "argus-g-cursor-agent")!;
@@ -1027,7 +1062,7 @@ describe("cursor credential documents", () => {
       }
       return w.fetchImpl(url, init as RequestInit);
     }) as typeof fetch;
-    const onecli = new OneCliClient("http://onecli.test", fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", fetchImpl);
     await applyLeases(
       onecli,
       target,
@@ -1047,7 +1082,7 @@ describe("cursor credential documents", () => {
 
   it("rejects settings-only and expired documents without echoing secrets", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     for (const credential of [
       CURSOR_SETTINGS,
       { accessToken: cursorJwt(Math.floor(Date.now() / 1000) - 60), refreshToken: CURSOR_REFRESH },
@@ -1069,7 +1104,7 @@ describe("cursor credential documents", () => {
 
   it("unassigns cursor secrets when the executor lease ends but keeps the engine", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     await applyLeases(onecli, target, [codexLease(), cursorLease()]);
     const names = w.onecli.agents[0]!.secrets.map(
       (id) => w.onecli.secrets.find((s) => s.id === id)!.name,
@@ -1127,7 +1162,7 @@ describe("cursor executor selection in the channel", () => {
 describe("applyLeasesDetailed", () => {
   it("reports executor JWT expiry for a Cursor executor lease", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     const exp = jwtExpiryMs(CURSOR_ACCESS);
     const out = await applyLeasesDetailed(onecli, { identifier: "g", name: "G" }, [
       codexLease(),
@@ -1555,7 +1590,7 @@ describe("global account selection in the channel", () => {
   });
 
   it("ignores the retired provider lists in the environment", () => {
-    vi.stubEnv("ONECLI_URL", "http://onecli.test");
+    vi.stubEnv("ONECLI_URL", "http://127.0.0.1:10254");
     vi.stubEnv("ARGUS_ACCOUNT_PROVIDERS", "openai");
     vi.stubEnv("ARGUS_EXECUTOR_PROVIDERS", "cursor");
     const accounts = accountsFromEnv()!;
@@ -1569,7 +1604,7 @@ describe("global account selection in the channel", () => {
     vi.stubEnv("ARGUS_ACCOUNT_PROVIDERS", "");
     vi.stubEnv("ARGUS_REPOSITORIES_JSON", "");
     expect(accountsFromEnv()).toBeUndefined();
-    vi.stubEnv("ONECLI_URL", "http://onecli.test");
+    vi.stubEnv("ONECLI_URL", "http://127.0.0.1:10254");
     expect(accountsFromEnv()?.models).toBe(true);
   });
 
@@ -1598,7 +1633,7 @@ describe("global account selection in the channel", () => {
       selectModels,
       accounts: {
         models: true,
-        onecli: new OneCliClient("http://onecli.test", w.fetchImpl),
+        onecli: new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
         resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
       },
     });
@@ -1644,7 +1679,7 @@ describe("global account selection in the channel", () => {
       claimWaitS: 1,
       accounts: {
         models: true,
-        onecli: new OneCliClient("http://onecli.test", fetchImpl),
+        onecli: new OneCliClient("http://127.0.0.1:10254", fetchImpl),
         resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
         selectEngine,
       },
@@ -1836,7 +1871,7 @@ describe("custom (OpenRouter) engine accounts", () => {
 
   it("applyLeases does not write a OneCLI secret for a custom engine lease", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     const engine = await applyLeasesDetailed(onecli, target, [
       lease("or", "sk-or-key", {
         provider: "custom",
@@ -1850,7 +1885,7 @@ describe("custom (OpenRouter) engine accounts", () => {
 
   it("applyLeases still applies a separate cursor executor lease", async () => {
     const w = world({ leases: [] });
-    await applyLeasesDetailed(new OneCliClient("http://onecli.test", w.fetchImpl), target, [
+    await applyLeasesDetailed(new OneCliClient("http://127.0.0.1:10254", w.fetchImpl), target, [
       lease("or", "sk-or-key", {
         provider: "custom",
         credential: { api_key: "sk-or-key" },

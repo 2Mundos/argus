@@ -2,9 +2,9 @@
 
 from datetime import datetime
 from enum import StrEnum
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from argus_core.agents import AgentRuntime
 
@@ -21,6 +21,21 @@ class RuntimeKind(StrEnum):
     NANOCLAW = "nanoclaw"
 
 
+def _docker_host_ok(host: str) -> bool:
+    """unix://, ssh://, https://, or tcp:// with TLS query params."""
+    parsed = urlsplit(host)
+    scheme = parsed.scheme.lower()
+    if scheme in ("unix", "ssh", "https"):
+        return True
+    if scheme != "tcp":
+        return False
+    qs = {k.lower(): [x.lower() for x in v] for k, v in parse_qs(parsed.query).items()}
+    for key in ("tls", "tlsverify"):
+        if qs.get(key, [""])[0] in ("1", "true", "yes"):
+            return True
+    return False
+
+
 class DockerOptions(BaseModel):
     model_config = ConfigDict(json_schema_serialization_defaults_required=True)
 
@@ -30,6 +45,18 @@ class DockerOptions(BaseModel):
     # OCI runtime for the container, e.g. "sysbox-runc". For the nanoclaw runtime
     # it replaces the shared Docker socket with a daemon inside the instance.
     runtime: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_.-]*$")
+
+    @field_validator("host")
+    @classmethod
+    def host_scheme(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if not _docker_host_ok(value):
+            raise ValueError(
+                "docker host must be unix://, ssh://, https://, or tcp:// with"
+                " ?tls=true (plain tcp:// is refused)"
+            )
+        return value
 
 
 IN_CLUSTER = "in-cluster"
@@ -54,6 +81,24 @@ class KubernetesOptions(BaseModel):
 
 # 107 (sun_path limit) - 1 ("/") - 36 (instance uuid) - len("/data/ncl.sock") = 56.
 NANOCLAW_MAX_ROOT_LEN = 107 - 1 - 36 - len("/data/ncl.sock")
+
+
+_ONECLI_HTTP_HOSTS = frozenset(
+    {"localhost", "127.0.0.1", "::1", "[::1]", "host.docker.internal"}
+)
+
+
+def onecli_url_ok(url: str) -> bool:
+    """https anywhere, or http only to loopback / host.docker.internal; no userinfo."""
+    parsed = urlsplit(url)
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme == "https":
+        return bool(host)
+    if parsed.scheme == "http":
+        return host in _ONECLI_HTTP_HOSTS
+    return False
 
 
 class NanoclawOptions(BaseModel):
@@ -86,6 +131,16 @@ class NanoclawOptions(BaseModel):
     repositories: dict[str, str] = {}
     user: str | None = None  # "uid:gid" to run the host container as
     group_add: list[str] = []  # e.g. the docker socket's group id
+
+    @field_validator("onecli_url")
+    @classmethod
+    def onecli_url_scheme(cls, value: str) -> str:
+        if not onecli_url_ok(value):
+            raise ValueError(
+                "onecli_url must be https://, or http:// to localhost /"
+                " 127.0.0.1 / host.docker.internal, without embedded credentials"
+            )
+        return value
 
     @model_validator(mode="before")
     @classmethod
@@ -133,6 +188,9 @@ class PoolUpsert(BaseModel):
     env: dict[str, str] = {}
     cpus: float | None = Field(default=None, gt=0)
     memory_mb: int | None = Field(default=None, ge=16)
+    # When false (default), a tag-only image missing locally is refused; Argus
+    # never silently re-pulls a mutable tag that is already present.
+    allow_mutable_images: bool = False
     docker: DockerOptions = DockerOptions()
     kubernetes: KubernetesOptions | None = None  # required for the kubernetes target
     nanoclaw: NanoclawOptions | None = None  # required for the nanoclaw runtime
@@ -207,6 +265,7 @@ class PoolPatch(BaseModel):
     env: dict[str, str | None] | None = None
     cpus: float | None = Field(default=None, gt=0)
     memory_mb: int | None = Field(default=None, ge=16)
+    allow_mutable_images: bool | None = None
     docker: DockerOptions | None = None
     kubernetes: KubernetesOptions | None = None
     nanoclaw: NanoclawOptions | None = None

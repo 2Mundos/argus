@@ -380,12 +380,46 @@ export class OneCliError extends Error {
   }
 }
 
+const ONECLI_HTTP_HOSTS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "[::1]",
+  "host.docker.internal",
+]);
+
+/** Mirror of Argus `NanoclawOptions.onecli_url` (security-hardening spec). */
+export function assertOneCliUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`invalid OneCLI URL: ${url}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("OneCLI URL must not embed credentials");
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol === "https:") {
+    if (!host) throw new Error("OneCLI URL needs a host");
+    return url;
+  }
+  if (parsed.protocol === "http:" && ONECLI_HTTP_HOSTS.has(host)) {
+    return url;
+  }
+  throw new Error(
+    "OneCLI URL must be https://, or http:// to localhost / 127.0.0.1 / host.docker.internal",
+  );
+}
+
 export class OneCliClient {
   constructor(
     private readonly baseUrl: string,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly apiKey?: string,
-  ) {}
+  ) {
+    assertOneCliUrl(baseUrl);
+  }
 
   async call(method: string, path: string, body?: unknown): Promise<any> {
     const res = await this.fetchImpl(this.baseUrl.replace(/\/$/, "") + "/api" + path, {
@@ -399,11 +433,19 @@ export class OneCliClient {
     const raw = await res.text();
     const data = raw ? JSON.parse(raw) : null;
     if (res.status >= 400) {
-      // Never echo a request body: it can hold a credential.
-      throw new OneCliError(
-        res.status,
-        `OneCLI ${method} ${path} failed: ${res.status} ${raw.slice(0, 200)}`,
-      );
+      // Never echo a response body by default: it can hold secrets or PII.
+      const debug = process.env.ARGUS_ONECLI_DEBUG_BODY === "1";
+      let code = "error";
+      if (data && typeof data === "object" && "error" in data) {
+        const err = (data as { error?: unknown }).error;
+        if (typeof err === "string" && err.length <= 64) code = err;
+        else if (err && typeof err === "object" && "code" in err) {
+          const c = (err as { code?: unknown }).code;
+          if (typeof c === "string" && c.length <= 64) code = c;
+        }
+      }
+      const detail = debug ? ` ${raw.slice(0, 200)}` : ` ${code}`;
+      throw new OneCliError(res.status, `OneCLI ${method} ${path} failed: ${res.status}${detail}`);
     }
     return data;
   }

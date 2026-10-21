@@ -54,7 +54,7 @@ describe("dedicated Gitea repository lease", () => {
         expect(normalized.gitPathPattern).toBe("/team/repo.git/*");
 
         await applyRepositoryLease(
-          new OneCliClient("http://onecli.test", fetchImpl),
+          new OneCliClient("http://127.0.0.1:10254", fetchImpl),
           { identifier: "worker", name: "worker" },
           {
             lease_id: "repository-lease",
@@ -113,7 +113,7 @@ describe("dedicated Gitea repository lease", () => {
       }
       return Response.json({ success: true });
     }) as typeof fetch;
-    const onecli = new OneCliClient("http://onecli.test", fakeFetch);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", fakeFetch);
     const target = { identifier: "group-1", name: "worker" };
     const lease: any = {
       lease_id: "lease-1",
@@ -215,7 +215,7 @@ describe("dedicated Gitea repository lease", () => {
     }) as typeof globalThis.fetch;
     await expect(
       applyRepositoryLease(
-        new OneCliClient("http://onecli.test", fetch),
+        new OneCliClient("http://127.0.0.1:10254", fetch),
         { identifier: "group", name: "worker" },
         { provider: "gitea", role: "repository", credential: { token: "dummy" } } as any,
         "https://git.example.test/team/other",

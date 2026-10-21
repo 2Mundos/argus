@@ -3,7 +3,7 @@
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -38,11 +38,16 @@ class Identity:
         return f"admin:{self.label or self.token_id[:8]}"
 
 
-async def authenticate(conn: aiosqlite.Connection, token: str) -> Identity:
+async def authenticate(
+    conn: aiosqlite.Connection,
+    token: str,
+    *,
+    now: datetime | None = None,
+) -> Identity:
     """Resolve an agent or admin token. Bootstrap, revoked, unknown tokens, and
     tokens of agents that have ended, all fail."""
     async with conn.execute(
-        "SELECT t.id, t.kind, t.role, t.agent_id, t.label FROM tokens t"
+        "SELECT t.id, t.kind, t.role, t.agent_id, t.label, t.expires_at FROM tokens t"
         " LEFT JOIN agents a ON a.id = t.agent_id"
         " WHERE t.token_hash = ? AND t.revoked_at IS NULL AND ("
         "  t.kind = 'admin' OR (t.kind = 'agent' AND a.state IN ('active', 'draining')))",
@@ -51,6 +56,13 @@ async def authenticate(conn: aiosqlite.Connection, token: str) -> Identity:
         row = await cur.fetchone()
     if row is None:
         raise UnauthorizedError("unknown, revoked, or ended token")
+    if row["expires_at"] is not None:
+        expires = datetime.fromisoformat(row["expires_at"])
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=UTC)
+        current = now if now is not None else datetime.now(UTC)
+        if expires <= current:
+            raise UnauthorizedError("token expired", code="token_expired")
     return Identity(row["id"], Scope(row["role"]), row["agent_id"], row["label"])
 
 
@@ -86,10 +98,16 @@ async def ensure_admin_token(tx: Tx, data_dir: Path, preset: str | None) -> str 
     token = new_token(ADMIN_PREFIX)
     await _insert_admin(tx, token, "initial", "system")
     path = data_dir / "admin-token"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(token + "\n")
-    os.chmod(path, 0o600)  # in case the file already existed with wider permissions
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)  # before writing, in case the file already existed
+        with os.fdopen(fd, "w") as f:
+            fd = -1  # fdopen owns it
+            f.write(token + "\n")
+    finally:
+        if fd >= 0:
+            os.close(fd)
     return token
 
 

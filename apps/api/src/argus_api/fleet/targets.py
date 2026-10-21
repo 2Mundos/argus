@@ -90,6 +90,8 @@ class ContainerSpec:
     read_only: bool = True
     pids_limit: int | None = 2048
     tmpfs: dict[str, str] = field(default_factory=lambda: dict(RUNTIME_TMPFS))
+    # Tag-only images: pull only when absent and the pool opted in.
+    allow_mutable_images: bool = False
     kubernetes: KubernetesPlacement | None = None
 
     @property
@@ -252,7 +254,7 @@ class DockerTarget:
             raise TargetError(str(exc)[:500]) from exc
 
     def _start(self, spec: ContainerSpec) -> str:
-        from docker.errors import APIError, ImageNotFound, NotFound
+        from docker.errors import APIError, NotFound
 
         client = self._docker()
         try:
@@ -263,10 +265,7 @@ class DockerTarget:
             if existing.status == "created":
                 existing.start()
             return spec.name
-        try:
-            client.images.get(spec.image)
-        except ImageNotFound:
-            client.images.pull(spec.image)
+        self._ensure_image(client, spec)
         for m in spec.mounts:
             if m.create_owner:
                 self._prepare_dir(client, spec.image, m)
@@ -299,6 +298,29 @@ class DockerTarget:
             if exc.status_code != 409:  # 409: created concurrently under our name
                 raise
         return spec.name
+
+    @staticmethod
+    def _ensure_image(client: Any, spec: ContainerSpec) -> None:
+        """Use a local image when present; never silently re-pull a mutable tag.
+
+        Digested references (`@sha256:…`) may be pulled when missing. A tag-only
+        image that is absent is refused unless `allow_mutable_images` is set.
+        """
+        from docker.errors import ImageNotFound
+
+        try:
+            client.images.get(spec.image)
+            return
+        except ImageNotFound:
+            pass
+        digested = "@sha256:" in spec.image
+        if not digested and not spec.allow_mutable_images:
+            raise TargetError(
+                f"image {spec.image!r} is not present locally and has no digest;"
+                " refuse to pull a mutable tag (set allow_mutable_images on the pool"
+                " to opt in)"
+            )
+        client.images.pull(spec.image)
 
     def _ports(
         self, client: Any, ports: dict[str, tuple[str, int | None]]
@@ -609,6 +631,7 @@ def pod_manifest(spec: ContainerSpec, namespace: str) -> dict[str, Any]:
     if "limits" in resources:  # requests = limits: a predictable QoS class
         resources["requests"] = dict(resources["limits"])
     security: dict[str, Any] = {
+        "runAsNonRoot": True,
         "allowPrivilegeEscalation": False,
         "readOnlyRootFilesystem": spec.read_only,
         "capabilities": {"drop": list(spec.cap_drop) or ["ALL"]},
@@ -617,6 +640,10 @@ def pod_manifest(spec: ContainerSpec, namespace: str) -> dict[str, Any]:
         "restartPolicy": "Never",
         # Workers talk to Argus, not to the cluster API.
         "automountServiceAccountToken": False,
+        "securityContext": {
+            "runAsNonRoot": True,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        },
         "containers": [
             {
                 "name": "worker",

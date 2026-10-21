@@ -20,7 +20,7 @@ async def ensure(db: Database, data_dir: Path, preset: str | None = None):
 
 async def whoami(db: Database, token: str) -> auth.Identity:
     async with db.read() as conn:
-        return await auth.authenticate(conn, token)
+        return await auth.authenticate(conn, token, now=db.now())
 
 
 # -- admin token bootstrap ----------------------------------------------------------
@@ -37,6 +37,19 @@ async def test_first_start_generates_admin_token_file(
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert (await whoami(db, token)).scope is Scope.ADMIN
     assert await ensure(db, tmp_path) is None  # idempotent
+
+
+async def test_admin_token_file_mode_fixed_before_write(
+    db: Database, tmp_path: Path
+) -> None:
+    """A pre-existing 0644 file must become 0600 without relying on post-write chmod."""
+    path = tmp_path / "admin-token"
+    path.write_text("stale\n")
+    path.chmod(0o644)
+    token = await ensure(db, tmp_path)
+    assert token is not None
+    assert path.read_text().strip() == token
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 async def test_preset_admin_token(db: Database, tmp_path: Path) -> None:

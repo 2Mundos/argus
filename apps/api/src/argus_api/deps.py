@@ -35,7 +35,7 @@ async def get_caller(
     if credentials is None:
         raise UnauthorizedError("missing bearer token", code="missing_token")
     async with db.read() as conn:
-        return await authenticate(conn, credentials.credentials)
+        return await authenticate(conn, credentials.credentials, now=db.now())
 
 
 def require(*scopes: Scope):

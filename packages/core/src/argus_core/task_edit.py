@@ -61,7 +61,7 @@ class TaskChanges(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     title: str | None = None
-    spec: str | None = None
+    spec: str | None = Field(default=None, max_length=200_000)
     acceptance: list[str] | None = None
     priority: int | None = None
     required_capabilities: list[str] | None = None
