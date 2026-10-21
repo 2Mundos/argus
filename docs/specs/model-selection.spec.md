@@ -27,7 +27,10 @@ supports; no alias rewriting. Other executors keep their native default unless
 configured. An optional `trivial` map (same shape; default Cursor `agent`: `composer-2.5`) replaces
 `implementation` when the task is `trivial` or the engine lease is a `local` account
 ([task complexity](task-complexity.spec.md)); `model_source` stays `policy` and
-`policy_map` says which map. A policy without it has the same revision as before.
+`policy_map` says which map. Optional `hard_harness` and `hard_implementation` maps
+(same shape; default Claude `claude-opus-5-5` in both) replace `harness` and
+`implementation` for a `hard` task, per engine, only where they have a chain; Codex has
+none by default. A policy without these optional maps has the same revision as before.
 Revisions are SHA-256 of canonical policy content.
 
 A `custom` account's role `model` ([custom accounts](custom-accounts.spec.md)) sits
