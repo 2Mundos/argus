@@ -2717,6 +2717,11 @@ export interface components {
              */
             capabilities?: string[];
             /**
+             * Runtime Providers
+             * @default []
+             */
+            runtime_providers?: string[];
+            /**
              * Wait S
              * @default 0
              */
@@ -2730,6 +2735,8 @@ export interface components {
         ClaimedTask: {
             /** Acceptance */
             acceptance: string[];
+            /** Account Providers */
+            account_providers?: string[] | null;
             /** Archived At */
             archived_at: string | null;
             /** Assignee Agent Id */
@@ -5567,6 +5574,8 @@ export interface components {
         Task: {
             /** Acceptance */
             acceptance: string[];
+            /** Account Providers */
+            account_providers?: string[] | null;
             /** Archived At */
             archived_at: string | null;
             /** Assignee Agent Id */
@@ -5723,6 +5732,8 @@ export interface components {
         TaskChanges: {
             /** Acceptance */
             acceptance?: string[] | null;
+            /** Account Providers */
+            account_providers?: string[] | null;
             /** Depends On */
             depends_on?: string[] | null;
             /** Knowledge */
@@ -5745,6 +5756,8 @@ export interface components {
              * @default []
              */
             acceptance?: string[];
+            /** Account Providers */
+            account_providers?: string[] | null;
             /**
              * Depends On
              * @default []
@@ -5812,6 +5825,8 @@ export interface components {
         TaskDetail: {
             /** Acceptance */
             acceptance: string[];
+            /** Account Providers */
+            account_providers?: string[] | null;
             /** Age S */
             age_s: number;
             /** Archived At */

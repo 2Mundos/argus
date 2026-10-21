@@ -21,6 +21,7 @@ const task = {
     "required_capabilities",
     "knowledge",
     "depends_on",
+    "account_providers",
   ],
 } as unknown as Task;
 

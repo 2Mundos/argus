@@ -135,8 +135,8 @@ async def create_task(
         "INSERT INTO tasks (id, parent_id, kind, title, spec, acceptance, input,"
         " required_capabilities, priority, state, requires_approval, review,"
         " prompt_trust, lease_ttl_s, max_attempts, project, timeout_s, created_by,"
-        " created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " created_at, updated_at, account_providers)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task_id,
             body.parent_id,
@@ -158,6 +158,7 @@ async def create_task(
             actor,
             now,
             now,
+            _providers_json(body.account_providers),
         ),
     )
     await tx.conn.executemany(
@@ -204,9 +205,18 @@ async def create_task(
 
 
 async def claim(
-    tx: Tx, agent_id: str, capabilities: list[str], *, default_timeout_s: int = 0
+    tx: Tx,
+    agent_id: str,
+    capabilities: list[str],
+    *,
+    default_timeout_s: int = 0,
+    runtime_providers: list[str] | None = None,
 ) -> Task | None:
     """Claim the highest-priority, oldest ready task the agent is capable of.
+
+    A task restricted to `account_providers` is skipped (it stays ready, no attempt
+    spent) unless the caller's `runtime_providers` intersect its list and one of
+    those providers has a usable account now (local harness spec 3).
 
     The attempt's wall-clock deadline is the task's `timeout_s` (which creation
     filled from its kind), else `default_timeout_s`; 0 means no deadline.
@@ -223,10 +233,17 @@ async def claim(
         "SELECT * FROM tasks t WHERE state = 'ready' AND NOT EXISTS ("
         "  SELECT 1 FROM json_each(t.required_capabilities) rc"
         "  WHERE rc.value NOT IN (SELECT value FROM json_each(?)))"
-        " ORDER BY priority DESC, created_at, id LIMIT 1",
+        " ORDER BY priority DESC, created_at, id",
         (json.dumps(capabilities),),
     ) as cur:
-        row = await cur.fetchone()
+        candidates = await cur.fetchall()
+    row = None
+    for candidate in candidates:
+        if candidate["account_providers"] is None or await _restriction_met(
+            tx, json.loads(candidate["account_providers"]), runtime_providers
+        ):
+            row = candidate
+            break
     if row is None:
         return None
     attempt = row["attempt"] + 1
@@ -254,6 +271,38 @@ async def claim(
     task = await get_task(tx.conn, row["id"])
     await _snapshot_attempt(tx, task, agent_id)
     return task
+
+
+async def account_providers(
+    conn: aiosqlite.Connection, task_id: str
+) -> list[str] | None:
+    """The task's provider restriction, None when unrestricted."""
+    row = await _row(conn, task_id)
+    raw = row["account_providers"]
+    return None if raw is None else json.loads(raw)
+
+
+async def _restriction_met(
+    tx: Tx, providers: list[str], runtime_providers: list[str] | None
+) -> bool:
+    """Can a restricted task start now: the runtime applies one of its providers and
+    an account of those is usable (available or past its reset, below `max_leases`;
+    an unreachable local model is disabled by its probe, so it never counts)."""
+    wanted = sorted(set(providers) & set(runtime_providers or []))
+    if not wanted:
+        return False
+    async with tx.conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM accounts a"
+        " WHERE a.provider IN (SELECT value FROM json_each(?))"
+        "  AND (a.state = 'available'"
+        "   OR (a.state = 'exhausted' AND a.exhausted_until <= ?))"
+        "  AND (a.max_leases IS NULL OR a.max_leases >"
+        "   (SELECT count(*) FROM account_leases l"
+        "    WHERE l.account_id = a.id AND l.released_at IS NULL)))",
+        (json.dumps(wanted), ts(tx.now)),
+    ) as cur:
+        row = await cur.fetchone()
+    return bool(row and row[0])
 
 
 async def awaiting_quota(conn: aiosqlite.Connection) -> bool:
@@ -707,8 +756,10 @@ async def edit_task(
     sets: dict[str, Any] = {
         f: json.dumps(v) if f in _JSON_FIELDS else v
         for f, v in changed.items()
-        if f not in ("knowledge", "depends_on")
+        if f not in ("knowledge", "depends_on", "account_providers")
     }
+    if "account_providers" in changed:
+        sets["account_providers"] = _providers_json(changed["account_providers"])
     if sets:
         assignments = ", ".join(f"{k} = ?" for k in sets)
         await tx.conn.execute(
@@ -778,10 +829,13 @@ def _normalized_edit(row: aiosqlite.Row, given: dict[str, Any]) -> dict[str, Any
     values: dict[str, Any] = {}
     for field, value in given.items():
         if value is None:
-            if field not in CLEARABLE:
+            if field == "account_providers":
+                values[field] = None
+            elif field not in CLEARABLE:
                 errors.append(f"{field}: cannot be cleared")
                 continue
-            values[field] = "" if field == "spec" else []
+            else:
+                values[field] = "" if field == "spec" else []
         else:
             values[field] = value
     if "required_capabilities" in values:
@@ -790,6 +844,13 @@ def _normalized_edit(row: aiosqlite.Row, given: dict[str, Any]) -> dict[str, Any
         values["knowledge"] = list(dict.fromkeys(values["knowledge"]))
     if "depends_on" in values:
         values["depends_on"] = sorted(set(values["depends_on"]))
+    if "account_providers" in values:
+        # an empty list clears to "unrestricted", like the other list fields
+        values["account_providers"] = (
+            sorted(set(values["account_providers"]))
+            if values["account_providers"]
+            else None
+        )
     try:
         TaskCreate.model_validate(
             {"project": row["project"], "kind": row["kind"], "title": row["title"]}
@@ -808,6 +869,10 @@ def _normalized_edit(row: aiosqlite.Row, given: dict[str, Any]) -> dict[str, Any
     return values
 
 
+def _providers_json(providers: list[str] | None) -> str | None:
+    return None if providers is None else json.dumps(providers)
+
+
 def _digest(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
@@ -815,7 +880,7 @@ def _digest(text: str) -> str:
 def _diff(field: str, old: Any, new: Any) -> dict[str, Any]:
     """What the audit keeps of one change. Spec and acceptance text never enter the
     event log (it is streamed and shown): only sizes and digests do."""
-    if field in ("title", "priority"):
+    if field in ("title", "priority", "account_providers"):
         return {"from": old, "to": new}
     if field in ("required_capabilities", "knowledge", "depends_on"):
         return {
@@ -1493,6 +1558,8 @@ async def _to_task(conn: aiosqlite.Connection, row: aiosqlite.Row) -> Task:
         data["result"] = json.loads(data["result"])
     if data["progress_data"] is not None:
         data["progress_data"] = json.loads(data["progress_data"])
+    if data["account_providers"] is not None:
+        data["account_providers"] = json.loads(data["account_providers"])
     data["requires_approval"] = bool(data["requires_approval"])
     data["version"] = row["updated_at"]
     data["editable_fields"] = editable_fields(

@@ -41,6 +41,8 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 class ClaimRequest(BaseModel):
     capabilities: list[str] = []
     wait_s: float = Field(default=0, ge=0, le=30)
+    # Account providers the runtime can apply: a task restricted to others is skipped.
+    runtime_providers: list[str] = []
 
 
 class CompleteRequest(BaseModel):
@@ -191,6 +193,7 @@ async def claim_task(
                     agent_id,
                     body.capabilities,
                     default_timeout_s=settings.task_timeout_s,
+                    runtime_providers=body.runtime_providers,
                 )
             if task is not None:
                 async with db.read() as conn:

@@ -1973,6 +1973,14 @@
             "title": "Capabilities",
             "type": "array"
           },
+          "runtime_providers": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Runtime Providers",
+            "type": "array"
+          },
           "wait_s": {
             "default": 0,
             "maximum": 30.0,
@@ -1993,6 +2001,20 @@
             },
             "title": "Acceptance",
             "type": "array"
+          },
+          "account_providers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Providers"
           },
           "archived_at": {
             "anyOf": [
@@ -10368,6 +10390,20 @@
             "title": "Acceptance",
             "type": "array"
           },
+          "account_providers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Providers"
+          },
           "archived_at": {
             "anyOf": [
               {
@@ -10863,6 +10899,20 @@
             ],
             "title": "Acceptance"
           },
+          "account_providers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Providers"
+          },
           "depends_on": {
             "anyOf": [
               {
@@ -10951,6 +11001,20 @@
             },
             "title": "Acceptance",
             "type": "array"
+          },
+          "account_providers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Providers"
           },
           "depends_on": {
             "default": [],
@@ -11076,6 +11140,20 @@
             },
             "title": "Acceptance",
             "type": "array"
+          },
+          "account_providers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Providers"
           },
           "age_s": {
             "title": "Age S",

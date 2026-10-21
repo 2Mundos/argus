@@ -290,12 +290,11 @@ async def lease(
     if not runtime_providers:
         raise ValidationFailedError("runtime_providers must be non-empty")
     await tasks.check_lease(tx, task_id, attempt, agent_id)
+    allowed = await _narrowed(tx, task_id, role, runtime_providers)
     await release(tx, agent_id, "replaced", role)
-    result = await _try_lease(
-        tx, agent_id, store, role, runtime_providers, reuse_held=reuse_held
-    )
+    result = await _try_lease(tx, agent_id, store, role, allowed, reuse_held=reuse_held)
     if result is None:
-        reset = await earliest_reset(tx, role, runtime_providers)
+        reset = await earliest_reset(tx, role, allowed)
         raise NoAccountError(
             f"no usable {role} account"
             + (f"; earliest reset at {reset.isoformat()}" if reset else ""),
@@ -342,7 +341,8 @@ async def exhausted(
         tx, agent_id, account_id, report.until, report.reason, cooldown
     )
     await release(tx, agent_id, "exhausted", role)
-    next_candidate = await _ranked(tx, agent_id, role, report.runtime_providers)
+    allowed = await _narrowed(tx, task_id, role, report.runtime_providers)
+    next_candidate = await _ranked(tx, agent_id, role, allowed)
     if next_candidate:
         await _failover(
             tx,
@@ -369,7 +369,7 @@ async def exhausted(
     blocked = True
     return FallbackResult(
         lease=None,
-        earliest_reset=await earliest_reset(tx, role, report.runtime_providers),
+        earliest_reset=await earliest_reset(tx, role, allowed),
         task_blocked=blocked,
     )
 
@@ -406,7 +406,9 @@ async def fail_task(
         tx, agent_id, held["id"], hit.until, hit.reason, cooldown
     )
     await release(tx, agent_id, "exhausted", "engine")
-    runtime = json.loads(held["providers"]) or None
+    runtime = await _narrowed(
+        tx, task_id, "engine", json.loads(held["providers"]) or None
+    )
     next_lease = await _try_lease(tx, agent_id, store, "engine", runtime)
     task = await tasks.pause_for_quota(
         tx, agent_id, task_id, attempt, hit.reason, wait=next_lease is None
@@ -687,6 +689,18 @@ async def disable_for_write_failure(tx: Tx, account_id: str, error: str) -> None
 
 
 # -- internals -----------------------------------------------------------------------------
+
+
+async def _narrowed(
+    tx: Tx, task_id: str, role: LeaseRole, runtime_providers: list[str] | None
+) -> list[str] | None:
+    """`runtime_providers` cut down to the task's `account_providers` for the engine
+    role (local harness spec 3): the restriction only narrows, never widens. An empty
+    result means no account is eligible."""
+    restriction = await tasks.account_providers(tx.conn, task_id)
+    if role != "engine" or restriction is None or runtime_providers is None:
+        return runtime_providers
+    return [p for p in runtime_providers if p in restriction]
 
 
 async def _try_lease(

@@ -10,10 +10,26 @@ from enum import StrEnum
 from typing import Any
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from argus_core.accounts import ENGINE_PROVIDERS
 from argus_core.knowledge import KnowledgeRef
 from argus_core.model_trace import ModelsSummary
+
+
+def validate_account_providers(value: list[str] | None) -> list[str] | None:
+    """A task's provider restriction: None, or a non-empty list of engine-capable
+    providers (never `gitea`, never an unknown one), de-duplicated and sorted."""
+    if value is None:
+        return None
+    if not value:
+        raise ValueError("must be non-empty; use null for no restriction")
+    if bad := sorted(set(value) - ENGINE_PROVIDERS):
+        raise ValueError(
+            f"not engine providers: {', '.join(bad)}"
+            f" (known: {', '.join(sorted(ENGINE_PROVIDERS))})"
+        )
+    return sorted(set(value))
 
 
 class TaskState(StrEnum):
@@ -229,6 +245,14 @@ class TaskCreate(BaseModel):
     # Wall-clock cap per attempt, counted from the claim; heartbeats and progress
     # notes do not extend it. Unset: the kind's default, then the server's.
     timeout_s: int | None = Field(default=None, ge=60, le=7 * 24 * 3600)
+    # Restrict the task to these engine account providers (e.g. ["local"]); None:
+    # unrestricted (local harness spec 3).
+    account_providers: list[str] | None = None
+
+    @field_validator("account_providers")
+    @classmethod
+    def _engine_providers(cls, value: list[str] | None) -> list[str] | None:
+        return validate_account_providers(value)
 
 
 class Failover(BaseModel):
@@ -287,6 +311,7 @@ class Task(BaseModel):
     depends_on: list[str]
     project: str
     knowledge: list[str]
+    account_providers: list[str] | None = None
     created_by: str
     created_at: datetime
     updated_at: datetime

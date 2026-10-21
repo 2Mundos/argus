@@ -43,6 +43,7 @@ const ALL = [
   "required_capabilities",
   "knowledge",
   "depends_on",
+  "account_providers",
 ];
 const task = {
   id: "t1",
