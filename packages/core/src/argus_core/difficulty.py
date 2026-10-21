@@ -1,18 +1,28 @@
-"""Task complexity and its conservative default (docs/specs/task-complexity.spec.md)."""
+"""Task difficulty and its conservative default (docs/specs/task-difficulty.spec.md)."""
 
 import re
 from enum import StrEnum
 
 
-class Complexity(StrEnum):
+class Difficulty(StrEnum):
     TRIVIAL = "trivial"
+    SIMPLE = "simple"
     STANDARD = "standard"
     HARD = "hard"
 
 
-class ComplexitySource(StrEnum):
-    EXPLICIT = "explicit"  # the creator or an editor chose it
-    HEURISTIC = "heuristic"  # derived by `classify`, or a row that predates the field
+# Ascending; an escalation moves one step right.
+LEVELS = tuple(Difficulty)
+
+
+def escalated(difficulty: Difficulty) -> Difficulty:
+    """One level harder; `hard` stays `hard`."""
+    return LEVELS[min(LEVELS.index(difficulty) + 1, len(LEVELS) - 1)]
+
+
+class DifficultySource(StrEnum):
+    DECLARED = "declared"  # the creator or an editor chose it
+    INFERRED = "inferred"  # a suggested classification (`classify`, the orchestrator)
 
 
 MAX_TRIVIAL_SPEC = 1500
@@ -54,13 +64,13 @@ _HARD = {
 }
 
 
-def classify(title: str, spec: str = "") -> Complexity:
+def classify(title: str, spec: str = "") -> Difficulty:
     """`hard` only for two or more distinct hard signals; `trivial` only for clear
     copy/text/docs signals with no code-risk signal and a short spec; everything else
-    is `standard`. Used only when the creator sends no complexity."""
+    is `standard`; never `simple`. Used only when the creator sends no difficulty."""
     text = f"{title}\n{spec}"
     if sum(1 for rx in _HARD.values() if rx.search(text)) >= 2:
-        return Complexity.HARD
+        return Difficulty.HARD
     if len(spec) > MAX_TRIVIAL_SPEC or _RISK.search(text) or not _COPY.search(text):
-        return Complexity.STANDARD
-    return Complexity.TRIVIAL
+        return Difficulty.STANDARD
+    return Difficulty.TRIVIAL

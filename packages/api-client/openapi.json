@@ -2055,12 +2055,15 @@
             "title": "Block Reason"
           },
           "complexity": {
-            "$ref": "#/components/schemas/Complexity",
-            "default": "standard"
-          },
-          "complexity_source": {
-            "$ref": "#/components/schemas/ComplexitySource",
-            "default": "heuristic"
+            "description": "The pre-difficulty three-level view, for clients that still read it:\n`simple` is `trivial` there, as both prefer the cheap executor.",
+            "enum": [
+              "trivial",
+              "standard",
+              "hard"
+            ],
+            "readOnly": true,
+            "title": "Complexity",
+            "type": "string"
           },
           "created_at": {
             "format": "date-time",
@@ -2077,6 +2080,14 @@
             },
             "title": "Depends On",
             "type": "array"
+          },
+          "difficulty": {
+            "$ref": "#/components/schemas/Difficulty",
+            "default": "standard"
+          },
+          "difficulty_source": {
+            "$ref": "#/components/schemas/DifficultySource",
+            "default": "inferred"
           },
           "editable_fields": {
             "default": [],
@@ -2381,7 +2392,8 @@
           "created_at",
           "updated_at",
           "archived_at",
-          "version"
+          "version",
+          "complexity"
         ],
         "title": "ClaimedTask",
         "type": "object"
@@ -2630,23 +2642,6 @@
         ],
         "title": "CompleteRequest",
         "type": "object"
-      },
-      "Complexity": {
-        "enum": [
-          "trivial",
-          "standard",
-          "hard"
-        ],
-        "title": "Complexity",
-        "type": "string"
-      },
-      "ComplexitySource": {
-        "enum": [
-          "explicit",
-          "heuristic"
-        ],
-        "title": "ComplexitySource",
-        "type": "string"
       },
       "CostFigures": {
         "description": "What one group spent. `runs = measured_runs + not_reported_runs`. A token\nfield is null when no measured run carried it, never 0 (cost view 3.1).",
@@ -3812,6 +3807,24 @@
         "title": "DependenciesRequest",
         "type": "object"
       },
+      "Difficulty": {
+        "enum": [
+          "trivial",
+          "simple",
+          "standard",
+          "hard"
+        ],
+        "title": "Difficulty",
+        "type": "string"
+      },
+      "DifficultySource": {
+        "enum": [
+          "declared",
+          "inferred"
+        ],
+        "title": "DifficultySource",
+        "type": "string"
+      },
       "DockerOptions-Input": {
         "properties": {
           "extra_hosts": {
@@ -4030,6 +4043,14 @@
             "title": "Label",
             "type": "string"
           },
+          "layers": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/LayerState"
+            },
+            "title": "Layers",
+            "type": "array"
+          },
           "notes": {
             "default": "",
             "title": "Notes",
@@ -4073,6 +4094,7 @@
           "id",
           "label",
           "role",
+          "layers",
           "axes",
           "auth_methods",
           "version",
@@ -4084,7 +4106,16 @@
         "title": "EngineEntry",
         "type": "object"
       },
+      "EngineLayer": {
+        "enum": [
+          "harness",
+          "executor"
+        ],
+        "title": "EngineLayer",
+        "type": "string"
+      },
       "EngineRole": {
+        "description": "Deprecated single-role view of an engine; `EngineEntry.layers` is the truth.",
         "enum": [
           "orchestrator",
           "code_executor",
@@ -4779,7 +4810,9 @@
               "worker_fail",
               "channel_error",
               "provider_failure",
-              "quota"
+              "quota",
+              "context_overflow",
+              "verification_failed"
             ],
             "title": "Reason",
             "type": "string"
@@ -6216,6 +6249,51 @@
           "executions"
         ],
         "title": "LayerModels",
+        "type": "object"
+      },
+      "LayerState": {
+        "description": "One layer of an engine with its own readiness: validating Claude as a harness\nproves nothing about Claude as an executor, nor the reverse.",
+        "properties": {
+          "accounts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountsSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "layer": {
+            "$ref": "#/components/schemas/EngineLayer"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/argus_core__engines__Readiness",
+            "default": {
+              "authenticated": {
+                "detail": "not checked"
+              },
+              "installed": {
+                "detail": "not checked"
+              },
+              "validated": {
+                "detail": "not checked"
+              }
+            }
+          },
+          "usable": {
+            "default": false,
+            "title": "Usable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "layer",
+          "readiness",
+          "accounts",
+          "usable"
+        ],
+        "title": "LayerState",
         "type": "object"
       },
       "LeaseRef": {
@@ -9412,6 +9490,16 @@
             ],
             "title": "Context Tokens"
           },
+          "difficulty": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Difficulty"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "escalate_to": {
             "anyOf": [
               {
@@ -9444,6 +9532,28 @@
               }
             ],
             "title": "Executor"
+          },
+          "executor_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executor Model"
+          },
+          "executor_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executor Reason"
           },
           "fallback_from": {
             "anyOf": [
@@ -9498,7 +9608,10 @@
           "blocked",
           "fallback_from",
           "executor",
-          "escalate_to"
+          "escalate_to",
+          "difficulty",
+          "executor_model",
+          "executor_reason"
         ],
         "title": "RouteDecision",
         "type": "object"
@@ -9509,6 +9622,16 @@
             "default": false,
             "title": "Criteria Deterministic",
             "type": "boolean"
+          },
+          "difficulty": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Difficulty"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "input_chars": {
             "anyOf": [
@@ -10528,12 +10651,15 @@
             "title": "Block Reason"
           },
           "complexity": {
-            "$ref": "#/components/schemas/Complexity",
-            "default": "standard"
-          },
-          "complexity_source": {
-            "$ref": "#/components/schemas/ComplexitySource",
-            "default": "heuristic"
+            "description": "The pre-difficulty three-level view, for clients that still read it:\n`simple` is `trivial` there, as both prefer the cheap executor.",
+            "enum": [
+              "trivial",
+              "standard",
+              "hard"
+            ],
+            "readOnly": true,
+            "title": "Complexity",
+            "type": "string"
           },
           "created_at": {
             "format": "date-time",
@@ -10550,6 +10676,14 @@
             },
             "title": "Depends On",
             "type": "array"
+          },
+          "difficulty": {
+            "$ref": "#/components/schemas/Difficulty",
+            "default": "standard"
+          },
+          "difficulty_source": {
+            "$ref": "#/components/schemas/DifficultySource",
+            "default": "inferred"
           },
           "editable_fields": {
             "default": [],
@@ -10846,7 +10980,8 @@
           "created_at",
           "updated_at",
           "archived_at",
-          "version"
+          "version",
+          "complexity"
         ],
         "title": "Task",
         "type": "object"
@@ -11006,16 +11141,6 @@
             ],
             "title": "Account Providers"
           },
-          "complexity": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Complexity"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "depends_on": {
             "anyOf": [
               {
@@ -11029,6 +11154,16 @@
               }
             ],
             "title": "Depends On"
+          },
+          "difficulty": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Difficulty"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "knowledge": {
             "anyOf": [
@@ -11119,16 +11254,6 @@
             ],
             "title": "Account Providers"
           },
-          "complexity": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Complexity"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "depends_on": {
             "default": [],
             "items": {
@@ -11136,6 +11261,26 @@
             },
             "title": "Depends On",
             "type": "array"
+          },
+          "difficulty": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Difficulty"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "difficulty_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DifficultySource"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "input": {
             "additionalProperties": true,
@@ -11318,12 +11463,15 @@
             "title": "Block Reason"
           },
           "complexity": {
-            "$ref": "#/components/schemas/Complexity",
-            "default": "standard"
-          },
-          "complexity_source": {
-            "$ref": "#/components/schemas/ComplexitySource",
-            "default": "heuristic"
+            "description": "The pre-difficulty three-level view, for clients that still read it:\n`simple` is `trivial` there, as both prefer the cheap executor.",
+            "enum": [
+              "trivial",
+              "standard",
+              "hard"
+            ],
+            "readOnly": true,
+            "title": "Complexity",
+            "type": "string"
           },
           "created_at": {
             "format": "date-time",
@@ -11347,6 +11495,14 @@
             },
             "title": "Depends On",
             "type": "array"
+          },
+          "difficulty": {
+            "$ref": "#/components/schemas/Difficulty",
+            "default": "standard"
+          },
+          "difficulty_source": {
+            "$ref": "#/components/schemas/DifficultySource",
+            "default": "inferred"
           },
           "editable_fields": {
             "default": [],
@@ -11654,7 +11810,8 @@
           "error",
           "knowledge",
           "created_by",
-          "updated_at"
+          "updated_at",
+          "complexity"
         ],
         "title": "TaskDetail",
         "type": "object"

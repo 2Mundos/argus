@@ -2747,10 +2747,13 @@ export interface components {
             attempt: number;
             /** Block Reason */
             block_reason: string | null;
-            /** @default standard */
-            complexity?: components["schemas"]["Complexity"];
-            /** @default heuristic */
-            complexity_source?: components["schemas"]["ComplexitySource"];
+            /**
+             * Complexity
+             * @description The pre-difficulty three-level view, for clients that still read it:
+             *     `simple` is `trivial` there, as both prefer the cheap executor.
+             * @enum {string}
+             */
+            readonly complexity: "trivial" | "standard" | "hard";
             /**
              * Created At
              * Format: date-time
@@ -2760,6 +2763,10 @@ export interface components {
             created_by: string;
             /** Depends On */
             depends_on: string[];
+            /** @default standard */
+            difficulty?: components["schemas"]["Difficulty"];
+            /** @default inferred */
+            difficulty_source?: components["schemas"]["DifficultySource"];
             /**
              * Editable Fields
              * @default []
@@ -2918,16 +2925,6 @@ export interface components {
             attempt: number;
             result: components["schemas"]["TaskResult-Input"];
         };
-        /**
-         * Complexity
-         * @enum {string}
-         */
-        Complexity: "trivial" | "standard" | "hard";
-        /**
-         * ComplexitySource
-         * @enum {string}
-         */
-        ComplexitySource: "explicit" | "heuristic";
         /**
          * CostFigures
          * @description What one group spent. `runs = measured_runs + not_reported_runs`. A token
@@ -3302,6 +3299,16 @@ export interface components {
             /** Expected Version */
             expected_version: string;
         };
+        /**
+         * Difficulty
+         * @enum {string}
+         */
+        Difficulty: "trivial" | "simple" | "standard" | "hard";
+        /**
+         * DifficultySource
+         * @enum {string}
+         */
+        DifficultySource: "declared" | "inferred";
         /** DockerOptions */
         "DockerOptions-Input": {
             /**
@@ -3362,6 +3369,11 @@ export interface components {
             /** Label */
             label: string;
             /**
+             * Layers
+             * @default []
+             */
+            layers: components["schemas"]["LayerState"][];
+            /**
              * Notes
              * @default
              */
@@ -3390,7 +3402,13 @@ export interface components {
             version: string | null;
         };
         /**
+         * EngineLayer
+         * @enum {string}
+         */
+        EngineLayer: "harness" | "executor";
+        /**
          * EngineRole
+         * @description Deprecated single-role view of an engine; `EngineEntry.layers` is the truth.
          * @enum {string}
          */
         EngineRole: "orchestrator" | "code_executor" | "executor" | "local";
@@ -3616,7 +3634,7 @@ export interface components {
              * @default worker_fail
              * @enum {string}
              */
-            reason?: "worker_fail" | "channel_error" | "provider_failure" | "quota";
+            reason?: "worker_fail" | "channel_error" | "provider_failure" | "quota" | "context_overflow" | "verification_failed";
         };
         /**
          * Failover
@@ -4081,6 +4099,34 @@ export interface components {
              * @enum {string}
              */
             state: "selected" | "running" | "succeeded" | "failed" | "cancelled";
+        };
+        /**
+         * LayerState
+         * @description One layer of an engine with its own readiness: validating Claude as a harness
+         *     proves nothing about Claude as an executor, nor the reverse.
+         */
+        LayerState: {
+            accounts: components["schemas"]["AccountsSummary"] | null;
+            layer: components["schemas"]["EngineLayer"];
+            /**
+             * @default {
+             *       "authenticated": {
+             *         "detail": "not checked"
+             *       },
+             *       "installed": {
+             *         "detail": "not checked"
+             *       },
+             *       "validated": {
+             *         "detail": "not checked"
+             *       }
+             *     }
+             */
+            readiness: components["schemas"]["argus_core__engines__Readiness"];
+            /**
+             * Usable
+             * @default false
+             */
+            usable: boolean;
         };
         /** LeaseRef */
         LeaseRef: {
@@ -5262,12 +5308,17 @@ export interface components {
             blocked: string | null;
             /** Context Tokens */
             context_tokens: number | null;
+            difficulty: components["schemas"]["Difficulty"] | null;
             /** Escalate To */
             escalate_to: string | null;
             /** Estimated Input Tokens */
             estimated_input_tokens: number | null;
             /** Executor */
             executor: string | null;
+            /** Executor Model */
+            executor_model: string | null;
+            /** Executor Reason */
+            executor_reason: string | null;
             /** Fallback From */
             fallback_from: string | null;
             /** Local Considered */
@@ -5288,6 +5339,7 @@ export interface components {
              * @default false
              */
             criteria_deterministic?: boolean;
+            difficulty?: components["schemas"]["Difficulty"] | null;
             /** Input Chars */
             input_chars?: number | null;
             /**
@@ -5618,10 +5670,13 @@ export interface components {
             attempt: number;
             /** Block Reason */
             block_reason: string | null;
-            /** @default standard */
-            complexity?: components["schemas"]["Complexity"];
-            /** @default heuristic */
-            complexity_source?: components["schemas"]["ComplexitySource"];
+            /**
+             * Complexity
+             * @description The pre-difficulty three-level view, for clients that still read it:
+             *     `simple` is `trivial` there, as both prefer the cheap executor.
+             * @enum {string}
+             */
+            readonly complexity: "trivial" | "standard" | "hard";
             /**
              * Created At
              * Format: date-time
@@ -5631,6 +5686,10 @@ export interface components {
             created_by: string;
             /** Depends On */
             depends_on: string[];
+            /** @default standard */
+            difficulty?: components["schemas"]["Difficulty"];
+            /** @default inferred */
+            difficulty_source?: components["schemas"]["DifficultySource"];
             /**
              * Editable Fields
              * @default []
@@ -5772,9 +5831,9 @@ export interface components {
             acceptance?: string[] | null;
             /** Account Providers */
             account_providers?: string[] | null;
-            complexity?: components["schemas"]["Complexity"] | null;
             /** Depends On */
             depends_on?: string[] | null;
+            difficulty?: components["schemas"]["Difficulty"] | null;
             /** Knowledge */
             knowledge?: string[] | null;
             /** Priority */
@@ -5797,12 +5856,13 @@ export interface components {
             acceptance?: string[];
             /** Account Providers */
             account_providers?: string[] | null;
-            complexity?: components["schemas"]["Complexity"] | null;
             /**
              * Depends On
              * @default []
              */
             depends_on?: string[];
+            difficulty?: components["schemas"]["Difficulty"] | null;
+            difficulty_source?: components["schemas"]["DifficultySource"] | null;
             /**
              * Input
              * @default {}
@@ -5879,10 +5939,13 @@ export interface components {
             attempt: number;
             /** Block Reason */
             block_reason: string | null;
-            /** @default standard */
-            complexity?: components["schemas"]["Complexity"];
-            /** @default heuristic */
-            complexity_source?: components["schemas"]["ComplexitySource"];
+            /**
+             * Complexity
+             * @description The pre-difficulty three-level view, for clients that still read it:
+             *     `simple` is `trivial` there, as both prefer the cheap executor.
+             * @enum {string}
+             */
+            readonly complexity: "trivial" | "standard" | "hard";
             /**
              * Created At
              * Format: date-time
@@ -5894,6 +5957,10 @@ export interface components {
             decision_ids: string[];
             /** Depends On */
             depends_on: string[];
+            /** @default standard */
+            difficulty?: components["schemas"]["Difficulty"];
+            /** @default inferred */
+            difficulty_source?: components["schemas"]["DifficultySource"];
             /**
              * Editable Fields
              * @default []

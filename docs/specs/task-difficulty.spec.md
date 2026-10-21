@@ -1,4 +1,4 @@
-# Task complexity, local routing and the hard tier
+# Task difficulty, executor routing and the hard tier
 
 # 1. Purpose and Scope
 
@@ -7,16 +7,17 @@ let them run on the node's own model: the `local` account (Strata,
 [local harness](local-harness.spec.md)) with Cursor (`agent`) on `composer-2.5`.
 Classify the hardest tasks (architecture, data migration, security, several
 services at once) as `hard` and run their Claude harness and executor on Opus.
-Scope: the task `complexity` field, its heuristic default, the lease ranking for
+Scope: the task `difficulty` field (four levels, replacing `complexity`), its
+inferred default, the executor chain per level, escalation, the lease ranking for
 the engine role, and the model-policy maps that pin the models.
 
 # 2. Non-Goals
 
-- A hard restriction. `complexity` only reorders accounts; it never makes a task
+- A hard restriction. `difficulty` only reorders accounts; it never makes a task
   wait for, or fail without, the local model. (Restricting a task to providers is
   `account_providers`, a separate and independent mechanism.)
-- More than three levels, or a score. Anything not clearly trivial or hard is
-  `standard`.
+- More than four levels, or a score. Anything not clearly trivial, simple or hard
+  is `standard`.
 - Picking a different engine or executor for `hard` tasks, or a Codex hard model:
   no Codex model is better than the default chain yet, so `hard` only overrides
   Claude by default. A Codex entry can be added later through the policy alone.
@@ -25,22 +26,42 @@ the engine role, and the model-policy maps that pin the models.
 
 # 3. Decisions Made
 
-- **Field.** `complexity` is `trivial` | `standard` | `hard` (default `standard`),
-  stored in `tasks.complexity` (CHECK-constrained; rows that predate it are
-  `standard`). Migration `0033_task_complexity_hard.sql` widens the CHECK: SQLite
-  cannot alter a CHECK, so it adds a new column with the wider CHECK, copies the
-  values, drops the old column and renames the new one (no table rebuild; the
-  column is referenced by no index, view or trigger).
-  `complexity_source` is `explicit` (the creator sent it, or an editor set it) or
-  `heuristic` (the creator did not; also the value for rows that predate the
-  field). It is a second column of the same migration rather than an event field,
-  so read models and the dashboard can show it without replaying events.
+- **Field.** `difficulty` is `trivial` | `simple` | `standard` | `hard` (default
+  `standard`), stored in `tasks.difficulty` (CHECK-constrained). `simple` is work
+  that needs no strong model but is more than a copy change; it routes like
+  `trivial` to the cheap executor, but only `trivial` prefers the `local` account.
+  `difficulty_source` is `declared` (the creator sent it, or an editor set it) or
+  `inferred` (the heuristic, or an escalation). Migration
+  `0036_task_difficulty.sql` adds both columns, copies `complexity` and
+  `complexity_source` (`explicit` becomes `declared`, `heuristic` becomes
+  `inferred`) and drops the old columns; one concept, not two in parallel.
+- **Legacy `complexity`.** Responses still carry `complexity` (`trivial` |
+  `standard` | `hard`) as a read-only computed field (`simple` reads `trivial`),
+  and `create_task` still accepts `complexity` as a deprecated alias of
+  `difficulty`, so existing orchestrators and the NanoClaw JS keep working.
 - **Set on create, editable.** `POST /tasks` and MCP `create_task` take
-  `complexity`. It is editable under the [task edit](task-edit.spec.md) rules
+  `difficulty` (and `difficulty_source`, so an orchestrator can mark a guess
+  `inferred`). It is editable under the [task edit](task-edit.spec.md) rules
   (only while `awaiting_approval`, `pending` or `ready`); editing sets the source
-  to `explicit`. It cannot be cleared.
-- **Heuristic fallback.** Only when the creator sends no `complexity`,
-  `argus_core.complexity.classify(title, spec)` decides. It returns `trivial` only
+  to `declared`. It cannot be cleared.
+- **Executor per level.** `POST /api/engines/route` with a `difficulty` also picks
+  the executor and model: the first executor of the level's chain whose
+  *executor layer* is usable ([engines](engines.spec.md)), with every one passed
+  over named in `executor_reason`. Defaults: `trivial` and `simple` use
+  `agent, claude, codex`; `standard` and `hard` use `claude, codex`.
+  `ARGUS_DIFFICULTY_EXECUTORS` (JSON `{"standard": ["codex", "claude"]}`, validated
+  at startup) overrides a level. The model is the first of the model policy's
+  `trivial` map for `trivial`/`simple`, `hard_implementation` for `hard`, else
+  `implementation`; none means the CLI default (`auto` for Cursor). The decision
+  and the `engine.routed` event record `difficulty`, `executor_model` and
+  `executor_reason`; `task_attempts.definition` snapshots the difficulty.
+- **Escalation.** A failure with reason `context_overflow` or
+  `verification_failed`, or a review rejection, raises the difficulty one level
+  (stopping at `hard`), sets the source to `inferred` and records
+  `difficulty_escalated {from, to, reason}` in the event. Other failures and quota
+  handling are unchanged.
+- **Heuristic fallback.** Only when the creator sends no `difficulty`,
+  `argus_core.difficulty.classify(title, spec)` decides. It returns `trivial` only
   when the title or spec carries a copy signal (copy, text, typo, wording,
   translation, docs-only; English and pt-BR), no code-risk signal (migration,
   schema, API, endpoint, security, auth, credential, test, refactor, bug, deploy,
@@ -49,8 +70,8 @@ the engine role, and the model-policy maps that pin the models.
   (arquitetura, redesign), data migration (migração de dados, backfill), security
   (segurança, vulnerability, threat model) and several services (multi-service,
   vários serviços, cross-service); one signal alone is `standard`, since Opus is
-  the expensive tier. Anything else is `standard`. An explicit value always wins,
-  including an explicit `standard`; `hard` is meant to be set explicitly by the
+  the expensive tier. Anything else is `standard`. A declared value always wins,
+  including a declared `standard`; `hard` is meant to be set explicitly by the
   orchestrator (REST, MCP `create_task`, task edit).
 - **Routing is a soft preference.** For the `engine` role the lease ranking of a
   `trivial` task puts `local` first (tier 0) and every cloud account after it
@@ -86,9 +107,9 @@ the engine role, and the model-policy maps that pin the models.
 - **Executor.** For a `trivial` task the harness prefers the Cursor executor, as it
   does on local leases, and falls back to the others only if Cursor is unavailable.
 - **Composition with `account_providers`.** When both exist, the task's
-  `account_providers` narrows the candidate providers first and `complexity` only
+  `account_providers` narrows the candidate providers first and `difficulty` only
   reorders what remains: a task restricted to `["anthropic"]` stays on it whatever
-  its complexity.
+  its difficulty.
 
 # 4. Open Questions
 
@@ -104,17 +125,17 @@ the engine role, and the model-policy maps that pin the models.
 # 5. Constraints
 
 - Single-node spec; no new service. The heuristic is a pure function, no I/O.
-- Migrations `0032_task_complexity.sql` and `0033_task_complexity_hard.sql`
-  (SQLite ≥ 3.35 for `DROP COLUMN`); all writes go through
+- Migrations `0032_task_complexity.sql`, `0033_task_complexity_hard.sql` and
+  `0036_task_difficulty.sql` (SQLite ≥ 3.35 for `DROP COLUMN`); all writes go through
   `Database.write()`.
 
 # 6. Implementation Consequences
 
-- `packages/core`: `Complexity`, `classify`, `fallback_tier(provider, prefer_local)`,
+- `packages/core`: `Difficulty`, `DifficultySource`, `escalated`, `classify`, `fallback_tier(provider, prefer_local)`,
   `TaskCreate`/`Task`/`TaskChanges` fields, the model-policy `trivial`,
   `hard_harness` and `hard_implementation` maps.
 - `apps/api`: migration, create/edit, `accounts/service.py` ranking, model policy
   validation and revision, MCP `create_task`, OpenAPI.
 - `integrations/nanoclaw`: `model-policy.mjs`, defaults and fixture, `argus.ts`
-  workspace context (`complexity`), `argus-delegate`, harness instructions.
-- Dashboard: complexity select on the task form, badge on the detail, API client.
+  workspace context (`complexity`, derived), `argus-delegate`, harness instructions.
+- Dashboard: difficulty select on the task form, badge and source on the detail, one row per engine layer, API client.

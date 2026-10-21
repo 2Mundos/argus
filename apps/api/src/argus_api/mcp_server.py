@@ -521,17 +521,23 @@ async def create_task(
     priority: int = 0,
     acceptance: list[str] | None = None,
     knowledge: list[str] | None = None,
+    difficulty: Literal["trivial", "simple", "standard", "hard"] | None = None,
+    difficulty_source: Literal["declared", "inferred"] | None = None,
     complexity: Literal["trivial", "standard", "hard"] | None = None,
     account_providers: list[str] | None = None,
 ) -> dict:
     """Create a task. Workers may only create subtasks of a task they hold (set
     parent_id; the project is inherited). Orchestrators create any task and must name
-    a project. `knowledge` pins pages the claiming agent should read. `complexity`:
-    "trivial" for the easiest work (a copy change, a typo, a translation) lets the
-    node's local model take it first, with the cloud as the fallback; omit it and
-    Argus decides conservatively from the title and spec. "hard" (architecture,
-    data migration, security, several services) runs a Claude harness and executor
-    on the policy's hard chains (Opus); set it explicitly.
+    a project. `knowledge` pins pages the claiming agent should read. `difficulty`:
+    "trivial" (a copy change, a typo) or "simple" take the cheap Cursor executor
+    (composer-2.5), trivial first on the node's local model with the cloud as the
+    fallback; "standard" (the default) the Claude or Codex executor; "hard"
+    (architecture, data migration, security, several services) the strong model (Opus).
+    Omit it and Argus infers one conservatively from the title and spec.
+    `difficulty_source` is "declared" by default; send "inferred" when the level is
+    your suggestion (editable later). A failed attempt for context overflow or a
+    failed verification raises it one level. `complexity` is the deprecated name
+    (trivial | standard | hard) and is used only when `difficulty` is absent.
     `account_providers` (e.g. ["local"]) restricts the task to those engine account
     providers; leave it out for no restriction."""
     body: dict[str, Any] = {
@@ -547,8 +553,10 @@ async def create_task(
     }
     if required_capabilities is not None:
         body["required_capabilities"] = required_capabilities
-    if complexity is not None:
-        body["complexity"] = complexity
+    if difficulty is not None or complexity is not None:
+        body["difficulty"] = difficulty or complexity
+    if difficulty_source is not None:
+        body["difficulty_source"] = difficulty_source
     if account_providers is not None:
         body["account_providers"] = account_providers
     return await _call(ctx, "POST", "/tasks", json=body)
@@ -774,7 +782,7 @@ async def edit_task(
 ) -> dict:
     """Edit a task's definition: title, spec, acceptance, priority,
     required_capabilities, knowledge (pinned page ids), depends_on,
-    account_providers and complexity (trivial | standard | hard; not clearable). `changes`
+    account_providers and difficulty (trivial | simple | standard | hard; not clearable). `changes`
     is a partial patch: a field you leave out is kept, null clears spec, acceptance,
     required_capabilities, knowledge, depends_on or account_providers (no
     restriction). Pass the task's `version` as
@@ -1151,10 +1159,13 @@ async def reset_model_policy(ctx: Context) -> dict:
 
 @tool(ANYONE)
 async def list_engines(ctx: Context) -> dict:
-    """Engines, delegated CLI executors (claude, codex, opencode, cursor-agent) and the
-    local model. Each entry separates model provider, harness, executor and account, and
-    reports `readiness` as three facts (installed, authenticated, validated; ok=null is
-    unknown). `usable` is true only when all three hold. Read-only."""
+    """Engines (claude, codex, opencode, cursor-agent) and the local model. Each entry
+    lists its `layers`: the NanoClaw `harness` and the code `executor` (claude and codex
+    have both, cursor-agent and opencode only the executor). Every layer has its own
+    `readiness` (installed, authenticated, validated; ok=null is unknown), `accounts` and
+    `usable` (true only when all three hold). Validating one layer proves nothing about
+    the other. The top-level `readiness`, `accounts`, `usable` and `role` are the
+    deprecated single-layer view. Read-only."""
     return await _call(ctx, "GET", "/engines")
 
 
@@ -1170,9 +1181,14 @@ async def route_task(
     is_code: bool = False,
     input_chars: int | None = None,
     output_tokens: int = 512,
+    difficulty: Literal["trivial", "simple", "standard", "hard"] | None = None,
 ) -> dict:
-    """Decide where a task should run: the local model, or codex/claude. The local model is
-    chosen only if the task is simple, low risk, has deterministic acceptance criteria,
+    """Decide where a task should run: the local model, or codex/claude, and which code
+    executor and model do the work. `difficulty` (the task's, when it has one) replaces
+    `simple` (trivial and simple mean simple) and picks the executor chain: trivial and
+    simple Cursor with composer-2.5, standard Claude or Codex, hard the strong model;
+    an executor that is not usable is skipped, in chain order, with the reason.
+    The local model is chosen only if the task is simple, low risk, has deterministic acceptance criteria,
     is not multi-file or sensitive, and `input_chars` (everything the model would see:
     instructions, tool schemas, history, inputs) provably fits. Unknown size never goes
     local. Needs the orchestrator or admin scope. The decision and its reason are recorded."""
@@ -1190,6 +1206,7 @@ async def route_task(
             "is_code": is_code,
             "input_chars": input_chars,
             "output_tokens": output_tokens,
+            "difficulty": difficulty,
         },
     )
 

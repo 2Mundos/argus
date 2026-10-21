@@ -1,7 +1,10 @@
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+
+from argus_core.difficulty import Difficulty
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,9 @@ class Settings:
     local_chat_template_overhead: int = 512
     local_timeout_s: float = 120.0
     engines_ledger: Path | None = None  # default: <data_dir>/engines-ledger.json
+    # Executor order per difficulty level, over the defaults in engines/router.py
+    # (ARGUS_DIFFICULTY_EXECUTORS, JSON: {"standard": ["codex", "claude"]}).
+    difficulty_executors: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # Dedicated Codex login (codex accounts spec 3): the pinned official client,
     # either as an image (run with docker) or a binary path. Off when neither is set.
     codex_login_image: str | None = None
@@ -147,6 +153,7 @@ class Settings:
             engines_ledger=(
                 Path(f) if (f := os.environ.get("ARGUS_ENGINES_LEDGER")) else None
             ),
+            difficulty_executors=_difficulty_executors(),
             codex_login_image=os.environ.get("ARGUS_CODEX_LOGIN_IMAGE") or None,
             codex_bin=os.environ.get("ARGUS_CODEX_BIN") or None,
             claude_login_image=os.environ.get("ARGUS_CLAUDE_LOGIN_IMAGE") or None,
@@ -158,6 +165,25 @@ class Settings:
                 Path(d) if (d := os.environ.get("ARGUS_DASHBOARD_DIR")) else None
             ),
         )
+
+
+def _difficulty_executors() -> dict[str, tuple[str, ...]]:
+    """ARGUS_DIFFICULTY_EXECUTORS, validated at startup: a bad value must not route."""
+    raw = os.environ.get("ARGUS_DIFFICULTY_EXECUTORS")
+    chains = json.loads(raw) if raw else {}
+    valid = {"claude", "codex", "opencode", "agent"}
+    if not isinstance(chains, dict) or any(
+        k not in set(Difficulty)
+        or not isinstance(v, list)
+        or not v
+        or not set(v) <= valid
+        for k, v in chains.items()
+    ):
+        raise ValueError(
+            "ARGUS_DIFFICULTY_EXECUTORS: a JSON object of difficulty -> non-empty "
+            f"list of executors ({', '.join(sorted(valid))})"
+        )
+    return {k: tuple(v) for k, v in chains.items()}
 
 
 def _csv(name: str) -> tuple[str, ...]:

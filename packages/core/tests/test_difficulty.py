@@ -1,8 +1,8 @@
 import pytest
 from argus_core.accounts import fallback_tier
-from argus_core.complexity import MAX_TRIVIAL_SPEC, Complexity, classify
+from argus_core.difficulty import MAX_TRIVIAL_SPEC, Difficulty, classify
 
-T, S = Complexity.TRIVIAL, Complexity.STANDARD
+T, S = Difficulty.TRIVIAL, Difficulty.STANDARD
 
 
 @pytest.mark.parametrize(
@@ -60,7 +60,7 @@ def test_prefer_local_inverts_only_the_tier() -> None:
     )
 
 
-H = Complexity.HARD
+H = Difficulty.HARD
 
 
 @pytest.mark.parametrize(
