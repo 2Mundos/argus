@@ -1566,7 +1566,16 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Edit Task
+         * @description Edit a task's title, spec, acceptance, priority, required capabilities,
+         *     knowledge pins or dependencies (orchestrator or admin). `changes` is a partial
+         *     patch: omitted fields stay, `null` clears. Which fields a state accepts is
+         *     `editable_fields` on the task. Stale `expected_version` is 409 `stale_version`,
+         *     a field the state does not allow 409 `task_not_editable`, an immutable or unknown
+         *     field 422 `immutable_field`; a refused edit writes nothing.
+         */
+        patch: operations["edit_task_api_tasks__task_id__patch"];
         trace?: never;
     };
     "/api/tasks/{task_id}/archive": {
@@ -1634,6 +1643,26 @@ export interface paths {
          *     the task returns to ready.
          */
         post: operations["ask_api_tasks__task_id__ask_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Attempts
+         * @description The definition each attempt was handed at claim, oldest first.
+         */
+        get: operations["list_attempts_api_tasks__task_id__attempts_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2503,6 +2532,11 @@ export interface components {
             created_by: string;
             /** Depends On */
             depends_on: string[];
+            /**
+             * Editable Fields
+             * @default []
+             */
+            editable_fields?: string[];
             /** Error */
             error: string | null;
             failover?: components["schemas"]["Failover"] | null;
@@ -2569,6 +2603,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Version */
+            version: string;
         };
         /**
          * ClaudeLogin
@@ -4753,6 +4789,11 @@ export interface components {
             created_by: string;
             /** Depends On */
             depends_on: string[];
+            /**
+             * Editable Fields
+             * @default []
+             */
+            editable_fields?: string[];
             /** Error */
             error: string | null;
             failover?: components["schemas"]["Failover"] | null;
@@ -4814,6 +4855,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Version */
+            version: string;
         };
         /** TaskArtifact */
         TaskArtifact: {
@@ -4841,6 +4884,50 @@ export interface components {
             size: number;
             /** Task Id */
             task_id: string;
+        };
+        /**
+         * TaskAttempt
+         * @description The definition one attempt was handed at claim (3.5).
+         */
+        TaskAttempt: {
+            /** Agent Id */
+            agent_id: string;
+            /** Attempt */
+            attempt: number;
+            /**
+             * Claimed At
+             * Format: date-time
+             */
+            claimed_at: string;
+            /** Definition */
+            definition: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * TaskChanges
+         * @description A partial patch: a field left out is preserved, `null` clears (3.2).
+         *
+         *     Anything that is not an editable field is kept in `model_extra` so the
+         *     service can refuse it with one structured `immutable_field` error.
+         */
+        TaskChanges: {
+            /** Acceptance */
+            acceptance?: string[] | null;
+            /** Depends On */
+            depends_on?: string[] | null;
+            /** Knowledge */
+            knowledge?: string[] | null;
+            /** Priority */
+            priority?: number | null;
+            /** Required Capabilities */
+            required_capabilities?: string[] | null;
+            /** Spec */
+            spec?: string | null;
+            /** Title */
+            title?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /** TaskCreate */
         TaskCreate: {
@@ -4939,6 +5026,11 @@ export interface components {
             decision_ids: string[];
             /** Depends On */
             depends_on: string[];
+            /**
+             * Editable Fields
+             * @default []
+             */
+            editable_fields?: string[];
             /** Error */
             error: string | null;
             failover?: components["schemas"]["Failover"] | null;
@@ -5009,6 +5101,15 @@ export interface components {
             updated_at: string;
             /** Version */
             version: string;
+        };
+        /**
+         * TaskEdit
+         * @description The body of `PATCH /api/tasks/{id}` and the arguments of `edit_task`.
+         */
+        TaskEdit: {
+            changes: components["schemas"]["TaskChanges"];
+            /** Expected Version */
+            expected_version: string;
         };
         /** TaskKind */
         TaskKind: {
@@ -8231,6 +8332,41 @@ export interface operations {
             };
         };
     };
+    edit_task_api_tasks__task_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskEdit"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     archive_task_api_tasks__task_id__archive_post: {
         parameters: {
             query?: never;
@@ -8357,6 +8493,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Decision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_attempts_api_tasks__task_id__attempts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskAttempt"][];
                 };
             };
             /** @description Validation Error */

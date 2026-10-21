@@ -1916,6 +1916,14 @@
             "title": "Depends On",
             "type": "array"
           },
+          "editable_fields": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Editable Fields",
+            "type": "array"
+          },
           "error": {
             "anyOf": [
               {
@@ -2148,6 +2156,10 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
           }
         },
         "required": [
@@ -2183,7 +2195,8 @@
           "created_by",
           "created_at",
           "updated_at",
-          "archived_at"
+          "archived_at",
+          "version"
         ],
         "title": "ClaimedTask",
         "type": "object"
@@ -8421,6 +8434,14 @@
             "title": "Depends On",
             "type": "array"
           },
+          "editable_fields": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Editable Fields",
+            "type": "array"
+          },
           "error": {
             "anyOf": [
               {
@@ -8645,6 +8666,10 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
           }
         },
         "required": [
@@ -8680,7 +8705,8 @@
           "created_by",
           "created_at",
           "updated_at",
-          "archived_at"
+          "archived_at",
+          "version"
         ],
         "title": "Task",
         "type": "object"
@@ -8752,6 +8778,134 @@
           "in_result"
         ],
         "title": "TaskArtifact",
+        "type": "object"
+      },
+      "TaskAttempt": {
+        "description": "The definition one attempt was handed at claim (3.5).",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "claimed_at": {
+            "format": "date-time",
+            "title": "Claimed At",
+            "type": "string"
+          },
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          }
+        },
+        "required": [
+          "attempt",
+          "agent_id",
+          "claimed_at",
+          "definition"
+        ],
+        "title": "TaskAttempt",
+        "type": "object"
+      },
+      "TaskChanges": {
+        "additionalProperties": true,
+        "description": "A partial patch: a field left out is preserved, `null` clears (3.2).\n\nAnything that is not an editable field is kept in `model_extra` so the\nservice can refuse it with one structured `immutable_field` error.",
+        "properties": {
+          "acceptance": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acceptance"
+          },
+          "depends_on": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Depends On"
+          },
+          "knowledge": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Knowledge"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          },
+          "required_capabilities": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Capabilities"
+          },
+          "spec": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "title": "TaskChanges",
         "type": "object"
       },
       "TaskCreate": {
@@ -8959,6 +9113,14 @@
               "type": "string"
             },
             "title": "Depends On",
+            "type": "array"
+          },
+          "editable_fields": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Editable Fields",
             "type": "array"
           },
           "error": {
@@ -9239,6 +9401,25 @@
           "updated_at"
         ],
         "title": "TaskDetail",
+        "type": "object"
+      },
+      "TaskEdit": {
+        "description": "The body of `PATCH /api/tasks/{id}` and the arguments of `edit_task`.",
+        "properties": {
+          "changes": {
+            "$ref": "#/components/schemas/TaskChanges"
+          },
+          "expected_version": {
+            "minLength": 1,
+            "title": "Expected Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_version",
+          "changes"
+        ],
+        "title": "TaskEdit",
         "type": "object"
       },
       "TaskKind": {
@@ -15426,6 +15607,62 @@
         "tags": [
           "tasks"
         ]
+      },
+      "patch": {
+        "description": "Edit a task's title, spec, acceptance, priority, required capabilities,\nknowledge pins or dependencies (orchestrator or admin). `changes` is a partial\npatch: omitted fields stay, `null` clears. Which fields a state accepts is\n`editable_fields` on the task. Stale `expected_version` is 409 `stale_version`,\na field the state does not allow 409 `task_not_editable`, an immutable or unknown\nfield 422 `immutable_field`; a refused edit writes nothing.",
+        "operationId": "edit_task_api_tasks__task_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskEdit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Edit Task",
+        "tags": [
+          "tasks"
+        ]
       }
     },
     "/api/tasks/{task_id}/archive": {
@@ -15701,6 +15938,58 @@
         "summary": "Ask",
         "tags": [
           "decisions"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/attempts": {
+      "get": {
+        "description": "The definition each attempt was handed at claim, oldest first.",
+        "operationId": "list_attempts_api_tasks__task_id__attempts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TaskAttempt"
+                  },
+                  "title": "Response List Attempts Api Tasks  Task Id  Attempts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Attempts",
+        "tags": [
+          "tasks"
         ]
       }
     },
