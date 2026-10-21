@@ -1457,7 +1457,8 @@ env > ${JSON.stringify(dump)}
 echo '{"result":"ok","is_error":false}'`,
   );
   const driver = stubDriver(g, g.stubPath);
-  // Claude Code's Bash tool drops CLAUDE_CODE_OAUTH_TOKEN; the bridge env stays.
+  // Claude Code's Bash tool drops CLAUDE_CODE_OAUTH_TOKEN but passes the bridge env on;
+  // the delegate must remove it before starting the child.
   const r = await runShell(
     `${process.execPath} ${driver} claude --cwd ${g.work} --timeout 20`,
     claudeToolEnv({ ...g.env, ARGUS_ENGINE: "claude", ...customHarnessEnv() }),
@@ -1485,4 +1486,30 @@ echo '{"result":"ok","is_error":false}'`,
     assert.equal(child[name], undefined, name);
   assert.equal(child.CLAUDE_CODE_OAUTH_TOKEN, SENTINEL);
   assert.equal(JSON.stringify(report).includes(BRIDGE_KEY), false);
+});
+
+test("custom harness: other executors never see the bridge either (codex)", async (t) => {
+  const s = sandbox(t);
+  const dump = path.join(s.dir, "child-env");
+  s.fake(
+    "codex",
+    `if [ "$1" = "--version" ]; then echo codex-cli 0; exit 0; fi
+cat >/dev/null
+env > ${JSON.stringify(dump)}`,
+  );
+  const { report } = await run(["codex", "--cwd", s.work, "--timeout", "20"], {
+    env: { ...s.env, OPENAI_API_KEY: "x", ...customHarnessEnv() },
+  });
+  assert.equal(report.harness, "custom");
+  const child = fs.readFileSync(dump, "utf8");
+  for (const name of [
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ARGUS_ALLOWED_ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "ARGUS_CUSTOM_HARNESS",
+  ])
+    assert.equal(new RegExp(`^${name}=`, "m").test(child), false, name);
+  assert.equal(child.includes(BRIDGE_KEY), false);
 });

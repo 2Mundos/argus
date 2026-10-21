@@ -1333,7 +1333,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       ).data as AccountLease;
     try {
       // A local or custom harness only orchestrates and prefers Cursor: lease Cursor
-      // first so its stub is mounted, any provider only when none is usable.
+      // first so its stub is mounted, any provider only when none is usable. Each call
+      // replaces the agent's executor lease, as the single call did; nothing is
+      // applied to the vault until both are done, so a failed Cursor try leaves the
+      // same end state (the fallback's lease, or none).
       let candidate: AccountLease | null = null;
       const first = executorFirst(lease.provider);
       if (first) {

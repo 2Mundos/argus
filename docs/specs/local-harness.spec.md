@@ -48,7 +48,8 @@ for router delegations.
   redirect plus any cloud credential (`ANTHROPIC_API_KEY`,
   `CLAUDE_CODE_OAUTH_TOKEN`, or non-placeholder `ANTHROPIC_AUTH_TOKEN`) is
   rejected. Local harness mode drops the Claude gateway credential stub and cloud
-  sentinel env from the container config.
+  sentinel env from the container config. (A custom harness keeps the stub for its
+  `claude` executor, see [custom harness](custom-harness.spec.md).)
 - **Observability.** `POST /engines/selected` records `provider: local`; task
   views already show `serving_account` and milestones from existing fields.
 - **Per-task provider restriction.** A task may carry `account_providers`: a
