@@ -13,3 +13,12 @@ def test_anthropic_redirect_allowlist() -> None:
         check=True,
         timeout=60,
     )
+
+
+def test_anthropic_openai_bridge() -> None:
+    subprocess.run(
+        ["node", "--test", str(NANOCLAW / "engines/anthropic-openai-bridge.test.mjs")],
+        cwd=NANOCLAW / "engines",
+        check=True,
+        timeout=60,
+    )

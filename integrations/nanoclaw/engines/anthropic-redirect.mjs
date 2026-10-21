@@ -3,6 +3,7 @@
  * with a cloud credential is always rejected. */
 
 export const LOCAL_HARNESS_AUTH_TOKEN = "argus-local-harness";
+export const CUSTOM_HARNESS_AUTH_TOKEN = "argus-custom-harness";
 
 export const LOCAL_ANTHROPIC_HOSTS = new Set([
   "127.0.0.1",
@@ -34,7 +35,7 @@ export function normalizeAnthropicBaseUrl(raw) {
 export function cloudHarnessCredentialPresent(e) {
   if ((e.ANTHROPIC_API_KEY ?? "").trim() || (e.CLAUDE_CODE_OAUTH_TOKEN ?? "").trim()) return true;
   const token = (e.ANTHROPIC_AUTH_TOKEN ?? "").trim();
-  return token !== "" && token !== LOCAL_HARNESS_AUTH_TOKEN;
+  return token !== "" && token !== LOCAL_HARNESS_AUTH_TOKEN && token !== CUSTOM_HARNESS_AUTH_TOKEN;
 }
 
 /**

@@ -20,8 +20,9 @@ isolation or sandbox/TLS restrictions.
 # 3. Decisions Made
 
 - **Custom accounts rank like any other.** A `custom` account
-  ([custom accounts](custom-accounts.spec.md)) is leased for `engine` or `executor`
-  when the runtime lists `custom` in `runtime_providers`; the lease carries `settings`
+  ([custom accounts](custom-accounts.spec.md), [custom harness](custom-harness.spec.md))
+  is leased for `engine` or `executor` when the runtime lists `custom` in
+  `runtime_providers`; the lease carries `settings`
   for the role. An HTTP 402/429 from its endpoint is quota (same failover path, no
   attempt consumed).
 

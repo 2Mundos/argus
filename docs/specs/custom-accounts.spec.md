@@ -91,22 +91,16 @@ Make an OpenAI-compatible endpoint (first case OpenRouter,
     - The report names `model` and `model_source` (`cli`, `account`, `policy`,
       `native_default`), plus `account_label` and `account_base_url` (no credentials by
       the URL rule).
-  - **NanoClaw harness**: not enabled. Credentials reach NanoClaw only through the
-    OneCLI vault by host mapping, `PROVIDERS` in `argus-accounts.ts` has no `custom`
-    entry, and the Claude stub rejects a redirected `ANTHROPIC_BASE_URL`
-    (`api_redirected`). Enabling it needs a host-registered mapping for the account's
-    host; the redirect stays blocked for every other URL. **Blocker (vault/runtime
-    change, out of scope here):** the channel also does not yet copy a lease's
-    `settings` into `executor_settings`.
-  - **Claude Code** cannot speak an OpenAI endpoint (Messages API only). A custom
-    account is therefore never a Claude Code engine.
+  - **NanoClaw harness**: see [custom harness](custom-harness.spec.md). The engine
+    lease uses a host loopback bridge (Anthropic Messages → OpenAI Chat Completions);
+    the API key never enters the container. The channel copies lease `settings` into
+    `engine_settings` / `executor_settings` on the pinned model-policy context.
+    `PROVIDERS.custom` is `harnessEnvOnly`; the executor lease stays separate (Cursor,
+    Codex, …).
+  - **Claude Code** cannot call an OpenAI-compatible URL directly; the bridge is the
+    only supported harness path for `custom` engine accounts.
 
 # 4. Open Questions
-
-- The vault mapping for custom hosts (NanoClaw side), and the channel passing
-  `executor_settings`. Until then the lease `settings` are the contract for plain
-  runtimes (`ARGUS_ACCOUNT_SETTINGS` + `ARGUS_ACCOUNT_API_KEY`) and nothing leases a
-  custom account for NanoClaw.
 - `/models` is the only suggestion source; a gateway without it gets free text.
 
 # 5. Constraints

@@ -55,6 +55,8 @@ every new dependency is judged against it.
   for the delegated Cursor CLI; executor lease and OneCLI path-scoped injection
 - [Custom accounts](specs/custom-accounts.spec.md) — an OpenAI-compatible endpoint
   (OpenRouter first) as an account: model and routing per role, probe, 402/429 failover
+- [Custom harness](specs/custom-harness.spec.md) — NanoClaw Claude Code on a custom
+  engine account via a loopback Anthropic→OpenAI bridge; executor stays independent
 - [Knowledge](specs/knowledge.spec.md) — projects and a versioned wiki shared by
   agents and people, delivered with every claim
 - [Home](specs/home.spec.md) — the default dashboard tab: what needs attention,

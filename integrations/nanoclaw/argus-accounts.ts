@@ -14,6 +14,13 @@
 
 import { localCredentialProblem } from "./argus-local-harness.js";
 
+export interface CustomLeaseSettings {
+  base_url: string;
+  label: string | null;
+  model: string | null;
+  provider: Record<string, unknown> | null;
+}
+
 export interface AccountLease {
   lease_id: string;
   account_id: string;
@@ -23,6 +30,8 @@ export interface AccountLease {
   credential: Record<string, unknown>;
   /** `engine` (default): the harness's account; `executor`: a delegated CLI's. */
   role?: "engine" | "executor" | "repository";
+  /** Custom accounts: where and how to call for this role (no secret). */
+  settings?: CustomLeaseSettings | null;
 }
 
 /** How a provider's account becomes a OneCLI secret. */
@@ -68,6 +77,16 @@ interface ProviderMapping {
 }
 
 const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+function customCredentialProblem(credential: Record<string, unknown>): string | null {
+  const keys = new Set(Object.keys(credential));
+  if (keys.size !== 1 || !keys.has("api_key"))
+    return "custom credential must be exactly {api_key}";
+  const key = text(credential.api_key);
+  if (!key) return "custom credential needs a non-empty api_key string";
+  if (/\s|[\r\n\u0000]/.test(key)) return "api_key must not contain whitespace or control characters";
+  return null;
+}
 
 export interface NormalizedRepositoryUrl {
   origin: string;
@@ -278,6 +297,15 @@ export const PROVIDERS: Record<string, ProviderMapping> = {
     harnessEnvOnly: true,
     problem: (c) => localCredentialProblem(c),
     pick: (c) => JSON.stringify(c),
+  },
+  custom: {
+    type: "openai",
+    host: "custom-harness",
+    engine: "claude",
+    secretSuffix: "-custom",
+    harnessEnvOnly: true,
+    problem: (c) => customCredentialProblem(c),
+    pick: (c) => text(c.api_key),
   },
   cursor: {
     type: "generic",
@@ -660,15 +688,20 @@ const QUOTA_NOTICES: Array<{ provider: string; pattern: RegExp }> = [
     pattern:
       /^(usage_limit_reached|insufficient_quota|you(?:'|\u2019)ve hit your usage limit|you have hit your usage limit)/i,
   },
+  {
+    provider: "custom",
+    pattern:
+      /^(?:http\s*)?(?:402|429)\b|^(?:insufficient credits|payment required|rate limit)/i,
+  },
 ];
 
-/** OpenAI engine auth expiry (401/token_expired): treated as an exhausted account so Argus leases another one. */
+/** Engine auth expiry (401/token_expired): treated as an exhausted account so Argus leases another one. */
+const AUTH_EXPIRED_PATTERN =
+  /^(?:error:\s*)?(?:http\s*)?401\b.*token_expired|^(?:error:\s*)?token_expired\b|^(?:error:\s*)?(?:http\s*)?401\b.*(?:authentication|unauthori[sz]ed)/i;
+
 const AUTH_EXPIRED_NOTICES: Array<{ provider: string; pattern: RegExp }> = [
-  {
-    provider: "openai",
-    pattern:
-      /^(?:error:\s*)?(?:http\s*)?401\b.*token_expired|^(?:error:\s*)?token_expired\b|^(?:error:\s*)?(?:http\s*)?401\b.*(?:authentication|unauthori[sz]ed)/i,
-  },
+  { provider: "openai", pattern: AUTH_EXPIRED_PATTERN },
+  { provider: "custom", pattern: AUTH_EXPIRED_PATTERN },
 ];
 
 /**
