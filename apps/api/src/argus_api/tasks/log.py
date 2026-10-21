@@ -17,7 +17,7 @@ MAX_LINES = 200  # per batch
 MAX_LINE_CHARS = 2000  # longer lines are cut, with "…"
 REDACT_LINE_CHARS = (
     8 * 1024
-)  # lines are cut to this before redaction, bounding its cost
+)  # lines or \r frames are cut to this before redaction, bounding its cost
 MAX_BATCH_BYTES = 64 * 1024  # UTF-8, before cleaning
 MIN_INTERVAL_S = 1.0  # per task and source
 RING_LINES = 2000  # per attempt

@@ -255,6 +255,14 @@ def test_cleaning_a_worst_case_batch_is_fast(line: str) -> None:
     assert time.perf_counter() - started < 1.0
 
 
+def test_cleaning_a_row_of_many_short_frames_is_fast() -> None:
+    import time
+
+    started = time.perf_counter()
+    log.clean(["a-\r" * 21_000], ())
+    assert time.perf_counter() - started < 1.0
+
+
 async def test_ring_buffer_evicts_oldest_and_seq_keeps_counting(
     db: Database, claimed, clock: FakeClock
 ) -> None:
