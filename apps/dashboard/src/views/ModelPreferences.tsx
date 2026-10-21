@@ -21,6 +21,8 @@ const TITLES: Record<Scope, string> = {
   harness: "Harness (NanoClaw)",
   implementation: "Implementation (argus-delegate)",
   trivial: "Trivial tasks and local leases (argus-delegate)",
+  hard_harness: "Hard tasks: harness (NanoClaw)",
+  hard_implementation: "Hard tasks: implementation (argus-delegate)",
 };
 
 /** Ordered model chains per engine, from GET/PUT/DELETE /api/models. */

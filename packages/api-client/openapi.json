@@ -2634,7 +2634,8 @@
       "Complexity": {
         "enum": [
           "trivial",
-          "standard"
+          "standard",
+          "hard"
         ],
         "title": "Complexity",
         "type": "string"
@@ -6854,6 +6855,40 @@
             ],
             "title": "File Revision"
           },
+          "hard_harness": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hard Harness"
+          },
+          "hard_implementation": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hard Implementation"
+          },
           "harness": {
             "additionalProperties": {
               "items": {
@@ -6934,6 +6969,12 @@
       "ModelPolicyBody": {
         "additionalProperties": false,
         "properties": {
+          "hard_harness": {
+            "title": "Hard Harness"
+          },
+          "hard_implementation": {
+            "title": "Hard Implementation"
+          },
           "harness": {
             "title": "Harness"
           },

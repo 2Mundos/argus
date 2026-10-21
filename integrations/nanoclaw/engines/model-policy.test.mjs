@@ -152,3 +152,50 @@ test("trivial tasks and local leases read the trivial map, others implementation
     "implementation",
   );
 });
+
+test("hard tasks read the hard maps per engine; others and codex keep the normal chains", () => {
+  const hardPolicy = {
+    ...policy,
+    trivial: { agent: ["composer-2.5"] },
+    hard_harness: { claude: ["claude-opus-5-5"] },
+    hard_implementation: { claude: ["claude-opus-5-5"] },
+  };
+  const snap = policySnapshot(hardPolicy, { complexity: "hard", account_provider: "anthropic" });
+  assert.deepEqual(Object.keys(snap.policy), [
+    "harness",
+    "implementation",
+    "trivial",
+    "hard_harness",
+    "hard_implementation",
+  ]);
+  const harness = selectHarnessModel(snap, "claude", { spec: "", complexity: "hard" });
+  assert.equal(harness.configured_model, "claude-opus-5-5");
+  assert.equal(harness.policy_map, "hard_harness");
+  assert.equal(
+    selectHarnessModel(snap, "claude", { spec: "", complexity: "standard" }).configured_model,
+    "sonnet",
+  );
+  // codex has no hard chain: the normal harness and implementation chains apply
+  assert.equal(
+    selectHarnessModel(snap, "codex", { spec: "", complexity: "hard" }).configured_model,
+    "luna",
+  );
+  assert.equal(implementationScope(snap, "codex"), "implementation");
+  assert.equal(implementationScope(snap, "claude"), "hard_implementation");
+  assert.equal(
+    selectModel(snap, implementationScope(snap, "claude"), "claude").configured_model,
+    "claude-opus-5-5",
+  );
+  // a hard task on a local lease with Cursor: no hard chain for agent, so trivial applies
+  const local = policySnapshot(hardPolicy, { complexity: "hard", account_provider: "local" });
+  assert.equal(implementationScope(local, "agent"), "trivial");
+  // a codex entry is policy data, no code change
+  const terra = policySnapshot(
+    { ...hardPolicy, hard_implementation: { codex: ["terra-6.1"] } },
+    { complexity: "hard" },
+  );
+  assert.equal(implementationScope(terra, "codex"), "hard_implementation");
+  for (const scope of ["hard_harness", "hard_implementation"])
+    for (const bad of [{ claude: [] }, { typo: ["x"] }, [], "x"])
+      assert.throws(() => policySnapshot({ ...policy, [scope]: bad }), /hard|map/);
+});

@@ -12,10 +12,16 @@
       },
       "trivial": {
         "agent": ["composer-2.5"]
+      },
+      "hard_harness": {
+        "claude": ["claude-opus-5-5"]
+      },
+      "hard_implementation": {
+        "claude": ["claude-opus-5-5"]
       }
     },
-    "canonical": "{\"harness\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6-luna\"]},\"implementation\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6.1-sol\"]},\"trivial\":{\"agent\":[\"composer-2.5\"]}}",
-    "revision": "2b05ba03cb83c36e9c5c92d3c4821b6ca4e240061eef35d44d0c38fa629539be"
+    "canonical": "{\"harness\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6-luna\"]},\"implementation\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6.1-sol\"]},\"trivial\":{\"agent\":[\"composer-2.5\"]},\"hard_harness\":{\"claude\":[\"claude-opus-5-5\"]},\"hard_implementation\":{\"claude\":[\"claude-opus-5-5\"]}}",
+    "revision": "afd6ae02b0f95664799bc2dc4b9722bfe71281486be018ca4c1f5b37672d3d2f"
   },
   {
     "name": "defaults without trivial",
@@ -72,5 +78,28 @@
     },
     "canonical": "{\"harness\":{},\"implementation\":{\"agent\":[\"m\"]},\"trivial\":{\"agent\":[\"composer-2.5\",\"x\"],\"claude\":[\"a\"]}}",
     "revision": "a941f4e374620d7b1223818299b03ca49650c768311272e006239c2f08b44b0f"
+  },
+  {
+    "name": "hard maps, unsorted keys",
+    "policy": {
+      "hard_implementation": {
+        "claude": ["claude-opus-5-5"]
+      },
+      "trivial": {
+        "agent": ["composer-2.5"]
+      },
+      "hard_harness": {
+        "codex": ["terra-6.1"],
+        "claude": ["claude-opus-5-5"]
+      },
+      "implementation": {
+        "claude": ["claude-sonnet-5-5"]
+      },
+      "harness": {
+        "claude": ["claude-haiku-5"]
+      }
+    },
+    "canonical": "{\"harness\":{\"claude\":[\"claude-haiku-5\"]},\"implementation\":{\"claude\":[\"claude-sonnet-5-5\"]},\"trivial\":{\"agent\":[\"composer-2.5\"]},\"hard_harness\":{\"claude\":[\"claude-opus-5-5\"],\"codex\":[\"terra-6.1\"]},\"hard_implementation\":{\"claude\":[\"claude-opus-5-5\"]}}",
+    "revision": "039dfd825bc2861c459ced569fbe4c2319e87da173ce314fb2c618b8345760dd"
   }
 ]
