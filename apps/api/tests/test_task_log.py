@@ -231,6 +231,18 @@ def test_long_lines_are_cut_but_never_unmask_a_secret() -> None:
     assert log.clean(["a", pem, "b"], ()) == ["a", "[redacted private key]", "b"]
 
 
+def test_a_long_progress_row_keeps_its_later_frames() -> None:
+    # 30 KB of \r frames on one row: the pre-cut applies per frame, not to the row.
+    frames = [f"{i:3d}% " + "#" * 300 for i in range(100)]
+    row = "\r".join(frames) + "\r100%\rdone"
+    assert len(row) > 30_000
+    out = log.clean([row], ())
+    assert out[-2:] == ["100%", "done"]
+    assert len(out) == 102
+    # A single frame longer than the pre-cut is still cut, and the frames after it kept.
+    assert log.clean(["x" * (log.REDACT_LINE_CHARS * 2) + "\rdone"], ())[-1] == "done"
+
+
 @pytest.mark.parametrize(
     "line",
     ["a." * 32_000, "a-" * 32_000, "--" + "a-" * 32_000, "x://a:" * 10_000],

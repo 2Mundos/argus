@@ -679,13 +679,14 @@ export function createDelegateLogRelay(opts: {
      * relay stops, or `timeoutMs` passes (wall clock). Each post waits the pace from the
      * last accepted one (a periodic poll may just have posted) and any back-off, so the
      * server's rate limit is not hit needlessly; it waits at least 50 ms between polls and
-     * gives up after three consecutive failed polls. Never throws.
+     * gives up after three consecutive failed polls of its own. Never throws.
      */
     async drain(timeoutMs = LOG_DRAIN_MS): Promise<void> {
       const deadline = Date.now() + timeoutMs;
       const sleep = (ms: number) =>
         new Promise((r) => setTimeout(r, Math.max(0, Math.min(ms, deadline - Date.now()))));
       gapMs = opts.paceMs ?? LOG_DRAIN_PACE_MS;
+      failures = 0; // failed periodic polls before the drain do not count against it
       try {
         for (;;) {
           const ran = await poll();

@@ -46,7 +46,7 @@ life for the no-signal indicator of [progress milestones](progress-milestones.sp
 - **Cleaning**, in this order, before the write transaction: `\r\n` becomes a
   newline; terminal escape sequences and control characters other than `\r` removed
   (so an escape cannot split a secret); private key blocks masked across the batch;
-  each line cut to 8 KiB; a line's bare `\r`s dropped when that leaves less unmasked
+  each line or `\r` frame cut to 8 KiB; a line's bare `\r`s dropped when that leaves less unmasked
   (a `\r` split a secret mid-token); redaction (3.2); then a bare `\r` splits the line
   too (a progress bar's frames are separate lines), so a `\r` used as a space cannot
   split a secret either; trailing whitespace stripped; blank lines dropped; long lines
@@ -161,6 +161,11 @@ run. URL schemes are bounded to 16 characters; names, URL users and passwords ar
   `task_log` rows first (the foreign key refuses otherwise).
 - A per-batch rate limit of one second may be too tight for a very chatty executor;
   the client batches, so it is not expected to matter.
+- A row where a `\r` splits a secret mid-token and another rule (say a `Bearer`
+  value) also matches is masked best effort: the row is kept whole or split by
+  whichever leaves less unmasked.
+- U+0085, U+2028 and U+2029 no longer split lines (only `\n` and a bare `\r` do), so
+  such a line shows as one line.
 
 # 5. Constraints
 

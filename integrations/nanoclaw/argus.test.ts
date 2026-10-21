@@ -1320,6 +1320,39 @@ describe("delegate live log relay", () => {
     }
   });
 
+  it("the final drain does not count failed periodic polls from before it", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    let slow = true;
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      paceMs: 5,
+      post: async (b) => {
+        if (slow) {
+          slow = false;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        posts.push(b);
+      },
+    });
+    fs.rmSync(dir, { recursive: true });
+    const warn = vi.spyOn(log, "warn");
+    try {
+      for (let i = 0; i < 3; i++) await relay.poll(); // three periodic polls fail
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(file, rec(Array.from({ length: 250 }, (_, i) => `l${i}`)));
+      const inFlight = relay.poll(); // a periodic poll is still posting when the drain starts
+      await relay.drain(5000);
+      await inFlight;
+      expect(warn.mock.calls.some((c) => /final drain abandoned/.test(String(c[0])))).toBe(false);
+      expect(posts.flatMap((p) => p.lines)).toHaveLength(250);
+    } finally {
+      warn.mockRestore();
+      fs.rmSync(dir, { recursive: true });
+    }
+  });
+
   it("the adapter relays the delegate log with the token on the host side only", async () => {
     const { dir, file } = tmp();
     fs.writeFileSync(file, rec(["stale line from a previous run"]));

@@ -58,7 +58,8 @@ def clean(lines: list[str], secrets: tuple[str, ...]) -> list[str]:
     drop blanks.
     Escapes go first, so none can split a secret (`ghp_\x1b[0m…`). Private key blocks
     are masked on the whole batch, so one spanning lines cannot slip through; the
-    other rules run on the batch with each line cut to REDACT_LINE_CHARS, before the
+    other rules run on the batch with each line or \r frame cut to REDACT_LINE_CHARS
+    (so a long progress row keeps its later frames), before the
     final cut (so a secret about to be cut is still whole), and again after it.
     Redaction runs before a bare CR splits a line, so a CR used as a space
     (`Bearer\r…`) splits no secret; a line whose CR splits a secret mid-token is
@@ -66,7 +67,10 @@ def clean(lines: list[str], secrets: tuple[str, ...]) -> list[str]:
     text = _CONTROL.sub("", "\n".join(lines).replace("\r\n", "\n"))
     text = redact_private_keys(text)
     text = "\n".join(
-        _join_split_secret(raw[:REDACT_LINE_CHARS], secrets) for raw in text.split("\n")
+        _join_split_secret(
+            "\r".join(f[:REDACT_LINE_CHARS] for f in raw.split("\r")), secrets
+        )
+        for raw in text.split("\n")
     )
     out: list[str] = []
     for row in redact(text, secrets).split("\n"):
