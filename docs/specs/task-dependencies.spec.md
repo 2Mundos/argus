@@ -30,6 +30,10 @@ dependencies waits in `pending` and becomes `ready` once all of them
 
 ## 3.1 Replacing dependencies
 
+Since the [task edit](task-edit.spec.md) spec this endpoint and tool call the same
+function as `PATCH /api/tasks/{id}` with only `depends_on`; the rules below hold
+unchanged, including the `task_not_waiting` code.
+
 - `PUT /api/tasks/{id}/dependencies` with `{depends_on: [ids], expected_version}`
   (orchestrator or admin) → MCP `set_task_dependencies`. It replaces the whole
   set; the response is the task, and its `version` changes.

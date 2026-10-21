@@ -72,6 +72,8 @@ every new dependency is judged against it.
   and totals; reversible, never deletes
 - [Task dependencies](specs/task-dependencies.spec.md) — edit a waiting task's
   dependencies with a cycle check; stuck dependents surface in the inbox
+- [Task edit](specs/task-edit.spec.md) — edit a task's title, spec, criteria, priority,
+  capabilities, pins and dependencies with one rule set for REST, MCP and the dashboard
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes
   that say whether an upgrade can be rolled back, the tagged image
 - [Codex worker sandbox profile (candidate)](specs/codex-sandbox-profile.spec.md) —
