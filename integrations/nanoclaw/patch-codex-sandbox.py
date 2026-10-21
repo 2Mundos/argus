@@ -288,7 +288,7 @@ edit(
                 "insert": (
                     "  // The folder label (D9) rides the spec",
                     COMPOSE + "  // The folder label (D9) rides the spec",
-                )
+                ),
             },
         ),
         (
