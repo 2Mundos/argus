@@ -192,18 +192,20 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "Skipping NanoClaw vitest: integrations/nanoclaw/ unchanged"
           fi
-      - uses: pnpm/action-setup@v4
-        if: steps.need.outputs.run == 'true'
-        with:
-          version: 10.0.0
       - uses: actions/setup-node@v4
         if: steps.need.outputs.run == 'true'
         with:
           node-version: "22"
       - name: provision.sh check (fresh pinned NanoClaw, engines overlay)
         if: steps.need.outputs.run == 'true'
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
         run: |
           set -euo pipefail
+          # pnpm through corepack: inside the checkout it is NanoClaw's own pinned
+          # packageManager (its pnpm-workspace.yaml has no packages list, which
+          # Argus's pnpm 10.0.0 rejects), as on a provisioning host.
+          corepack enable
           # Short state path: provision.sh caps the instances root at 56 characters.
           state="/tmp/argus-nc-ci-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
           rm -rf "$state"
