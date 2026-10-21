@@ -15,6 +15,7 @@ dev = [
     "pip-audit>=2.7",
     "ty>=0.0.87",
     "httpx2>=2.13.1",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.uv]
