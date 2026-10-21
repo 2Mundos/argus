@@ -177,7 +177,8 @@ export interface paths {
         put?: never;
         /**
          * Lease Account
-         *     Lease the best usable account and deliver its credential to a claimed task.
+         * @description Lease the best usable account and deliver its credential to a claimed task.
+         *
          *     `runtime_providers` is required and states what the runtime can apply. The
          *     caller must hold the live claim identified by `task_id` and `attempt`. One
          *     active lease per role; `409 no_account` when none is usable.
@@ -293,6 +294,7 @@ export interface paths {
         /**
          * Report Exhausted
          * @description Mark a leased account exhausted and return fallback metadata only.
+         *
          *     The caller must hold the live claim identified by `task_id` and `attempt`;
          *     `runtime_providers` controls which fallback metadata may be returned. Obtain
          *     any next credential through `/accounts/lease`.
@@ -3121,6 +3123,7 @@ export interface components {
         /**
          * ExhaustedReport
          * @description Mark a held account exhausted for the caller's live task claim.
+         *
          *     `runtime_providers` declares which fallback account metadata the runtime can
          *     use. The response never carries the next credential.
          */
