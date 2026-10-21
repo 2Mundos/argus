@@ -317,12 +317,16 @@ class DockerTarget:
             if addr == HOST_GATEWAY:
                 if gateway is None:
                     gateway = _bridge_gateway(client)
-                if not gateway:  # no docker0: nothing in a container could reach it
-                    log.warning("no default bridge gateway; %s is not published", cport)
-                    continue
+                if not gateway:
+                    # No default bridge: the agent containers NanoClaw starts there
+                    # could not run either. Fail the start loudly (pool last_error).
+                    raise TargetError(
+                        f"cannot publish {cport}: the daemon's default bridge network"
+                        " has no IPv4 gateway"
+                    )
                 addr = gateway
             out[cport] = (addr, hport)
-        return out or None
+        return out
 
     def _prepare_dir(self, client: Any, image: str, mount: Mount) -> None:
         """Create a bind-mount source owned by the instance user.

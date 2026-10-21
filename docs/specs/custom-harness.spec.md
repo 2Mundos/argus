@@ -55,7 +55,12 @@ account's configured `base_url` with the leased API key held only in host memory
     `http://host.docker.internal:<published port>`. Published on the gateway address,
     the port is reachable from containers and the Docker host, not from the LAN. A start
     that cannot resolve the published port fails the apply (no harness) instead of
-    handing the container an unreachable URL.
+    handing the container an unreachable URL. A daemon without a default bridge
+    gateway fails the NanoClaw container's start (its agents could not run either).
+    The port is fixed per container, so one NanoClaw container runs at most one custom
+    harness at a time (a fleet instance has one agent group); a second one fails to
+    bind with a clear error. Containers created before this change have no published
+    port: replace them (recycle) when deploying.
   - *NanoClaw on the Docker host* (no such env): loopback bridge plus the docker0 TCP
     forwarder the Strata path uses (`argus-local-forward.ts`).
   - Either way the bridge is reachable by any container on the default bridge, so each

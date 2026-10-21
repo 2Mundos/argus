@@ -154,3 +154,21 @@ describe("bridgePlacement / parsePublishedPort", () => {
     expect(parsePublishedPort("")).toBeNull();
   });
 });
+
+describe("published placement port contention", () => {
+  afterEach(async () => {
+    await syncCustomHarnessBridge("g1", null, null);
+    await syncCustomHarnessBridge("g2", null, null);
+  });
+
+  it("a second custom group on the same NanoClaw container fails with a clear error", async () => {
+    const up = await fakeUpstream();
+    const env = { ARGUS_CUSTOM_BRIDGE_PORT: "3142", ARGUS_CUSTOM_BRIDGE_CONTAINER: "argus-i-1" };
+    const resolvePublished = async () => 32769;
+    await syncCustomHarnessBridge("g1", SETTINGS(up.port), "k", fetch, { env, resolvePublished });
+    await expect(
+      syncCustomHarnessBridge("g2", SETTINGS(up.port), "k", fetch, { env, resolvePublished }),
+    ).rejects.toThrow(/one custom harness per NanoClaw container/);
+    up.close();
+  });
+});

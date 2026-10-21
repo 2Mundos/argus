@@ -116,6 +116,13 @@ export async function syncCustomHarnessBridge(
     ...(placement.kind === "published"
       ? { listenHost: "0.0.0.0", listenPort: placement.containerPort }
       : {}),
+  }).catch((err: NodeJS.ErrnoException) => {
+    // One published port per NanoClaw container: a second custom group cannot share it.
+    if (placement.kind === "published" && err?.code === "EADDRINUSE")
+      throw new Error(
+        `custom bridge port ${placement.containerPort} is in use: one custom harness per NanoClaw container`,
+      );
+    throw err;
   });
   let containerBaseUrl: string;
   try {

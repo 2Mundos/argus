@@ -289,3 +289,41 @@ def test_docker_start_without_ports_publishes_nothing(
     monkeypatch.setattr(target, "_docker", lambda: FakeClient())
     target._start(ContainerSpec(instance_id="i-2", image="worker:1", env={}, labels={}))
     assert runs[0]["ports"] is None
+
+
+def test_docker_start_refuses_to_publish_without_a_bridge_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from argus_api.fleet.targets import HOST_GATEWAY, ContainerSpec, TargetError
+
+    class FakeContainers:
+        def get(self, name):
+            from docker.errors import NotFound
+
+            raise NotFound("missing")
+
+        def run(self, image, **kwargs):  # pragma: no cover - must not be reached
+            raise AssertionError("started without a reachable bridge port")
+
+    class FakeNetworks:
+        def get(self, name):
+            net = MagicMock()
+            net.attrs = {"IPAM": {"Config": []}}
+            return net
+
+    class FakeClient:
+        containers = FakeContainers()
+        images = MagicMock()
+        networks = FakeNetworks()
+
+    target = DockerTarget(host=None)
+    monkeypatch.setattr(target, "_docker", lambda: FakeClient())
+    spec = ContainerSpec(
+        instance_id="i-3",
+        image="worker:1",
+        env={},
+        labels={},
+        ports={"3141/tcp": (HOST_GATEWAY, None)},
+    )
+    with pytest.raises(TargetError, match="no IPv4 gateway"):
+        target._start(spec)
