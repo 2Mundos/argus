@@ -1845,6 +1845,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Log
+         * @description Log lines of an attempt (default: the current one), oldest first. With
+         *     `after` (a `seq`), the lines after it; without, the newest `limit` lines.
+         *     Workers only read tasks they have leased.
+         */
+        get: operations["get_log_api_tasks__task_id__log_get"];
+        put?: never;
+        /**
+         * Post Log
+         * @description Append output lines to the live log of the attempt you hold (agent token).
+         *     Up to 200 lines of 2000 characters (longer ones are cut) and 64 KiB per batch,
+         *     one batch per second per source. Secrets are redacted before storing; the
+         *     batch is published as a `task.log` event and stored in a ring of 2000 lines
+         *     per attempt. Fenced like progress: a stale attempt is 409 `stale_attempt`.
+         */
+        post: operations["post_log_api_tasks__task_id__log_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/progress": {
         parameters: {
             query?: never;
@@ -2647,6 +2677,8 @@ export interface components {
             lease_ttl_s: number;
             /** Max Attempts */
             max_attempts: number;
+            /** Output At */
+            output_at?: string | null;
             /** Parent Id */
             parent_id: string | null;
             /** Priority */
@@ -3871,6 +3903,53 @@ export interface components {
             /** Verdict */
             verdict: string;
         };
+        /** LogAccepted */
+        LogAccepted: {
+            /** Accepted */
+            accepted: number;
+            /** Last Seq */
+            last_seq: number;
+            /** Output At */
+            output_at: string | null;
+        };
+        /** LogLine */
+        LogLine: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Line */
+            line: string;
+            /** Seq */
+            seq: number;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "worker" | "delegate";
+        };
+        /** LogPage */
+        LogPage: {
+            /** Attempt */
+            attempt: number;
+            /** Last Seq */
+            last_seq: number;
+            /** Lines */
+            lines: components["schemas"]["LogLine"][];
+        };
+        /** LogRequest */
+        LogRequest: {
+            /** Attempt */
+            attempt: number;
+            /** Lines */
+            lines: string[];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "worker" | "delegate";
+        };
         /** LoopOut */
         LoopOut: {
             /** Errors Total */
@@ -5078,6 +5157,8 @@ export interface components {
             lease_ttl_s: number;
             /** Max Attempts */
             max_attempts: number;
+            /** Output At */
+            output_at?: string | null;
             /** Parent Id */
             parent_id: string | null;
             /** Priority */
@@ -5316,6 +5397,8 @@ export interface components {
             lease_ttl_s: number;
             /** Max Attempts */
             max_attempts: number;
+            /** Output At */
+            output_at?: string | null;
             /** Parent Id */
             parent_id: string | null;
             /** Priority */
@@ -5529,6 +5612,8 @@ export interface components {
             lease_expires_at: string | null;
             /** Max Attempts */
             max_attempts: number;
+            /** Output At */
+            output_at?: string | null;
             /** Parent Id */
             parent_id: string | null;
             /** Priority */
@@ -9097,6 +9182,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_log_api_tasks__task_id__log_get: {
+        parameters: {
+            query?: {
+                attempt?: number | null;
+                after?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_log_api_tasks__task_id__log_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LogRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogAccepted"];
                 };
             };
             /** @description Validation Error */

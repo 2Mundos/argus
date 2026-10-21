@@ -28,16 +28,23 @@ export type Signal = Pick<
   | "progress_at"
   | "progress_kind"
   | "progress_data"
->;
+> & { output_at?: string | null };
 
-/** Whole minutes of silence on a claimed task, or null while it is within `threshold`. */
+/**
+ * Whole minutes of silence on a claimed task, or null while it is within `threshold`.
+ * Silence is counted from the latest of the last progress note and the last log output.
+ */
 export function noSignalMinutes(
-  task: Pick<Task, "state" | "progress_at">,
+  task: Pick<Task, "state" | "progress_at"> & { output_at?: string | null },
   now: number,
   threshold = NO_SIGNAL_MINUTES,
 ): number | null {
-  if (task.state !== "claimed" || !task.progress_at) return null;
-  const minutes = (now - new Date(task.progress_at).getTime()) / 60_000;
+  const last = Math.max(
+    task.progress_at ? Date.parse(task.progress_at) : Number.NEGATIVE_INFINITY,
+    task.output_at ? Date.parse(task.output_at) : Number.NEGATIVE_INFINITY,
+  );
+  if (task.state !== "claimed" || !Number.isFinite(last)) return null;
+  const minutes = (now - last) / 60_000;
   return minutes > threshold ? Math.floor(minutes) : null;
 }
 

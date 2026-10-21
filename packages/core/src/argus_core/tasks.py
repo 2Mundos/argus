@@ -279,6 +279,9 @@ class Task(BaseModel):
     progress_at: datetime | None
     progress_kind: ProgressKind | None = None
     progress_data: dict[str, Any] | None = None
+    output_at: datetime | None = (
+        None  # last accepted live-log batch (task-live-log spec)
+    )
     depends_on: list[str]
     project: str
     knowledge: list[str]

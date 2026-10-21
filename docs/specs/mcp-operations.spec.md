@@ -106,6 +106,9 @@ Findings outside the gap list:
 - **Batch read:** `GET /api/tasks?ids=a,b,c&view=detail` (≤50 ids) → MCP
   `get_tasks(ids, view)`. Unknown ids come back in `missing: [...]`; nothing
   fails as a whole. `ids` takes no other filter or cursor (`422 ids_exclusive`).
+- **Task log:** MCP `get_task_log(task_id, attempt?, after?, limit?)` reads the live
+  log tail like `GET /api/tasks/{id}/log` ([task live log](task-live-log.spec.md) 3.5),
+  with REST's permissions; it is listed to every scope.
 - **Decisions:** MCP `list_decisions` exposes REST's `state` and `subject_id`
   filters and the new `project` and `kind` filters, with the page envelope. Add
   MCP `get_decision`.

@@ -328,6 +328,9 @@ test("commands are non-interactive, scoped to the cwd, and read-only on request"
   assert.ok(write.args.join(" ").includes("-s workspace-write"));
   assert.ok(buildCommand("claude", { cwd: "/w", readOnly: true }).args.includes("plan"));
   const claudeWrite = buildCommand("claude", { cwd: "/w", readOnly: false });
+  // The live log needs the event stream; the last line is still the result object.
+  assert.equal(claudeWrite.args[claudeWrite.args.indexOf("--output-format") + 1], "stream-json");
+  assert.ok(claudeWrite.args.includes("--verbose"));
   assert.ok(claudeWrite.args.includes("acceptEdits"));
   assert.ok(claudeWrite.args.includes("--allowed-tools"));
   assert.ok(claudeWrite.args.join(" ").includes("Bash"));
@@ -1094,4 +1097,152 @@ fetch(c.options.baseURL + "/chat/completions", { method: "POST", headers: { auth
   assert.equal(seen[0].body.model, "qwen/qwen3-coder");
   assert.deepEqual(seen[0].body.provider, SETTINGS.provider);
   assert.ok(!dump(report).includes(KEY));
+});
+
+/** A fake claude that prints a stream-json run; `extra` is shell run before the result line. */
+function liveRun(t, { extra = "", leakInEnv = {}, envExtra = {}, relayFile } = {}) {
+  const s = sandbox(t);
+  const ev = (o) => `echo '${JSON.stringify(o)}'`;
+  s.fake(
+    "claude",
+    [
+      'if [ "$1" = "--version" ]; then echo v; exit 0; fi',
+      "cat >/dev/null",
+      `env > ${path.join(s.dir, "child-env.txt")}`,
+      ev({ type: "system", subtype: "init", model: "m-1" }),
+      ev({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "Reading the spec" },
+            { type: "tool_use", name: "Read", input: { file_path: "/w/a.py" } },
+            { type: "text", text: "Authorization: Bearer abcdef1234567890xyz" },
+          ],
+        },
+      }),
+      extra,
+      ev({ type: "result", subtype: "success", is_error: false, result: "done", usage: {} }),
+    ].join("\n"),
+  );
+  const policy = JSON.parse(
+    fs.readFileSync(new URL("./model-policy.defaults.json", import.meta.url), "utf8"),
+  );
+  const file = path.join(s.dir, "argus-model-policy.json");
+  fs.writeFileSync(file, JSON.stringify(policySnapshot(policy, { task_id: "t1", attempt: 3 })));
+  const env = {
+    ...s.env,
+    ANTHROPIC_API_KEY: "placeholder",
+    ARGUS_MODEL_POLICY_FILE: file,
+    ARGUS_LIVELOG_TICK_S: "0.05",
+    ARGUS_LIVELOG_FLUSH_S: "0.1",
+    ...(relayFile ? { ARGUS_TASK_LOG_FILE: relayFile } : {}),
+    ...leakInEnv,
+    ...envExtra,
+  };
+  const relay = relayFile ?? path.join(s.dir, "argus-task-log.jsonl");
+  const records = () =>
+    fs.existsSync(relay)
+      ? fs
+          .readFileSync(relay, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l))
+      : [];
+  return { s, env, relay, records };
+}
+
+test("a claude run streams readable, redacted lines to the relay file beside the policy", async (t) => {
+  const l = liveRun(t);
+  const { code, report } = await run(["claude", "--cwd", l.s.work, "--timeout", "20"], {
+    env: l.env,
+  });
+  assert.equal(code, 0);
+  assert.equal(report.exit_code, 0);
+  assert.equal(report.executor_error, undefined);
+  const lines = l.records().flatMap((r) => r.lines);
+  assert.deepEqual(lines.slice(0, 3), [
+    "claude started (m-1)",
+    "Reading the spec",
+    "▸ Read /w/a.py",
+  ]);
+  assert.equal(lines[3], "[redacted]");
+  assert.equal(lines.at(-1), "claude finished");
+  assert.ok(l.records().every((r) => r.task_id === "t1" && r.attempt === 3 && r.v === 1));
+  // The raw stream stays the artifact and its last line is the final report.
+  const out = fs.readFileSync(report.artifacts[0], "utf8").trim().split("\n");
+  assert.equal(JSON.parse(out.at(-1)).type, "result");
+  assert.match(report.tail, /"result":"done"/);
+});
+
+test("a silent executor produces keepalive lines", async (t) => {
+  const l = liveRun(t, {
+    extra: "sleep 1.2",
+    envExtra: { ARGUS_LIVELOG_KEEPALIVE_S: "0.3" },
+  });
+  const { code } = await run(["claude", "--cwd", l.s.work, "--timeout", "20"], { env: l.env });
+  assert.equal(code, 0);
+  const alive = l
+    .records()
+    .flatMap((r) => r.lines)
+    .filter((x) => /^delegate alive, \d+s since last output$/.test(x));
+  assert.ok(alive.length >= 2, JSON.stringify(l.records()));
+});
+
+test("a broken relay never fails the run", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "norelay-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, "file"), "x");
+  // a path below a regular file can never be created
+  const l = liveRun(t, { relayFile: path.join(dir, "file", "sub", "log.jsonl") });
+  const { code, report } = await run(["claude", "--cwd", l.s.work, "--timeout", "20"], {
+    env: l.env,
+  });
+  assert.equal(code, 0);
+  assert.equal(report.exit_code, 0);
+  assert.equal(fs.existsSync(l.relay), false);
+});
+
+test("values of secret-looking env vars are masked even without a known shape", async (t) => {
+  const l = liveRun(t, {
+    extra:
+      "echo '" +
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "the db said opensesame-2026 back" }] },
+      }) +
+      "'",
+    envExtra: { DB_PASSWORD: "opensesame-2026" },
+  });
+  const { code } = await run(["claude", "--cwd", l.s.work, "--timeout", "20"], { env: l.env });
+  assert.equal(code, 0);
+  const relayed = fs.readFileSync(l.relay, "utf8");
+  assert.equal(relayed.includes("opensesame-2026"), false);
+  assert.match(relayed, /the db said \[redacted\] back/);
+});
+
+test("the Argus agent token is neither passed on nor relayed", async (t) => {
+  const TOKEN = "argus_agent_SECRET0123456789";
+  // The channel keeps the token on the host; a delegate started without it never gains one.
+  const l = liveRun(t, {
+    extra:
+      "echo '" +
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: `leak ARGUS_AGENT_TOKEN=${TOKEN}` }] },
+      }) +
+      "'",
+  });
+  const { code } = await run(["claude", "--cwd", l.s.work, "--timeout", "20"], { env: l.env });
+  assert.equal(code, 0);
+  assert.equal(
+    /ARGUS_AGENT_TOKEN=/.test(fs.readFileSync(path.join(l.s.dir, "child-env.txt"), "utf8")),
+    false,
+  );
+  const relayed = fs.readFileSync(l.relay, "utf8");
+  assert.equal(relayed.includes(TOKEN), false);
+  assert.match(relayed, /ARGUS_AGENT_TOKEN=\[redacted\]/);
+  // and the relay path itself makes no request: nothing in it can authenticate
+  const src = fs.readFileSync(new URL("./livelog.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /ARGUS_AGENT_TOKEN|fetch\(/);
 });

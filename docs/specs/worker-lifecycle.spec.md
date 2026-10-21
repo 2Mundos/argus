@@ -464,7 +464,7 @@ as a managed pool of size 1 uses the same model and comes later.
   REST API with the caller's own token, so scopes, validation, leases, and
   error codes are identical to HTTP; REST errors come back as tool errors
   (`409 stale_attempt: …`). The MCP layer holds no state or logic of its own.
-  Tools: `claim_task`, `heartbeat`, `get_task`, `get_tasks`, `report_progress`,
+  Tools: `claim_task`, `heartbeat`, `get_task`, `get_tasks`, `get_task_log`, `report_progress`,
   `complete_task`, `fail_task`, `ask_question`, `create_task`,
   `upload_text_artifact`, `list_artifacts`, `read_artifact`, `verify_artifact`,
   `leave`; `search_knowledge`, `get_knowledge_page`, `write_knowledge`;
