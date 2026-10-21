@@ -1,3 +1,5 @@
+import time
+
 import pytest
 from argus_core.redact import REDACTED, redact
 
@@ -51,3 +53,34 @@ def test_ordinary_text_and_counters_survive() -> None:
 def test_redaction_is_idempotent() -> None:
     once = redact("API_TOKEN=abc Authorization: Bearer abcdefgh12345")
     assert redact(once) == once
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a." * 32_000,
+        "a-" * 32_000,
+        "--" + "a-" * 32_000,
+        "a" * 64_000 + "://",
+        "x://a:" * 10_000,
+        "x://a:" + "b" * 64_000,
+        "-----BEGIN " + "A " * 32_000,
+        "-----BEGIN PRIVATE KEY-----" * 2_000,
+        "token=" * 10_000,
+        "bearer " * 9_000,
+        "eyJ" + "a" * 64_000,
+        "authorization:" + " " * 64_000,
+    ],
+)
+def test_worst_case_input_stays_linear(text: str) -> None:
+    started = time.perf_counter()
+    redact(text, ("exact-secret-value",))
+    assert time.perf_counter() - started < 1.0
+
+
+def test_bounded_names_still_mask_ordinary_long_names() -> None:
+    name = "MY_" + "X" * 50 + "_TOKEN"
+    assert redact(f"{name}=s3cr3tvalue") == f"{name}=[redacted]"
+    assert redact("tool --gitea-access-token s3cr3tvalue") == (
+        "tool --gitea-access-token [redacted]"
+    )

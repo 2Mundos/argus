@@ -10,6 +10,7 @@ import {
   createBatcher,
   createFileRelay,
   createStreamParser,
+  envSecrets,
   redactText,
   startLiveLog,
 } from "./livelog.mjs";
@@ -109,6 +110,47 @@ test("obvious secrets are redacted before anything leaves the delegate", () => {
   });
   p.push(ev(assistant({ type: "text", text: "using exact-secret-value and TOKEN=abcdef123456" })));
   assert.deepEqual(got, ["using [redacted] and TOKEN=[redacted]"]);
+});
+
+test("redaction stays linear on adversarial input (no ReDoS)", () => {
+  const worst = [
+    "a.".repeat(32_000),
+    "a-".repeat(32_000),
+    `--${"a-".repeat(32_000)}`,
+    `${"a".repeat(64_000)}://`,
+    "x://a:".repeat(10_000),
+    `x://a:${"b".repeat(64_000)}`,
+    `-----BEGIN ${"A ".repeat(32_000)}`,
+    "token=".repeat(10_000),
+    `eyJ${"a".repeat(64_000)}`,
+    `authorization:${" ".repeat(64_000)}`,
+  ];
+  for (const text of worst) {
+    const t0 = performance.now();
+    redactText(text, ["exact-secret-value"]);
+    const ms = performance.now() - t0;
+    assert.ok(ms < 1000, `${ms.toFixed(0)} ms for ${text.slice(0, 20)}…`);
+  }
+});
+
+test("secret-looking env values are masked exactly", () => {
+  const env = {
+    GITEA_TOKEN: " plainvalue-xyz123 ",
+    DB_PASSWORD: "opensesame-2026",
+    ANTHROPIC_API_KEY: "short",
+    my_client_secret: "lowercase-name-ok",
+    PATH: "/usr/bin:/bin:/usr/local/bin",
+    NUMBER: undefined,
+  };
+  assert.deepEqual(envSecrets(env).sort(), [
+    "lowercase-name-ok",
+    "opensesame-2026",
+    "plainvalue-xyz123",
+  ]);
+  assert.equal(
+    redactText("got plainvalue-xyz123 and opensesame-2026 in /usr/bin", envSecrets(env)),
+    "got [redacted] and [redacted] in /usr/bin",
+  );
 });
 
 test("batching: lines wait for the flush interval, in batches of at most 200", () => {

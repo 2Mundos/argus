@@ -1203,6 +1203,24 @@ test("a broken relay never fails the run", async (t) => {
   assert.equal(fs.existsSync(l.relay), false);
 });
 
+test("values of secret-looking env vars are masked even without a known shape", async (t) => {
+  const l = liveRun(t, {
+    extra:
+      "echo '" +
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "the db said opensesame-2026 back" }] },
+      }) +
+      "'",
+    envExtra: { DB_PASSWORD: "opensesame-2026" },
+  });
+  const { code } = await run(["claude", "--cwd", l.s.work, "--timeout", "20"], { env: l.env });
+  assert.equal(code, 0);
+  const relayed = fs.readFileSync(l.relay, "utf8");
+  assert.equal(relayed.includes("opensesame-2026"), false);
+  assert.match(relayed, /the db said \[redacted\] back/);
+});
+
 test("the Argus agent token is neither passed on nor relayed", async (t) => {
   const TOKEN = "argus_agent_SECRET0123456789";
   // The channel keeps the token on the host; a delegate started without it never gains one.

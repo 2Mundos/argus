@@ -18,8 +18,9 @@ const ARG_MAX = 120;
 const RESULT_MAX = 200;
 
 const MASK = "[redacted]";
+// Every open-ended run is bounded so the work stays linear in the input (no ReDoS).
 const PATTERNS = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+  /-----BEGIN [A-Z ]{0,32}PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]{0,32}PRIVATE KEY-----|$)/g,
   /\b(?:authorization|proxy-authorization)\s*[:=]\s*\S+(?:[ \t]+\S+)?/gi,
   /\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
   /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*/g,
@@ -30,11 +31,19 @@ const PATTERNS = [
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
   /\bAIza[A-Za-z0-9_-]{30,}/g,
-  /(?<=:\/\/[^\s/:@]+:)[^\s/@]+(?=@)/g,
+  /(\b[a-z][a-z0-9+.-]{0,16}:\/\/[^\s/:@]{1,256}:)[^\s/@]{1,256}(?=@)/gi,
   // NAME=value, name: value, "name": "value" for secret-looking names
-  /(\b[\w.-]*(?:token|secret|password|passwd|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credentials?)["']?\s*[:=]\s*["']?)[^\s"',;]+/gi,
-  /(--[\w-]*(?:token|secret|password|api-key)[\w-]*[ =])\S+/gi,
+  /(\b[\w.-]{0,64}(?:token|secret|password|passwd|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credentials?)["']?\s*[:=]\s*["']?)[^\s"',;]+/gi,
+  /(--[\w-]{0,64}(?:token|secret|password|api-key)[\w-]{0,64}[ =])\S+/gi,
 ];
+
+/** Values of secret-looking variables (`*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*`), to mask exactly. */
+export function envSecrets(env = process.env) {
+  return Object.entries(env)
+    .filter(([k, v]) => /KEY|TOKEN|SECRET|PASSWORD/i.test(k) && typeof v === "string")
+    .map(([, v]) => v.trim())
+    .filter((v) => v.length >= 8);
+}
 
 /** Best-effort masking of obvious secrets; the server redacts again. `secrets` are exact values. */
 export function redactText(text, secrets = []) {

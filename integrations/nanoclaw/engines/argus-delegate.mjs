@@ -21,7 +21,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createFileRelay, RELAY_FILE, startLiveLog } from "./livelog.mjs";
+import { createFileRelay, envSecrets, RELAY_FILE, startLiveLog } from "./livelog.mjs";
 import { createSink, createTracker, gitHead, waitingInput } from "./milestones.mjs";
 import { loadPolicy, selectModel } from "./model-policy.mjs";
 import { parseUsage, runKey, runKeyHash } from "./usage.mjs";
@@ -836,7 +836,7 @@ async function runAttempt(
         stdoutFile,
         executor,
         send: createFileRelay({ file: relayFile, taskId, attempt }),
-        secrets: [e[CUSTOM_KEY_ENV]?.trim()],
+        secrets: [e[CUSTOM_KEY_ENV]?.trim(), ...envSecrets(e)],
         flushMs: seconds(e.ARGUS_LIVELOG_FLUSH_S),
         keepaliveMs: seconds(e.ARGUS_LIVELOG_KEEPALIVE_S),
         intervalMs: seconds(e.ARGUS_LIVELOG_TICK_S),
