@@ -6,10 +6,13 @@ import json
 
 import pytest
 from api_support import DONE, FakeClock, insert_agent
+from argus_api.accounts import service as accounts
 from argus_api.db import Database
 from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
 from argus_api.knowledge import service as kn
+from argus_api.secrets import MemorySecretStore
 from argus_api.tasks import service as tasks
+from argus_core.accounts import AccountCreate
 from argus_core.knowledge import PageCreate, ProjectUpsert
 from argus_core.task_edit import EDITABLE, EDITABLE_BY_STATE, TaskChanges
 from argus_core.tasks import ExecutorModel, HarnessModel, TaskCreate
@@ -405,6 +408,17 @@ async def test_each_state_permits_exactly_its_documented_fields(
     assert task.state is state
     allowed = EDITABLE_BY_STATE[state]
     assert set(task.editable_fields) == allowed
+    store = MemorySecretStore()  # the account a harness account pin names
+    await store.put("pin", {"api_key": "k"})
+    async with db.write() as tx:
+        await accounts.create_account(
+            tx,
+            "acc-pin",
+            AccountCreate(name="pin", provider="anthropic", secret_ref="sops:pin"),
+            "sops:pin",
+            WHO,
+            store,
+        )
     values = {
         "title": "T",
         "spec": "S",
@@ -417,6 +431,7 @@ async def test_each_state_permits_exactly_its_documented_fields(
         "account_providers": ["anthropic", "local"],
         "harness_model": HarnessModel(engine="claude", model="claude-opus-5-5"),
         "executor_model": ExecutorModel(executor="codex", model="gpt-6.1-sol"),
+        "harness_account": "acc-pin",
     }
     assert set(values) == set(EDITABLE)
     for field, value in values.items():

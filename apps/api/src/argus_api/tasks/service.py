@@ -122,6 +122,13 @@ async def create_task(
     else:
         prompt_trust = PromptTrust.ORCHESTRATOR
     await _check_project_and_pins(tx.conn, body)
+    harness_account = await _resolve_harness_account(
+        tx.conn,
+        body.harness_account,
+        account_providers=body.account_providers,
+        harness_model=body.harness_model,
+        executor_model=body.executor_model,
+    )
     deps = sorted(set(body.depends_on))
     dep_states = await _states(tx.conn, deps)
     if missing := set(deps) - dep_states.keys():
@@ -148,9 +155,9 @@ async def create_task(
         " required_capabilities, priority, state, requires_approval, review,"
         " prompt_trust, lease_ttl_s, max_attempts, project, timeout_s, created_by,"
         " created_at, updated_at, difficulty, difficulty_source, account_providers,"
-        " harness_model, executor_model)"
+        " harness_model, executor_model, harness_account)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-        " ?, ?)",
+        " ?, ?, ?)",
         (
             task_id,
             body.parent_id,
@@ -177,6 +184,7 @@ async def create_task(
             _providers_json(body.account_providers),
             _pin_json(body.harness_model),
             _pin_json(body.executor_model),
+            harness_account,
         ),
     )
     await tx.conn.executemany(
@@ -272,7 +280,8 @@ async def claim(
     row = None
     for candidate in candidates:
         restriction = engine_restriction(candidate)
-        if restriction is None and not gated:
+        pinned = candidate["harness_account"]
+        if restriction is None and pinned is None and not gated:
             row = candidate
             break
         providers = (
@@ -280,10 +289,12 @@ async def claim(
             if restriction is not None
             else sorted(ENGINE_PROVIDERS)
         )
-        if await _restriction_met(tx, providers, runtime_providers, agent_id):
+        if await _restriction_met(tx, providers, runtime_providers, agent_id, pinned):
             row = candidate
             break
-        if gated and not await can_serve(tx, restriction):
+        if (gated or pinned is not None) and not await can_serve(
+            tx, restriction, pinned
+        ):
             await _apply(
                 tx,
                 candidate,
@@ -342,6 +353,12 @@ async def executor_provider(conn: aiosqlite.Connection, task_id: str) -> str | N
     return None if pin is None else ExecutorModel.model_validate_json(pin).provider
 
 
+async def harness_account(conn: aiosqlite.Connection, task_id: str) -> str | None:
+    """The id of the one account the task's engine lease may use, None when any may
+    (task models spec 3.4)."""
+    return (await _row(conn, task_id))["harness_account"]
+
+
 def engine_restriction(row: aiosqlite.Row) -> str | None:
     """The stored `account_providers`, narrowed to the pinned harness's provider
     (task models spec 3.2); None when unrestricted."""
@@ -361,11 +378,13 @@ async def _restriction_met(
     providers: list[str],
     runtime_providers: list[str] | None,
     agent_id: str | None = None,
+    account_id: str | None = None,
 ) -> bool:
     """Can the caller start a task allowing `providers` now: the runtime applies one
     of them and either the caller already holds an engine lease of one, or an account
     of one is usable (available or past its reset, below `max_leases`; an
-    unreachable local model is disabled by its probe, so it never counts)."""
+    unreachable local model is disabled by its probe, so it never counts). With
+    `account_id` (a harness account pin) only that account counts, held or usable."""
     wanted = sorted(set(providers) & set(runtime_providers or []))
     if not wanted:
         return False
@@ -373,15 +392,26 @@ async def _restriction_met(
         "SELECT EXISTS (SELECT 1 FROM account_leases l JOIN accounts a"
         "  ON a.id = l.account_id WHERE l.agent_id = ? AND l.role = 'engine'"
         "  AND l.released_at IS NULL"
-        "  AND a.provider IN (SELECT value FROM json_each(?)))"
+        "  AND a.provider IN (SELECT value FROM json_each(?))"
+        "  AND (? IS NULL OR a.id = ?))"
         " OR EXISTS (SELECT 1 FROM accounts a"
         " WHERE a.provider IN (SELECT value FROM json_each(?))"
+        "  AND (? IS NULL OR a.id = ?)"
         "  AND (a.state = 'available'"
         "   OR (a.state = 'exhausted' AND a.exhausted_until <= ?))"
         "  AND (a.max_leases IS NULL OR a.max_leases >"
         "   (SELECT count(*) FROM account_leases l"
         "    WHERE l.account_id = a.id AND l.released_at IS NULL)))",
-        (agent_id, json.dumps(wanted), json.dumps(wanted), ts(tx.now)),
+        (
+            agent_id,
+            json.dumps(wanted),
+            account_id,
+            account_id,
+            json.dumps(wanted),
+            account_id,
+            account_id,
+            ts(tx.now),
+        ),
     ) as cur:
         row = await cur.fetchone()
     return bool(row and row[0])
@@ -431,15 +461,15 @@ async def _served_providers(conn: aiosqlite.Connection) -> set[str] | None:
 
 
 async def engine_capacity(tx: Tx) -> list[list[Any]]:
-    """`[provider, slots]` of each usable engine account, cloud before the local
-    model: how many more tasks it can serve now. Slots are the free lease slots plus
+    """`[provider, slots, account_id]` of each usable engine account, cloud before
+    the local model: how many more tasks it can serve now. Slots are the free lease slots plus
     the engine leases held by agents with no claimed task (they can take one at
     once); None means no lease limit. Accounts with no slot are left out, and so are
     accounts of a provider no live agent's runtime can apply (a `custom` account no
     worker runs is no capacity)."""
     served = await _served_providers(tx.conn)
     async with tx.conn.execute(
-        "SELECT a.provider, a.max_leases,"
+        "SELECT a.id, a.provider, a.max_leases,"
         " (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
         "  AND l.released_at IS NULL) AS active,"
         " (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
@@ -459,24 +489,36 @@ async def engine_capacity(tx: Tx) -> list[list[Any]]:
         if served is not None and r["provider"] not in served:
             continue
         if r["max_leases"] is None:
-            out.append([r["provider"], None])
+            out.append([r["provider"], None, r["id"]])
             continue
         slots = max(0, r["max_leases"] - r["active"]) + r["idle"]
         if slots > 0:
-            out.append([r["provider"], slots])
+            out.append([r["provider"], slots, r["id"]])
     out.sort(key=lambda c: c[0] == LOCAL_PROVIDER)  # stable: cloud first
     return out
 
 
-def _allows(account_providers: str | None, provider: str) -> bool:
+def _allows(
+    account_providers: str | None,
+    provider: str,
+    pinned: str | None = None,
+    account_id: str | None = None,
+) -> bool:
+    """Does a capacity entry fit the task's (stored) provider restriction and its
+    harness account pin (task models spec 3.4)?"""
+    if pinned is not None and account_id != pinned:
+        return False
     return account_providers is None or provider in json.loads(account_providers)
 
 
-async def can_serve(tx: Tx, account_providers: str | None) -> bool:
-    """Could any agent run a task with this (stored) restriction now?"""
+async def can_serve(
+    tx: Tx, account_providers: str | None, pinned: str | None = None
+) -> bool:
+    """Could any agent run a task with this (stored) restriction and harness
+    account pin now?"""
     return any(
-        _allows(account_providers, provider)
-        for provider, _ in await engine_capacity(tx)
+        _allows(account_providers, provider, pinned, account_id)
+        for provider, _, account_id in await engine_capacity(tx)
     )
 
 
@@ -490,7 +532,8 @@ async def wake_waiting(tx: Tx, actor: str = "system") -> list[str]:
     if not capacity:
         return []
     async with tx.conn.execute(
-        "SELECT id, account_providers, harness_model FROM tasks WHERE state = 'blocked'"
+        "SELECT id, account_providers, harness_model, harness_account FROM tasks"
+        " WHERE state = 'blocked'"
         " AND block_reason IN (?, ?) ORDER BY priority DESC, created_at, id",
         QUOTA_WAIT_REASONS,
     ) as cur:
@@ -501,7 +544,8 @@ async def wake_waiting(tx: Tx, actor: str = "system") -> list[str]:
             (
                 c
                 for c in capacity
-                if (c[1] is None or c[1] > 0) and _allows(engine_restriction(r), c[0])
+                if (c[1] is None or c[1] > 0)
+                and _allows(engine_restriction(r), c[0], r["harness_account"], c[2])
             ),
             None,
         )
@@ -720,7 +764,7 @@ async def fail(
     if (
         quota
         and await _manages_accounts(tx.conn)
-        and not await can_serve(tx, engine_restriction(row))
+        and not await can_serve(tx, engine_restriction(row), row["harness_account"])
     ):
         await _apply(
             tx,
@@ -1039,6 +1083,8 @@ async def edit_task(
         )
     current = await get_task(tx.conn, task_id)
     new = _normalized_edit(row, given)
+    if new.get("harness_account") is not None:  # a name is stored as its id
+        new["harness_account"] = await _account_id(tx.conn, new["harness_account"])
     changed = {f: v for f, v in new.items() if v != getattr(current, f)}
     if not changed:
         return current  # nothing differs: no write, same version
@@ -1049,6 +1095,14 @@ async def edit_task(
         raise ValidationFailedError(
             f"invalid values: harness_model: {why}",
             details=[f"harness_model: {why}"],
+        )
+    if changed.keys() & set(_ACCOUNT_PIN_RULES):
+        await _resolve_harness_account(
+            tx.conn,
+            new.get("harness_account", current.harness_account),
+            account_providers=new.get("account_providers", current.account_providers),
+            harness_model=new.get("harness_model", current.harness_model),
+            executor_model=new.get("executor_model", current.executor_model),
         )
 
     deps = changed.get("depends_on")
@@ -1141,7 +1195,7 @@ def _normalized_edit(row: aiosqlite.Row, given: dict[str, Any]) -> dict[str, Any
     values: dict[str, Any] = {}
     for field, value in given.items():
         if value is None:
-            if field in ("account_providers", *_PIN_FIELDS):
+            if field in ("account_providers", "harness_account", *_PIN_FIELDS):
                 values[field] = None
             elif field not in CLEARABLE:
                 errors.append(f"{field}: cannot be cleared")
@@ -1186,6 +1240,79 @@ def _providers_json(providers: list[str] | None) -> str | None:
 
 
 _PIN_FIELDS = ("harness_model", "executor_model")
+# The fields a harness account pin is checked against (task models spec 3.4).
+_ACCOUNT_PIN_RULES = (
+    "harness_account",
+    "account_providers",
+    "harness_model",
+    "executor_model",
+)
+
+
+async def _account_id(conn: aiosqlite.Connection, ref: str) -> str:
+    """The id of the account `ref` names (its id or its name); 422 when none does."""
+    return (await _named_account(conn, ref))["id"]
+
+
+async def _named_account(conn: aiosqlite.Connection, ref: str) -> aiosqlite.Row:
+    """The account `ref` names (its id first, else its name); 422 when none does."""
+    async with conn.execute(
+        "SELECT id, name, provider FROM accounts WHERE id = ? OR name = ?"
+        " ORDER BY id = ? DESC LIMIT 1",
+        (ref, ref, ref),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        why = f"no account {ref!r}"
+        raise ValidationFailedError(
+            f"invalid values: harness_account: {why}",
+            details=[f"harness_account: {why}"],
+        )
+    return row
+
+
+async def _resolve_harness_account(
+    conn: aiosqlite.Connection,
+    ref: str | None,
+    *,
+    account_providers: list[str] | None,
+    harness_model: HarnessModel | None,
+    executor_model: ExecutorModel | None,
+) -> str | None:
+    """The id of the account a harness account pin names, checked against the
+    task's other fields (task models spec 3.4); None when the task is not pinned.
+    The account must be an engine account its `account_providers` and harness pin
+    allow; a local (Strata) harness only orchestrates, so its executor pin may only
+    be the Cursor agent."""
+    if ref is None:
+        return None
+    acc = await _named_account(conn, ref)
+    account_id, name, provider = acc["id"], acc["name"], acc["provider"]
+    why = None
+    if provider not in ENGINE_PROVIDERS:
+        why = f"account {name} ({provider}) cannot run a harness"
+    elif account_providers is not None and provider not in account_providers:
+        why = f"account {name} is {provider}, excluded by account_providers"
+    elif harness_model is not None and harness_model.provider != provider:
+        why = (
+            f"account {name} is {provider}; harness_model engine"
+            f" {harness_model.engine} needs {harness_model.provider}"
+        )
+    elif (
+        provider == LOCAL_PROVIDER
+        and executor_model is not None
+        and executor_model.executor != "agent"
+    ):
+        why = (
+            f"account {name} is the local harness, which delegates only to the"
+            f" Cursor agent; executor_model {executor_model.executor} cannot run"
+        )
+    if why:
+        raise ValidationFailedError(
+            f"invalid values: harness_account: {why}",
+            details=[f"harness_account: {why}"],
+        )
+    return account_id
 
 
 def _pin_json(pin: HarnessModel | ExecutorModel | None) -> str | None:
@@ -1204,7 +1331,13 @@ def _diff(field: str, old: Any, new: Any) -> dict[str, Any]:
             "from": old and old.model_dump(),
             "to": new and new.model_dump(),
         }
-    if field in ("title", "priority", "difficulty", "account_providers"):
+    if field in (
+        "title",
+        "priority",
+        "difficulty",
+        "account_providers",
+        "harness_account",
+    ):
         return {"from": old, "to": new}
     if field in ("required_capabilities", "knowledge", "depends_on"):
         return {
@@ -1286,6 +1419,7 @@ async def _snapshot_attempt(tx: Tx, task: Task, agent_id: str) -> None:
             "depends_on",
             "difficulty",
             "difficulty_source",
+            "harness_account",
         )
     }
     for f in _PIN_FIELDS:

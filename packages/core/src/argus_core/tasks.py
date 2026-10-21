@@ -50,6 +50,10 @@ EXECUTOR_PROVIDERS: dict[str, str] = {
     "codex": "openai",
     "agent": "cursor",
 }
+# An account id or name: what a harness account pin names (task models spec 3.4).
+AccountRef = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
 ModelId = Annotated[
     str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
 ]
@@ -322,6 +326,9 @@ class TaskCreate(BaseModel):
     # Pinned engine/executor and model; None: policy and account priority.
     harness_model: HarnessModel | None = None
     executor_model: ExecutorModel | None = None
+    # Pin the engine lease to one account (id or name; stored as its id), e.g. the
+    # local Strata account or one custom account (task models spec 3.4).
+    harness_account: AccountRef | None = None
 
     @field_validator("input")
     @classmethod
@@ -415,6 +422,7 @@ class Task(BaseModel):
     account_providers: list[str] | None = None
     harness_model: HarnessModel | None = None
     executor_model: ExecutorModel | None = None
+    harness_account: str | None = None
     created_by: str
     created_at: datetime
     updated_at: datetime

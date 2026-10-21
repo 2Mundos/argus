@@ -208,6 +208,28 @@ export interface ArgusTask {
   /** Pinned engine/executor and model (task models spec); null follows the policy. */
   harness_model?: { engine: string; model: string } | null;
   executor_model?: { executor: string; model: string } | null;
+  /** Engine providers the task may run on (local harness spec); null: any. */
+  account_providers?: string[] | null;
+  /** The one account its engine lease may use (task models spec 3.4); null: any. */
+  harness_account?: string | null;
+}
+
+const PIN_PROVIDERS: Record<string, string> = { claude: "anthropic", codex: "openai" };
+
+/**
+ * Does the engine account the worker holds fit what the task allows (harness account
+ * pin, `account_providers`, harness engine pin)? When not, the claim leases afresh at
+ * once instead of keeping the account until the next re-evaluation.
+ */
+export function heldAccountFits(
+  held: { id: string; provider: string },
+  task: Pick<ArgusTask, "harness_account" | "account_providers" | "harness_model">,
+): boolean {
+  if (task.harness_account && held.id !== task.harness_account) return false;
+  if (task.account_providers?.length && !task.account_providers.includes(held.provider))
+    return false;
+  const pinned = task.harness_model && PIN_PROVIDERS[task.harness_model.engine];
+  return !pinned || pinned === held.provider;
 }
 
 /** True only when the task input explicitly sets delivery.allow_merge to boolean true. */
@@ -1505,7 +1527,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
     if (!acc.models) return true;
     const rebalancing = account !== null;
-    if (rebalancing) {
+    if (rebalancing && account && heldAccountFits(account, task)) {
       const every = acc.rebalanceMs ?? REBALANCE_MS;
       if (every <= 0 || (cfg.now?.() ?? Date.now()) - leasedAt < every) return true;
       leasedAt = cfg.now?.() ?? Date.now();
