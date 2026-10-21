@@ -24,7 +24,7 @@ export type Changes = {
   required_capabilities?: string[];
   knowledge?: string[];
   depends_on?: string[];
-  complexity?: "trivial" | "standard";
+  complexity?: "trivial" | "standard" | "hard";
   account_providers?: string[];
 };
 
@@ -82,7 +82,7 @@ export function buildChanges(base: Task, draft: Draft): { changes: Changes; erro
         errors.priority = "Priority is a whole number.";
       else changes.priority = n;
     } else if (field === "complexity") {
-      changes.complexity = value as "trivial" | "standard";
+      changes.complexity = value as "trivial" | "standard" | "hard";
     } else if (field === "spec") {
       changes.spec = value;
     } else {

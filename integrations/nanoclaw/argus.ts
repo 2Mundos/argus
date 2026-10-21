@@ -193,8 +193,8 @@ export interface ArgusTask {
   knowledge_refs: KnowledgeRef[];
   /** Immutable at create; missing on older servers is treated as orchestrator. */
   prompt_trust?: PromptTrust;
-  /** "trivial" prefers the local model and Cursor; missing on older servers is standard. */
-  complexity?: "trivial" | "standard";
+  /** "trivial" prefers the local model and Cursor, "hard" the policy hard chains; missing on older servers is standard. */
+  complexity?: "trivial" | "standard" | "hard";
 }
 
 /** True only when the task input explicitly sets delivery.allow_merge to boolean true. */

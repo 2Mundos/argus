@@ -9,5 +9,11 @@
   },
   "trivial": {
     "agent": ["composer-2.5"]
+  },
+  "hard_harness": {
+    "claude": ["claude-opus-5-5"]
+  },
+  "hard_implementation": {
+    "claude": ["claude-opus-5-5"]
   }
 }

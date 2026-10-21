@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 const engines = new Set(["codex", "claude", "opencode", "agent"]);
+// Optional maps, in canonical order after the two required ones: a policy without
+// them keeps its revision (task complexity spec).
+const OPTIONAL = ["trivial", "hard_harness", "hard_implementation"];
 const object = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
 
 export function validatePolicy(raw) {
@@ -9,18 +12,13 @@ export function validatePolicy(raw) {
   if (
     !object(raw) ||
     !["harness", "implementation"].every((k) => keys.includes(k)) ||
-    keys.some((k) => !["harness", "implementation", "trivial"].includes(k))
+    keys.some((k) => !["harness", "implementation", ...OPTIONAL].includes(k))
   )
     throw new Error(
-      "model policy requires harness and implementation maps and allows only an optional trivial one",
+      "model policy requires harness and implementation maps and allows only optional trivial, hard_harness and hard_implementation ones",
     );
   const policy = {};
-  // `trivial` is optional and last, so a policy without it keeps its old revision.
-  for (const scope of [
-    "harness",
-    "implementation",
-    ...(keys.includes("trivial") ? ["trivial"] : []),
-  ]) {
+  for (const scope of ["harness", "implementation", ...OPTIONAL.filter((k) => keys.includes(k))]) {
     if (!object(raw[scope])) throw new Error(`invalid ${scope} map`);
     policy[scope] = {};
     for (const name of Object.keys(raw[scope]).sort()) {
@@ -97,9 +95,13 @@ export function selectModel(snapshot, scope, engine, attempt = 1, reason = null,
 export function selectHarnessModel(snapshot, engine, task) {
   const reviews = (task.spec.match(/^## Review notes \(attempt /gm) ?? []).length;
   const failures = task.failures ?? 0;
+  const scope =
+    task.complexity === "hard" && snapshot.policy.hard_harness?.[engine]
+      ? "hard_harness"
+      : "harness";
   return selectModel(
     snapshot,
-    "harness",
+    scope,
     engine,
     failures + reviews + 1,
     reviews ? "verification_rejected" : failures ? "previous_task_failure" : null,
@@ -107,11 +109,14 @@ export function selectHarnessModel(snapshot, engine, task) {
 }
 
 /**
- * The map delegated selection reads: the optional `trivial` one when the pinned task is
- * trivial or the engine runs on a local account and it has a chain for this executor,
- * else `implementation`.
+ * The map delegated selection reads: `hard_implementation` when the pinned task is hard
+ * and that map has a chain for this executor; else the optional `trivial` one when the
+ * task is trivial or the engine runs on a local account and it has a chain for this
+ * executor; else `implementation`.
  */
 export function implementationScope(snapshot, executor, context = snapshot.context) {
+  if (context?.complexity === "hard" && snapshot.policy.hard_implementation?.[executor])
+    return "hard_implementation";
   const light = context?.complexity === "trivial" || context?.account_provider === "local";
   return light && snapshot.policy.trivial?.[executor] ? "trivial" : "implementation";
 }

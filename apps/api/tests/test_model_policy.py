@@ -291,3 +291,46 @@ def test_put_roundtrips_the_trivial_map_and_null_means_absent(
     )
     assert bad.status_code == 422
     assert "invalid model chain: trivial.agent" in bad.text
+
+
+def test_hard_maps_are_optional_validated_and_ordered_after_trivial() -> None:
+    plain = model_policy.revision(POLICY)
+    hard = {
+        **POLICY,
+        "hard_implementation": {"claude": ["claude-opus-5-5"]},
+        "hard_harness": {"claude": ["claude-opus-5-5"]},
+        "trivial": {"agent": ["composer-2.5"]},
+    }
+    assert model_policy.revision(hard) != plain
+    assert model_policy.canonical(hard).endswith(
+        '"trivial":{"agent":["composer-2.5"]},'
+        '"hard_harness":{"claude":["claude-opus-5-5"]},'
+        '"hard_implementation":{"claude":["claude-opus-5-5"]}}'
+    )
+    for scope in ("hard_harness", "hard_implementation"):
+        for bad in ({"claude": []}, {"typo": ["x"]}, [], "x"):
+            with pytest.raises(ValidationFailedError):
+                model_policy.validate({**POLICY, scope: bad})
+
+
+def test_defaults_ship_opus_for_claude_on_hard_and_nothing_for_codex(
+    client: TestClient,
+) -> None:
+    body = client.get("/api/models", headers=ADMIN).json()
+    assert body["hard_harness"] == {"claude": ["claude-opus-5-5"]}
+    assert body["hard_implementation"] == {"claude": ["claude-opus-5-5"]}
+
+
+def test_put_roundtrips_hard_maps_including_a_codex_entry(client: TestClient) -> None:
+    hard = {
+        **POLICY,
+        "hard_harness": {"claude": ["claude-opus-5-5"], "codex": ["terra-6.1"]},
+        "hard_implementation": {"codex": ["terra-6.1"]},
+    }
+    res = client.put("/api/models", json=hard, headers=ADMIN)
+    assert res.status_code == 200, res.text
+    assert res.json()["hard_harness"] == hard["hard_harness"]
+    assert res.json()["revision"] == model_policy.revision(hard)
+    res = client.put("/api/models", json=POLICY, headers=ADMIN)
+    assert res.json()["hard_harness"] is None
+    assert res.json()["revision"] == model_policy.revision(POLICY)

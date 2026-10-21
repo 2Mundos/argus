@@ -137,6 +137,7 @@ export function TaskEditForm({ task, onDone }: { task: Task; onDone: (saved?: Ta
               <select {...common}>
                 <option value="standard">standard</option>
                 <option value="trivial">trivial (prefers the local model)</option>
+                <option value="hard">hard (Claude runs on Opus)</option>
               </select>
             ) : (
               <input type={field === "priority" ? "number" : "text"} {...common} />
