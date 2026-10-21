@@ -28,7 +28,9 @@ life for the no-signal indicator of [progress milestones](progress-milestones.sp
   `claimed` task, its agent live, the lease unexpired, and `attempt` the task's
   current one. Otherwise `409` with `not_claimed`, `not_assignee`, `stale_attempt`,
   `lease_expired` or `agent_<state>`. An old attempt can never write into a newer
-  one, and a refused batch writes nothing. Unlike progress, a log batch does
+  one, and a refused batch writes nothing. The lease and rate checks run first on a
+  read snapshot, so a refused batch costs no cleaning, and again in the write
+  transaction, where they are authoritative. Unlike progress, a log batch does
   **not** renew the lease; heartbeats and progress do.
 - **Limits** (all enforced server-side):
 
@@ -41,7 +43,8 @@ life for the no-signal indicator of [progress milestones](progress-milestones.sp
 
   A line is cut, not refused, because output the client cannot shorten is better
   shown cut than lost. A batch every 2-5 s is well inside the rate.
-- **Cleaning**, in this order, before the write transaction: terminal escape
+- **Cleaning**, in this order, before the write transaction: `\r\n` and a bare `\r`
+  become newlines (a progress bar's frames are separate lines); terminal escape
   sequences and control characters removed (so an escape cannot split a secret);
   private key blocks masked across the batch; each line cut to 8 KiB; redaction
   (3.2); trailing whitespace stripped; blank lines dropped; long lines cut; each line
@@ -61,8 +64,10 @@ the password in `scheme://user:password@host`, assignments to names ending in
 `private_key` or `credential(s)` (`NAME=value`, `name: value`, JSON `"name": "value"`),
 `--token value` style flags, and PEM private key blocks. A private key block is
 caught only within one batch (an unterminated one is masked to the end of the batch);
-clients should send a block in one batch. Every open-ended run in a pattern is bounded
-(names to 64 characters, URL schemes to 16), so redaction stays linear in the input.
+clients should send a block in one batch. Redaction stays linear in the input: a rule
+starts only where its run starts (a JWT or a flag not inside a longer run of its
+characters; a name by its ending, whatever its length), so no two starts rescan one
+run. URL schemes are bounded to 16 characters; names, URL users and passwords are not.
 
 ## 3.3 Storage and retention
 
@@ -110,8 +115,8 @@ clients should send a block in one batch. Every open-ended run in a pattern is b
   the shared event stream for that task, de-duplicated by `seq`. It shows the attempt,
   filters `todos` / `worker` / `delegate`, scrolls to the end while the reader is at the
   end, and has pause/resume (paused lines are buffered and shown on resume). When the
-  stream reconnects, or a batch's `seq` skips past the newest line held, it reads the
-  missed lines with `after`.
+  stream reconnects, or a batch's `seq` skips past the newest line held (or past 1 when
+  none is held), it reads the missed lines with `after`.
 - **No signal** uses the later of `progress_at` and `output_at`; the threshold is
   unchanged (`NO_SIGNAL_MINUTES`, `VITE_NO_SIGNAL_MINUTES`).
 
@@ -138,7 +143,9 @@ clients should send a block in one batch. Every open-ended run in a pattern is b
   per poll with `source: "delegate"` (<= 200 lines, 60 KiB). `409` `stale_attempt`,
   `not_assignee`, `not_claimed` or `401` stop the relay; other `409`, `413`, `422` drop
   the batch; `429`, `5xx` and network errors back off (2 s doubling to 30 s) and retry.
-  Before COMPLETE/FAIL/ASK it drains the file, retrying within a 5 s deadline.
+  Before COMPLETE/FAIL/ASK it drains the file within a 5 s deadline: it keeps reading
+  while unread bytes remain, and paces each post 1.1 s from the last accepted one (or
+  the back-off), so the drain does not cause a `429`.
 
 # 4. Open Questions
 
