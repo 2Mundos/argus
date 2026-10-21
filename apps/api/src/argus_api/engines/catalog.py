@@ -10,21 +10,26 @@ from argus_core.engines import (
     Axes,
     EngineCatalog,
     EngineEntry,
+    EngineLayer,
     EngineRole,
     Fact,
+    LayerState,
     LocalModelInfo,
     Readiness,
 )
 
 from argus_api.engines.local_readiness import merge_local_validated
 
-# (id, label, role, axes, auth methods, notes). Auth methods are the ways the
-# vendor's own client supports; none of them is performed or stored by Argus.
-_DECLARED: list[tuple[str, str, EngineRole, Axes, list[str], str]] = [
+H, X = EngineLayer.HARNESS, EngineLayer.EXECUTOR
+
+# (id, label, layers, axes, auth methods, notes). The first layer is the primary one:
+# the legacy readiness and the flat ledger `validated` belong to it. Auth methods are
+# the ways the vendor's own client supports; none of them is performed or stored by Argus.
+_DECLARED: list[tuple[str, str, tuple[EngineLayer, ...], Axes, list[str], str]] = [
     (
         "codex",
         "Codex (OpenAI)",
-        EngineRole.ORCHESTRATOR,
+        (H, X),
         Axes(
             model_provider="openai",
             model=None,
@@ -33,13 +38,14 @@ _DECLARED: list[tuple[str, str, EngineRole, Axes, list[str], str]] = [
             account_provider="openai",
         ),
         ["chatgpt-device-login", "chatgpt-auth-json-import", "openai-api-key"],
-        "Engine and executor, chosen by account priority like any other. Its login "
+        "NanoClaw harness and code executor, chosen by account priority like any "
+        "other. Its login "
         "is an Argus account (imported or made with the dedicated device login).",
     ),
     (
         "claude",
         "Claude Code (Anthropic)",
-        EngineRole.CODE_EXECUTOR,
+        (H, X),
         Axes(
             model_provider="anthropic",
             model=None,
@@ -48,12 +54,12 @@ _DECLARED: list[tuple[str, str, EngineRole, Axes, list[str], str]] = [
             account_provider="anthropic",
         ),
         ["argus-account", "claude-login"],
-        "Engine and executor, chosen by account priority like any other.",
+        "NanoClaw harness and code executor, chosen by account priority like any other.",
     ),
     (
         "opencode",
         "OpenCode",
-        EngineRole.EXECUTOR,
+        (X,),
         Axes(
             model_provider="per-config",
             model=None,
@@ -68,7 +74,7 @@ _DECLARED: list[tuple[str, str, EngineRole, Axes, list[str], str]] = [
     (
         "cursor-agent",
         "Cursor agent",
-        EngineRole.EXECUTOR,
+        (X,),
         Axes(
             model_provider="cursor",
             model=None,
@@ -77,7 +83,7 @@ _DECLARED: list[tuple[str, str, EngineRole, Axes, list[str], str]] = [
             account_provider="cursor",
         ),
         ["argus-account", "CURSOR_API_KEY", "agent-login"],
-        "Delegated executor only (never an engine). An Argus cursor account (an "
+        "Code executor only (never a harness), the cheap default. An Argus cursor account (an "
         "imported login or an API key) reaches it through the vault; blocked "
         "without one or a login made in the container.",
     ),
@@ -120,6 +126,27 @@ def _with_tools(r: Readiness, tools: object) -> Readiness:
     return r
 
 
+def _role(layers: tuple[EngineLayer, ...]) -> EngineRole:
+    """The deprecated single role a set of layers collapses to."""
+    if len(layers) == 2:
+        return EngineRole.CODE_EXECUTOR
+    return EngineRole.ORCHESTRATOR if layers == (H,) else EngineRole.EXECUTOR
+
+
+def _layer_readiness(rec: dict, layer: EngineLayer, primary: bool) -> Readiness:
+    """The ledger facts of one layer. `layers.<layer>` holds its own; the flat facts
+    are the legacy record: `installed` and `authenticated` (the image and the account
+    are shared) fill any gap, but the flat `validated` is the primary layer's only, so
+    a validated harness never makes the executor validated, nor the reverse."""
+    own = (rec.get("layers") or {}).get(layer.value)
+    own = own if isinstance(own, dict) else {}
+    merged = {
+        f: own.get(f) or (rec.get(f) if primary or f != "validated" else None)
+        for f in _FACTS
+    }
+    return _with_tools(_readiness(merged), rec.get("tools"))
+
+
 def _with_registry(r: Readiness, summary: AccountsSummary) -> Readiness:
     """`authenticated` from the account registry (codex accounts spec 3). An
     available account makes it true; with none, the ledger's fact stands (a
@@ -152,25 +179,38 @@ def build(
     """`accounts` maps an account provider to its registry counts; None means the
     registry was not consulted and the ledger alone decides."""
     entries: list[EngineEntry] = []
-    for eid, label, role, axes, auth, notes in _DECLARED:
+    for eid, label, layer_ids, axes, auth, notes in _DECLARED:
         rec = ledger.get(eid, {})
-        r = _with_tools(_readiness(rec), rec.get("tools"))
         summary: AccountsSummary | None = None
         if accounts is not None and axes.account_provider:
             summary = accounts.get(axes.account_provider, AccountsSummary(leasable=0))
-            r = _with_registry(r, summary)
+        layers: list[LayerState] = []
+        for layer in layer_ids:
+            r = _layer_readiness(rec, layer, layer is layer_ids[0])
+            if summary is not None:
+                r = _with_registry(r, summary)
+            layers.append(
+                LayerState(
+                    layer=layer,
+                    readiness=r,
+                    accounts=summary,
+                    # Reported exhaustion removes the layer; unknown quota does not.
+                    usable=r.usable and (summary is None or summary.leasable_count > 0),
+                )
+            )
+        primary = layers[0]
         entries.append(
             EngineEntry(
                 id=eid,
                 label=label,
-                role=role,
+                role=_role(layer_ids),
+                layers=layers,
                 axes=axes,
                 auth_methods=auth,
                 version=rec.get("version"),
-                readiness=r,
-                accounts=summary,
-                # Reported exhaustion removes the engine; unknown quota does not.
-                usable=r.usable and (summary is None or summary.leasable_count > 0),
+                readiness=primary.readiness,
+                accounts=primary.accounts,
+                usable=primary.usable,
                 notes=notes,
             )
         )
@@ -206,6 +246,11 @@ def build(
                 id=LOCAL_ID,
                 label="Local model",
                 role=EngineRole.LOCAL,
+                layers=[
+                    LayerState(
+                        layer=X, readiness=r, accounts=local_accounts, usable=r.usable
+                    )
+                ],
                 axes=Axes(
                     model_provider="local",
                     model=local.model,

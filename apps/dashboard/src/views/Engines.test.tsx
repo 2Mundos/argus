@@ -8,7 +8,7 @@ const sample = {
     {
       id: "codex",
       label: "Codex (OpenAI)",
-      role: "orchestrator",
+      role: "code_executor",
       axes: {
         model_provider: "openai",
         model: null,
@@ -24,6 +24,26 @@ const sample = {
         validated: { ok: null, detail: "not checked" },
       },
       usable: false,
+      layers: [
+        {
+          layer: "harness",
+          readiness: {
+            installed: { ok: true, detail: "ok" },
+            authenticated: { ok: false, detail: "no credential" },
+            validated: { ok: null, detail: "not checked" },
+          },
+          usable: false,
+        },
+        {
+          layer: "executor",
+          readiness: {
+            installed: { ok: true, detail: "ok" },
+            authenticated: { ok: true, detail: "ok" },
+            validated: { ok: true, detail: "ok" },
+          },
+          usable: true,
+        },
+      ],
       notes: "",
     },
   ],
@@ -57,9 +77,12 @@ describe("Engines", () => {
   it("shows provider, executor and separate readiness facts", async () => {
     render(<Engines />);
     expect(await screen.findByText("Codex (OpenAI)")).toBeTruthy();
-    expect(screen.getByText("openai")).toBeTruthy();
+    expect(screen.getAllByText("openai")).toHaveLength(2);
     expect(screen.getAllByText("codex").length).toBeGreaterThan(0);
     expect(screen.getByText("model preferences")).toBeTruthy();
     expect(screen.getAllByText("no").length).toBeGreaterThan(0);
+    // Harness and executor are separate rows with their own readiness.
+    expect(screen.getByText("harness", { selector: "td" })).toBeTruthy();
+    expect(screen.getByText("executor", { selector: "td" })).toBeTruthy();
   });
 });

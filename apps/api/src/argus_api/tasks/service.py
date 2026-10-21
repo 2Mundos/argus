@@ -20,9 +20,9 @@ from argus_core.accounts import (
 )
 from argus_core.agents import LIVE, AgentState
 from argus_core.auth import Scope
-from argus_core.complexity import Complexity, ComplexitySource, classify
 from argus_core.custom_accounts import CustomConfig
 from argus_core.decisions import Audience, DecisionKind
+from argus_core.difficulty import Difficulty, DifficultySource, classify, escalated
 from argus_core.kinds import TaskKind
 from argus_core.task_edit import CLEARABLE, TaskAttempt, TaskChanges, editable_fields
 from argus_core.tasks import (
@@ -137,15 +137,17 @@ async def create_task(
 
     task_id = str(uuid4())
     now = ts(tx.now)
-    complexity = body.complexity or classify(body.title, body.spec)
+    difficulty = body.difficulty or classify(body.title, body.spec)
     source = (
-        ComplexitySource.EXPLICIT if body.complexity else ComplexitySource.HEURISTIC
+        body.difficulty_source or DifficultySource.DECLARED
+        if body.difficulty
+        else DifficultySource.INFERRED
     )
     await tx.conn.execute(
         "INSERT INTO tasks (id, parent_id, kind, title, spec, acceptance, input,"
         " required_capabilities, priority, state, requires_approval, review,"
         " prompt_trust, lease_ttl_s, max_attempts, project, timeout_s, created_by,"
-        " created_at, updated_at, complexity, complexity_source, account_providers)"
+        " created_at, updated_at, difficulty, difficulty_source, account_providers)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task_id,
@@ -168,7 +170,7 @@ async def create_task(
             actor,
             now,
             now,
-            complexity,
+            difficulty,
             source,
             _providers_json(body.account_providers),
         ),
@@ -315,9 +317,9 @@ async def claim(
 
 
 async def prefers_local(conn: aiosqlite.Connection, task_id: str) -> bool:
-    """A trivial task ranks the local model first (task complexity spec 3)."""
+    """A trivial task ranks the local model first (task difficulty spec 3)."""
     row = await _row(conn, task_id)
-    return row["complexity"] == Complexity.TRIVIAL
+    return row["difficulty"] == Difficulty.TRIVIAL
 
 
 async def account_providers(
@@ -660,6 +662,7 @@ async def fail(
             data={"error": error, "reason": reason},
         )
         return await get_task(tx.conn, task_id)
+    harder = {} if quota else _escalation(row, reason)
     await _apply(
         tx,
         row,
@@ -670,11 +673,31 @@ async def fail(
             {"progress_message": f"provider quota; requeued: {error}"}
             if quota
             else {"failures": row["failures"] + 1}
-        ),
-        data={"error": error, "reason": reason},
+        )
+        | harder.get("set", {}),
+        data={"error": error, "reason": reason} | harder.get("data", {}),
         counts_failure=not quota,
     )
     return await get_task(tx.conn, task_id)
+
+
+# Reasons for which the next attempt moves one difficulty level up (task difficulty
+# spec 3): the cheaper route could not hold the task.
+ESCALATING_REASONS = frozenset({"context_overflow", "verification_failed"})
+
+
+def _escalation(row: aiosqlite.Row, reason: str) -> dict[str, dict[str, Any]]:
+    """The difficulty bump (columns and event data) a failed attempt earns, or {}."""
+    current = Difficulty(row["difficulty"])
+    target = escalated(current)
+    if reason not in ESCALATING_REASONS or target is current:
+        return {}
+    return {
+        "set": {"difficulty": target, "difficulty_source": DifficultySource.INFERRED},
+        "data": {
+            "difficulty_escalated": {"from": current, "to": target, "reason": reason}
+        },
+    }
 
 
 async def block(tx: Tx, agent_id: str, task_id: str, attempt: int, reason: str) -> Task:
@@ -961,8 +984,8 @@ async def edit_task(
         for f, v in changed.items()
         if f not in ("knowledge", "depends_on", "account_providers")
     }
-    if "complexity" in sets:
-        sets["complexity_source"] = ComplexitySource.EXPLICIT
+    if "difficulty" in sets:
+        sets["difficulty_source"] = DifficultySource.DECLARED
     if "account_providers" in changed:
         sets["account_providers"] = _providers_json(changed["account_providers"])
     if sets:
@@ -1085,7 +1108,7 @@ def _digest(text: str) -> str:
 def _diff(field: str, old: Any, new: Any) -> dict[str, Any]:
     """What the audit keeps of one change. Spec and acceptance text never enter the
     event log (it is streamed and shown): only sizes and digests do."""
-    if field in ("title", "priority", "complexity", "account_providers"):
+    if field in ("title", "priority", "difficulty", "account_providers"):
         return {"from": old, "to": new}
     if field in ("required_capabilities", "knowledge", "depends_on"):
         return {
@@ -1165,6 +1188,8 @@ async def _snapshot_attempt(tx: Tx, task: Task, agent_id: str) -> None:
             "required_capabilities",
             "knowledge",
             "depends_on",
+            "difficulty",
+            "difficulty_source",
         )
     }
     await tx.conn.execute(
@@ -1345,8 +1370,14 @@ async def review(
         spec = row["spec"]
         if notes:
             spec += f"\n\n## Review notes (attempt {row['attempt']})\n\n{notes}"
+        harder = _escalation(row, "verification_failed")
         await _apply(
-            tx, row, Action.REJECT, actor, set_={"spec": spec}, data={"notes": notes}
+            tx,
+            row,
+            Action.REJECT,
+            actor,
+            set_={"spec": spec} | harder.get("set", {}),
+            data={"notes": notes} | harder.get("data", {}),
         )
     return await get_task(tx.conn, task_id)
 

@@ -172,6 +172,17 @@ def _read(path: Path) -> ModelPolicy:
     )
 
 
+def effective_policy(path: Path) -> Policy | None:
+    """The effective policy's chains, or None when it cannot be read (routing then
+    leaves the model to the CLI instead of failing)."""
+    try:
+        policy = _read(path)
+    except ValidationFailedError:
+        return None
+    scopes = (*SCOPES, *OPTIONAL_SCOPES)
+    return {s: chains for s in scopes if (chains := getattr(policy, s)) is not None}
+
+
 def effective_env(path: Path) -> tuple[str, str]:
     """(canonical JSON, revision) of the policy `GET /api/models` reports, for the
     ARGUS_MODEL_POLICY of a new instance. Raises ValidationFailedError if it is invalid."""

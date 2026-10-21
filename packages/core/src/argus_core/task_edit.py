@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from argus_core.complexity import Complexity
+from argus_core.difficulty import Difficulty
 from argus_core.tasks import TaskState
 
 EDITABLE = (
@@ -20,11 +20,11 @@ EDITABLE = (
     "required_capabilities",
     "knowledge",
     "depends_on",
-    "complexity",
+    "difficulty",
     "account_providers",
 )
-# `null` clears these to their empty value; title, priority and complexity cannot be.
-CLEARABLE = frozenset(EDITABLE) - {"title", "priority", "complexity"}
+# `null` clears these to their empty value; title, priority and difficulty cannot be.
+CLEARABLE = frozenset(EDITABLE) - {"title", "priority", "difficulty"}
 
 _ALL = frozenset(EDITABLE)
 _PRIORITY_ONLY = frozenset({"priority"})
@@ -65,7 +65,7 @@ class TaskChanges(BaseModel):
     required_capabilities: list[str] | None = None
     knowledge: list[str] | None = None
     depends_on: list[str] | None = None
-    complexity: Complexity | None = None
+    difficulty: Difficulty | None = None
     account_providers: list[str] | None = None
 
     def given(self) -> dict[str, Any]:

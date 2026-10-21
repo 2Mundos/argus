@@ -67,6 +67,17 @@ In scope:
   changes nothing, so listing never runs a container. An entry is `usable` only if
   all three are `true`. Installed does not imply authenticated; the host's
   login proves nothing about a container.
+- **Two layers per engine.** An engine is a *harness* (the NanoClaw provider that
+  runs the agent loop) and/or an *executor* (the CLI `argus-delegate` runs for
+  the code). Matrix: Claude and Codex are both; opencode and Cursor (`agent`) are
+  executors only; `local` is an executor only. Each layer has its own
+  `readiness`, `accounts` and `usable` in `layers[]`: validating Claude as a
+  harness proves nothing about Claude as an executor. The top-level `readiness`,
+  `accounts` and `usable` are kept and equal the primary layer (the harness when
+  there is one); `role` is deprecated and derived (both layers: `code_executor`,
+  harness only: `orchestrator`, executor only: `executor`), so Codex now reads
+  `code_executor`. Routing by [task difficulty](task-difficulty.spec.md) reads the
+  executor layer only.
 - **The ledger is a file** (`<data_dir>/engines-ledger.json`), written by
   `integrations/nanoclaw/engines/smoke.sh` and read by the API. It holds facts
   with evidence, never secrets. Absent file or absent entry means `null`. For
@@ -76,7 +87,10 @@ In scope:
   (`endpoint`, `model`, `n_ctx` as probed) on the ledger row, or an
   `engine.local_run` event with `verdict: accepted`, `criteria_effective: true`,
   and the same identity. `GET /api/engines` only reads the ledger and the event
-  log; it never runs a probe to infer validation.
+  log; it never runs a probe to infer validation. Per-layer facts live under
+  `layers.<harness|executor>` on the row; the flat `installed`/`authenticated`
+  are shared by both layers and the flat `validated` applies to the primary layer
+  only, so executor validation of Claude or Codex needs `layers.executor.validated`.
 - **Local validation from real runs.** `POST /api/engines/local/run` (and MCP
   `run_local`) records `engine.local_run` with `validation_identity` and whether
   criteria were effective. Only `accepted` with effective criteria can satisfy
@@ -185,7 +199,7 @@ In scope:
   MCP tools, settings
   `ARGUS_LOCAL_MODEL_URL`, `ARGUS_LOCAL_MODEL`, `ARGUS_LOCAL_MAX_INPUT_FRACTION`,
   `ARGUS_LOCAL_OUTPUT_RESERVE`, `ARGUS_LOCAL_CHAT_TEMPLATE_OVERHEAD`,
-  `ARGUS_ENGINES_LEDGER`.
+  `ARGUS_ENGINES_LEDGER`, `ARGUS_DIFFICULTY_EXECUTORS`.
 - Local acceptance criteria: `must_contain`, literal `equals`, `max_chars`, and a
   **restricted** `json_schema` subset (no `$ref`, `pattern`, or remote resolution).
   Legacy `must_match` (regex) is rejected with 422. Empty criteria are rejected
