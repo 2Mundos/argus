@@ -660,6 +660,18 @@ Consequences for Argus:
   siblings. A dedicated Docker host per pool (`docker.host`) adds a VM boundary on
   top and is the recommended hardening for untrusted workloads. Without
   `docker.runtime` the socket is mounted and root-equivalent on that host.
+  Mounting the socket via `PUT`/`PATCH /api/pools/{name}` (or a template that
+  yields a socket pool) requires the process-level opt-in
+  `ARGUS_NANOCLAW_ALLOW_DOCKER_SOCKET=true`; without it the upsert is refused
+  (`403 docker_socket_not_allowed`). Configuring `docker.runtime` together with
+  `nanoclaw.docker_socket` (or `user`/`group_add`) is rejected (`422`).
+- **Every runtime container Argus starts is hardened on the Docker target:**
+  `--cap-drop=ALL`, `no-new-privileges`, a read-only root filesystem with small
+  tmpfs mounts (`/tmp`, `/run`, …; sandboxed NanoClaw also gets scratch for an
+  inner dockerd), and a PID limit (2048 plain, 4096 NanoClaw host). Per-instance
+  working directories are prepared on the host when the daemon shares this
+  filesystem; on a remote daemon a one-shot container mounts only the parent
+  directory and runs `mkdir`/`chown` as argv (no shell).
 - **Argus ships a NanoClaw channel** (`integrations/nanoclaw/argus.ts`,
   TypeScript, installed into a NanoClaw checkout by `install.sh`; NanoClaw has no
   plugin loader). It is a native channel adapter in the host process, modeled on

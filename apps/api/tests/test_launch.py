@@ -159,6 +159,11 @@ def test_discovery_reports_images_and_unverifiable_paths(
 def test_nanoclaw_local_paths_are_checked(
     client: TestClient, tmp_path: Path, target: FakeTarget
 ) -> None:
+    from dataclasses import replace
+
+    client.app.state.settings = replace(
+        client.app.state.settings, nanoclaw_allow_docker_socket=True
+    )
     target.shares_filesystem = True
     nc = {  # instances_root is length-limited: keep these short
         "install_dir": str(tmp_path),
@@ -176,6 +181,11 @@ def test_nanoclaw_local_paths_are_checked(
 
 
 def test_remote_daemon_paths_are_unverified_not_ok(client: TestClient) -> None:
+    from dataclasses import replace
+
+    client.app.state.settings = replace(
+        client.app.state.settings, nanoclaw_allow_docker_socket=True
+    )
     # The paths exist here, but the daemon does not share this filesystem:
     # existing here proves nothing about the daemon's host.
     with tempfile.TemporaryDirectory(

@@ -95,14 +95,17 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
       node's Docker socket, which is **root-equivalent on that Docker host**.
       Offered only when the operator opts in with
       `ARGUS_NANOCLAW_ALLOW_DOCKER_SOCKET=true` (a process-level policy the
-      request cannot change), and needs the agent image on the node's daemon, the
-      socket (`ARGUS_NANOCLAW_DOCKER_SOCKET`, default `/var/run/docker.sock`), and
-      `ARGUS_NANOCLAW_USER` (`uid:gid`) / `ARGUS_NANOCLAW_GROUP_ADD` (the socket's
-      group id) so the unprivileged host process can use it. Readiness measures,
-      on a daemon sharing this filesystem, that the socket exists, that the
-      configured user can reach it (root, group in `GROUP_ADD`, or world access),
-      and that the install dir is readable by that user. `integrations/nanoclaw/
-      provision.sh env` derives these ids from the host instead of hard-coding them.
+      request cannot change). The same opt-in is enforced on every
+      `PUT`/`PATCH /api/pools/{name}` that would mount the socket, so the raw
+      pool editor cannot bypass the template gate. Needs the agent image on the
+      node's daemon, the socket (`ARGUS_NANOCLAW_DOCKER_SOCKET`, default
+      `/var/run/docker.sock`), and `ARGUS_NANOCLAW_USER` (`uid:gid`) /
+      `ARGUS_NANOCLAW_GROUP_ADD` (the socket's group id) so the unprivileged host
+      process can use it. Readiness measures, on a daemon sharing this
+      filesystem, that the socket exists, that the configured user can reach it
+      (root, group in `GROUP_ADD`, or world access), and that the install dir is
+      readable by that user. `integrations/nanoclaw/provision.sh env` derives
+      these ids from the host instead of hard-coding them.
     The id `nanoclaw` (before the split) is **not accepted** for creation
     (`unknown_template`): it did not say which isolation it meant, and picking one
     would silently downgrade or upgrade it. Existing pools keep whatever they were

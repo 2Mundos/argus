@@ -138,7 +138,11 @@ def test_manifest_is_a_hardened_one_shot_pod() -> None:
     assert s["imagePullSecrets"] == [{"name": "regcred"}]
     assert s["nodeSelector"] == {"pool": "gpu"}
     c = s["containers"][0]
-    assert c["securityContext"] == {"allowPrivilegeEscalation": False}
+    assert c["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "readOnlyRootFilesystem": True,
+        "capabilities": {"drop": ["ALL"]},
+    }
     assert c["resources"] == {
         "limits": {"cpu": "500m", "memory": "256Mi"},
         "requests": {"cpu": "500m", "memory": "256Mi"},

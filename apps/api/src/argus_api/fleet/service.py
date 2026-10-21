@@ -22,10 +22,12 @@ from argus_core.fleet import (
     PoolUpsert,
 )
 
+from argus_api.config import Settings
 from argus_api.db import Tx, ts
 from argus_api.decisions import store as decisions
 from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
 from argus_api.events import record
+from argus_api.fleet import policy
 
 _CONFIG_FIELDS = (
     "env",
@@ -90,7 +92,13 @@ def redact(pool: Pool) -> Pool:
     return pool.model_copy(update={"env": dict.fromkeys(pool.env, REDACTED)})
 
 
-async def patch_pool(tx: Tx, name: str, body: PoolPatch, actor: str) -> Pool:
+async def patch_pool(
+    tx: Tx,
+    name: str,
+    body: PoolPatch,
+    actor: str,
+    settings: Settings | None = None,
+) -> Pool:
     """Apply a partial update, guarded by the pool's version (3.3)."""
     pool = await get_pool(tx.conn, name)
     if body.expected_version != pool.version:
@@ -115,6 +123,8 @@ async def patch_pool(tx: Tx, name: str, body: PoolPatch, actor: str) -> Pool:
         upsert = PoolUpsert.model_validate(merged)
     except ValueError as exc:  # a consistency rule across fields
         raise ValidationFailedError(str(exc), code="invalid_pool") from exc
+    if settings is not None:
+        policy.enforce_nanoclaw_socket_policy(upsert, settings)
     await upsert_pool(tx, name, upsert, actor)
     await record(
         tx,
@@ -353,6 +363,16 @@ def _to_pool(row: aiosqlite.Row) -> Pool:
     data["capabilities"] = json.loads(data["capabilities"])
     data |= json.loads(data.pop("config"))
     data["version"] = row["updated_at"]
+    # Legacy sandboxed pools may still carry a docker_socket path; the runtime
+    # never mounts it, and PoolUpsert now rejects configuring both.
+    docker = data.get("docker") or {}
+    nanoclaw = data.get("nanoclaw")
+    if (
+        isinstance(docker, dict)
+        and docker.get("runtime")
+        and isinstance(nanoclaw, dict)
+    ):
+        nanoclaw.pop("docker_socket", None)
     return Pool.model_validate(data)
 
 

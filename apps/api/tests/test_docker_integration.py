@@ -67,6 +67,8 @@ def argus(tmp_path_factory: pytest.TempPathFactory) -> Generator[httpx.Client]:
             f"http://{os.environ.get('ARGUS_IT_HOST', 'host.docker.internal')}:{port}"
         ),
         "ARGUS_RECONCILE_INTERVAL_S": "1",
+        # Socket-mounted NanoClaw pools need the process-level opt-in (PUT path).
+        "ARGUS_NANOCLAW_ALLOW_DOCKER_SOCKET": "true",
     }
     from argus_api.main import app
 

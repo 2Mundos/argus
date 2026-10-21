@@ -6195,10 +6195,16 @@
             "title": "Agent Image Archive"
           },
           "docker_socket": {
-            "default": "/var/run/docker.sock",
-            "pattern": "^/",
-            "title": "Docker Socket",
-            "type": "string"
+            "anyOf": [
+              {
+                "pattern": "^/",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Docker Socket"
           },
           "group_add": {
             "default": [],
@@ -6273,10 +6279,16 @@
             "title": "Agent Image Archive"
           },
           "docker_socket": {
-            "default": "/var/run/docker.sock",
-            "pattern": "^/",
-            "title": "Docker Socket",
-            "type": "string"
+            "anyOf": [
+              {
+                "pattern": "^/",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Docker Socket"
           },
           "group_add": {
             "default": [],
