@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -5,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from argus_core import claude_auth, codex_auth, cursor_auth, custom_accounts
 from argus_core.accounts import (
+    LOCAL_PROVIDER,
     Account,
     AccountCreate,
     AccountLease,
@@ -38,6 +40,8 @@ from argus_api.deps import (
 from argus_api.errors import ForbiddenError, ValidationFailedError
 from argus_api.secrets import SecretStoreError, ref_name
 from argus_api.tasks import service as tasks
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -404,15 +408,21 @@ async def delete_account(
 
 @router.post("/lease")
 async def lease_account(
-    body: LeaseRequest, db: DbDep, agent_id: AgentDep, secrets: SecretsDep
+    request: Request,
+    body: LeaseRequest,
+    db: DbDep,
+    agent_id: AgentDep,
+    secrets: SecretsDep,
 ) -> AccountLease:
     """Lease the best usable account and deliver its credential to a claimed task.
 
     `runtime_providers` is required and states what the runtime can apply. The
     caller must hold the live claim identified by `task_id` and `attempt`. One
-    active lease per role; `409 no_account` when none is usable."""
+    active lease per role; `409 no_account` when none is usable. A `local` lease
+    whose credential names no `context_tokens` carries the window the local model's
+    probe measured, so the harness can compact in time (local harness spec, "Harness orchestrates only")."""
     async with db.write() as tx:
-        return await service.lease(
+        leased = await service.lease(
             tx,
             agent_id,
             body.runtime_providers,
@@ -422,6 +432,27 @@ async def lease_account(
             task_id=body.task_id,
             attempt=body.attempt,
         )
+    return await _with_local_context(request, leased)
+
+
+async def _with_local_context(request: Request, leased: AccountLease) -> AccountLease:
+    """Fill a local lease's `context_tokens` from the probe (cached; outside the
+    transaction). Unknown stays absent: the harness then assumes a small window."""
+    if leased.provider != LOCAL_PROVIDER or "context_tokens" in leased.credential:
+        return leased
+    local_model = getattr(request.app.state, "local_model", None)
+    if local_model is None:
+        return leased
+    try:
+        info = await local_model.probe()
+    except Exception:  # a probe problem never fails the lease
+        log.exception("local model probe failed while leasing")
+        return leased
+    if not info.n_ctx:
+        return leased
+    return leased.model_copy(
+        update={"credential": {**leased.credential, "context_tokens": info.n_ctx}}
+    )
 
 
 @router.post("/release", status_code=status.HTTP_204_NO_CONTENT)

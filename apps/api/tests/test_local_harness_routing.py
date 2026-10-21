@@ -245,8 +245,11 @@ async def test_claim_skips_restricted_task_when_runtime_lacks_provider(
     assert await claim_one(db, providers=None) is None
     async with db.read() as conn:
         t = await tasks.get_task(conn, task_id)
-    assert t.state == "ready" and t.attempt == 0
-    assert (await claim_one(db)) is not None
+    # no live runtime applies `local`: it waits, without an attempt (3.6)
+    assert (t.state, t.block_reason, t.attempt) == ("blocked", "awaiting_quota", 0)
+    # a runtime that applies local wakes it on its claim and takes it
+    got = await claim_one(db)
+    assert got is not None and got.id == task_id and got.attempt == 1
 
 
 async def test_unreachable_local_parks_tasks_and_wakes_one_per_slot(
@@ -461,3 +464,82 @@ async def test_an_idle_holder_keeps_the_task_ready_for_itself(
         assert (await tasks.get_task(conn, second)).state == "ready"
     again = await claim_one(db, "agent-b")
     assert again is not None and again.id == second
+
+
+CUSTOM = {
+    "base_url": "https://openrouter.ai/api/v1",
+    "label": "openrouter",
+    "engine": {"model": "deepseek/deepseek-chat"},
+}
+
+
+async def _add_custom(db: Database, store, name: str = "openrouter") -> str:
+    await store.put(name, {"api_key": "sk-or-v1-FAKEKEYFAKEKEY"})
+    async with db.write() as tx:
+        account = await accounts.create_account(
+            tx,
+            name,
+            AccountCreate(
+                name=name,
+                provider="custom",
+                secret_ref=f"sops:{name}",
+                config=CUSTOM,  # type: ignore[arg-type]
+                max_leases=1,
+            ),
+            f"sops:{name}",
+            "admin:test",
+            store,
+        )
+    return account.id
+
+
+async def test_an_account_no_live_worker_can_run_is_no_capacity(
+    db: Database, store, agent
+) -> None:
+    """A free `custom` account counts for nothing while every live runtime applies
+    only anthropic/openai/local: the task parks instead of sitting ready."""
+    await _busy_local(db, store)
+    await _add_custom(db, store)
+    plain = await make_task(db, None, "plain")
+    assert await claim_one(db) is None
+    async with db.read() as conn:
+        t = await tasks.get_task(conn, plain)
+        assert (t.state, t.block_reason, t.attempt) == ("blocked", "awaiting_quota", 0)
+    async with db.write() as tx:
+        assert await tasks.engine_capacity(tx) == []
+        assert await tasks.wake_waiting(tx) == []
+
+
+async def test_a_worker_that_runs_the_provider_wakes_the_waiting_task(
+    db: Database, store, agent
+) -> None:
+    await _busy_local(db, store)
+    await _add_custom(db, store)
+    plain = await make_task(db, None, "plain")
+    assert await claim_one(db) is None  # parked: nobody runs custom
+    await insert_agent(db, "agent-c")
+    got = await claim_one(db, "agent-c", [*RUNTIME, "custom"])
+    assert got is not None and got.id == plain and got.failures == 0
+
+
+async def test_lost_workers_do_not_count_for_their_providers(
+    db: Database, store, agent
+) -> None:
+    await _busy_local(db, store)
+    await _add_custom(db, store)
+    await insert_agent(db, "agent-c")
+    other = await make_task(db, ["custom"], "custom-only")
+    got = await claim_one(db, "agent-c", ["custom"])
+    assert got is not None and got.id == other
+    async with db.write() as tx:
+        await tasks.complete(
+            tx, "agent-c", other, got.attempt, TaskResult(summary="ok")
+        )
+        await tx.conn.execute(
+            "UPDATE agents SET state = 'lost', ended_at = ? WHERE id = 'agent-c'",
+            ("2026-10-21T00:00:00+00:00",),
+        )
+    plain = await make_task(db, None, "plain")
+    assert await claim_one(db) is None
+    async with db.read() as conn:
+        assert (await tasks.get_task(conn, plain)).block_reason == "awaiting_quota"

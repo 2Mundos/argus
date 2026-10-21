@@ -13758,7 +13758,7 @@
     },
     "/api/accounts/lease": {
       "post": {
-        "description": "Lease the best usable account and deliver its credential to a claimed task.\n\n`runtime_providers` is required and states what the runtime can apply. The\ncaller must hold the live claim identified by `task_id` and `attempt`. One\nactive lease per role; `409 no_account` when none is usable.",
+        "description": "Lease the best usable account and deliver its credential to a claimed task.\n\n`runtime_providers` is required and states what the runtime can apply. The\ncaller must hold the live claim identified by `task_id` and `attempt`. One\nactive lease per role; `409 no_account` when none is usable. A `local` lease\nwhose credential names no `context_tokens` carries the window the local model's\nprobe measured, so the harness can compact in time (local harness spec, \"Harness orchestrates only\").",
         "operationId": "lease_account_api_accounts_lease_post",
         "requestBody": {
           "content": {

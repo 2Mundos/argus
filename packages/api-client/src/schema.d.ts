@@ -181,7 +181,9 @@ export interface paths {
          *
          *     `runtime_providers` is required and states what the runtime can apply. The
          *     caller must hold the live claim identified by `task_id` and `attempt`. One
-         *     active lease per role; `409 no_account` when none is usable.
+         *     active lease per role; `409 no_account` when none is usable. A `local` lease
+         *     whose credential names no `context_tokens` carries the window the local model's
+         *     probe measured, so the harness can compact in time (local harness spec, "Harness orchestrates only").
          */
         post: operations["lease_account_api_accounts_lease_post"];
         delete?: never;

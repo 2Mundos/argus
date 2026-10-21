@@ -14,6 +14,7 @@ import {
   CUSTOM_KEY_ENV,
   cursorConfigDirAllowsCliWrites,
   executorJsonFailure,
+  localHarnessRefusal,
   materializePrivateCursorConfig,
   parseAccountSettings,
   prepareExecutorEnv,
@@ -1311,4 +1312,38 @@ test("Cursor gets composer-2.5 from the trivial map for trivial tasks and local 
     [report.model, report.model_source, report.policy_map],
     [null, "native_default", "implementation"],
   );
+});
+
+test("a local harness never starts a Claude Code executor (Strata serves only the harness)", async (t) => {
+  const box = sandbox(t);
+  box.fake("claude", "echo should-not-run; exit 0");
+  const env = {
+    ...box.env,
+    ARGUS_ENGINE: "claude",
+    ANTHROPIC_BASE_URL: "http://host.docker.internal:8080",
+    ARGUS_ALLOWED_ANTHROPIC_BASE_URL: "http://host.docker.internal:8080",
+    ANTHROPIC_AUTH_TOKEN: "argus-local-harness",
+    ARGUS_LOCAL_HARNESS: "1",
+  };
+  const { code, report } = await run(["claude", "--cwd", box.work], { env });
+  assert.equal(code, 78);
+  assert.equal(report.blocked, "auth_missing");
+  assert.equal(report.reason, "local_harness_engine_only");
+  assert.match(report.need, /EXECUTOR agent/);
+});
+
+test("localHarnessRefusal spares other executors and cloud harnesses", () => {
+  const local = { ARGUS_LOCAL_HARNESS: "1" };
+  assert.equal(localHarnessRefusal("agent", local), null);
+  assert.equal(localHarnessRefusal("codex", local), null);
+  assert.notEqual(localHarnessRefusal("claude", local), null);
+  // older env without the marker: the local placeholder token on a redirect
+  assert.notEqual(
+    localHarnessRefusal("claude", {
+      ANTHROPIC_BASE_URL: "http://host.docker.internal:8080",
+      ANTHROPIC_AUTH_TOKEN: "argus-local-harness",
+    }),
+    null,
+  );
+  assert.equal(localHarnessRefusal("claude", { CLAUDE_CODE_OAUTH_TOKEN: "x" }), null);
 });

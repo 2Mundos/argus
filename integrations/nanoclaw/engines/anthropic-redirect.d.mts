@@ -9,3 +9,4 @@ export declare function anthropicRedirectRejection(
   e: Record<string, string | undefined>,
   allowedBaseUrl?: string | null,
 ): string | null;
+export declare const CUSTOM_HARNESS_AUTH_TOKEN: string;

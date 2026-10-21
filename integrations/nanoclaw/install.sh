@@ -32,8 +32,11 @@ cp "$here/argus-claude-stub.ts" "$target/src/gateway-providers/argus-claude-stub
 cp "$here/argus-claude-stub.test.ts" "$target/src/gateway-providers/argus-claude-stub.test.ts"
 cp "$here/engines/anthropic-redirect.mjs" "$target/src/gateway-providers/anthropic-redirect.mjs"
 mkdir -p "$target/src/gateway-providers/engines" "$target/dist/gateway-providers/engines"
-cp "$here/engines/account-settings.mjs" "$here/engines/anthropic-openai-bridge.mjs" \
-  "$target/src/gateway-providers/engines/" "$target/dist/gateway-providers/engines/"
+# cp takes one destination: copy into each directory separately.
+for dir in "$target/src/gateway-providers/engines" "$target/dist/gateway-providers/engines"; do
+  cp "$here/engines/account-settings.mjs" "$here/engines/anthropic-openai-bridge.mjs" "$dir/"
+done
+cp "$here/engines/anthropic-openai-bridge.d.mts" "$target/src/gateway-providers/engines/"
 cp "$here/argus-local-harness.ts" "$target/src/gateway-providers/argus-local-harness.ts"
 cp "$here/argus-local-harness.test.ts" "$target/src/gateway-providers/argus-local-harness.test.ts"
 cp "$here/argus-custom-harness.ts" "$target/src/gateway-providers/argus-custom-harness.ts"
@@ -50,6 +53,11 @@ for dir in channels gateway-providers; do
 done
 # The channel imports the harness helpers from its own directory.
 printf '%s\n' "export * from '../gateway-providers/argus-local-harness.js';" > "$target/src/channels/argus-local-harness.ts"
+for mod in argus-custom-harness argus-custom-bridge; do
+  printf '%s\n' "export * from '../gateway-providers/$mod.js';" > "$target/src/channels/$mod.ts"
+done
+# ...and the custom bridge reaches the channel's Strata forwarder from its own.
+printf '%s\n' "export * from '../channels/argus-local-forward.js';" > "$target/src/gateway-providers/argus-local-forward.ts"
 cp "$here/argus-onecli-git-ca.ts" "$target/src/gateway-providers/argus-onecli-git-ca.ts"
 cp "$here/argus-onecli-git-ca.test.ts" "$target/src/gateway-providers/argus-onecli-git-ca.test.ts"
 cp "$here/onecli-path-match.ts" "$target/src/gateway-providers/onecli-path-match.ts"
