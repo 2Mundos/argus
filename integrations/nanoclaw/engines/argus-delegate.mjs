@@ -27,7 +27,11 @@ import {
   parseAccountSettings,
   settingsSupport,
 } from "./account-settings.mjs";
-import { anthropicRedirectRejection, LOCAL_HARNESS_AUTH_TOKEN } from "./anthropic-redirect.mjs";
+import {
+  anthropicRedirectRejection,
+  CUSTOM_HARNESS_AUTH_TOKEN,
+  LOCAL_HARNESS_AUTH_TOKEN,
+} from "./anthropic-redirect.mjs";
 import { createFileRelay, envSecrets, RELAY_FILE, startLiveLog } from "./livelog.mjs";
 import { createSink, createTracker, gitHead, waitingInput } from "./milestones.mjs";
 import { implementationScope, loadPolicy, selectModel } from "./model-policy.mjs";
@@ -170,6 +174,35 @@ export function localHarnessRefusal(executor, e = process.env) {
   return local
     ? "the local model serves only the harness; delegate with EXECUTOR agent (Cursor) or codex"
     : null;
+}
+
+/**
+ * Is this the harness of a custom lease (OpenRouter through the host bridge)? The
+ * custom account serves only the harness (custom harness spec).
+ */
+export function customHarnessActive(e = process.env) {
+  return (
+    e.ARGUS_CUSTOM_HARNESS === "1" ||
+    ((e.ANTHROPIC_BASE_URL ?? "").trim() !== "" &&
+      (e.ANTHROPIC_AUTH_TOKEN ?? "").trim() === CUSTOM_HARNESS_AUTH_TOKEN)
+  );
+}
+
+/** The bridge coordinates a custom harness env carries; no executor may inherit them. */
+export const CUSTOM_HARNESS_ENV = [
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ARGUS_ALLOWED_ANTHROPIC_BASE_URL",
+  "ANTHROPIC_MODEL",
+  "ANTHROPIC_CUSTOM_HEADERS",
+  "ARGUS_CUSTOM_HARNESS",
+];
+
+/** `e` without the custom harness's bridge variables. */
+export function withoutCustomHarness(e) {
+  const out = { ...e };
+  for (const name of CUSTOM_HARNESS_ENV) delete out[name];
+  return out;
 }
 
 /** Where the trusted host mounts the gateway stub (argus-claude-stub.ts); never configurable. */
@@ -647,6 +680,12 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
       allowed_roots: roots,
     });
 
+  // A custom harness's bridge serves only the harness: no executor inherits it.
+  const customHarness = customHarnessActive(e);
+  if (customHarness) {
+    e = withoutCustomHarness(e);
+    identity = { ...identity, harness: "custom" };
+  }
   const localRefusal = localHarnessRefusal(executor, e);
   if (localRefusal)
     finish(78, {
@@ -660,6 +699,15 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
     e = restored.env;
     if (restored.source) identity = { ...identity, auth_source: restored.source };
     if (restored.stub) identity = { ...identity, gateway_stub: restored.stub };
+    // On a custom harness Claude Code runs only on a real Anthropic account, through
+    // the gateway (an Anthropic executor lease); never on the custom account.
+    if (customHarness && restored.source !== "gateway_sentinel")
+      finish(78, {
+        ...identity,
+        blocked: "auth_missing",
+        reason: "custom_harness_engine_only",
+        need: "the custom account serves only the harness; delegate with EXECUTOR agent (Cursor), or lease an Anthropic executor account",
+      });
   }
   e = prepareExecutorEnv(executor, e, path.join(cwd, ".argus-delegate-runtime"));
   e = withCliToolsPath(e);

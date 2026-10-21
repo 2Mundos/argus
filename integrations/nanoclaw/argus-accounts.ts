@@ -348,8 +348,8 @@ export function executorFor(provider: string): string | null {
 
 /**
  * Preferred delegated CLI for a task: the executor lease when present, otherwise
- * the engine's. Local is engine-only; when the harness is local Strata, Cursor
- * `agent` is still preferred for implementation work, and so for a trivial task.
+ * the engine's. Local is engine-only; when the harness is local Strata or a custom
+ * account, Cursor `agent` is preferred for implementation work, and so for a trivial task.
  */
 export function preferredExecutorForLease(
   engine: Pick<AccountLease, "provider"> | null,
@@ -358,8 +358,17 @@ export function preferredExecutorForLease(
 ): string | null {
   const best = executor ?? engine;
   if (!best) return null;
-  if (engine?.provider === "local" || complexity === "trivial") return "agent";
+  if (executorFirst(engine?.provider) || complexity === "trivial") return "agent";
   return executorFor(best.provider);
+}
+
+/**
+ * The executor provider leased first on a harness that only orchestrates: Cursor on a
+ * local (Strata) or custom (bridge) engine lease, so `agent` has its stub (local and
+ * custom harness specs). Null: the ordinary executor lease across providers.
+ */
+export function executorFirst(engineProvider: string | null | undefined): string | null {
+  return engineProvider === "local" || engineProvider === "custom" ? "cursor" : null;
 }
 
 export class OneCliError extends Error {

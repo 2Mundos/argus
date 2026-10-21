@@ -6,7 +6,6 @@ import { readFileSync, unlinkSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ContainerConfig } from "@onecli-sh/sdk";
-import { CLAUDE_GATEWAY_STUB_PATH } from "./argus-claude-stub.js";
 import {
   CUSTOM_HARNESS_AUTH_TOKEN,
   normalizeAnthropicBaseUrl,
@@ -62,6 +61,8 @@ export function customHarnessEnv(harness: CustomHarnessConfig): Record<string, s
     ANTHROPIC_BASE_URL: base,
     ANTHROPIC_AUTH_TOKEN: CUSTOM_HARNESS_AUTH_TOKEN,
     ARGUS_ALLOWED_ANTHROPIC_BASE_URL: base,
+    // argus-delegate strips the bridge from every executor (custom harness spec).
+    ARGUS_CUSTOM_HARNESS: "1",
   };
   if (harness.model) out.ANTHROPIC_MODEL = harness.model;
   if (harness.bridge_key)
@@ -69,14 +70,16 @@ export function customHarnessEnv(harness: CustomHarnessConfig): Record<string, s
   return out;
 }
 
-/** Drop cloud Anthropic material; the bridge is reached directly. */
+/**
+ * Drop cloud Anthropic material from the harness env; the bridge is reached directly.
+ * The Claude gateway stub stays: only `argus-delegate claude` reads it, after removing
+ * the bridge variables, so a Claude Code executor runs on the leased Anthropic account
+ * through the gateway and never on the bridge (custom harness spec).
+ */
 export function withCustomHarnessRuntime(
   config: ContainerConfig,
   harness: CustomHarnessConfig | null,
 ): ContainerConfig {
-  const stubs = (config.credentialStubs ?? []).filter(
-    (stub) => stub.containerPath !== CLAUDE_GATEWAY_STUB_PATH,
-  );
   if (!harness) {
     const env = { ...(config.env ?? {}) };
     for (const key of [
@@ -85,6 +88,7 @@ export function withCustomHarnessRuntime(
       "ARGUS_ALLOWED_ANTHROPIC_BASE_URL",
       "ANTHROPIC_MODEL",
       "ANTHROPIC_CUSTOM_HEADERS",
+      "ARGUS_CUSTOM_HARNESS",
     ])
       delete env[key];
     return { ...config, env };
@@ -113,7 +117,6 @@ export function withCustomHarnessRuntime(
   ]);
   return {
     ...config,
-    credentialStubs: stubs,
     env: {
       ...env,
       ...customHarnessEnv(harness),
