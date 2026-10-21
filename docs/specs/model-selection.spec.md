@@ -18,8 +18,11 @@ service or dependency.
 configuration. Missing means the checked-in default; malformed means fail closed.
 The policy has `harness` and `implementation` maps, each mapping an engine to
 an ordered nonempty list. Model IDs are opaque CLI IDs, not availability claims.
-Defaults: Codex harness `gpt-6-luna`, Codex implementation `gpt-6-luna` (the account's own configured model — the default is a placeholder, edit it), Claude
-`claude-sonnet-5-5` then `claude-opus-5-5`. Operators must use IDs their provider
+Defaults: Codex harness `gpt-6-luna`; Codex implementation `gpt-6.1-sol` (a
+placeholder ID for "sol 6.1": the real CLI ID may differ, so edit it); Claude harness
+and implementation `claude-sonnet-5-5` then fallback `claude-opus-5-5`. They live only in
+`model-policy.defaults.json`, and every chain stays editable. The Cursor executor
+(`agent`) has no default chain but can be added to either map. Operators must use IDs their provider
 supports; no alias rewriting. Other executors keep their native default unless
 configured. Revisions are SHA-256 of canonical policy content.
 
@@ -60,6 +63,8 @@ unknown rather than being inferred from the model sent in argv.
 
 # 4a. Operator surface
 
+MCP has the same operations over the same REST routes: `get_model_policy` (any
+token), `set_model_policy` and `reset_model_policy` (admin only; `PUT`/`DELETE`).
 `GET /api/models` (any token) returns the effective policy, `revision`, `source`
 (`env` | `file` | `defaults`), the file `path`, `env_overrides` and `file_revision`.
 `PUT /api/models` (admin; both maps) validates with the rules above, answers 422

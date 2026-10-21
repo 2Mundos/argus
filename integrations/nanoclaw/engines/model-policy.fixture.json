@@ -7,12 +7,12 @@
         "claude": ["claude-sonnet-5-5", "claude-opus-5-5"]
       },
       "implementation": {
-        "codex": ["gpt-6-luna"],
+        "codex": ["gpt-6.1-sol"],
         "claude": ["claude-sonnet-5-5", "claude-opus-5-5"]
       }
     },
-    "canonical": "{\"harness\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6-luna\"]},\"implementation\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6-luna\"]}}",
-    "revision": "2bf27458e8604c2a912e620cd6cbd4ed519c725b6b1476d95e7d4c335dd32c80"
+    "canonical": "{\"harness\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6-luna\"]},\"implementation\":{\"claude\":[\"claude-sonnet-5-5\",\"claude-opus-5-5\"],\"codex\":[\"gpt-6.1-sol\"]}}",
+    "revision": "431d733b1d8fe31a9d9bb2c11802b7cf7f947e778aec22e93473f5056962f3ae"
   },
   {
     "name": "unsorted keys",

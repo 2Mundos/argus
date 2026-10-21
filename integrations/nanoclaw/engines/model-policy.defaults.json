@@ -4,7 +4,7 @@
     "claude": ["claude-sonnet-5-5", "claude-opus-5-5"]
   },
   "implementation": {
-    "codex": ["gpt-6-luna"],
+    "codex": ["gpt-6.1-sol"],
     "claude": ["claude-sonnet-5-5", "claude-opus-5-5"]
   }
 }

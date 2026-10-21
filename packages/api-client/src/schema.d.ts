@@ -3884,6 +3884,35 @@ export interface components {
             /** Status */
             status: string;
         };
+        /**
+         * ModelEndpoint
+         * @description One host serving a model (OpenRouter `…/endpoints`), for the routing pickers.
+         */
+        ModelEndpoint: {
+            /** Completion Price */
+            completion_price?: string | null;
+            /** Context Length */
+            context_length?: number | null;
+            /** Max Completion Tokens */
+            max_completion_tokens?: number | null;
+            /** Prompt Price */
+            prompt_price?: string | null;
+            /** Provider Name */
+            provider_name: string;
+            /** Quantization */
+            quantization?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Tag */
+            tag?: string | null;
+        };
+        /** ModelEndpoints */
+        ModelEndpoints: {
+            /** Endpoints */
+            endpoints: components["schemas"]["ModelEndpoint"][];
+            /** Model */
+            model: string;
+        };
         /** ModelPolicy */
         ModelPolicy: {
             /** Env Overrides */
@@ -3916,35 +3945,6 @@ export interface components {
             harness: unknown;
             /** Implementation */
             implementation: unknown;
-        };
-        /**
-         * ModelEndpoint
-         * @description One host serving a model (OpenRouter `…/endpoints`), for the routing pickers.
-         */
-        ModelEndpoint: {
-            /** Completion Price */
-            completion_price?: string | null;
-            /** Context Length */
-            context_length?: number | null;
-            /** Max Completion Tokens */
-            max_completion_tokens?: number | null;
-            /** Prompt Price */
-            prompt_price?: string | null;
-            /** Provider Name */
-            provider_name: string;
-            /** Quantization */
-            quantization?: string | null;
-            /** Status */
-            status?: string | null;
-            /** Tag */
-            tag?: string | null;
-        };
-        /** ModelEndpoints */
-        ModelEndpoints: {
-            /** Endpoints */
-            endpoints: components["schemas"]["ModelEndpoint"][];
-            /** Model */
-            model: string;
         };
         /**
          * NanoclawOptions

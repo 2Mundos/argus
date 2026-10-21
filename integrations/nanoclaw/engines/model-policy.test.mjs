@@ -72,7 +72,7 @@ test("questions do not escalate harness; failures and review rejection do", () =
 test("shipped defaults reflect operator requirements", () => {
   const snapshot = loadPolicy({});
   assert.equal(selectModel(snapshot, "harness", "codex").configured_model, "gpt-6-luna");
-  assert.equal(selectModel(snapshot, "implementation", "codex").configured_model, "gpt-6-luna");
+  assert.equal(selectModel(snapshot, "implementation", "codex").configured_model, "gpt-6.1-sol");
   assert.equal(
     selectModel(snapshot, "implementation", "claude", 2, "failed").configured_model,
     "claude-opus-5-5",
@@ -115,4 +115,5 @@ test("revisions match the fixture shared with the manager API", () => {
     assert.equal(JSON.stringify(snapshot.policy), c.canonical, c.name);
     assert.equal(snapshot.revision, c.revision, c.name);
   }
+  assert.equal(loadPolicy({}).revision, cases[0].revision); // shipped defaults
 });

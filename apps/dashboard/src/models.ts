@@ -7,6 +7,8 @@ export type Draft = Record<Scope, Chains>;
 
 export const SCOPES: Scope[] = ["harness", "implementation"];
 export const KNOWN_ENGINES = ["codex", "claude", "opencode", "agent"];
+/** The `agent` executor is the Cursor CLI. */
+export const engineLabel = (e: string) => (e === "agent" ? "agent (Cursor)" : e);
 // Mirrors the API: a CLI model ID, not a claim that the provider serves it.
 export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
 

@@ -57,7 +57,7 @@ def test_defaults_are_the_shipped_policy(client: TestClient) -> None:
     assert body["notice"] is None
     assert body["path"].endswith("model-policy.json")
     assert body["revision"] == json.loads(FIXTURE.read_text())[0]["revision"]
-    assert body["implementation"]["codex"] == ["gpt-6-luna"]
+    assert body["implementation"]["codex"] == ["gpt-6.1-sol"]
 
 
 def test_any_token_reads_but_only_admin_writes(client: TestClient) -> None:

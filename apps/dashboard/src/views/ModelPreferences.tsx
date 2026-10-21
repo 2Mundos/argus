@@ -3,6 +3,7 @@ import { useLiveData } from "../live";
 import {
   addProblem,
   type Draft,
+  engineLabel,
   fetchModelPolicy,
   KNOWN_ENGINES,
   type ModelPolicy,
@@ -180,7 +181,7 @@ function ScopeEditor(props: {
               aria-label={`add ${scope} ${e}`}
               onClick={() => onChange(e, [])}
             >
-              {e}
+              {engineLabel(e)}
             </button>
           ))}
         </p>
@@ -204,7 +205,7 @@ function Chain(props: {
   };
   return (
     <div>
-      <strong>{engine}</strong>
+      <strong>{engineLabel(engine)}</strong>
       {chain.length === 0 && <span className="muted small"> empty: add a model before saving</span>}
       <ol>
         {chain.map((model, i) => (

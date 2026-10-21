@@ -1004,6 +1004,37 @@ async def create_worker(
     )
 
 
+# -- preferred models -------------------------------------------------------------------
+
+
+@tool(ANYONE)
+async def get_model_policy(ctx: Context) -> dict:
+    """The effective model policy: `harness` and `implementation` maps (engine -> ordered
+    model chain), `revision`, `source` (env | file | defaults), and `env_overrides` (true
+    means ARGUS_MODEL_POLICY wins over saved edits). IDs are opaque; availability at the
+    provider is not checked."""
+    return await _call(ctx, "GET", "/models")
+
+
+@tool(ADMINS)
+async def set_model_policy(ctx: Context, harness: dict, implementation: dict) -> dict:
+    """Replace the whole model policy (admin only). Both maps are required; each maps an
+    engine (codex, claude, opencode, agent) to a nonempty chain of at most 10 distinct
+    model IDs. A bad chain is a 422 naming it. New NanoClaw instances pick it up."""
+    return await _call(
+        ctx,
+        "PUT",
+        "/models",
+        json={"harness": harness, "implementation": implementation},
+    )
+
+
+@tool(ADMINS)
+async def reset_model_policy(ctx: Context) -> dict:
+    """Remove the saved model policy so the shipped defaults apply again (admin only)."""
+    return await _call(ctx, "DELETE", "/models")
+
+
 # -- engines and the local model ---------------------------------------------------------
 
 

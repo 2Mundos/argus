@@ -10,7 +10,7 @@ const NEW_REV = "ffffffff0000000000000000000000000000000000000000000000000000000
 
 const policy = (over: Partial<ModelPolicy> = {}): ModelPolicy => ({
   harness: { codex: ["gpt-6-luna"], claude: ["sonnet", "opus"] },
-  implementation: { codex: ["gpt-6-luna"] },
+  implementation: { codex: ["gpt-6.1-sol"] },
   revision: REV,
   source: "defaults",
   path: "/data/model-policy.json",
@@ -84,9 +84,58 @@ describe("ModelPreferences", () => {
     await waitFor(() => expect(m.saveModelPolicy).toHaveBeenCalledTimes(1));
     expect(m.saveModelPolicy.mock.calls[0]?.[0]).toEqual({
       harness: { codex: ["gpt-6-luna"], claude: ["haiku", "opus"] },
-      implementation: { codex: ["gpt-6-luna"] },
+      implementation: { codex: ["gpt-6.1-sol"] },
     });
     expect(await screen.findByText(/Saved: revision ffffffff, source file/)).toBeTruthy();
+  });
+
+  it("edits every provider, incl. a Cursor chain and fallbacks, and shows it persisted", async () => {
+    const saved = policy({
+      source: "file",
+      revision: NEW_REV,
+      file_revision: NEW_REV,
+      harness: { codex: ["luna2"], claude: ["sonnet", "opus"] },
+      implementation: {
+        codex: ["sol-7"],
+        claude: ["opus", "sonnet"],
+        agent: ["composer-1", "auto"],
+      },
+    });
+    m.saveModelPolicy.mockResolvedValue(saved);
+    render(<ModelPreferences />);
+    await screen.findByText("gpt-6.1-sol");
+    const addModel = (label: string, id: string) => {
+      fireEvent.change(screen.getByLabelText(`new model for ${label}`), { target: { value: id } });
+      fireEvent.click(screen.getByRole("button", { name: `add model to ${label}` }));
+    };
+    addModel("harness codex", "luna2");
+    fireEvent.click(screen.getByRole("button", { name: "remove gpt-6-luna from harness codex" }));
+    addModel("implementation codex", "sol-7");
+    fireEvent.click(
+      screen.getByRole("button", { name: "remove gpt-6.1-sol from implementation codex" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "add implementation claude" }));
+    addModel("implementation claude", "opus");
+    addModel("implementation claude", "sonnet");
+    fireEvent.click(screen.getByRole("button", { name: "add implementation agent" }));
+    addModel("implementation agent", "composer-1");
+    addModel("implementation agent", "auto");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(m.saveModelPolicy).toHaveBeenCalledTimes(1));
+    expect(m.saveModelPolicy.mock.calls[0]?.[0]).toEqual({
+      harness: saved.harness,
+      implementation: saved.implementation,
+    });
+    // A fresh load (as after navigating away and back) reads the saved policy.
+    cleanup();
+    m.fetchModelPolicy.mockResolvedValue(saved);
+    render(<ModelPreferences />);
+    expect(await screen.findByText("composer-1")).toBeTruthy();
+    expect(screen.getAllByText("agent (Cursor)").length).toBeGreaterThan(0);
+    expect(screen.getByText("sol-7")).toBeTruthy();
+    const impl = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
+    const at = (model: string) => impl.findIndex((t) => t.includes(model));
+    expect(at("composer-1")).toBeLessThan(at("auto"));
   });
 
   it("rejects a duplicate or malformed model before calling the API", async () => {
