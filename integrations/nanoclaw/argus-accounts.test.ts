@@ -779,10 +779,10 @@ describe("engine and executor leases in the channel", () => {
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
     const leaseCalls = w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body);
     expect(leaseCalls).toEqual([
-      { runtime_providers: ["anthropic", "openai"], task_id: "t1", attempt: 1 },
+      { runtime_providers: ["anthropic", "openai", "local"], task_id: "t1", attempt: 1 },
       {
         role: "executor",
-        runtime_providers: ["anthropic", "openai", "cursor"],
+        runtime_providers: ["anthropic", "openai", "local", "cursor"],
         reuse_held: true,
         task_id: "t1",
         attempt: 1,
@@ -1048,10 +1048,10 @@ describe("cursor executor selection in the channel", () => {
     await adapter.setup(setup);
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
     expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
-      { runtime_providers: ["anthropic", "openai"], task_id: "t1", attempt: 1 },
+      { runtime_providers: ["anthropic", "openai", "local"], task_id: "t1", attempt: 1 },
       {
         role: "executor",
-        runtime_providers: ["anthropic", "openai", "cursor"],
+        runtime_providers: ["anthropic", "openai", "local", "cursor"],
         reuse_held: true,
         task_id: "t1",
         attempt: 1,
@@ -1145,7 +1145,7 @@ describe("structured providerFailure on a failure notice", () => {
     expect(call?.body).toEqual({
       reason: "OpenAI/Codex authentication expired",
       role: "engine",
-      runtime_providers: ["anthropic", "openai"],
+      runtime_providers: ["anthropic", "openai", "local"],
       task_id: "t1",
       attempt: 1,
     });
@@ -1232,10 +1232,10 @@ describe("task-scoped repository auth", () => {
       );
       expect(h.inbound[0].content.text).not.toContain("dummy-gitea-token");
       expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
-        { runtime_providers: ["anthropic", "openai"], task_id: "t1", attempt: 1 },
+        { runtime_providers: ["anthropic", "openai", "local"], task_id: "t1", attempt: 1 },
         {
           role: "executor",
-          runtime_providers: ["anthropic", "openai", "cursor"],
+          runtime_providers: ["anthropic", "openai", "local", "cursor"],
           reuse_held: true,
           task_id: "t1",
           attempt: 1,
@@ -1566,7 +1566,7 @@ describe("global account selection in the channel", () => {
     expect(calls).toEqual([
       {
         role: "executor",
-        runtime_providers: ["anthropic", "openai", "cursor"],
+        runtime_providers: ["anthropic", "openai", "local", "cursor"],
         reuse_held: true,
         task_id: "t1",
         attempt: 1,
@@ -1827,7 +1827,7 @@ describe("no usable account at claim time", () => {
     await h.adapter.setup(h.setup);
     await until(() => w.calls.some((c) => c.path === "/accounts/awaiting-quota"));
     const call = w.calls.find((c) => c.path === "/accounts/awaiting-quota")!;
-    expect(call.body).toMatchObject({ runtime_providers: ["anthropic", "openai"] });
+    expect(call.body).toMatchObject({ runtime_providers: ["anthropic", "openai", "local"] });
     expect(w.calls.some((c) => c.path === "/tasks/claim")).toBe(true);
     expect(w.calls.some((c) => c.path === "/tasks/t1/fail")).toBe(true);
   });

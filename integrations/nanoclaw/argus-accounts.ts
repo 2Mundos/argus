@@ -324,8 +324,8 @@ export function executorFor(provider: string): string | null {
  * `agent` is still preferred for implementation work.
  */
 export function preferredExecutorForLease(
-  engine: AccountLease | null,
-  executor: AccountLease | null,
+  engine: Pick<AccountLease, "provider"> | null,
+  executor: Pick<AccountLease, "provider"> | null,
 ): string | null {
   const best = executor ?? engine;
   if (!best) return null;
