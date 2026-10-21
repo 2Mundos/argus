@@ -286,6 +286,26 @@ async def get_task(ctx: Context, task_id: str) -> dict:
 
 
 @tool(ANYONE)
+async def get_task_log(
+    ctx: Context,
+    task_id: str,
+    attempt: int | None = None,
+    after: int | None = None,
+    limit: int = 200,
+) -> dict:
+    """Read the live output log of a task attempt (default: the current one), as the
+    dashboard's "Ao vivo" panel shows it: {attempt, lines: [{seq, source, at, line}],
+    last_seq}. Without `after` you get the newest `limit` lines (max 1000); pass
+    `after`=last_seq to read on. Secrets are redacted. Workers read leased tasks only."""
+    return await _call(
+        ctx,
+        "GET",
+        f"/tasks/{task_id}/log",
+        params={"attempt": attempt, "after": after, "limit": limit},
+    )
+
+
+@tool(ANYONE)
 async def get_tasks(ctx: Context, ids: list[str], view: ViewArg = "summary") -> dict:
     """Read up to 50 tasks in one call, in the order given; unknown ids come back in
     `missing`. view=detail adds spec and result (long text cut, see `truncated`)."""

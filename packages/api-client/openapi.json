@@ -2033,6 +2033,18 @@
             "title": "Max Attempts",
             "type": "integer"
           },
+          "output_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output At"
+          },
           "parent_id": {
             "anyOf": [
               {
@@ -5764,6 +5776,128 @@
         "title": "LocalRunResult",
         "type": "object"
       },
+      "LogAccepted": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "integer"
+          },
+          "last_seq": {
+            "title": "Last Seq",
+            "type": "integer"
+          },
+          "output_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output At"
+          }
+        },
+        "required": [
+          "accepted",
+          "last_seq",
+          "output_at"
+        ],
+        "title": "LogAccepted",
+        "type": "object"
+      },
+      "LogLine": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "line": {
+            "title": "Line",
+            "type": "string"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "source": {
+            "enum": [
+              "worker",
+              "delegate"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "source",
+          "at",
+          "line"
+        ],
+        "title": "LogLine",
+        "type": "object"
+      },
+      "LogPage": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "last_seq": {
+            "title": "Last Seq",
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/LogLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          }
+        },
+        "required": [
+          "attempt",
+          "lines",
+          "last_seq"
+        ],
+        "title": "LogPage",
+        "type": "object"
+      },
+      "LogRequest": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Lines",
+            "type": "array"
+          },
+          "source": {
+            "enum": [
+              "worker",
+              "delegate"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "source",
+          "lines"
+        ],
+        "title": "LogRequest",
+        "type": "object"
+      },
       "LoopOut": {
         "properties": {
           "errors_total": {
@@ -9010,6 +9144,18 @@
             "title": "Max Attempts",
             "type": "integer"
           },
+          "output_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output At"
+          },
           "parent_id": {
             "anyOf": [
               {
@@ -9694,6 +9840,18 @@
           "max_attempts": {
             "title": "Max Attempts",
             "type": "integer"
+          },
+          "output_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output At"
           },
           "parent_id": {
             "anyOf": [
@@ -10436,6 +10594,18 @@
           "max_attempts": {
             "title": "Max Attempts",
             "type": "integer"
+          },
+          "output_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output At"
           },
           "parent_id": {
             "anyOf": [
@@ -16987,6 +17157,172 @@
           }
         ],
         "summary": "Fail Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/log": {
+      "get": {
+        "description": "Log lines of an attempt (default: the current one), oldest first. With\n`after` (a `seq`), the lines after it; without, the newest `limit` lines.\nWorkers only read tasks they have leased.",
+        "operationId": "get_log_api_tasks__task_id__log_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "attempt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Attempt"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Log",
+        "tags": [
+          "tasks"
+        ]
+      },
+      "post": {
+        "description": "Append output lines to the live log of the attempt you hold (agent token).\nUp to 200 lines of 2000 characters (longer ones are cut) and 64 KiB per batch,\none batch per second per source. Secrets are redacted before storing; the\nbatch is published as a `task.log` event and stored in a ring of 2000 lines\nper attempt. Fenced like progress: a stale attempt is 409 `stale_attempt`.",
+        "operationId": "post_log_api_tasks__task_id__log_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Log",
         "tags": [
           "tasks"
         ]

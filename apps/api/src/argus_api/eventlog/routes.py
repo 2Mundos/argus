@@ -273,14 +273,14 @@ async def event_stream(
             if projects is not None and not await _live_allowed(
                 db, event, projects, agent_id
             ):
-                cursor = event.id
+                cursor = max(cursor, event.id)
                 continue
             yield to_sse(event)
-            cursor = event.id
+            cursor = max(cursor, event.id)  # a transient event (id 0) keeps it
 
 
 def _after(cursor: int) -> Callable[[Event], bool]:
-    return lambda e: e.id > cursor
+    return lambda e: e.id > cursor or e.id == 0
 
 
 async def _scope(conn, caller: Identity) -> tuple[str, list[str]] | None:

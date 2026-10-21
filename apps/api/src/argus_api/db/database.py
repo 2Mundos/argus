@@ -41,6 +41,7 @@ class Tx:
     conn: aiosqlite.Connection
     now: datetime
     events: list[Event] = field(default_factory=list)
+    transient: list[Event] = field(default_factory=list)  # published, never stored
 
     @asynccontextmanager
     async def savepoint(self) -> AsyncGenerator[None]:
@@ -52,6 +53,7 @@ class Tx:
         """
         name = f"sp_{next(_savepoints)}"
         mark = len(self.events)
+        transient_mark = len(self.transient)
         await self.conn.execute(f"SAVEPOINT {name}")
         try:
             yield
@@ -59,6 +61,7 @@ class Tx:
             await self.conn.execute(f"ROLLBACK TO {name}")
             await self.conn.execute(f"RELEASE {name}")
             del self.events[mark:]
+            del self.transient[transient_mark:]
             raise
         await self.conn.execute(f"RELEASE {name}")
 
@@ -150,7 +153,7 @@ class Database:
                     with contextlib.suppress(Exception):
                         await self._writer.execute("ROLLBACK")
                 raise
-        for event in tx.events:
+        for event in (*tx.events, *tx.transient):
             self.bus.publish(event)
 
     @asynccontextmanager

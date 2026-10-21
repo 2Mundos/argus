@@ -1,0 +1,186 @@
+"""Live log of a task attempt's output (docs/specs/task-live-log.spec.md)."""
+
+import re
+from datetime import datetime
+from typing import Literal
+
+import aiosqlite
+from argus_core.redact import redact
+from pydantic import BaseModel
+
+from argus_api.db import Tx, ts
+from argus_api.errors import RateLimitedError, TooLargeError
+from argus_api.events import transient
+from argus_api.tasks import service
+
+MAX_LINES = 200  # per batch
+MAX_LINE_CHARS = 2000  # longer lines are cut, with "…"
+MAX_BATCH_BYTES = 64 * 1024  # UTF-8, before cleaning
+MIN_INTERVAL_S = 1.0  # per task and source
+RING_LINES = 2000  # per attempt
+KEEP_ATTEMPTS = 3  # the current attempt and the two before it
+DEFAULT_TAIL = 200
+MAX_READ = 1000
+
+Source = Literal["worker", "delegate"]
+
+_CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b-\x1f\x7f]")
+
+
+class LogLine(BaseModel):
+    seq: int
+    source: Source
+    at: datetime
+    line: str
+
+
+class LogPage(BaseModel):
+    attempt: int
+    lines: list[LogLine]  # oldest first
+    last_seq: int  # of the last line returned, else `after` (0 when not given)
+
+
+class LogAccepted(BaseModel):
+    accepted: int  # lines stored (blank lines are dropped)
+    last_seq: int  # of the task's log so far
+    output_at: datetime | None
+
+
+def clean(lines: list[str], secrets: tuple[str, ...]) -> list[str]:
+    """Redact, split on newlines, strip terminal escapes, cut long lines, drop blanks.
+    Redaction runs on the whole batch first so a private key block spanning its
+    lines, or a secret about to be cut, cannot slip through."""
+    text = redact("\n".join(lines), secrets)
+    out: list[str] = []
+    for raw in text.splitlines():
+        line = _CONTROL.sub("", raw).rstrip()
+        if not line:
+            continue
+        out.append(
+            line if len(line) <= MAX_LINE_CHARS else line[: MAX_LINE_CHARS - 1] + "…"
+        )
+    return out
+
+
+async def append(
+    tx: Tx,
+    agent_id: str,
+    task_id: str,
+    attempt: int,
+    source: Source,
+    lines: list[str],
+    secrets: tuple[str, ...] = (),
+) -> LogAccepted:
+    """Store a batch for the attempt the caller holds the live lease on, then publish
+    it as a transient `task.log` event. Does not renew the lease (heartbeats and
+    progress do)."""
+    if sum(len(line.encode()) for line in lines) > MAX_BATCH_BYTES:
+        raise TooLargeError(
+            f"a log batch is at most {MAX_BATCH_BYTES} bytes",
+            code="log_batch_too_large",
+        )
+    row = await service.check_lease(tx, task_id, attempt, agent_id)
+    async with tx.conn.execute(
+        "SELECT at FROM task_log WHERE task_id = ? AND attempt = ? AND source = ?"
+        " ORDER BY seq DESC LIMIT 1",
+        (task_id, attempt, source),
+    ) as cur:
+        last = await cur.fetchone()
+    if last is not None:
+        wait = (
+            MIN_INTERVAL_S
+            - (tx.now - datetime.fromisoformat(last["at"])).total_seconds()
+        )
+        if wait > 0:
+            raise RateLimitedError(
+                f"at most one {source} log batch per {MIN_INTERVAL_S:g} s;"
+                f" retry in {wait:.1f} s"
+            )
+    kept = clean(lines, secrets)
+    first = row["log_seq"] + 1
+    if kept:
+        at = ts(tx.now)
+        await tx.conn.executemany(
+            "INSERT INTO task_log (task_id, attempt, seq, source, at, line)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (task_id, attempt, first + i, source, at, line)
+                for i, line in enumerate(kept)
+            ],
+        )
+        last_seq = first + len(kept) - 1
+        await tx.conn.execute(
+            "UPDATE tasks SET log_seq = ?, output_at = ? WHERE id = ?",
+            (last_seq, at, task_id),
+        )
+        await _trim(tx.conn, task_id, attempt, last_seq)
+        transient(
+            tx,
+            f"agent:{agent_id}",
+            "task",
+            task_id,
+            "task.log",
+            {
+                "task_id": task_id,
+                "attempt": attempt,
+                "source": source,
+                "seq": first,  # line i has seq + i
+                "at": at,
+                "lines": kept,
+            },
+        )
+    return LogAccepted(
+        accepted=len(kept),
+        last_seq=row["log_seq"] + len(kept),
+        output_at=tx.now if kept else _dt(row["output_at"]),
+    )
+
+
+async def _trim(
+    conn: aiosqlite.Connection, task_id: str, attempt: int, last_seq: int
+) -> None:
+    # One attempt writes at a time, so its seqs are dense: the ring is a seq window.
+    await conn.execute(
+        "DELETE FROM task_log WHERE task_id = ? AND attempt = ? AND seq <= ?",
+        (task_id, attempt, last_seq - RING_LINES),
+    )
+    await conn.execute(
+        "DELETE FROM task_log WHERE task_id = ? AND attempt <= ?",
+        (task_id, attempt - KEEP_ATTEMPTS),
+    )
+
+
+async def read(
+    conn: aiosqlite.Connection,
+    task_id: str,
+    attempt: int | None,
+    after: int | None,
+    limit: int,
+) -> LogPage:
+    """Lines of one attempt (default: the task's current one). With `after`, the
+    lines after that seq, oldest first; without, the newest `limit` lines."""
+    task = await service.get_task(conn, task_id)
+    attempt = task.attempt if attempt is None else attempt
+    if after is None:
+        sql = (
+            "SELECT * FROM (SELECT seq, source, at, line FROM task_log"
+            " WHERE task_id = ? AND attempt = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq"
+        )
+        params: tuple = (task_id, attempt, limit)
+    else:
+        sql = (
+            "SELECT seq, source, at, line FROM task_log"
+            " WHERE task_id = ? AND attempt = ? AND seq > ? ORDER BY seq LIMIT ?"
+        )
+        params = (task_id, attempt, after, limit)
+    async with conn.execute(sql, params) as cur:
+        lines = [LogLine.model_validate(dict(r)) for r in await cur.fetchall()]
+    return LogPage(
+        attempt=attempt,
+        lines=lines,
+        last_seq=lines[-1].seq if lines else (after or 0),
+    )
+
+
+def _dt(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value) if value else None

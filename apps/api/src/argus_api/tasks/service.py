@@ -239,6 +239,7 @@ async def claim(
             "attempt": attempt,
             "progress_kind": None,  # a milestone belongs to one attempt
             "progress_data": None,
+            "output_at": None,
             "lease_expires_at": _deadline(tx.now, row["lease_ttl_s"]),
             "timeout_at": (
                 _deadline(tx.now, timeout)
@@ -515,10 +516,11 @@ async def retry(tx: Tx, task_id: str, actor: str) -> Task:
         "UPDATE tasks SET state = ?, attempt = 0, failures = 0, error = NULL,"
         " assignee_agent_id = NULL, lease_expires_at = NULL, timeout_at = NULL,"
         " progress_message = NULL, progress_percent = NULL, progress_at = NULL,"
-        " progress_kind = NULL, progress_data = NULL,"
+        " progress_kind = NULL, progress_data = NULL, output_at = NULL,"
         " block_reason = NULL, archived_at = NULL, updated_at = ? WHERE id = ?",
         (S.READY, ts(tx.now), task_id),
     )
+    await tx.conn.execute("DELETE FROM task_log WHERE task_id = ?", (task_id,))
     error = row["error"] or ""
     await record(
         tx,
@@ -1093,9 +1095,9 @@ async def _expire_where(
 
 async def check_lease(
     tx: Tx, task_id: str, attempt: int, agent_id: str, *, allow_expired: bool = False
-) -> None:
+) -> aiosqlite.Row:
     """Public ownership check for writes owned by other modules (artifacts, accounts)."""
-    await _owned(tx, task_id, attempt, agent_id, allow_expired=allow_expired)
+    return await _owned(tx, task_id, attempt, agent_id, allow_expired=allow_expired)
 
 
 async def _owned(
