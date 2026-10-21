@@ -2297,7 +2297,7 @@ describe("Cursor first on a local or custom engine lease", () => {
       claimWaitS: 1,
       accounts: {
         models: true,
-        onecli: new OneCliClient("http://onecli.test", fetchImpl),
+        onecli: new OneCliClient("http://127.0.0.1:10254", fetchImpl),
         resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
         selectEngine: vi.fn(async (_engine: string) => true),
       },
