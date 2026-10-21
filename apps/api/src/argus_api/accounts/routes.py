@@ -37,6 +37,7 @@ from argus_api.deps import (
 )
 from argus_api.errors import ForbiddenError, ValidationFailedError
 from argus_api.secrets import SecretStoreError, ref_name
+from argus_api.tasks import service as tasks
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -495,12 +496,20 @@ async def update_credential(
 ) -> None:
     """Replace the credential (e.g. refreshed OAuth tokens). Allowed for the agent
     holding a lease on the account, or an admin. If it cannot be persisted, the
-    account is disabled rather than left with a token that would be lost."""
+    account is disabled rather than left with a token that would be lost.
+
+    An agent must also hold the live task claim named by `task_id` and `attempt`,
+    checked before the store write (no transaction spans the store's I/O)."""
     if caller.agent_id is None and caller.scope != "admin":
         raise ForbiddenError("requires the leasing agent or an admin")
     async with db.read() as conn:
         name = await service.secret_name_for_update(conn, account_id, caller.agent_id)
         account = await service.get_account(conn, account_id, utcnow())
+    if caller.agent_id is not None:
+        if body.task_id is None or body.attempt is None:
+            raise ValidationFailedError("task_id and attempt are required")
+        async with db.write() as tx:
+            await tasks.check_lease(tx, body.task_id, body.attempt, caller.agent_id)
     checked = check_credential(account.provider, body.credential)
     if caller.agent_id is not None:
         prior = secrets.get(name)
@@ -510,6 +519,10 @@ async def update_credential(
             raise ValidationFailedError(
                 "an agent may rotate only the same credential document shape"
             )
+        if account.provider == "gitea" and prior.get("username") != body.credential.get(
+            "username"
+        ):
+            raise ValidationFailedError("gitea username cannot change during rotation")
         if checked is not None and checked[0] != account.kind:
             raise ValidationFailedError(
                 "credential kind cannot change during agent rotation"

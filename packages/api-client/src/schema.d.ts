@@ -273,6 +273,9 @@ export interface paths {
          * @description Replace the credential (e.g. refreshed OAuth tokens). Allowed for the agent
          *     holding a lease on the account, or an admin. If it cannot be persisted, the
          *     account is disabled rather than left with a token that would be lost.
+         *
+         *     An agent must also hold the live task claim named by `task_id` and `attempt`,
+         *     checked before the store write (no transaction spans the store's I/O).
          */
         put: operations["update_credential_api_accounts__account_id__credential_put"];
         post?: never;
@@ -2881,12 +2884,18 @@ export interface components {
         /**
          * CredentialUpdate
          * @description E.g. refreshed OAuth tokens for a subscription account.
+         *
+         *     An agent must name the live task claim it rotates for; an admin need not.
          */
         CredentialUpdate: {
+            /** Attempt */
+            attempt?: number | null;
             /** Credential */
             credential: {
                 [key: string]: unknown;
             };
+            /** Task Id */
+            task_id?: string | null;
         };
         /**
          * Criteria

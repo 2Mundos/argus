@@ -331,6 +331,10 @@ class QuotaRefresh(BaseModel):
 
 
 class CredentialUpdate(BaseModel):
-    """E.g. refreshed OAuth tokens for a subscription account."""
+    """E.g. refreshed OAuth tokens for a subscription account.
+
+    An agent must name the live task claim it rotates for; an admin need not."""
 
     credential: dict[str, Any]
+    task_id: str | None = None
+    attempt: int | None = Field(default=None, ge=1)

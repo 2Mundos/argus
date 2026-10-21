@@ -2734,12 +2734,35 @@
         "type": "object"
       },
       "CredentialUpdate": {
-        "description": "E.g. refreshed OAuth tokens for a subscription account.",
+        "description": "E.g. refreshed OAuth tokens for a subscription account.\n\nAn agent must name the live task claim it rotates for; an admin need not.",
         "properties": {
+          "attempt": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
+          },
           "credential": {
             "additionalProperties": true,
             "title": "Credential",
             "type": "object"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
           }
         },
         "required": [
@@ -12447,7 +12470,7 @@
     },
     "/api/accounts/{account_id}/credential": {
       "put": {
-        "description": "Replace the credential (e.g. refreshed OAuth tokens). Allowed for the agent\nholding a lease on the account, or an admin. If it cannot be persisted, the\naccount is disabled rather than left with a token that would be lost.",
+        "description": "Replace the credential (e.g. refreshed OAuth tokens). Allowed for the agent\nholding a lease on the account, or an admin. If it cannot be persisted, the\naccount is disabled rather than left with a token that would be lost.\n\nAn agent must also hold the live task claim named by `task_id` and `attempt`,\nchecked before the store write (no transaction spans the store's I/O).",
         "operationId": "update_credential_api_accounts__account_id__credential_put",
         "parameters": [
           {
