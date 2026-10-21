@@ -14,6 +14,7 @@ import {
   classifyLogTail,
   classifyProviderFailure,
   exchangeCursorApiKey,
+  executorFirst,
   jwtExpiryMs,
   OneCliClient,
   preferredExecutorForLease,
@@ -2110,5 +2111,94 @@ describe("Codex usage limit and expired login (account-selection.spec.md 3.6)", 
       "> Error handling: insufficient_quota is returned by the API",
     ].join("\n");
     expect(classifyLogTail(tail, "openai", NOW)).toBeNull();
+  });
+});
+
+// -- executor lease on a harness that only orchestrates (custom/local harness specs) ------
+
+describe("Cursor first on a local or custom engine lease", () => {
+  const settings = {
+    base_url: "https://openrouter.ai/api/v1",
+    label: "openrouter",
+    model: "deepseek/deepseek-v4.1-flash-1017",
+    provider: null,
+  };
+  const custom = () =>
+    lease("or", "sk-or-key", {
+      provider: "custom",
+      credential: { api_key: "sk-or-key" },
+      settings,
+    });
+
+  it("executorFirst names cursor only for local and custom engines", () => {
+    expect(executorFirst("custom")).toBe("cursor");
+    expect(executorFirst("local")).toBe("cursor");
+    expect(executorFirst("anthropic")).toBeNull();
+    expect(executorFirst("openai")).toBeNull();
+    expect(executorFirst(null)).toBeNull();
+  });
+
+  it("prefers agent on a custom engine lease even when an Anthropic executor is held", () => {
+    const anthropic = lease("claude-1", "sk-ant", { role: "executor" });
+    expect(preferredExecutorForLease(custom(), anthropic)).toBe("agent");
+    expect(preferredExecutorForLease(custom(), null)).toBe("agent");
+  });
+
+  async function executorCalls(answers: Array<"no_account" | AccountLease>) {
+    const w = world({ leases: [custom()], tasks: [task()] });
+    const calls: any[] = [];
+    const inner = w.fetchImpl;
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      const body = init.body ? JSON.parse(init.body as string) : undefined;
+      if (String(url).endsWith("/accounts/lease") && body?.role === "executor") {
+        calls.push(body);
+        const next = answers.shift();
+        if (!next || next === "no_account")
+          return new Response(
+            JSON.stringify({ detail: { code: "no_account", message: "no usable account" } }),
+            { status: 409 },
+          );
+        return new Response(JSON.stringify(next), { status: 200 });
+      }
+      return inner(url, init);
+    }) as unknown as typeof fetch;
+    const h = createArgusAdapter({
+      url: "http://argus.test",
+      bootstrapToken: "boot",
+      capabilities: [],
+      name: "w",
+      fetch: fetchImpl,
+      claimWaitS: 1,
+      accounts: {
+        models: true,
+        onecli: new OneCliClient("http://onecli.test", fetchImpl),
+        resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
+        selectEngine: vi.fn(async (_engine: string) => true),
+      },
+    });
+    live.push(h);
+    await h.setup({
+      onInbound: vi.fn(),
+      onInboundEvent: vi.fn(),
+      onMetadata: vi.fn(),
+      onAction: vi.fn(),
+    } as unknown as ChannelSetup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    return { calls: calls.map((c) => c.runtime_providers), w };
+  }
+
+  it("leases the Cursor executor first so its stub is mounted", async () => {
+    const cursor = lease("cur", "", {
+      provider: "cursor",
+      role: "executor",
+      credential: { api_key: "crsr" },
+    });
+    const { calls } = await executorCalls([cursor]);
+    expect(calls).toEqual([["cursor"]]);
+  });
+
+  it("falls back to any executor provider when no Cursor account is usable", async () => {
+    const { calls } = await executorCalls(["no_account", "no_account"]);
+    expect(calls).toEqual([["cursor"], ["anthropic", "openai", "local", "custom", "cursor"]]);
   });
 });

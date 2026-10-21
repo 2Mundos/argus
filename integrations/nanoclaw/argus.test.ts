@@ -211,6 +211,14 @@ describe("renderTask", () => {
     const cloud = renderTask(task() as any, new Map(), "agent");
     expect(cloud).not.toContain("Local harness (mandatory)");
   });
+  it("tells a custom-lease harness to orchestrate and keep Claude Code off its account", () => {
+    const custom = renderTask(task() as any, new Map(), "agent", { customHarness: true });
+    expect(custom).toContain("Custom harness (mandatory)");
+    expect(custom).toContain("argus-delegate agent");
+    expect(custom).toContain("custom_harness_engine_only");
+    expect(custom).not.toContain("Local harness (mandatory)");
+    expect(renderTask(task() as any, new Map(), "agent")).not.toContain("Custom harness");
+  });
   it("includes identity, framed untrusted data, and the reply protocol", () => {
     const text = renderTask(task() as any, new Map([["p1", "Step 1\nStep 2"]]));
     expect(text).toContain("[Argus task] Task: t1 · Project: web · Attempt: 1");

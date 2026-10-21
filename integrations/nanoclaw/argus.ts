@@ -49,6 +49,7 @@ import {
   classifyFailure,
   classifyLogTail,
   classifyProviderFailure,
+  executorFirst,
   type FailureKind,
   isGenericFailureNotice,
   normalizeRepositoryUrl,
@@ -339,12 +340,20 @@ export const LOCAL_HARNESS_RULES = [
   "Never use EXECUTOR claude here: the local model serves only this harness and the delegate refuses it.",
 ];
 
+export const CUSTOM_HARNESS_RULES = [
+  "Custom harness (mandatory): this harness runs on a custom account (e.g. OpenRouter) that serves only the harness.",
+  "You orchestrate: delegate investigation, implementation, gates and review to /usr/local/bin/argus-delegate agent",
+  "(Cursor; add --read-only for investigation or review). Use EXECUTOR claude only when Cursor is unavailable",
+  "(auth_missing or not_installed); it runs on a leased Anthropic account through the gateway, never on this",
+  "harness's account, and refuses (custom_harness_engine_only) when none is leased.",
+];
+
 /** The message a claimed task becomes. `pages` are inlined knowledge bodies by page id. */
 export function renderTask(
   task: ArgusTask,
   pages: Map<string, string>,
   preferredExecutor?: string | null,
-  opts: { localHarness?: boolean } = {},
+  opts: { localHarness?: boolean; customHarness?: boolean } = {},
 ): string {
   const pinned = task.executor_model;
   const trivial = task.complexity === "trivial" && !pinned;
@@ -389,6 +398,7 @@ export function renderTask(
           ]
         : []),
     ...(opts.localHarness ? ["", ...LOCAL_HARNESS_RULES, ""] : []),
+    ...(opts.customHarness ? ["", ...CUSTOM_HARNESS_RULES, ""] : []),
     "Do not invoke agent, cursor-agent, claude, codex, or opencode directly for implementation — that bypasses",
     "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
     "Direct Git, gates, QA, and other non-delegated shell commands in the checkout are fine when they are not a",
@@ -1254,6 +1264,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       renderCurrent = () =>
         renderTask(task, pages, preferredExecutorForLease(account, executor, task.complexity), {
           localHarness: account?.provider === "local",
+          customHarness: account?.provider === "custom",
         });
       currentText = renderCurrent();
       await injectTask(task.id, task.attempt, currentText);
@@ -1308,17 +1319,31 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     // too. It is held only when it is of another provider than the engine's: the
     // vault keeps one account per provider, and the engine's serves the CLI of its
     // own provider.
+    const leaseExecutor = async (runtime_providers: string[]) =>
+      (
+        await client.call("POST", "/accounts/lease", {
+          role: "executor",
+          runtime_providers,
+          // The engine's own credential already serves its provider's CLI: if that
+          // account is the best executor too, Argus returns it and takes no slot.
+          reuse_held: true,
+          task_id: task.id,
+          attempt: task.attempt,
+        })
+      ).data as AccountLease;
     try {
-      const { data } = await client.call("POST", "/accounts/lease", {
-        role: "executor",
-        runtime_providers: runtimeProviders("executor"),
-        // The engine's own credential already serves its provider's CLI: if that
-        // account is the best executor too, Argus returns it and takes no slot.
-        reuse_held: true,
-        task_id: task.id,
-        attempt: task.attempt,
-      });
-      const candidate = data as AccountLease;
+      // A local or custom harness only orchestrates and prefers Cursor: lease Cursor
+      // first so its stub is mounted, any provider only when none is usable.
+      let candidate: AccountLease | null = null;
+      const first = executorFirst(lease.provider);
+      if (first) {
+        try {
+          candidate = await leaseExecutor([first]);
+        } catch (err) {
+          if (!(err instanceof ArgusError && err.code === "no_account")) throw err;
+        }
+      }
+      candidate ??= await leaseExecutor(runtimeProviders("executor"));
       if (candidate.role === "executor" && candidate.provider !== lease.provider)
         held.push(candidate);
     } catch (err) {

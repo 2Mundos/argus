@@ -1373,3 +1373,116 @@ test("localHarnessRefusal spares other executors and cloud harnesses", () => {
   );
   assert.equal(localHarnessRefusal("claude", { CLAUDE_CODE_OAUTH_TOKEN: "x" }), null);
 });
+
+// -- Custom harness (OpenRouter bridge): the executor never rides the bridge -------------
+
+import { customHarnessActive, withoutCustomHarness } from "./argus-delegate.mjs";
+
+const BRIDGE = "http://host.docker.internal:32776";
+const BRIDGE_KEY = "a".repeat(64);
+/** What withCustomHarnessRuntime puts in the container env (custom harness spec). */
+const customHarnessEnv = () => ({
+  ANTHROPIC_BASE_URL: BRIDGE,
+  ARGUS_ALLOWED_ANTHROPIC_BASE_URL: BRIDGE,
+  ANTHROPIC_AUTH_TOKEN: "argus-custom-harness",
+  ANTHROPIC_MODEL: "deepseek/deepseek-v4.1-flash-1017",
+  ANTHROPIC_CUSTOM_HEADERS: `x-argus-bridge-key: ${BRIDGE_KEY}`,
+  ARGUS_CUSTOM_HARNESS: "1",
+});
+
+/** A driver that runs main() with the test's Claude gateway stub path. */
+function stubDriver(g, stubPath) {
+  const driver = path.join(g.dir, "driver.mjs");
+  fs.writeFileSync(
+    driver,
+    `import { main } from ${JSON.stringify(new URL("./argus-delegate.mjs", import.meta.url).href)};
+await main(process.argv.slice(2), process.env, { claudeStub: ${JSON.stringify(stubPath)} });`,
+  );
+  return driver;
+}
+
+test("customHarnessActive: the marker, or the custom placeholder on a redirect", () => {
+  assert.equal(customHarnessActive(customHarnessEnv()), true);
+  assert.equal(
+    customHarnessActive({
+      ANTHROPIC_BASE_URL: BRIDGE,
+      ANTHROPIC_AUTH_TOKEN: "argus-custom-harness",
+    }),
+    true,
+  );
+  assert.equal(
+    customHarnessActive({ ARGUS_LOCAL_HARNESS: "1", ANTHROPIC_BASE_URL: BRIDGE }),
+    false,
+  );
+  assert.equal(customHarnessActive({ CLAUDE_CODE_OAUTH_TOKEN: "x" }), false);
+  assert.equal(customHarnessActive({ ANTHROPIC_AUTH_TOKEN: "argus-custom-harness" }), false);
+});
+
+test("withoutCustomHarness removes every bridge variable and keeps the rest", () => {
+  const out = withoutCustomHarness({
+    ...customHarnessEnv(),
+    HTTPS_PROXY: "http://p:1",
+    PATH: "/b",
+  });
+  assert.deepEqual(out, { HTTPS_PROXY: "http://p:1", PATH: "/b" });
+});
+
+test("custom harness: argus-delegate claude without an Anthropic executor lease refuses (nothing runs)", async (t) => {
+  const g = gateway(t);
+  g.fake("claude", 'if [ "$1" = "--version" ]; then echo v; exit 0; fi\ntouch ran');
+  const driver = stubDriver(g, path.join(g.dir, "absent.json"));
+  const r = await runShell(
+    `${process.execPath} ${driver} claude --cwd ${g.work} --timeout 20`,
+    { ...g.env, ARGUS_ENGINE: "claude", ...customHarnessEnv() },
+    "x",
+  );
+  const report = JSON.parse(r.stdout.trim().split("\n").pop());
+  assert.equal(r.status, 78, r.stdout + r.stderr);
+  assert.equal(report.blocked, "auth_missing");
+  assert.equal(report.reason, "custom_harness_engine_only");
+  assert.equal(report.harness, "custom");
+  assert.match(report.need, /EXECUTOR agent/);
+  assert.equal(fs.existsSync(path.join(g.work, "ran")), false, "claude never started");
+  assert.equal((r.stdout + r.stderr).includes(BRIDGE_KEY), false);
+});
+
+test("custom harness: argus-delegate claude runs on the gateway's Anthropic account, never the bridge", async (t) => {
+  const g = gateway(t);
+  const dump = path.join(g.dir, "child-env");
+  g.fake(
+    "claude",
+    `if [ "$1" = "--version" ]; then echo "9.9.9 (Claude Code)"; exit 0; fi
+cat >/dev/null
+env > ${JSON.stringify(dump)}
+echo '{"result":"ok","is_error":false}'`,
+  );
+  const driver = stubDriver(g, g.stubPath);
+  // Claude Code's Bash tool drops CLAUDE_CODE_OAUTH_TOKEN; the bridge env stays.
+  const r = await runShell(
+    `${process.execPath} ${driver} claude --cwd ${g.work} --timeout 20`,
+    claudeToolEnv({ ...g.env, ARGUS_ENGINE: "claude", ...customHarnessEnv() }),
+    "do the thing",
+  );
+  const report = JSON.parse(r.stdout.trim().split("\n").pop());
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(report.auth_source, "gateway_sentinel");
+  assert.equal(report.harness, "custom");
+  const child = Object.fromEntries(
+    fs
+      .readFileSync(dump, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
+  );
+  for (const name of [
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ARGUS_ALLOWED_ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "ARGUS_CUSTOM_HARNESS",
+  ])
+    assert.equal(child[name], undefined, name);
+  assert.equal(child.CLAUDE_CODE_OAUTH_TOKEN, SENTINEL);
+  assert.equal(JSON.stringify(report).includes(BRIDGE_KEY), false);
+});
