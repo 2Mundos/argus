@@ -41,10 +41,12 @@ life for the no-signal indicator of [progress milestones](progress-milestones.sp
 
   A line is cut, not refused, because output the client cannot shorten is better
   shown cut than lost. A batch every 2-5 s is well inside the rate.
-- **Cleaning**, in this order, on the whole batch: redaction (3.2); split on newlines;
-  terminal escape sequences and control characters removed; trailing whitespace
-  stripped; blank lines dropped; long lines cut. A batch that is blank afterwards is
-  accepted with `accepted: 0` and changes nothing.
+- **Cleaning**, in this order, before the write transaction: terminal escape
+  sequences and control characters removed (so an escape cannot split a secret);
+  private key blocks masked across the batch; each line cut to 8 KiB; redaction
+  (3.2); trailing whitespace stripped; blank lines dropped; long lines cut; each line
+  redacted again (a cut never unmasks). A batch that is blank afterwards is accepted
+  with `accepted: 0` and changes nothing.
 - Answer: `{accepted, last_seq, output_at}`.
 
 ## 3.2 Redaction
@@ -59,7 +61,8 @@ the password in `scheme://user:password@host`, assignments to names ending in
 `private_key` or `credential(s)` (`NAME=value`, `name: value`, JSON `"name": "value"`),
 `--token value` style flags, and PEM private key blocks. A private key block is
 caught only within one batch (an unterminated one is masked to the end of the batch);
-clients should send a block in one batch.
+clients should send a block in one batch. Every open-ended run in a pattern is bounded
+(names to 64 characters, URL schemes to 16), so redaction stays linear in the input.
 
 ## 3.3 Storage and retention
 
@@ -85,7 +88,9 @@ clients should send a block in one batch.
   `/api/events/stream` without an `id:` line, so it never changes `Last-Event-ID` and
   is never replayed. A client that reconnects backfills with 3.5.
 - Workers receive it only for tasks they have leased, by the same check as other task
-  events. It is not returned by `GET /events` or `/events/wait`.
+  events; a stream remembers a task once found leased (grants are never deleted), so a
+  busy log costs one read per task. It is not returned by `GET /events` or
+  `/events/wait`, and never moves their cursor.
 
 ## 3.5 Reading: `GET /api/tasks/{id}/log?attempt=&after=&limit=`
 
@@ -104,7 +109,9 @@ clients should send a block in one batch.
 - Panel **Ao vivo** in the task view: backfill with 3.5, then follow `task.log` through
   the shared event stream for that task, de-duplicated by `seq`. It shows the attempt,
   filters `todos` / `worker` / `delegate`, scrolls to the end while the reader is at the
-  end, and has pause/resume (paused lines are buffered and shown on resume).
+  end, and has pause/resume (paused lines are buffered and shown on resume). When the
+  stream reconnects, or a batch's `seq` skips past the newest line held, it reads the
+  missed lines with `after`.
 - **No signal** uses the later of `progress_at` and `output_at`; the threshold is
   unchanged (`NO_SIGNAL_MINUTES`, `VITE_NO_SIGNAL_MINUTES`).
 
@@ -118,18 +125,28 @@ clients should send a block in one batch.
 - The batches are appended as JSON lines `{v, task_id, attempt, at, lines}` to
   `argus-task-log.jsonl` in the agent group directory (beside the model-policy
   snapshot, no new mount). The file is capped at 8 MiB per run; a relay failure is
-  silent and never fails or slows the run. The token is never in that environment.
-- The channel (`integrations/nanoclaw/argus.ts`) empties the file at task start, polls
+  silent and never fails or slows the run. The token is never in that environment;
+  environment values whose names contain `KEY`, `TOKEN`, `SECRET` or `PASSWORD` (8+
+  characters) are masked as exact secrets.
+- The directory is writable by the container, so the channel never follows a link:
+  at task start it unlinks the file and creates it exclusively (`O_EXCL|O_NOFOLLOW`,
+  parent checked to be a real directory), and reads it with `O_NOFOLLOW`, refusing
+  anything but a regular file with one link (the relay stops). A record over 4 MiB
+  without a newline is skipped.
+- The channel (`integrations/nanoclaw/argus.ts`) recreates the file at task start, polls
   it every 2 s, keeps only records of its current task and attempt, and posts one batch
   per poll with `source: "delegate"` (<= 200 lines, 60 KiB). `409` `stale_attempt`,
   `not_assignee`, `not_claimed` or `401` stop the relay; other `409`, `413`, `422` drop
   the batch; `429`, `5xx` and network errors back off (2 s doubling to 30 s) and retry.
-  A last poll runs before COMPLETE/FAIL/ASK.
+  Before COMPLETE/FAIL/ASK it drains the file, retrying within a 5 s deadline.
 
 # 4. Open Questions
 
 - Only the `claude` executor is parsed into readable lines; other executors give
   keepalive lines only.
+- Retention: no path deletes tasks, so a task's log lives as long as the task, bounded
+  to 2000 lines for each of three attempts. A future task purge must delete its
+  `task_log` rows first (the foreign key refuses otherwise).
 - A per-batch rate limit of one second may be too tight for a very chatty executor;
   the client batches, so it is not expected to matter.
 
