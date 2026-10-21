@@ -86,10 +86,16 @@ async def ensure_admin_token(tx: Tx, data_dir: Path, preset: str | None) -> str 
     token = new_token(ADMIN_PREFIX)
     await _insert_admin(tx, token, "initial", "system")
     path = data_dir / "admin-token"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(token + "\n")
-    os.chmod(path, 0o600)  # in case the file already existed with wider permissions
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)  # before writing, in case the file already existed
+        with os.fdopen(fd, "w") as f:
+            fd = -1  # fdopen owns it
+            f.write(token + "\n")
+    finally:
+        if fd >= 0:
+            os.close(fd)
     return token
 
 
