@@ -5,6 +5,7 @@ import json
 from argus_core.fleet import Pool
 
 from argus_api.fleet.targets import (
+    HOST_GATEWAY,
     INSTANCE_LABEL,
     MANAGED_LABEL,
     POOL_LABEL,
@@ -14,12 +15,18 @@ from argus_api.fleet.targets import (
     KubernetesPlacement,
     Mount,
     TargetError,
+    container_name,
 )
 
 DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock"
 # NanoClaw host may run an inner dockerd (sandbox) or spawn sibling agents; keep
 # headroom above the agent-container default of 2048.
 NANOCLAW_HOST_PIDS_LIMIT = 4096
+# Port the custom-harness bridge listens on inside a NanoClaw host container. The
+# Docker target publishes it on the default bridge gateway at a free host port, so
+# agent containers (another network) reach it as host.docker.internal:<host port>
+# (custom harness spec, "Bridge reachable from agent containers").
+CUSTOM_BRIDGE_PORT = 3141
 
 
 def descendant_label(pool: Pool) -> str | None:
@@ -73,6 +80,7 @@ def container_spec(
     group_add: list[str] = []
     tmpfs = dict(RUNTIME_TMPFS)
     pids_limit = 2048
+    ports: dict[str, tuple[str, int | None]] = {}
     if pool.runtime == "nanoclaw":
         nc = pool.nanoclaw
         if nc is None:  # guarded by PoolUpsert; kept for a clear error on bad rows
@@ -115,6 +123,12 @@ def container_spec(
             socket = nc.docker_socket or DEFAULT_DOCKER_SOCKET
             mounts.append(Mount(socket, "/var/run/docker.sock", "rw"))
             user, group_add = nc.user, list(nc.group_add)
+            if pool.target == "docker":
+                # Sibling agent containers sit on the default bridge, not on this
+                # container's network: only a published port reaches the bridge.
+                env["ARGUS_CUSTOM_BRIDGE_PORT"] = str(CUSTOM_BRIDGE_PORT)
+                env["ARGUS_CUSTOM_BRIDGE_CONTAINER"] = container_name(instance_id)
+                ports[f"{CUSTOM_BRIDGE_PORT}/tcp"] = (HOST_GATEWAY, None)
     elif pool.runtime != "plain":
         raise TargetError(f"runtime {pool.runtime!r} is not supported")
     return ContainerSpec(
@@ -130,6 +144,7 @@ def container_spec(
         memory_mb=pool.memory_mb,
         network=pool.docker.network,
         extra_hosts=pool.docker.extra_hosts,
+        ports=ports,
         mounts=mounts,
         user=user,
         group_add=group_add,

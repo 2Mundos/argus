@@ -21,7 +21,13 @@ export interface CustomHarnessConfig {
   /** URL the container uses (host.docker.internal bridge port). */
   anthropic_base_url: string;
   model?: string;
+  /** Per-bridge key the container sends in the bridge key header. */
+  bridge_key?: string;
 }
+
+/** Header name the bridge checks (engines/anthropic-openai-bridge.mjs BRIDGE_KEY_HEADER). */
+const BRIDGE_KEY_HEADER_NAME = "x-argus-bridge-key";
+const BRIDGE_KEY_RE = /^[0-9a-f]{32,128}$/;
 
 export interface CustomLeaseSettings {
   base_url: string;
@@ -33,12 +39,20 @@ export interface CustomLeaseSettings {
 export function customHarnessFromLease(
   containerBaseUrl: string,
   settings: CustomLeaseSettings | null | undefined,
+  bridgeKey?: string | null,
 ): CustomHarnessConfig | null {
   const base = normalizeAnthropicBaseUrl(containerBaseUrl);
   if (!base || !settings?.base_url) return null;
   const model =
     typeof settings.model === "string" && settings.model.trim() ? settings.model.trim() : undefined;
-  return { version: 1, anthropic_base_url: base, ...(model ? { model } : {}) };
+  const key =
+    typeof bridgeKey === "string" && BRIDGE_KEY_RE.test(bridgeKey) ? bridgeKey : undefined;
+  return {
+    version: 1,
+    anthropic_base_url: base,
+    ...(model ? { model } : {}),
+    ...(key ? { bridge_key: key } : {}),
+  };
 }
 
 export function customHarnessEnv(harness: CustomHarnessConfig): Record<string, string> {
@@ -50,6 +64,8 @@ export function customHarnessEnv(harness: CustomHarnessConfig): Record<string, s
     ARGUS_ALLOWED_ANTHROPIC_BASE_URL: base,
   };
   if (harness.model) out.ANTHROPIC_MODEL = harness.model;
+  if (harness.bridge_key)
+    out.ANTHROPIC_CUSTOM_HEADERS = `${BRIDGE_KEY_HEADER_NAME}: ${harness.bridge_key}`;
   return out;
 }
 
@@ -68,6 +84,7 @@ export function withCustomHarnessRuntime(
       "ANTHROPIC_AUTH_TOKEN",
       "ARGUS_ALLOWED_ANTHROPIC_BASE_URL",
       "ANTHROPIC_MODEL",
+      "ANTHROPIC_CUSTOM_HEADERS",
     ])
       delete env[key];
     return { ...config, env };
@@ -123,6 +140,9 @@ export function readCustomHarnessFile(
       version: 1,
       anthropic_base_url: base,
       ...(typeof raw.model === "string" && raw.model.trim() ? { model: raw.model.trim() } : {}),
+      ...(typeof raw.bridge_key === "string" && BRIDGE_KEY_RE.test(raw.bridge_key)
+        ? { bridge_key: raw.bridge_key }
+        : {}),
     };
   } catch {
     return null;

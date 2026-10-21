@@ -31,8 +31,8 @@ account's configured `base_url` with the leased API key held only in host memory
   `model`, `provider` block) from Argus. The channel copies the engine role's settings
   into the pinned model-policy context as `engine_settings` and the executor role's as
   `executor_settings` (delegate spec). Secrets never appear in either field.
-- **Bridge.** `argus-custom-bridge` on the NanoClaw host listens on loopback only,
-  starts when a custom engine lease is applied, and stops when the lease is released or
+- **Bridge.** `argus-custom-bridge` on the NanoClaw host listens where agent containers
+  reach it (next item) and nowhere else, starts when a custom engine lease is applied, and stops when the lease is released or
   replaced. It receives the API key and `settings` only in process memory from the
   channel at apply time. Outbound requests use `Authorization: Bearer`, the configured
   `model`, and the OpenRouter `provider` block in the JSON body when present
@@ -41,10 +41,45 @@ account's configured `base_url` with the leased API key held only in host memory
   at `http://host.docker.internal:<port>` (bridge), `ANTHROPIC_AUTH_TOKEN` is the public
   placeholder `argus-custom-harness`, and `ARGUS_ALLOWED_ANTHROPIC_BASE_URL` matches.
   `anthropic-redirect.mjs` allows only loopback / `host.docker.internal` bases with no
-  cloud credential env present. A TCP forwarder on the Docker bridge (reuse
-  `argus-local-forward.ts`) exposes the bridge port to the agent container.
+  cloud credential env present.
+- **Bridge reachable from agent containers.** Agent containers run on Docker's default
+  bridge and resolve `host.docker.internal` to its gateway (docker0). Where the bridge
+  listens depends on where NanoClaw runs:
+  - *NanoClaw in a fleet container* (the Docker target with the host socket): that
+    container is on its own network (e.g. `onecli-control`), so neither its loopback
+    nor its IP is reachable from agent containers (Docker isolates bridge networks).
+    The fleet publishes container port `3141/tcp` on the default bridge gateway at a
+    free host port and sets `ARGUS_CUSTOM_BRIDGE_PORT` / `ARGUS_CUSTOM_BRIDGE_CONTAINER`;
+    the bridge listens on `0.0.0.0:3141` inside the container and the container URL
+    names the published host port (`docker port`), i.e.
+    `http://host.docker.internal:<published port>`. Published on the gateway address,
+    the port is reachable from containers and the Docker host, not from the LAN. A start
+    that cannot resolve the published port fails the apply (no harness) instead of
+    handing the container an unreachable URL. A daemon without a default bridge
+    gateway fails the NanoClaw container's start (its agents could not run either).
+    The port is fixed per container, so one NanoClaw container runs at most one custom
+    harness at a time (a fleet instance has one agent group); a second one fails to
+    bind with a clear error. Containers created before this change have no published
+    port: replace them (recycle) when deploying.
+  - *NanoClaw on the Docker host* (no such env): loopback bridge plus the docker0 TCP
+    forwarder the Strata path uses (`argus-local-forward.ts`). A sandboxed fleet pool
+    (inner dockerd, no host socket) is this case too: its agents' host.docker.internal
+    is the sandbox's own docker0, where NanoClaw itself runs.
+  - The bridge lives in the NanoClaw process; after a restart a leftover harness file
+    is ignored until a lease re-applies it (no URL or key of a dead bridge is handed on).
+  - Inside a fleet container the bridge listens on 0.0.0.0, so containers on that
+    container's own network (e.g. `onecli-control`) can reach it too; the bridge key is
+    what guards it there.
+  - Either way the bridge is reachable by any container on the default bridge, so each
+    bridge has a random key: requests without `x-argus-bridge-key: <key>` get 401. The
+    key reaches Claude Code as `ANTHROPIC_CUSTOM_HEADERS` and is stored in the harness
+    file; it guards only that bridge and dies with the lease.
+  - The real-Docker integration test (`make test-docker`) starts the bridge the way
+    the fleet starts a NanoClaw host and proves an agent-network container reaches it
+    with the key and is refused without it.
 - **Harness file.** `argus-custom-harness.json` under the agent group directory holds
-  only non-secret bridge coordinates (`anthropic_base_url`, optional display `model`);
+  only bridge coordinates (`anthropic_base_url`, optional display `model`, the per-bridge
+  `bridge_key`; never the account's API key);
   the host merges it in `withCustomHarnessRuntime` like the local harness file.
 - **Model precedence.** The bridge always sends the account's role `model` from settings
   when set; otherwise the model from the incoming Anthropic request. Policy harness
@@ -81,6 +116,8 @@ account's configured `base_url` with the leased API key held only in host memory
 - `argus-accounts.ts` (`custom` mapping, `runtime_providers`, quota patterns),
   `argus.ts` (lease settings, bridge lifecycle, model-policy context),
   `argus-local-harness.ts` (combined runtime wrapper), `install.sh`.
+- `apps/api/src/argus_api/fleet/runtimes.py` / `targets.py`: the published bridge port
+  (`ContainerSpec.ports`, `HOST_GATEWAY`); `test_docker_integration.py` covers the path.
 - `packages/core/tests/fixtures/quota-notices.json` custom rows; channel quota test
   passes `custom` provider into `classifyFailure`.
 - [engines.spec.md](engines.spec.md) and [custom-accounts.spec.md](custom-accounts.spec.md)

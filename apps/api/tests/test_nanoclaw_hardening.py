@@ -183,3 +183,147 @@ def test_docker_start_passes_hardening(monkeypatch: pytest.MonkeyPatch) -> None:
     assert runs[0]["read_only"] is True
     assert runs[0]["pids_limit"] == 2048
     assert runs[0]["tmpfs"] == RUNTIME_TMPFS
+
+
+def _socket_pool(**overrides: object):
+    from datetime import UTC, datetime
+
+    from argus_core.fleet import Pool
+
+    body = {**SOCKET_POOL, **overrides}
+    upsert = PoolUpsert.model_validate(body, context={"allow_docker_socket": True})
+    now = datetime.now(UTC)
+    return Pool(
+        name="nc",
+        status="ok",
+        last_error=None,
+        live_instances=0,
+        created_at=now,
+        updated_at=now,
+        version="v1",
+        **upsert.model_dump(),
+    )
+
+
+def test_socket_nanoclaw_publishes_the_custom_bridge_port() -> None:
+    """Agent containers run on the default bridge, the NanoClaw host on its own
+    network: the custom-harness bridge is reachable only through a port published
+    on the bridge gateway (it was refused at host.docker.internal before)."""
+    from argus_api.fleet.runtimes import CUSTOM_BRIDGE_PORT, container_spec
+    from argus_api.fleet.targets import HOST_GATEWAY, container_name
+
+    spec = container_spec(_socket_pool(), "i-1", ["argus_boot_x"], "http://argus")
+    assert spec.ports == {f"{CUSTOM_BRIDGE_PORT}/tcp": (HOST_GATEWAY, None)}
+    assert spec.env["ARGUS_CUSTOM_BRIDGE_PORT"] == str(CUSTOM_BRIDGE_PORT)
+    assert spec.env["ARGUS_CUSTOM_BRIDGE_CONTAINER"] == container_name("i-1")
+
+
+def test_docker_start_publishes_on_the_bridge_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from argus_api.fleet.targets import HOST_GATEWAY, ContainerSpec
+
+    runs: list[dict] = []
+
+    class FakeContainers:
+        def get(self, name):
+            from docker.errors import NotFound
+
+            raise NotFound("missing")
+
+        def run(self, image, **kwargs):
+            runs.append(kwargs)
+            return MagicMock()
+
+    class FakeNetworks:
+        def get(self, name):
+            assert name == "bridge"
+            net = MagicMock()
+            net.attrs = {
+                "IPAM": {
+                    "Config": [{"Subnet": "172.17.0.0/16", "Gateway": "172.17.0.1"}]
+                }
+            }
+            return net
+
+    class FakeClient:
+        containers = FakeContainers()
+        images = MagicMock()
+        networks = FakeNetworks()
+
+    target = DockerTarget(host=None)
+    monkeypatch.setattr(target, "_docker", lambda: FakeClient())
+    spec = ContainerSpec(
+        instance_id="11111111-2222-3333-4444-555555555555",
+        image="worker:1",
+        env={},
+        labels={},
+        ports={"3141/tcp": (HOST_GATEWAY, None)},
+    )
+    target._start(spec)
+    assert runs[0]["ports"] == {"3141/tcp": ("172.17.0.1", None)}
+
+
+def test_docker_start_without_ports_publishes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from argus_api.fleet.targets import ContainerSpec
+
+    runs: list[dict] = []
+
+    class FakeContainers:
+        def get(self, name):
+            from docker.errors import NotFound
+
+            raise NotFound("missing")
+
+        def run(self, image, **kwargs):
+            runs.append(kwargs)
+            return MagicMock()
+
+    class FakeClient:
+        containers = FakeContainers()
+        images = MagicMock()
+
+    target = DockerTarget(host=None)
+    monkeypatch.setattr(target, "_docker", lambda: FakeClient())
+    target._start(ContainerSpec(instance_id="i-2", image="worker:1", env={}, labels={}))
+    assert runs[0]["ports"] is None
+
+
+def test_docker_start_refuses_to_publish_without_a_bridge_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from argus_api.fleet.targets import HOST_GATEWAY, ContainerSpec, TargetError
+
+    class FakeContainers:
+        def get(self, name):
+            from docker.errors import NotFound
+
+            raise NotFound("missing")
+
+        def run(self, image, **kwargs):  # pragma: no cover - must not be reached
+            raise AssertionError("started without a reachable bridge port")
+
+    class FakeNetworks:
+        def get(self, name):
+            net = MagicMock()
+            net.attrs = {"IPAM": {"Config": []}}
+            return net
+
+    class FakeClient:
+        containers = FakeContainers()
+        images = MagicMock()
+        networks = FakeNetworks()
+
+    target = DockerTarget(host=None)
+    monkeypatch.setattr(target, "_docker", lambda: FakeClient())
+    spec = ContainerSpec(
+        instance_id="i-3",
+        image="worker:1",
+        env={},
+        labels={},
+        ports={"3141/tcp": (HOST_GATEWAY, None)},
+    )
+    with pytest.raises(TargetError, match="no IPv4 gateway"):
+        target._start(spec)
