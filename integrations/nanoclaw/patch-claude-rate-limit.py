@@ -11,6 +11,8 @@ poll-loop and formatter hooks extend the providerFailure plumbing of NanoClaw's 
 skill; a runner without it only gets the claude.ts hook, whose error then reaches the
 channel as the notice text. Idempotent: every hook is "ensure this exact text", and an
 anchor that is missing or ambiguous stops the install (the upstream shape changed).
+Upgrading: a hook also rewrites the text an earlier version of this script wrote, so a
+checkout patched before the Codex usage-limit hook (#74) converges instead of stopping.
 """
 
 import sys
@@ -19,12 +21,21 @@ from pathlib import Path
 RUNNER = Path("container/agent-runner/src")
 
 
-def edit(root: Path, path: str, hooks: list[tuple[str, str, str]]) -> None:
-    """hooks: (what, anchor, replacement). Skipped when the replacement is present."""
+Hook = tuple[str, str, str] | tuple[str, str, str, tuple[str, ...]]
+
+
+def edit(root: Path, path: str, hooks: list[Hook]) -> None:
+    """hooks: (what, anchor, replacement[, earlier]). Skipped when the replacement is
+    present. `earlier` are texts a previous version of this script wrote: each becomes
+    the replacement, when the replacement is not there yet or the earlier text wraps it
+    (a duplicate left by an upgrade that did not know the earlier text)."""
     p = root / RUNNER / path
     s = p.read_text()
     original = s
-    for what, anchor, new in hooks:
+    for what, anchor, new, *rest in hooks:
+        for old in rest[0] if rest else ():
+            if s.count(old) == 1 and (new not in s or new in old):
+                s = s.replace(old, new, 1)
         if what == "import" and "from './claude-rate-limit.js'" in s:
             continue
         if new in s:
@@ -71,6 +82,15 @@ export interface ProviderFailure {
   provider: string;
   kind: ProviderFailureKind;
 }"""
+# What the hook wrote before the Codex usage-limit fields (#74).
+KIND_BEFORE_CODEX = """export type ProviderFailureKind = 'auth_expired' | 'rate_limit';
+
+export interface ProviderFailure {
+  provider: string;
+  kind: ProviderFailureKind;
+  /** ISO time a rate limit resets, when the provider states one. */
+  resets_at?: string;
+}"""
 KIND_NEW = """export type ProviderFailureKind = 'auth_expired' | 'rate_limit';
 
 export interface ProviderFailure {
@@ -90,6 +110,13 @@ CLASSIFY = (
 
 
 CLAUDE_HOOK = "  if (providerName === 'claude') return claudeRateLimitFailure(error);\n"
+CLAUDE_IMPORT = (
+    "import { claudeRateLimitFailure } from './providers/claude-rate-limit.js';\n"
+)
+CODEX_IMPORT = (
+    "import { codexUsageLimitFailure } from './providers/codex-usage-limit.js';\n"
+)
+POLL_IMPORTS = POLL_IMPORT + CLAUDE_IMPORT + CODEX_IMPORT
 
 
 def main(root: Path) -> None:
@@ -130,7 +157,11 @@ def main(root: Path) -> None:
             file=sys.stderr,
         )
         return
-    edit(root, "formatter.ts", [("ProviderFailure", KIND, KIND_NEW)])
+    edit(
+        root,
+        "formatter.ts",
+        [("ProviderFailure", KIND, KIND_NEW, (KIND_BEFORE_CODEX,))],
+    )
     edit(
         root,
         "poll-loop.ts",
@@ -138,9 +169,9 @@ def main(root: Path) -> None:
             (
                 "import",
                 POLL_IMPORT,
-                POLL_IMPORT
-                + "import { claudeRateLimitFailure } from './providers/claude-rate-limit.js';\n"
-                + "import { codexUsageLimitFailure } from './providers/codex-usage-limit.js';\n",
+                POLL_IMPORTS,
+                # The duplicate a #74-era upgrade left (it lacked these earlier texts); before #74.
+                (POLL_IMPORTS + CLAUDE_IMPORT, POLL_IMPORT + CLAUDE_IMPORT),
             ),
             (
                 "classifyProviderFailure",
