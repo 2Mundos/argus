@@ -582,6 +582,7 @@ async def create_task(
     account_providers: list[str] | None = None,
     harness_model: HarnessModel | None = None,
     executor_model: ExecutorModel | None = None,
+    harness_account: str | None = None,
 ) -> dict:
     """Create a task. Workers may only create subtasks of a task they hold (set
     parent_id; the project is inherited). Orchestrators create any task and must name
@@ -600,7 +601,11 @@ async def create_task(
     codex, model}) and `executor_model` ({executor: claude | codex | agent, model})
     pin the engine/executor and its model for every attempt, with no fallback chain;
     the task then only runs on that provider's accounts. Leave them out to follow
-    the model policy."""
+    the model policy. `harness_account` (an account id or name, e.g. "strata-local"
+    or a custom OpenRouter account) pins the engine lease to that one account: the
+    task waits as awaiting_quota while it cannot serve and never runs on another.
+    Local and custom accounts bring their own model, so pair them with no
+    harness_model; a local (Strata) harness delegates only to the Cursor agent."""
     body: dict[str, Any] = {
         "title": title,
         "project": project,
@@ -624,6 +629,8 @@ async def create_task(
         body["harness_model"] = harness_model.model_dump()
     if executor_model is not None:
         body["executor_model"] = executor_model.model_dump()
+    if harness_account is not None:
+        body["harness_account"] = harness_account
     return await _call(ctx, "POST", "/tasks", json=body)
 
 
@@ -848,10 +855,11 @@ async def edit_task(
     """Edit a task's definition: title, spec, acceptance, priority,
     required_capabilities, knowledge (pinned page ids), depends_on,
     account_providers, difficulty (trivial | simple | standard | hard; not clearable),
-    harness_model ({engine, model}) and executor_model ({executor, model}). `changes`
-    is a partial patch: a field you leave out is kept, null clears spec, acceptance,
-    required_capabilities, knowledge, depends_on, account_providers (no
-    restriction) or a model pin (back to the policy). Pass the task's `version` as
+    harness_model ({engine, model}), executor_model ({executor, model}) and
+    harness_account (an account id or name). `changes` is a partial patch: a field
+    you leave out is kept, null clears spec, acceptance, required_capabilities,
+    knowledge, depends_on, account_providers (no restriction), a model pin (back to
+    the policy) or the harness account pin (any account). Pass the task's `version` as
     expected_version (409 stale_version carries the current one). The task's
     `editable_fields` says what its state allows: ready, pending and
     awaiting_approval tasks take everything; blocked, claimed and in_review only

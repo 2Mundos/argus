@@ -2150,6 +2150,17 @@
             "title": "Failures",
             "type": "integer"
           },
+          "harness_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Account"
+          },
           "harness_model": {
             "anyOf": [
               {
@@ -11066,6 +11077,17 @@
             "title": "Failures",
             "type": "integer"
           },
+          "harness_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Account"
+          },
           "harness_model": {
             "anyOf": [
               {
@@ -11533,6 +11555,19 @@
               }
             ]
           },
+          "harness_account": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Account"
+          },
           "harness_model": {
             "anyOf": [
               {
@@ -11670,6 +11705,19 @@
                 "type": "null"
               }
             ]
+          },
+          "harness_account": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Account"
           },
           "harness_model": {
             "anyOf": [
@@ -11964,6 +12012,17 @@
           "failures": {
             "title": "Failures",
             "type": "integer"
+          },
+          "harness_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Account"
           },
           "harness_model": {
             "anyOf": [

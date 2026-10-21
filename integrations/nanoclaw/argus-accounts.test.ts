@@ -1837,6 +1837,29 @@ describe("global account selection in the channel", () => {
     expect(w.calls.some((c) => c.path === "/tasks/t2/fail")).toBe(false);
   });
 
+  it("leases afresh at once when the held account does not fit the next task's pin", async () => {
+    const strata = lease("strata", "", {
+      provider: "local",
+      credential: { base_url: "http://host.docker.internal:8080" },
+    });
+    const w = world({
+      leases: [codexLease(), strata],
+      tasks: [task(), { ...task(), id: "t2", harness_account: "a-strata" }],
+    });
+    const recycleRuntime = vi.fn(async () => undefined);
+    // An hour between re-evaluations: only the pin makes the second claim lease.
+    const h = harness(w, true, { rebalanceMs: 3_600_000, recycleRuntime });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await until(() => h.inbound.length === 2, 5000);
+    expect(w.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(2);
+    expect(recycleRuntime).toHaveBeenCalledTimes(1); // the Codex runtime stops first
+    const selected = w.calls.filter((c) => c.path === "/engines/selected").map((c) => c.body);
+    expect(selected.map((b) => b.account_id)).toEqual(["a-codex-1", "a-strata"]);
+  });
+
   it("never rotates while a task is in flight", async () => {
     const w = world({
       leases: [codexLease(), "no_account", lease("claude-1", "sk-ant")],

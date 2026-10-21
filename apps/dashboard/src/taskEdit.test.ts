@@ -24,6 +24,7 @@ const task = {
     "account_providers",
     "harness_model",
     "executor_model",
+    "harness_account",
   ],
   executor_model: { executor: "codex", model: "gpt-6.1-sol" },
 } as unknown as Task;
@@ -31,6 +32,15 @@ const task = {
 describe("buildChanges", () => {
   it("sends nothing when the draft equals the task", () => {
     expect(buildChanges(task, toDraft(task))).toEqual({ changes: {}, errors: {} });
+  });
+
+  it("pins a harness account by id and clears it back to any account", () => {
+    const pinned = { ...toDraft(task), harness_account: "acc-strata" };
+    expect(buildChanges(task, pinned).changes).toEqual({ harness_account: "acc-strata" });
+    const withPin = { ...task, harness_account: "acc-strata" } as Task;
+    expect(toDraft(withPin).harness_account).toBe("acc-strata");
+    const cleared = { ...toDraft(withPin), harness_account: "" };
+    expect(buildChanges(withPin, cleared).changes).toEqual({ harness_account: null });
   });
 
   it("sends only changed fields and treats capabilities as a set", () => {

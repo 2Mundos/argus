@@ -4,11 +4,13 @@
 
 An operator who knows a task needs a stronger (or cheaper) model can only change
 the global [model policy](model-selection.spec.md) today, which affects every
-task. This spec adds **two optional per-task pins**, set at creation and
-editable while the task is queued:
+task. This spec adds **optional per-task pins**, set at creation and editable while
+the task is queued:
 
 - `harness_model`: the engine that runs the worker loop and its model;
-- `executor_model`: the delegated coding CLI and its model.
+- `executor_model`: the delegated coding CLI and its model;
+- `harness_account`: the one account the engine lease may use, e.g. the local
+  Strata account or one custom (OpenRouter) account (3.4).
 
 Scope: the task fields (REST, MCP, dashboard), the lease narrowing they imply,
 the harness model the NanoClaw channel configures at claim, and the model
@@ -19,9 +21,10 @@ the harness model the NanoClaw channel configures at claim, and the model
 - No change to the global policy, its revision or its chains.
 - No availability check of a model ID: like the policy, IDs are opaque and the
   operator must use one the provider serves.
-- No pin for `opencode` or for `custom`/`local` accounts: their models come from
-  the account ([custom accounts](custom-accounts.spec.md), [local
-  harness](local-harness.spec.md)).
+- No model pin for `opencode` or for `custom`/`local` accounts: their models
+  come from the account ([custom accounts](custom-accounts.spec.md), [local
+  harness](local-harness.spec.md)); such a task is pinned to the account itself
+  (3.4).
 - No change of a running attempt: an edit never reaches a claimed task ([task
   edit](task-edit.spec.md) 3.4).
 
@@ -71,6 +74,42 @@ every attempt, failures and review rejections included.
   pinned executor), the account model, the policy chain, the native default;
   `model_source` is `task` when the pin is used.
 
+## 3.4 Harness account
+
+`harness_account` is an account id, or `null` (the default: any account the
+rest of the task allows). The API also accepts the account's name and stores its
+id. It exists so an operator can force a run onto an account that would never
+win on priority: the Strata local account (`strata-local`) or one custom account
+(`openrouter-deepseek-v4.1-flash`) while the Claude accounts outrank them.
+
+- **Validation** (`422 validation_failed`, `harness_account: ...`, at creation
+  and on any edit of it, `account_providers`, `harness_model` or
+  `executor_model`, checked against the merged task): the account exists; its
+  provider is an engine provider (`anthropic`, `openai`, `custom`, `local`); it is
+  allowed by `account_providers`; it is the provider a `harness_model` engine
+  needs (so a local or custom account takes no `harness_model`: the account
+  brings its model); and a `local` account allows only an `executor_model` of
+  `agent` (the Strata harness only orchestrates and delegates to Cursor, [local
+  harness](local-harness.spec.md)). A disabled account is accepted: the task
+  waits until it is enabled.
+- **Leases.** The pin narrows the engine role to that one account, on top of 3.2:
+  the claim gate starts the task only when the caller holds an engine lease on
+  that account or the account is usable (available or past its reset, below
+  `max_leases`) and its provider is in the caller's `runtime_providers`; the
+  engine lease and the failover candidate after an exhaustion consider only that
+  account. When it cannot serve, the task waits as `awaiting_quota` (no attempt,
+  no failure) and never runs on another account, of the same provider or not;
+  `wake_waiting` wakes it only for a free slot of that account (enabling or
+  refilling the account wakes it). The executor role is not narrowed by it.
+- **Channel.** A worker that still holds an engine account the task does not
+  allow (another account than the pinned one, a provider outside
+  `account_providers`, or another engine than `harness_model`'s) leases afresh at
+  claim instead of waiting for the periodic re-evaluation, stopping the old
+  runtime first.
+- The pin is in the attempt snapshot and the audit diff (`{from, to}` ids). A
+  deleted account leaves a pinned task waiting until the pin is edited or
+  cleared.
+
 # 4. Open Questions
 
 - Whether to pin only the engine or executor (policy model) without a model.
@@ -78,7 +117,8 @@ every attempt, failures and review rejections included.
 
 # 5. Constraints
 
-- One additive migration (`0037_task_model_pins.sql`): two nullable JSON columns.
+- One additive migration (`0037_task_model_pins.sql`): two nullable JSON columns;
+  `0038_task_harness_account.sql` adds the nullable `harness_account` id.
 - Rules live in `argus_core` and `tasks.service`; REST, MCP and the dashboard
   hold none of their own.
 - No new service, no credential in a pin, the audit or the snapshot.
@@ -93,3 +133,6 @@ every attempt, failures and review rejections included.
 4. Dashboard: engine/executor and model selects on the create and edit forms,
    shown on the detail.
 5. Tests on every layer.
+6. Harness account (3.4): the column, validation, claim gate, wake, lease and
+   failover narrowing, the channel's re-lease on an unfit held account, MCP and
+   REST arguments, and an account select on the dashboard create and edit forms.

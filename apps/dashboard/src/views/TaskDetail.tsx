@@ -137,6 +137,12 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                     <dd>{task.account_providers.join(", ")}</dd>
                   </>
                 )}
+                {task.harness_account && (
+                  <>
+                    <dt>Harness account</dt>
+                    <dd>{task.harness_account}</dd>
+                  </>
+                )}
                 {task.harness_model && (
                   <>
                     <dt>Harness</dt>
