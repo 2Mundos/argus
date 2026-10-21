@@ -15,6 +15,7 @@ import aiosqlite
 from argus_core.accounts import EXECUTOR_ONLY, REPOSITORY_PROVIDER
 from argus_core.agents import LIVE, AgentState
 from argus_core.auth import Scope
+from argus_core.custom_accounts import CustomConfig
 from argus_core.decisions import Audience, DecisionKind
 from argus_core.kinds import TaskKind
 from argus_core.task_edit import CLEARABLE, TaskAttempt, TaskChanges, editable_fields
@@ -1441,16 +1442,21 @@ async def _serving_account(
     if row["state"] != S.CLAIMED:
         return None
     async with conn.execute(
-        "SELECT a.id, a.name, a.provider FROM account_leases l"
+        "SELECT a.id, a.name, a.provider, a.config FROM account_leases l"
         " JOIN accounts a ON a.id = l.account_id WHERE l.agent_id = ?"
         " AND l.role = 'engine' AND l.released_at IS NULL",
         (row["assignee_agent_id"],),
     ) as cur:
         acc = await cur.fetchone()
-    return (
-        ServingAccount(id=acc["id"], name=acc["name"], provider=acc["provider"])
-        if acc
-        else None
+    if acc is None:
+        return None
+    config = CustomConfig.model_validate_json(acc["config"]) if acc["config"] else None
+    return ServingAccount(
+        id=acc["id"],
+        name=acc["name"],
+        provider=acc["provider"],
+        model=config.engine.model if config else None,
+        host=config.host if config else None,
     )
 
 

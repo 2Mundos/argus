@@ -24,12 +24,14 @@ import { AccountDetail } from "./AccountDetail";
 import { DeleteAccount, EditAccount, ReplaceCredential } from "./AccountDialogs";
 import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
+import { CustomAccount } from "./CustomAccount";
 import { AccountQuota, Sparkline } from "./charts";
 import { ProviderMark, StateIcon } from "./providerIcons";
 
 export function Accounts() {
   const [adding, setAdding] = useState(false);
   const [addingCodex, setAddingCodex] = useState(false);
+  const [addingCustom, setAddingCustom] = useState(false);
   // A Claude wizard: new (`{}`) or renewing the given account.
   const [claude, setClaude] = useState<{ renew?: Account }>();
   const [editing, setEditing] = useState<Account>();
@@ -91,6 +93,9 @@ export function Accounts() {
         </button>
         <button type="button" onClick={() => setClaude({})}>
           Add Claude account
+        </button>
+        <button type="button" onClick={() => setAddingCustom(true)}>
+          Add custom provider
         </button>
         <button type="button" className="primary" onClick={() => setAdding(true)}>
           Add account
@@ -285,6 +290,16 @@ export function Accounts() {
           onDone={() => {
             setNotice(claude.renew ? `Renewed “${claude.renew.name}”.` : "Claude account added.");
             setClaude(undefined);
+          }}
+        />
+      )}
+      {addingCustom && (
+        <CustomAccount
+          onClose={() => setAddingCustom(false)}
+          onDone={() => {
+            setAddingCustom(false);
+            setNotice("Custom provider account added.");
+            reloadList();
           }}
         />
       )}

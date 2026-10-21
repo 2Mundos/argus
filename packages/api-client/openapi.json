@@ -19,6 +19,16 @@
             ],
             "title": "Billing Day"
           },
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -290,6 +300,16 @@
       },
       "AccountCreate": {
         "properties": {
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "credential": {
             "anyOf": [
               {
@@ -422,6 +442,16 @@
             ],
             "title": "Role",
             "type": "string"
+          },
+          "settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LeaseSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -458,6 +488,16 @@
               }
             ],
             "title": "Billing Day"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "enabled": {
             "anyOf": [
@@ -2745,6 +2785,92 @@
           }
         },
         "title": "Criteria",
+        "type": "object"
+      },
+      "CustomConfig": {
+        "additionalProperties": false,
+        "description": "The non-secret configuration of a `custom` account.",
+        "properties": {
+          "base_url": {
+            "maxLength": 500,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/RoleSettings",
+            "default": {}
+          },
+          "executor": {
+            "$ref": "#/components/schemas/RoleSettings",
+            "default": {}
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_url",
+          "label"
+        ],
+        "title": "CustomConfig",
+        "type": "object"
+      },
+      "CustomProbe": {
+        "description": "The readiness of a custom account: `GET {base_url}/models` with the key.",
+        "properties": {
+          "exhausted_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exhausted Until"
+          },
+          "http_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Status"
+          },
+          "models": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "unauthorized",
+              "exhausted",
+              "unreachable",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "CustomProbe",
         "type": "object"
       },
       "DatabaseOut": {
@@ -5361,6 +5487,50 @@
         "title": "LeaseRequest",
         "type": "object"
       },
+      "LeaseSettings": {
+        "description": "What a lease of a custom account adds to the credential: where to call,\nwhich model, and the request-body `provider` block. No secret.",
+        "properties": {
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          }
+        },
+        "required": [
+          "base_url",
+          "label",
+          "model",
+          "provider"
+        ],
+        "title": "LeaseSettings",
+        "type": "object"
+      },
       "LocalAttempt": {
         "properties": {
           "completion_tokens": {
@@ -5639,6 +5809,118 @@
           "passes_total"
         ],
         "title": "LoopOut",
+        "type": "object"
+      },
+      "ModelEndpoint": {
+        "description": "One host serving a model (OpenRouter `\u2026/endpoints`), for the routing pickers.",
+        "properties": {
+          "completion_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completion Price"
+          },
+          "context_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Length"
+          },
+          "max_completion_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Completion Tokens"
+          },
+          "prompt_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Price"
+          },
+          "provider_name": {
+            "title": "Provider Name",
+            "type": "string"
+          },
+          "quantization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantization"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
+          }
+        },
+        "required": [
+          "provider_name"
+        ],
+        "title": "ModelEndpoint",
+        "type": "object"
+      },
+      "ModelEndpoints": {
+        "properties": {
+          "endpoints": {
+            "items": {
+              "$ref": "#/components/schemas/ModelEndpoint"
+            },
+            "title": "Endpoints",
+            "type": "array"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "endpoints"
+        ],
+        "title": "ModelEndpoints",
         "type": "object"
       },
       "NanoclawOptions-Input": {
@@ -7856,6 +8138,36 @@
         "title": "Role",
         "type": "string"
       },
+      "RoleSettings": {
+        "additionalProperties": false,
+        "description": "What one lease role (`engine`: the NanoClaw harness, `executor`: the code\nexecutor) uses on this account.",
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "routing_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingOptions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "RoleSettings",
+        "type": "object"
+      },
       "RouteDecision": {
         "properties": {
           "blocked": {
@@ -8033,6 +8345,49 @@
         "title": "RouteRequest",
         "type": "object"
       },
+      "RoutingOptions": {
+        "additionalProperties": false,
+        "description": "OpenRouter provider routing. A list or a comma-separated string is accepted.",
+        "properties": {
+          "allow_fallbacks": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Fallbacks"
+          },
+          "only": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Only",
+            "type": "array"
+          },
+          "order": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Order",
+            "type": "array"
+          },
+          "quantizations": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Quantizations",
+            "type": "array"
+          }
+        },
+        "title": "RoutingOptions",
+        "type": "object"
+      },
       "RuntimeKind": {
         "enum": [
           "plain",
@@ -8176,9 +8531,31 @@
       },
       "ServingAccount": {
         "properties": {
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
           },
           "name": {
             "title": "Name",
@@ -11908,6 +12285,120 @@
           }
         ],
         "summary": "Report Exhausted",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/models/{author}/{slug}/endpoints": {
+      "get": {
+        "description": "The hosts serving an OpenRouter model, with quantization, context and price,\nfor the routing pickers (custom accounts spec 3). Proxied; `author` and `slug`\nare validated as one path segment each.",
+        "operationId": "custom_model_endpoints_api_accounts__account_id__models__author___slug__endpoints_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "author",
+            "required": true,
+            "schema": {
+              "title": "Author",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelEndpoints"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Custom Model Endpoints",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/probe": {
+      "post": {
+        "description": "Readiness of a custom account: `GET {base_url}/models` with its key (custom\naccounts spec 3). Returns the model ids as suggestions; never the key, and\nonly a fixed reason, never upstream text.",
+        "operationId": "probe_custom_account_api_accounts__account_id__probe_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomProbe"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Probe Custom Account",
         "tags": [
           "accounts"
         ]

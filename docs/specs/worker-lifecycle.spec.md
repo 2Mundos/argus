@@ -720,6 +720,10 @@ carries the provider's `Rate limit`/`Out of credits` message, switches the secre
 value to the next account, and re-sends the task. Details and limits in
 `integrations/nanoclaw/README.md`.
 
+Provider `custom` (an OpenAI-compatible endpoint) is specified in
+[custom accounts](custom-accounts.spec.md); `accounts.config` (migration 0026) holds
+its non-secret settings and a lease returns them as `settings`.
+
 Agents run on subscription or API accounts (Claude, Codex, Cursor, …) that hit
 usage limits. Argus owns the **account registry and leasing** (in SQLite) and
 the **credentials** (in a SOPS file, 3.9.1). The two are kept apart: the

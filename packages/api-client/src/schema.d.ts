@@ -306,6 +306,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/models/{author}/{slug}/endpoints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Custom Model Endpoints
+         * @description The hosts serving an OpenRouter model, with quantization, context and price,
+         *     for the routing pickers (custom accounts spec 3). Proxied; `author` and `slug`
+         *     are validated as one path segment each.
+         */
+        get: operations["custom_model_endpoints_api_accounts__account_id__models__author___slug__endpoints_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Probe Custom Account
+         * @description Readiness of a custom account: `GET {base_url}/models` with its key (custom
+         *     accounts spec 3). Returns the model ids as suggestions; never the key, and
+         *     only a fixed reason, never upstream text.
+         */
+        post: operations["probe_custom_account_api_accounts__account_id__probe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/quota/refresh": {
         parameters: {
             query?: never;
@@ -1879,6 +1923,7 @@ export interface components {
             active_leases: number;
             /** Billing Day */
             billing_day?: number | null;
+            config?: components["schemas"]["CustomConfig"] | null;
             /**
              * Created At
              * Format: date-time
@@ -1965,6 +2010,7 @@ export interface components {
         };
         /** AccountCreate */
         AccountCreate: {
+            config?: components["schemas"]["CustomConfig"] | null;
             /** Credential */
             credential?: {
                 [key: string]: unknown;
@@ -2025,6 +2071,7 @@ export interface components {
              * @enum {string}
              */
             role?: "engine" | "executor" | "repository";
+            settings?: components["schemas"]["LeaseSettings"] | null;
         };
         /**
          * AccountState
@@ -2035,6 +2082,7 @@ export interface components {
         AccountUpdate: {
             /** Billing Day */
             billing_day?: number | null;
+            config?: components["schemas"]["CustomConfig"] | null;
             /** Enabled */
             enabled?: boolean | null;
             /** Labels */
@@ -2797,6 +2845,42 @@ export interface components {
              * @default []
              */
             must_contain?: string[];
+        };
+        /**
+         * CustomConfig
+         * @description The non-secret configuration of a `custom` account.
+         */
+        CustomConfig: {
+            /** Base Url */
+            base_url: string;
+            /** @default {} */
+            engine?: components["schemas"]["RoleSettings"];
+            /** @default {} */
+            executor?: components["schemas"]["RoleSettings"];
+            /** Label */
+            label: string;
+        };
+        /**
+         * CustomProbe
+         * @description The readiness of a custom account: `GET {base_url}/models` with the key.
+         */
+        CustomProbe: {
+            /** Exhausted Until */
+            exhausted_until?: string | null;
+            /** Http Status */
+            http_status?: number | null;
+            /**
+             * Models
+             * @default []
+             */
+            models?: string[];
+            /** Reason */
+            reason: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "unauthorized" | "exhausted" | "unreachable" | "failed";
         };
         /** DatabaseOut */
         DatabaseOut: {
@@ -3672,6 +3756,23 @@ export interface components {
             /** Task Id */
             task_id: string;
         };
+        /**
+         * LeaseSettings
+         * @description What a lease of a custom account adds to the credential: where to call,
+         *     which model, and the request-body `provider` block. No secret.
+         */
+        LeaseSettings: {
+            /** Base Url */
+            base_url: string;
+            /** Label */
+            label: string;
+            /** Model */
+            model: string | null;
+            /** Provider */
+            provider: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** LocalAttempt */
         LocalAttempt: {
             /** Completion Tokens */
@@ -3753,6 +3854,35 @@ export interface components {
             passes_total: number;
             /** Status */
             status: string;
+        };
+        /**
+         * ModelEndpoint
+         * @description One host serving a model (OpenRouter `…/endpoints`), for the routing pickers.
+         */
+        ModelEndpoint: {
+            /** Completion Price */
+            completion_price?: string | null;
+            /** Context Length */
+            context_length?: number | null;
+            /** Max Completion Tokens */
+            max_completion_tokens?: number | null;
+            /** Prompt Price */
+            prompt_price?: string | null;
+            /** Provider Name */
+            provider_name: string;
+            /** Quantization */
+            quantization?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Tag */
+            tag?: string | null;
+        };
+        /** ModelEndpoints */
+        ModelEndpoints: {
+            /** Endpoints */
+            endpoints: components["schemas"]["ModelEndpoint"][];
+            /** Model */
+            model: string;
         };
         /**
          * NanoclawOptions
@@ -4607,6 +4737,16 @@ export interface components {
          * @enum {string}
          */
         Role: "orchestrator" | "worker";
+        /**
+         * RoleSettings
+         * @description What one lease role (`engine`: the NanoClaw harness, `executor`: the code
+         *     executor) uses on this account.
+         */
+        RoleSettings: {
+            /** Model */
+            model?: string | null;
+            routing_options?: components["schemas"]["RoutingOptions"] | null;
+        };
         /** RouteDecision */
         RouteDecision: {
             /** Blocked */
@@ -4675,6 +4815,29 @@ export interface components {
             touches_sensitive?: boolean;
         };
         /**
+         * RoutingOptions
+         * @description OpenRouter provider routing. A list or a comma-separated string is accepted.
+         */
+        RoutingOptions: {
+            /** Allow Fallbacks */
+            allow_fallbacks?: boolean | null;
+            /**
+             * Only
+             * @default []
+             */
+            only?: string[];
+            /**
+             * Order
+             * @default []
+             */
+            order?: string[];
+            /**
+             * Quantizations
+             * @default []
+             */
+            quantizations?: string[];
+        };
+        /**
          * RuntimeKind
          * @enum {string}
          */
@@ -4726,8 +4889,12 @@ export interface components {
         };
         /** ServingAccount */
         ServingAccount: {
+            /** Host */
+            host?: string | null;
             /** Id */
             id: string;
+            /** Model */
+            model?: string | null;
             /** Name */
             name: string;
             /** Provider */
@@ -6216,6 +6383,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FallbackResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    custom_model_endpoints_api_accounts__account_id__models__author___slug__endpoints_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+                author: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelEndpoints"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    probe_custom_account_api_accounts__account_id__probe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomProbe"];
                 };
             };
             /** @description Validation Error */

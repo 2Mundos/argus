@@ -11,9 +11,11 @@ import {
   authorizedCwd,
   authStatus,
   buildCommand,
+  CUSTOM_KEY_ENV,
   cursorConfigDirAllowsCliWrites,
   executorJsonFailure,
   materializePrivateCursorConfig,
+  parseAccountSettings,
   prepareExecutorEnv,
   READ_ONLY_PROMPT_PREFIX,
   withCliToolsPath,
@@ -919,4 +921,177 @@ case "$*" in *sonnet*) echo '{"is_error":true,"result":"context exceeded"}';; *)
     api.calls.map((c) => c.body.model),
     ["sonnet", "opus"],
   );
+});
+
+// ---- custom OpenAI-compatible account settings (docs/specs/custom-accounts.spec.md) ----
+
+const KEY = "sk-or-v1-TOPSECRETKEY0123456789"; // gitleaks:allow (test fixture)
+const SETTINGS = {
+  base_url: "http://127.0.0.1:9/api/v1",
+  label: "openrouter",
+  model: "qwen/qwen3-coder",
+  provider: { order: ["deepinfra"], allow_fallbacks: false, only: ["deepinfra"] },
+};
+
+/** A stub executor that records argv and the env it was given, then answers. */
+function customSandbox(t, executor, { settings = SETTINGS, policy } = {}) {
+  const s = sandbox(t);
+  const rec = path.join(s.dir, "rec");
+  s.fake(
+    executor,
+    `if [ "$1" = "--version" ]; then echo v; exit 0; fi
+printf '%s\\n' "$@" > ${rec}.argv
+env > ${rec}.env
+cat >/dev/null; echo '{"result":"ok"}'`,
+  );
+  const file = path.join(s.dir, "argus-model-policy.json");
+  const chains = policy ?? {
+    harness: { codex: ["luna"] },
+    implementation: { codex: ["policy-model"], opencode: ["policy-model"] },
+  };
+  fs.writeFileSync(
+    file,
+    JSON.stringify(
+      policySnapshot(chains, { task_id: "t1", attempt: 1, executor_settings: settings }),
+    ),
+  );
+  s.env = { ...s.env, [CUSTOM_KEY_ENV]: KEY, ARGUS_MODEL_POLICY_FILE: file };
+  s.out = path.join(s.dir, "out");
+  s.read = (n) => fs.readFileSync(`${rec}.${n}`, "utf8");
+  return s;
+}
+const dump = (report) => JSON.stringify(report);
+
+test("custom account: OpenCode gets base_url, model and provider block; the key stays out of argv, output and report", async (t) => {
+  const s = customSandbox(t, "opencode");
+  const { code, report } = await run(["opencode", "--cwd", s.work, "--out", s.out], { env: s.env });
+  assert.equal(code, 0);
+  const argv = s.read("argv");
+  assert.match(argv, /^-m\nargus_custom\/qwen\/qwen3-coder$/m);
+  assert.ok(!argv.includes(KEY));
+  const env = s.read("env");
+  const cfg = JSON.parse(env.match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m)[1]);
+  const entry = cfg.provider.argus_custom;
+  assert.equal(entry.options.baseURL, "http://127.0.0.1:9/api/v1");
+  assert.equal(entry.options.apiKey, "{env:ARGUS_ACCOUNT_API_KEY}");
+  assert.deepEqual(entry.models["qwen/qwen3-coder"].options.provider, SETTINGS.provider);
+  assert.ok(!env.match(/^OPENCODE_CONFIG_CONTENT=.*/m)[0].includes(KEY));
+  assert.ok(env.includes(`ARGUS_ACCOUNT_API_KEY=${KEY}`)); // only via env
+  assert.equal(report.model, "qwen/qwen3-coder");
+  assert.equal(report.model_source, "account");
+  assert.equal(report.provider_block_applied, true);
+  assert.ok(!dump(report).includes(KEY));
+  for (const f of [...report.artifacts, report.report_file, report.usage_spool])
+    assert.ok(!fs.readFileSync(f, "utf8").includes(KEY), f);
+});
+
+test("custom account: Codex takes base_url and model but cannot carry the provider block", async (t) => {
+  const s = customSandbox(t, "codex");
+  const { code, report } = await run(["codex", "--cwd", s.work, "--out", s.out], { env: s.env });
+  assert.equal(code, 0);
+  const argv = s.read("argv");
+  assert.match(argv, /^-m\nqwen\/qwen3-coder$/m);
+  assert.ok(argv.includes('model_providers.argus_custom.base_url="http://127.0.0.1:9/api/v1"'));
+  assert.ok(argv.includes('model_providers.argus_custom.env_key="ARGUS_ACCOUNT_API_KEY"'));
+  assert.ok(!argv.includes(KEY));
+  assert.ok(!argv.includes("deepinfra"));
+  assert.equal(report.provider_block_applied, false);
+  assert.ok(!dump(report).includes(KEY));
+});
+
+test("custom account: the key is redacted if the executor echoes it", async (t) => {
+  const s = customSandbox(t, "opencode");
+  s.fake(
+    "opencode",
+    `if [ "$1" = "--version" ]; then echo v; exit 0; fi\ncat >/dev/null; echo "bad key $ARGUS_ACCOUNT_API_KEY" >&2; echo "boom $ARGUS_ACCOUNT_API_KEY"; exit 3`,
+  );
+  const { code, report } = await run(["opencode", "--cwd", s.work, "--out", s.out], { env: s.env });
+  assert.equal(code, 1);
+  assert.ok(!dump(report).includes(KEY));
+  assert.match(report.stderr_tail, /bad key \[redacted\]/);
+});
+
+test("custom account: a missing key blocks with auth_missing and nothing runs", async (t) => {
+  const s = customSandbox(t, "opencode");
+  delete s.env[CUSTOM_KEY_ENV];
+  const { code, report } = await run(["opencode", "--cwd", s.work], { env: s.env });
+  assert.equal(code, 78);
+  assert.equal(report.blocked, "auth_missing");
+  assert.match(report.need, /ARGUS_ACCOUNT_API_KEY/);
+});
+
+test("custom account: claude and agent cannot use it", async (t) => {
+  const s = customSandbox(t, "claude");
+  const { code, report } = await run(["claude", "--cwd", s.work], { env: s.env });
+  assert.equal(code, 64);
+  assert.match(report.detail, /cannot use a custom account/);
+});
+
+test("model precedence: --model, then account model, then policy chain, then native default", async (t) => {
+  const go = async (executor, args, settings, policy) => {
+    const s = customSandbox(t, executor, { settings, policy });
+    const r = await run([executor, "--cwd", s.work, "--out", s.out, ...args], { env: s.env });
+    return r.report;
+  };
+  let r = await go("opencode", ["--model", "cli/model"], SETTINGS);
+  assert.deepEqual([r.model, r.model_source], ["cli/model", "cli"]);
+  r = await go("opencode", [], SETTINGS);
+  assert.deepEqual([r.model, r.model_source], ["qwen/qwen3-coder", "account"]);
+  r = await go("opencode", [], { ...SETTINGS, model: null });
+  assert.deepEqual([r.model, r.model_source], ["policy-model", "policy"]);
+  r = await go(
+    "opencode",
+    [],
+    { ...SETTINGS, model: null },
+    { harness: { codex: ["l"] }, implementation: { codex: ["x"] } },
+  );
+  assert.deepEqual([r.model, r.model_source], [null, "native_default"]);
+});
+
+test("account settings are validated and never echoed", () => {
+  assert.equal(parseAccountSettings(undefined), null);
+  assert.equal(parseAccountSettings(JSON.stringify(SETTINGS)).base_url, SETTINGS.base_url);
+  assert.throws(() => parseAccountSettings({ base_url: "https://user:pw@h/v1" }), /credentials/);
+  assert.throws(() => parseAccountSettings({ base_url: "https://h/v1?key=abc" }), /query/);
+  assert.throws(
+    () => parseAccountSettings({ base_url: "https://h/v1", model: "bad model" }),
+    /model/,
+  );
+});
+
+test("a fake OpenAI-compatible server sees the key as bearer and the provider block in the body", async (t) => {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      seen.push({ auth: req.headers.authorization, body: JSON.parse(body) });
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ choices: [{ message: { content: "ok" } }] }));
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}/api/v1`;
+  const s = customSandbox(t, "opencode", { settings: { ...SETTINGS, base_url: base } });
+  // The stub executor plays OpenCode: it reads the injected config and calls the endpoint.
+  s.fake(
+    "opencode",
+    `if [ "$1" = "--version" ]; then echo v; exit 0; fi
+cat >/dev/null
+node -e '
+const c = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT).provider.argus_custom;
+const model = Object.keys(c.models)[0];
+const key = c.options.apiKey.replace(/^\\{env:(.*)\\}$/, (_, n) => process.env[n]);
+fetch(c.options.baseURL + "/chat/completions", { method: "POST", headers: { authorization: "Bearer " + key, "content-type": "application/json" },
+  body: JSON.stringify({ model, provider: c.models[model].options.provider, messages: [] }) }).then(() => console.log(JSON.stringify({ result: "ok" })));
+'`,
+  );
+  const { code, report } = await run(["opencode", "--cwd", s.work, "--out", s.out], { env: s.env });
+  assert.equal(code, 0);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].auth, `Bearer ${KEY}`);
+  assert.equal(seen[0].body.model, "qwen/qwen3-coder");
+  assert.deepEqual(seen[0].body.provider, SETTINGS.provider);
+  assert.ok(!dump(report).includes(KEY));
 });

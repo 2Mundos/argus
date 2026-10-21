@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from argus_core import claude_auth, codex_auth, cursor_auth
+from argus_core import claude_auth, codex_auth, cursor_auth, custom_accounts
 from argus_core.accounts import (
     Account,
     AccountCreate,
@@ -24,7 +24,7 @@ from argus_core.cost import CostReport, CostWindow
 from fastapi import APIRouter, Query, Request, status
 from pydantic import BaseModel, Field
 
-from argus_api.accounts import cost, pricing, service, usage
+from argus_api.accounts import cost, custom, pricing, service, usage
 from argus_api.db import utcnow
 from argus_api.deps import (
     AdminDep,
@@ -36,7 +36,7 @@ from argus_api.deps import (
     SettingsDep,
 )
 from argus_api.errors import ForbiddenError, ValidationFailedError
-from argus_api.secrets import SecretStoreError
+from argus_api.secrets import SecretStoreError, ref_name
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -54,6 +54,9 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
             found = codex_auth.validate(credential)
         elif provider == cursor_auth.PROVIDER:
             found = cursor_auth.validate(credential)
+        elif provider == custom_accounts.PROVIDER:
+            custom_accounts.validate_credential(credential)
+            return "api_key", "api_key"
         elif provider == "gitea":
             token = credential.get("token")
             username = credential.get("username")
@@ -85,6 +88,7 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
         claude_auth.ClaudeAuthError,
         codex_auth.CodexAuthError,
         cursor_auth.CursorAuthError,
+        custom_accounts.CustomAccountError,
     ) as exc:
         raise ValidationFailedError(f"invalid {provider} credential: {exc}") from None
     return found.kind, found.mode
@@ -155,6 +159,10 @@ async def create_account(
     if body.provider == "gitea" and body.credential is None:
         raise ValidationFailedError(
             "invalid gitea credential: username and token must be validated at registration"
+        )
+    if body.provider == custom_accounts.PROVIDER and body.credential is None:
+        raise ValidationFailedError(
+            "invalid custom credential: give the api_key as credential"
         )
     if checked := check_credential(body.provider, body.credential):
         body = body.model_copy(update={"kind": checked[0]})
@@ -297,6 +305,53 @@ async def refresh_quota(
     async with db.read() as conn:
         await service.get_account(conn, account_id, utcnow())
     return await request.app.state.quota.refresh(account_id)
+
+
+async def _custom_account(
+    request: Request, db: DbDep, account_id: str
+) -> tuple[custom_accounts.CustomConfig, str | None]:
+    """The account's config and (if stored) key; 422 for any other provider."""
+    async with db.read() as conn:
+        account = await service.get_account(conn, account_id, utcnow())
+    if account.config is None:
+        raise ValidationFailedError("not a custom account")
+    name = ref_name(account.secret_ref)
+    stored = request.app.state.secrets.get(name) if name else None
+    key = stored.get("api_key") if isinstance(stored, dict) else None
+    return account.config, key if isinstance(key, str) else None
+
+
+@router.post("/{account_id}/probe")
+async def probe_custom_account(
+    account_id: str, request: Request, db: DbDep, _: AdminDep
+) -> custom.CustomProbe:
+    """Readiness of a custom account: `GET {base_url}/models` with its key (custom
+    accounts spec 3). Returns the model ids as suggestions; never the key, and
+    only a fixed reason, never upstream text."""
+    config, key = await _custom_account(request, db, account_id)
+    if key is None:
+        return custom.CustomProbe(status="failed", reason="credential not found")
+    return await custom.probe(
+        config, key, getattr(request.app.state, "custom_transport", None)
+    )
+
+
+@router.get("/{account_id}/models/{author}/{slug}/endpoints")
+async def custom_model_endpoints(
+    account_id: str,
+    author: str,
+    slug: str,
+    request: Request,
+    db: DbDep,
+    _: ManagerDep,
+) -> custom_accounts.ModelEndpoints:
+    """The hosts serving an OpenRouter model, with quantization, context and price,
+    for the routing pickers (custom accounts spec 3). Proxied; `author` and `slug`
+    are validated as one path segment each."""
+    config, _key = await _custom_account(request, db, account_id)
+    return await custom.model_endpoints(
+        config, author, slug, getattr(request.app.state, "custom_transport", None)
+    )
 
 
 @router.patch("/{account_id}")

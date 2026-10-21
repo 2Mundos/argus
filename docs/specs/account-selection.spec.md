@@ -19,6 +19,12 @@ isolation or sandbox/TLS restrictions.
 
 # 3. Decisions Made
 
+- **Custom accounts rank like any other.** A `custom` account
+  ([custom accounts](custom-accounts.spec.md)) is leased for `engine` or `executor`
+  when the runtime lists `custom` in `runtime_providers`; the lease carries `settings`
+  for the role. An HTTP 402/429 from its endpoint is quota (same failover path, no
+  attempt consumed).
+
 - **One global ranking.** A lease (`POST /api/accounts/lease`, MCP
   `lease_account`) considers every usable model account and picks by
   `priority` descending, then fewest active leases, then provider, name and id,
