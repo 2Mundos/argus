@@ -12670,7 +12670,7 @@
     },
     "/api/decisions": {
       "get": {
-        "description": "Decisions oldest first, in pages (max 100); open ones by default.\nWorkers only see decisions for tasks they have leased (and knowledge\nproposals in those projects).",
+        "description": "Decisions oldest first, in pages (max 100); open ones by default.",
         "operationId": "list_decisions_api_decisions_get",
         "parameters": [
           {
@@ -13130,7 +13130,7 @@
     },
     "/api/events": {
       "get": {
-        "description": "Event history, newest first. Page backwards with `before`. Workers only\nsee events for projects of tasks they have leased.",
+        "description": "Event history, newest first. Page backwards with `before`.",
         "operationId": "list_events_api_events_get",
         "parameters": [
           {
@@ -15283,7 +15283,7 @@
     },
     "/api/tasks": {
       "get": {
-        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`. Archived tasks\nare left out unless `archived=true`, which lists only those. Workers only see\ntasks they have leased.",
+        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`. Archived tasks\nare left out unless `archived=true`, which lists only those.",
         "operationId": "list_tasks_api_tasks_get",
         "parameters": [
           {
