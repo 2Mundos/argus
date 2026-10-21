@@ -24,10 +24,10 @@ export function AccountPin({
 }) {
   const [options, setOptions] = useState<Option[]>();
   useEffect(() => {
-    call(api.GET("/api/accounts", {})).then(
-      (accounts) =>
+    call(api.GET("/api/accounts", {}))
+      .then((accounts) =>
         setOptions(
-          accounts
+          (Array.isArray(accounts) ? accounts : [])
             .filter((a) => ENGINE_PROVIDERS.has(a.provider))
             .map((a) => ({
               id: a.id,
@@ -36,8 +36,8 @@ export function AccountPin({
               enabled: a.state !== "disabled",
             })),
         ),
-      () => setOptions([]), // a reader without account access still sees the stored id
-    );
+      )
+      .catch(() => setOptions([])); // a reader without account access still sees the stored id
   }, []);
   const known = options?.some((o) => o.id === value);
   return (
