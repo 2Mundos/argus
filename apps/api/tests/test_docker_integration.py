@@ -415,7 +415,10 @@ def test_custom_bridge_published_port_reaches_agent_containers() -> None:
             text=True,
             check=True,
         ).stdout
-        host_port = published.strip().splitlines()[0].rsplit(":", 1)[1]
+        # Same rule as the NanoClaw side (parsePublishedPort): first line with a port.
+        host_port = next(
+            line.rsplit(":", 1)[1] for line in published.splitlines() if ":" in line
+        )
         probe = (
             "const u='http://host.docker.internal:" + host_port + "/v1/messages';"
             "const body=JSON.stringify({model:'smoke',max_tokens:8,"

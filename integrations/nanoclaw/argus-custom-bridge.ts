@@ -154,6 +154,11 @@ export async function syncCustomHarnessBridge(
   return { containerBaseUrl, bridgeKey };
 }
 
+/** Whether this process runs a bridge for `groupKey` now (its harness file is live). */
+export function hasCustomBridge(groupKey: string): boolean {
+  return active.has(groupKey);
+}
+
 export async function stopAllCustomBridges(): Promise<void> {
   for (const [key, handle] of active) {
     await handle.close().catch(() => undefined);

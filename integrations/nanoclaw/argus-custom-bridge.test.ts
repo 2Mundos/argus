@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BRIDGE_KEY_HEADER,
   bridgePlacement,
+  hasCustomBridge,
   parsePublishedPort,
   syncCustomHarnessBridge,
 } from "./argus-custom-bridge.js";
@@ -169,6 +170,18 @@ describe("published placement port contention", () => {
     await expect(
       syncCustomHarnessBridge("g2", SETTINGS(up.port), "k", fetch, { env, resolvePublished }),
     ).rejects.toThrow(/one custom harness per NanoClaw container/);
+    up.close();
+  });
+});
+
+describe("hasCustomBridge", () => {
+  it("is true only while this process runs the group's bridge", async () => {
+    const up = await fakeUpstream();
+    expect(hasCustomBridge("hb")).toBe(false);
+    await syncCustomHarnessBridge("hb", SETTINGS(up.port), "k", fetch, { env: {} });
+    expect(hasCustomBridge("hb")).toBe(true);
+    await syncCustomHarnessBridge("hb", null, null);
+    expect(hasCustomBridge("hb")).toBe(false);
     up.close();
   });
 });

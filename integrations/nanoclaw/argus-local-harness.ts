@@ -254,7 +254,12 @@ export async function withLocalHarnessRuntimeForGroup(
   const { readCustomHarnessFile, withCustomHarnessRuntime } = await import(
     "./argus-custom-harness.js"
   );
-  const custom = readCustomHarnessFile(dataDir, group.folder);
+  const { hasCustomBridge } = await import("./argus-custom-bridge.js");
+  // The bridge lives in this process: a harness file left from before a restart names
+  // a bridge (and key) that no longer exists, so it is ignored until a lease re-applies.
+  const custom = hasCustomBridge(group.folder)
+    ? readCustomHarnessFile(dataDir, group.folder)
+    : null;
   if (custom) return withCustomHarnessRuntime(config, custom);
   const harness = readLocalHarnessFile(dataDir, group.folder);
   return withLocalHarnessRuntime(config, harness);

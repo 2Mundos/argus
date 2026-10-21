@@ -62,7 +62,14 @@ account's configured `base_url` with the leased API key held only in host memory
     bind with a clear error. Containers created before this change have no published
     port: replace them (recycle) when deploying.
   - *NanoClaw on the Docker host* (no such env): loopback bridge plus the docker0 TCP
-    forwarder the Strata path uses (`argus-local-forward.ts`).
+    forwarder the Strata path uses (`argus-local-forward.ts`). A sandboxed fleet pool
+    (inner dockerd, no host socket) is this case too: its agents' host.docker.internal
+    is the sandbox's own docker0, where NanoClaw itself runs.
+  - The bridge lives in the NanoClaw process; after a restart a leftover harness file
+    is ignored until a lease re-applies it (no URL or key of a dead bridge is handed on).
+  - Inside a fleet container the bridge listens on 0.0.0.0, so containers on that
+    container's own network (e.g. `onecli-control`) can reach it too; the bridge key is
+    what guards it there.
   - Either way the bridge is reachable by any container on the default bridge, so each
     bridge has a random key: requests without `x-argus-bridge-key: <key>` get 401. The
     key reaches Claude Code as `ANTHROPIC_CUSTOM_HEADERS` and is stored in the harness

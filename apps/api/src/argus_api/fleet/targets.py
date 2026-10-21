@@ -9,15 +9,12 @@ creating a second one.
 import asyncio
 import builtins
 import json
-import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
-
-log = logging.getLogger(__name__)
 
 MANAGED_LABEL = "argus.managed"
 POOL_LABEL = "argus.pool"
