@@ -68,8 +68,11 @@ def assert_buildable(s: str) -> None:
     missing = staged_reads(run) - set(sources)
     assert not missing, f"installed but not copied: {sorted(missing)}"
     assert len(sources) == len(set(sources))
-    for needed in REQUIRED:
+    for needed in REQUIRED - {"/usr/local/bin/argus-gitea-api"}:
         assert needed in run, needed
+    # Installed once: in the Argus step or by the older standalone Gitea section.
+    assert s.count("/usr/local/bin/argus-gitea-api") == 1
+    assert s.count("npm install --prefix /usr/local/lib/argus-gitea") == 1
     assert re.search(
         r"^COPY model-policy\.mjs model-policy\.defaults\.json /usr/local/bin/$",
         s,

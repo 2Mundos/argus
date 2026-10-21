@@ -110,8 +110,13 @@ def patch(p: Path, s: str) -> str:
     if end < 0:
         fail(p, "no cleanup step after the Argus COPY line")
     run = s[copy.end() : end]
+    outside = s[: copy.start()] + s[end:]
     for needed, step in STEPS:
-        if needed not in run:
+        # argus-gitea-api may come from the earlier standalone "Argus Gitea API
+        # helper" section; one install of it is enough.
+        if needed not in run and not (
+            needed.startswith("/usr/local/bin/") and needed in outside
+        ):
             run += step
     files = ["install-cursor-agent.sh", "argus-delegate.mjs", *copy["rest"].split()]
     for name in re.findall(re.escape(STAGE) + r"([\w.-]+)", run):

@@ -152,7 +152,8 @@ jobs:
         if: steps.need.outputs.build == 'true'
         run: |
           set -euo pipefail
-          # 64 is argus-delegate's usage exit: it got past every import.
+          # 64 is argus-delegate's usage exit (no EXECUTOR): it got past every import;
+          # a missing module exits 1 before that.
           docker run --rm argus-tools-layer:ci sh -c '
             argus-delegate >/dev/null 2>&1; rc=$?; [ "$rc" = 64 ] || { echo "argus-delegate exited $rc"; exit 1; }
             for m in account-settings model-policy milestones livelog usage anthropic-redirect; do

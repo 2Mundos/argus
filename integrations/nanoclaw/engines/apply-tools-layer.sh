@@ -14,6 +14,7 @@ gitea_src="$here/../gitea-api.mjs"
 [[ -f "$gitea_src" ]] || { echo "missing Gitea helper: $gitea_src" >&2; exit 2; }
 ctx="$(mktemp -d)"
 trap 'rm -rf "$ctx"' EXIT
+shopt -s nullglob
 cp -p "$here"/*.mjs "$here"/*.json "$ctx/"
 cp -p "$gitea_src" "$ctx/gitea-api.mjs"
 docker build --build-arg "BASE=$base" -f "$here/Dockerfile.tools-layer" -t "$tag" "$ctx"
