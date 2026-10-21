@@ -15,6 +15,7 @@ from argus_core.tasks import (
 from fastapi import APIRouter, Query, Response, status
 from pydantic import BaseModel, Field, model_validator
 
+from argus_api.access import require_task_readable, worker_task_filter
 from argus_api.accounts import service as accounts
 from argus_api.db import utcnow
 from argus_api.deps import (
@@ -113,7 +114,7 @@ async def create_task(
 @router.get("")
 async def list_tasks(
     db: DbDep,
-    _: CallerDep,
+    caller: CallerDep,
     state: Annotated[list[TaskState] | None, Query()] = None,
     project: str | None = None,
     kind: str | None = None,
@@ -127,7 +128,9 @@ async def list_tasks(
     """Tasks newest first, in pages (max 100). `assignee` is the agent holding a
     task now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read
     instead: no other filter, no paging, unknown ids in `missing`. Archived tasks
-    are left out unless `archived=true`, which lists only those."""
+    are left out unless `archived=true`, which lists only those. Workers only see
+    tasks they have leased."""
+    scope = worker_task_filter(caller)
     async with db.snapshot() as snap:
         if ids is not None:
             if state or project or kind or assignee or archived or cursor:
@@ -135,7 +138,7 @@ async def list_tasks(
                     "ids is a batch read; it takes no other filter or cursor",
                     code="ids_exclusive",
                 )
-            return await views.get_tasks(snap, ids.split(","), view)
+            return await views.get_tasks(snap, ids.split(","), view, task_scope=scope)
         return await views.list_tasks(
             snap,
             states=state,
@@ -146,6 +149,7 @@ async def list_tasks(
             view=view,
             limit=limit,
             cursor=cursor,
+            task_scope=scope,
         )
 
 
@@ -195,8 +199,9 @@ def _became_ready(event: Event) -> bool:
 
 
 @router.get("/{task_id}")
-async def get_task(task_id: str, db: DbDep, _: CallerDep) -> Task:
+async def get_task(task_id: str, db: DbDep, caller: CallerDep) -> Task:
     async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
         return await service.get_task(conn, task_id)
 
 

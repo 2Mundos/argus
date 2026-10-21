@@ -63,12 +63,19 @@ async def list_decisions(
     view: View = "summary",
     limit: int = 25,
     cursor: str | None = None,
+    decision_scope: tuple[str, list[str]] | None = None,
 ) -> DecisionPage:
-    """Oldest first, keyset-paged on (created_at, id)."""
+    """Oldest first, keyset-paged on (created_at, id). `decision_scope` further
+    restricts rows for workers (leased tasks / their projects)."""
     limit = clamp(limit)
     filters: dict[str, Any] = {"state": state, "subject_id": subject_id}
     filters |= {"project": project, "kinds": sorted(kinds or [])}
     where, params = ["1 = 1"], []
+    if decision_scope is not None:
+        clause, scope_params = decision_scope
+        where.append(clause)
+        params += scope_params
+        filters["decision_scope"] = scope_params
     if state is not None:
         where.append("d.state = ?")
         params.append(state)

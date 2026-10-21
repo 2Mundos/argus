@@ -68,6 +68,9 @@ every new dependency is judged against it.
   per project and account over 24h/7d/30d, price table, unpriced models
 - [MCP operations](specs/mcp-operations.spec.md) — inbox and fleet journeys over
   MCP with compact, paged responses; REST/MCP coverage audit
+- [Worker read scope](specs/worker-read-scope.spec.md) — workers may only read
+  tasks/artifacts they have leased and knowledge/events for those projects;
+  orchestrators and admins stay global
 - [Task archive](specs/task-archive.spec.md) — archive terminal tasks out of lists
   and totals; reversible, never deletes
 - [Task dependencies](specs/task-dependencies.spec.md) — edit a waiting task's
