@@ -1565,21 +1565,17 @@
             "type": "array"
           },
           "runtime_providers": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "minItems": 1,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Runtime Providers"
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Runtime Providers",
+            "type": "array"
           }
         },
+        "required": [
+          "runtime_providers"
+        ],
         "title": "AwaitingQuotaRequest",
         "type": "object"
       },
@@ -3899,17 +3895,12 @@
         "type": "object"
       },
       "ExhaustedReport": {
+        "description": "Mark a held account exhausted for the caller's live task claim.\n\n`runtime_providers` declares which fallback account metadata the runtime can\nuse. The response never carries the next credential.",
         "properties": {
           "attempt": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Attempt"
+            "minimum": 1.0,
+            "title": "Attempt",
+            "type": "integer"
           },
           "reason": {
             "default": "",
@@ -3928,30 +3919,16 @@
             "type": "string"
           },
           "runtime_providers": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "minItems": 1,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Runtime Providers"
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Runtime Providers",
+            "type": "array"
           },
           "task_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task Id"
+            "title": "Task Id",
+            "type": "string"
           },
           "until": {
             "anyOf": [
@@ -3966,6 +3943,11 @@
             "title": "Until"
           }
         },
+        "required": [
+          "runtime_providers",
+          "task_id",
+          "attempt"
+        ],
         "title": "ExhaustedReport",
         "type": "object"
       },
@@ -4175,15 +4157,45 @@
               }
             ]
           },
+          "next_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Account Id"
+          },
+          "next_account_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Account Name"
+          },
+          "next_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Provider"
+          },
           "task_blocked": {
             "default": false,
             "title": "Task Blocked",
             "type": "boolean"
           }
         },
-        "required": [
-          "lease"
-        ],
         "title": "FallbackResult",
         "type": "object"
       },
@@ -5308,6 +5320,11 @@
       "LeaseRequest": {
         "description": "Lease the best usable account globally (priority, then least leased).\n\nThe retired `providers` list is accepted and ignored: no caller-side order or\nallowlist restricts selection.",
         "properties": {
+          "attempt": {
+            "minimum": 1.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
           "reuse_held": {
             "default": false,
             "title": "Reuse Held",
@@ -5324,21 +5341,23 @@
             "type": "string"
           },
           "runtime_providers": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "minItems": 1,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Runtime Providers"
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Runtime Providers",
+            "type": "array"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
           }
         },
+        "required": [
+          "runtime_providers",
+          "task_id",
+          "attempt"
+        ],
         "title": "LeaseRequest",
         "type": "object"
       },
@@ -11431,7 +11450,7 @@
     },
     "/api/accounts/lease": {
       "post": {
-        "description": "Lease the best usable account globally (priority, then least leased), with\nits credential. `runtime_providers` only states what the runtime can apply.\nOne active lease per role; it ends when released or replaced.\n`409 no_account` when none is usable.",
+        "description": "Lease the best usable account and deliver its credential to a claimed task.\n\n`runtime_providers` is required and states what the runtime can apply. The\ncaller must hold the live claim identified by `task_id` and `attempt`. One\nactive lease per role; `409 no_account` when none is usable.",
         "operationId": "lease_account_api_accounts_lease_post",
         "requestBody": {
           "content": {
@@ -11838,7 +11857,7 @@
     },
     "/api/accounts/{account_id}/exhausted": {
       "post": {
-        "description": "Report that the leased account hit a quota. Returns the next account to use\n(best remaining by priority, any provider), or none: then the given task is blocked as\n`awaiting_quota` and returns to ready when an account frees up.",
+        "description": "Mark a leased account exhausted and return fallback metadata only.\n\nThe caller must hold the live claim identified by `task_id` and `attempt`;\n`runtime_providers` controls which fallback metadata may be returned. Obtain\nany next credential through `/accounts/lease`.",
         "operationId": "report_exhausted_api_accounts__account_id__exhausted_post",
         "parameters": [
           {

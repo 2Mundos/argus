@@ -69,7 +69,7 @@ Related: [worker lifecycle](worker-lifecycle.spec.md), [knowledge](knowledge.spe
 
 # 6. Implementation Consequences
 
-- Migration `0024_prompt_trust.sql`; `PromptTrust` on `Task`; create path sets
+- Migration `0025_prompt_trust.sql`; `PromptTrust` on `Task`; create path sets
   trust and forces worker approval.
 - `renderTask` + `frameUntrustedTaskData` / `parseFramedUntrustedTaskData` in
   `integrations/nanoclaw/argus.ts`; negative tests in `argus.test.ts` and

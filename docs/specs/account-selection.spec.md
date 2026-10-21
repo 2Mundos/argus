@@ -32,14 +32,20 @@ isolation or sandbox/TLS restrictions.
   accounts; executor-only providers (`cursor`) cannot be a harness (`engine`
   role). The lease request may carry `runtime_providers`: what the leasing
   runtime can technically apply (for NanoClaw, the providers with a vault
-  mapping; engines exclude executor-only ones). It narrows eligibility, never
-  orders it. The old `providers` field is accepted and ignored.
+  mapping; engines exclude executor-only ones). It is required and non-empty
+  for credential delivery, and narrows eligibility, never orders it. The old
+  `providers` field is accepted and ignored. Every credential-bearing lease is
+  bound to `task_id` and `attempt` and requires that task to be currently claimed
+  by the caller with an unexpired lease. NanoClaw claims first, then leases and
+  applies the engine credential; it does not fetch credentials while idle.
 - **Exhaustion and recovery use the same ranking.** After
   `POST /accounts/{id}/exhausted` the remaining usable accounts are ranked
-  globally; the previous provider gets no preference. A recovered or newly added
+  globally; the previous provider gets no preference. The response contains
+  next-account metadata only, never a credential; the worker obtains the secret
+  through the task-bound lease endpoint. A recovered or newly added
   higher-priority account is considered by the **next lease**; a held lease is
-  never preempted. The NanoClaw channel re-leases only while idle (no task in
-  flight), at most every 60 s, and rotates (OneCLI secret, harness, stopped
+  never preempted. The NanoClaw channel re-evaluates accounts only for a claimed
+  task (at most once a minute) and rotates (OneCLI secret, harness, stopped
   containers) only when Argus returns a different account.
 - **Pool and worker provider lists are retired.** `nanoclaw.account_providers`,
   `nanoclaw.executor_providers`, `ARGUS_NANOCLAW_ACCOUNT_PROVIDERS`,
@@ -104,6 +110,9 @@ isolation or sandbox/TLS restrictions.
   `auth_source: gateway_sentinel`, and no executor, model, sandbox or TLS setting
   changes. No assignment, no stub.
 
+- **Credential rotation.** An agent may update a credential only while it holds
+  that account lease, and only with the same provider credential kind and nested
+  document structure. Admin renewal remains the operator path for changing kind.
 - **Quota failover (3.6).** A provider quota never costs an attempt.
   - *Server path.* A task `FAIL` with reason `provider_failure` whose error is a
     quota notice for the engine lease's provider (the one pattern set in

@@ -21,12 +21,35 @@ from argus_api.errors import ValidationFailedError
 from argus_api.events import Event
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
+from argus_api.tasks import service as tasks
 from argus_core.accounts import AccountCreate, AccountUpdate, QuotaReport, UsageReport
+from argus_core.tasks import TaskCreate
 from fastapi.testclient import TestClient
 from prometheus_client.parser import text_string_to_metric_families
 from pydantic import ValidationError
 
 A = "agent-a"
+
+
+async def lease(
+    db: Database, store: MemorySecretStore, providers: list[str], role="engine"
+):
+    async with db.write() as tx:
+        await tasks.create_task(
+            tx, TaskCreate(project="global", title="usage lease test"), "admin:test"
+        )
+        task = await tasks.claim(tx, A, [])
+    assert task is not None
+    async with db.write() as tx:
+        return await accounts.lease(
+            tx,
+            A,
+            providers,
+            store,
+            role,
+            task_id=task.id,
+            attempt=task.attempt,
+        )
 
 
 @pytest.fixture
@@ -117,8 +140,7 @@ async def test_reported_rate_limits_become_snapshots(
     db: Database, store: MemorySecretStore, clock: FakeClock
 ) -> None:
     c = await add(db, store, "codex-1", "openai", chatgpt_login())
-    async with db.write() as tx:
-        await accounts.lease(tx, A, ["openai"], store)
+    await lease(db, store, ["openai"])
     resets = datetime(2026, 10, 20, tzinfo=UTC)
     limits = [
         {"window_minutes": 10080, "used_percent": 40.0, "resets_at": resets},
@@ -146,8 +168,7 @@ async def test_a_pool_snapshot_has_no_percentage(
     db: Database, store: MemorySecretStore, clock: FakeClock
 ) -> None:
     c = await add(db, store, "cursor-1", "cursor", {"api_key": "k"})
-    async with db.write() as tx:
-        await accounts.lease(tx, A, ["cursor"], store, "executor")
+    await lease(db, store, ["cursor"], "executor")
     until = datetime(2026, 11, 3, tzinfo=UTC)
     await report(db, c, rate_limits=[{"pool": "third_party", "exhausted_until": until}])
     async with db.read() as conn:
@@ -181,8 +202,7 @@ async def test_series_buckets_in_the_viewers_timezone(
 ) -> None:
     c = await add(db, store, "codex-1", "openai", chatgpt_login())
     idle = await add(db, store, "codex-2", "openai", chatgpt_login(refresh="r2"))
-    async with db.write() as tx:
-        await accounts.lease(tx, A, ["openai"], store)
+    await lease(db, store, ["openai"])
     clock.now = datetime(2026, 10, 2, 2, 30, tzinfo=UTC)  # Oct 1, 23:30 in São Paulo
     await report(db, c, input_tokens=100, output_tokens=10, cached_input_tokens=60)
     clock.now = datetime(2026, 10, 2, 15, 0, tzinfo=UTC)
@@ -353,8 +373,7 @@ async def test_a_finished_run_queues_its_codex_accounts(
 ) -> None:
     c = await add(db, store, "codex-1", "openai", chatgpt_login())
     await add(db, store, "claude-1", "anthropic", {"api_key": "k"})
-    async with db.write() as tx:
-        await accounts.lease(tx, A, ["openai"], store)
+    await lease(db, store, ["openai"])
     p = prober(db, store, tmp_path, None)
     claimed_at = clock.now
     async with db.write() as tx:
@@ -378,8 +397,7 @@ async def test_metrics_report_tokens_and_quota(
     db: Database, store: MemorySecretStore, tmp_path: Path
 ) -> None:
     c = await add(db, store, "codex-1", "openai", chatgpt_login())
-    async with db.write() as tx:
-        await accounts.lease(tx, A, ["openai"], store)
+    await lease(db, store, ["openai"])
     await report(
         db,
         c,
@@ -435,8 +453,7 @@ async def held(
 ) -> str:
     """An account of `provider` leased by A."""
     c = await add(db, store, f"{provider}-x", provider, chatgpt_login(), kind)
-    async with db.write() as tx:
-        await accounts.lease(tx, A, [provider], store)
+    await lease(db, store, [provider])
     return c
 
 

@@ -350,10 +350,11 @@ async def delete_account(
 async def lease_account(
     body: LeaseRequest, db: DbDep, agent_id: AgentDep, secrets: SecretsDep
 ) -> AccountLease:
-    """Lease the best usable account globally (priority, then least leased), with
-    its credential. `runtime_providers` only states what the runtime can apply.
-    One active lease per role; it ends when released or replaced.
-    `409 no_account` when none is usable."""
+    """Lease the best usable account and deliver its credential to a claimed task.
+
+    `runtime_providers` is required and states what the runtime can apply. The
+    caller must hold the live claim identified by `task_id` and `attempt`. One
+    active lease per role; `409 no_account` when none is usable."""
     async with db.write() as tx:
         return await service.lease(
             tx,
@@ -362,6 +363,8 @@ async def lease_account(
             secrets,
             body.role,
             reuse_held=body.reuse_held,
+            task_id=body.task_id,
+            attempt=body.attempt,
         )
 
 
@@ -385,7 +388,10 @@ async def awaiting_quota(
             tx, agent_id, body.capabilities, body.runtime_providers
         )
         return AwaitingQuotaResult(
-            task_ids=ids, refill_at=await service.earliest_reset(tx, "engine", None)
+            task_ids=ids,
+            refill_at=await service.earliest_reset(
+                tx, "engine", body.runtime_providers
+            ),
         )
 
 
@@ -398,9 +404,13 @@ async def report_exhausted(
     secrets: SecretsDep,
     settings: SettingsDep,
 ) -> FallbackResult:
-    """Report that the leased account hit a quota. Returns the next account to use
-    (best remaining by priority, any provider), or none: then the given task is blocked as
-    `awaiting_quota` and returns to ready when an account frees up."""
+    """Mark a leased account exhausted and return fallback metadata only.
+
+    The caller must hold the live claim identified by `task_id` and `attempt`;
+    `runtime_providers` controls which fallback metadata may be returned. Obtain
+    any next credential through `/accounts/lease`."""
+    if body.task_id is None or body.attempt is None:
+        raise ValidationFailedError("task_id and attempt are required")
     async with db.write() as tx:
         return await service.exhausted(
             tx,
@@ -437,6 +447,18 @@ async def update_credential(
         name = await service.secret_name_for_update(conn, account_id, caller.agent_id)
         account = await service.get_account(conn, account_id, utcnow())
     checked = check_credential(account.provider, body.credential)
+    if caller.agent_id is not None:
+        prior = secrets.get(name)
+        if prior is None or _credential_shape(prior) != _credential_shape(
+            body.credential
+        ):
+            raise ValidationFailedError(
+                "an agent may rotate only the same credential document shape"
+            )
+        if checked is not None and checked[0] != account.kind:
+            raise ValidationFailedError(
+                "credential kind cannot change during agent rotation"
+            )
     try:
         await secrets.put(name, body.credential)
     except SecretStoreError as exc:
@@ -447,3 +469,18 @@ async def update_credential(
         # An admin renewal: the kind follows the credential, nothing else changes.
         async with db.write() as tx:
             await service.credential_renewed(tx, account_id, *checked, caller.actor)
+
+
+def _credential_shape(value: object) -> object:
+    """Describe nested key structure and JSON value types without retaining values."""
+    if isinstance(value, dict):
+        return {key: _credential_shape(child) for key, child in sorted(value.items())}
+    if isinstance(value, list):
+        return [_credential_shape(child) for child in value]
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, (int, float)):
+        return "number"
+    return type(value).__name__

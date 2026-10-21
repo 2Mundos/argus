@@ -29,7 +29,12 @@ from argus_core.tasks import Task
 
 from argus_api.accounts import usage
 from argus_api.db import Tx, ts
-from argus_api.errors import ConflictError, ForbiddenError, NotFoundError
+from argus_api.errors import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationFailedError,
+)
 from argus_api.events import record
 from argus_api.secrets import SecretStore, ref_name
 from argus_api.tasks import service as tasks
@@ -246,17 +251,22 @@ async def reconcile_secrets(tx: Tx, store: SecretStore) -> None:
 async def lease(
     tx: Tx,
     agent_id: str,
-    runtime_providers: list[str] | None,
+    runtime_providers: list[str],
     store: SecretStore,
     role: LeaseRole = "engine",
     *,
     reuse_held: bool = False,
+    task_id: str,
+    attempt: int,
 ) -> AccountLease:
     """Lease the best usable account for `role`, ranked globally by priority (then
     least leased, then name). `runtime_providers` is only what the runtime can
     technically apply, never an order or allowlist. An agent holds one lease per
     role (`engine`: its harness; `executor`: a delegated CLI; `repository`); a new
     lease replaces the previous one of the same role. Raises NoAccountError."""
+    if not runtime_providers:
+        raise ValidationFailedError("runtime_providers must be non-empty")
+    await tasks.check_lease(tx, task_id, attempt, agent_id)
     await release(tx, agent_id, "replaced", role)
     result = await _try_lease(
         tx, agent_id, store, role, runtime_providers, reuse_held=reuse_held
@@ -283,43 +293,53 @@ async def exhausted(
     preference for the previous provider). With nothing left, the agent's task (if
     given) is blocked as `awaiting_quota` and resumes when one frees up. The task
     keeps its attempt and failures either way."""
+    if report.task_id is None or report.attempt is None:
+        raise ConflictError("task_id and attempt are required")
     held = await _lease_on(tx.conn, agent_id, account_id, report.role)
     if held is None:
         raise ConflictError(
             f"agent {agent_id} does not hold a lease on account {account_id}",
             code="not_leased",
         )
-    task_id = report.task_id if report.attempt is not None else None
-    if task_id is not None and report.attempt is not None:
-        # Fence before any write: a stale attempt must not exhaust anything.
-        await tasks.check_lease(
-            tx, task_id, report.attempt, agent_id, allow_expired=True
+    task_id = report.task_id
+    attempt = report.attempt
+    # Fence before any write: a stale or expired claim must not exhaust anything.
+    await tasks.check_lease(tx, task_id, attempt, agent_id)
+    async with tx.conn.execute(
+        "SELECT provider FROM accounts WHERE id = ?", (account_id,)
+    ) as cur:
+        account_row = await cur.fetchone()
+    if account_row is None or account_row["provider"] not in report.runtime_providers:
+        raise ConflictError(
+            "the exhausted account provider must be declared in runtime_providers",
+            code="provider_not_declared",
         )
     role = held["role"]
     previous = await _mark_exhausted(
         tx, agent_id, account_id, report.until, report.reason, cooldown
     )
     await release(tx, agent_id, "exhausted", role)
-    next_lease = await _try_lease(tx, agent_id, store, role, report.runtime_providers)
-    if next_lease is not None:
-        if task_id is not None and report.attempt is not None:
-            await _failover(
-                tx,
-                agent_id,
-                task_id,
-                report.attempt,
-                previous,
-                next_lease.name,
-                report.reason,
-            )
-        return FallbackResult(lease=next_lease)
-    blocked = False
-    if task_id is not None and report.attempt is not None:
-        await tasks.block(tx, agent_id, task_id, report.attempt, tasks.AWAITING_QUOTA)
+    next_candidate = await _ranked(tx, agent_id, role, report.runtime_providers)
+    if next_candidate:
         await _failover(
-            tx, agent_id, task_id, report.attempt, previous, None, report.reason
+            tx,
+            agent_id,
+            task_id,
+            attempt,
+            previous,
+            next_candidate[0]["name"],
+            report.reason,
         )
-        blocked = True
+        return FallbackResult(
+            lease=None,
+            next_account_id=next_candidate[0]["id"],
+            next_account_name=next_candidate[0]["name"],
+            next_provider=next_candidate[0]["provider"],
+        )
+    blocked = False
+    await tasks.block(tx, agent_id, task_id, attempt, tasks.AWAITING_QUOTA)
+    await _failover(tx, agent_id, task_id, attempt, previous, None, report.reason)
+    blocked = True
     return FallbackResult(
         lease=None,
         earliest_reset=await earliest_reset(tx, role, report.runtime_providers),
@@ -377,11 +397,13 @@ async def fail_task(
 
 
 async def mark_awaiting_quota(
-    tx: Tx, agent_id: str, capabilities: list[str], runtime_providers: list[str] | None
+    tx: Tx, agent_id: str, capabilities: list[str], runtime_providers: list[str]
 ) -> list[str]:
     """The agent found no usable account, so it never claims. Mark the `ready` tasks
     it could have claimed as `awaiting_quota` (refill time shown from the exhausted
     accounts). Refused while any account is usable: nobody can park work by asking."""
+    if not runtime_providers:
+        raise ValidationFailedError("runtime_providers must be non-empty")
     if await _ranked(tx, agent_id, "engine", runtime_providers):
         raise ConflictError("a usable account exists", code="account_available")
     return await tasks.await_quota_ready(tx, agent_id, capabilities)
