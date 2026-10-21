@@ -72,22 +72,41 @@ Make an OpenAI-compatible endpoint (first case OpenRouter,
   `--model`; the account's role `model`; the [model policy](model-selection.spec.md)
   chain of the engine; the executor's native default.
 - **Engine use**:
-  - Executors that take an OpenAI-compatible endpoint (OpenCode; Codex with a custom
-    `model_provider`) can be fed from the lease `settings`. OpenCode can also carry
-    the `provider` block in its config; Codex cannot add body fields.
+  - **Delegate** (`integrations/nanoclaw/engines/argus-delegate.mjs`): lease `settings`
+    reach it as `executor_settings` in the pinned task context or as the JSON in
+    `ARGUS_ACCOUNT_SETTINGS`; neither holds a secret. The key is read only from the
+    environment variable `ARGUS_ACCOUNT_API_KEY`, never from argv, a file or the report.
+    - **OpenCode** gets `base_url`, `model` and the `provider` block through an inline
+      config in `OPENCODE_CONFIG_CONTENT` (an `@ai-sdk/openai-compatible` provider
+      `argus_custom`, `-m argus_custom/<model>`; the block sits in the model's
+      `options.provider`). The config names the key as `{env:ARGUS_ACCOUNT_API_KEY}`.
+    - **Codex** gets `base_url` and `model` through `-c model_providers.argus_custom.*`
+      (`env_key = "ARGUS_ACCOUNT_API_KEY"`) and `-m`. Codex **cannot carry `provider`**:
+      it cannot add body fields, so the block is dropped and the report says
+      `provider_block_applied: false`.
+    - `claude` and `agent` cannot use a custom account: the delegate exits 64.
+    - A missing key is `78 auth_missing`. If an executor echoes the key, the report's
+      `tail`, `stderr_tail` and `executor_error` have it replaced by `[redacted]`
+      (the raw artifact files are the executor's own output and are not rewritten).
+    - The report names `model` and `model_source` (`cli`, `account`, `policy`,
+      `native_default`), plus `account_label` and `account_base_url` (no credentials by
+      the URL rule).
   - **NanoClaw harness**: not enabled. Credentials reach NanoClaw only through the
     OneCLI vault by host mapping, `PROVIDERS` in `argus-accounts.ts` has no `custom`
     entry, and the Claude stub rejects a redirected `ANTHROPIC_BASE_URL`
     (`api_redirected`). Enabling it needs a host-registered mapping for the account's
-    host; the redirect stays blocked for every other URL.
+    host; the redirect stays blocked for every other URL. **Blocker (vault/runtime
+    change, out of scope here):** the channel also does not yet copy a lease's
+    `settings` into `executor_settings`.
   - **Claude Code** cannot speak an OpenAI endpoint (Messages API only). A custom
     account is therefore never a Claude Code engine.
 
 # 4. Open Questions
 
-- The vault mapping for custom hosts (NanoClaw side) and which executors the delegate
-  starts with `settings`. Until then the lease `settings` are the contract for plain
-  runtimes and nothing leases a custom account for NanoClaw.
+- The vault mapping for custom hosts (NanoClaw side), and the channel passing
+  `executor_settings`. Until then the lease `settings` are the contract for plain
+  runtimes (`ARGUS_ACCOUNT_SETTINGS` + `ARGUS_ACCOUNT_API_KEY`) and nothing leases a
+  custom account for NanoClaw.
 - `/models` is the only suggestion source; a gateway without it gets free text.
 
 # 5. Constraints
@@ -106,5 +125,7 @@ Make an OpenAI-compatible endpoint (first case OpenRouter,
   `accounts/routes.py`; lease `settings` in `accounts/service.py`; test transport via
   `app.state.custom_transport`.
 - Dashboard: the custom account form and the model and host on the attempt.
+- Delegate: `argus-delegate.mjs` (`parseAccountSettings`, `effectiveModel`,
+  `applySettingsEnv`, Codex `-c` args), tests in `argus-delegate.test.mjs`.
 - Tests: `packages/core/tests/test_custom_accounts.py`,
   `apps/api/tests/test_custom_accounts.py` (in-process fake provider).
