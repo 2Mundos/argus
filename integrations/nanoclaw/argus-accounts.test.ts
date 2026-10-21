@@ -548,15 +548,23 @@ describe("channel with accounts", () => {
     });
   });
 
-  it("does not claim while no account is usable, and starts once one is", async () => {
-    const w = world({ leases: ["no_account", lease("a", "sk-ant-AAAA")], tasks: [task()] });
+  it("gives a claimed task back as quota while no account is usable, and starts once one is", async () => {
+    // Leases are bound to a claim, so the channel claims first; Argus only hands it a
+    // task some agent can serve and parks the returned one until an account frees up.
+    const w = world({
+      leases: ["no_account", lease("a", "sk-ant-AAAA")],
+      tasks: [task(), { ...task(), attempt: 2 }],
+    });
     const h = harness(w);
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
-    await new Promise((r) => setTimeout(r, 200));
-    expect(w.calls.some((c) => c.path === "/tasks/claim")).toBe(false);
-    await until(() => h.inbound.length === 1, 7000); // the retry sleeps 5 s
-  }, 10_000);
+    await until(() => w.calls.some((c) => c.path === "/tasks/t1/fail"), 7000); // the retry sleeps 5 s
+    const fail = w.calls.find((c) => c.path === "/tasks/t1/fail")!;
+    expect(fail.body).toMatchObject({ attempt: 1, reason: "quota" });
+    await until(() => h.inbound.length === 1, 7000);
+    // attempt 1 never reached the agent; the re-offered attempt 2 did
+    expect(h.inbound.map((m) => m.id)).toEqual(["argus-t1-2"]);
+  }, 15_000);
 
   it("on a rate-limit failure: reports the account, switches, and re-sends the task", async () => {
     const w = world({
@@ -652,9 +660,13 @@ describe("channel with accounts", () => {
       onAction: () => {},
     } as unknown as ChannelSetup);
     await until(() => w.calls.some((c) => c.path === "/accounts/release"));
-    expect(w.calls.some((c) => c.path === "/tasks/claim")).toBe(false);
+    // the claimed task goes back to Argus as quota, never to the agent
+    await until(() => w.calls.some((c) => c.path === "/tasks/t1/fail"), 7000);
+    expect(w.calls.find((c) => c.path === "/tasks/t1/fail")!.body).toMatchObject({
+      reason: "quota",
+    });
     expect(inbound).toHaveLength(0);
-  });
+  }, 10_000);
 
   it("a non-quota failure notice fails the attempt with its text", async () => {
     const w = world({ leases: [lease("a", "sk-ant-AAAA")], tasks: [task()] });
@@ -1569,7 +1581,7 @@ describe("global account selection in the channel", () => {
     // Claude 100 (max_leases 1) is the engine; Argus, asked to reuse held accounts,
     // answers the executor request with that same engine lease, not Codex 0.
     const engine = lease("claude-1", "sk-ant");
-    const w = world({ leases: [engine, "no_account"] });
+    const w = world({ leases: [engine, "no_account"], tasks: [task()] });
     const calls: any[] = [];
     const inner = w.fetchImpl;
     const fetchImpl = (async (url: string, init: RequestInit) => {
@@ -1625,17 +1637,23 @@ describe("global account selection in the channel", () => {
     expect(renderTask(task() as any, new Map())).not.toContain("Preferred EXECUTOR");
   });
 
-  it("adopts a recovered higher-priority account while idle, without touching active work", async () => {
-    // Initially only openai was usable; once idle, Argus ranks anthropic first again.
+  // Leases are bound to a claimed task, so the account is re-evaluated at the next
+  // claim once `rebalanceMs` has passed, never while idle or mid-task.
+  it("adopts a recovered higher-priority account at the next claim, without touching active work", async () => {
+    // Only openai was usable for the first task; by the next claim Argus ranks anthropic first.
     const w = world({
-      leases: [codexLease(), "no_account", lease("claude-1", "sk-ant")],
-      idleClaimMs: 15,
+      leases: [codexLease(), lease("claude-1", "sk-ant")],
+      tasks: [task(), { ...task(), id: "t2" }],
     });
     const recycleRuntime = vi.fn(async () => undefined);
     const selectEngine = vi.fn(async (_engine: string) => true);
     const h = harness(w, true, { rebalanceMs: 30, recycleRuntime, selectEngine });
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    expect(recycleRuntime).not.toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 60));
+    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
     await until(() => selectEngine.mock.calls.some((c) => c[0] === "claude"), 5000);
     expect(selectEngine.mock.calls.map((c) => c[0])).toEqual(["codex", "claude"]);
     expect(recycleRuntime).toHaveBeenCalledTimes(1);
@@ -1644,14 +1662,22 @@ describe("global account selection in the channel", () => {
   });
 
   it("keeps the established account when a re-evaluation finds nothing better or nothing usable", async () => {
-    const w = world({ leases: [codexLease(), "no_account", "no_account"], idleClaimMs: 10 });
+    const w = world({
+      leases: [codexLease(), "no_account", "no_account"],
+      tasks: [task(), { ...task(), id: "t2" }],
+    });
     const selectEngine = vi.fn(async (_engine: string) => true);
     const h = harness(w, true, { rebalanceMs: 20, selectEngine });
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
-    await until(() => w.calls.filter((c) => c.path === "/accounts/lease").length >= 3, 5000);
+    await until(() => h.inbound.length === 1);
+    await new Promise((r) => setTimeout(r, 40));
+    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await until(() => h.inbound.length === 2, 5000);
+    expect(w.calls.filter((c) => c.path === "/accounts/lease").length).toBeGreaterThanOrEqual(2);
     expect(selectEngine).toHaveBeenCalledTimes(1);
     expect(w.calls.some((c) => /\/exhausted$/.test(c.path))).toBe(false);
+    expect(w.calls.some((c) => c.path === "/tasks/t2/fail")).toBe(false);
   });
 
   it("never rotates while a task is in flight", async () => {
@@ -1865,10 +1891,13 @@ describe("no usable account at claim time", () => {
     const h = harness(w);
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
-    await until(() => w.calls.some((c) => c.path === "/accounts/awaiting-quota"));
+    // the lease retry sleeps 5 s before the task is given back
+    await until(() => w.calls.some((c) => c.path === "/accounts/awaiting-quota"), 7000);
     const call = w.calls.find((c) => c.path === "/accounts/awaiting-quota")!;
     expect(call.body).toMatchObject({ runtime_providers: ["anthropic", "openai", "local"] });
     expect(w.calls.some((c) => c.path === "/tasks/claim")).toBe(true);
-    expect(w.calls.some((c) => c.path === "/tasks/t1/fail")).toBe(true);
-  });
+    expect(w.calls.find((c) => c.path === "/tasks/t1/fail")!.body).toMatchObject({
+      reason: "quota",
+    });
+  }, 10_000);
 });

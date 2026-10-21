@@ -545,12 +545,16 @@ async def _failover(
 async def release(
     tx: Tx, agent_id: str, reason: str, role: LeaseRole | None = None
 ) -> None:
-    """End the agent's active leases: one role, or all of them."""
-    await tx.conn.execute(
+    """End the agent's active leases: one role, or all of them. A freed slot wakes
+    as many quota-waiting tasks as can now be served (`tasks.wake_waiting`), except
+    when the lease is only being `replaced` by a new one in the same call."""
+    cur = await tx.conn.execute(
         "UPDATE account_leases SET released_at = ?, release_reason = ?"
         " WHERE agent_id = ? AND released_at IS NULL AND (? IS NULL OR role = ?)",
         (ts(tx.now), reason, agent_id, role, role),
     )
+    if cur.rowcount and reason != "replaced":
+        await tasks.wake_waiting(tx)
 
 
 async def earliest_reset(
@@ -629,22 +633,10 @@ async def sync_local_health(
 
 async def release_waiting_tasks(tx: Tx) -> list[str]:
     """Unblock tasks waiting for quota (`awaiting_quota`, or the older `no_account`)
-    as soon as any account is available. They return to ready; whichever agent
-    claims them leases afresh, and one that still finds nothing parks them again."""
-    async with tx.conn.execute(
-        "SELECT 1 FROM accounts WHERE state = 'available' LIMIT 1"
-    ) as cur:
-        if await cur.fetchone() is None:
-            return []
-    async with tx.conn.execute(
-        "SELECT id FROM tasks WHERE state = 'blocked' AND block_reason IN (?, ?)"
-        " ORDER BY id",
-        tasks.QUOTA_WAIT_REASONS,
-    ) as cur:
-        ids = [r["id"] for r in await cur.fetchall()]
-    for task_id in ids:
-        await tasks.unblock(tx, task_id, "system")
-    return ids
+    when an account becomes usable: as many as the accounts can serve now, highest
+    priority first (`tasks.wake_waiting`). Whichever agent claims one leases afresh;
+    one that still finds nothing parks it again without spending an attempt."""
+    return await tasks.wake_waiting(tx)
 
 
 # -- usage and credentials -----------------------------------------------------------------

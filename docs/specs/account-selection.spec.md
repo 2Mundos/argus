@@ -161,6 +161,24 @@ isolation or sandbox/TLS restrictions.
     `POST /accounts/awaiting-quota` (capabilities, runtime providers) when its
     lease fails with `no_account`; the endpoint refuses (409 `account_available`)
     while any account is usable, and only blocks tasks that worker could claim.
+  - *Claim gate and waking (2026-10-21).* Leases are bound to a claim, so a
+    worker claims first; Argus therefore gates the claim itself. With
+    `runtime_providers` and a fleet that manages model accounts, a task (restricted
+    or not) is handed only to a caller that already holds an engine lease of a
+    provider the task allows, or when such an account has a free lease slot. A task
+    nobody can serve now (no free slot and no idle agent holding a fitting lease)
+    is parked as `awaiting_quota` by the claim, without bumping `attempt`; one an
+    idle holder elsewhere can serve stays `ready` for it. A `FAIL` with reason
+    `quota` (the channel's "no usable provider account" give-back) parks the task
+    the same way instead of requeueing it, so it no longer bounces between agents
+    that cannot lease. Waking (`tasks.wake_waiting`) runs when a lease is released
+    (task done, agent lost or recycled, explicit release; not when a lease is only
+    replaced) and on every account change listed above. It wakes, highest priority
+    first, at most as many waiting tasks as the usable engine accounts can serve
+    now: free lease slots plus idle holders, per account, cloud before local, each
+    task taking a slot of an account its `account_providers` allow (an account
+    without `max_leases` wakes all that fit). The rest keep waiting; none spends a
+    failure.
   - *Channel.* When a run ends, the channel treats as exhaustion: a quota notice,
     a structured `providerFailure` `{provider:"claude", kind:"rate_limit",
     resets_at?}` (anthropic account; fixed reason, never raw text), or the generic

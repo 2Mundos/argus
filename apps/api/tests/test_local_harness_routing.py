@@ -16,7 +16,7 @@ from argus_api.secrets import MemorySecretStore
 from argus_api.tasks import service as tasks
 from argus_core.accounts import AccountCreate, AccountUpdate, ExhaustedReport
 from argus_core.task_edit import TaskChanges
-from argus_core.tasks import TaskCreate
+from argus_core.tasks import TaskCreate, TaskResult
 
 A = "agent-a"
 RUNTIME = ["anthropic", "openai", "local"]
@@ -221,9 +221,17 @@ async def test_restricted_task_waits_for_busy_local_without_spending_an_attempt(
     assert await claim_one(db) is None
     async with db.read() as conn:
         t = await tasks.get_task(conn, second)
-    assert t.state == "ready" and t.attempt == 0
+    # nobody can serve it now: it waits for the account instead of bouncing
+    assert (t.state, t.block_reason, t.attempt, t.failures) == (
+        "blocked",
+        "awaiting_quota",
+        0,
+        0,
+    )
     async with db.write() as tx:
-        await accounts.release(tx, "agent-b", "done")
+        await accounts.release(tx, "agent-b", "done")  # the freed slot wakes it
+    async with db.read() as conn:
+        assert (await tasks.get_task(conn, second)).state == "ready"
     freed = await claim_one(db)
     assert freed is not None and freed.id == second and freed.attempt == 1
 
@@ -241,7 +249,7 @@ async def test_claim_skips_restricted_task_when_runtime_lacks_provider(
     assert (await claim_one(db)) is not None
 
 
-async def test_unreachable_local_holds_only_the_restricted_task(
+async def test_unreachable_local_parks_tasks_and_wakes_one_per_slot(
     db: Database, store, agent
 ) -> None:
     await add_local(db, store, "strata")
@@ -249,15 +257,26 @@ async def test_unreachable_local_holds_only_the_restricted_task(
     plain = await make_task(db, None, "plain")
     async with db.write() as tx:
         await accounts.sync_local_health(tx, False, "down")
-    got = await claim_one(db)
-    assert got is not None and got.id == plain
+    # the local model is the only account and it is down: neither task can run, so
+    # both wait for an account without spending an attempt
+    assert await claim_one(db) is None
     async with db.read() as conn:
-        t = await tasks.get_task(conn, restricted)
-    assert t.state == "ready" and t.attempt == 0
+        for task_id in (restricted, plain):
+            t = await tasks.get_task(conn, task_id)
+            assert (t.state, t.block_reason, t.attempt) == (
+                "blocked",
+                "awaiting_quota",
+                0,
+            )
     async with db.write() as tx:
         await accounts.sync_local_health(tx, True)
+    async with db.read() as conn:
+        # one lease slot is back: one task is woken, the other keeps waiting
+        states = {i: (await tasks.get_task(conn, i)).state for i in (restricted, plain)}
+    woken = [i for i, state in states.items() if state == "ready"]
+    assert len(woken) == 1
     again = await claim_one(db, "agent-a")
-    assert again is not None and again.id == restricted
+    assert again is not None and again.id == woken[0] and again.attempt == 1
 
 
 async def test_restricted_lease_still_requires_the_live_claim(
@@ -327,3 +346,118 @@ async def test_account_providers_edit_rules(db: Database, store, agent) -> None:
                 claimed.version,
                 "admin:t",
             )
+
+
+# -- waiting for an account: no retry storm, no thundering herd (account selection 3.6)
+
+
+async def _busy_local(db: Database, store) -> str:
+    """The only account is local (one lease) and agent-b is working on it."""
+    await insert_agent(db, "agent-b")
+    await add_local(db, store, "strata")
+    await make_task(db, ["local"], "holder")
+    holder = await claim_one(db, "agent-b")
+    assert holder is not None
+    async with db.write() as tx:
+        await accounts.lease(
+            tx, "agent-b", RUNTIME, store, task_id=holder.id, attempt=holder.attempt
+        )
+    return holder.id
+
+
+async def test_agent_without_an_account_does_not_claim_unrestricted_work(
+    db: Database, store, agent
+) -> None:
+    await _busy_local(db, store)
+    plain = await make_task(db, None, "plain")
+    for _ in range(3):  # a polling agent never bounces it
+        assert await claim_one(db) is None
+    async with db.read() as conn:
+        t = await tasks.get_task(conn, plain)
+    assert (t.state, t.block_reason, t.attempt, t.failures) == (
+        "blocked",
+        "awaiting_quota",
+        0,
+        0,
+    )
+
+
+async def test_quota_fail_with_no_account_left_waits_instead_of_requeueing(
+    db: Database, store, agent
+) -> None:
+    await _busy_local(db, store)
+    plain = await make_task(db, None, "plain")
+    async with db.write() as tx:
+        # claimed before the account filled up (e.g. a race between two agents)
+        await tx.conn.execute(
+            "UPDATE tasks SET state = 'claimed', assignee_agent_id = ?, attempt = 1,"
+            " lease_expires_at = '2999-01-01T00:00:00+00:00' WHERE id = ?",
+            (A, plain),
+        )
+        await tasks.fail(
+            tx, A, plain, 1, "no usable provider account for claimed task", "quota"
+        )
+    async with db.read() as conn:
+        t = await tasks.get_task(conn, plain)
+    assert (t.state, t.block_reason, t.attempt, t.failures) == (
+        "blocked",
+        "awaiting_quota",
+        1,
+        0,
+    )
+    assert t.error == "no usable provider account for claimed task"
+
+
+async def test_quota_fail_requeues_when_an_account_is_free(
+    db: Database, store, agent
+) -> None:
+    await add_local(db, store, "strata")
+    plain = await make_task(db, None, "plain")
+    got = await claim_one(db)
+    assert got is not None and got.id == plain
+    async with db.write() as tx:
+        await tasks.fail(tx, A, plain, got.attempt, "transient", "quota")
+    async with db.read() as conn:
+        t = await tasks.get_task(conn, plain)
+    assert (t.state, t.failures) == ("ready", 0)
+
+
+async def test_released_lease_wakes_only_as_many_tasks_as_it_frees(
+    db: Database, store, agent
+) -> None:
+    holder = await _busy_local(db, store)
+    waiting = [await make_task(db, None, f"plain-{i}") for i in range(3)]
+    assert await claim_one(db) is None  # parks all three
+    async with db.write() as tx:
+        await tasks.complete(tx, "agent-b", holder, 1, TaskResult(summary="done"))
+        await accounts.release(tx, "agent-b", "released")
+    async with db.read() as conn:
+        states = [(await tasks.get_task(conn, i)).state for i in waiting]
+    assert states.count("ready") == 1 and states.count("blocked") == 2
+    woken = waiting[states.index("ready")]
+    got = await claim_one(db)
+    assert got is not None and got.id == woken and got.failures == 0
+
+
+async def test_an_idle_holder_keeps_the_task_ready_for_itself(
+    db: Database, store, agent
+) -> None:
+    await insert_agent(db, "agent-b")
+    await add_local(db, store, "strata")
+    first = await make_task(db, None, "first")
+    got = await claim_one(db, "agent-b")
+    assert got is not None and got.id == first
+    async with db.write() as tx:
+        await accounts.lease(
+            tx, "agent-b", RUNTIME, store, task_id=got.id, attempt=got.attempt
+        )
+        await tasks.complete(
+            tx, "agent-b", first, got.attempt, TaskResult(summary="ok")
+        )
+    second = await make_task(db, None, "second")
+    # agent-a holds nothing and the only slot is agent-b's idle lease: a skips it
+    assert await claim_one(db) is None
+    async with db.read() as conn:
+        assert (await tasks.get_task(conn, second)).state == "ready"
+    again = await claim_one(db, "agent-b")
+    assert again is not None and again.id == second
