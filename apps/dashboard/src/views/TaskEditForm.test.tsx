@@ -79,6 +79,23 @@ describe("TaskEditForm", () => {
     expect(done.mock.calls[0]?.[0].version).toBe("v2");
   });
 
+  it("pins the harness engine and model", async () => {
+    const done = vi.fn();
+    net.reply = { status: 200, body: { ...task, version: "v2" } };
+    const editable = { ...task, editable_fields: [...ALL, "harness_model"] } as Task;
+    render(<TaskEditForm task={editable} onDone={done} />);
+    await userEvent.selectOptions(screen.getByLabelText("Harness engine"), "claude");
+    await userEvent.type(screen.getByLabelText("Harness model"), "claude-opus-5-5");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(done).toHaveBeenCalled());
+    expect(net.patches).toEqual([
+      {
+        expected_version: "v1",
+        changes: { harness_model: { engine: "claude", model: "claude-opus-5-5" } },
+      },
+    ]);
+  });
+
   it("cancels without a request", async () => {
     const done = vi.fn();
     render(<TaskEditForm task={task} onDone={done} />);

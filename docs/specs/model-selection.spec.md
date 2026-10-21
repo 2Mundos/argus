@@ -37,7 +37,10 @@ A `custom` account's role `model` ([custom accounts](custom-accounts.spec.md)) s
 between an explicit `--model` and the policy chain: `--model`, account model, policy
 chain, native default. `argus-delegate` implements this order for executors on a custom
 account and reports `model` with `model_source` (`cli`, `account`, `policy`,
-`native_default`). An account or `--model` choice is fixed: it has no fallback chain.
+`native_default`). An account or `--model` choice is fixed: it has no fallback chain. A task's
+`harness_model`/`executor_model` pin ([task models](task-models.spec.md)) replaces
+the harness chain and sits between `--model` and the account model for the
+pinned executor, also with no chain.
 
 At each claim, the channel applies the harness selection before injecting work,
 using the existing NanoClaw model setting, killing stale session containers when

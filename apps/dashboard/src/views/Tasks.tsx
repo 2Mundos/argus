@@ -4,8 +4,10 @@ import { relative, shortId } from "../format";
 import { reportPage, useLiveData } from "../live";
 import { TaskSignal } from "../milestones";
 import { TaskLabel } from "../TaskLabel";
+import { executorPin, harnessPin } from "../taskEdit";
 import { useNow } from "./Activity";
 import { ArchiveTasks } from "./ArchiveTasks";
+import { ModelPin } from "./ModelPin";
 import { TaskDetail } from "./TaskDetail";
 
 const COLUMNS: { title: string; states: TaskState[] }[] = [
@@ -134,6 +136,8 @@ function NewTask({ onClose }: { onClose: () => void }) {
     requires_approval: false,
     review: "none" as "none" | "human" | "orchestrator",
     difficulty: "" as "" | "trivial" | "simple" | "standard" | "hard",
+    harnessModel: "",
+    executorModel: "",
   });
   const [error, setError] = useState<string>();
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
@@ -150,6 +154,8 @@ function NewTask({ onClose }: { onClose: () => void }) {
         .split(",")
         .map((c) => c.trim())
         .filter(Boolean);
+      const harness = harnessPin(form.harnessModel);
+      const executor = executorPin(form.executorModel);
       await call(
         api.POST("/api/tasks", {
           body: {
@@ -164,6 +170,8 @@ function NewTask({ onClose }: { onClose: () => void }) {
             ...(form.timeoutMinutes ? { timeout_s: Number(form.timeoutMinutes) * 60 } : {}),
             ...(capabilities.length ? { required_capabilities: capabilities } : {}),
             ...(accountProviders.length ? { account_providers: accountProviders } : {}),
+            ...(harness ? { harness_model: harness } : {}),
+            ...(executor ? { executor_model: executor } : {}),
           },
         }),
       );
@@ -246,6 +254,24 @@ function NewTask({ onClose }: { onClose: () => void }) {
           <input
             value={form.accountProviders}
             onChange={(e) => set("accountProviders", e.target.value)}
+          />
+        </label>
+        <label>
+          Harness engine and model (empty: the model policy)
+          <ModelPin
+            field="harness_model"
+            id="new-harness-model"
+            value={form.harnessModel}
+            onChange={(v) => set("harnessModel", v)}
+          />
+        </label>
+        <label>
+          Coding executor and model (empty: the model policy)
+          <ModelPin
+            field="executor_model"
+            id="new-executor-model"
+            value={form.executorModel}
+            onChange={(v) => set("executorModel", v)}
           />
         </label>
         <label>

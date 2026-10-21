@@ -2108,6 +2108,16 @@
             ],
             "title": "Error"
           },
+          "executor_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutorModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "failover": {
             "anyOf": [
               {
@@ -2139,6 +2149,16 @@
           "failures": {
             "title": "Failures",
             "type": "integer"
+          },
+          "harness_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HarnessModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "title": "Id",
@@ -4765,6 +4785,32 @@
         "title": "ExecutionReport",
         "type": "object"
       },
+      "ExecutorModel": {
+        "additionalProperties": false,
+        "description": "A task's pinned delegated executor and model (task models spec).",
+        "properties": {
+          "executor": {
+            "enum": [
+              "claude",
+              "codex",
+              "agent"
+            ],
+            "title": "Executor",
+            "type": "string"
+          },
+          "model": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "executor",
+          "model"
+        ],
+        "title": "ExecutorModel",
+        "type": "object"
+      },
       "ExhaustedReport": {
         "description": "Mark a held account exhausted for the caller's live task claim.\n\n`runtime_providers` declares which fallback account metadata the runtime can\nuse. The response never carries the next credential.",
         "properties": {
@@ -5350,6 +5396,31 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HarnessModel": {
+        "additionalProperties": false,
+        "description": "A task's pinned harness engine and model (task models spec).",
+        "properties": {
+          "engine": {
+            "enum": [
+              "claude",
+              "codex"
+            ],
+            "title": "Engine",
+            "type": "string"
+          },
+          "model": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "engine",
+          "model"
+        ],
+        "title": "HarnessModel",
         "type": "object"
       },
       "HeartbeatRequest": {
@@ -10931,6 +11002,16 @@
             ],
             "title": "Error"
           },
+          "executor_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutorModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "failover": {
             "anyOf": [
               {
@@ -10962,6 +11043,16 @@
           "failures": {
             "title": "Failures",
             "type": "integer"
+          },
+          "harness_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HarnessModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "title": "Id",
@@ -11410,6 +11501,26 @@
               }
             ]
           },
+          "executor_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutorModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "harness_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HarnessModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "knowledge": {
             "anyOf": [
               {
@@ -11521,6 +11632,26 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DifficultySource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "executor_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutorModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "harness_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HarnessModel"
               },
               {
                 "type": "null"
@@ -11768,6 +11899,16 @@
             ],
             "title": "Error"
           },
+          "executor_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutorModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "failover": {
             "anyOf": [
               {
@@ -11799,6 +11940,16 @@
           "failures": {
             "title": "Failures",
             "type": "integer"
+          },
+          "harness_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HarnessModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "title": "Id",

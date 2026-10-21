@@ -22,7 +22,10 @@ const task = {
     "knowledge",
     "depends_on",
     "account_providers",
+    "harness_model",
+    "executor_model",
   ],
+  executor_model: { executor: "codex", model: "gpt-6.1-sol" },
 } as unknown as Task;
 
 describe("buildChanges", () => {
@@ -40,6 +43,16 @@ describe("buildChanges", () => {
   it("reports what the browser can tell is wrong", () => {
     const draft = { ...toDraft(task), title: "  ", priority: "1.5" };
     expect(Object.keys(buildChanges(task, draft).errors).sort()).toEqual(["priority", "title"]);
+  });
+
+  it("pins a model, clears a pin back to the policy and checks the model ID", () => {
+    const draft = { ...toDraft(task), harness_model: "claude claude-opus-5-5", executor_model: "" };
+    expect(buildChanges(task, draft).changes).toEqual({
+      harness_model: { engine: "claude", model: "claude-opus-5-5" },
+      executor_model: null,
+    });
+    const bad = { ...toDraft(task), harness_model: "claude " };
+    expect(buildChanges(task, bad).errors).toEqual({ harness_model: "Enter a model ID." });
   });
 
   it("never sends a field the state does not allow", () => {

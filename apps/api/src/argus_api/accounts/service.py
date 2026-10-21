@@ -813,11 +813,19 @@ async def _prefer_local(tx: Tx, task_id: str, role: LeaseRole) -> bool:
 async def _narrowed(
     tx: Tx, task_id: str, role: LeaseRole, runtime_providers: list[str] | None
 ) -> list[str] | None:
-    """`runtime_providers` cut down to the task's `account_providers` for the engine
-    role (local harness spec 3): the restriction only narrows, never widens. An empty
-    result means no account is eligible."""
-    restriction = await tasks.account_providers(tx.conn, task_id)
-    if role != "engine" or restriction is None or runtime_providers is None:
+    """`runtime_providers` cut down to the task's `account_providers` (and pinned
+    harness) for the engine role (local harness spec 3), or to its pinned executor's
+    provider for the executor role (task models spec 3.2): the restriction only
+    narrows, never widens. An empty result means no account is eligible."""
+    if runtime_providers is None:
+        return None
+    if role == "engine":
+        restriction = await tasks.account_providers(tx.conn, task_id)
+    elif role == "executor" and (p := await tasks.executor_provider(tx.conn, task_id)):
+        restriction = [p]
+    else:
+        restriction = None
+    if restriction is None:
         return runtime_providers
     return [p for p in runtime_providers if p in restriction]
 

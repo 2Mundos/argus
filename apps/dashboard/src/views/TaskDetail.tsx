@@ -6,6 +6,7 @@ import { bytes, relative, shortId } from "../format";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
 import { TaskLabel } from "../TaskLabel";
+import { pinText } from "../taskEdit";
 import { Activity } from "./Activity";
 import { AgentDetail } from "./AgentDetail";
 import { EventList } from "./Events";
@@ -134,6 +135,18 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                   <>
                     <dt>Runs on</dt>
                     <dd>{task.account_providers.join(", ")}</dd>
+                  </>
+                )}
+                {task.harness_model && (
+                  <>
+                    <dt>Harness</dt>
+                    <dd>{pinText(task.harness_model)}</dd>
+                  </>
+                )}
+                {task.executor_model && (
+                  <>
+                    <dt>Executor</dt>
+                    <dd>{pinText(task.executor_model)}</dd>
                   </>
                 )}
                 {task.depends_on.length > 0 && (

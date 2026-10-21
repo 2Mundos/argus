@@ -1,4 +1,5 @@
 import { ApiError, type Task } from "./api";
+import { MODEL_ID } from "./models";
 
 export const EDIT_FIELDS = [
   "title",
@@ -10,10 +11,15 @@ export const EDIT_FIELDS = [
   "depends_on",
   "difficulty",
   "account_providers",
+  "harness_model",
+  "executor_model",
 ] as const;
 export type EditField = (typeof EDIT_FIELDS)[number];
 
-/** The form's text view of a task: lists are one entry per line (ids and capabilities too). */
+/**
+ * The form's text view of a task: lists are one entry per line (ids and capabilities too), a
+ * model pin is "<engine> <model>" (model IDs have no spaces) and "" follows the policy.
+ */
 export type Draft = Record<EditField, string>;
 
 export type Changes = {
@@ -26,7 +32,40 @@ export type Changes = {
   depends_on?: string[];
   difficulty?: "trivial" | "simple" | "standard" | "hard";
   account_providers?: string[];
+  harness_model?: HarnessPin | null;
+  executor_model?: ExecutorPin | null;
 };
+
+export type HarnessPin = NonNullable<Task["harness_model"]>;
+export type ExecutorPin = NonNullable<Task["executor_model"]>;
+export const PIN_FIELDS = ["harness_model", "executor_model"] as const;
+type PinField = (typeof PIN_FIELDS)[number];
+/** Engines and executors a pin may name, as the API accepts them (task models spec 3.1). */
+export const PIN_CHOICES: Record<PinField, string[]> = {
+  harness_model: ["claude", "codex"],
+  executor_model: ["claude", "codex", "agent"],
+};
+
+export function pinText(pin: HarnessPin | ExecutorPin | null | undefined): string {
+  if (!pin) return "";
+  return `${"engine" in pin ? pin.engine : pin.executor} ${pin.model}`;
+}
+
+/** "<engine> <model>" → its two parts; "" → null (follow the policy). */
+export function parsePin(text: string): { name: string; model: string } | null {
+  const [name = "", model = ""] = text.trim().split(/\s+/, 2);
+  return name ? { name, model } : null;
+}
+
+export function harnessPin(text: string): HarnessPin | null {
+  const pin = parsePin(text);
+  return pin && { engine: pin.name as HarnessPin["engine"], model: pin.model };
+}
+
+export function executorPin(text: string): ExecutorPin | null {
+  const pin = parsePin(text);
+  return pin && { executor: pin.name as ExecutorPin["executor"], model: pin.model };
+}
 
 export type FieldErrors = Partial<Record<EditField | "form", string>>;
 
@@ -48,6 +87,8 @@ export function toDraft(task: Task): Draft {
     depends_on: task.depends_on.join("\n"),
     difficulty: task.difficulty ?? "standard",
     account_providers: (task.account_providers ?? []).join("\n"),
+    harness_model: pinText(task.harness_model),
+    executor_model: pinText(task.executor_model),
   };
 }
 
@@ -83,6 +124,11 @@ export function buildChanges(base: Task, draft: Draft): { changes: Changes; erro
       else changes.priority = n;
     } else if (field === "difficulty") {
       changes.difficulty = value as "trivial" | "simple" | "standard" | "hard";
+    } else if (field === "harness_model" || field === "executor_model") {
+      const pin = parsePin(value);
+      if (pin && !MODEL_ID.test(pin.model)) errors[field] = "Enter a model ID.";
+      else if (field === "harness_model") changes.harness_model = harnessPin(value);
+      else changes.executor_model = executorPin(value);
     } else if (field === "spec") {
       changes.spec = value;
     } else {

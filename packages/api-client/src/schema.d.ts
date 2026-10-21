@@ -2774,11 +2774,13 @@ export interface components {
             editable_fields?: string[];
             /** Error */
             error: string | null;
+            executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failure Class */
             failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
+            harness_model?: components["schemas"]["HarnessModel"] | null;
             /** Id */
             id: string;
             /** Input */
@@ -3596,6 +3598,19 @@ export interface components {
             state: "selected" | "running" | "succeeded" | "failed" | "cancelled";
         };
         /**
+         * ExecutorModel
+         * @description A task's pinned delegated executor and model (task models spec).
+         */
+        ExecutorModel: {
+            /**
+             * Executor
+             * @enum {string}
+             */
+            executor: "claude" | "codex" | "agent";
+            /** Model */
+            model: string;
+        };
+        /**
          * ExhaustedReport
          * @description Mark a held account exhausted for the caller's live task claim.
          *
@@ -3772,6 +3787,19 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HarnessModel
+         * @description A task's pinned harness engine and model (task models spec).
+         */
+        HarnessModel: {
+            /**
+             * Engine
+             * @enum {string}
+             */
+            engine: "claude" | "codex";
+            /** Model */
+            model: string;
         };
         /** HeartbeatRequest */
         HeartbeatRequest: {
@@ -5729,11 +5757,13 @@ export interface components {
             editable_fields?: string[];
             /** Error */
             error: string | null;
+            executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failure Class */
             failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
+            harness_model?: components["schemas"]["HarnessModel"] | null;
             /** Id */
             id: string;
             /** Input */
@@ -5868,6 +5898,8 @@ export interface components {
             /** Depends On */
             depends_on?: string[] | null;
             difficulty?: components["schemas"]["Difficulty"] | null;
+            executor_model?: components["schemas"]["ExecutorModel"] | null;
+            harness_model?: components["schemas"]["HarnessModel"] | null;
             /** Knowledge */
             knowledge?: string[] | null;
             /** Priority */
@@ -5897,6 +5929,8 @@ export interface components {
             depends_on?: string[];
             difficulty?: components["schemas"]["Difficulty"] | null;
             difficulty_source?: components["schemas"]["DifficultySource"] | null;
+            executor_model?: components["schemas"]["ExecutorModel"] | null;
+            harness_model?: components["schemas"]["HarnessModel"] | null;
             /**
              * Input
              * @default {}
@@ -6002,11 +6036,13 @@ export interface components {
             editable_fields?: string[];
             /** Error */
             error: string | null;
+            executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failure Class */
             failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
+            harness_model?: components["schemas"]["HarnessModel"] | null;
             /** Id */
             id: string;
             /** Input */
