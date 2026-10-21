@@ -100,6 +100,7 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
                           │                     ▲                   │
                           │                     │ lease expired /   │ complete
                           │                     │ fail, failures<max│
+                          │                     │ release (operator)│
                           │                     ├───────────────────┤──▶ succeeded (review: none)
                           │                     │ review rejected   │──▶ in_review ──▶ succeeded
                           │                     └────── in_review ◀─┘
@@ -132,8 +133,8 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   never decreases, because it fences stale writers (3.3); `failures` counts only
   `fail` and lease expiry, and is what `max_attempts` limits. A task whose
   `failures + 1` reaches `max_attempts` on a failure goes to `failed`. Review
-  rejections and unblocks lead to new claims (new `attempt`) without touching
-  `failures`.
+  rejections, unblocks and operator releases (3.3) lead to new claims (new
+  `attempt`) without touching `failures`.
 - Terminal states: `succeeded`, `failed`, `cancelled`. Operators may archive them
   out of lists and totals ([task archive](task-archive.spec.md)).
 - `POST /tasks/{id}/retry` (manager scope) is the one way out of `failed`, for
@@ -209,6 +210,42 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   `channel_error` or `provider_failure` for failures it detects itself, and
   `quota` for a provider limit with no account left, which does not count as a
   failure: see [account selection](account-selection.spec.md)).
+- **Operator release never burns an attempt.** `POST /tasks/{id}/release
+  {reason, attempt?}` (orchestrator and admin, like cancel; workers get `403`)
+  takes a claimed task off its holder and puts it back in the queue, for an
+  operator who needs the worker back (a drain, a pool rolled to a new image, a
+  stuck host) while the work itself is fine. `reason` is required and non-empty
+  (`422` otherwise, max 500 characters). Only a `claimed` task can be released
+  (`409 task_not_claimed`); an `attempt` that is not the current one is `409
+  stale_attempt`, a compare-and-set guard against releasing a later claim than
+  the one the operator looked at. In one write transaction (the 3.3 rules: begin,
+  then read the clock, then recheck):
+  - the task goes `claimed → ready` with assignee, lease and attempt deadline
+    cleared. A claimed task had its dependencies and approval behind it, and they
+    cannot change while it is claimed, so it is ready at once;
+  - `attempt` keeps its value (it only ever grows: it is the fencing token, and
+    the next claim is `attempt + 1`); `failures` is untouched, so the released
+    attempt never counts toward `max_attempts`. A task on its last attempt that is
+    released and claimed again still has that last attempt;
+  - `error` is cleared (nothing failed), `progress_message` becomes `attempt <n>
+    released: <reason>; requeued`, and the attempt's row in `task_attempts` gets
+    `outcome: released` and `outcome_reason` (migration 0030; the only outcome a
+    row records, other endings are in the events);
+  - event `task.released` with `from`, `to`, `attempt`, `reason` and
+    `previous_holder`; the actor is the caller. It is not `task.fail` or
+    `task.expire`, so fleet health does not count it as a failure. Claim waiters
+    wake as for any task that becomes ready;
+  - the previous holder's account leases end (`release_reason: task_released`)
+    unless it still holds another claimed task. Every credential-bearing account
+    call (lease, exhausted, credential rotation) needs the live claim
+    ([account selection](account-selection.spec.md)), so the released
+    `(task_id, attempt)` can no longer lease, rotate or report anything.
+  The holder itself stays alive: its next write for that pair, `FAIL` included,
+  gets `409` (`not_claimed`, or `not_assignee`/`stale_attempt` once claimed
+  again) and its heartbeat lists the pair as rejected. A worker must stop that
+  run without reporting it (3.8) and go back to claiming unless it is draining.
+  As with expiry, execution is at least once: external effects of the released
+  run may land after the task was claimed again.
 - Defaults: `lease_ttl = 120 s`, heartbeat every 30 s, `max_attempts = 3`.
   Per-task and per-kind override allowed.
 
@@ -256,6 +293,16 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   claims nothing new, then exits with `POST /agents/me/leave`, which ends the
   identity as `gone` with the same revocation and lease release as loss. Used
   for scale-down and for rolling a pool to a new image.
+- **Operator stops release, crashes expire.** A task still held when its agent
+  ends is released (3.3, no failure) when an operator caused the end: a
+  `draining` agent that leaves (reason `drain`), any agent of a draining
+  (recycled or scaled-down) instance that is terminated or confirmed gone (reason
+  `recycle`), and an admin terminate (reason `operator_terminate`, unless it asks
+  for `requeue: false`, 3.5). Everything else expires and counts as a failure as
+  before: heartbeat silence (`lost`), lease expiry, attempt timeout, an `active`
+  agent that leaves holding a task, and an instance of a pool that is not
+  draining ending for any other reason (crash, vanished container, a lost
+  sibling, no registration).
 - Defaults: heartbeat every 30 s, `lost` after 90 s of silence, reaper pass
   every 10 s.
 
@@ -320,12 +367,22 @@ startup lock file guarantees there is only one. As built:
   running, on scale-down of an instance that has no agent yet, or by an admin
   (`POST /api/instances/{id}/terminate`). Exited containers are removed after
   they are confirmed. Containers carrying the pool's label that Argus does not
-  track as live are stopped as orphans.
+  track as live are stopped as orphans. An admin terminate takes `{"requeue":
+  true}` by default: the tasks its agents hold are released (reason
+  `operator_terminate`, 3.3) before the agents end, so killing a busy worker does
+  not cost those tasks an attempt. `{"requeue": false}` expires them as failures
+  instead, for a worker that keeps breaking on the task it holds.
 - **Scale-down** drops reserved instances first, then drains idle running
   instances (their agents go `draining`); instances with a claimed task are
   skipped. A draining instance (scaled down or recycled with
   `POST /api/instances/{id}/recycle`) is stopped once none of its agents holds a
-  claimed task, or when they all leave, whichever comes first.
+  claimed task, or when they all leave, whichever comes first. Recycle takes
+  `{"requeue": false}` by default (wait for the work to finish); `{"requeue":
+  true}` releases the tasks its agents hold now (reason `recycle`, actor the
+  caller, 3.3), so the instance is idle and stops on the next pass. A recycle
+  with `requeue` of an instance that is already draining still releases them.
+  Either way a task still held when the draining instance ends is released, not
+  failed (3.4).
 - **Scaling API**: `POST /api/pools/{name}/scale`. Up to `max_replicas`,
   orchestrators and admins scale directly; above it an admin raises the cap
   along with it, while an orchestrator's request opens a `policy` decision for a
@@ -419,7 +476,7 @@ anonymous access. Three scopes:
 | Scope | Can |
 | --- | --- |
 | `worker` | Claim, heartbeat, update/complete/fail/block its own tasks, report progress, ask questions, lease accounts, create subtasks under a task it holds. |
-| `orchestrator` | Everything `worker` can, plus create/cancel any task, edit deps of waiting tasks ([task dependencies](task-dependencies.spec.md)) and edit tasks ([task edit](task-edit.spec.md)), answer `orchestrator` decisions, set `desired_replicas` up to `max_replicas`, drain agents. |
+| `orchestrator` | Everything `worker` can, plus create/cancel/release any task, edit deps of waiting tasks ([task dependencies](task-dependencies.spec.md)) and edit tasks ([task edit](task-edit.spec.md)), answer `orchestrator` decisions, set `desired_replicas` up to `max_replicas`, drain agents. |
 | `admin` (human) | Everything, including pool and account definitions, `max_replicas`, killing instances, revoking tokens. |
 
 Every route requires a token except `GET /healthz` and `POST /agents/register`
@@ -470,7 +527,7 @@ as a managed pool of size 1 uses the same model and comes later.
   `leave`; `search_knowledge`, `get_knowledge_page`, `write_knowledge`;
   `lease_account`, `report_account_exhausted`; `list_engines`, `run_local`; and
   for orchestrators `get_inbox`, `list_tasks`, `edit_task`, `set_task_dependencies`,
-  `unblock_task`, `retry_task`,
+  `unblock_task`, `retry_task`, `release_task`,
   `cancel_task`, `list_agents`, `list_pools`, `scale_pool`,
   `inspect_pool`, `get_instance`, `get_instance_logs`, `drain_agent`,
   `recycle_instance`, `wait_for_events`, `get_fleet_capabilities`, `launch_worker`,
@@ -511,6 +568,13 @@ injecting them at the HTTPS layer (OneCLI Agent Vault or Iron Proxy), has a
 pluggable provider interface (Claude Code by default), supports user-added MCP
 servers, and is administered locally by the `ncl` CLI over a Unix socket (no
 HTTP admin API). See https://docs.nanoclaw.dev/concepts/architecture.
+
+When Argus ends the channel's claim (a heartbeat rejects the pair: released,
+expired, reassigned), the channel stops the run: it forgets the task, so a late
+reply is dropped instead of reported, stops the session containers (the same
+stop as an account rotation) before it claims again, and leases its accounts
+afresh for the next task. It reports nothing for the abandoned attempt; a reply
+that does reach Argus first gets `409` and is dropped.
 
 When the channel rotates the engine account after a limit or expired auth, it
 stops the old session container and waits for its exit before resending the same
