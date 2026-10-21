@@ -175,6 +175,11 @@ Findings outside the gap list:
   `null` removes it. A stale version is `409 stale_version` with the current
   version in `details`; a result that breaks a pool rule is `422 invalid_pool`.
   `update_pool` is listed to admins only.
+- **Model policy:** `GET/PUT/DELETE /api/models` ([model selection](model-selection.spec.md))
+  → MCP `get_model_policy` (anyone), `set_model_policy(harness, implementation)` and
+  `reset_model_policy` (admin only). They are thin calls to the same routes, so
+  validation (422 naming the chain), the audit event and the env-wins rule are
+  identical. Availability of a model at the provider is not checked.
 - **Redaction:** in every pool response, on every surface, `env` comes back as
   `{key: "***"}` unless the caller is admin and asks for `reveal_env=true` over
   REST (`GET /api/pools/{name}`; anyone else gets a 403). MCP never sends that
@@ -210,7 +215,7 @@ Findings outside the gap list:
   managers (orchestrator and admin), or anyone. Workers see the task-working
   and knowledge tools. Orchestrators see everything. Admins see everything
   except the tools that need an agent identity (`claim_task`, `heartbeat`, …).
-  Admin-only tools (`update_pool`) appear only for admins. A test calls every
+  Admin-only tools (`update_pool`, `set_model_policy`, `reset_model_policy`) appear only for admins. A test calls every
   listed tool for each scope and fails if REST refuses one on scope. Calling an
   unlisted tool still follows REST's rules. Hiding a tool is not access control.
 - The server `instructions` name the inbox journey and the fleet journey. They

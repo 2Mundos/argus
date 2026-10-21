@@ -24,14 +24,17 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import aiosqlite
 from argus_core.agents import BootstrapTokenCreate, Role
 from argus_core.fleet import Pool
 
+from argus_api import model_policy
 from argus_api.agents import service as agents
 from argus_api.db import Database, Tx, ts
+from argus_api.errors import ValidationFailedError
 from argus_api.events import record
 from argus_api.fleet import runtimes
 from argus_api.fleet import service as fleet
@@ -55,6 +58,8 @@ class FleetSettings:
     registration_timeout: timedelta = timedelta(minutes=5)
     stop_grace: timedelta = timedelta(seconds=30)
     start_backoff_max: timedelta = timedelta(minutes=5)
+    # The manager's model policy file; set, it is passed to new NanoClaw instances.
+    model_policy_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -385,7 +390,11 @@ async def _act(
     assert settings.argus_url is not None
     try:
         spec = runtimes.container_spec(
-            pool, action.instance_id, tokens, settings.argus_url
+            pool,
+            action.instance_id,
+            tokens,
+            settings.argus_url,
+            model_policy=_model_policy(pool, settings),
         )
         ref = await target.start(spec)
     except TargetError as exc:
@@ -407,6 +416,18 @@ async def _act(
             await _mark_running(tx, action.instance_id, ref)
         if pool.status == "failing":
             await _set_status(tx, pool_name, "ok", None)
+
+
+def _model_policy(pool: Pool, settings: FleetSettings) -> str | None:
+    """The canonical policy JSON for a new instance; only its revision is logged."""
+    if pool.runtime != "nanoclaw" or settings.model_policy_path is None:
+        return None
+    try:
+        policy, rev = model_policy.effective_env(settings.model_policy_path)
+    except ValidationFailedError as exc:
+        raise TargetError(f"model policy is invalid, not starting: {exc}") from exc
+    log.info("pool %s: new instance gets model policy %s", pool.name, rev[:8])
+    return policy
 
 
 async def begin_terminating(tx: Tx, instance_id: str, reason: str) -> None:

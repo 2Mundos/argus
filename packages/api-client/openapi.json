@@ -5923,6 +5923,100 @@
         "title": "ModelEndpoints",
         "type": "object"
       },
+      "ModelPolicy": {
+        "properties": {
+          "env_overrides": {
+            "title": "Env Overrides",
+            "type": "boolean"
+          },
+          "file_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Revision"
+          },
+          "harness": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Harness",
+            "type": "object"
+          },
+          "implementation": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Implementation",
+            "type": "object"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "env",
+              "file",
+              "defaults"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "harness",
+          "implementation",
+          "revision",
+          "source",
+          "path",
+          "env_overrides"
+        ],
+        "title": "ModelPolicy",
+        "type": "object"
+      },
+      "ModelPolicyBody": {
+        "additionalProperties": false,
+        "properties": {
+          "harness": {
+            "title": "Harness"
+          },
+          "implementation": {
+            "title": "Implementation"
+          }
+        },
+        "required": [
+          "harness",
+          "implementation"
+        ],
+        "title": "ModelPolicyBody",
+        "type": "object"
+      },
       "NanoclawOptions-Input": {
         "description": "The `nanoclaw` runtime (docs/research/2026-10-14.nanoclaw-integration).\n\nNanoClaw bind-mounts paths from its own filesystem into agent containers, so\nevery path here is an absolute path **on the Docker host** and is mounted at\nthe identical path inside the NanoClaw host container.",
         "properties": {
@@ -15128,6 +15222,103 @@
         "summary": "Metrics",
         "tags": [
           "operations"
+        ]
+      }
+    },
+    "/api/models": {
+      "delete": {
+        "description": "Remove the file so the repository defaults apply again.",
+        "operationId": "restore_models_api_models_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelPolicy"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Restore Models",
+        "tags": [
+          "models"
+        ]
+      },
+      "get": {
+        "description": "The effective policy, its origin and revision. Availability of a model at\nthe provider is not checked.",
+        "operationId": "get_models_api_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelPolicy"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Models",
+        "tags": [
+          "models"
+        ]
+      },
+      "put": {
+        "description": "Validate and save the file policy, all or nothing.",
+        "operationId": "put_models_api_models_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelPolicyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelPolicy"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Models",
+        "tags": [
+          "models"
         ]
       }
     },

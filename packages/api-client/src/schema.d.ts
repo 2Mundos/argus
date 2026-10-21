@@ -1301,6 +1301,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Models
+         * @description The effective policy, its origin and revision. Availability of a model at
+         *     the provider is not checked.
+         */
+        get: operations["get_models_api_models_get"];
+        /**
+         * Put Models
+         * @description Validate and save the file policy, all or nothing.
+         */
+        put: operations["put_models_api_models_put"];
+        post?: never;
+        /**
+         * Restore Models
+         * @description Remove the file so the repository defaults apply again.
+         */
+        delete: operations["restore_models_api_models_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/overview": {
         parameters: {
             query?: never;
@@ -3883,6 +3912,39 @@ export interface components {
             endpoints: components["schemas"]["ModelEndpoint"][];
             /** Model */
             model: string;
+        };
+        /** ModelPolicy */
+        ModelPolicy: {
+            /** Env Overrides */
+            env_overrides: boolean;
+            /** File Revision */
+            file_revision?: string | null;
+            /** Harness */
+            harness: {
+                [key: string]: string[];
+            };
+            /** Implementation */
+            implementation: {
+                [key: string]: string[];
+            };
+            /** Notice */
+            notice?: string | null;
+            /** Path */
+            path: string;
+            /** Revision */
+            revision: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "env" | "file" | "defaults";
+        };
+        /** ModelPolicyBody */
+        ModelPolicyBody: {
+            /** Harness */
+            harness: unknown;
+            /** Implementation */
+            implementation: unknown;
         };
         /**
          * NanoclawOptions
@@ -8014,6 +8076,79 @@ export interface operations {
                 };
                 content: {
                     "text/plain": string;
+                };
+            };
+        };
+    };
+    get_models_api_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelPolicy"];
+                };
+            };
+        };
+    };
+    put_models_api_models_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelPolicyBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelPolicy"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_models_api_models_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelPolicy"];
                 };
             };
         };

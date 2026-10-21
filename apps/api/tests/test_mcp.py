@@ -92,7 +92,7 @@ def test_tools_are_listed_by_scope(client: TestClient) -> None:
     assert "claim_task" not in by_scope[Scope.ADMIN]
     assert "answer_decision" not in by_scope[Scope.WORKER]
     admin_only = {n for n, a in mcp_server.audiences.items() if a == {Scope.ADMIN}}
-    assert admin_only == {"update_pool"}
+    assert admin_only == {"update_pool", "set_model_policy", "reset_model_policy"}
     assert by_scope[Scope.ORCHESTRATOR] == set(mcp_server.audiences) - admin_only
 
 
@@ -451,3 +451,40 @@ def test_fleet_tools_forward_and_redact(client: TestClient) -> None:
         ]
         == "2.0"
     )
+
+
+def test_model_policy_tools_match_rest(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ARGUS_MODEL_POLICY", raising=False)
+    orchestrator = register(client, "orchestrator")
+    worker = register(client)
+    admin = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+    for token in (worker, orchestrator, ADMIN_TOKEN):
+        assert "get_model_policy" in listed(client, token)
+    assert "set_model_policy" not in listed(client, orchestrator)
+
+    before = tool(client, worker, "get_model_policy")
+    assert before == client.get("/api/models", headers=admin).json()
+    assert before["source"] == "defaults"
+
+    policy = {
+        "harness": {"codex": ["luna"]},
+        "implementation": {"agent": ["vendor/model:v1"], "claude": ["a", "b"]},
+    }
+    for token in (worker, orchestrator):
+        assert "error" in tool(client, token, "set_model_policy", **policy)
+        assert "error" in tool(client, token, "reset_model_policy")
+    bad = tool(
+        client, ADMIN_TOKEN, "set_model_policy", harness={}, implementation={"x": ["m"]}
+    )
+    assert "invalid model chain: implementation.x" in bad["error"]
+
+    saved = tool(client, ADMIN_TOKEN, "set_model_policy", **policy)
+    assert saved["source"] == "file"
+    assert saved["implementation"] == policy["implementation"]
+    assert tool(client, worker, "get_model_policy") == saved
+    assert client.get("/api/models", headers=admin).json() == saved
+
+    reset = tool(client, ADMIN_TOKEN, "reset_model_policy")
+    assert (reset["source"], reset["revision"]) == ("defaults", before["revision"])

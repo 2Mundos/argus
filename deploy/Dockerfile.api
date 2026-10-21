@@ -39,6 +39,7 @@ COPY --from=sops --chmod=755 /sops /usr/local/bin/sops
 COPY deploy/litestream.yml /etc/litestream.yml
 COPY deploy/entrypoint.sh /usr/local/bin/argus-entrypoint
 COPY --from=build /app /app
+COPY integrations/nanoclaw/engines/model-policy.defaults.json /app/integrations/nanoclaw/engines/
 COPY --from=dashboard /src/apps/dashboard/dist /app/dashboard
 # ssh: remote Docker targets (DOCKER_HOST=ssh://…). The data dir is created in the
 # image so a fresh named volume inherits nobody's ownership.
