@@ -75,9 +75,7 @@ async def register(
     body: AgentRegister, db: DbDep, settings: SettingsDep
 ) -> Registration:
     async with db.write() as tx:
-        reg = await service.register(
-            tx, body, token_ttl_s=settings.agent_token_ttl_s
-        )
+        reg = await service.register(tx, body, token_ttl_s=settings.agent_token_ttl_s)
     return Registration(
         agent=reg.agent,
         token=reg.token,

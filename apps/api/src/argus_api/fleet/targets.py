@@ -254,7 +254,7 @@ class DockerTarget:
             raise TargetError(str(exc)[:500]) from exc
 
     def _start(self, spec: ContainerSpec) -> str:
-        from docker.errors import APIError, ImageNotFound, NotFound
+        from docker.errors import APIError, NotFound
 
         client = self._docker()
         try:

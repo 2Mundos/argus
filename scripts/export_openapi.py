@@ -13,7 +13,7 @@ from pathlib import Path
 # so FastAPI still builds the schema for export (security-hardening spec).
 os.environ["ARGUS_API_DOCS"] = "1"
 
-from argus_api.main import app  # noqa: E402
+from argus_api.main import app
 
 OUT = Path(__file__).resolve().parent.parent / "packages/api-client/openapi.json"
 

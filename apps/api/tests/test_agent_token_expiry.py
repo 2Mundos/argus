@@ -43,12 +43,14 @@ async def _set_expires(client: TestClient, token: str, delta: timedelta) -> str:
 
 
 async def _read_expires(client: TestClient, token: str) -> str | None:
-    async with client.app.state.db.read() as conn:
-        async with conn.execute(
+    async with (
+        client.app.state.db.read() as conn,
+        conn.execute(
             "SELECT expires_at FROM tokens WHERE token_hash = ?",
             (hash_token(token),),
-        ) as cur:
-            row = await cur.fetchone()
+        ) as cur,
+    ):
+        row = await cur.fetchone()
     assert row is not None
     return row["expires_at"]
 
