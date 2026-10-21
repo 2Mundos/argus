@@ -521,7 +521,7 @@ async def create_task(
     priority: int = 0,
     acceptance: list[str] | None = None,
     knowledge: list[str] | None = None,
-    complexity: Literal["trivial", "standard"] | None = None,
+    complexity: Literal["trivial", "standard", "hard"] | None = None,
     account_providers: list[str] | None = None,
 ) -> dict:
     """Create a task. Workers may only create subtasks of a task they hold (set
@@ -529,7 +529,9 @@ async def create_task(
     a project. `knowledge` pins pages the claiming agent should read. `complexity`:
     "trivial" for the easiest work (a copy change, a typo, a translation) lets the
     node's local model take it first, with the cloud as the fallback; omit it and
-    Argus decides conservatively from the title and spec.
+    Argus decides conservatively from the title and spec. "hard" (architecture,
+    data migration, security, several services) runs a Claude harness and executor
+    on the policy's hard chains (Opus); set it explicitly.
     `account_providers` (e.g. ["local"]) restricts the task to those engine account
     providers; leave it out for no restriction."""
     body: dict[str, Any] = {
@@ -772,7 +774,7 @@ async def edit_task(
 ) -> dict:
     """Edit a task's definition: title, spec, acceptance, priority,
     required_capabilities, knowledge (pinned page ids), depends_on,
-    account_providers and complexity (trivial | standard; not clearable). `changes`
+    account_providers and complexity (trivial | standard | hard; not clearable). `changes`
     is a partial patch: a field you leave out is kept, null clears spec, acceptance,
     required_capabilities, knowledge, depends_on or account_providers (no
     restriction). Pass the task's `version` as

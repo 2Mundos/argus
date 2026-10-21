@@ -1,14 +1,25 @@
 import { api, call, type ModelPolicy } from "./api";
 
 export type { ModelPolicy };
-export type Scope = "harness" | "implementation" | "trivial";
+export type OptionalScope = "trivial" | "hard_harness" | "hard_implementation";
+export type Scope = "harness" | "implementation" | OptionalScope;
 export type Chains = Record<string, string[]>;
-/** `trivial` is optional: a policy without it keeps its revision, so it is only sent when present. */
-export type Draft = { harness: Chains; implementation: Chains; trivial?: Chains };
+/** Optional maps: a policy without them keeps its revision, so each is only sent when present. */
+export type Draft = { harness: Chains; implementation: Chains } & Partial<
+  Record<OptionalScope, Chains>
+>;
 
 export const SCOPES: Scope[] = ["harness", "implementation"];
-/** The scopes a draft edits: the optional `trivial` one only while the policy has it. */
-export const scopesOf = (d: Draft): Scope[] => (d.trivial ? [...SCOPES, "trivial"] : SCOPES);
+export const OPTIONAL_SCOPES: OptionalScope[] = ["trivial", "hard_harness", "hard_implementation"];
+/** The scopes a draft edits: an optional one only while the policy has it. */
+export const scopesOf = (d: Draft): Scope[] => [...SCOPES, ...OPTIONAL_SCOPES.filter((s) => d[s])];
+const optionals = (d: Partial<Record<OptionalScope, Chains | null>>, f: (c: Chains) => Chains) =>
+  Object.fromEntries(
+    OPTIONAL_SCOPES.flatMap((s) => {
+      const c = d[s];
+      return c ? [[s, f(c)]] : [];
+    }),
+  ) as Partial<Record<OptionalScope, Chains>>;
 export const KNOWN_ENGINES = ["codex", "claude", "opencode", "agent"];
 /** The `agent` executor is the Cursor CLI. */
 export const engineLabel = (e: string) => (e === "agent" ? "agent (Cursor)" : e);
@@ -22,19 +33,19 @@ export const saveModelPolicy = (draft: Draft) =>
       body: {
         harness: draft.harness,
         implementation: draft.implementation,
-        ...(draft.trivial ? { trivial: draft.trivial } : {}),
+        ...optionals(draft, (c) => c),
       },
     }),
   );
 export const restoreModelDefaults = () => call(api.DELETE("/api/models"));
 
-export function toDraft(p: Pick<ModelPolicy, "harness" | "implementation" | "trivial">): Draft {
+export function toDraft(p: Pick<ModelPolicy, "harness" | "implementation" | OptionalScope>): Draft {
   const copy = (c: Chains): Chains =>
     Object.fromEntries(Object.entries(c).map(([k, v]) => [k, [...v]]));
   return {
     harness: copy(p.harness),
     implementation: copy(p.implementation),
-    ...(p.trivial ? { trivial: copy(p.trivial) } : {}),
+    ...optionals(p, copy),
   };
 }
 

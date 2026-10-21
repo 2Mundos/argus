@@ -124,7 +124,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
     timeoutMinutes: "",
     requires_approval: false,
     review: "none" as "none" | "human" | "orchestrator",
-    complexity: "" as "" | "trivial" | "standard",
+    complexity: "" as "" | "trivial" | "standard" | "hard",
   });
   const [error, setError] = useState<string>();
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
@@ -216,7 +216,8 @@ function NewTask({ onClose }: { onClose: () => void }) {
           </label>
         </div>
         <label>
-          Complexity (trivial work, such as a copy change, prefers the local model)
+          Complexity (trivial work, such as a copy change, prefers the local model; hard work runs
+          Claude on Opus)
           <select
             value={form.complexity}
             onChange={(e) => set("complexity", e.target.value as typeof form.complexity)}
@@ -224,6 +225,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
             <option value="">decide from the title and spec</option>
             <option value="trivial">trivial</option>
             <option value="standard">standard</option>
+            <option value="hard">hard (Claude runs on Opus)</option>
           </select>
         </label>
         <label>

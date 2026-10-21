@@ -27,7 +27,7 @@ from test_mcp import ADMIN_TOKEN, tool
 client = test_mcp.client  # the same app fixture as the MCP tests
 
 A, B = "agent-a", "agent-b"
-TRIVIAL, STANDARD = Complexity.TRIVIAL, Complexity.STANDARD
+TRIVIAL, STANDARD, HARD = Complexity.TRIVIAL, Complexity.STANDARD, Complexity.HARD
 
 
 @pytest.fixture
@@ -295,3 +295,70 @@ async def test_failover_after_exhaustion_also_prefers_local_for_trivial(
             store,
         )
     assert result.next_provider == "local"
+
+
+# -- hard ------------------------------------------------------------------------------
+
+
+async def test_hard_is_set_explicitly_or_by_two_hard_signals(db: Database) -> None:
+    explicit = await create(db, title="Add retries", complexity=HARD)
+    assert (explicit.complexity, explicit.complexity_source) == (HARD, "explicit")
+    guessed = await create(db, title="Data migration across multi-service accounts")
+    assert (guessed.complexity, guessed.complexity_source) == (HARD, "heuristic")
+    one = await create(db, title="Melhorar a segurança do login")
+    assert one.complexity == STANDARD
+
+
+async def test_edit_to_hard(db: Database) -> None:
+    task = await create(db, title="Add retries")
+    async with db.write() as tx:
+        edited = await tasks.edit_task(
+            tx, task.id, TaskChanges(complexity=HARD), task.version, "admin:test"
+        )
+    assert (edited.complexity, edited.complexity_source) == (HARD, "explicit")
+
+
+async def test_hard_task_keeps_cloud_first(db: Database, store, agents) -> None:
+    await pool(db, store)
+    await create(db, title="Add retries", complexity=HARD)
+    held = await lease(db, store, await claim(db))
+    assert held.provider == "anthropic"
+
+
+async def test_the_column_rejects_unknown_values(db: Database) -> None:
+    task = await create(db, title="Add retries", complexity=TRIVIAL)
+    async with db.write() as tx:
+        with pytest.raises(Exception, match="CHECK"):
+            await tx.conn.execute(
+                "UPDATE tasks SET complexity = 'epic' WHERE id = ?", (task.id,)
+            )
+
+
+def test_migration_0033_keeps_values_and_widens_the_check() -> None:
+    import sqlite3
+    from pathlib import Path
+
+    import argus_api.db as db_pkg
+
+    migrations = Path(db_pkg.__file__).parent / "migrations"
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY)")
+    conn.executescript((migrations / "0032_task_complexity.sql").read_text())
+    conn.execute(
+        "INSERT INTO tasks (id, complexity) VALUES ('a', 'trivial'), ('b', 'standard')"
+    )
+    conn.executescript((migrations / "0033_task_complexity_hard.sql").read_text())
+    rows = conn.execute(
+        "SELECT id, complexity, complexity_source FROM tasks ORDER BY id"
+    )
+    assert rows.fetchall() == [
+        ("a", "trivial", "heuristic"),
+        ("b", "standard", "heuristic"),
+    ]
+    conn.execute("INSERT INTO tasks (id, complexity) VALUES ('c', 'hard')")
+    conn.execute("INSERT INTO tasks (id) VALUES ('d')")
+    assert conn.execute("SELECT complexity FROM tasks WHERE id = 'd'").fetchone() == (
+        "standard",
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO tasks (id, complexity) VALUES ('e', 'epic')")

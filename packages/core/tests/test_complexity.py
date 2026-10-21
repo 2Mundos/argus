@@ -58,3 +58,32 @@ def test_prefer_local_inverts_only_the_tier() -> None:
     assert fallback_tier("local", prefer_local=True) < fallback_tier(
         "anthropic", prefer_local=True
     )
+
+
+H = Complexity.HARD
+
+
+@pytest.mark.parametrize(
+    ("title", "spec"),
+    [
+        ("Redesenhar a arquitetura de segurança dos workers", ""),
+        ("Data migration across multi-service accounts", ""),
+        ("Security review of the cross-service token flow", ""),
+        ("Architecture: backfill the ledger", "and keep it distributed"),
+    ],
+)
+def test_two_distinct_hard_signals_are_hard(title: str, spec: str) -> None:
+    assert classify(title, spec) is H
+
+
+@pytest.mark.parametrize(
+    ("title", "spec"),
+    [
+        ("Melhorar a segurança do login", ""),  # one signal only
+        ("Write the architecture doc", ""),
+        ("Security and more security", "vulnerability fix"),  # one kind, twice
+        ("Fix typo", ""),
+    ],
+)
+def test_one_hard_signal_or_none_is_not_hard(title: str, spec: str) -> None:
+    assert classify(title, spec) is not H

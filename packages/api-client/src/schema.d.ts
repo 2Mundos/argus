@@ -2920,7 +2920,7 @@ export interface components {
          * Complexity
          * @enum {string}
          */
-        Complexity: "trivial" | "standard";
+        Complexity: "trivial" | "standard" | "hard";
         /**
          * ComplexitySource
          * @enum {string}
@@ -4294,6 +4294,14 @@ export interface components {
             env_overrides: boolean;
             /** File Revision */
             file_revision?: string | null;
+            /** Hard Harness */
+            hard_harness?: {
+                [key: string]: string[];
+            } | null;
+            /** Hard Implementation */
+            hard_implementation?: {
+                [key: string]: string[];
+            } | null;
             /** Harness */
             harness: {
                 [key: string]: string[];
@@ -4320,6 +4328,10 @@ export interface components {
         };
         /** ModelPolicyBody */
         ModelPolicyBody: {
+            /** Hard Harness */
+            hard_harness?: unknown;
+            /** Hard Implementation */
+            hard_implementation?: unknown;
             /** Harness */
             harness: unknown;
             /** Implementation */
