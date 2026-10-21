@@ -114,12 +114,19 @@ class QuotaHit:
     reset_text: str | None = None
 
 
+def _fold(notice: str) -> str:
+    """Control characters folded to spaces, whitespace collapsed: the text that is
+    classified (URLs intact, so a structured error document still parses)."""
+    return re.sub(r"\s{2,}", " ", re.sub(r"[\x00-\x1f\x7f]+", " ", notice)).strip()
+
+
 def sanitize_notice(notice: str, limit: int = REASON_MAX) -> str:
     """One line of provider text: control characters folded to spaces, bearer-like
     tokens and URL query strings dropped, bounded. Never a prompt or a credential."""
-    text = re.sub(r"[\x00-\x1f\x7f]+", " ", notice)
     text = re.sub(
-        r"(?i)\b(?:bearer\s+|sk-|eyJ)[A-Za-z0-9._~+/=-]{8,}", "[redacted]", text
+        r"(?i)\b(?:bearer\s+|sk-|eyJ)[A-Za-z0-9._~+/=-]{8,}",
+        "[redacted]",
+        _fold(notice),
     )
     text = re.sub(r"(https?://[^\s?#)]+)[?#][^\s)]*", r"\1", text)
     return re.sub(r"\s{2,}", " ", text).strip()[:limit]
@@ -154,7 +161,8 @@ def classify_quota(
     `provider`, only that account provider's messages count. `now` anchors a
     clock-time reset ("resets 2am (UTC)"); it defaults to the current time."""
     text = sanitize_notice(notice)
-    body = _PREFIX.sub("", _unwrap(_PREFIX.sub("", text, count=1)), count=1)
+    folded = _fold(notice)
+    body = _PREFIX.sub("", _unwrap(_PREFIX.sub("", folded, count=1)), count=1)
     for patterns, code in (
         (AUTH_EXPIRED_NOTICES, "auth_expired"),
         (QUOTA_NOTICES, "quota_exhausted"),

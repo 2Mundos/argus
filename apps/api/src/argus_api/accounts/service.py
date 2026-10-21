@@ -425,7 +425,9 @@ async def fail_task(
     if held is None or hit is None:
         return await tasks.fail(tx, agent_id, task_id, attempt, error, reason)
     await tasks.check_lease(tx, task_id, attempt, agent_id, allow_expired=True)
-    detail = _hit_detail(hit)
+    detail = _hit_detail(
+        hit, "structured" if error.lstrip().startswith("{") else "notice"
+    )
     previous, reset_at = await _mark_exhausted(
         tx, agent_id, held["id"], hit.until, hit.reason, cooldown, detail
     )
@@ -666,10 +668,8 @@ def _reset_detail(
     }
 
 
-def _hit_detail(hit: QuotaHit) -> dict[str, Any]:
-    return _reset_detail(
-        hit.until, hit.reset_status, hit.reset_text, "structured", hit.code
-    )
+def _hit_detail(hit: QuotaHit, source: str) -> dict[str, Any]:
+    return _reset_detail(hit.until, hit.reset_status, hit.reset_text, source, hit.code)
 
 
 async def recover(tx: Tx) -> list[str]:

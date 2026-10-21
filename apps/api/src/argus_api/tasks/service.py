@@ -524,7 +524,8 @@ async def block_switch_failed(
 ) -> Task:
     """The old runtime did not stop, so the new account cannot be applied safely:
     block the task (`runtime_switch_failed`) with `attempt` and `failures` as they
-    were; an operator or the recovery loop decides what next."""
+    were. Nothing releases it automatically (`wake_waiting` only wakes quota waits):
+    the task stays blocked until an operator acts."""
     row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
     await _apply(
         tx,

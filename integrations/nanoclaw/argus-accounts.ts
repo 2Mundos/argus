@@ -683,14 +683,21 @@ export type FailureKind =
     }
   | { kind: "failed"; reason: string };
 
+/** Control characters folded to spaces, whitespace collapsed: the text classified (URLs and all, so a JSON envelope still parses). */
+function foldNotice(notice: string): string {
+  return notice
+    .replace(/[\x00-\x1f\x7f]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 /**
  * One line of provider text: control characters to spaces, bearer-like tokens and
  * URL query strings removed, bounded. Never a prompt or a credential. Mirrors
  * `argus_core.quota.sanitize_notice` (both are tested on one shared fixture).
  */
 export function sanitizeNotice(notice: string, limit = 500): string {
-  return notice
-    .replace(/[\x00-\x1f\x7f]+/g, " ")
+  return foldNotice(notice)
     .replace(/\b(?:bearer\s+|sk-|eyJ)[A-Za-z0-9._~+/=-]{8,}/gi, "[redacted]")
     .replace(/(https?:\/\/[^\s?#)]+)[?#][^\s)]*/g, "$1")
     .replace(/\s{2,}/g, " ")
@@ -841,7 +848,7 @@ export function classifyFailure(
   now: Date = new Date(),
 ): FailureKind {
   const t = sanitizeNotice(noticeText);
-  const body = noticeBody(t);
+  const body = noticeBody(foldNotice(noticeText));
   const authHit = AUTH_EXPIRED_NOTICES.find(
     (q) => q.pattern.test(body) && (!provider || q.provider === provider),
   );
@@ -958,11 +965,14 @@ export function classifyProviderFailure(
   return null;
 }
 
+/** Timestamp and `[level]` tags a log line may open with, before the error text. */
+const LOG_LINE_LEAD = /^(?:\[[^\]]*\]\s*|\d{4}-\d\d-\d\d[T ]\S+\s+)+/;
+
 /**
  * The provider's own limit line in the agent log tail, for runs whose notice is
  * only the generic placeholder. Claude Code: `Rate limit [window] (resets <ISO>)` or
  * `You've hit your session|usage|weekly limit · resets 2am (UTC)` (the next such UTC
- * time after `now`). Codex: the usage-limit sentence or its error code. The last
+ * time after `now`). Codex: an error line (or structured error) carrying the usage-limit sentence or code. The last
  * occurrence wins; only the held account's own provider is affected. The reason is
  * rebuilt from the parsed reset (Claude) or sanitized (Codex), never the raw log.
  */
@@ -972,14 +982,16 @@ export function classifyLogTail(
   now: Date = new Date(),
 ): FailureKind | null {
   if (accountProvider === "openai") {
-    const codex = [
-      ...logTail.matchAll(
-        /(?:usage_limit_(?:reached|exceeded)|usagelimitexceeded|insufficient_quota|you(?:'|\u2019)ve (?:hit|reached) your usage limit)[^\n"]*/gi,
-      ),
-    ].at(-1);
-    if (!codex) return null;
-    const found = classifyFailure(codex[0], "openai", now);
-    return found.kind === "exhausted" ? { ...found, source: "log" } : null;
+    // Only a line that is itself a Codex error ("Error: …", "Turn failed: …", a
+    // structured error envelope): the same words in a prompt or tool output never count.
+    for (const line of logTail.split("\n").reverse()) {
+      const text = line.trim().replace(LOG_LINE_LEAD, "");
+      const envelope = text.startsWith("{") && /^\{\s*"error"\s*:|"codexErrorInfo"/.test(text);
+      if (!envelope && !NOTICE_PREFIX.test(text)) continue;
+      const found = classifyFailure(text, "openai", now);
+      if (found.kind === "exhausted") return { ...found, source: "log" };
+    }
+    return null;
   }
   if (accountProvider !== "anthropic") return null;
   const hits = [

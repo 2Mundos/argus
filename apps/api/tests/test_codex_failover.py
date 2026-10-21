@@ -1,7 +1,7 @@
 """Codex usage limit and expired login as quota (account selection 3.6)."""
 
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from api_support import FakeClock, insert_agent
@@ -264,3 +264,31 @@ async def test_exhausted_report_needs_a_claim_and_custom_is_an_engine(
         )
     async with db.read() as conn:
         assert (await engine_pool(conn, clock.now)).usable == 1
+
+
+@pytest.mark.parametrize(
+    ("error", "source"), [(LIMIT, "notice"), (LIMIT_JSON, "structured")]
+)
+async def test_failover_labels_the_source_of_the_hit(
+    db: Database, store: MemorySecretStore, error: str, source: str
+) -> None:
+    await add(db, store, "codex-a")
+    task = await started(db, store)
+    after = await fail(db, store, task, error)
+    assert after.failover.source == source  # type: ignore[union-attr]
+
+
+def test_exhausted_report_reset_status_must_match_until() -> None:
+    base = {"runtime_providers": ["openai"], "task_id": "t", "attempt": 1}
+    zoned = datetime(2026, 1, 2, tzinfo=UTC)
+    ExhaustedReport(**base, until=zoned, reset_status="stated")
+    ExhaustedReport(**base, reset_status="absent")
+    ExhaustedReport(**base, reset_status="ambiguous", reset_text="3pm")
+    for bad in (
+        {"reset_status": "stated"},  # no time
+        {"reset_status": "stated", "until": datetime(2026, 1, 2)},  # no zone
+        {"reset_status": "absent", "until": zoned},
+        {"reset_status": "ambiguous", "until": zoned},
+    ):
+        with pytest.raises(ValueError):
+            ExhaustedReport(**base, **bad)  # type: ignore[arg-type]

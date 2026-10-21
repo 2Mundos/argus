@@ -1497,6 +1497,7 @@ describe("runtime recycling on an account rotation", () => {
     const fail = w.calls.find((c) => /\/tasks\/t1\/fail$/.test(c.path))!;
     expect(fail.body.attempt).toBe(1);
     expect(fail.body.error).toContain("could not be stopped");
+    expect(fail.body.reason).toBe("runtime_switch_failed");
     expect(h.inbound).toHaveLength(1); // the old process got nothing more
     expect(w.calls.some((c) => c.path === "/tasks/t1/complete")).toBe(false);
   });
@@ -1677,6 +1678,26 @@ describe("global account selection in the channel", () => {
     expect(recycleRuntime).toHaveBeenCalledTimes(1);
     const selected = w.calls.filter((c) => c.path === "/engines/selected").map((c) => c.body);
     expect(selected.map((b) => b.provider)).toEqual(["openai", "anthropic"]);
+  });
+
+  it("reports runtime_switch_failed when the rebalance cannot stop the old runtime", async () => {
+    const w = world({
+      leases: [codexLease(), lease("claude-1", "sk-ant")],
+      tasks: [task(), { ...task(), id: "t2" }],
+    });
+    const recycleRuntime = vi.fn(async () => {
+      throw new Error("session s1 did not stop");
+    });
+    const h = harness(w, true, { rebalanceMs: 30, recycleRuntime });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await new Promise((r) => setTimeout(r, 60));
+    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await until(() => w.calls.some((c) => c.path === "/tasks/t2/fail"), 5000);
+    const fail = w.calls.find((c) => c.path === "/tasks/t2/fail")!;
+    expect(fail.body.reason).toBe("runtime_switch_failed");
+    expect(fail.body.error).toContain("could not be stopped");
   });
 
   it("keeps the established account when a re-evaluation finds nothing better or nothing usable", async () => {
@@ -2067,11 +2088,27 @@ describe("Codex usage limit and expired login (account-selection.spec.md 3.6)", 
   });
 
   it("classifyLogTail reads a codex limit sentence for an openai account only", () => {
-    const tail = "x\nYou've hit your usage limit. try again at 3:05 PM\n";
+    const tail = "x\n[agent] Error: You've hit your usage limit. try again at 3:05 PM\n";
     expect(classifyLogTail(tail, "openai", NOW)).toMatchObject({
       kind: "exhausted",
       source: "log",
     });
     expect(classifyLogTail(tail, "anthropic", NOW)).toBeNull();
+    const envelope = '{"error":{"message":"x","codexErrorInfo":"usageLimitExceeded"}}';
+    expect(classifyLogTail(`a\n${envelope}\n`, "openai", NOW)).toMatchObject({
+      kind: "exhausted",
+      source: "log",
+    });
+  });
+
+  it("classifyLogTail ignores quota words in a prompt or tool output", () => {
+    const tail = [
+      "user: please handle insufficient_quota and usage_limit_reached in the client",
+      "You've hit your usage limit. try again at 3:05 PM",
+      "tool output: insufficient_quota",
+      '{"message":"insufficient_quota","note":"fixture"}',
+      "> Error handling: insufficient_quota is returned by the API",
+    ].join("\n");
+    expect(classifyLogTail(tail, "openai", NOW)).toBeNull();
   });
 });

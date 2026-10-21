@@ -270,5 +270,18 @@
     "provider": "openai",
     "notice": "The model said: you exceeded your current quota",
     "exhausted": false
+  },
+  {
+    "provider": "openai",
+    "notice": "{\"error\": {\"message\": \"You've hit your usage limit. Upgrade at https://x.example/a?b, or try again at Nov 19th, 2026 2:08 PM.\", \"codexErrorInfo\": \"usageLimitExceeded\"}}",
+    "exhausted": true,
+    "until": null,
+    "reset_status": "ambiguous"
+  },
+  {
+    "provider": "openai",
+    "notice": "{\"error\": {\"message\": \"see https://x.example/a#frag\", \"codexErrorInfo\": \"usageLimitExceeded\"}}",
+    "exhausted": true,
+    "until": null
   }
 ]

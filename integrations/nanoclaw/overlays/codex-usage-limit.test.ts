@@ -20,6 +20,17 @@ describe("codexUsageLimitFailure", () => {
     expect(codexUsageLimitFailure(TEXT)?.reset_text).toBe("Nov 19th, 2026 2:08 PM");
   });
 
+  it("takes the reset from its sentence, not only at the end of the message", () => {
+    const f = codexUsageLimitFailure(
+      "You've hit your usage limit, try again at 3pm. Upgrade to Plus to continue.",
+    );
+    expect(f?.reset_text).toBe("3pm");
+    expect(
+      codexUsageLimitFailure("You've hit your usage limit. try again at 3 p.m. Upgrade now.")
+        ?.reset_text,
+    ).toBe("3 p.m");
+  });
+
   it("leaves reset_text out when the provider stated none", () => {
     const f = codexUsageLimitFailure("usage_limit_reached");
     expect(f).toEqual({ provider: "codex", kind: "rate_limit", notice: "usage_limit_reached" });

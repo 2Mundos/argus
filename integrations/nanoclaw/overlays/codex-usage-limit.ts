@@ -13,7 +13,7 @@
 
 const LIMIT_TEXT =
   /\byou(?:'|’)ve hit your usage limit\b|\byou have (?:hit|reached) your usage limit\b|\busage[_ ]?limit[_ ](?:reached|exceeded)\b|\binsufficient_quota\b|\busageLimitExceeded\b/i;
-const RESET_WORDS = /\btry again at ([^.\n]{3,60}?)\s*\.?\s*$/im;
+const RESET_WORDS = /\btry again at ([^\n]{3,60}?)\s*(?:\.(?:\s|$)|$)/i;
 const NOTICE_MAX = 300;
 
 export interface CodexRateLimitFailure {

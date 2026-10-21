@@ -74,7 +74,13 @@ async def add_instance(db: Database, iid: str, pool: str, state: str) -> None:
         )
 
 
-async def add_account(db: Database, name: str, provider: str, state: str) -> None:
+async def add_account(
+    db: Database,
+    name: str,
+    provider: str,
+    state: str,
+    until: str = "2099-01-01T00:00:00.000000Z",
+) -> None:
     async with db.write() as tx:
         stamp = ts(tx.now)
         await tx.conn.execute(
@@ -87,7 +93,7 @@ async def add_account(db: Database, name: str, provider: str, state: str) -> Non
                 provider,
                 SECRET_REF,
                 state,
-                "2026-02-01T00:00:00.000000Z" if state == "exhausted" else None,
+                until if state == "exhausted" else None,
                 "test" if state == "disabled" else None,
                 stamp,
                 stamp,
@@ -250,6 +256,18 @@ async def test_counts_by_state_role_pool_and_provider(db: Database) -> None:
     assert o.decisions.open_by_audience == {"human": 1, "orchestrator": 0, "any": 1}
     assert o.knowledge.pages_by_state == {"active": 1, "archived": 2}
     assert o.knowledge.proposals_by_state["open"] == 1
+
+
+async def test_next_reset_ignores_an_account_already_past_its_reset(
+    db: Database,
+) -> None:
+    # Past its reset but not yet recovered: usable now, so no pending reset (the
+    # claim gate judges it the same way).
+    await add_account(
+        db, "spent", "anthropic", "exhausted", until="2020-01-01T00:00:00.000000Z"
+    )
+    o = await overview.overview(db)
+    assert (o.accounts.next_reset_at, o.accounts.awaiting_quota) == (None, False)
 
 
 async def test_overview_only_reads(db: Database) -> None:

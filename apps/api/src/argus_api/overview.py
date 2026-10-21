@@ -188,7 +188,6 @@ async def overview(db: Database) -> Overview:
                     state
                 ] = n
             pool = await engine_pool(conn, now)
-            next_reset = (await engine_pool(conn, None)).next_reset
             quota_measured = bool(
                 await scalar("SELECT EXISTS (SELECT 1 FROM account_quota)")
             )
@@ -249,7 +248,7 @@ async def overview(db: Database) -> Overview:
             by_state=accounts,
             total=sum(accounts.values()),
             by_provider=accounts_by_provider,
-            next_reset_at=next_reset,
+            next_reset_at=pool.next_reset,
             awaiting_quota=pool.awaiting_quota,
             quota_measured=quota_measured,
         ),
