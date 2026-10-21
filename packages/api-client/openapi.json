@@ -17183,6 +17183,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 9223372036854775807,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -17200,6 +17201,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 9223372036854775807,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -17266,22 +17268,6 @@
             "schema": {
               "title": "Task Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           }
         ],

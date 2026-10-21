@@ -9233,9 +9233,7 @@ export interface operations {
     post_log_api_tasks__task_id__log_post: {
         parameters: {
             query?: never;
-            header?: {
-                authorization?: string | null;
-            };
+            header?: never;
             path: {
                 task_id: string;
             };
