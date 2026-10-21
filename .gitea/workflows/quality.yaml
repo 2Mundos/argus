@@ -58,11 +58,60 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
+  # Smoke that Dockerfile.api still builds. On PRs, skip when no image inputs
+  # changed (job still runs so a required "image" check gets a green status).
+  # Buildx + actions/cache keeps layer reuse across runs on Gitea runners.
   image:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -f deploy/Dockerfile.api -t argus:ci .
+      - name: Decide whether image inputs changed
+        id: need
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE"
+          # Paths copied by deploy/Dockerfile.api (or that change its context).
+          pattern='^(deploy/|\.dockerignore$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.npmrc$|tsconfig\.base\.json$|packages/api-client/|apps/dashboard/|pyproject\.toml$|uv\.lock$|apps/api/|packages/core/|integrations/nanoclaw/engines/model-policy\.defaults\.json$)'
+          if git diff --name-only "$BASE" HEAD | grep -E "$pattern" >/dev/null; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping image build: no Dockerfile inputs changed"
+          fi
+      - uses: docker/setup-buildx-action@v3
+        if: steps.need.outputs.build == 'true'
+      - uses: actions/cache@v4
+        if: steps.need.outputs.build == 'true'
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ hashFiles('deploy/Dockerfile.api', 'uv.lock', 'pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+      - name: Ensure buildx cache dir
+        if: steps.need.outputs.build == 'true'
+        run: mkdir -p /tmp/.buildx-cache
+      - name: Build image
+        if: steps.need.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.api
+          tags: argus:ci
+          # Validate the build only; no need to load into the local daemon.
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+      - name: Rotate buildx cache
+        if: steps.need.outputs.build == 'true'
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
   # Real Docker: Argus starts echo-worker containers that must reach it back via
   # host.docker.internal. Manual until verified on the runner's network layout.
