@@ -44,7 +44,10 @@ describe("buildChanges", () => {
   it("never sends a field the state does not allow", () => {
     const claimed = { ...task, state: "claimed", editable_fields: ["priority"] } as Task;
     const draft = { ...toDraft(claimed), title: "Other", priority: "9" };
-    expect(buildChanges(claimed, draft).changes).toEqual({ priority: 9 });
+    expect(buildChanges(claimed, draft)).toEqual({
+      changes: { priority: 9 },
+      errors: { title: "Not editable while the task is claimed." },
+    });
   });
 });
 

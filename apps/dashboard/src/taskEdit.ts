@@ -58,7 +58,12 @@ export function buildChanges(base: Task, draft: Draft): { changes: Changes; erro
   const allowed = new Set<string>(base.editable_fields ?? []);
   const current = toDraft(base);
   for (const field of EDIT_FIELDS) {
-    if (!allowed.has(field) || draft[field] === current[field]) continue;
+    if (draft[field] === current[field]) continue;
+    if (!allowed.has(field)) {
+      // a re-based draft can hold a change the task's new state refuses: say so, never drop it
+      errors[field] = `Not editable while the task is ${base.state}.`;
+      continue;
+    }
     const value = draft[field];
     if (field === "title") {
       const title = value.trim();
