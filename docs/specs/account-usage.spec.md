@@ -75,6 +75,13 @@ scope (orchestrator, admin), as `GET /api/accounts` is. There is no MCP tool yet
 - Usage rows emit no event (the run's task events already refresh views). A
   quota snapshot that changes emits `account.quota`.
 
+Account credentials are returned only by a lease request with a required,
+non-empty `runtime_providers` list and a `task_id`/`attempt` currently claimed
+by that agent. Exhaustion reports require the same live task claim and return
+fallback account metadata only; the worker obtains any next credential through
+the task-bound lease endpoint. Agent credential rotation also requires an active
+account lease and must preserve the document structure and JSON value types.
+
 ## 3.3 Polling (Codex)
 
 - When a run ends (a task leaves `claimed`) without a quota snapshot observed

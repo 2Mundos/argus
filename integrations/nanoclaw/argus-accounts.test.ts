@@ -250,8 +250,16 @@ function world(opts: {
     if (/^\/accounts\/[^/]+\/exhausted$/.test(path)) {
       const n = ++exhaustedCount;
       if (opts.exhaustedResponse) return json(200, opts.exhaustedResponse(n));
-      const next = leases.shift();
-      if (next && next !== "no_account") return json(200, { lease: next, task_blocked: false });
+      const next = leases[0];
+      if (next && next !== "no_account") {
+        return json(200, {
+          lease: null,
+          next_account_id: next.account_id,
+          next_account_name: next.name,
+          next_provider: next.provider,
+          task_blocked: false,
+        });
+      }
       return json(200, { lease: null, earliest_reset: null, task_blocked: true });
     }
     if (path === "/tasks/claim") {
@@ -507,17 +515,17 @@ describe("applyLease", () => {
 // -- the channel -----------------------------------------------------------------------
 
 describe("channel with accounts", () => {
-  it("leases and applies an account before it claims anything", async () => {
+  it("claims a task before leasing and applying its account", async () => {
     const w = world({ leases: [lease("a", "sk-ant-AAAA")], tasks: [task()] });
     const h = harness(w);
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
     const order = w.calls.map((c) => `${c.who}:${c.path}`);
-    expect(order.indexOf("argus:/accounts/lease")).toBeLessThan(
-      order.indexOf("argus:/tasks/claim"),
+    expect(order.indexOf("argus:/tasks/claim")).toBeLessThan(
+      order.indexOf("argus:/accounts/lease"),
     );
-    expect(order.indexOf("onecli:/agents")).toBeLessThan(order.indexOf("argus:/tasks/claim"));
+    expect(order.indexOf("argus:/tasks/claim")).toBeLessThan(order.indexOf("onecli:/agents"));
     expect(w.onecli.secrets[0]!.value).toBe("sk-ant-AAAA");
   });
 
@@ -581,7 +589,7 @@ describe("channel with accounts", () => {
     const w = world({
       leases: [lease("a", "sk-ant-AAAA")],
       tasks: [task()],
-      exhaustedResponse: () => ({ lease: null, task_blocked: false }),
+      exhaustedResponse: () => ({ lease: null, next_account_id: null, task_blocked: false }),
     });
     const h = harness(w);
     live.push(h.adapter);
@@ -755,8 +763,8 @@ describe("engine and executor leases in the channel", () => {
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
     const leaseCalls = w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body);
     expect(leaseCalls).toEqual([
-      { runtime_providers: ["anthropic", "openai"] },
-      { role: "executor", runtime_providers: ["anthropic", "openai", "cursor"], reuse_held: true },
+      { runtime_providers: ["anthropic", "openai"], task_id: "t1", attempt: 1 },
+      { role: "executor", runtime_providers: ["anthropic", "openai", "cursor"], reuse_held: true, task_id: "t1", attempt: 1 },
     ]);
     expect(JSON.stringify(leaseCalls)).not.toContain('"providers"');
     expect(selectEngine).toHaveBeenCalledWith("codex");
@@ -1018,8 +1026,8 @@ describe("cursor executor selection in the channel", () => {
     await adapter.setup(setup);
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
     expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
-      { runtime_providers: ["anthropic", "openai"] },
-      { role: "executor", runtime_providers: ["anthropic", "openai", "cursor"], reuse_held: true },
+      { runtime_providers: ["anthropic", "openai"], task_id: "t1", attempt: 1 },
+      { role: "executor", runtime_providers: ["anthropic", "openai", "cursor"], reuse_held: true, task_id: "t1", attempt: 1 },
     ]);
     expect(w.onecli.secrets.filter((s) => s.name.includes("cursor"))).toHaveLength(2);
   });
@@ -1196,13 +1204,15 @@ describe("task-scoped repository auth", () => {
       );
       expect(h.inbound[0].content.text).not.toContain("dummy-gitea-token");
       expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
-        { runtime_providers: ["anthropic", "openai"] },
+        { runtime_providers: ["anthropic", "openai"], task_id: "t1", attempt: 1 },
         {
           role: "executor",
           runtime_providers: ["anthropic", "openai", "cursor"],
           reuse_held: true,
+          task_id: "t1",
+          attempt: 1,
         },
-        { role: "repository" },
+        { role: "repository", runtime_providers: ["gitea"], task_id: "t1", attempt: 1 },
       ]);
       await h.adapter.deliver("local", null, {
         kind: "chat",
@@ -1530,6 +1540,8 @@ describe("global account selection in the channel", () => {
         role: "executor",
         runtime_providers: ["anthropic", "openai", "cursor"],
         reuse_held: true,
+        task_id: "t1",
+        attempt: 1,
       },
     ]);
     expect(w.onecli.agents[0]!.secrets).toHaveLength(1); // no Codex secret in the vault
@@ -1788,6 +1800,7 @@ describe("no usable account at claim time", () => {
     await until(() => w.calls.some((c) => c.path === "/accounts/awaiting-quota"));
     const call = w.calls.find((c) => c.path === "/accounts/awaiting-quota")!;
     expect(call.body).toMatchObject({ runtime_providers: ["anthropic", "openai"] });
-    expect(w.calls.some((c) => c.path === "/tasks/claim")).toBe(false);
+    expect(w.calls.some((c) => c.path === "/tasks/claim")).toBe(true);
+    expect(w.calls.some((c) => c.path === "/tasks/t1/fail")).toBe(true);
   });
 });

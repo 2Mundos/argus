@@ -86,7 +86,7 @@ const CLAIM_WAIT_S = 20;
 const MAX_PAGE_CHARS = 4000;
 const MAX_PAGES_INLINED = 3;
 const MAX_RESENDS = 3; // account switches for one attempt before giving up
-const REBALANCE_MS = 60_000; // idle re-evaluation of the engine lease (priority recovery)
+const REBALANCE_MS = 60_000; // task-bound re-evaluation for priority recovery
 const RECYCLE_TIMEOUT_MS = 30_000; // wait for the old container to exit after an account rotation
 
 /** The accounts held when a task's models are chosen (null: not leased). */
@@ -109,9 +109,9 @@ export interface ArgusConfig {
      */
     models: boolean;
     /**
-     * While idle (no task in flight) re-evaluate the engine lease at most this
-     * often, so a recovered or newly added higher-priority account is adopted at
-     * a safe point; active work is never rotated. Default 60 s; 0 disables.
+     * Re-evaluate the engine lease for a claimed task at most this often, so a
+     * recovered or newly added higher-priority account is adopted at a safe
+     * point; active work is never rotated. Default 60 s; 0 disables.
      */
     rebalanceMs?: number;
     onecli: OneCliClient;
@@ -495,7 +495,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let resends = 0;
   let account: { id: string; name: string; provider: string } | null = null;
   let executor: { id: string; name: string; provider: string } | null = null;
-  let leasedAt = 0; // when the engine lease was last confirmed (idle rebalance)
+  let leasedAt = 0; // when the engine lease was last confirmed for a claimed task
   let recycleOnLease = false; // Argus moved us to another account: recycle once the next one is applied
   let engineInUse: string | null = null; // the harness the leased account selected
   let activeAccountLeases: AccountLease[] = [];
@@ -659,19 +659,26 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         attempt: task.attempt,
       });
       log.warn("Argus account exhausted", { account: exhausted.name, until: f.until });
-      const next = data.lease as AccountLease | undefined;
+      const nextInfo = data.next_account_id
+        ? { account_id: data.next_account_id, name: data.next_account_name, provider: data.next_provider }
+        : undefined;
       log.warn(
         `account_failover ${JSON.stringify({
           from: exhausted.name,
-          to: next?.name ?? null,
+          to: nextInfo?.name ?? null,
           reason: f.reason,
           task_id: task.id,
           attempt: task.attempt,
         })}`,
       );
-      if (data.lease) {
-        const lease = data.lease as AccountLease;
-        await applyAndSelect(cfg.accounts, lease, "exhausted");
+      if (nextInfo) {
+        const { data: leased } = await client.call("POST", "/accounts/lease", {
+          runtime_providers: runtimeProviders("engine"),
+          task_id: task.id,
+          attempt: task.attempt,
+        });
+        const lease = leased as AccountLease;
+        await applyAndSelect(cfg.accounts, lease, "exhausted", task);
         account = { id: lease.account_id, name: lease.name, provider: lease.provider };
         leasedAt = cfg.now?.() ?? Date.now();
         try {
@@ -710,7 +717,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         await client.call("POST", `/tasks/${task.id}/fail`, {
           attempt: task.attempt,
           error: f.reason,
-          reason: data.lease ? "provider_failure" : "quota",
+          reason: nextInfo ? "provider_failure" : "quota",
         });
       }
       finishTask();
@@ -751,6 +758,19 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       taskDone = resolve;
     });
     currentClaim = task;
+    if (!(await ensureAccount(task))) {
+      await client.call("POST", `/tasks/${task.id}/fail`, {
+        attempt: task.attempt,
+        error: "no usable provider account for claimed task",
+        reason: "quota",
+      }).catch(() => undefined);
+      await client.call("POST", "/accounts/awaiting-quota", {
+        capabilities: cfg.capabilities,
+        runtime_providers: runtimeProviders("engine"),
+      }).catch(() => undefined);
+      finishTask();
+      return;
+    }
     try {
       await prepareModels(task);
     } catch (err) {
@@ -773,6 +793,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         const normalizedRepository = normalizeRepositoryUrl(repositoryUrl);
         const { data } = await client.call("POST", "/accounts/lease", {
           role: "repository",
+          runtime_providers: ["gitea"],
+          task_id: task.id,
+          attempt: task.attempt,
         });
         const lease = data as AccountLease;
         repositoryLeaseHeld = true;
@@ -840,6 +863,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     acc: NonNullable<ArgusConfig["accounts"]>,
     lease: AccountLease,
     reason: "lease" | "exhausted",
+    task: { id: string; attempt: number },
   ): Promise<void> {
     const held: AccountLease[] = [lease];
     // The executor (a delegated CLI) is the best usable account across providers
@@ -853,6 +877,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         // The engine's own credential already serves its provider's CLI: if that
         // account is the best executor too, Argus returns it and takes no slot.
         reuse_held: true,
+        task_id: task.id,
+        attempt: task.attempt,
       });
       const candidate = data as AccountLease;
       if (candidate.role === "executor" && candidate.provider !== lease.provider)
@@ -923,8 +949,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       .catch((err) => log.warn("Could not report the engine selection", { err }));
   }
 
-  /** Hold a leased account, applied to the vault, before claiming any work. */
-  async function ensureAccount(): Promise<boolean> {
+  /** Lease and apply an account for the currently claimed task. */
+  async function ensureAccount(task: ArgusTask): Promise<boolean> {
     const acc = cfg.accounts;
     if (!acc) return true;
     if (!repositoryAssignmentReconciled && activeAccountLeases.length > 0) {
@@ -947,11 +973,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     try {
       const { data } = await client.call("POST", "/accounts/lease", {
         runtime_providers: runtimeProviders("engine"),
+        task_id: task.id,
+        attempt: task.attempt,
       });
       const lease = data as AccountLease;
       if (rebalancing && lease.account_id === account?.id) return true; // still the best
       try {
-        await applyAndSelect(acc, lease, "lease");
+        await applyAndSelect(acc, lease, "lease", task);
         if (rebalancing || recycleOnLease) await acc.recycleRuntime?.();
         recycleOnLease = false;
       } catch (err) {
@@ -974,16 +1002,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         return true;
       }
       if (err instanceof ArgusError && err.code === "no_account") {
-        log.warn("No Argus account is usable right now; not claiming work", {
+        log.warn("No Argus account is usable for this claimed task", {
           message: err.message,
         });
-        // Ready work this worker could take is shown as awaiting quota, with when.
-        await client
-          .call("POST", "/accounts/awaiting-quota", {
-            capabilities: cfg.capabilities,
-            runtime_providers: runtimeProviders("engine"),
-          })
-          .catch((e) => log.warn("Could not mark ready tasks as awaiting quota", { err: e }));
       } else {
         log.warn("Could not lease/apply an account (will retry)", { err });
       }
@@ -999,7 +1020,6 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         await sleep(1000);
         continue;
       }
-      if (!(await ensureAccount())) continue;
       abortClaim = new AbortController();
       try {
         const { status, data } = await client.call(

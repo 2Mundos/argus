@@ -8,7 +8,7 @@ from api_support import FakeClock, insert_agent
 from argus_api.accounts import service as accounts
 from argus_api.accounts.service import NoAccountError
 from argus_api.db import Database, ts
-from argus_api.errors import ConflictError, ForbiddenError
+from argus_api.errors import ConflictError, ForbiddenError, ValidationFailedError
 from argus_api.main import app
 from argus_api.reaper import reap
 from argus_api.secrets import MemorySecretStore, SecretStoreError
@@ -57,8 +57,27 @@ async def add(
 
 
 async def lease(db: Database, store, agent=A, runtime=None):
+    task_id, attempt = await claim_task(db, agent)
+    if runtime is None:
+        async with (
+            db.read() as conn,
+            conn.execute("SELECT DISTINCT provider FROM accounts") as cur,
+        ):
+            runtime = [row[0] for row in await cur.fetchall()]
     async with db.write() as tx:
-        return await accounts.lease(tx, agent, runtime, store)
+        return await accounts.lease(
+            tx, agent, runtime, store, task_id=task_id, attempt=attempt
+        )
+
+
+async def claim_task(db: Database, agent=A) -> tuple[str, int]:
+    async with db.write() as tx:
+        await tasks.create_task(
+            tx, TaskCreate(project="global", title="account lease test"), "admin:test"
+        )
+        task = await tasks.claim(tx, agent, [])
+    assert task is not None
+    return task.id, task.attempt
 
 
 async def get(db: Database, account_id: str, clock: FakeClock):
@@ -67,9 +86,30 @@ async def get(db: Database, account_id: str, clock: FakeClock):
 
 
 async def exhaust(db: Database, store, account_id: str, agent=A, **kw):
+    task_id = kw.pop("task_id", None)
+    attempt = kw.pop("attempt", None)
+    if task_id is None or attempt is None:
+        task_id, attempt = await claim_task(db, agent)
     async with db.write() as tx:
         return await accounts.exhausted(
-            tx, agent, account_id, ExhaustedReport(**kw), store
+            tx,
+            agent,
+            account_id,
+            ExhaustedReport(
+                task_id=task_id,
+                attempt=attempt,
+                runtime_providers=[
+                    "anthropic",
+                    "openai",
+                    "cursor",
+                    "mistral",
+                    "gitea",
+                    "acme",
+                    "zeta",
+                ],
+                **kw,
+            ),
+            store,
         )
 
 
@@ -145,9 +185,8 @@ async def test_gitea_and_executor_only_accounts_never_become_model_accounts(
     await add(db, store, "cursor-1", "cursor", priority=500)
     await add(db, store, "codex-1", "openai", priority=1)
     assert (await lease(db, store, A)).name == "codex-1"  # not gitea, not an engine
-    async with db.write() as tx:
-        executor = await accounts.lease(tx, A, None, store, "executor")
-        repo = await accounts.lease(tx, A, None, store, "repository")
+    executor = await lease_role(db, store, "executor", ["gitea", "cursor", "openai"])
+    repo = await lease_role(db, store, "repository", ["gitea"])
     assert executor.name == "cursor-1"
     assert repo.name == "repo"
 
@@ -158,7 +197,7 @@ async def test_runtime_providers_state_capability_not_preference(
     await add(db, store, "exotic", "mistral", priority=100)
     await add(db, store, "claude-1", "anthropic", priority=50)
     assert (await lease(db, store, A, ["anthropic", "openai"])).name == "claude-1"
-    assert (await lease(db, store, B)).name == "exotic"  # no statement: global
+    assert (await lease(db, store, B, ["mistral", "anthropic"])).name == "exotic"
 
 
 async def test_max_leases_and_least_used(
@@ -180,7 +219,9 @@ async def test_one_lease_per_agent(
 
 
 async def test_no_account(db: Database, store: MemorySecretStore) -> None:
-    with pytest.raises(NoAccountError):
+    with pytest.raises(
+        ValidationFailedError, match="runtime_providers must be non-empty"
+    ):
         await lease(db, store)
 
 
@@ -195,8 +236,10 @@ async def test_fallback_ranks_remaining_accounts_globally(
     await add(db, store, "claude-2", "anthropic", priority=1)
     assert (await lease(db, store)).account_id == c1
     result = await exhaust(db, store, c1, until=clock.now + timedelta(hours=5))
-    assert result.lease is not None
-    assert result.lease.name == "openai-1"  # no preference for the previous provider
+    assert result.lease is None
+    assert (
+        result.next_account_name == "openai-1"
+    )  # no preference for the previous provider
     exhausted = await get(db, c1, clock)
     assert exhausted.state is AccountState.EXHAUSTED
     assert exhausted.exhausted_until == clock.now + timedelta(hours=5)
@@ -207,9 +250,41 @@ async def test_recovery_is_considered_at_the_next_lease_without_preemption(
 ) -> None:
     c1 = await add(db, store, "claude-1", "anthropic", priority=100)
     o1 = await add(db, store, "openai-1", "openai", priority=10)
-    assert (await lease(db, store, A)).account_id == c1
-    fallback = await exhaust(db, store, c1, until=clock.now + timedelta(hours=1))
-    assert fallback.lease is not None and fallback.lease.account_id == o1
+    task_id, attempt = await claim_task(db, A)
+    async with db.write() as tx:
+        assert (
+            await accounts.lease(
+                tx,
+                A,
+                ["anthropic", "openai"],
+                store,
+                task_id=task_id,
+                attempt=attempt,
+            )
+        ).account_id == c1
+    async with db.write() as tx:
+        fallback = await accounts.exhausted(
+            tx,
+            A,
+            c1,
+            ExhaustedReport(
+                until=clock.now + timedelta(hours=1),
+                runtime_providers=["anthropic", "openai"],
+                task_id=task_id,
+                attempt=attempt,
+            ),
+            store,
+        )
+    assert fallback.lease is None and fallback.next_account_id == o1
+    async with db.write() as tx:
+        await accounts.lease(
+            tx,
+            A,
+            ["anthropic", "openai"],
+            store,
+            task_id=task_id,
+            attempt=attempt,
+        )
     clock.advance(7200)
     async with db.write() as tx:
         await accounts.recover(tx)
@@ -399,14 +474,33 @@ ADMIN = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
 
 class FailingStore(MemorySecretStore):
     async def put(self, name: str, value: dict) -> None:
-        if name.startswith("account-") and "refresh" in value:
+        if name.startswith("account-") and (
+            "refresh" in value or value.get("api_key") == "sk-ant-api03-y"
+        ):
             raise SecretStoreError("disk full")
         await super().put(name, value)
 
 
 async def lease_role(db, store, role, runtime=None, agent=A):
+    task_id, attempt = await claim_task(db, agent)
+    if runtime is None:
+        async with (
+            db.read() as conn,
+            conn.execute("SELECT DISTINCT provider FROM accounts") as cur,
+        ):
+            runtime = [row[0] for row in await cur.fetchall()]
     async with db.write() as tx:
-        return await accounts.lease(tx, agent, runtime, store, role)
+        return await accounts.lease(
+            tx, agent, runtime, store, role, task_id=task_id, attempt=attempt
+        )
+
+
+async def claimed_lease(db, store, runtime, role="engine", agent=A, **kwargs):
+    task_id, attempt = await claim_task(db, agent)
+    async with db.write() as tx:
+        return await accounts.lease(
+            tx, agent, runtime, store, role, task_id=task_id, attempt=attempt, **kwargs
+        )
 
 
 async def active(db: Database, agent=A) -> list[tuple[str, str]]:
@@ -448,13 +542,13 @@ async def test_a_lower_priority_executor_never_displaces_the_held_engine_account
     engine = await lease_role(db, store, "engine")
     assert engine.account_id == claude
     # Plain executor lease: the engine's slot is taken, so the next best is chosen.
-    async with db.write() as tx:
-        plain = await accounts.lease(tx, A, None, store, "executor")
+    plain = await claimed_lease(db, store, ["anthropic", "openai"], "executor")
     assert plain.account_id == codex
     # With reuse_held the held, higher-priority account stays the executor's pick:
     # its own lease is returned, no second row, no extra slot, no Codex lease.
-    async with db.write() as tx:
-        reused = await accounts.lease(tx, A, None, store, "executor", reuse_held=True)
+    reused = await claimed_lease(
+        db, store, ["anthropic", "openai"], "executor", reuse_held=True
+    )
     assert (reused.account_id, reused.role) == (claude, "engine")
     assert reused.lease_id == engine.lease_id
     assert reused.credential == {"api_key": "key-claude-1"}
@@ -468,15 +562,16 @@ async def test_reuse_held_prefers_a_better_other_account_and_other_roles_ignore_
 ) -> None:
     held = await add(db, store, "codex-1", "openai", priority=10)
     better = await add(db, store, "claude-1", "anthropic", priority=100)
-    async with db.write() as tx:  # force the engine onto the lower account
-        await accounts.lease(tx, A, ["openai"], store)
-    async with db.write() as tx:
-        executor = await accounts.lease(tx, A, None, store, "executor", reuse_held=True)
+    await claimed_lease(db, store, ["openai"])
+    executor = await claimed_lease(
+        db, store, ["openai", "anthropic"], "executor", reuse_held=True
+    )
     assert (executor.account_id, executor.role) == (better, "executor")
     assert ("engine", held) in await active(db)
     # reuse_held means nothing for the engine role.
-    async with db.write() as tx:
-        again = await accounts.lease(tx, A, None, store, "engine", reuse_held=True)
+    again = await claimed_lease(
+        db, store, ["openai", "anthropic"], "engine", reuse_held=True
+    )
     assert again.role == "engine"
 
 
@@ -487,22 +582,35 @@ async def test_executor_exhaustion_stays_in_its_role(db: Database, store) -> Non
     engine = await lease_role(db, store, "engine", ["openai", "anthropic"])
     executor = await lease_role(db, store, "executor", ["anthropic"])
     assert executor.account_id == c1
+    task_id, attempt = await claim_task(db, A)
     async with db.write() as tx:
         result = await accounts.exhausted(
             tx,
             A,
             c1,
             ExhaustedReport(
-                reason="limit", role="executor", runtime_providers=["anthropic"]
+                reason="limit",
+                role="executor",
+                runtime_providers=["anthropic"],
+                task_id=task_id,
+                attempt=attempt,
             ),
             store,
         )
     # Ranked globally among what the runtime can apply; the role is kept.
-    assert result.lease and (result.lease.account_id, result.lease.role) == (
-        c2,
-        "executor",
-    )
+    assert result.lease is None
+    assert result.next_account_id == c2
     assert ("engine", engine.account_id) in await active(db)
+    async with db.write() as tx:
+        await accounts.lease(
+            tx,
+            A,
+            ["anthropic"],
+            store,
+            "executor",
+            task_id=task_id,
+            attempt=attempt,
+        )
     assert ("executor", c2) in await active(db)
 
 
@@ -553,6 +661,28 @@ def register(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {reg.json()['token']}"}
 
 
+def claimed_task(client: TestClient, worker: dict[str, str]) -> dict:
+    created = client.post(
+        "/api/tasks",
+        json={"project": "global", "title": "account test"},
+        headers=ADMIN,
+    )
+    assert created.status_code == 201
+    claimed = client.post("/api/tasks/claim", json={}, headers=worker)
+    assert claimed.status_code == 200
+    return claimed.json()
+
+
+def lease_payload(task: dict, runtime_providers: list[str], **extra) -> dict:
+    """Build a lease body. Extra keys (e.g. retired `providers=`) are attack surface."""
+    return {
+        "runtime_providers": runtime_providers,
+        "task_id": task["id"],
+        "attempt": task["attempt"],
+        **extra,
+    }
+
+
 def test_accounts_over_http(client: TestClient) -> None:
     res = client.post(
         "/api/accounts",
@@ -571,15 +701,74 @@ def test_accounts_over_http(client: TestClient) -> None:
 
     worker = register(client)
     assert client.get("/api/accounts", headers=worker).status_code == 403
+    missing_runtime = client.post(
+        "/api/accounts/lease",
+        json={"task_id": "unclaimed", "attempt": 1},
+        headers=worker,
+    )
+    assert missing_runtime.status_code == 422
+    assert "sk-ant-api03-fake" not in missing_runtime.text
+    empty_runtime = client.post(
+        "/api/accounts/lease",
+        json={"runtime_providers": [], "task_id": "unclaimed", "attempt": 1},
+        headers=worker,
+    )
+    assert empty_runtime.status_code == 422
+    assert "sk-ant-api03-fake" not in empty_runtime.text
+    missing_claim = client.post(
+        "/api/accounts/lease",
+        json={"runtime_providers": ["anthropic"]},
+        headers=worker,
+    )
+    assert missing_claim.status_code == 422
+    assert "sk-ant-api03-fake" not in missing_claim.text
+    other_worker = register(client)
+    other_task = client.post(
+        "/api/tasks",
+        json={"project": "global", "title": "owned elsewhere"},
+        headers=ADMIN,
+    ).json()
+    other_claim = client.post("/api/tasks/claim", json={}, headers=other_worker).json()
+    foreign_claim_attempt = client.post(
+        "/api/accounts/lease",
+        json={
+            "runtime_providers": ["anthropic"],
+            "task_id": other_task["id"],
+            "attempt": other_claim["attempt"],
+        },
+        headers=worker,
+    )
+    assert foreign_claim_attempt.status_code == 409
+    assert "sk-ant-api03-fake" not in foreign_claim_attempt.text
+    task = client.post(
+        "/api/tasks",
+        json={"project": "global", "title": "account test"},
+        headers=ADMIN,
+    ).json()
+    claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
     leased = client.post(
-        "/api/accounts/lease", json={"providers": ["anthropic"]}, headers=worker
+        "/api/accounts/lease",
+        json={
+            "runtime_providers": ["anthropic"],
+            "task_id": task["id"],
+            "attempt": claimed["attempt"],
+        },
+        headers=worker,
     ).json()
     assert leased["credential"] == {"api_key": "sk-ant-api03-fake"}
+
+    changed_shape = client.put(
+        f"/api/accounts/{account['id']}/credential",
+        json={"credential": {"api_key": "sk-ant-api03-new", "refresh": "x"}},
+        headers=worker,
+    )
+    assert changed_shape.status_code == 422
+    assert "sk-ant-api03-new" not in changed_shape.text
 
     # A credential that cannot be persisted disables the account loudly.
     res = client.put(
         f"/api/accounts/{account['id']}/credential",
-        json={"credential": {"api_key": "sk-ant-api03-y", "refresh": "r"}},
+        json={"credential": {"api_key": "sk-ant-api03-y"}},
         headers=worker,
     )
     assert res.status_code == 503
@@ -619,9 +808,10 @@ def test_gitea_service_credential_is_sops_backed_and_leased_only_to_repository_r
     assert token not in created.text
     assert token not in client.get("/api/accounts", headers=ADMIN).text
     worker = register(client)
+    task = claimed_task(client, worker)
     leased = client.post(
         "/api/accounts/lease",
-        json={"providers": ["gitea"], "role": "repository"},
+        json=lease_payload(task, ["gitea"], role="repository"),
         headers=worker,
     )
     assert leased.status_code == 200
@@ -650,9 +840,20 @@ async def test_one_account_held_in_both_roles_exhausts_per_role(
     only = await add(db, store, "claude-1", "anthropic")
     await lease_role(db, store, "engine", ["anthropic"])
     await lease_role(db, store, "executor", ["anthropic"])
+    task_id, attempt = await claim_task(db, A)
     async with db.write() as tx:
         result = await accounts.exhausted(
-            tx, A, only, ExhaustedReport(reason="limit", role="executor"), store
+            tx,
+            A,
+            only,
+            ExhaustedReport(
+                reason="limit",
+                role="executor",
+                runtime_providers=["anthropic"],
+                task_id=task_id,
+                attempt=attempt,
+            ),
+            store,
         )
     assert result.lease is None
     assert await active(db) == [("engine", only)]
@@ -687,14 +888,17 @@ def test_rest_lease_is_global_and_the_retired_provider_list_restricts_nothing(
         )
         assert res.status_code == 201
     worker = register(client)
+    task = claimed_task(client, worker)
     # The retired `providers` list is accepted and ignored.
     legacy = client.post(
-        "/api/accounts/lease", json={"providers": ["zeta"]}, headers=worker
+        "/api/accounts/lease",
+        json=lease_payload(task, ["acme", "zeta"], providers=["zeta"]),
+        headers=worker,
     )
     assert legacy.status_code == 200 and legacy.json()["name"] == "big"
     # `runtime_providers` is capability: the best account the runtime can apply.
     capable = client.post(
-        "/api/accounts/lease", json={"runtime_providers": ["zeta"]}, headers=worker
+        "/api/accounts/lease", json=lease_payload(task, ["zeta"]), headers=worker
     )
     assert capable.status_code == 200 and capable.json()["name"] == "small"
     # The credential rides only in the lease response, never in a listing.
@@ -702,7 +906,7 @@ def test_rest_lease_is_global_and_the_retired_provider_list_restricts_nothing(
     assert "key-big" not in listing.text and "key-small" not in listing.text
     # No account is usable for a runtime that supports none of them.
     none = client.post(
-        "/api/accounts/lease", json={"runtime_providers": ["nope"]}, headers=worker
+        "/api/accounts/lease", json=lease_payload(task, ["nope"]), headers=worker
     )
     assert none.status_code == 409 and none.json()["detail"]["code"] == "no_account"
 
@@ -757,7 +961,10 @@ def test_delete_refuses_active_lease_then_succeeds_once_released(
     account = _create(client, "busy")
     url = f"/api/accounts/{account['id']}"
     worker = register(client)
-    client.post("/api/accounts/lease", json={"providers": ["acme"]}, headers=worker)
+    task = claimed_task(client, worker)
+    client.post(
+        "/api/accounts/lease", json=lease_payload(task, ["acme"]), headers=worker
+    )
     res = client.delete(url, params={"confirm_name": "busy"}, headers=ADMIN)
     assert (res.status_code, res.json()["detail"]["code"]) == (409, "account_in_use")
     assert client.get(url, headers=ADMIN).json()["active_leases"] == 1
@@ -773,8 +980,9 @@ def test_delete_removes_usage_leases_and_secret_but_not_other_accounts(
 ) -> None:
     gone, kept = _create(client, "gone"), _create(client, "kept")
     worker = register(client)
+    task = claimed_task(client, worker)
     leased = client.post(
-        "/api/accounts/lease", json={"providers": ["acme"]}, headers=worker
+        "/api/accounts/lease", json=lease_payload(task, ["acme"]), headers=worker
     ).json()
     client.post(
         f"/api/accounts/{leased['account_id']}/usage",
@@ -892,8 +1100,9 @@ def test_delete_keeps_a_secret_another_account_still_references(
     )
     assert res.status_code == 204 and secrets.get(name) is not None
     worker = register(client)
+    task = claimed_task(client, worker)
     leased = client.post(
-        "/api/accounts/lease", json={"providers": ["acme"]}, headers=worker
+        "/api/accounts/lease", json=lease_payload(task, ["acme"]), headers=worker
     ).json()
     assert leased["account_id"] == sibling["id"] and leased["credential"]
     client.post("/api/accounts/release", headers=worker)
@@ -956,8 +1165,23 @@ async def test_claim_is_held_while_all_accounts_are_exhausted_then_resumes(
     db: Database, store: MemorySecretStore, clock: FakeClock
 ) -> None:
     c1 = await add(db, store, "claude-1", "anthropic")
-    await lease(db, store)
-    await exhaust(db, store, c1, until=clock.now + timedelta(minutes=30))
+    # Fence claim only for lease+exhaust; cancel it so recovery cannot reclaim it
+    # ahead of the held ready task (which must stay attempt 0 until first claim).
+    setup_id, setup_attempt = await claim_task(db)
+    async with db.write() as tx:
+        await accounts.lease(
+            tx, A, ["anthropic"], store, task_id=setup_id, attempt=setup_attempt
+        )
+    await exhaust(
+        db,
+        store,
+        c1,
+        until=clock.now + timedelta(minutes=30),
+        task_id=setup_id,
+        attempt=setup_attempt,
+    )
+    async with db.write() as tx:
+        await tasks.cancel(tx, setup_id, "admin:test")
     task_id = await _make_ready(db)
 
     assert await _claim(db) is None

@@ -196,21 +196,21 @@ worker provider list (the retired `account_providers` / `executor_providers` /
 `ARGUS_ACCOUNT_PROVIDERS` / `ARGUS_EXECUTOR_PROVIDERS` are ignored, see
 [global account selection](../../docs/specs/account-selection.spec.md)):
 
-1. Before claiming work it leases an account (`POST /api/accounts/lease`, stating
-   only the providers this installed code can apply) and
+1. After claiming a task it leases an account (`POST /api/accounts/lease`, bound
+   to that task id and attempt, and stating only the providers this installed code can apply) and
    writes the credential into OneCLI: a secret `argus-<agent group id>` (with
    `-openai` / `-cursor…` suffixes for other providers) for the provider's host, assigned to that group's OneCLI agent in **selective** mode
    so it is the only secret the agent can use. The credential reaches the vault
    from the host process; the agent container never sees it.
 2. When a run is blocked by the provider (the agent's failure notice reads
    `Rate limit …` / `Out of credits`, with the reset time when given), it reports
-   the account exhausted. Argus returns the next best usable account (any provider, by priority),
-   the channel `PATCH`es the vault secret's value, and re-sends the task to the
-   agent. A switch needs no restart: OneCLI applies a changed value to the next
-   request.
-   While idle the channel re-leases at most once a minute, so a recovered or
-   higher-priority account is adopted between tasks; running work is never
-   rotated.
+   the account exhausted. Argus marks it and returns next-account metadata only.
+   The channel obtains the credential through the task-bound lease endpoint,
+   `PATCH`es the vault secret's value, and re-sends the task to the agent. A
+   switch needs no restart: OneCLI applies a changed value to the next
+   request. The channel re-evaluates accounts only for a claimed task (at most
+   once a minute), so recovered or higher-priority accounts are considered at a
+   safe point; running work is never rotated.
    For a Claude subscription account, Claude Code withholds
    `CLAUDE_CODE_OAUTH_TOKEN` from its Bash tool, so `install.sh` also mounts a
    read-only gateway stub (`/home/node/.config/argus/claude-gateway.json`, sentinel

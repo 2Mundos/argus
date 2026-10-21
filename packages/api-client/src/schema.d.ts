@@ -177,10 +177,10 @@ export interface paths {
         put?: never;
         /**
          * Lease Account
-         * @description Lease the best usable account globally (priority, then least leased), with
-         *     its credential. `runtime_providers` only states what the runtime can apply.
-         *     One active lease per role; it ends when released or replaced.
-         *     `409 no_account` when none is usable.
+         *     Lease the best usable account and deliver its credential to a claimed task.
+         *     `runtime_providers` is required and states what the runtime can apply. The
+         *     caller must hold the live claim identified by `task_id` and `attempt`. One
+         *     active lease per role; `409 no_account` when none is usable.
          */
         post: operations["lease_account_api_accounts_lease_post"];
         delete?: never;
@@ -292,9 +292,10 @@ export interface paths {
         put?: never;
         /**
          * Report Exhausted
-         * @description Report that the leased account hit a quota. Returns the next account to use
-         *     (best remaining by priority, any provider), or none: then the given task is blocked as
-         *     `awaiting_quota` and returns to ready when an account frees up.
+         * @description Mark a leased account exhausted and return fallback metadata only.
+         *     The caller must hold the live claim identified by `task_id` and `attempt`;
+         *     `runtime_providers` controls which fallback metadata may be returned. Obtain
+         *     any next credential through `/accounts/lease`.
          */
         post: operations["report_exhausted_api_accounts__account_id__exhausted_post"];
         delete?: never;
@@ -2379,7 +2380,7 @@ export interface components {
              */
             capabilities?: string[];
             /** Runtime Providers */
-            runtime_providers?: string[] | null;
+            runtime_providers: string[];
         };
         /** AwaitingQuotaResult */
         AwaitingQuotaResult: {
@@ -3117,10 +3118,15 @@ export interface components {
             /** Timed Out */
             timed_out: boolean;
         };
-        /** ExhaustedReport */
+        /**
+         * ExhaustedReport
+         * @description Mark a held account exhausted for the caller's live task claim.
+         *     `runtime_providers` declares which fallback account metadata the runtime can
+         *     use. The response never carries the next credential.
+         */
         ExhaustedReport: {
             /** Attempt */
-            attempt?: number | null;
+            attempt: number;
             /**
              * Reason
              * @default
@@ -3133,9 +3139,9 @@ export interface components {
              */
             role?: "engine" | "executor" | "repository";
             /** Runtime Providers */
-            runtime_providers?: string[] | null;
+            runtime_providers: string[];
             /** Task Id */
-            task_id?: string | null;
+            task_id: string;
             /** Until */
             until?: string | null;
         };
@@ -3217,7 +3223,13 @@ export interface components {
         FallbackResult: {
             /** Earliest Reset */
             earliest_reset?: string | null;
-            lease: components["schemas"]["AccountLease"] | null;
+            lease?: components["schemas"]["AccountLease"] | null;
+            /** Next Account Id */
+            next_account_id?: string | null;
+            /** Next Account Name */
+            next_account_name?: string | null;
+            /** Next Provider */
+            next_provider?: string | null;
             /**
              * Task Blocked
              * @default false
@@ -3598,6 +3610,8 @@ export interface components {
          *     allowlist restricts selection.
          */
         LeaseRequest: {
+            /** Attempt */
+            attempt: number;
             /**
              * Reuse Held
              * @default false
@@ -3610,7 +3624,9 @@ export interface components {
              */
             role?: "engine" | "executor" | "repository";
             /** Runtime Providers */
-            runtime_providers?: string[] | null;
+            runtime_providers: string[];
+            /** Task Id */
+            task_id: string;
         };
         /** LocalAttempt */
         LocalAttempt: {

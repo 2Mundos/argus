@@ -57,9 +57,19 @@ async def add(db: Database, store: MemorySecretStore, name: str, **kw) -> str:
     return account.id
 
 
-async def lease(db: Database, store, agent=A):
+async def lease(db: Database, store, agent=A, *, task=None):
+    """Lease for `agent`. Pass `task` to reuse one claim; otherwise create one."""
+    if task is None:
+        task = await new_task(db, agent)
     async with db.write() as tx:
-        return await accounts.lease(tx, agent, None, store)
+        return await accounts.lease(
+            tx,
+            agent,
+            ["anthropic", "openai", "cursor"],
+            store,
+            task_id=task.id,
+            attempt=task.attempt,
+        )
 
 
 async def new_task(db: Database, agent=A, **kw):
@@ -110,9 +120,19 @@ async def test_exhausted_top_account_is_skipped_and_costs_no_attempt(
     a = await add(db, store, "acct-a", priority=100)
     await add(db, store, "acct-b", priority=90)
     held = await lease(db, store)
+    task = await new_task(db, A)
     async with db.write() as tx:
         await accounts.exhausted(
-            tx, A, a, ExhaustedReport(until=clock.now + timedelta(hours=4)), store
+            tx,
+            A,
+            a,
+            ExhaustedReport(
+                until=clock.now + timedelta(hours=4),
+                runtime_providers=["anthropic"],
+                task_id=task.id,
+                attempt=task.attempt,
+            ),
+            store,
         )
     assert (await lease(db, store, B)).name == "acct-b"  # A is out of rotation
     task = await new_task(db, B)
@@ -126,9 +146,19 @@ async def test_stale_exhausted_mark_past_reset_does_not_demote(
     a = await add(db, store, "acct-a", priority=100)
     await add(db, store, "acct-b", priority=90)
     await lease(db, store)
+    task = await new_task(db, A)
     async with db.write() as tx:
         await accounts.exhausted(
-            tx, A, a, ExhaustedReport(until=clock.now + timedelta(hours=1)), store
+            tx,
+            A,
+            a,
+            ExhaustedReport(
+                until=clock.now + timedelta(hours=1),
+                runtime_providers=["anthropic"],
+                task_id=task.id,
+                attempt=task.attempt,
+            ),
+            store,
         )
     clock.advance(3601)  # reaper has not run: the mark is stale
     assert (await lease(db, store, B)).name == "acct-a"  # recovered on lease
@@ -288,17 +318,27 @@ async def test_exhausted_report_is_fenced_and_repeat_is_refused(
     await add(db, store, "acct-b", priority=90)
     await lease(db, store)
     task = await new_task(db)
-    report = ExhaustedReport(task_id=task.id, attempt=task.attempt + 1, reason=QUOTA)
+    report = ExhaustedReport(
+        task_id=task.id,
+        attempt=task.attempt + 1,
+        reason=QUOTA,
+        runtime_providers=["anthropic"],
+    )
     async with db.write() as tx:
         with pytest.raises(LeaseConflictError):
             await accounts.exhausted(tx, A, a, report, store)
     async with db.read() as conn:
         assert (await accounts.get_account(conn, a, clock.now)).state == "available"
 
-    report = ExhaustedReport(task_id=task.id, attempt=task.attempt, reason=QUOTA)
+    report = ExhaustedReport(
+        task_id=task.id,
+        attempt=task.attempt,
+        reason=QUOTA,
+        runtime_providers=["anthropic"],
+    )
     async with db.write() as tx:
         result = await accounts.exhausted(tx, A, a, report, store)
-    assert result.lease is not None and result.lease.name == "acct-b"
+    assert result.lease is None and result.next_account_name == "acct-b"
     async with db.write() as tx:
         with pytest.raises(ConflictError) as repeat:
             await accounts.exhausted(tx, A, a, report, store)
@@ -317,12 +357,28 @@ async def test_all_exhausted_awaits_quota_then_returns_to_ready(
 ) -> None:
     b = await add(db, store, "acct-b", priority=90)
     soon = clock.now + timedelta(hours=2)
-    await lease(db, store, B)
+    task_b = await new_task(db, B)
+    await lease(db, store, B, task=task_b)
     async with db.write() as tx:
-        await accounts.exhausted(tx, B, b, ExhaustedReport(until=soon), store)
+        await accounts.exhausted(
+            tx,
+            B,
+            b,
+            ExhaustedReport(
+                until=soon,
+                runtime_providers=["anthropic"],
+                task_id=task_b.id,
+                attempt=task_b.attempt,
+            ),
+            store,
+        )
+    # Adding acct-a would unblock task_b into ready; cancel the fence so the
+    # subsequent claim is a fresh attempt-1 task, not a reclaim of task_b.
+    async with db.write() as tx:
+        await tasks.cancel(tx, task_b.id, "admin:test")
     await add(db, store, "acct-a", priority=100)
-    await lease(db, store)
     task = await new_task(db)
+    await lease(db, store, task=task)
 
     after = await fail(db, store, task)  # A's reset is 05:00 (QUOTA)
     assert (after.state, after.block_reason) == (S.BLOCKED, "awaiting_quota")
@@ -350,7 +406,13 @@ async def test_exhausted_endpoint_path_also_awaits_quota_with_refill(
             tx,
             A,
             a,
-            ExhaustedReport(until=reset, reason=QUOTA, task_id=task.id, attempt=1),
+            ExhaustedReport(
+                until=reset,
+                reason=QUOTA,
+                task_id=task.id,
+                attempt=task.attempt,
+                runtime_providers=["anthropic"],
+            ),
             store,
         )
     assert result.lease is None and result.task_blocked
@@ -371,9 +433,20 @@ async def test_legacy_no_account_rows_are_still_read_and_released(
     task = await new_task(db)
     async with db.write() as tx:
         await accounts.exhausted(
-            tx, A, a, ExhaustedReport(until=clock.now + timedelta(minutes=5)), store
+            tx,
+            A,
+            a,
+            ExhaustedReport(
+                until=clock.now + timedelta(minutes=5),
+                runtime_providers=["anthropic"],
+                task_id=task.id,
+                attempt=task.attempt,
+            ),
+            store,
         )
-        await tasks.block(tx, A, task.id, 1, "no_account")
+        await tx.conn.execute(
+            "UPDATE tasks SET block_reason = 'no_account' WHERE id = ?", (task.id,)
+        )
     old = await get(db, task.id)
     assert old.refill_at == clock.now + timedelta(minutes=5)
     clock.advance(301)
@@ -388,8 +461,20 @@ async def test_unclaimed_ready_task_is_parked_when_no_account_is_leasable(
     a = await add(db, store, "acct-a")
     await lease(db, store, B)
     reset = clock.now + timedelta(hours=1)
+    task_b = await new_task(db, B)
     async with db.write() as tx:
-        await accounts.exhausted(tx, B, a, ExhaustedReport(until=reset), store)
+        await accounts.exhausted(
+            tx,
+            B,
+            a,
+            ExhaustedReport(
+                until=reset,
+                runtime_providers=["anthropic"],
+                task_id=task_b.id,
+                attempt=task_b.attempt,
+            ),
+            store,
+        )
     async with db.write() as tx:
         await tasks.create_task(
             tx, TaskCreate(project="global", title="t"), "admin:test"
@@ -399,10 +484,10 @@ async def test_unclaimed_ready_task_is_parked_when_no_account_is_leasable(
             TaskCreate(project="global", title="u", required_capabilities=["gpu"]),
             "admin:test",
         )
-    with pytest.raises(NoAccountError):
-        await lease(db, store)
     async with db.write() as tx:
-        ids = await accounts.mark_awaiting_quota(tx, A, [], None)
+        ids = await accounts.mark_awaiting_quota(
+            tx, A, [], ["anthropic", "openai", "cursor"]
+        )
     assert len(ids) == 1 and ids[0] != other.id  # only what the agent could claim
     parked = await get(db, ids[0])
     assert (parked.state, parked.block_reason, parked.attempt, parked.failures) == (
@@ -428,7 +513,9 @@ async def test_parking_is_refused_while_an_account_is_usable(
         )
     async with db.write() as tx:
         with pytest.raises(ConflictError) as err:
-            await accounts.mark_awaiting_quota(tx, A, [], None)
+            await accounts.mark_awaiting_quota(
+                tx, A, [], ["anthropic", "openai", "cursor"]
+            )
     assert err.value.code == "account_available"
 
 
@@ -520,11 +607,17 @@ def test_failover_over_http(client: TestClient) -> None:
             },
         )
         assert res.status_code == 201
-    assert client.post("/api/accounts/lease", json={}, headers=worker).json()[
-        "name"
-    ] == ("acct-a")
     client.post("/api/tasks", json={"project": "global", "title": "x"})
     task = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    assert client.post(
+        "/api/accounts/lease",
+        json={
+            "runtime_providers": ["anthropic"],
+            "task_id": task["id"],
+            "attempt": task["attempt"],
+        },
+        headers=worker,
+    ).json()["name"] == ("acct-a")
 
     res = client.post(
         f"/api/tasks/{task['id']}/fail",
@@ -557,21 +650,126 @@ def test_awaiting_quota_endpoint_over_http(client: TestClient) -> None:
         },
     ).json()
     task = client.post("/api/tasks", json={"project": "global", "title": "x"}).json()
-    parked = client.post("/api/accounts/awaiting-quota", json={}, headers=worker)
+    parked = client.post(
+        "/api/accounts/awaiting-quota",
+        json={"runtime_providers": ["anthropic"]},
+        headers=worker,
+    )
     assert parked.status_code == 409 and parked.json()["detail"]["code"] == (
         "account_available"
     )
-    client.post("/api/accounts/lease", json={}, headers=worker)
+    task = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    client.post(
+        "/api/accounts/lease",
+        json={
+            "runtime_providers": ["anthropic"],
+            "task_id": task["id"],
+            "attempt": task["attempt"],
+        },
+        headers=worker,
+    )
+    waiting = client.post(
+        "/api/tasks", json={"project": "global", "title": "waiting"}
+    ).json()
     reset = "2099-01-01T00:00:00Z"
     client.post(
         f"/api/accounts/{account['id']}/exhausted",
-        json={"until": reset},
+        json={
+            "until": reset,
+            "runtime_providers": ["anthropic"],
+            "task_id": task["id"],
+            "attempt": task["attempt"],
+        },
         headers=worker,
     )
-    parked = client.post("/api/accounts/awaiting-quota", json={}, headers=worker)
+    parked = client.post(
+        "/api/accounts/awaiting-quota",
+        json={"runtime_providers": ["anthropic"]},
+        headers=worker,
+    )
     assert parked.status_code == 200
-    assert parked.json()["task_ids"] == [task["id"]]
+    assert parked.json()["task_ids"] == [waiting["id"]]
     assert parked.json()["refill_at"].startswith("2099-01-01T00:00:00")
     got = client.get(f"/api/tasks/{task['id']}").json()
     assert (got["state"], got["block_reason"]) == ("blocked", "awaiting_quota")
     assert got["refill_at"].startswith("2099-01-01T00:00:00")
+
+
+def test_exhausted_returns_metadata_only_and_honors_runtime_provider_filter(
+    client: TestClient,
+) -> None:
+    worker = register(client)
+    first = client.post(
+        "/api/accounts",
+        json={
+            "name": "first",
+            "provider": "anthropic",
+            "priority": 10,
+            "credential": {"api_key": "sk-ant-api03-first"},
+        },
+    ).json()
+    client.post(
+        "/api/accounts",
+        json={
+            "name": "other-provider",
+            "provider": "openai",
+            "credential": {"api_key": "opaque-openai"},
+        },
+    )
+    client.post(
+        "/api/accounts",
+        json={
+            "name": "anthropic-fallback",
+            "provider": "anthropic",
+            "credential": {"api_key": "sk-ant-api03-next"},
+        },
+    )
+    client.post("/api/tasks", json={"project": "global", "title": "quota"})
+    task = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    leased = client.post(
+        "/api/accounts/lease",
+        json={
+            "runtime_providers": ["anthropic"],
+            "task_id": task["id"],
+            "attempt": task["attempt"],
+        },
+        headers=worker,
+    ).json()
+    assert leased["account_id"] == first["id"]
+    no_claim = client.post(
+        f"/api/accounts/{first['id']}/exhausted",
+        json={"runtime_providers": ["anthropic"]},
+        headers=worker,
+    )
+    assert no_claim.status_code == 422 and "credential" not in no_claim.text
+    undeclared = client.post(
+        f"/api/accounts/{first['id']}/exhausted",
+        json={
+            "runtime_providers": ["openai"],
+            "task_id": task["id"],
+            "attempt": task["attempt"],
+        },
+        headers=worker,
+    )
+    assert undeclared.status_code == 409
+    admin = {"Authorization": "Bearer test-admin-token-" + "x" * 32}
+    assert (
+        client.get(f"/api/accounts/{first['id']}", headers=admin).json()["state"]
+        == "available"
+    )
+    result = client.post(
+        f"/api/accounts/{first['id']}/exhausted",
+        json={
+            "runtime_providers": ["anthropic"],
+            "task_id": task["id"],
+            "attempt": task["attempt"],
+            "reason": "limit",
+        },
+        headers=worker,
+    )
+    assert result.status_code == 200
+    body = result.json()
+    assert body["next_provider"] == "anthropic"
+    assert body["next_account_name"] == "anthropic-fallback"
+    assert "credential" not in body and body["lease"] is None
+    assert "sk-ant-api03-next" not in result.text and "opaque-openai" not in result.text

@@ -21,14 +21,15 @@ def role_accepts(
     """May an account of `provider` be leased for `role`? Repository accounts serve
     only the repository role and never become model accounts; a harness cannot run
     on an executor-only provider. `runtime_providers` is what the leasing runtime
-    reports it can technically apply (None: no statement), never a preference."""
+    reports it can technically apply. Credential-bearing leases require an
+    explicit non-empty provider list."""
+    if runtime_providers is None or provider not in runtime_providers:
+        return False
     if role == "repository":
         return provider == REPOSITORY_PROVIDER
     if provider == REPOSITORY_PROVIDER:
         return False
-    if role == "engine" and provider in EXECUTOR_ONLY:
-        return False
-    return runtime_providers is None or provider in runtime_providers
+    return not (role == "engine" and provider in EXECUTOR_ONLY)
 
 
 class AccountKind(StrEnum):
@@ -186,9 +187,9 @@ class LeaseRequest(BaseModel):
     The retired `providers` list is accepted and ignored: no caller-side order or
     allowlist restricts selection."""
 
-    # Providers the runtime can technically apply (it knows how to inject them);
-    # absent means no statement. Capability, not preference: it never orders.
-    runtime_providers: list[str] | None = Field(default=None, min_length=1)
+    # Providers the runtime can technically apply (it knows how to inject them).
+    # Required for credential delivery; capability, not preference, so it never orders.
+    runtime_providers: list[str] = Field(min_length=1)
     # `engine`: the account the worker's harness runs on; `executor`: the one a
     # CLI it delegates to uses. One active lease per role.
     role: LeaseRole = "engine"
@@ -197,6 +198,9 @@ class LeaseRequest(BaseModel):
     # CLI of the same provider runs on the engine's own credential). Otherwise the
     # executor lease is an ordinary separate one.
     reuse_held: bool = False
+    # Credential delivery is bound to the active claim that needs it.
+    task_id: str
+    attempt: int = Field(ge=1)
 
 
 class AccountLease(BaseModel):
@@ -212,21 +216,27 @@ class AccountLease(BaseModel):
 
 
 class ExhaustedReport(BaseModel):
+    """Mark a held account exhausted for the caller's live task claim.
+
+    `runtime_providers` declares which fallback account metadata the runtime can
+    use. The response never carries the next credential.
+    """
+
     until: datetime | None = None  # the provider's reset time, if known
     reason: str = Field(default="", max_length=2000)
-    runtime_providers: list[str] | None = Field(default=None, min_length=1)
+    runtime_providers: list[str] = Field(min_length=1)
     # Which of the agent's leases hit the limit (it may hold one account twice).
     role: LeaseRole = "engine"
     # The task the agent was working on: blocked as `awaiting_quota` if nothing is left.
-    task_id: str | None = None
-    attempt: int | None = None
+    task_id: str
+    attempt: int = Field(ge=1)
 
 
 class AwaitingQuotaRequest(BaseModel):
     """An agent with no usable account asks for the work it cannot claim to wait."""
 
     capabilities: list[str] = []
-    runtime_providers: list[str] | None = Field(default=None, min_length=1)
+    runtime_providers: list[str] = Field(min_length=1)
 
 
 class AwaitingQuotaResult(BaseModel):
@@ -235,7 +245,10 @@ class AwaitingQuotaResult(BaseModel):
 
 
 class FallbackResult(BaseModel):
-    lease: AccountLease | None
+    lease: AccountLease | None = None
+    next_account_id: str | None = None
+    next_account_name: str | None = None
+    next_provider: str | None = None
     earliest_reset: datetime | None = None
     task_blocked: bool = False
 
