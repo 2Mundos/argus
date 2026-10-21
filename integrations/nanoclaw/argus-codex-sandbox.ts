@@ -1,11 +1,15 @@
 /**
- * Per-worker opt-in to the Codex sandbox profile (docs/specs/codex-sandbox-profile.spec.md).
+ * Codex sandbox profile for the execution pool (docs/specs/codex-sandbox-profile.spec.md).
  *
  * Installed by integrations/nanoclaw/install.sh into src/drivers/. Everything here
  * runs in the NanoClaw HOST process, never in an agent container:
  *
- *   pool env ARGUS_CODEX_SANDBOX_PROFILE=codex-bwrap   (the operator, per pool)
- *     -> host process.env -> composeSessionSpec (only provider 'codex', only the
+ *   Default: ARGUS_CODEX_SANDBOX_PROFILE unset/blank → codex-bwrap (on).
+ *   Explicit off: ARGUS_CODEX_SANDBOX_PROFILE=off (escape hatch when architecture
+ *   cannot enforce AppArmor/seccomp, e.g. documented inner-daemon setups).
+ *   Explicit on: ARGUS_CODEX_SANDBOX_PROFILE=codex-bwrap
+ *
+ *   host process.env -> composeSessionSpec (only provider 'codex', only the
  *        agent container) -> ContainerSpec.securityProfile (a closed token)
  *     -> DockerSessionDriver -> `--security-opt apparmor=…` + `--security-opt seccomp=…`
  *
@@ -21,6 +25,8 @@ import { deniedByPolicy, specInvalid } from "./types.js";
 
 export const CODEX_SANDBOX_ENV = "ARGUS_CODEX_SANDBOX_PROFILE";
 export const CODEX_SANDBOX_PROFILE = "codex-bwrap" as const;
+/** Explicit escape hatch: disable the default-on profile when architecture requires it. */
+export const CODEX_SANDBOX_OFF = "off" as const;
 export type SecurityProfileId = typeof CODEX_SANDBOX_PROFILE;
 
 /** The name `apparmor_parser` loads from integrations/nanoclaw/security/argus-codex-worker.apparmor. */
@@ -41,28 +47,29 @@ const DENYING_DEFAULT_ACTIONS = new Set([
 ]);
 
 /**
- * The profile this worker opted into, or undefined when it did not (the default).
- * The only accepted value is the exact token; anything else refuses, so a typo can
- * never mean "off" or "on with something else".
+ * The profile for this host, or undefined when explicitly disabled (`off`).
+ * Default (unset/blank) is `codex-bwrap`. Only `codex-bwrap` and `off` are accepted;
+ * anything else refuses, so a typo can never mean a silent change of policy.
  */
 export function codexSandboxProfileFromEnv(env: NodeJS.ProcessEnv): SecurityProfileId | undefined {
   const raw = env[CODEX_SANDBOX_ENV]?.trim();
-  if (!raw) return undefined;
-  if (raw !== CODEX_SANDBOX_PROFILE) {
+  const value = raw || CODEX_SANDBOX_PROFILE; // default on
+  if (value === CODEX_SANDBOX_OFF) return undefined;
+  if (value !== CODEX_SANDBOX_PROFILE) {
     throw specInvalid(
-      `${CODEX_SANDBOX_ENV}='${raw}' is not a known profile (only '${CODEX_SANDBOX_PROFILE}'); unset it to keep the default`,
+      `${CODEX_SANDBOX_ENV}='${raw}' is not a known profile (only '${CODEX_SANDBOX_PROFILE}' or '${CODEX_SANDBOX_OFF}'); unset for default '${CODEX_SANDBOX_PROFILE}'`,
     );
   }
   if (env.ARGUS_NANOCLAW_INNER_DOCKER === "1") {
     // The profile lives in the kernel of the node's Docker daemon; a private daemon inside a sandbox runtime cannot load or enforce it.
     throw specInvalid(
-      `${CODEX_SANDBOX_ENV} is not supported with a private inner Docker daemon (nanoclaw-sandbox)`,
+      `${CODEX_SANDBOX_ENV}=${CODEX_SANDBOX_PROFILE} is not supported with a private inner Docker daemon (nanoclaw-sandbox); set ${CODEX_SANDBOX_ENV}=${CODEX_SANDBOX_OFF}`,
     );
   }
-  return raw;
+  return value;
 }
 
-/** The profile for a session: the opt-in applies to the native Codex provider only. */
+/** The profile for a session: applies to the native Codex provider only. */
 export function securityProfileForProvider(
   provider: string,
   env: NodeJS.ProcessEnv,

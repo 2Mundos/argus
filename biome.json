@@ -5,6 +5,7 @@
     "includes": [
       "**",
       "!**/.pnpm-store/**",
+      "!**/.argus-delegate-runtime/**",
       "!pnpm-lock.yaml",
       "!uv.lock",
       "!packages/api-client/openapi.json",

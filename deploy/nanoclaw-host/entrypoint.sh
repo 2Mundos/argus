@@ -4,7 +4,8 @@
 # Inputs (set by Argus from the pool's `nanoclaw` options and the plain-runtime
 # contract): ARGUS_NANOCLAW_INSTALL_DIR, ARGUS_NANOCLAW_INSTANCES_ROOT,
 # ARGUS_INSTANCE_ID, ARGUS_URL, ARGUS_BOOTSTRAP_TOKENS, ARGUS_AGENT_NAME,
-# CONTAINER_IMAGE, ONECLI_URL. Optional (the pool's `env`): ARGUS_CODEX_SANDBOX_PROFILE=codex-bwrap.
+# CONTAINER_IMAGE, ONECLI_URL. Codex sandbox (pool `env`): ARGUS_CODEX_SANDBOX_PROFILE
+# defaults to codex-bwrap; set to `off` only when architecture cannot enforce it.
 set -eu
 
 INSTALL="${ARGUS_NANOCLAW_INSTALL_DIR:?}"
@@ -19,22 +20,28 @@ WORK="${ARGUS_NANOCLAW_INSTANCES_ROOT:?}/${ARGUS_INSTANCE_ID:?}"
   exit 78
 }
 
-# Optional per-pool Codex sandbox profile (docs/specs/codex-sandbox-profile.spec.md):
-# refuse to boot on a value the driver would refuse at spawn, instead of failing task by task.
-if [ -n "${ARGUS_CODEX_SANDBOX_PROFILE:-}" ]; then
-  [ "$ARGUS_CODEX_SANDBOX_PROFILE" = "codex-bwrap" ] || {
-    echo "ARGUS_CODEX_SANDBOX_PROFILE must be unset or codex-bwrap, got '$ARGUS_CODEX_SANDBOX_PROFILE'" >&2
+# Codex sandbox profile (docs/specs/codex-sandbox-profile.spec.md): default on
+# (unset/blank → codex-bwrap). Explicit `off` disables. Refuse unknown values and
+# refuse the profile with a private inner Docker daemon.
+_CODEX_SANDBOX_PROFILE="${ARGUS_CODEX_SANDBOX_PROFILE:-codex-bwrap}"
+case "$_CODEX_SANDBOX_PROFILE" in
+  off) ;;
+  codex-bwrap)
+    [ "${ARGUS_NANOCLAW_INNER_DOCKER:-}" != "1" ] || {
+      echo "ARGUS_CODEX_SANDBOX_PROFILE=codex-bwrap is not supported with a private inner Docker daemon (nanoclaw-sandbox); set ARGUS_CODEX_SANDBOX_PROFILE=off" >&2
+      exit 78
+    }
+    [ -f "$INSTALL/security/argus-codex-worker.seccomp.json" ] || {
+      echo "no seccomp profile in $INSTALL/security (run integrations/nanoclaw/install.sh)" >&2
+      exit 78
+    }
+    ;;
+  *)
+    echo "ARGUS_CODEX_SANDBOX_PROFILE must be unset (default codex-bwrap), codex-bwrap, or off; got '$_CODEX_SANDBOX_PROFILE'" >&2
     exit 78
-  }
-  [ "${ARGUS_NANOCLAW_INNER_DOCKER:-}" != "1" ] || {
-    echo "ARGUS_CODEX_SANDBOX_PROFILE is not supported with a private inner Docker daemon (nanoclaw-sandbox)" >&2
-    exit 78
-  }
-  [ -f "$INSTALL/security/argus-codex-worker.seccomp.json" ] || {
-    echo "no seccomp profile in $INSTALL/security (run integrations/nanoclaw/install.sh)" >&2
-    exit 78
-  }
-fi
+    ;;
+esac
+unset _CODEX_SANDBOX_PROFILE
 
 # NanoClaw roots everything at its working directory: state is per instance,
 # code and the files it bind-mounts into agents are shared from the install.

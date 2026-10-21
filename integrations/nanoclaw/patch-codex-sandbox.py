@@ -243,8 +243,8 @@ IMP_V1 = (
     "import { securityProfileForProvider } from './drivers/argus-codex-sandbox.js';"
 )
 IMP_V2 = "import { assertDriverSupportsSecurityProfiles, securityProfileForProvider } from './drivers/argus-codex-sandbox.js';"
-COMPOSE = """  // Per-worker opt-in (ARGUS_CODEX_SANDBOX_PROFILE on this host's env): the native Codex
-  // provider's AGENT container only, never an auxiliary one. Throws on an unknown value.
+COMPOSE = """  // Codex sandbox (ARGUS_CODEX_SANDBOX_PROFILE; default codex-bwrap, off to disable):
+  // native Codex provider's AGENT container only, never an auxiliary one. Throws on unknown values.
   const securityProfile = securityProfileForProvider(
     resolveProviderName(session.agent_provider, containerConfig.provider),
     process.env,
