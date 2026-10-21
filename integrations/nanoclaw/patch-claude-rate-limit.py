@@ -162,7 +162,7 @@ def main(root: Path) -> None:
                 "import",
                 POLL_IMPORT,
                 POLL_IMPORTS,
-                # Before #74; and the duplicate a #74 upgrade of that left (no earlier text known).
+                # The duplicate a #74-era upgrade left (it lacked these earlier texts); before #74.
                 (POLL_IMPORTS + CLAUDE_IMPORT, POLL_IMPORT + CLAUDE_IMPORT),
             ),
             (
