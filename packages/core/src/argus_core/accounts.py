@@ -360,6 +360,22 @@ class ExhaustedReport(BaseModel):
     # The task the agent was working on: blocked as `awaiting_quota` if nothing is left.
     task_id: str
     attempt: int = Field(ge=1)
+    # Provenance of the report (account selection 3.6). All optional: omitted, the
+    # server classifies `reason` itself.
+    source: Literal["structured", "notice", "log"] | None = None
+    reason_code: Literal["quota_exhausted", "auth_expired"] | None = None
+    reset_status: Literal["stated", "ambiguous", "absent"] | None = None
+    reset_text: str | None = Field(default=None, max_length=120)  # provider's words
+
+    @model_validator(mode="after")
+    def _reset_status_matches_until(self) -> "ExhaustedReport":
+        """`stated` is a zoned time; `absent` and `ambiguous` carry none."""
+        if self.reset_status == "stated":
+            if self.until is None or self.until.tzinfo is None:
+                raise ValueError("reset_status 'stated' needs a time with a zone")
+        elif self.reset_status is not None and self.until is not None:
+            raise ValueError(f"reset_status {self.reset_status!r} cannot carry until")
+        return self
 
 
 class AwaitingQuotaRequest(BaseModel):

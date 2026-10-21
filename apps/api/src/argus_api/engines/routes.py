@@ -1,3 +1,4 @@
+import contextlib
 from typing import Any, Literal
 
 from argus_core.accounts import AccountState
@@ -29,7 +30,7 @@ from argus_api.engines import catalog as catalog_mod
 from argus_api.engines import router as routing
 from argus_api.engines.local import LocalModel, build_chat_completion_payload
 from argus_api.engines.local_readiness import local_identity, validated_from_events
-from argus_api.errors import DomainError
+from argus_api.errors import ConflictError, DomainError
 from argus_api.secrets import SecretStore, ref_name
 
 router = APIRouter(tags=["engines"])
@@ -161,6 +162,9 @@ class EngineSelected(BaseModel):
     provider: str = Field(min_length=1, max_length=50)
     account_id: str = Field(min_length=1, max_length=64)
     reason: Literal["lease", "exhausted"] = "lease"
+    # The claim the switch serves: marks that attempt's failover `applied`.
+    task_id: str | None = None
+    attempt: int | None = Field(default=None, ge=1)
 
 
 @router.post("/engines/selected", status_code=204)
@@ -174,8 +178,14 @@ async def engine_selected(body: EngineSelected, db: DbDep, agent_id: AgentDep) -
             "engine",
             body.engine,
             "engine.selected",
-            body.model_dump(),
+            body.model_dump(exclude={"task_id", "attempt"}),
         )
+        if body.task_id is not None and body.attempt is not None:
+            # A stale claim must not lose the audit event above.
+            with contextlib.suppress(ConflictError):
+                await accounts_service.switch_applied(
+                    tx, agent_id, body.task_id, body.attempt, body.account_id
+                )
 
 
 @router.post("/engines/local/run")

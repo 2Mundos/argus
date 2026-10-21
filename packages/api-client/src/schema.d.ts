@@ -2775,6 +2775,8 @@ export interface components {
             /** Error */
             error: string | null;
             failover?: components["schemas"]["Failover"] | null;
+            /** Failure Class */
+            failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
             /** Id */
@@ -3416,6 +3418,8 @@ export interface components {
         EngineSelected: {
             /** Account Id */
             account_id: string;
+            /** Attempt */
+            attempt?: number | null;
             /**
              * Engine
              * @enum {string}
@@ -3429,6 +3433,8 @@ export interface components {
              * @enum {string}
              */
             reason?: "lease" | "exhausted";
+            /** Task Id */
+            task_id?: string | null;
         };
         /** EventOut */
         EventOut: {
@@ -3604,6 +3610,12 @@ export interface components {
              * @default
              */
             reason?: string;
+            /** Reason Code */
+            reason_code?: ("quota_exhausted" | "auth_expired") | null;
+            /** Reset Status */
+            reset_status?: ("stated" | "ambiguous" | "absent") | null;
+            /** Reset Text */
+            reset_text?: string | null;
             /**
              * Role
              * @default engine
@@ -3612,6 +3624,8 @@ export interface components {
             role?: "engine" | "executor" | "repository";
             /** Runtime Providers */
             runtime_providers: string[];
+            /** Source */
+            source?: ("structured" | "notice" | "log") | null;
             /** Task Id */
             task_id: string;
             /** Until */
@@ -3634,13 +3648,19 @@ export interface components {
              * @default worker_fail
              * @enum {string}
              */
-            reason?: "worker_fail" | "channel_error" | "provider_failure" | "quota" | "context_overflow" | "verification_failed";
+            reason?: "worker_fail" | "channel_error" | "provider_failure" | "quota" | "runtime_switch_failed" | "context_overflow" | "verification_failed";
         };
         /**
          * Failover
          * @description The last switch of the account serving a task (account selection 3.6).
          */
         Failover: {
+            /** Applied At */
+            applied_at?: string | null;
+            /** Apply */
+            apply?: ("pending" | "applied" | "not_needed" | "failed") | null;
+            /** Apply Error */
+            apply_error?: string | null;
             /**
              * At
              * Format: date-time
@@ -3650,8 +3670,20 @@ export interface components {
             attempt: number;
             /** From Account */
             from_account: string | null;
+            /** Outcome */
+            outcome?: ("switched" | "awaiting_quota" | "switch_failed") | null;
             /** Reason */
             reason: string;
+            /** Reason Code */
+            reason_code?: ("quota_exhausted" | "auth_expired") | null;
+            /** Reset At */
+            reset_at?: string | null;
+            /** Reset Status */
+            reset_status?: ("stated" | "ambiguous" | "absent") | null;
+            /** Reset Text */
+            reset_text?: string | null;
+            /** Source */
+            source?: ("structured" | "notice" | "log") | null;
             /** To Account */
             to_account: string | null;
         };
@@ -5698,6 +5730,8 @@ export interface components {
             /** Error */
             error: string | null;
             failover?: components["schemas"]["Failover"] | null;
+            /** Failure Class */
+            failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
             /** Id */
@@ -5969,6 +6003,8 @@ export interface components {
             /** Error */
             error: string | null;
             failover?: components["schemas"]["Failover"] | null;
+            /** Failure Class */
+            failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
             /** Id */

@@ -527,7 +527,18 @@ async def test_quota_failover_records_account_switch(db: Database) -> None:
     assert QUOTA and c  # the third account (other provider) is the next fallback
     async with db.write() as tx:
         task = await tasks.claim(tx, "agent-a", [])
-    assert task is not None
+        assert task is not None
+        from argus_api.accounts import service as accounts
+
+        # The switch happens at the next claim: it leases the next account.
+        await accounts.lease(
+            tx,
+            "agent-a",
+            ["anthropic", "openai"],
+            store,
+            task_id=task.id,
+            attempt=task.attempt,
+        )
     await fail(db, store, task, agent="agent-a")
     async with db.read() as conn:
         trace = await modeltrace.get_trace(conn, task.id)

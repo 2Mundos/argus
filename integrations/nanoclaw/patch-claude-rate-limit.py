@@ -70,12 +70,18 @@ export interface ProviderFailure {
   kind: ProviderFailureKind;
   /** ISO time a rate limit resets, when the provider states one. */
   resets_at?: string;
+  /** Codex usage limit: the provider's sentence and its reset in its own words. */
+  notice?: string;
+  reset_text?: string;
 }"""
 POLL_IMPORT = "import { stripHarnessTagArtifacts } from './harness-tag-strip.js';\n"
 CLASSIFY = (
     "function classifyProviderFailure(providerName: string, error: string | undefined):"
     " ProviderFailure | undefined {\n"
 )
+
+
+CLAUDE_HOOK = "  if (providerName === 'claude') return claudeRateLimitFailure(error);\n"
 
 
 def main(root: Path) -> None:
@@ -125,13 +131,22 @@ def main(root: Path) -> None:
                 "import",
                 POLL_IMPORT,
                 POLL_IMPORT
-                + "import { claudeRateLimitFailure } from './providers/claude-rate-limit.js';\n",
+                + "import { claudeRateLimitFailure } from './providers/claude-rate-limit.js';\n"
+                + "import { codexUsageLimitFailure } from './providers/codex-usage-limit.js';\n",
             ),
             (
                 "classifyProviderFailure",
                 CLASSIFY,
                 CLASSIFY
                 + "  if (providerName === 'claude') return claudeRateLimitFailure(error);\n",
+            ),
+            (
+                "codex usage limit",
+                CLAUDE_HOOK,
+                CLAUDE_HOOK + "  if (providerName === 'codex') {\n"
+                "    const limit = codexUsageLimitFailure(error);\n"
+                "    if (limit) return limit;\n"
+                "  }\n",
             ),
         ],
     )

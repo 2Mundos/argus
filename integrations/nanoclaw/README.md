@@ -263,6 +263,18 @@ worker provider list (the retired `account_providers` / `executor_providers` /
    `refill_at`) and the channel lets go of it; it leases again (and claims) once
    an account is usable. When it cannot lease at claim time it calls
    `POST /accounts/awaiting-quota` so ready tasks show as waiting too.
+   A Codex usage limit takes the same path: the runner overlay
+   `overlays/codex-usage-limit.ts` (installed with the Claude one) yields
+   `providerFailure {provider:"codex", kind:"rate_limit", notice?, reset_text?}`,
+   the plain sentence ("You've hit your usage limit … try again at …", either
+   apostrophe) and the structured `usageLimitExceeded` error are classified the
+   same, and the provider's reset stays words (`reset_status`, `reset_text`), never
+   a guessed time. The report also carries `reason_code` and `source`. If the old
+   runtime cannot be stopped after a switch the channel fails the task with
+   `reason=runtime_switch_failed` (an explicit block, no attempt spent) and
+   recycles before it claims again; a claim refused `lease_account_unusable`
+   makes it re-lease and recycle. After applying a switch it reports
+   `POST /engines/selected` with `task_id`/`attempt`.
 4. Any other failure notice now fails the attempt with its text, so Argus retries
    it (up to `max_attempts`) instead of leaving it claimed.
 

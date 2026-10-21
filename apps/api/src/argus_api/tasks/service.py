@@ -12,18 +12,14 @@ from typing import Any
 from uuid import uuid4
 
 import aiosqlite
-from argus_core.accounts import (
-    ENGINE_PROVIDERS,
-    EXECUTOR_ONLY,
-    LOCAL_PROVIDER,
-    REPOSITORY_PROVIDER,
-)
+from argus_core.accounts import ENGINE_PROVIDERS, LOCAL_PROVIDER
 from argus_core.agents import LIVE, AgentState
 from argus_core.auth import Scope
 from argus_core.custom_accounts import CustomConfig
 from argus_core.decisions import Audience, DecisionKind
 from argus_core.difficulty import Difficulty, DifficultySource, classify, escalated
 from argus_core.kinds import TaskKind
+from argus_core.quota import failure_class
 from argus_core.task_edit import CLEARABLE, TaskAttempt, TaskChanges, editable_fields
 from argus_core.tasks import (
     TERMINAL,
@@ -43,6 +39,7 @@ from argus_core.tasks import (
 from pydantic import ValidationError
 
 from argus_api.access import record_lease_grant
+from argus_api.accounts.eligibility import engine_pool
 from argus_api.accounts.usage import insert_usage
 from argus_api.db import Snapshot, Tx, ts
 from argus_api.decisions import store as decisions
@@ -247,13 +244,14 @@ async def claim(
             f"agent {agent_id} is {state}; it may not claim new tasks",
             code=f"agent_{state}",
         )
+    await _check_engine_lease(tx, agent_id)
     if runtime_providers and await _record_runtime_providers(
         tx, agent_id, runtime_providers
     ):
         # A runtime that can apply a provider no live agent could before makes
         # waiting tasks servable: wake them (bounded) before choosing.
         await wake_waiting(tx)
-    if await awaiting_quota(tx.conn):
+    if await awaiting_quota(tx.conn, tx.now):
         return None
     async with tx.conn.execute(
         "SELECT * FROM tasks t WHERE state = 'ready' AND NOT EXISTS ("
@@ -489,15 +487,63 @@ async def wake_waiting(tx: Tx, actor: str = "system") -> list[str]:
     return woken
 
 
-async def awaiting_quota(conn: aiosqlite.Connection) -> bool:
-    """True when the fleet manages accounts, some are exhausted and none is
-    available: a claim would only burn an attempt on a provider limit."""
-    async with conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM accounts WHERE state = 'exhausted')"
-        " AND NOT EXISTS (SELECT 1 FROM accounts WHERE state = 'available')"
+async def awaiting_quota(conn: aiosqlite.Connection, now: datetime | None) -> bool:
+    """True when some engine account is held back and none is usable: a claim would
+    only burn an attempt on a provider limit (one rule: `engine_pool`)."""
+    return (await engine_pool(conn, now)).awaiting_quota
+
+
+async def _check_engine_lease(tx: Tx, agent_id: str) -> None:
+    """A claim whose engine lease sits on an account that is disabled, or exhausted
+    with its reset ahead, cannot run: `409 lease_account_unusable`. The channel
+    drops that account, leases again and recycles the runtime."""
+    async with tx.conn.execute(
+        "SELECT a.name, a.provider, a.state, a.exhausted_until FROM account_leases l"
+        " JOIN accounts a ON a.id = l.account_id WHERE l.agent_id = ?"
+        " AND l.role = 'engine' AND l.released_at IS NULL",
+        (agent_id,),
     ) as cur:
-        row = await cur.fetchone()
-    return bool(row and row[0])
+        rows = await cur.fetchall()
+    for r in rows:
+        if r["provider"] == LOCAL_PROVIDER:
+            continue
+        held_back = r["state"] == "exhausted" and (
+            not r["exhausted_until"]
+            or datetime.fromisoformat(r["exhausted_until"]) > tx.now
+        )
+        if r["state"] == "disabled" or held_back:
+            raise ConflictError(
+                f"engine account {r['name']} is {r['state']}; lease another",
+                code="lease_account_unusable",
+            )
+
+
+RUNTIME_SWITCH_FAILED = "runtime_switch_failed"
+
+
+async def block_switch_failed(
+    tx: Tx, agent_id: str, task_id: str, attempt: int, error: str
+) -> Task:
+    """The old runtime did not stop, so the new account cannot be applied safely:
+    block the task (`runtime_switch_failed`) with `attempt` and `failures` as they
+    were. Nothing releases it automatically (`wake_waiting` only wakes quota waits):
+    the task stays blocked until an operator acts."""
+    row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
+    await _apply(
+        tx,
+        row,
+        Action.BLOCK,
+        f"agent:{agent_id}",
+        set_={
+            "error": error,
+            "block_reason": RUNTIME_SWITCH_FAILED,
+            "progress_message": "account switch failed; the old runtime did not stop",
+            "progress_percent": None,
+            "progress_at": ts(tx.now),
+        },
+        data={"reason": RUNTIME_SWITCH_FAILED, "error": error},
+    )
+    return await get_task(tx.conn, task_id)
 
 
 @dataclass(frozen=True)
@@ -1805,6 +1851,7 @@ async def _to_task(conn: aiosqlite.Connection, row: aiosqlite.Row) -> Task:
     data["refill_at"] = await _refill_at(conn, row)
     data["serving_account"] = await _serving_account(conn, row)
     data["failover"] = await _last_failover(conn, row)
+    data["failure_class"] = _failure_class(row, data["failover"])
     data["models"] = (await modeltrace.summaries(conn, [row["id"]]))[row["id"]]
     async with conn.execute(
         "SELECT page_id FROM task_knowledge WHERE task_id = ? ORDER BY page_id",
@@ -1818,17 +1865,7 @@ async def _refill_at(conn: aiosqlite.Connection, row: aiosqlite.Row) -> datetime
     """When the earliest exhausted account a model run could use resets."""
     if row["state"] != S.BLOCKED or row["block_reason"] not in QUOTA_WAIT_REASONS:
         return None
-    async with conn.execute(
-        "SELECT provider, exhausted_until FROM accounts"
-        " WHERE state = 'exhausted' AND exhausted_until IS NOT NULL"
-    ) as cur:
-        marks = [
-            datetime.fromisoformat(r["exhausted_until"])
-            for r in await cur.fetchall()
-            if r["provider"] != REPOSITORY_PROVIDER
-            and r["provider"] not in EXECUTOR_ONLY
-        ]
-    return min(marks, default=None)
+    return (await engine_pool(conn, None)).next_reset
 
 
 async def _serving_account(
@@ -1859,24 +1896,77 @@ async def _serving_account(
 async def _last_failover(
     conn: aiosqlite.Connection, row: aiosqlite.Row
 ) -> Failover | None:
+    """The last switch of the serving account, derived from events: the failover
+    itself plus what the channel reported after it (applied, or failed to stop the
+    old runtime). Never a credential or a prompt."""
     if row["attempt"] == 0:
         return None
     async with conn.execute(
-        "SELECT at, data FROM events WHERE subject_type = 'task' AND subject_id = ?"
-        " AND kind = 'account.failover' ORDER BY id DESC LIMIT 1",
+        "SELECT id, at, data FROM events WHERE subject_type = 'task'"
+        " AND subject_id = ? AND kind = 'account.failover' ORDER BY id DESC LIMIT 1",
         (row["id"],),
     ) as cur:
         event = await cur.fetchone()
     if event is None:
         return None
     d = json.loads(event["data"])
+    attempt = d.get("attempt", row["attempt"])
+    async with conn.execute(
+        "SELECT kind, at, data FROM events WHERE subject_type = 'task'"
+        " AND subject_id = ? AND id > ? AND kind IN"
+        " ('account.switch_applied', 'account.switch_failed') ORDER BY id DESC",
+        (row["id"], event["id"]),
+    ) as cur:
+        later = [
+            e
+            for e in await cur.fetchall()
+            if json.loads(e["data"]).get("attempt") in (attempt, attempt + 1)
+        ]
+    outcome = d.get("outcome")
+    apply = d.get("apply")
+    apply_error = None
+    applied_at = None
+    if later:
+        last = later[0]
+        if last["kind"] == "account.switch_applied":
+            apply, applied_at = "applied", datetime.fromisoformat(last["at"])
+        else:
+            outcome, apply = "switch_failed", "failed"
+            apply_error = json.loads(last["data"]).get("error")
+    reset_at = d.get("reset_at")
     return Failover(
         from_account=d.get("from"),
         to_account=d.get("to"),
         reason=d.get("reason", ""),
         at=datetime.fromisoformat(event["at"]),
-        attempt=d.get("attempt", row["attempt"]),
+        attempt=attempt,
+        reason_code=d.get("reason_code"),
+        reset_status=d.get("reset_status"),
+        reset_text=d.get("reset_text"),
+        reset_at=datetime.fromisoformat(reset_at) if reset_at else None,
+        source=d.get("source"),
+        outcome=outcome,
+        apply=apply,
+        apply_error=apply_error,
+        applied_at=applied_at,
     )
+
+
+def _failure_class(row: aiosqlite.Row, failover: Failover | None) -> str | None:
+    """Why the task last failed, for REST/MCP/UI. Only `quota_exhausted` and
+    `auth_expired` rotate the account; the rest never do."""
+    if row["block_reason"] == RUNTIME_SWITCH_FAILED:
+        return RUNTIME_SWITCH_FAILED
+    if (
+        failover is not None
+        and failover.reason_code
+        and failover.attempt == row["attempt"]
+        and row["state"] in (S.READY, S.BLOCKED)
+    ):
+        return failover.reason_code
+    if row["error"]:
+        return failure_class(row["error"])
+    return None
 
 
 def _deadline(now: datetime, ttl_s: int) -> str:

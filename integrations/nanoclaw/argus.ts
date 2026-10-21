@@ -842,6 +842,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let account: { id: string; name: string; provider: string } | null = null;
   let executor: { id: string; name: string; provider: string } | null = null;
   let leasedAt = 0; // when the engine lease was last confirmed for a claimed task
+  let switchFailure: string | null = null; // the runtime did not stop for the last switch
   let recycleOnLease = false; // Argus moved us to another account: recycle once the next one is applied
   let engineInUse: string | null = null; // the harness the leased account selected
   let activeAccountLeases: AccountLease[] = [];
@@ -1045,6 +1046,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const { data } = await client.call("POST", `/accounts/${exhausted.id}/exhausted`, {
         until: f.until,
         reason: f.reason,
+        reason_code: f.code ?? "quota_exhausted",
+        reset_status: f.resetStatus ?? (f.until ? "stated" : "absent"),
+        reset_text: f.resetText,
+        source: f.source ?? "notice",
         role: "engine",
         runtime_providers: runtimeProviders("engine"),
         task_id: task.id,
@@ -1074,24 +1079,28 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           attempt: task.attempt,
         });
         const lease = leased as AccountLease;
-        await applyAndSelect(cfg.accounts, lease, "exhausted", task);
-        account = { id: lease.account_id, name: lease.name, provider: lease.provider };
-        leasedAt = cfg.now?.() ?? Date.now();
         try {
           // The old container holds the previous account's stubs: it must be gone
-          // before the task is sent again.
+          // before the new account is written and before the task is sent again.
           await cfg.accounts.recycleRuntime?.();
         } catch (err) {
-          log.error("The previous runtime could not be stopped; not resending the task", { err });
-          // A quota-led reason makes Argus requeue without consuming the attempt.
+          log.error("The previous runtime could not be stopped; not applying the new account", {
+            err,
+          });
+          // Argus releases the engine lease and blocks the task without spending
+          // an attempt; the next lease recycles the runtime first.
+          recycleOnLease = true;
           await client.call("POST", `/tasks/${task.id}/fail`, {
             attempt: task.attempt,
-            error: `${f.reason}; the account was switched but the previous worker runtime could not be stopped`,
-            reason: "provider_failure",
+            error: `${f.reason}; the previous worker runtime could not be stopped`,
+            reason: "runtime_switch_failed",
           });
           finishTask();
           return;
         }
+        await applyAndSelect(cfg.accounts, lease, "exhausted", task);
+        account = { id: lease.account_id, name: lease.name, provider: lease.provider };
+        leasedAt = cfg.now?.() ?? Date.now();
         log.info("Switched to another Argus account", { account: lease.name });
         if (currentClaim) await prepareModels(currentClaim);
         if (currentText && resends < MAX_RESENDS) {
@@ -1162,14 +1171,22 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       taskDone = resolve;
     });
     currentClaim = task;
+    switchFailure = null;
     if (!(await ensureAccount(task))) {
+      const stale = switchFailure !== null;
       await client
         .call("POST", `/tasks/${task.id}/fail`, {
           attempt: task.attempt,
-          error: "no usable provider account for claimed task",
-          reason: "quota",
+          error: stale
+            ? `the previous worker runtime could not be stopped: ${switchFailure}`
+            : "no usable provider account for claimed task",
+          reason: stale ? "runtime_switch_failed" : "quota",
         })
         .catch(() => undefined);
+      if (stale) {
+        finishTask();
+        return;
+      }
       await client
         .call("POST", "/accounts/awaiting-quota", {
           capabilities: cfg.capabilities,
@@ -1358,6 +1375,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         provider: lease.provider,
         account_id: lease.account_id,
         reason,
+        task_id: task.id,
+        attempt: task.attempt,
       })
       .catch((err) => log.warn("Could not report the engine selection", { err }));
     await syncLocalHarnessFile(lease);
@@ -1464,9 +1483,17 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const lease = data as AccountLease;
       if (rebalancing && lease.account_id === account?.id) return true; // still the best
       try {
+        // The old runtime stops before the new account is written.
+        if (rebalancing || recycleOnLease) {
+          try {
+            await acc.recycleRuntime?.();
+          } catch (err) {
+            switchFailure = err instanceof Error ? err.message : String(err);
+            throw err;
+          }
+          recycleOnLease = false;
+        }
         await applyAndSelect(acc, lease, "lease", task);
-        if (rebalancing || recycleOnLease) await acc.recycleRuntime?.();
-        recycleOnLease = false;
       } catch (err) {
         // Do not sit on an account we cannot use: give it back, then retry later.
         await client.call("POST", "/accounts/release").catch(() => undefined);
@@ -1521,6 +1548,15 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         if (status === 200 && data) await runTask(data as ArgusTask);
       } catch (err) {
         if (stopped) return;
+        if (err instanceof ArgusError && err.code === "lease_account_unusable") {
+          // The engine lease sits on an exhausted or disabled account: drop it,
+          // lease afresh with the next claim and recycle the runtime then.
+          log.warn("The leased account is no longer usable; dropping it", { message: err.message });
+          account = null;
+          recycleOnLease = true;
+          await client.call("POST", "/accounts/release?role=engine").catch(() => undefined);
+          continue;
+        }
         if (err instanceof ArgusError && err.code === "agent_draining") {
           draining = true; // Argus told us directly: no need to wait for a heartbeat
           await completeDrainIfIdle();

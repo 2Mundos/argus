@@ -201,7 +201,9 @@ async def test_quota_fail_fails_over_without_consuming_an_attempt(
     async with db.write() as tx:
         again = await tasks.claim(tx, A, [])
     assert again is not None and (again.attempt, again.failures) == (2, 0)
-    assert again.serving_account.name == "acct-b"  # type: ignore[union-attr]
+    assert again.serving_account is None  # nothing is leased before the new claim does
+    assert (await lease(db, store, task=again)).name == "acct-b"
+    assert (await get(db, task.id)).serving_account.name == "acct-b"  # type: ignore[union-attr]
 
     [event] = await events(db, "account.failover")
     assert event["actor"] == f"agent:{A}" and event["subject"] == task.id
@@ -209,14 +211,21 @@ async def test_quota_fail_fails_over_without_consuming_an_attempt(
     [record] = [
         r for r in caplog.records if r.getMessage().startswith("account_failover")
     ]
-    assert json.loads(record.getMessage().split(" ", 1)[1]) == {
-        "event": "account_failover",
-        "from": "acct-a",
-        "to": "acct-b",
-        "reason": QUOTA,
-        "task_id": task.id,
-        "attempt": 1,
-    }
+    logged = json.loads(record.getMessage().split(" ", 1)[1])
+    assert (
+        logged.items()
+        >= {
+            "event": "account_failover",
+            "from": "acct-a",
+            "to": "acct-b",
+            "reason": QUOTA,
+            "task_id": task.id,
+            "attempt": 1,
+            "outcome": "switched",
+            "apply": "pending",
+            "reason_code": "quota_exhausted",
+        }.items()
+    )
     assert "key-acct" not in json.dumps(event) + caplog.text
 
 
@@ -233,6 +242,7 @@ async def test_quota_never_reaches_failed_however_often_it_repeats(
         assert (task.state, task.failures) == (S.READY, 0)
         async with db.write() as tx:
             task = await tasks.claim(tx, A, [])  # type: ignore[assignment]
+        await lease(db, store, task=task)
     assert (await get(db, task.id)).state is S.CLAIMED
 
 

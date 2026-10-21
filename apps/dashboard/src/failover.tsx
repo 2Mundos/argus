@@ -6,13 +6,35 @@ import { relative } from "./format";
 export type FailoverInfo = Pick<
   Task,
   "state" | "block_reason" | "refill_at" | "serving_account" | "failover"
->;
+> &
+  Partial<Pick<Task, "failure_class">>;
+
+// What stopped the run, in words an operator can tell apart.
+const CODES: Record<string, string> = {
+  quota_exhausted: "Quota exhausted",
+  auth_expired: "Login expired",
+  network_unavailable: "Network unavailable",
+  runtime_switch_failed: "Runtime switch failed",
+  implementation: "Implementation error",
+};
+
+const label = (code: string | null | undefined) => (code ? (CODES[code] ?? code) : null);
+
+/** The provider's reset: the stated time, else its own words, else that it said nothing. */
+function resetNote(f: NonNullable<Task["failover"]>): string | null {
+  if (f.reset_status === "stated" && f.reset_at) return `resets ${f.reset_at}`;
+  if (f.reset_status === "ambiguous")
+    return f.reset_text ? `reset (provider's words, no zone): ${f.reset_text}` : "reset ambiguous";
+  if (f.reset_status === "absent") return "no reset stated";
+  return null;
+}
 
 /** Serving account, the last switch with Argus's literal reason, and when quota is back. */
 export function TaskFailover({ task, now = Date.now() }: { task: FailoverInfo; now?: number }) {
   const f = task.failover;
   const waiting = task.state === "blocked" && task.block_reason === "awaiting_quota";
-  if (!task.serving_account && !f && !waiting) return null;
+  const cls = task.failure_class && !f ? label(task.failure_class) : null;
+  if (!task.serving_account && !f && !waiting && !cls) return null;
   return (
     <>
       {task.serving_account && (
@@ -41,6 +63,12 @@ export function TaskFailover({ task, now = Date.now() }: { task: FailoverInfo; n
           </dd>
         </>
       )}
+      {cls && (
+        <>
+          <dt>Failure</dt>
+          <dd>{cls}</dd>
+        </>
+      )}
       {f && (
         <>
           <dt>Last failover</dt>
@@ -50,6 +78,20 @@ export function TaskFailover({ task, now = Date.now() }: { task: FailoverInfo; n
               at attempt {f.attempt}, {relative(f.at, now)}
             </span>
             <div className="small muted">{f.reason}</div>
+            <div className="small muted">
+              {[label(f.reason_code), resetNote(f), f.source && `via ${f.source}`]
+                .filter(Boolean)
+                .join(" · ")}
+            </div>
+            {f.outcome === "switch_failed" || f.apply === "failed" ? (
+              <div className="small">
+                Runtime switch failed{f.apply_error ? `: ${f.apply_error}` : ""}
+              </div>
+            ) : f.apply === "applied" ? (
+              <div className="small muted">
+                Applied {f.applied_at ? relative(f.applied_at, now) : ""}
+              </div>
+            ) : null}
           </dd>
         </>
       )}

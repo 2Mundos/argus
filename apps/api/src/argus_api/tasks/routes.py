@@ -78,6 +78,7 @@ class FailRequest(BaseModel):
         "channel_error",
         "provider_failure",
         "quota",
+        "runtime_switch_failed",
         "context_overflow",
         "verification_failed",
     ] = "worker_fail"

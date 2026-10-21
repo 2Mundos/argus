@@ -142,7 +142,7 @@ isolation or sandbox/TLS restrictions.
     `usage_limit_reached`, `insufficient_quota`, usage-limit sentences) is not a
     failure: Argus marks the holder's engine account exhausted (until the parsed
     reset, else the cooldown; an existing later mark is never shortened),
-    releases the lease, leases the next usable account, and puts the task back to
+    releases the lease, and puts the task back to
     `ready` on the **same attempt** with `failures` unchanged. With no account
     left it becomes `blocked` / `awaiting_quota`. A claim still bumps `attempt`
     (that is how stale writers are fenced), but the attempt is "not consumed":
@@ -209,6 +209,58 @@ isolation or sandbox/TLS restrictions.
     attempt, and it does not report a failure. If Argus itself recognised a
     quota notice on `/fail` and switched the account, the channel drops its stale
     account and recycles when it re-leases.
+  - *Codex usage limit.* The Codex app-server answers a spent plan with a
+    structured error (`codexErrorInfo` `usageLimitExceeded`, `usage_limit_exceeded`)
+    and the text `You've hit your usage limit. Upgrade to Plus … or try again at
+    <date>.` (ASCII `'` or typographic `’`, optionally `Error:`-prefixed). It is a
+    quota like Claude's: the runner overlay `codex-usage-limit.ts` turns it into
+    `providerFailure {provider:"codex", kind:"rate_limit", notice?, reset_text?}`,
+    the channel and `argus_core.quota` classify the plain text and structured
+    JSON the same way (one shared fixture), and the *engine* account of that
+    provider is exhausted, never the executor's.
+  - *Reset provenance.* The reset is the provider's text. A time is kept only
+    when it carries a zone (`Z`, an offset, or `(UTC)`); a zoneless date is never
+    given a zone. The report carries `reset_status` (`stated` | `ambiguous` |
+    `absent`) and, when ambiguous, `reset_text` (the provider's words, bounded).
+    Without a stated time the account rests for the Argus cooldown and the
+    event says `until_kind: cooldown`; with one, `stated`. The raw notice is
+    kept sanitized (one line, bearer-like tokens and URL query strings dropped,
+    bounded) beside a `reason_code`: `quota_exhausted`, or `auth_expired` for
+    an expired login, which rotates the same way. `failure_class` on the Task
+    separates `quota_exhausted`, `auth_expired`, `network_unavailable`,
+    `runtime_switch_failed` and `implementation`; only the first two rotate and
+    only `implementation`/network failures follow the normal attempt policy.
+  - *One eligibility rule.* `accounts/eligibility.py` `engine_pool` is the only
+    reader of "is any engine account usable": the claim gate, `awaiting_quota`,
+    `refill_at`, `release_waiting_tasks`, the overview and the engine catalog
+    (`usable`) all agree. An account whose provider is executor-only (Cursor) or
+    the repository provider is not engine capacity, so a usable executor never
+    hides an exhausted engine pool.
+  - *Safe boundary.* Rotation happens only with the old runtime stopped before
+    the new writer: the switch is a lease bound to the live claim, never made in
+    `/exhausted` or `/fail`: the channel leases at the next claim, recycles the
+    runtime (confirmed exit), applies the account, and only then resends the task
+    (`failures` unchanged), reporting `POST /engines/selected` with
+    `task_id`/`attempt` to close the trail (`apply: applied`). If the
+    runtime cannot be stopped the channel posts `POST /tasks/{id}/fail`
+    `reason=runtime_switch_failed` (not a quota notice, so the old account's
+    text is not re-judged against the new lease): Argus releases the engine
+    lease, records `account.switch_failed`, and blocks the task with
+    `block_reason=runtime_switch_failed` and `failover.apply=failed`. No
+    attempt is spent, nothing is lost: the claim, checkout and WIP stay, and the
+    channel recycles before it claims again.
+  - *Already exhausted.* A claim by an agent whose engine lease sits on an
+    exhausted (reset ahead) or disabled account is refused `409
+    lease_account_unusable`; the channel drops that account, re-leases and
+    recycles the runtime, so a live runtime cannot keep accepting tasks on a
+    spent credential.
+  - *Trail.* Each switch is one `Failover` (task, attempt): `from_account`,
+    `to_account`, `reason` (sanitized), `reason_code`, `reset_status`,
+    `reset_text`, `reset_at`, `source` (`structured` | `notice` | `log`),
+    `outcome` (`switched` | `awaiting_quota` | `switch_failed`), `apply`
+    (`pending` | `applied` | `failed` | `not_needed`), `apply_error`, `applied_at`,
+    derived on read from `account.failover`, `account.switch_applied` and
+    `account.switch_failed` events. Never credentials or prompts.
   - *Dynamic priority.* Exhausted accounts are out of the ranking until
     `exhausted_until`; an `exhausted` account past its reset is recovered on lease,
     never demoted. There is no priority editing.
@@ -280,7 +332,8 @@ the model-policy snapshot or `argus-delegate` output.
   (`Action.REQUEUE`, `ready → blocked`, `refill_at`, `serving_account`,
   `failover`), `accounts.py` (`AwaitingQuotaRequest/Result`); `apps/api`
   `accounts/service.py` (`fail_task`, `exhausted`, `mark_awaiting_quota`),
-  `tasks/service.py` (`pause_for_quota`, `await_quota_ready`), `tasks/routes.py`,
+  `tasks/service.py` (`pause_for_quota`, `await_quota_ready`, `block_switch_failed`),
+  `accounts/eligibility.py`, `tasks/routes.py`,
   `accounts/routes.py`; dashboard `failover.tsx`; OpenAPI and client regenerated.
 - Rollout: the channel change (`argus.ts`, `argus-accounts.ts`) needs the NanoClaw
   **host rebuilt and restarted** (it loads the channel) and Argus upgraded first

@@ -16,6 +16,7 @@ from argus_core.accounts import ENGINE_PROVIDERS
 from argus_core.difficulty import Difficulty, DifficultySource
 from argus_core.knowledge import KnowledgeRef
 from argus_core.model_trace import ModelsSummary
+from argus_core.quota import FailureClass
 
 
 def validate_account_providers(value: list[str] | None) -> list[str] | None:
@@ -265,9 +266,18 @@ class Failover(BaseModel):
 
     from_account: str | None  # account names, never credentials
     to_account: str | None  # None: nothing usable was left (awaiting quota)
-    reason: str
+    reason: str  # sanitized: one line, no tokens or query strings
     at: datetime
     attempt: int
+    reason_code: Literal["quota_exhausted", "auth_expired"] | None = None
+    reset_status: Literal["stated", "ambiguous", "absent"] | None = None
+    reset_text: str | None = None
+    reset_at: datetime | None = None
+    source: Literal["structured", "notice", "log"] | None = None
+    outcome: Literal["switched", "awaiting_quota", "switch_failed"] | None = None
+    apply: Literal["pending", "applied", "not_needed", "failed"] | None = None
+    apply_error: str | None = None
+    applied_at: datetime | None = None
 
 
 class ServingAccount(BaseModel):
@@ -305,6 +315,7 @@ class Task(BaseModel):
     result: TaskResult | None
     error: str | None
     block_reason: str | None
+    failure_class: FailureClass | None = None
     progress_message: str | None
     progress_percent: int | None
     progress_at: datetime | None

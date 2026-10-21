@@ -665,9 +665,86 @@ export const applyLease = (
   lease: AccountLease,
 ): Promise<string> => applyLeases(onecli, target, [lease]);
 
+/** `stated`: the provider gave a time with a zone; `ambiguous`: it named one we cannot place; `absent`: none. */
+export type ResetStatus = "stated" | "ambiguous" | "absent";
+export type QuotaCode = "quota_exhausted" | "auth_expired";
+export type FailureSource = "structured" | "notice" | "log";
+
 export type FailureKind =
-  | { kind: "exhausted"; reason: string; until?: string }
+  | {
+      kind: "exhausted";
+      reason: string;
+      until?: string;
+      code?: QuotaCode;
+      resetStatus?: ResetStatus;
+      /** The provider's own words about the reset, bounded; never a guessed time. */
+      resetText?: string;
+      source?: FailureSource;
+    }
   | { kind: "failed"; reason: string };
+
+/** Control characters folded to spaces, whitespace collapsed: the text classified (URLs and all, so a JSON envelope still parses). */
+function foldNotice(notice: string): string {
+  return notice
+    .replace(/[\x00-\x1f\x7f]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/**
+ * One line of provider text: control characters to spaces, bearer-like tokens and
+ * URL query strings removed, bounded. Never a prompt or a credential. Mirrors
+ * `argus_core.quota.sanitize_notice` (both are tested on one shared fixture).
+ */
+export function sanitizeNotice(notice: string, limit = 500): string {
+  return foldNotice(notice)
+    .replace(/\b(?:bearer\s+|sk-|eyJ)[A-Za-z0-9._~+/=-]{8,}/gi, "[redacted]")
+    .replace(/(https?:\/\/[^\s?#)]+)[?#][^\s)]*/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+    .slice(0, limit);
+}
+
+/** Structured Codex error codes that mean "this account's quota is spent". */
+const STRUCTURED_QUOTA_CODES = new Set([
+  "usagelimitexceeded",
+  "usage_limit_exceeded",
+  "usage_limit_reached",
+  "insufficient_quota",
+]);
+
+const NOTICE_PREFIX =
+  /^(?:(?:codex |claude )?error:\s*|turn failed:\s*|reconnecting\.{3}\s*\d+\/\d+:\s*)/i;
+
+/** A structured Codex error as the text its code or message would have been. */
+function unwrapStructured(body: string): string {
+  if (!body.startsWith("{")) return body;
+  let doc: unknown;
+  try {
+    doc = JSON.parse(body);
+  } catch {
+    return body;
+  }
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) return body;
+  const top = doc as Record<string, unknown>;
+  const err = "error" in top ? top.error : top;
+  if (typeof err === "string") return err;
+  if (typeof err !== "object" || err === null || Array.isArray(err)) return body;
+  const fields = err as Record<string, unknown>;
+  const message = typeof fields.message === "string" ? fields.message : undefined;
+  for (const key of ["codexErrorInfo", "code", "type"]) {
+    const value = fields[key];
+    if (typeof value === "string" && STRUCTURED_QUOTA_CODES.has(value.toLowerCase())) {
+      return message !== undefined ? `${value}: ${message}` : value;
+    }
+  }
+  return message ?? body;
+}
+
+/** The text of a notice with the runner's own prefixes (and a JSON wrapper) removed. */
+function noticeBody(sanitized: string): string {
+  return unwrapStructured(sanitized.replace(NOTICE_PREFIX, "")).replace(NOTICE_PREFIX, "");
+}
 
 /**
  * Quota messages by the provider whose run they end. Matching is anchored at
@@ -686,7 +763,7 @@ const QUOTA_NOTICES: Array<{ provider: string; pattern: RegExp }> = [
   {
     provider: "openai",
     pattern:
-      /^(usage_limit_reached|insufficient_quota|you(?:'|\u2019)ve hit your usage limit|you have hit your usage limit)/i,
+      /^(usage_limit_(?:reached|exceeded)|usagelimitexceeded|insufficient_quota|you(?:'|\u2019)ve (?:hit|reached) your usage limit|you have (?:hit|reached) your usage limit|you exceeded your current quota)/i,
   },
   {
     provider: "custom",
@@ -703,16 +780,26 @@ const AUTH_EXPIRED_NOTICES: Array<{ provider: string; pattern: RegExp }> = [
   { provider: "custom", pattern: AUTH_EXPIRED_PATTERN },
 ];
 
+const RESET_MARKER = /\(resets |\bresets? (?:at |on )?|try again (?:at|in) /i;
+
+/** An ISO time counts only with a zone (`Z` or an offset); a bare one is the provider's local time. */
+function parseZonedIso(text: string): string | undefined {
+  const t = text.trim();
+  if (!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(t)) return undefined;
+  const when = new Date(t);
+  return Number.isNaN(when.getTime()) ? undefined : when.toISOString();
+}
+
 /**
- * When a quota notice says the limit resets: "(resets <ISO>)" or a UTC clock time
- * ("resets 11:50pm (UTC)", the next such time strictly after `now`). Undefined
- * when absent or unparsable.
+ * When a quota notice says the limit resets: "(resets <ISO with zone>)" or a UTC
+ * clock time ("resets 11:50pm (UTC)", the next such time strictly after `now`).
+ * Undefined when absent, zoneless or unparsable.
  */
 function parseResetTime(body: string, now: Date): string | undefined {
   const iso = /\(resets ([^)]+)\)/i.exec(body);
   if (iso) {
-    const when = new Date(iso[1]!);
-    if (!Number.isNaN(when.getTime())) return when.toISOString();
+    const when = parseZonedIso(iso[1]!);
+    if (when) return when;
   }
   const clock = /\bresets\s+(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\s*\(UTC\)/i.exec(body);
   if (!clock) return undefined;
@@ -727,6 +814,27 @@ function parseResetTime(body: string, now: Date): string | undefined {
   return at.toISOString();
 }
 
+interface ResetInfo {
+  until?: string;
+  resetStatus: ResetStatus;
+  resetText?: string;
+}
+
+/** The reset a notice states: its time only with a zone, else the provider's words (`ambiguous`) or nothing (`absent`). */
+function parseReset(body: string, now: Date): ResetInfo {
+  const until = parseResetTime(body, now);
+  const marker = RESET_MARKER.exec(body);
+  let resetText: string | undefined;
+  if (marker) {
+    let rest = body.slice(marker.index + marker[0].length).split("\n")[0]!;
+    if (marker[0].startsWith("(")) rest = rest.split(")")[0]!;
+    rest = rest.split(/\.(?:\s|$)/)[0]!;
+    resetText = sanitizeNotice(rest, 80).replace(/\.+$/, "") || undefined;
+  }
+  if (until) return { until, resetStatus: "stated", resetText };
+  return { resetStatus: resetText ? "ambiguous" : "absent", resetText };
+}
+
 /**
  * Classify the text of an agent failure notice. NanoClaw's runner puts the
  * provider's own message there when a run was blocked; anything else is a plain
@@ -739,29 +847,38 @@ export function classifyFailure(
   provider?: string,
   now: Date = new Date(),
 ): FailureKind {
-  const t = noticeText.trim();
-  const body = t.replace(/^(?:error:\s*|reconnecting\.{3}\s*\d+\/\d+:\s*)/i, "");
+  const t = sanitizeNotice(noticeText);
+  const body = noticeBody(foldNotice(noticeText));
   const authHit = AUTH_EXPIRED_NOTICES.find(
     (q) => q.pattern.test(body) && (!provider || q.provider === provider),
   );
   if (authHit) {
     return {
       kind: "exhausted",
-      reason: t.slice(0, 500),
-      until: undefined,
+      reason: t,
+      code: "auth_expired",
+      resetStatus: "absent",
+      source: "notice",
     };
   }
   const hit = QUOTA_NOTICES.find(
     (q) => q.pattern.test(body) && (!provider || q.provider === provider),
   );
   if (hit) {
-    return { kind: "exhausted", reason: t.slice(0, 500), until: parseResetTime(body, now) };
+    return {
+      kind: "exhausted",
+      reason: t,
+      code: "quota_exhausted",
+      source: "notice",
+      ...parseReset(body, now),
+    };
   }
-  return { kind: "failed", reason: t.slice(0, 1000) || "the agent run failed" };
+  return { kind: "failed", reason: sanitizeNotice(noticeText, 1000) || "the agent run failed" };
 }
 
 /** Fixed, non-sensitive reason for a structured auth expiry; never the notice or log text. */
 const STRUCTURED_AUTH_EXPIRED_REASON = "OpenAI/Codex authentication expired";
+const STRUCTURED_CODEX_LIMIT_REASON = "Codex usage limit reached";
 
 /** The runner's placeholder when the provider's own message did not reach the notice. */
 export function isGenericFailureNotice(noticeText: string): boolean {
@@ -769,53 +886,113 @@ export function isGenericFailureNotice(noticeText: string): boolean {
 }
 
 /** `Rate limit reached`, plus the reset when it is a valid timestamp. Starts like Claude Code's own notice so Argus's server-side patterns match it too. */
-function rateLimitReason(resetsAt: unknown): { reason: string; until?: string } {
+function rateLimitReason(resetsAt: unknown): {
+  reason: string;
+  until?: string;
+  resetStatus: ResetStatus;
+} {
   const when = typeof resetsAt === "string" ? new Date(resetsAt) : null;
-  if (!when || Number.isNaN(when.getTime())) return { reason: "Rate limit reached" };
+  if (!when || Number.isNaN(when.getTime())) {
+    return { reason: "Rate limit reached", resetStatus: "absent" };
+  }
   const until = when.toISOString();
-  return { reason: `Rate limit reached (resets ${until})`, until };
+  return { reason: `Rate limit reached (resets ${until})`, until, resetStatus: "stated" };
 }
 
 /**
  * The structured `content.providerFailure` of a NanoClaw failure notice
  * (docs/specs/codex-accounts.spec.md §3, account-selection.spec.md 3.6).
- * `{provider:"codex", kind:"auth_expired"}` against a held `openai` account and
- * `{provider:"claude", kind:"rate_limit", resets_at?}` against a held `anthropic`
- * account exhaust it (`codex`/`claude` are the NanoClaw engines; Argus names the
- * accounts by their vendor). Anything else (unknown value, other account
- * provider, bad shape) is not a decision: null. Reasons are fixed, never the raw text.
+ * `{provider:"codex", kind:"auth_expired"}` and `{provider:"codex",
+ * kind:"rate_limit", notice?, reset_text?, resets_at?}` against a held `openai`
+ * account, and `{provider:"claude", kind:"rate_limit", resets_at?}` against a held
+ * `anthropic` account exhaust it (`codex`/`claude` are the NanoClaw engines; Argus
+ * names the accounts by their vendor). Anything else (unknown value, other account
+ * provider, bad shape) is not a decision: null. The reason is the sanitized notice
+ * when given, else a fixed text; a reset counts only with a zone.
  */
 export function classifyProviderFailure(
   value: unknown,
   accountProvider?: string,
+  now: Date = new Date(),
 ): FailureKind | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const { provider, kind, resets_at } = value as {
+  const { provider, kind, resets_at, notice, reset_text } = value as {
     provider?: unknown;
     kind?: unknown;
     resets_at?: unknown;
+    notice?: unknown;
+    reset_text?: unknown;
   };
   if (accountProvider === "openai" && provider === "codex" && kind === "auth_expired") {
-    return { kind: "exhausted", reason: STRUCTURED_AUTH_EXPIRED_REASON, until: undefined };
+    return {
+      kind: "exhausted",
+      reason: STRUCTURED_AUTH_EXPIRED_REASON,
+      until: undefined,
+      code: "auth_expired",
+      resetStatus: "absent",
+      source: "structured",
+    };
+  }
+  if (accountProvider === "openai" && provider === "codex" && kind === "rate_limit") {
+    const text = typeof notice === "string" ? sanitizeNotice(notice) : "";
+    let reset: ResetInfo = { resetStatus: "absent" };
+    const at = typeof resets_at === "string" ? parseZonedIso(resets_at) : undefined;
+    if (at) reset = { until: at, resetStatus: "stated" };
+    else if (text) reset = parseReset(noticeBody(text), now);
+    if (!reset.resetText && typeof reset_text === "string") {
+      const words = sanitizeNotice(reset_text, 80);
+      if (words) {
+        reset = { ...reset, resetText: words };
+        if (reset.resetStatus === "absent") reset.resetStatus = "ambiguous";
+      }
+    }
+    return {
+      kind: "exhausted",
+      reason: text || STRUCTURED_CODEX_LIMIT_REASON,
+      code: "quota_exhausted",
+      source: "structured",
+      ...reset,
+    };
   }
   if (accountProvider === "anthropic" && provider === "claude" && kind === "rate_limit") {
-    return { kind: "exhausted", ...rateLimitReason(resets_at) };
+    return {
+      kind: "exhausted",
+      code: "quota_exhausted",
+      source: "structured",
+      ...rateLimitReason(resets_at),
+    };
   }
   return null;
 }
 
+/** Timestamp and `[level]` tags a log line may open with, before the error text. */
+const LOG_LINE_LEAD = /^(?:\[[^\]]*\]\s*|\d{4}-\d\d-\d\d[T ]\S+\s+)+/;
+
 /**
- * Claude Code's own limit line in the agent log tail, for runs whose notice is
- * only the generic placeholder: `Rate limit [window] (resets <ISO>)` or `You've
- * hit your session|usage|weekly limit · resets 2am (UTC)` (the next such UTC time
- * after `now`). The last occurrence wins; only a held `anthropic` account is
- * affected. The reason is rebuilt from the parsed reset, never the log text.
+ * The provider's own limit line in the agent log tail, for runs whose notice is
+ * only the generic placeholder. Claude Code: `Rate limit [window] (resets <ISO>)` or
+ * `You've hit your session|usage|weekly limit · resets 2am (UTC)` (the next such UTC
+ * time after `now`). Codex: an error line (or structured error) carrying the usage-limit sentence or code. The last
+ * occurrence wins; only the held account's own provider is affected. The reason is
+ * rebuilt from the parsed reset (Claude) or sanitized (Codex), never the raw log.
  */
 export function classifyLogTail(
   logTail: string,
   accountProvider?: string,
   now: Date = new Date(),
 ): FailureKind | null {
+  if (accountProvider === "openai") {
+    // Only a line that is itself a Codex error ("Error: …", "Turn failed: …", a
+    // structured error envelope): the same words in a prompt or tool output never count.
+    for (const line of logTail.split("\n").reverse()) {
+      const text = line.trim().replace(LOG_LINE_LEAD, "");
+      const envelope = text.startsWith("{") && /^\{\s*"error"\s*:|"codexErrorInfo"/.test(text);
+      if (!envelope && !NOTICE_PREFIX.test(text)) continue;
+      const found = classifyFailure(text, "openai", now);
+      if (found.kind === "exhausted") return { ...found, source: "log" };
+    }
+    return null;
+  }
   if (accountProvider !== "anthropic") return null;
   const hits = [
     ...logTail.matchAll(
@@ -826,6 +1003,8 @@ export function classifyLogTail(
   if (!last) return null;
   return {
     kind: "exhausted",
+    code: "quota_exhausted",
+    source: "log",
     ...rateLimitReason(last[2] ? parseResetTime(last[2], now) : last[1]),
   };
 }

@@ -31,10 +31,11 @@ from argus_core.custom_accounts import (
     PROVIDER as CUSTOM_PROVIDER,
 )
 from argus_core.custom_accounts import CustomConfig, LeaseSettings, lease_settings
-from argus_core.quota import classify_quota
+from argus_core.quota import QuotaHit, classify_quota, sanitize_notice
 from argus_core.tasks import Task
 
 from argus_api.accounts import usage
+from argus_api.accounts.eligibility import engine_pool
 from argus_api.db import Tx, ts
 from argus_api.errors import (
     ConflictError,
@@ -346,8 +347,16 @@ async def exhausted(
             code="provider_not_declared",
         )
     role = held["role"]
-    previous = await _mark_exhausted(
-        tx, agent_id, account_id, report.until, report.reason, cooldown
+    reason = sanitize_notice(report.reason)
+    detail = _reset_detail(
+        report.until,
+        report.reset_status,
+        report.reset_text,
+        report.source,
+        report.reason_code,
+    )
+    previous, reset_at = await _mark_exhausted(
+        tx, agent_id, account_id, report.until, reason, cooldown, detail
     )
     await release(tx, agent_id, "exhausted", role)
     allowed = await _narrowed(tx, task_id, role, report.runtime_providers)
@@ -358,34 +367,31 @@ async def exhausted(
         allowed,
         prefer_local=await _prefer_local(tx, task_id, role),
     )
+    # The switch itself happens at the next claim, through a lease bound to it.
+    await _failover(
+        tx,
+        agent_id,
+        task_id,
+        attempt,
+        previous,
+        next_candidate[0]["name"] if next_candidate else None,
+        reason,
+        account_id,
+        next_candidate[0]["id"] if next_candidate else None,
+        detail | {"reset_at": reset_at},
+    )
     if next_candidate:
-        await _failover(
-            tx,
-            agent_id,
-            task_id,
-            attempt,
-            previous,
-            next_candidate[0]["name"],
-            report.reason,
-            account_id,
-            next_candidate[0]["id"],
-        )
         return FallbackResult(
             lease=None,
             next_account_id=next_candidate[0]["id"],
             next_account_name=next_candidate[0]["name"],
             next_provider=next_candidate[0]["provider"],
         )
-    blocked = False
     await tasks.block(tx, agent_id, task_id, attempt, tasks.AWAITING_QUOTA)
-    await _failover(
-        tx, agent_id, task_id, attempt, previous, None, report.reason, account_id, None
-    )
-    blocked = True
     return FallbackResult(
         lease=None,
         earliest_reset=await earliest_reset(tx, role, allowed),
-        task_blocked=blocked,
+        task_blocked=True,
     )
 
 
@@ -404,6 +410,8 @@ async def fail_task(
     failure: the account is exhausted, the agent moves to the next one, and the task
     returns to `ready` (or waits as `awaiting_quota` when nothing is left) with
     `failures` unchanged. Anything else fails the attempt as before."""
+    if reason == tasks.RUNTIME_SWITCH_FAILED:
+        return await _switch_failed(tx, agent_id, task_id, attempt, error)
     held = None
     if reason == "provider_failure":
         async with tx.conn.execute(
@@ -417,23 +425,26 @@ async def fail_task(
     if held is None or hit is None:
         return await tasks.fail(tx, agent_id, task_id, attempt, error, reason)
     await tasks.check_lease(tx, task_id, attempt, agent_id, allow_expired=True)
-    previous = await _mark_exhausted(
-        tx, agent_id, held["id"], hit.until, hit.reason, cooldown
+    detail = _hit_detail(
+        hit, "structured" if error.lstrip().startswith("{") else "notice"
+    )
+    previous, reset_at = await _mark_exhausted(
+        tx, agent_id, held["id"], hit.until, hit.reason, cooldown, detail
     )
     await release(tx, agent_id, "exhausted", "engine")
     runtime = await _narrowed(
         tx, task_id, "engine", json.loads(held["providers"]) or None
     )
-    next_lease = await _try_lease(
+    # No lease here: the next claim leases (bound to it) and the channel applies it.
+    next_candidate = await _ranked(
         tx,
         agent_id,
-        store,
         "engine",
         runtime,
         prefer_local=await _prefer_local(tx, task_id, "engine"),
     )
     task = await tasks.pause_for_quota(
-        tx, agent_id, task_id, attempt, hit.reason, wait=next_lease is None
+        tx, agent_id, task_id, attempt, hit.reason, wait=not next_candidate
     )
     await _failover(
         tx,
@@ -441,12 +452,60 @@ async def fail_task(
         task_id,
         attempt,
         previous,
-        next_lease.name if next_lease else None,
+        next_candidate[0]["name"] if next_candidate else None,
         hit.reason,
         held["id"],
-        next_lease.account_id if next_lease else None,
+        next_candidate[0]["id"] if next_candidate else None,
+        detail | {"reset_at": reset_at},
     )
     return await tasks.get_task(tx.conn, task.id)
+
+
+async def _switch_failed(
+    tx: Tx, agent_id: str, task_id: str, attempt: int, error: str
+) -> Task:
+    """The old runtime did not stop, so the new account was never applied: drop the
+    engine lease, record it, and block the task without spending an attempt."""
+    await tasks.check_lease(tx, task_id, attempt, agent_id, allow_expired=True)
+    async with tx.conn.execute(
+        "SELECT a.id, a.name FROM account_leases l JOIN accounts a"
+        " ON a.id = l.account_id WHERE l.agent_id = ? AND l.role = 'engine'"
+        " AND l.released_at IS NULL",
+        (agent_id,),
+    ) as cur:
+        held = await cur.fetchone()
+    note = sanitize_notice(error)
+    await release(tx, agent_id, "switch_failed", "engine")
+    await record(
+        tx,
+        f"agent:{agent_id}",
+        "task",
+        task_id,
+        "account.switch_failed",
+        {
+            "attempt": attempt,
+            "account": held["name"] if held else None,
+            "error": note,
+        },
+    )
+    return await tasks.block_switch_failed(tx, agent_id, task_id, attempt, note)
+
+
+async def switch_applied(
+    tx: Tx, agent_id: str, task_id: str, attempt: int, account_id: str
+) -> None:
+    """The channel applied the leased account and recycled the runtime: the failover
+    trail of that attempt turns from `pending` to `applied`."""
+    await tasks.check_lease(tx, task_id, attempt, agent_id)
+    row = await _row(tx.conn, account_id)
+    await record(
+        tx,
+        f"agent:{agent_id}",
+        "task",
+        task_id,
+        "account.switch_applied",
+        {"attempt": attempt, "account": row["name"]},
+    )
 
 
 async def mark_awaiting_quota(
@@ -469,9 +528,12 @@ async def _mark_exhausted(
     until: datetime | None,
     reason: str,
     cooldown: timedelta,
-) -> str:
+    detail: dict[str, Any] | None = None,
+) -> tuple[str, datetime | None]:
     """Exhaust the account until the reported reset (else the cooldown); never
-    shorten an existing mark. Returns the account name.
+    shorten an existing mark. Returns the account name and the mark it now has
+    (None for a quota-exempt account). The event says whether the time was the
+    provider's (`until_kind: stated`) or the cooldown.
 
     A quota-exempt provider (the local model) has no limit to hit: the report is
     recorded and the account stays as it is, available or not by its own probe."""
@@ -483,10 +545,11 @@ async def _mark_exhausted(
             "account",
             account_id,
             "account.exhausted",
-            {"until": None, "reason": reason, "quota_exempt": True},
+            {"until": None, "reason": reason, "quota_exempt": True} | (detail or {}),
         )
-        return row["name"]
-    new = until if until and until > tx.now else tx.now + cooldown
+        return row["name"], None
+    stated = bool(until and until > tx.now)
+    new = until if until and stated else tx.now + cooldown
     current = row["exhausted_until"]
     if (
         row["state"] == "exhausted"
@@ -505,9 +568,14 @@ async def _mark_exhausted(
         "account",
         account_id,
         "account.exhausted",
-        {"until": new.isoformat(), "reason": reason},
+        {
+            "until": new.isoformat(),
+            "until_kind": "stated" if stated else "cooldown",
+            "reason": reason,
+        }
+        | (detail or {}),
     )
-    return row["name"]
+    return row["name"], new
 
 
 async def _failover(
@@ -520,15 +588,23 @@ async def _failover(
     reason: str,
     from_id: str,
     to_id: str | None,
+    detail: dict[str, Any] | None = None,
 ) -> None:
     """The visible record of an account switch: an event on the task and one
-    structured log line. Names only; no credential ever reaches either."""
+    structured log line. Names only; no credential ever reaches either. `outcome`
+    is `switched` (another account is ranked; applied at the next claim, `apply`
+    pending) or `awaiting_quota` (none left)."""
+    reset_at = (detail or {}).get("reset_at")
     data = {
         "from": from_name,
         "to": to_name,
-        "reason": reason[:500],
+        "reason": sanitize_notice(reason, 500),
         "task_id": task_id,
         "attempt": attempt,
+        "outcome": "switched" if to_id else "awaiting_quota",
+        "apply": "pending" if to_id else "not_needed",
+        **{k: v for k, v in (detail or {}).items() if k != "reset_at"},
+        "reset_at": reset_at.isoformat() if reset_at else None,
     }
     await record(tx, f"agent:{agent_id}", "task", task_id, "account.failover", data)
     if to_id is not None:  # a switch happened (model observability 3.4)
@@ -560,6 +636,8 @@ async def release(
 async def earliest_reset(
     tx: Tx, role: LeaseRole, runtime_providers: list[str] | None
 ) -> datetime | None:
+    if role == "engine" and runtime_providers is None:
+        return (await engine_pool(tx.conn, None)).next_reset
     async with tx.conn.execute(
         "SELECT provider, exhausted_until FROM accounts WHERE state = 'exhausted'"
         " AND exhausted_until IS NOT NULL"
@@ -571,6 +649,27 @@ async def earliest_reset(
         if role_accepts(role, r["provider"], runtime_providers)
     ]
     return min(marks, default=None)
+
+
+def _reset_detail(
+    until: datetime | None,
+    status: str | None,
+    text: str | None,
+    source: str | None,
+    code: str | None,
+) -> dict[str, Any]:
+    """The provenance of a report: why it counts, and whether its reset time is the
+    provider's (`stated`), unplaceable (`ambiguous`) or missing (`absent`)."""
+    return {
+        "reason_code": code or "quota_exhausted",
+        "reset_status": status or ("stated" if until else "absent"),
+        "reset_text": sanitize_notice(text, 120) if text else None,
+        "source": source or "notice",
+    }
+
+
+def _hit_detail(hit: QuotaHit, source: str) -> dict[str, Any]:
+    return _reset_detail(hit.until, hit.reset_status, hit.reset_text, source, hit.code)
 
 
 async def recover(tx: Tx) -> list[str]:

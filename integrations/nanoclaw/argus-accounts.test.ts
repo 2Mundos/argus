@@ -19,6 +19,7 @@ import {
   preferredExecutorForLease,
   releaseRepositoryLease,
   runtimeProviders,
+  sanitizeNotice,
 } from "./argus-accounts.js";
 
 // NanoClaw's own modules are replaced, so the real `recycleRuntime` runs against a
@@ -1496,6 +1497,7 @@ describe("runtime recycling on an account rotation", () => {
     const fail = w.calls.find((c) => /\/tasks\/t1\/fail$/.test(c.path))!;
     expect(fail.body.attempt).toBe(1);
     expect(fail.body.error).toContain("could not be stopped");
+    expect(fail.body.reason).toBe("runtime_switch_failed");
     expect(h.inbound).toHaveLength(1); // the old process got nothing more
     expect(w.calls.some((c) => c.path === "/tasks/t1/complete")).toBe(false);
   });
@@ -1678,6 +1680,26 @@ describe("global account selection in the channel", () => {
     expect(selected.map((b) => b.provider)).toEqual(["openai", "anthropic"]);
   });
 
+  it("reports runtime_switch_failed when the rebalance cannot stop the old runtime", async () => {
+    const w = world({
+      leases: [codexLease(), lease("claude-1", "sk-ant")],
+      tasks: [task(), { ...task(), id: "t2" }],
+    });
+    const recycleRuntime = vi.fn(async () => {
+      throw new Error("session s1 did not stop");
+    });
+    const h = harness(w, true, { rebalanceMs: 30, recycleRuntime });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await new Promise((r) => setTimeout(r, 60));
+    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await until(() => w.calls.some((c) => c.path === "/tasks/t2/fail"), 5000);
+    const fail = w.calls.find((c) => c.path === "/tasks/t2/fail")!;
+    expect(fail.body.reason).toBe("runtime_switch_failed");
+    expect(fail.body.error).toContain("could not be stopped");
+  });
+
   it("keeps the established account when a re-evaluation finds nothing better or nothing usable", async () => {
     const w = world({
       leases: [codexLease(), "no_account", "no_account"],
@@ -1776,6 +1798,7 @@ describe("quota notices shared with Argus", () => {
     now?: string;
     exhausted: boolean;
     until?: string | null;
+    reset_status?: string;
   }>;
   it.each(cases)("$provider: $notice", (c) => {
     const f = classifyFailure(
@@ -1784,7 +1807,16 @@ describe("quota notices shared with Argus", () => {
       c.now ? new Date(c.now) : undefined,
     );
     expect(f.kind).toBe(c.exhausted ? "exhausted" : "failed");
-    if (c.exhausted) expect((f as { until?: string }).until ?? null).toBe(c.until ?? null);
+    if (c.exhausted) {
+      // The fixture's `until` is any ISO form with a zone: compare instants.
+      const got = (f as { until?: string }).until;
+      expect(got ? new Date(got).getTime() : null).toBe(
+        c.until ? new Date(c.until).getTime() : null,
+      );
+    }
+    if (c.exhausted && c.reset_status) {
+      expect((f as { resetStatus?: string }).resetStatus).toBe(c.reset_status);
+    }
   });
 });
 
@@ -1800,16 +1832,25 @@ describe("a Claude rate limit that only the structured field or the log shows", 
       kind: "exhausted",
       reason: `Rate limit reached (resets ${resets})`,
       until: resets,
+      code: "quota_exhausted",
+      source: "structured",
+      resetStatus: "stated",
     });
     expect(
       classifyProviderFailure({ provider: "claude", kind: "rate_limit" }, "anthropic"),
-    ).toEqual({ kind: "exhausted", reason: "Rate limit reached" });
+    ).toEqual({
+      kind: "exhausted",
+      reason: "Rate limit reached",
+      code: "quota_exhausted",
+      source: "structured",
+      resetStatus: "absent",
+    });
     expect(
       classifyProviderFailure(
         { provider: "claude", kind: "rate_limit", resets_at: "nope" },
         "anthropic",
       ),
-    ).toEqual({ kind: "exhausted", reason: "Rate limit reached" });
+    ).toMatchObject({ kind: "exhausted", reason: "Rate limit reached", resetStatus: "absent" });
     expect(classifyProviderFailure(null, "anthropic")).toBeNull();
     expect(classifyProviderFailure(v, "openai")).toBeNull();
     expect(classifyProviderFailure(v, undefined)).toBeNull();
@@ -1967,4 +2008,107 @@ describe("no usable account at claim time", () => {
       reason: "quota",
     });
   }, 10_000);
+});
+
+describe("Codex usage limit and expired login (account-selection.spec.md 3.6)", () => {
+  const NOW = new Date("2026-10-20T12:00:00Z");
+
+  it("a structured codex rate_limit exhausts an openai account, with the reset's provenance", () => {
+    const stated = classifyProviderFailure(
+      {
+        provider: "codex",
+        kind: "rate_limit",
+        notice: "You've hit your usage limit (resets 2026-10-21T03:00:00Z)",
+      },
+      "openai",
+      NOW,
+    );
+    expect(stated).toMatchObject({
+      kind: "exhausted",
+      code: "quota_exhausted",
+      source: "structured",
+      resetStatus: "stated",
+      until: "2026-10-21T03:00:00.000Z",
+    });
+    const words = classifyProviderFailure(
+      { provider: "codex", kind: "rate_limit", reset_text: "Nov 19th, 2026 2:08 PM" },
+      "openai",
+      NOW,
+    );
+    expect(words).toMatchObject({
+      resetStatus: "ambiguous",
+      resetText: "Nov 19th, 2026 2:08 PM",
+    });
+    expect((words as { until?: string }).until).toBeUndefined();
+    const bare = classifyProviderFailure({ provider: "codex", kind: "rate_limit" }, "openai", NOW);
+    expect(bare).toMatchObject({ resetStatus: "absent", reason: "Codex usage limit reached" });
+    expect(
+      classifyProviderFailure({ provider: "codex", kind: "rate_limit" }, "anthropic"),
+    ).toBeNull();
+  });
+
+  it("an expired login is auth_expired", () => {
+    expect(
+      classifyProviderFailure({ provider: "codex", kind: "auth_expired" }, "openai"),
+    ).toMatchObject({
+      kind: "exhausted",
+      code: "auth_expired",
+    });
+    expect(classifyFailure("Error: 401 token_expired", "openai")).toMatchObject({
+      kind: "exhausted",
+      code: "auth_expired",
+    });
+  });
+
+  it("a structured JSON error counts, a model merely talking about limits does not", () => {
+    const json = JSON.stringify({
+      error: { codexErrorInfo: "UsageLimitExceeded", message: "usage limit" },
+    });
+    expect(classifyFailure(json, "openai")).toMatchObject({
+      kind: "exhausted",
+      code: "quota_exhausted",
+    });
+    expect(classifyFailure("I explained that the usage limit resets daily", "openai").kind).toBe(
+      "failed",
+    );
+  });
+
+  it("a time without a zone is never accepted", () => {
+    const f = classifyFailure("Usage limit reached (resets 2026-10-21T03:00:00)", "anthropic", NOW);
+    expect(f).toMatchObject({ kind: "exhausted", resetStatus: "ambiguous" });
+    expect((f as { until?: string }).until).toBeUndefined();
+  });
+
+  it("sanitizeNotice drops tokens, query strings and control characters", () => {
+    const out = sanitizeNotice(
+      "bad\nline Bearer abcdefghij1234 sk-abcdefghijkl https://x.test/a?token=s3cret&b=1 eyJhbGciOiJIUzI1NiJ9abc",
+    );
+    expect(out).not.toMatch(/abcdefghij1234|sk-abc|s3cret|eyJhbGci|\n/);
+    expect(out).toContain("https://x.test/a");
+  });
+
+  it("classifyLogTail reads a codex limit sentence for an openai account only", () => {
+    const tail = "x\n[agent] Error: You've hit your usage limit. try again at 3:05 PM\n";
+    expect(classifyLogTail(tail, "openai", NOW)).toMatchObject({
+      kind: "exhausted",
+      source: "log",
+    });
+    expect(classifyLogTail(tail, "anthropic", NOW)).toBeNull();
+    const envelope = '{"error":{"message":"x","codexErrorInfo":"usageLimitExceeded"}}';
+    expect(classifyLogTail(`a\n${envelope}\n`, "openai", NOW)).toMatchObject({
+      kind: "exhausted",
+      source: "log",
+    });
+  });
+
+  it("classifyLogTail ignores quota words in a prompt or tool output", () => {
+    const tail = [
+      "user: please handle insufficient_quota and usage_limit_reached in the client",
+      "You've hit your usage limit. try again at 3:05 PM",
+      "tool output: insufficient_quota",
+      '{"message":"insufficient_quota","note":"fixture"}',
+      "> Error handling: insufficient_quota is returned by the API",
+    ].join("\n");
+    expect(classifyLogTail(tail, "openai", NOW)).toBeNull();
+  });
 });
