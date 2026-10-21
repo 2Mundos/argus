@@ -14,7 +14,9 @@ from argus_api.accounts.service import NoAccountError
 from argus_api.db import Database
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
+from argus_api.tasks import service as tasks
 from argus_core.accounts import AccountCreate, AccountUpdate
+from argus_core.tasks import TaskCreate
 from fastapi.testclient import TestClient
 
 ADMIN_TOKEN = "t" * 40
@@ -178,7 +180,21 @@ async def add(db: Database, store, name: str, provider: str, credential: dict, *
 
 async def lease(db: Database, store, role: str, providers: list[str]):
     async with db.write() as tx:
-        return await accounts.lease(tx, A, providers, store, role)
+        await tasks.create_task(
+            tx, TaskCreate(project="global", title="cursor lease test"), "admin:test"
+        )
+        task = await tasks.claim(tx, A, [])
+    assert task is not None
+    async with db.write() as tx:
+        return await accounts.lease(
+            tx,
+            A,
+            providers,
+            store,
+            role,
+            task_id=task.id,
+            attempt=task.attempt,
+        )
 
 
 async def test_cursor_is_leased_as_the_executor_next_to_an_engine_account(

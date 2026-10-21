@@ -37,8 +37,10 @@ or fail_task. Every task write needs the task's `attempt`; a 409 error means you
 longer hold the task, so stop working on it. If you need a human or orchestrator to
 decide something, use ask_question (your task is paused until answered). Read the
 knowledge pages listed with each claimed task before starting; search_knowledge for
-more, and write_knowledge when you learn something others will need. If a provider
-account runs out of quota, call report_account_exhausted to get the next one.
+more, and write_knowledge when you learn something others will need. Lease provider
+credentials only after claiming a task, with runtime_providers, task_id and attempt.
+If an account runs out of quota, report_account_exhausted (same claim and providers)
+returns fallback metadata; call lease_account to receive the next credential.
 
 As an orchestrator, work the inbox: get_inbox lists what waits (blocked, in review,
 awaiting approval) with decision and artifact ids; list_decisions(view="detail") or
@@ -562,16 +564,25 @@ async def write_knowledge(
 
 @tool(AGENTS)
 async def lease_account(
-    ctx: Context, runtime_providers: list[str] | None = None
+    ctx: Context,
+    runtime_providers: list[str],
+    task_id: str,
+    attempt: int,
 ) -> dict:
-    """Get a provider account (with its credential) to do your work: the best
-    usable one across all providers, by priority. Pass `runtime_providers` only to
-    say which providers your runtime can technically use; it does not rank them."""
+    """Get a provider account for a currently claimed task.
+
+    `runtime_providers` is required and lists providers this runtime can apply;
+    `task_id` and `attempt` must identify your live task claim. The best eligible
+    account is selected by priority."""
     return await _call(
         ctx,
         "POST",
         "/accounts/lease",
-        json={"runtime_providers": runtime_providers} if runtime_providers else {},
+        json={
+            "runtime_providers": runtime_providers,
+            "task_id": task_id,
+            "attempt": attempt,
+        },
     )
 
 
@@ -579,19 +590,28 @@ async def lease_account(
 async def report_account_exhausted(
     ctx: Context,
     account_id: str,
+    runtime_providers: list[str],
+    task_id: str,
+    attempt: int,
     reason: str = "",
     until: str | None = None,
-    task_id: str | None = None,
-    attempt: int | None = None,
 ) -> dict:
-    """Your account hit a quota or rate limit. Returns the next account to use, or
-    none: then pass task_id/attempt so the task waits until an account frees up.
-    `until` is the provider's reset time (ISO 8601) if it told you."""
+    """Mark your leased account exhausted for a live claimed task.
+
+    Returns fallback account metadata only. Obtain any next credential with
+    `lease_account`; `runtime_providers` and the live claim are required.
+    `until` is the provider's reset time (ISO 8601), if known."""
     return await _call(
         ctx,
         "POST",
         f"/accounts/{account_id}/exhausted",
-        json={"reason": reason, "until": until, "task_id": task_id, "attempt": attempt},
+        json={
+            "reason": reason,
+            "until": until,
+            "runtime_providers": runtime_providers,
+            "task_id": task_id,
+            "attempt": attempt,
+        },
     )
 
 

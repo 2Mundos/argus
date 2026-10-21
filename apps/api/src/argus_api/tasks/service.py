@@ -12,7 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 import aiosqlite
-from argus_core.accounts import role_accepts
+from argus_core.accounts import EXECUTOR_ONLY, REPOSITORY_PROVIDER
 from argus_core.agents import LIVE, AgentState
 from argus_core.auth import Scope
 from argus_core.decisions import Audience, DecisionKind
@@ -1426,7 +1426,8 @@ async def _refill_at(conn: aiosqlite.Connection, row: aiosqlite.Row) -> datetime
         marks = [
             datetime.fromisoformat(r["exhausted_until"])
             for r in await cur.fetchall()
-            if role_accepts("engine", r["provider"], None)
+            if r["provider"] != REPOSITORY_PROVIDER
+            and r["provider"] not in EXECUTOR_ONLY
         ]
     return min(marks, default=None)
 

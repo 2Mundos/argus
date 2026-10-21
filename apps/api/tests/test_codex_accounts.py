@@ -893,6 +893,24 @@ def _worker(client: TestClient) -> dict:
     return {"Authorization": f"Bearer {reg.json()['token']}"}
 
 
+def _lease(client: TestClient, worker: dict) -> dict:
+    client.post(
+        "/api/tasks",
+        json={"project": "global", "title": "account routing"},
+        headers=ADMIN,
+    )
+    task = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    return client.post(
+        "/api/accounts/lease",
+        json={
+            "runtime_providers": ["anthropic", "openai"],
+            "task_id": task["id"],
+            "attempt": task["attempt"],
+        },
+        headers=worker,
+    ).json()
+
+
 def test_a_full_top_priority_account_does_not_win_routing_over_a_free_one(
     client: TestClient, tmp_path: Path
 ) -> None:
@@ -929,8 +947,8 @@ def test_a_full_top_priority_account_does_not_win_routing_over_a_free_one(
     )
     assert _routed(client)["target"] == "claude"  # free and highest priority
     worker = _worker(client)
-    lease = client.post("/api/accounts/lease", json={}, headers=worker)
-    assert lease.json()["name"] == "claude-top"
+    lease = _lease(client, worker)
+    assert lease["name"] == "claude-top"
     # The top account is now full: lifecycle says available, capacity says busy.
     anthropic = _summary(client, "claude")
     assert (anthropic["available"], anthropic["busy"], anthropic["leasable"]) == (
@@ -949,10 +967,7 @@ def test_a_full_top_priority_account_does_not_win_routing_over_a_free_one(
     assert (decision["target"], decision["blocked"]) == ("codex", None)
     # What a lease really does agrees with the route.
     other = _worker(client)
-    assert (
-        client.post("/api/accounts/lease", json={}, headers=other).json()["name"]
-        == "codex-low"
-    )
+    assert _lease(client, other)["name"] == "codex-low"
     # Releasing the slot makes the top account leasable and routable again.
     client.post("/api/accounts/release", headers=worker)
     assert _summary(client, "claude")["leasable"] == 1
@@ -1011,7 +1026,4 @@ def test_a_missing_secret_is_not_leasable_and_routing_never_writes_or_leaks(
     assert key not in leaked and SECRET_REFRESH not in leaked
     # A lease agrees: it skips the account (and only then disables it).
     worker = _worker(client)
-    assert (
-        client.post("/api/accounts/lease", json={}, headers=worker).json()["name"]
-        == "codex-low"
-    )
+    assert _lease(client, worker)["name"] == "codex-low"
