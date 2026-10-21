@@ -414,11 +414,14 @@ describe("classifyFailure", () => {
       kind: "exhausted",
       reason: "Rate limit [five_hour] (resets 2026-10-15T01:00:00.000Z)",
       until: "2026-10-15T01:00:00.000Z",
+      code: "quota_exhausted",
+      resetStatus: "stated",
+      resetText: "2026-10-15T01:00:00.000Z",
+      source: "notice",
     });
-    expect(classifyFailure("Out of credits")).toMatchObject({
-      kind: "exhausted",
-      until: undefined,
-    });
+    const credits = classifyFailure("Out of credits");
+    expect(credits).toMatchObject({ kind: "exhausted", resetStatus: "absent" });
+    expect(credits).not.toHaveProperty("until");
   });
   it("recognizes Claude's session-limit wording and the UTC clock reset", () => {
     const now = new Date("2026-10-20T20:00:00.000Z");
@@ -427,6 +430,10 @@ describe("classifyFailure", () => {
       kind: "exhausted",
       reason: text,
       until: "2026-10-20T23:50:00.000Z",
+      code: "quota_exhausted",
+      resetStatus: "stated",
+      resetText: "11:50pm (UTC)",
+      source: "notice",
     });
     expect(
       classifyFailure("You\u2019ve hit your limit · resets 11:50 pm (UTC)", "anthropic", now),
@@ -435,13 +442,17 @@ describe("classifyFailure", () => {
     expect(
       classifyFailure("You've hit your session limit · resets 1:05am (UTC)", "anthropic", now),
     ).toMatchObject({ until: "2026-10-21T01:05:00.000Z" });
-    expect(classifyFailure("Usage limit reached", "anthropic", now)).toMatchObject({
+    const usage = classifyFailure("Usage limit reached", "anthropic", now);
+    expect(usage).toMatchObject({ kind: "exhausted", resetStatus: "absent" });
+    expect(usage).not.toHaveProperty("until");
+    // Words but no time with a zone: kept as the provider's text, never a guessed time.
+    const vague = classifyFailure("You've hit your limit · resets sometime", "anthropic", now);
+    expect(vague).toMatchObject({
       kind: "exhausted",
-      until: undefined,
+      resetStatus: "ambiguous",
+      resetText: "sometime",
     });
-    expect(
-      classifyFailure("You've hit your limit · resets sometime", "anthropic", now),
-    ).toMatchObject({ kind: "exhausted", until: undefined });
+    expect(vague).not.toHaveProperty("until");
     expect(
       classifyFailure("Rate limit [five_hour] (resets 2026-10-20T23:50:00.000Z)", "anthropic"),
     ).toMatchObject({ until: "2026-10-20T23:50:00.000Z" });
@@ -832,11 +843,14 @@ describe("engine and executor leases in the channel", () => {
     expect(JSON.stringify(leaseCalls)).not.toContain('"providers"');
     expect(selectEngine).toHaveBeenCalledWith("codex");
     const selected = w.calls.find((c) => c.path === "/engines/selected")!.body;
+    // task_id/attempt close the failover trail (account-selection.spec.md 3.6).
     expect(selected).toEqual({
       engine: "codex",
       provider: "openai",
       account_id: "a-codex-1",
       reason: "lease",
+      task_id: "t1",
+      attempt: 1,
     });
     expect(JSON.stringify(w.calls.filter((c) => c.who === "argus"))).not.toContain("SECRET");
     expect(w.onecli.agents[0]!.secrets).toHaveLength(2);
@@ -1192,6 +1206,9 @@ describe("structured providerFailure on a failure notice", () => {
     expect(call?.path).toBe("/accounts/a-codex-1/exhausted");
     expect(call?.body).toEqual({
       reason: "OpenAI/Codex authentication expired",
+      reason_code: "auth_expired",
+      reset_status: "absent",
+      source: "structured",
       role: "engine",
       runtime_providers: ["anthropic", "openai", "local", "custom"],
       task_id: "t1",
@@ -1251,6 +1268,9 @@ describe("structured providerFailure on a failure notice", () => {
       kind: "exhausted",
       reason: "OpenAI/Codex authentication expired",
       until: undefined,
+      code: "auth_expired",
+      resetStatus: "absent",
+      source: "structured",
     });
   });
 });
@@ -1422,7 +1442,7 @@ describe("runtime recycling on an account rotation", () => {
     name: "codex-2",
   };
 
-  it("stops the old runtime after the new account is applied and before the task is resent", async () => {
+  it("stops the old runtime before the new account is applied and the task is resent", async () => {
     const w = world({
       leases: [codexLease(), "no_account", codex2, "no_account"],
       tasks: [task()],
@@ -1442,7 +1462,8 @@ describe("runtime recycling on an account rotation", () => {
     await h.adapter.deliver("local", null, expired as any);
     await until(() => h.inbound.length === 2);
     expect(recycleRuntime).toHaveBeenCalledTimes(1);
-    expect(order[0]).toMatch(/^recycle\(inbound=1,/);
+    // Recycled before the replacement's secret was written (account-selection.spec.md 3.6).
+    expect(order[0]).toMatch(/^recycle\(inbound=1, secret=1\)$/);
     expect(h.inbound[1].content.text).toContain("account was switched");
     // Same task and attempt: nothing was failed or retried to renew the session.
     expect(w.calls.some((c) => /\/tasks\/t1\/fail$/.test(c.path))).toBe(false);
@@ -1450,7 +1471,7 @@ describe("runtime recycling on an account rotation", () => {
     expect(selected.map((b) => b.account_id)).toEqual(["a-codex-1", "a-codex-2"]);
   });
 
-  it("also runs on a cross-provider fallback, after the engine is selected", async () => {
+  it("also runs on a cross-provider fallback, before the new engine is selected", async () => {
     const w = world({
       leases: [codexLease(), "no_account", lease("claude-1", "sk-ant")],
       tasks: [task()],
@@ -1465,7 +1486,8 @@ describe("runtime recycling on an account rotation", () => {
     await until(() => h.inbound.length === 1);
     await h.adapter.deliver("local", null, expired as any);
     await until(() => h.inbound.length === 2);
-    expect(calls).toEqual(["select:codex", "select:claude", "recycle"]);
+    // The old runtime stops before the new account is written and its engine selected.
+    expect(calls).toEqual(["select:codex", "recycle", "select:claude"]);
   });
 
   it("does not recycle when no replacement account exists", async () => {
@@ -1700,6 +1722,30 @@ describe("global account selection in the channel", () => {
     expect(fail.body.error).toContain("could not be stopped");
   });
 
+  it("stops the stuck runtime before it claims again after runtime_switch_failed", async () => {
+    const w = world({
+      leases: [codexLease(), lease("claude-1", "sk-ant"), lease("claude-1", "sk-ant")],
+      tasks: [task(), { ...task(), id: "t2" }, { ...task(), id: "t3" }],
+    });
+    const claimsAtRecycle: number[] = [];
+    const recycleRuntime = vi.fn(async () => {
+      claimsAtRecycle.push(w.calls.filter((c) => c.path === "/tasks/claim").length);
+      if (recycleRuntime.mock.calls.length === 1) throw new Error("session s1 did not stop");
+    });
+    const h = harness(w, true, { rebalanceMs: 30, recycleRuntime });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await new Promise((r) => setTimeout(r, 60));
+    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await until(() => h.inbound.length === 2, 5000); // t3 runs once the runtime stopped
+    const fail = w.calls.find((c) => c.path === "/tasks/t2/fail")!;
+    expect(fail.body.reason).toBe("runtime_switch_failed");
+    // The failed stop (during t2's lease) and the retry both happen before t3 is claimed.
+    expect(recycleRuntime).toHaveBeenCalledTimes(2);
+    expect(claimsAtRecycle).toEqual([2, 2]);
+  });
+
   it("keeps the established account when a re-evaluation finds nothing better or nothing usable", async () => {
     const w = world({
       leases: [codexLease(), "no_account", "no_account"],
@@ -1873,10 +1919,19 @@ describe("a Claude rate limit that only the structured field or the log shows", 
         kind: "exhausted",
         reason: "Rate limit reached (resets 2026-10-21T02:00:00.000Z)",
         until: "2026-10-21T02:00:00.000Z",
+        code: "quota_exhausted",
+        resetStatus: "stated",
+        source: "log",
       });
     }
     expect(classifyLogTail("You've hit your weekly limit · resets soon", "anthropic", now)).toEqual(
-      { kind: "exhausted", reason: "Rate limit reached" },
+      {
+        kind: "exhausted",
+        reason: "Rate limit reached",
+        code: "quota_exhausted",
+        resetStatus: "absent",
+        source: "log",
+      },
     );
     expect(classifyLogTail(line, "openai", now)).toBeNull();
   });
