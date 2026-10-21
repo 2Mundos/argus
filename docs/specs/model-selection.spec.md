@@ -24,7 +24,11 @@ and implementation `claude-sonnet-5-5` then fallback `claude-opus-5-5`. They liv
 `model-policy.defaults.json`, and every chain stays editable. The Cursor executor
 (`agent`) has no default chain but can be added to either map. Operators must use IDs their provider
 supports; no alias rewriting. Other executors keep their native default unless
-configured. Revisions are SHA-256 of canonical policy content.
+configured. An optional `trivial` map (same shape; default Cursor `agent`: `composer-2.5`) replaces
+`implementation` when the task is `trivial` or the engine lease is a `local` account
+([task complexity](task-complexity.spec.md)); `model_source` stays `policy` and
+`policy_map` says which map. A policy without it has the same revision as before.
+Revisions are SHA-256 of canonical policy content.
 
 A `custom` account's role `model` ([custom accounts](custom-accounts.spec.md)) sits
 between an explicit `--model` and the policy chain: `--model`, account model, policy
