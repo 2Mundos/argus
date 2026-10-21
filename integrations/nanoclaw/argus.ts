@@ -41,11 +41,11 @@ import type { ChannelAdapter, ChannelDefaults, ChannelSetup, OutboundMessage } f
 import {
   type AccountLease,
   type ApplyTarget,
-  type CustomLeaseSettings,
   applyLeases,
   applyLeasesDetailed,
   applyRepositoryLease,
   CURSOR_EXPIRY_MARGIN_MS,
+  type CustomLeaseSettings,
   classifyFailure,
   classifyLogTail,
   classifyProviderFailure,
@@ -1121,8 +1121,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     const selection = await cfg.selectModels(task, {
       engine: account ? { provider: account.provider, account_id: account.id } : null,
       executor: executor ? { provider: executor.provider, account_id: executor.id } : null,
-      engine_settings:
-        engineLease?.provider === "custom" ? (engineLease.settings ?? null) : null,
+      engine_settings: engineLease?.provider === "custom" ? (engineLease.settings ?? null) : null,
       executor_settings:
         executorLease?.provider === "custom" ? (executorLease.settings ?? null) : null,
     });

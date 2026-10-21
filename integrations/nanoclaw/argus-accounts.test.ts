@@ -10,7 +10,6 @@ import {
   applyLeasesDetailed,
   applyRepositoryLease,
   CURSOR_EXPIRY_MARGIN_MS,
-  runtimeProviders,
   classifyFailure,
   classifyLogTail,
   classifyProviderFailure,
@@ -19,6 +18,7 @@ import {
   OneCliClient,
   preferredExecutorForLease,
   releaseRepositoryLease,
+  runtimeProviders,
 } from "./argus-accounts.js";
 
 // NanoClaw's own modules are replaced, so the real `recycleRuntime` runs against a
@@ -540,7 +540,9 @@ describe("channel with accounts", () => {
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
     const claim = w.calls.find((c) => c.path === "/tasks/claim")!;
-    expect(claim.body).toMatchObject({ runtime_providers: ["anthropic", "openai", "local", "custom"] });
+    expect(claim.body).toMatchObject({
+      runtime_providers: ["anthropic", "openai", "local", "custom"],
+    });
     // the restriction is the server's: the lease request is unchanged and names the task
     const leaseCall = w.calls.find((c) => c.path === "/accounts/lease")!;
     expect(leaseCall.body).toMatchObject({
@@ -1277,7 +1279,11 @@ describe("task-scoped repository auth", () => {
       );
       expect(h.inbound[0].content.text).not.toContain("dummy-gitea-token");
       expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
-        { runtime_providers: ["anthropic", "openai", "local", "custom"], task_id: "t1", attempt: 1 },
+        {
+          runtime_providers: ["anthropic", "openai", "local", "custom"],
+          task_id: "t1",
+          attempt: 1,
+        },
         {
           role: "executor",
           runtime_providers: ["anthropic", "openai", "local", "custom", "cursor"],
@@ -1721,17 +1727,13 @@ describe("custom (OpenRouter) engine accounts", () => {
 
   it("applyLeases does not write a OneCLI secret for a custom engine lease", async () => {
     const w = world({ leases: [] });
-    const engine = await applyLeasesDetailed(
-      w.onecli,
-      target,
-      [
-        lease("or", "sk-or-key", {
-          provider: "custom",
-          credential: { api_key: "sk-or-key" },
-          settings,
-        }),
-      ],
-    );
+    const engine = await applyLeasesDetailed(w.onecli, target, [
+      lease("or", "sk-or-key", {
+        provider: "custom",
+        credential: { api_key: "sk-or-key" },
+        settings,
+      }),
+    ]);
     expect(engine.engine).toBe("claude");
     expect(w.onecli.secrets).toHaveLength(0);
     const agent = w.onecli.agents.find((a) => a.identifier === "g")!;
@@ -1954,7 +1956,9 @@ describe("no usable account at claim time", () => {
     // the lease retry sleeps 5 s before the task is given back
     await until(() => w.calls.some((c) => c.path === "/accounts/awaiting-quota"), 7000);
     const call = w.calls.find((c) => c.path === "/accounts/awaiting-quota")!;
-    expect(call.body).toMatchObject({ runtime_providers: ["anthropic", "openai", "local", "custom"] });
+    expect(call.body).toMatchObject({
+      runtime_providers: ["anthropic", "openai", "local", "custom"],
+    });
     expect(w.calls.some((c) => c.path === "/tasks/claim")).toBe(true);
     expect(w.calls.find((c) => c.path === "/tasks/t1/fail")!.body).toMatchObject({
       reason: "quota",

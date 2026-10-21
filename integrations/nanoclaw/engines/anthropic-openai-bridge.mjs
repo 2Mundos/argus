@@ -20,7 +20,9 @@ export function upstreamUrlAllowed(configuredBase, targetUrl) {
     if (base.protocol !== target.protocol || base.host !== target.host) return false;
     const basePath = base.pathname.replace(/\/+$/, "") || "";
     const targetPath = target.pathname.replace(/\/+$/, "") || "";
-    return targetPath === `${basePath}/chat/completions` || targetPath.endsWith("/chat/completions");
+    return (
+      targetPath === `${basePath}/chat/completions` || targetPath.endsWith("/chat/completions")
+    );
   } catch {
     return false;
   }
@@ -34,7 +36,11 @@ function anthropicContentToOpenAI(content) {
   for (const block of content) {
     if (!isObject(block)) continue;
     if (block.type === "text" && typeof block.text === "string") parts.push(block.text);
-    if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+    if (
+      block.type === "tool_use" &&
+      typeof block.id === "string" &&
+      typeof block.name === "string"
+    ) {
       toolCalls.push({
         id: block.id,
         type: "function",

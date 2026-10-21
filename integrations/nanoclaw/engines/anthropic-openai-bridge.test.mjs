@@ -14,7 +14,10 @@ test("anthropic messages become OpenAI chat messages", () => {
     system: "sys",
     messages: [{ role: "user", content: "hi" }],
   });
-  assert.deepEqual(msgs, [{ role: "system", content: "sys" }, { role: "user", content: "hi" }]);
+  assert.deepEqual(msgs, [
+    { role: "system", content: "sys" },
+    { role: "user", content: "hi" },
+  ]);
 });
 
 test("buildOpenAIChatBody adds model and provider block", () => {
@@ -40,7 +43,10 @@ test("bridge forwards to upstream and returns anthropic shape", async (t) => {
     }
     const chunks = [];
     for await (const c of req) chunks.push(c);
-    seen.push({ auth: req.headers.authorization, body: JSON.parse(Buffer.concat(chunks).toString()) });
+    seen.push({
+      auth: req.headers.authorization,
+      body: JSON.parse(Buffer.concat(chunks).toString()),
+    });
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
       JSON.stringify({

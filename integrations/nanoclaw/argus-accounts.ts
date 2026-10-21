@@ -80,11 +80,11 @@ const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ?
 
 function customCredentialProblem(credential: Record<string, unknown>): string | null {
   const keys = new Set(Object.keys(credential));
-  if (keys.size !== 1 || !keys.has("api_key"))
-    return "custom credential must be exactly {api_key}";
+  if (keys.size !== 1 || !keys.has("api_key")) return "custom credential must be exactly {api_key}";
   const key = text(credential.api_key);
   if (!key) return "custom credential needs a non-empty api_key string";
-  if (/\s|[\r\n\u0000]/.test(key)) return "api_key must not contain whitespace or control characters";
+  if (/\s|[\r\n\u0000]/.test(key))
+    return "api_key must not contain whitespace or control characters";
   return null;
 }
 
@@ -690,8 +690,7 @@ const QUOTA_NOTICES: Array<{ provider: string; pattern: RegExp }> = [
   },
   {
     provider: "custom",
-    pattern:
-      /^(?:http\s*)?(?:402|429)\b|^(?:insufficient credits|payment required|rate limit)/i,
+    pattern: /^(?:http\s*)?(?:402|429)\b|^(?:insufficient credits|payment required|rate limit)/i,
   },
 ];
 

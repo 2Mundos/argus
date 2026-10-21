@@ -2,10 +2,11 @@
  * Host-side Anthropic→OpenAI bridge for custom engine leases (custom-harness spec).
  * API keys live only in this process until the lease is released.
  */
-import { startAnthropicOpenAIBridge } from "./engines/anthropic-openai-bridge.mjs";
+
 import type { CustomLeaseSettings } from "./argus-custom-harness.js";
 import { CUSTOM_HARNESS_AUTH_TOKEN } from "./argus-custom-harness.js";
 import { syncLocalStrataForward } from "./argus-local-forward.js";
+import { startAnthropicOpenAIBridge } from "./engines/anthropic-openai-bridge.mjs";
 
 type BridgeHandle = {
   close: () => Promise<void>;
