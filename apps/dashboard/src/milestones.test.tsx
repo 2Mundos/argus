@@ -85,6 +85,28 @@ describe("no-signal threshold", () => {
     expect(noSignalMinutes({ ...base, progress_at: ago(5) }, NOW, 3)).toBe(5);
   });
 
+  it("counts silence from the latest of progress_at and output_at", () => {
+    const quiet = { ...base, progress_at: ago(35) };
+    expect(noSignalMinutes(quiet, NOW)).toBe(35);
+    expect(noSignalMinutes({ ...quiet, output_at: ago(2) }, NOW)).toBeNull();
+    expect(noSignalMinutes({ ...quiet, output_at: ago(20) }, NOW)).toBe(20);
+    // An older log line never hides a newer note.
+    expect(noSignalMinutes({ ...base, progress_at: ago(1), output_at: ago(40) }, NOW)).toBeNull();
+    // Output alone (no note yet) still counts; neither: no warning.
+    expect(noSignalMinutes({ ...base, progress_at: null, output_at: ago(30) }, NOW)).toBe(30);
+    expect(noSignalMinutes({ ...base, progress_at: null, output_at: null }, NOW)).toBeNull();
+    expect(noSignalMinutes({ ...quiet, output_at: ago(8) }, NOW, 3)).toBe(8);
+  });
+
+  it("hides the badge while the task is producing output", () => {
+    const { rerender } = render(
+      <TaskSignal now={NOW} task={{ ...base, progress_at: ago(35), output_at: ago(1) }} />,
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+    rerender(<TaskSignal now={NOW} task={{ ...base, progress_at: ago(35), output_at: ago(30) }} />);
+    expect(screen.getByRole("status").textContent).toBe("No signal for 30 min");
+  });
+
   it("parses the Vite env override and falls back on junk", () => {
     expect(parseNoSignalMinutes("25")).toBe(25);
     expect(parseNoSignalMinutes(undefined)).toBe(10);
