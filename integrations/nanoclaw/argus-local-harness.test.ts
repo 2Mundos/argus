@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CLAUDE_GATEWAY_STUB_PATH, withClaudeDelegateRuntime } from "./argus-claude-stub.js";
 import {
   DEFAULT_LOCAL_CONTEXT_TOKENS,
@@ -9,11 +12,20 @@ import {
   localHarnessEnv,
   localHarnessFromCredential,
   withLocalHarnessRuntime,
+  withLocalHarnessRuntimeForGroup,
+  writeLocalHarnessFile,
 } from "./argus-local-harness.js";
 import {
   anthropicRedirectRejection,
   normalizeAnthropicBaseUrl,
 } from "./engines/anthropic-redirect.mjs";
+
+// The OneCLI hook looks the agent group up in NanoClaw's database; here one group
+// is known and every other id is not.
+vi.mock("../db/agent-groups.js", () => ({
+  getAgentGroup: async (id: string) =>
+    id === "ag-local" ? { id, folder: "argus-local-group", name: "local" } : undefined,
+}));
 
 describe("normalizeAnthropicBaseUrl", () => {
   it("normalises host.docker.internal without a path", () => {
@@ -170,5 +182,45 @@ describe("local context window (local harness spec)", () => {
     );
     const cloud = withLocalHarnessRuntime(local, null);
     for (const key of LOCAL_HARNESS_ENV_KEYS) expect(cloud.env?.[key]).toBeUndefined();
+  });
+});
+
+describe("withLocalHarnessRuntimeForGroup (the OneCLI ensureSession hook)", () => {
+  const dirs: string[] = [];
+  const dataDir = () => {
+    const d = mkdtempSync(path.join(tmpdir(), "argus-local-harness-"));
+    dirs.push(d);
+    return d;
+  };
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+  const cloud = () =>
+    withClaudeDelegateRuntime({
+      env: { CLAUDE_CODE_OAUTH_TOKEN: "onecli-managed-sentinel" },
+      caCertificateContainerPath: "/tmp/ca.pem",
+      credentialStubs: [],
+    } as never);
+
+  it("applies the harness file the channel wrote for a known group", async () => {
+    const dir = dataDir();
+    const harness = localHarnessFromCredential({ base_url: "http://host.docker.internal:8080" })!;
+    await writeLocalHarnessFile(dir, "argus-local-group", harness);
+    const out = await withLocalHarnessRuntimeForGroup(cloud(), dir, "ag-local");
+    expect(out.env?.ANTHROPIC_BASE_URL).toBe("http://host.docker.internal:8080");
+    expect(out.env?.ANTHROPIC_AUTH_TOKEN).toBe(LOCAL_HARNESS_AUTH_TOKEN);
+    expect(out.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+
+  it("keeps cloud mode for a known group without a harness file", async () => {
+    const config = cloud();
+    const out = await withLocalHarnessRuntimeForGroup(config, dataDir(), "ag-local");
+    expect(out.env?.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(out.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("onecli-managed-sentinel");
+  });
+
+  it("returns the config unchanged for a group it does not know", async () => {
+    const config = cloud();
+    expect(await withLocalHarnessRuntimeForGroup(config, dataDir(), "ag-other")).toBe(config);
   });
 });
