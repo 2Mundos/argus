@@ -48,6 +48,7 @@ from argus_api.errors import (
 )
 from argus_api.events import record
 from argus_api.kinds import service as kinds
+from argus_api.modeltrace import service as modeltrace
 
 log = logging.getLogger(__name__)
 S = TaskState
@@ -1407,6 +1408,7 @@ async def _to_task(conn: aiosqlite.Connection, row: aiosqlite.Row) -> Task:
     data["refill_at"] = await _refill_at(conn, row)
     data["serving_account"] = await _serving_account(conn, row)
     data["failover"] = await _last_failover(conn, row)
+    data["models"] = (await modeltrace.summaries(conn, [row["id"]]))[row["id"]]
     async with conn.execute(
         "SELECT page_id FROM task_knowledge WHERE task_id = ? ORDER BY page_id",
         (row["id"],),

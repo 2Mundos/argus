@@ -36,6 +36,7 @@ from argus_api.errors import (
     ValidationFailedError,
 )
 from argus_api.events import record
+from argus_api.modeltrace import service as modeltrace
 from argus_api.secrets import SecretStore, ref_name
 from argus_api.tasks import service as tasks
 
@@ -329,6 +330,8 @@ async def exhausted(
             previous,
             next_candidate[0]["name"],
             report.reason,
+            account_id,
+            next_candidate[0]["id"],
         )
         return FallbackResult(
             lease=None,
@@ -338,7 +341,9 @@ async def exhausted(
         )
     blocked = False
     await tasks.block(tx, agent_id, task_id, attempt, tasks.AWAITING_QUOTA)
-    await _failover(tx, agent_id, task_id, attempt, previous, None, report.reason)
+    await _failover(
+        tx, agent_id, task_id, attempt, previous, None, report.reason, account_id, None
+    )
     blocked = True
     return FallbackResult(
         lease=None,
@@ -392,6 +397,8 @@ async def fail_task(
         previous,
         next_lease.name if next_lease else None,
         hit.reason,
+        held["id"],
+        next_lease.account_id if next_lease else None,
     )
     return await tasks.get_task(tx.conn, task.id)
 
@@ -452,6 +459,8 @@ async def _failover(
     from_name: str,
     to_name: str | None,
     reason: str,
+    from_id: str,
+    to_id: str | None,
 ) -> None:
     """The visible record of an account switch: an event on the task and one
     structured log line. Names only; no credential ever reaches either."""
@@ -463,6 +472,10 @@ async def _failover(
         "attempt": attempt,
     }
     await record(tx, f"agent:{agent_id}", "task", task_id, "account.failover", data)
+    if to_id is not None:  # a switch happened (model observability 3.4)
+        await modeltrace.record_account_switch(
+            tx, agent_id, task_id, attempt, from_id, to_id, reason
+        )
     log.info(
         "account_failover %s",
         json.dumps({"event": "account_failover", **data}),

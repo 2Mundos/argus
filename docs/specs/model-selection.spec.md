@@ -50,7 +50,9 @@ the caller must run gates and explicitly request the next model on rejection.
 # 4. Open Questions
 
 Provider-observed model IDs are not uniformly exposed by CLIs. They remain
-unknown rather than being inferred from the model sent in argv. A dedicated UI
+unknown rather than being inferred from the model sent in argv. The evidence
+rule and the per-task record of observed models live in
+[model observability](model-observability.spec.md). A dedicated UI
 can follow; the existing pool env editor/API is the configuration surface now.
 
 # 5. Constraints

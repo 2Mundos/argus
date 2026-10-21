@@ -92,6 +92,9 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
 - `ci_*` needs the repository to be allowlisted for the worker and a CI that posts
   commit statuses.
 
+Model executions and selections publish `task.model_execution` and
+`task.model_selection` events ([model observability](model-observability.spec.md)).
+
 # 5. Constraints
 
 - Single-node: no new service. The emitter reads local git and calls the Gitea API only

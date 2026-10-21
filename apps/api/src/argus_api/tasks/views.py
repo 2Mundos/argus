@@ -10,11 +10,13 @@ from datetime import datetime
 from typing import Any
 
 import aiosqlite
+from argus_core.model_trace import ModelsSummary
 from argus_core.tasks import ProgressKind, Review, Task, TaskState
 from pydantic import BaseModel, Field
 
 from argus_api.db import Snapshot
 from argus_api.errors import ValidationFailedError
+from argus_api.modeltrace import service as modeltrace
 from argus_api.paging import (
     PageInfo,
     View,
@@ -53,6 +55,7 @@ class TaskSummary(Refs):
     progress_at: datetime | None
     progress_kind: ProgressKind | None = None
     progress_data: dict[str, Any] | None = None
+    models: ModelsSummary = ModelsSummary()
     created_at: datetime
     archived_at: datetime | None
     version: str  # updated_at; pass it back as expected_version
@@ -181,7 +184,9 @@ async def refs(conn: aiosqlite.Connection, ids: list[str]) -> dict[str, Refs]:
 
 
 async def _page(snap: Snapshot, rows: list[aiosqlite.Row], view: View) -> TaskPage:
-    by_id = await refs(snap.conn, [r["id"] for r in rows]) if rows else {}
+    ids = [r["id"] for r in rows]
+    by_id = await refs(snap.conn, ids) if rows else {}
+    models = await modeltrace.summaries(snap.conn, ids) if rows else {}
     items: list[TaskSummary | TaskDetail] = []
     omitted: set[str] = set()
     for row in rows:
@@ -189,6 +194,7 @@ async def _page(snap: Snapshot, rows: list[aiosqlite.Row], view: View) -> TaskPa
         common = {
             **by_id[row["id"]].model_dump(),
             "version": row["updated_at"],
+            "models": models[row["id"]],
             "age_s": _age(snap.now, row["created_at"]),
             "block_reason": cap(row["block_reason"], "block_reason", truncated),
             "progress_data": (

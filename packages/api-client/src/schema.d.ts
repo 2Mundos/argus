@@ -534,6 +534,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/{agent_id}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Models */
+        get: operations["get_agent_models_api_agents__agent_id__models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/artifacts/{artifact_id}": {
         parameters: {
             query?: never;
@@ -1768,6 +1785,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Models
+         * @description Every execution (both layers, all attempts, oldest first) with its evidence,
+         *     and the selection/switch timeline. Cards use the compact `models` summary.
+         */
+        get: operations["get_models_api_tasks__task_id__models_get"];
+        put?: never;
+        /**
+         * Report Models
+         * @description Report the model executions and routing decisions of the attempt the caller
+         *     holds (same lease fence as progress). Idempotent per `key`: a re-sent record
+         *     completes the stored one and never overwrites it (409 on a contradiction).
+         */
+        post: operations["report_models_api_tasks__task_id__models_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/progress": {
         parameters: {
             query?: never;
@@ -2188,6 +2232,21 @@ export interface components {
             runtime?: components["schemas"]["AgentRuntime"] | null;
             state: components["schemas"]["AgentState"];
         };
+        /**
+         * AgentModels
+         * @description What the worker ran lately: its latest run per layer and its history, each
+         *     with its evidence. `current` is the latest recorded run, not a live claim.
+         */
+        AgentModels: {
+            /** Agent Id */
+            agent_id: string;
+            /** Current */
+            current: {
+                [key: string]: components["schemas"]["LayerModels"];
+            };
+            /** History */
+            history: components["schemas"]["Execution"][];
+        };
         /** AgentRegister */
         AgentRegister: {
             /** Bootstrap Token */
@@ -2239,6 +2298,20 @@ export interface components {
             holding_claims: number;
             /** Lost On Unfinished Instance */
             lost_on_unfinished_instance: number;
+        };
+        /**
+         * Alternative
+         * @description An option that was available when a choice was made (identifiers only).
+         */
+        Alternative: {
+            /** Executor */
+            executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            /** Model */
+            model?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Reason Code */
+            reason_code?: ("priority" | "availability" | "compatibility" | "context" | "quota" | "error" | "policy") | null;
         };
         /** AnswerBatch */
         AnswerBatch: {
@@ -2566,6 +2639,13 @@ export interface components {
             lease_ttl_s: number;
             /** Max Attempts */
             max_attempts: number;
+            /**
+             * @default {
+             *       "executions": 0,
+             *       "switches": 0
+             *     }
+             */
+            models?: components["schemas"]["ModelsSummary"];
             /** Parent Id */
             parent_id: string | null;
             /** Priority */
@@ -3157,6 +3237,134 @@ export interface components {
             /** Timed Out */
             timed_out: boolean;
         };
+        /** Execution */
+        Execution: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Agent Id */
+            agent_id: string | null;
+            /** Attempt */
+            attempt: number;
+            /** Configured Model */
+            configured_model?: string | null;
+            /** Delegation Id */
+            delegation_id?: string | null;
+            /** Ended At */
+            ended_at?: string | null;
+            /** Engine */
+            engine?: string | null;
+            /** Error Code */
+            error_code?: string | null;
+            /**
+             * Evidence
+             * @default not_reported
+             * @enum {string}
+             */
+            evidence?: "reported_by_runtime" | "cli_output" | "provider_response" | "not_reported";
+            /** Executor */
+            executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            /** Id */
+            id: string;
+            /** Key */
+            key: string;
+            /**
+             * Layer
+             * @enum {string}
+             */
+            layer: "harness" | "delegate";
+            /** Observed Model */
+            observed_model?: string | null;
+            /** Policy Revision */
+            policy_revision?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Requested Model */
+            requested_model?: string | null;
+            /** Resumed From */
+            resumed_from?: string | null;
+            /** Run Key */
+            run_key?: string | null;
+            /** Runtime */
+            runtime?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "selected" | "running" | "succeeded" | "failed" | "cancelled";
+            /** Task Id */
+            task_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            usage?: components["schemas"]["UsageRef"] | null;
+        };
+        /**
+         * ExecutionReport
+         * @description One model run of a layer: a harness session, or one delegation attempt.
+         *
+         *     `key` is chosen by the producer (stable across retries of the *report*, unique per
+         *     run). Re-sending it completes the record: values already stored are kept, only
+         *     gaps, `state`, `ended_at`, `error_code` and the observation can be filled.
+         */
+        ExecutionReport: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Configured Model */
+            configured_model?: string | null;
+            /** Delegation Id */
+            delegation_id?: string | null;
+            /** Ended At */
+            ended_at?: string | null;
+            /** Engine */
+            engine?: string | null;
+            /** Error Code */
+            error_code?: string | null;
+            /**
+             * Evidence
+             * @default not_reported
+             * @enum {string}
+             */
+            evidence?: "reported_by_runtime" | "cli_output" | "provider_response" | "not_reported";
+            /** Executor */
+            executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            /** Key */
+            key: string;
+            /**
+             * Layer
+             * @enum {string}
+             */
+            layer: "harness" | "delegate";
+            /** Observed Model */
+            observed_model?: string | null;
+            /** Policy Revision */
+            policy_revision?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Requested Model */
+            requested_model?: string | null;
+            /** Resumed From */
+            resumed_from?: string | null;
+            /** Run Key */
+            run_key?: string | null;
+            /** Runtime */
+            runtime?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "selected" | "running" | "succeeded" | "failed" | "cancelled";
+        };
         /**
          * ExhaustedReport
          * @description Mark a held account exhausted for the caller's live task claim.
@@ -3635,6 +3843,39 @@ export interface components {
             /** Requested */
             requested: boolean;
         };
+        /**
+         * LayerModels
+         * @description The latest execution of a layer. Fields stay separate: asked for, configured
+         *     and observed are different facts.
+         */
+        LayerModels: {
+            /** Configured Model */
+            configured_model: string | null;
+            /** Engine */
+            engine: string | null;
+            /**
+             * Evidence
+             * @enum {string}
+             */
+            evidence: "reported_by_runtime" | "cli_output" | "provider_response" | "not_reported";
+            /** Execution Id */
+            execution_id: string;
+            /** Executions */
+            executions: number;
+            /** Executor */
+            executor: ("claude" | "codex" | "opencode" | "agent") | null;
+            /** Observed Model */
+            observed_model: string | null;
+            /** Provider */
+            provider: string | null;
+            /** Requested Model */
+            requested_model: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "selected" | "running" | "succeeded" | "failed" | "cancelled";
+        };
         /** LeaseRef */
         LeaseRef: {
             /** Attempt */
@@ -3749,6 +3990,49 @@ export interface components {
             passes_total: number;
             /** Status */
             status: string;
+        };
+        /**
+         * ModelTrace
+         * @description Full detail: every execution and the routing timeline, oldest first.
+         */
+        ModelTrace: {
+            /** Executions */
+            executions: components["schemas"]["Execution"][];
+            summary: components["schemas"]["ModelsSummary"];
+            /** Task Id */
+            task_id: string;
+            /** Timeline */
+            timeline: components["schemas"]["Selection"][];
+        };
+        /**
+         * ModelTraceReport
+         * @description The ingestion payload: executions and selections of one attempt.
+         */
+        ModelTraceReport: {
+            /** Attempt */
+            attempt: number;
+            /** Executions */
+            executions?: components["schemas"]["ExecutionReport"][];
+            /** Selections */
+            selections?: components["schemas"]["SelectionReport"][];
+        };
+        /**
+         * ModelsSummary
+         * @description Compact card view. A layer is null when nothing was reported for it.
+         */
+        ModelsSummary: {
+            delegate?: components["schemas"]["LayerModels"] | null;
+            /**
+             * Executions
+             * @default 0
+             */
+            executions?: number;
+            harness?: components["schemas"]["LayerModels"] | null;
+            /**
+             * Switches
+             * @default 0
+             */
+            switches?: number;
         };
         /**
          * NanoclawOptions
@@ -4720,6 +5004,132 @@ export interface components {
             /** Secrets */
             secrets: number;
         };
+        /** Selection */
+        Selection: {
+            /** Agent Id */
+            agent_id: string | null;
+            /** Alternatives */
+            alternatives?: components["schemas"]["Alternative"][];
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Attempt */
+            attempt: number;
+            /** Execution Key */
+            execution_key?: string | null;
+            /** Explanation */
+            explanation?: string | null;
+            /** From Account Id */
+            from_account_id?: string | null;
+            /** From Executor */
+            from_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            /** From Model */
+            from_model?: string | null;
+            /** From Provider */
+            from_provider?: string | null;
+            /** Id */
+            id: string;
+            /** Key */
+            key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "initial" | "account_switch" | "model_switch" | "provider_switch" | "executor_switch" | "retry_no_fallback";
+            /**
+             * Layer
+             * @enum {string}
+             */
+            layer: "harness" | "delegate";
+            /** Occurred At */
+            occurred_at?: string | null;
+            /**
+             * Outcome
+             * @default unknown
+             * @enum {string}
+             */
+            outcome?: "unknown" | "succeeded" | "failed" | "abandoned";
+            /** Policy Revision */
+            policy_revision?: string | null;
+            /**
+             * Reason Code
+             * @enum {string}
+             */
+            reason_code: "priority" | "availability" | "compatibility" | "context" | "quota" | "error" | "policy";
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Task Id */
+            task_id: string;
+            /** To Account Id */
+            to_account_id?: string | null;
+            /** To Executor */
+            to_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            /** To Model */
+            to_model?: string | null;
+            /** To Provider */
+            to_provider?: string | null;
+        };
+        /**
+         * SelectionReport
+         * @description One routing decision: the initial selection, or a switch, with its coded
+         *     operational reason (never model reasoning).
+         */
+        SelectionReport: {
+            /** Alternatives */
+            alternatives?: components["schemas"]["Alternative"][];
+            /** Execution Key */
+            execution_key?: string | null;
+            /** Explanation */
+            explanation?: string | null;
+            /** From Account Id */
+            from_account_id?: string | null;
+            /** From Executor */
+            from_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            /** From Model */
+            from_model?: string | null;
+            /** From Provider */
+            from_provider?: string | null;
+            /** Key */
+            key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "initial" | "account_switch" | "model_switch" | "provider_switch" | "executor_switch" | "retry_no_fallback";
+            /**
+             * Layer
+             * @enum {string}
+             */
+            layer: "harness" | "delegate";
+            /** Occurred At */
+            occurred_at?: string | null;
+            /**
+             * Outcome
+             * @default unknown
+             * @enum {string}
+             */
+            outcome?: "unknown" | "succeeded" | "failed" | "abandoned";
+            /** Policy Revision */
+            policy_revision?: string | null;
+            /**
+             * Reason Code
+             * @enum {string}
+             */
+            reason_code: "priority" | "availability" | "compatibility" | "context" | "quota" | "error" | "policy";
+            /** To Account Id */
+            to_account_id?: string | null;
+            /** To Executor */
+            to_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            /** To Model */
+            to_model?: string | null;
+            /** To Provider */
+            to_provider?: string | null;
+        };
         /** ServingAccount */
         ServingAccount: {
             /** Id */
@@ -4845,6 +5255,13 @@ export interface components {
             lease_ttl_s: number;
             /** Max Attempts */
             max_attempts: number;
+            /**
+             * @default {
+             *       "executions": 0,
+             *       "switches": 0
+             *     }
+             */
+            models?: components["schemas"]["ModelsSummary"];
             /** Parent Id */
             parent_id: string | null;
             /** Priority */
@@ -5083,6 +5500,13 @@ export interface components {
             lease_ttl_s: number;
             /** Max Attempts */
             max_attempts: number;
+            /**
+             * @default {
+             *       "executions": 0,
+             *       "switches": 0
+             *     }
+             */
+            models?: components["schemas"]["ModelsSummary"];
             /** Parent Id */
             parent_id: string | null;
             /** Priority */
@@ -5296,6 +5720,13 @@ export interface components {
             lease_expires_at: string | null;
             /** Max Attempts */
             max_attempts: number;
+            /**
+             * @default {
+             *       "executions": 0,
+             *       "switches": 0
+             *     }
+             */
+            models?: components["schemas"]["ModelsSummary"];
             /** Parent Id */
             parent_id: string | null;
             /** Priority */
@@ -5402,6 +5833,22 @@ export interface components {
              * @default 0
              */
             unmeasured_runs?: number;
+        };
+        /**
+         * UsageRef
+         * @description The account usage row of the same run (null fields: not reported).
+         */
+        UsageRef: {
+            /** Cached Input Tokens */
+            cached_input_tokens: number | null;
+            /** Cost Usd */
+            cost_usd: number | null;
+            /** Input Tokens */
+            input_tokens: number | null;
+            /** Measurement */
+            measurement: string;
+            /** Output Tokens */
+            output_tokens: number | null;
         };
         /**
          * UsageReport
@@ -6590,6 +7037,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Agent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_models_api_agents__agent_id__models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentModels"];
                 };
             };
             /** @description Validation Error */
@@ -8727,6 +9205,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_models_api_tasks__task_id__models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTrace"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    report_models_api_tasks__task_id__models_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelTraceReport"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTrace"];
                 };
             };
             /** @description Validation Error */

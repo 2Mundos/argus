@@ -928,6 +928,36 @@
         "title": "Agent",
         "type": "object"
       },
+      "AgentModels": {
+        "description": "What the worker ran lately: its latest run per layer and its history, each\nwith its evidence. `current` is the latest recorded run, not a live claim.",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "current": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LayerModels"
+            },
+            "title": "Current",
+            "type": "object"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/Execution"
+            },
+            "title": "History",
+            "type": "array"
+          }
+        },
+        "required": [
+          "agent_id",
+          "current",
+          "history"
+        ],
+        "title": "AgentModels",
+        "type": "object"
+      },
       "AgentRegister": {
         "properties": {
           "bootstrap_token": {
@@ -1044,6 +1074,72 @@
           "lost_on_unfinished_instance"
         ],
         "title": "AgentsOverview",
+        "type": "object"
+      },
+      "Alternative": {
+        "description": "An option that was available when a choice was made (identifiers only).",
+        "properties": {
+          "executor": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "agent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executor"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "priority",
+                  "availability",
+                  "compatibility",
+                  "context",
+                  "quota",
+                  "error",
+                  "policy"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          }
+        },
+        "title": "Alternative",
         "type": "object"
       },
       "AnswerBatch": {
@@ -1992,6 +2088,13 @@
           "max_attempts": {
             "title": "Max Attempts",
             "type": "integer"
+          },
+          "models": {
+            "$ref": "#/components/schemas/ModelsSummary",
+            "default": {
+              "executions": 0,
+              "switches": 0
+            }
           },
           "parent_id": {
             "anyOf": [
@@ -3894,6 +3997,494 @@
         "title": "EventWait",
         "type": "object"
       },
+      "Execution": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "configured_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured Model"
+          },
+          "delegation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delegation Id"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "evidence": {
+            "default": "not_reported",
+            "enum": [
+              "reported_by_runtime",
+              "cli_output",
+              "provider_response",
+              "not_reported"
+            ],
+            "title": "Evidence",
+            "type": "string"
+          },
+          "executor": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "agent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executor"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "layer": {
+            "enum": [
+              "harness",
+              "delegate"
+            ],
+            "title": "Layer",
+            "type": "string"
+          },
+          "observed_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Model"
+          },
+          "policy_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Revision"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "requested_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Model"
+          },
+          "resumed_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resumed From"
+          },
+          "run_key": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Key"
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "enum": [
+              "selected",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UsageRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "layer",
+          "state",
+          "id",
+          "task_id",
+          "attempt",
+          "agent_id",
+          "recorded_at",
+          "updated_at"
+        ],
+        "title": "Execution",
+        "type": "object"
+      },
+      "ExecutionReport": {
+        "description": "One model run of a layer: a harness session, or one delegation attempt.\n\n`key` is chosen by the producer (stable across retries of the *report*, unique per\nrun). Re-sending it completes the record: values already stored are kept, only\ngaps, `state`, `ended_at`, `error_code` and the observation can be filled.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "configured_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured Model"
+          },
+          "delegation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delegation Id"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "evidence": {
+            "default": "not_reported",
+            "enum": [
+              "reported_by_runtime",
+              "cli_output",
+              "provider_response",
+              "not_reported"
+            ],
+            "title": "Evidence",
+            "type": "string"
+          },
+          "executor": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "agent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executor"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "layer": {
+            "enum": [
+              "harness",
+              "delegate"
+            ],
+            "title": "Layer",
+            "type": "string"
+          },
+          "observed_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Model"
+          },
+          "policy_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Revision"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "requested_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Model"
+          },
+          "resumed_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resumed From"
+          },
+          "run_key": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Key"
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "enum": [
+              "selected",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "layer",
+          "state"
+        ],
+        "title": "ExecutionReport",
+        "type": "object"
+      },
       "ExhaustedReport": {
         "description": "Mark a held account exhausted for the caller's live task claim.\n\n`runtime_providers` declares which fallback account metadata the runtime can\nuse. The response never carries the next credential.",
         "properties": {
@@ -5299,6 +5890,126 @@
         "title": "LaunchResult",
         "type": "object"
       },
+      "LayerModels": {
+        "description": "The latest execution of a layer. Fields stay separate: asked for, configured\nand observed are different facts.",
+        "properties": {
+          "configured_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured Model"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
+          },
+          "evidence": {
+            "enum": [
+              "reported_by_runtime",
+              "cli_output",
+              "provider_response",
+              "not_reported"
+            ],
+            "title": "Evidence",
+            "type": "string"
+          },
+          "execution_id": {
+            "title": "Execution Id",
+            "type": "string"
+          },
+          "executions": {
+            "title": "Executions",
+            "type": "integer"
+          },
+          "executor": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "agent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executor"
+          },
+          "observed_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Model"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "requested_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Model"
+          },
+          "state": {
+            "enum": [
+              "selected",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "execution_id",
+          "state",
+          "executor",
+          "engine",
+          "provider",
+          "requested_model",
+          "configured_model",
+          "observed_model",
+          "evidence",
+          "executions"
+        ],
+        "title": "LayerModels",
+        "type": "object"
+      },
       "LeaseRef": {
         "properties": {
           "attempt": {
@@ -5639,6 +6350,108 @@
           "passes_total"
         ],
         "title": "LoopOut",
+        "type": "object"
+      },
+      "ModelTrace": {
+        "description": "Full detail: every execution and the routing timeline, oldest first.",
+        "properties": {
+          "executions": {
+            "items": {
+              "$ref": "#/components/schemas/Execution"
+            },
+            "title": "Executions",
+            "type": "array"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ModelsSummary"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/Selection"
+            },
+            "title": "Timeline",
+            "type": "array"
+          }
+        },
+        "required": [
+          "task_id",
+          "summary",
+          "executions",
+          "timeline"
+        ],
+        "title": "ModelTrace",
+        "type": "object"
+      },
+      "ModelTraceReport": {
+        "description": "The ingestion payload: executions and selections of one attempt.",
+        "properties": {
+          "attempt": {
+            "minimum": 1.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "executions": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionReport"
+            },
+            "maxItems": 20,
+            "title": "Executions",
+            "type": "array"
+          },
+          "selections": {
+            "items": {
+              "$ref": "#/components/schemas/SelectionReport"
+            },
+            "maxItems": 20,
+            "title": "Selections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "attempt"
+        ],
+        "title": "ModelTraceReport",
+        "type": "object"
+      },
+      "ModelsSummary": {
+        "description": "Compact card view. A layer is null when nothing was reported for it.",
+        "properties": {
+          "delegate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LayerModels"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "executions": {
+            "default": 0,
+            "title": "Executions",
+            "type": "integer"
+          },
+          "harness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LayerModels"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "switches": {
+            "default": 0,
+            "title": "Switches",
+            "type": "integer"
+          }
+        },
+        "title": "ModelsSummary",
         "type": "object"
       },
       "NanoclawOptions-Input": {
@@ -8174,6 +8987,472 @@
         "title": "SecretsReloaded",
         "type": "object"
       },
+      "Selection": {
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "alternatives": {
+            "items": {
+              "$ref": "#/components/schemas/Alternative"
+            },
+            "maxItems": 10,
+            "title": "Alternatives",
+            "type": "array"
+          },
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "execution_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Key"
+          },
+          "explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "from_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Account Id"
+          },
+          "from_executor": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "agent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Executor"
+          },
+          "from_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Model"
+          },
+          "from_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Provider"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "initial",
+              "account_switch",
+              "model_switch",
+              "provider_switch",
+              "executor_switch",
+              "retry_no_fallback"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "layer": {
+            "enum": [
+              "harness",
+              "delegate"
+            ],
+            "title": "Layer",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "outcome": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "succeeded",
+              "failed",
+              "abandoned"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "policy_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Revision"
+          },
+          "reason_code": {
+            "enum": [
+              "priority",
+              "availability",
+              "compatibility",
+              "context",
+              "quota",
+              "error",
+              "policy"
+            ],
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "to_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Account Id"
+          },
+          "to_executor": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "agent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Executor"
+          },
+          "to_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Model"
+          },
+          "to_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Provider"
+          }
+        },
+        "required": [
+          "key",
+          "layer",
+          "kind",
+          "reason_code",
+          "id",
+          "task_id",
+          "attempt",
+          "agent_id",
+          "at",
+          "recorded_at"
+        ],
+        "title": "Selection",
+        "type": "object"
+      },
+      "SelectionReport": {
+        "description": "One routing decision: the initial selection, or a switch, with its coded\noperational reason (never model reasoning).",
+        "properties": {
+          "alternatives": {
+            "items": {
+              "$ref": "#/components/schemas/Alternative"
+            },
+            "maxItems": 10,
+            "title": "Alternatives",
+            "type": "array"
+          },
+          "execution_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Key"
+          },
+          "explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "from_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Account Id"
+          },
+          "from_executor": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "agent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Executor"
+          },
+          "from_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Model"
+          },
+          "from_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Provider"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "initial",
+              "account_switch",
+              "model_switch",
+              "provider_switch",
+              "executor_switch",
+              "retry_no_fallback"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "layer": {
+            "enum": [
+              "harness",
+              "delegate"
+            ],
+            "title": "Layer",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "outcome": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "succeeded",
+              "failed",
+              "abandoned"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "policy_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Revision"
+          },
+          "reason_code": {
+            "enum": [
+              "priority",
+              "availability",
+              "compatibility",
+              "context",
+              "quota",
+              "error",
+              "policy"
+            ],
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "to_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Account Id"
+          },
+          "to_executor": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "agent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Executor"
+          },
+          "to_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Model"
+          },
+          "to_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Provider"
+          }
+        },
+        "required": [
+          "key",
+          "layer",
+          "kind",
+          "reason_code"
+        ],
+        "title": "SelectionReport",
+        "type": "object"
+      },
       "ServingAccount": {
         "properties": {
           "id": {
@@ -8538,6 +9817,13 @@
           "max_attempts": {
             "title": "Max Attempts",
             "type": "integer"
+          },
+          "models": {
+            "$ref": "#/components/schemas/ModelsSummary",
+            "default": {
+              "executions": 0,
+              "switches": 0
+            }
           },
           "parent_id": {
             "anyOf": [
@@ -9223,6 +10509,13 @@
           "max_attempts": {
             "title": "Max Attempts",
             "type": "integer"
+          },
+          "models": {
+            "$ref": "#/components/schemas/ModelsSummary",
+            "default": {
+              "executions": 0,
+              "switches": 0
+            }
           },
           "parent_id": {
             "anyOf": [
@@ -9966,6 +11259,13 @@
             "title": "Max Attempts",
             "type": "integer"
           },
+          "models": {
+            "$ref": "#/components/schemas/ModelsSummary",
+            "default": {
+              "executions": 0,
+              "switches": 0
+            }
+          },
           "parent_id": {
             "anyOf": [
               {
@@ -10311,6 +11611,68 @@
           "runs"
         ],
         "title": "UsageBucket",
+        "type": "object"
+      },
+      "UsageRef": {
+        "description": "The account usage row of the same run (null fields: not reported).",
+        "properties": {
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "measurement": {
+            "title": "Measurement",
+            "type": "string"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          }
+        },
+        "required": [
+          "measurement",
+          "input_tokens",
+          "output_tokens",
+          "cached_input_tokens",
+          "cost_usd"
+        ],
+        "title": "UsageRef",
         "type": "object"
       },
       "UsageReport": {
@@ -12463,6 +13825,53 @@
           }
         ],
         "summary": "Drain",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/models": {
+      "get": {
+        "operationId": "get_agent_models_api_agents__agent_id__models_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentModels"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Agent Models",
         "tags": [
           "agents"
         ]
@@ -16307,6 +17716,110 @@
         "summary": "Fail Task",
         "tags": [
           "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/models": {
+      "get": {
+        "description": "Every execution (both layers, all attempts, oldest first) with its evidence,\nand the selection/switch timeline. Cards use the compact `models` summary.",
+        "operationId": "get_models_api_tasks__task_id__models_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelTrace"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Models",
+        "tags": [
+          "models"
+        ]
+      },
+      "post": {
+        "description": "Report the model executions and routing decisions of the attempt the caller\nholds (same lease fence as progress). Idempotent per `key`: a re-sent record\ncompletes the stored one and never overwrites it (409 on a contradiction).",
+        "operationId": "report_models_api_tasks__task_id__models_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelTraceReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelTrace"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Report Models",
+        "tags": [
+          "models"
         ]
       }
     },

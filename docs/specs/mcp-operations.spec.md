@@ -142,6 +142,11 @@ Findings outside the gap list:
   whole, and an item's domain error (`{status, code, message}`) fails only it.
 - **Unblock and retry** are exposed as MCP `unblock_task` and `retry_task`.
 
+## 3.2b Model observability
+
+`report_task_models` (agents), `get_task_models` and `get_agent_models` (any
+token) wrap the model trace endpoints ([spec](model-observability.spec.md)).
+
 ## 3.3 P1 — fleet
 
 - **Inspect:** `GET /api/pools/{name}/inspect` → MCP `inspect_pool(name)`

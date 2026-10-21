@@ -361,6 +361,53 @@ async def report_progress(
 
 
 @tool(AGENTS)
+async def report_task_models(
+    ctx: Context,
+    task_id: str,
+    attempt: int,
+    executions: list[dict] | None = None,
+    selections: list[dict] | None = None,
+) -> dict:
+    """Report which models ran for your task attempt, in two separate layers:
+    `harness` (your agent runtime) and `delegate` (a CLI implementer). Each execution
+    has a unique `key`, `layer`, `state` (selected|running|succeeded|failed|cancelled)
+    and optional runtime/engine/executor/provider/requested_model/configured_model/
+    observed_model + `evidence` (reported_by_runtime|cli_output|provider_response;
+    never claim an observed model from config), policy_revision, account_id,
+    delegation_id, run_key, resumed_from, error_code, started_at (omit if the model
+    never started), ended_at. Each selection has `key`, `layer`, `kind` (initial|
+    account_switch|model_switch|provider_switch|executor_switch|retry_no_fallback),
+    `reason_code` (priority|availability|compatibility|context|quota|error|policy),
+    a short `explanation`, from_*/to_* model/provider/executor/account_id,
+    alternatives, execution_key, outcome. Re-sending a key completes it; it never
+    overwrites. Never include credentials or prompts."""
+    return await _call(
+        ctx,
+        "POST",
+        f"/tasks/{task_id}/models",
+        json={
+            "attempt": attempt,
+            "executions": executions or [],
+            "selections": selections or [],
+        },
+    )
+
+
+@tool(ANYONE)
+async def get_task_models(ctx: Context, task_id: str) -> dict:
+    """Which models ran for a task, per layer (harness vs delegate): every execution
+    across attempts with requested/configured/observed model and evidence, plus the
+    selection and fallback timeline. An unreported model is null / not_reported."""
+    return await _call(ctx, "GET", f"/tasks/{task_id}/models")
+
+
+@tool(ANYONE)
+async def get_agent_models(ctx: Context, agent_id: str) -> dict:
+    """A worker's latest model per layer and its recent runs, with evidence."""
+    return await _call(ctx, "GET", f"/agents/{agent_id}/models")
+
+
+@tool(AGENTS)
 async def complete_task(
     ctx: Context,
     task_id: str,
