@@ -19,6 +19,16 @@
             ],
             "title": "Billing Day"
           },
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -290,6 +300,16 @@
       },
       "AccountCreate": {
         "properties": {
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "credential": {
             "anyOf": [
               {
@@ -422,6 +442,16 @@
             ],
             "title": "Role",
             "type": "string"
+          },
+          "settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LeaseSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -458,6 +488,16 @@
               }
             ],
             "title": "Billing Day"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "enabled": {
             "anyOf": [
@@ -1993,6 +2033,18 @@
             "title": "Max Attempts",
             "type": "integer"
           },
+          "output_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output At"
+          },
           "parent_id": {
             "anyOf": [
               {
@@ -2768,6 +2820,92 @@
           }
         },
         "title": "Criteria",
+        "type": "object"
+      },
+      "CustomConfig": {
+        "additionalProperties": false,
+        "description": "The non-secret configuration of a `custom` account.",
+        "properties": {
+          "base_url": {
+            "maxLength": 500,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/RoleSettings",
+            "default": {}
+          },
+          "executor": {
+            "$ref": "#/components/schemas/RoleSettings",
+            "default": {}
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_url",
+          "label"
+        ],
+        "title": "CustomConfig",
+        "type": "object"
+      },
+      "CustomProbe": {
+        "description": "The readiness of a custom account: `GET {base_url}/models` with the key.",
+        "properties": {
+          "exhausted_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exhausted Until"
+          },
+          "http_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Status"
+          },
+          "models": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "unauthorized",
+              "exhausted",
+              "unreachable",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "CustomProbe",
         "type": "object"
       },
       "DatabaseOut": {
@@ -5384,6 +5522,50 @@
         "title": "LeaseRequest",
         "type": "object"
       },
+      "LeaseSettings": {
+        "description": "What a lease of a custom account adds to the credential: where to call,\nwhich model, and the request-body `provider` block. No secret.",
+        "properties": {
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          }
+        },
+        "required": [
+          "base_url",
+          "label",
+          "model",
+          "provider"
+        ],
+        "title": "LeaseSettings",
+        "type": "object"
+      },
       "LocalAttempt": {
         "properties": {
           "completion_tokens": {
@@ -5617,6 +5799,128 @@
         "title": "LocalRunResult",
         "type": "object"
       },
+      "LogAccepted": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "integer"
+          },
+          "last_seq": {
+            "title": "Last Seq",
+            "type": "integer"
+          },
+          "output_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output At"
+          }
+        },
+        "required": [
+          "accepted",
+          "last_seq",
+          "output_at"
+        ],
+        "title": "LogAccepted",
+        "type": "object"
+      },
+      "LogLine": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "line": {
+            "title": "Line",
+            "type": "string"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "source": {
+            "enum": [
+              "worker",
+              "delegate"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "source",
+          "at",
+          "line"
+        ],
+        "title": "LogLine",
+        "type": "object"
+      },
+      "LogPage": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "last_seq": {
+            "title": "Last Seq",
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/LogLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          }
+        },
+        "required": [
+          "attempt",
+          "lines",
+          "last_seq"
+        ],
+        "title": "LogPage",
+        "type": "object"
+      },
+      "LogRequest": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Lines",
+            "type": "array"
+          },
+          "source": {
+            "enum": [
+              "worker",
+              "delegate"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "source",
+          "lines"
+        ],
+        "title": "LogRequest",
+        "type": "object"
+      },
       "LoopOut": {
         "properties": {
           "errors_total": {
@@ -5662,6 +5966,212 @@
           "passes_total"
         ],
         "title": "LoopOut",
+        "type": "object"
+      },
+      "ModelEndpoint": {
+        "description": "One host serving a model (OpenRouter `\u2026/endpoints`), for the routing pickers.",
+        "properties": {
+          "completion_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completion Price"
+          },
+          "context_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Length"
+          },
+          "max_completion_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Completion Tokens"
+          },
+          "prompt_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Price"
+          },
+          "provider_name": {
+            "title": "Provider Name",
+            "type": "string"
+          },
+          "quantization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantization"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
+          }
+        },
+        "required": [
+          "provider_name"
+        ],
+        "title": "ModelEndpoint",
+        "type": "object"
+      },
+      "ModelEndpoints": {
+        "properties": {
+          "endpoints": {
+            "items": {
+              "$ref": "#/components/schemas/ModelEndpoint"
+            },
+            "title": "Endpoints",
+            "type": "array"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "endpoints"
+        ],
+        "title": "ModelEndpoints",
+        "type": "object"
+      },
+      "ModelPolicy": {
+        "properties": {
+          "env_overrides": {
+            "title": "Env Overrides",
+            "type": "boolean"
+          },
+          "file_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Revision"
+          },
+          "harness": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Harness",
+            "type": "object"
+          },
+          "implementation": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Implementation",
+            "type": "object"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "env",
+              "file",
+              "defaults"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "harness",
+          "implementation",
+          "revision",
+          "source",
+          "path",
+          "env_overrides"
+        ],
+        "title": "ModelPolicy",
+        "type": "object"
+      },
+      "ModelPolicyBody": {
+        "additionalProperties": false,
+        "properties": {
+          "harness": {
+            "title": "Harness"
+          },
+          "implementation": {
+            "title": "Implementation"
+          }
+        },
+        "required": [
+          "harness",
+          "implementation"
+        ],
+        "title": "ModelPolicyBody",
         "type": "object"
       },
       "NanoclawOptions-Input": {
@@ -7879,6 +8389,36 @@
         "title": "Role",
         "type": "string"
       },
+      "RoleSettings": {
+        "additionalProperties": false,
+        "description": "What one lease role (`engine`: the NanoClaw harness, `executor`: the code\nexecutor) uses on this account.",
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "routing_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingOptions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "RoleSettings",
+        "type": "object"
+      },
       "RouteDecision": {
         "properties": {
           "blocked": {
@@ -8056,6 +8596,49 @@
         "title": "RouteRequest",
         "type": "object"
       },
+      "RoutingOptions": {
+        "additionalProperties": false,
+        "description": "OpenRouter provider routing. A list or a comma-separated string is accepted.",
+        "properties": {
+          "allow_fallbacks": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Fallbacks"
+          },
+          "only": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Only",
+            "type": "array"
+          },
+          "order": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Order",
+            "type": "array"
+          },
+          "quantizations": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Quantizations",
+            "type": "array"
+          }
+        },
+        "title": "RoutingOptions",
+        "type": "object"
+      },
       "RuntimeKind": {
         "enum": [
           "plain",
@@ -8199,9 +8782,31 @@
       },
       "ServingAccount": {
         "properties": {
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
           },
           "name": {
             "title": "Name",
@@ -8561,6 +9166,18 @@
           "max_attempts": {
             "title": "Max Attempts",
             "type": "integer"
+          },
+          "output_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output At"
           },
           "parent_id": {
             "anyOf": [
@@ -9246,6 +9863,18 @@
           "max_attempts": {
             "title": "Max Attempts",
             "type": "integer"
+          },
+          "output_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output At"
           },
           "parent_id": {
             "anyOf": [
@@ -9988,6 +10617,18 @@
           "max_attempts": {
             "title": "Max Attempts",
             "type": "integer"
+          },
+          "output_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output At"
           },
           "parent_id": {
             "anyOf": [
@@ -11931,6 +12572,120 @@
           }
         ],
         "summary": "Report Exhausted",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/models/{author}/{slug}/endpoints": {
+      "get": {
+        "description": "The hosts serving an OpenRouter model, with quantization, context and price,\nfor the routing pickers (custom accounts spec 3). Proxied; `author` and `slug`\nare validated as one path segment each.",
+        "operationId": "custom_model_endpoints_api_accounts__account_id__models__author___slug__endpoints_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "author",
+            "required": true,
+            "schema": {
+              "title": "Author",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelEndpoints"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Custom Model Endpoints",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/probe": {
+      "post": {
+        "description": "Readiness of a custom account: `GET {base_url}/models` with its key (custom\naccounts spec 3). Returns the model ids as suggestions; never the key, and\nonly a fixed reason, never upstream text.",
+        "operationId": "probe_custom_account_api_accounts__account_id__probe_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomProbe"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Probe Custom Account",
         "tags": [
           "accounts"
         ]
@@ -14663,6 +15418,103 @@
         ]
       }
     },
+    "/api/models": {
+      "delete": {
+        "description": "Remove the file so the repository defaults apply again.",
+        "operationId": "restore_models_api_models_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelPolicy"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Restore Models",
+        "tags": [
+          "models"
+        ]
+      },
+      "get": {
+        "description": "The effective policy, its origin and revision. Availability of a model at\nthe provider is not checked.",
+        "operationId": "get_models_api_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelPolicy"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Models",
+        "tags": [
+          "models"
+        ]
+      },
+      "put": {
+        "description": "Validate and save the file policy, all or nothing.",
+        "operationId": "put_models_api_models_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelPolicyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelPolicy"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Models",
+        "tags": [
+          "models"
+        ]
+      }
+    },
     "/api/overview": {
       "get": {
         "description": "Fleet-wide totals per state for the Home view (orchestrator or admin).",
@@ -16328,6 +17180,158 @@
           }
         ],
         "summary": "Fail Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/log": {
+      "get": {
+        "description": "Log lines of an attempt (default: the current one), oldest first. With\n`after` (a `seq`), the lines after it; without, the newest `limit` lines.\nWorkers only read tasks they have leased.",
+        "operationId": "get_log_api_tasks__task_id__log_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "attempt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Attempt"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Log",
+        "tags": [
+          "tasks"
+        ]
+      },
+      "post": {
+        "description": "Append output lines to the live log of the attempt you hold (agent token).\nUp to 200 lines of 2000 characters (longer ones are cut) and 64 KiB per batch,\none batch per second per source. Secrets are redacted before storing; the\nbatch is published as a `task.log` event and stored in a ring of 2000 lines\nper attempt. Fenced like progress: a stale attempt is 409 `stale_attempt`.",
+        "operationId": "post_log_api_tasks__task_id__log_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Log",
         "tags": [
           "tasks"
         ]

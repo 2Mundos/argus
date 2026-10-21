@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Event:
+    # 0 marks a transient event: published live only, never in the events table.
     id: int
     at: datetime
     actor: str
@@ -98,6 +99,18 @@ async def record(
     return event
 
 
+def transient(
+    tx: "Tx",
+    actor: str,
+    subject_type: str,
+    subject_id: str,
+    kind: str,
+    data: dict[str, Any],
+) -> None:
+    """Publish an event live after commit without storing it (no replay, no id)."""
+    tx.transient.append(Event(0, tx.now, actor, subject_type, subject_id, kind, data))
+
+
 def to_sse(event: Event) -> str:
     payload = {
         "id": event.id,
@@ -108,4 +121,6 @@ def to_sse(event: Event) -> str:
         "kind": event.kind,
         "data": event.data,
     }
-    return f"id: {event.id}\ndata: {json.dumps(payload)}\n\n"
+    # A transient event has no id, so it never moves the client's Last-Event-ID.
+    ident = f"id: {event.id}\n" if event.id else ""
+    return f"{ident}data: {json.dumps(payload)}\n\n"

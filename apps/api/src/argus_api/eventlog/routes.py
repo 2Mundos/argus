@@ -220,8 +220,10 @@ async def event_stream(
     overflows ends the stream; the client reconnects with Last-Event-ID.
     Workers only receive events for leased tasks and their leased projects (live
     filter uses the project set captured at subscribe time; task grants are
-    checked per event).
+    checked per event, and a grant once seen is cached: grants are never deleted,
+    so a busy live log costs one read per task, not one per batch).
     """
+    granted: set[str] = set()
     with db.bus.subscribe() as sub:
         if after is None:
             async with (
@@ -271,16 +273,16 @@ async def event_stream(
             except OverflowedError:
                 return
             if projects is not None and not await _live_allowed(
-                db, event, projects, agent_id
+                db, event, projects, agent_id, granted
             ):
-                cursor = event.id
+                cursor = max(cursor, event.id)
                 continue
             yield to_sse(event)
-            cursor = event.id
+            cursor = max(cursor, event.id)  # a transient event (id 0) keeps it
 
 
 def _after(cursor: int) -> Callable[[Event], bool]:
-    return lambda e: e.id > cursor
+    return lambda e: e.id > cursor or e.id == 0
 
 
 async def _scope(conn, caller: Identity) -> tuple[str, list[str]] | None:
@@ -292,15 +294,24 @@ async def _scope(conn, caller: Identity) -> tuple[str, list[str]] | None:
 
 
 async def _live_allowed(
-    db: Database, event: Event, projects: Collection[str], agent_id: str | None
+    db: Database,
+    event: Event,
+    projects: Collection[str],
+    agent_id: str | None,
+    granted: set[str],
 ) -> bool:
     """Whether a live bus event is readable by the worker; same rule as
-    worker_event_filter."""
+    worker_event_filter. `granted` caches the tasks already found leased."""
     if agent_id is None:
         return False
     if event.subject_type == "task":
+        if event.subject_id in granted:
+            return True
         async with db.read() as conn:
-            return await has_leased_task(conn, agent_id, event.subject_id)
+            if not await has_leased_task(conn, agent_id, event.subject_id):
+                return False
+        granted.add(event.subject_id)
+        return True
     if not projects:
         return False
     if event.subject_type == "project":

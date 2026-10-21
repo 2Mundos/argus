@@ -182,7 +182,7 @@ test("actual harness hook applies config, stops stale containers and pins policy
     executor_account_id: "a-codex",
     preferred_executor: "codex",
   });
-  assert.equal(loadPolicy({}, file).policy.implementation.codex[0], "gpt-6-luna");
+  assert.equal(loadPolicy({}, file).policy.implementation.codex[0], "gpt-6.1-sol");
   // Without a separate executor lease the engine's account is the executor account too.
   await hook(
     { id: "task2", attempt: 1, failures: 1, spec: "" },

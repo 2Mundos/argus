@@ -39,13 +39,19 @@ def descendant_owner(pool: Pool, label_value: str) -> str | None:
 
 
 def container_spec(
-    pool: Pool, instance_id: str, bootstrap_tokens: list[str], argus_url: str
+    pool: Pool,
+    instance_id: str,
+    bootstrap_tokens: list[str],
+    argus_url: str,
+    model_policy: str | None = None,
 ) -> ContainerSpec:
     """Build the container for one instance.
 
     `plain`: the image reads ARGUS_* and speaks the Argus API itself.
     `nanoclaw`: the image runs a NanoClaw host (with the Argus channel) from a
     prepared checkout on the Docker host, which spawns its own agent containers.
+    `model_policy` (canonical JSON) becomes its ARGUS_MODEL_POLICY, fixed for the
+    life of the container.
     """
     env = {
         **pool.env,
@@ -74,6 +80,8 @@ def container_spec(
             "ARGUS_REPOSITORIES_JSON": json.dumps(nc.repositories, sort_keys=True),
             "NO_PROXY": "host.docker.internal,127.0.0.1,localhost",
         }
+        if model_policy is not None:
+            env["ARGUS_MODEL_POLICY"] = model_policy
         workdir = f"{nc.instances_root.rstrip('/')}/{instance_id}"
         sandboxed = pool.docker.runtime is not None
         mounts = [

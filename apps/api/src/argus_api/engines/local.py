@@ -3,10 +3,10 @@ server really serves, and run one bounded completion checked by criteria."""
 
 import asyncio
 import time
-from urllib.parse import urlsplit
 
 import httpx2 as httpx
 from argus_core.criteria_safe import check_answer
+from argus_core.custom_accounts import check_base_url
 from argus_core.engines import (
     LocalAttempt,
     LocalModelInfo,
@@ -20,12 +20,7 @@ QUEUE_WAIT_S = 5.0
 
 def validate_url(url: str) -> str:
     """http(s) only, no embedded credentials, no query/fragment."""
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise ValueError(f"ARGUS_LOCAL_MODEL_URL must be an http(s) URL: {url!r}")
-    if parts.username or parts.password or parts.query or parts.fragment:
-        raise ValueError("ARGUS_LOCAL_MODEL_URL must not carry credentials or a query")
-    return url.rstrip("/")
+    return check_base_url(url, "ARGUS_LOCAL_MODEL_URL")
 
 
 def build_chat_completion_payload(req: LocalRunRequest, model: str) -> dict:

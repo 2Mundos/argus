@@ -26,12 +26,13 @@ from argus_api.deps import (
     ManagerDep,
     SecretsDep,
     SettingsDep,
+    TokenDep,
 )
 from argus_api.errors import ValidationFailedError
 from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
 from argus_api.paging import DEFAULT_LIMIT, View
-from argus_api.tasks import service, views
+from argus_api.tasks import log, service, views
 from argus_api.tasks.views import TaskPage
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -59,6 +60,12 @@ class ProgressRequest(BaseModel):
     def _milestone(self) -> "ProgressRequest":
         validate_milestone(self.kind, self.data)
         return self
+
+
+class LogRequest(BaseModel):
+    attempt: int
+    source: log.Source
+    lines: list[str] = Field(min_length=1, max_length=log.MAX_LINES)
 
 
 class FailRequest(BaseModel):
@@ -229,6 +236,45 @@ async def report_progress(
             body.kind,
             body.data,
         )
+
+
+@router.post("/{task_id}/log")
+async def post_log(
+    task_id: str,
+    body: LogRequest,
+    db: DbDep,
+    agent_id: AgentDep,
+    token: TokenDep,
+) -> log.LogAccepted:
+    """Append output lines to the live log of the attempt you hold (agent token).
+    Up to 200 lines of 2000 characters (longer ones are cut) and 64 KiB per batch,
+    one batch per second per source. Secrets are redacted before storing; the
+    batch is published as a `task.log` event and stored in a ring of 2000 lines
+    per attempt. Fenced like progress: a stale attempt is 409 `stale_attempt`."""
+    async with db.snapshot() as snap:  # refuse cheaply before the costly cleaning
+        await log.admit(snap, agent_id, task_id, body.attempt, body.source)
+    lines = log.prepare(
+        body.lines, (token,) if token else ()
+    )  # redaction stays outside the writer
+    async with db.write() as tx:
+        return await log.append(tx, agent_id, task_id, body.attempt, body.source, lines)
+
+
+@router.get("/{task_id}/log")
+async def get_log(
+    task_id: str,
+    db: DbDep,
+    caller: CallerDep,
+    attempt: Annotated[int | None, Query(ge=0, le=log.MAX_SEQ)] = None,
+    after: Annotated[int | None, Query(ge=0, le=log.MAX_SEQ)] = None,
+    limit: Annotated[int, Query(ge=1, le=log.MAX_READ)] = log.DEFAULT_TAIL,
+) -> log.LogPage:
+    """Log lines of an attempt (default: the current one), oldest first. With
+    `after` (a `seq`), the lines after it; without, the newest `limit` lines.
+    Workers only read tasks they have leased."""
+    async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
+        return await log.read(conn, task_id, attempt, after, limit)
 
 
 @router.post("/{task_id}/fail")

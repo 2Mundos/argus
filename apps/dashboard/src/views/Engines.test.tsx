@@ -36,6 +36,8 @@ vi.mock("../engines", () => ({
     f.ok === true ? "yes" : f.ok === false ? "no" : "unknown",
 }));
 
+vi.mock("./ModelPreferences", () => ({ ModelPreferences: () => <p>model preferences</p> }));
+
 vi.mock("../live", async () => {
   const { useEffect, useState } = await import("react");
   return {
@@ -57,6 +59,7 @@ describe("Engines", () => {
     expect(await screen.findByText("Codex (OpenAI)")).toBeTruthy();
     expect(screen.getByText("openai")).toBeTruthy();
     expect(screen.getAllByText("codex").length).toBeGreaterThan(0);
+    expect(screen.getByText("model preferences")).toBeTruthy();
     expect(screen.getAllByText("no").length).toBeGreaterThan(0);
   });
 });

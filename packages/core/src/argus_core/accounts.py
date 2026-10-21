@@ -6,6 +6,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from argus_core.custom_accounts import PROVIDER as CUSTOM_PROVIDER
+from argus_core.custom_accounts import CustomConfig, LeaseSettings
+
 LeaseRole = Literal["engine", "executor", "repository"]
 
 # Technical facts, not operator policy (account selection spec 3): the account
@@ -71,6 +74,8 @@ class AccountCreate(BaseModel):
     secret_ref: str | None = Field(default=None, pattern=r"^sops:[A-Za-z0-9_-]{1,128}$")
     # Max total (input + output) tokens per rolling window; used to estimate quota.
     token_limits: dict[str, int] | None = None
+    # `custom` accounts only: base URL, label, per-role model and routing options.
+    config: CustomConfig | None = None
 
     _limits = field_validator("token_limits")(_check_token_limits)
 
@@ -78,6 +83,8 @@ class AccountCreate(BaseModel):
     def one_secret_source(self) -> "AccountCreate":
         if (self.credential is None) == (self.secret_ref is None):
             raise ValueError("give exactly one of credential or secret_ref")
+        if (self.provider == CUSTOM_PROVIDER) != (self.config is not None):
+            raise ValueError("config is required for, and only for, provider custom")
         return self
 
 
@@ -89,6 +96,7 @@ class AccountUpdate(BaseModel):
     enabled: bool | None = None
     billing_day: int | None = Field(default=None, ge=1, le=31)
     token_limits: dict[str, int] | None = None  # null clears
+    config: CustomConfig | None = None  # custom accounts: replaces the whole config
 
     _limits = field_validator("token_limits")(_check_token_limits)
 
@@ -177,6 +185,8 @@ class Account(BaseModel):
     quota_status: QuotaStatus
     token_limits: dict[str, int] | None = None
     billing_day: int | None = None
+    # `custom` accounts: where and how to call. Never contains the key.
+    config: CustomConfig | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -213,6 +223,8 @@ class AccountLease(BaseModel):
     kind: AccountKind
     role: LeaseRole = "engine"
     credential: dict[str, Any]
+    # `custom` accounts: base URL, model and `provider` block for this role.
+    settings: LeaseSettings | None = None
 
 
 class ExhaustedReport(BaseModel):

@@ -53,6 +53,7 @@ class TaskSummary(Refs):
     progress_at: datetime | None
     progress_kind: ProgressKind | None = None
     progress_data: dict[str, Any] | None = None
+    output_at: datetime | None = None
     created_at: datetime
     archived_at: datetime | None
     version: str  # updated_at; pass it back as expected_version

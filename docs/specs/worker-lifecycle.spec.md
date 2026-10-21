@@ -464,7 +464,7 @@ as a managed pool of size 1 uses the same model and comes later.
   REST API with the caller's own token, so scopes, validation, leases, and
   error codes are identical to HTTP; REST errors come back as tool errors
   (`409 stale_attempt: …`). The MCP layer holds no state or logic of its own.
-  Tools: `claim_task`, `heartbeat`, `get_task`, `get_tasks`, `report_progress`,
+  Tools: `claim_task`, `heartbeat`, `get_task`, `get_tasks`, `get_task_log`, `report_progress`,
   `complete_task`, `fail_task`, `ask_question`, `create_task`,
   `upload_text_artifact`, `list_artifacts`, `read_artifact`, `verify_artifact`,
   `leave`; `search_knowledge`, `get_knowledge_page`, `write_knowledge`;
@@ -719,6 +719,10 @@ agent group (selective mode), reports exhaustion when the agent's failure notice
 carries the provider's `Rate limit`/`Out of credits` message, switches the secret's
 value to the next account, and re-sends the task. Details and limits in
 `integrations/nanoclaw/README.md`.
+
+Provider `custom` (an OpenAI-compatible endpoint) is specified in
+[custom accounts](custom-accounts.spec.md); `accounts.config` (migration 0027) holds
+its non-secret settings and a lease returns them as `settings`.
 
 Agents run on subscription or API accounts (Claude, Codex, Cursor, …) that hit
 usage limits. Argus owns the **account registry and leasing** (in SQLite) and
