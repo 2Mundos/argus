@@ -53,6 +53,8 @@ every new dependency is judged against it.
   dedicated login, or renew an Anthropic credential as an Argus account
 - [Cursor accounts](specs/cursor-accounts.spec.md) — import a login or API key
   for the delegated Cursor CLI; executor lease and OneCLI path-scoped injection
+- [Custom accounts](specs/custom-accounts.spec.md) — an OpenAI-compatible endpoint
+  (OpenRouter first) as an account: model and routing per role, probe, 402/429 failover
 - [Knowledge](specs/knowledge.spec.md) — projects and a versioned wiki shared by
   agents and people, delivered with every claim
 - [Home](specs/home.spec.md) — the default dashboard tab: what needs attention,
@@ -64,12 +66,17 @@ every new dependency is judged against it.
   feed, agent drawer with its current work and container output
 - [Progress milestones](specs/progress-milestones.spec.md) — structured progress
   signals (commit, PR, CI, gate) on task cards and a no-signal indicator
+- [Task live log](specs/task-live-log.spec.md) — a redacted ring of an attempt's
+  output, streamed as `task.log`; the "Ao vivo" panel and MCP `get_task_log`
 - [Account usage](specs/account-usage.spec.md) — tokens spent and quota left per
   provider account: reported usage, Codex quota probe, Cursor pools, charts
 - [Cost view](specs/cost-view.spec.md) — the Custo tab: tokens and estimated cost
   per project and account over 24h/7d/30d, price table, unpriced models
 - [MCP operations](specs/mcp-operations.spec.md) — inbox and fleet journeys over
   MCP with compact, paged responses; REST/MCP coverage audit
+- [Worker read scope](specs/worker-read-scope.spec.md) — workers may only read
+  tasks/artifacts they have leased and knowledge/events for those projects;
+  orchestrators and admins stay global
 - [Task archive](specs/task-archive.spec.md) — archive terminal tasks out of lists
   and totals; reversible, never deletes
 - [Task dependencies](specs/task-dependencies.spec.md) — edit a waiting task's

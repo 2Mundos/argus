@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import FileResponse
 
+from argus_api.access import require_task_readable
 from argus_api.artifacts import service
 from argus_api.artifacts.service import (
     Artifact,
@@ -64,29 +65,33 @@ async def upload_artifact(
 async def list_artifacts(
     task_id: str,
     db: DbDep,
-    _: CallerDep,
+    caller: CallerDep,
     attempt: int | None = None,
     role: ArtifactRole | None = None,
 ) -> list[TaskArtifact]:
     """A task's artifacts (metadata only), by attempt then name; `in_result` says
     whether the task's result lists one."""
     async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
         return await service.list_artifacts(conn, task_id, attempt=attempt, role=role)
 
 
 @router.get("/artifacts/{artifact_id}")
-async def get_artifact(artifact_id: str, db: DbDep, _: CallerDep) -> Artifact:
+async def get_artifact(artifact_id: str, db: DbDep, caller: CallerDep) -> Artifact:
     async with db.read() as conn:
-        return await service.get_artifact(conn, artifact_id)
+        artifact = await service.get_artifact(conn, artifact_id)
+        await require_task_readable(conn, caller, artifact.task_id)
+        return artifact
 
 
 @router.get("/artifacts/{artifact_id}/content", response_class=FileResponse)
 async def download_artifact(
-    artifact_id: str, db: DbDep, store: StoreDep, _: CallerDep
+    artifact_id: str, db: DbDep, store: StoreDep, caller: CallerDep
 ) -> FileResponse:
     """The raw bytes. Honours `Range: bytes=…` for partial reads."""
     async with db.read() as conn:
         artifact = await service.get_artifact(conn, artifact_id)
+        await require_task_readable(conn, caller, artifact.task_id)
     return FileResponse(
         store.path(service.key(artifact.task_id, artifact.attempt, artifact.name)),
         media_type=artifact.media_type,
@@ -99,7 +104,7 @@ async def read_artifact_text(
     artifact_id: str,
     db: DbDep,
     store: StoreDep,
-    _: CallerDep,
+    caller: CallerDep,
     offset: Annotated[int, Query(ge=0)] = 0,
     max_bytes: Annotated[int, Query(ge=64, le=65536)] = 16384,
 ) -> ArtifactText:
@@ -107,15 +112,17 @@ async def read_artifact_text(
     continue from `next_offset`. Other media types return `binary` and no bytes."""
     async with db.read() as conn:
         artifact = await service.get_artifact(conn, artifact_id)
+        await require_task_readable(conn, caller, artifact.task_id)
     return await service.read_text(store, artifact, offset, max_bytes)
 
 
 @router.post("/artifacts/{artifact_id}/verify")
 async def verify_artifact(
-    artifact_id: str, db: DbDep, store: StoreDep, _: CallerDep
+    artifact_id: str, db: DbDep, store: StoreDep, caller: CallerDep
 ) -> Verification:
     """Re-hash the stored bytes against the size and SHA-256 recorded at upload.
     `ok` means intact, not acceptable."""
     async with db.read() as conn:
         artifact = await service.get_artifact(conn, artifact_id)
+        await require_task_readable(conn, caller, artifact.task_id)
     return await service.verify(store, artifact)

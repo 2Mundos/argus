@@ -117,8 +117,13 @@ async def list_pages(
     project: str | None = None,
     include_archived: bool = False,
     stale_after: timedelta = DEFAULT_STALE_AFTER,
+    project_scope: tuple[str, list[str]] | None = None,
 ) -> list[PageListItem]:
     sql, params = "SELECT * FROM knowledge_pages WHERE 1 = 1", []
+    if project_scope is not None:
+        clause, scope_params = project_scope
+        sql += f" AND ({clause})"
+        params += scope_params
     if project is not None:
         sql += " AND project = ?"
         params.append(project)
@@ -208,6 +213,7 @@ async def search(
     match_any: bool = False,
     exclude: set[str] | None = None,
     stale_after: timedelta = DEFAULT_STALE_AFTER,
+    project_scope: tuple[str, list[str]] | None = None,
 ) -> list[SearchHit]:
     """Ranked full-text search over active pages. All terms must match unless
     `match_any`; stale pages rank after fresh ones but are never dropped."""
@@ -220,6 +226,10 @@ async def search(
         " WHERE knowledge_fts MATCH ? AND p.state = 'active'"
     )
     params: list[Any] = [(" OR " if match_any else " ").join(terms)]
+    if project_scope is not None:
+        clause, scope_params = project_scope
+        sql += f" AND ({clause})"
+        params += scope_params
     if project is not None:
         sql += " AND p.project = ?"
         params.append(project)
@@ -595,11 +605,18 @@ async def get_proposal(conn: aiosqlite.Connection, proposal_id: str) -> Proposal
 
 
 async def list_proposals(
-    conn: aiosqlite.Connection, state: ProposalState | None = ProposalState.OPEN
+    conn: aiosqlite.Connection,
+    state: ProposalState | None = ProposalState.OPEN,
+    *,
+    project_scope: tuple[str, list[str]] | None = None,
 ) -> list[Proposal]:
-    sql, params = "SELECT * FROM knowledge_proposals", []
+    sql, params = "SELECT * FROM knowledge_proposals WHERE 1 = 1", []
+    if project_scope is not None:
+        clause, scope_params = project_scope
+        sql += f" AND ({clause})"
+        params += scope_params
     if state is not None:
-        sql += " WHERE state = ?"
+        sql += " AND state = ?"
         params.append(state)
     async with conn.execute(sql + " ORDER BY created_at", params) as cur:
         return [_to_proposal(r) for r in await cur.fetchall()]

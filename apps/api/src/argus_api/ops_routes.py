@@ -30,8 +30,10 @@ def _loops(request: Request) -> dict[str, ops.LoopStats]:
 async def _readiness(
     request: Request, db: DbDep, settings: SettingsDep
 ) -> ops.Readiness:
-    return await ops.readiness(
-        db, _loops(request), settings.data_dir, request.app.state.secrets_ok
+    return await request.app.state.readiness.get(
+        lambda: ops.readiness(
+            db, _loops(request), settings.data_dir, request.app.state.secrets_ok
+        )
     )
 
 

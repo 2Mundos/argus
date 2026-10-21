@@ -10,6 +10,7 @@ import { Activity } from "./Activity";
 import { AgentDetail } from "./AgentDetail";
 import { EventList } from "./Events";
 import { TaskEditForm } from "./TaskEditForm";
+import { TaskLog } from "./TaskLog";
 
 export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () => void }) {
   const [error, setError] = useState<string>();
@@ -186,6 +187,7 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                   </div>
                 </>
               )}
+              {task.attempt > 0 && <TaskLog taskId={taskId} attempt={task.attempt} />}
               {task.result && (
                 <>
                   <h3>Result</h3>

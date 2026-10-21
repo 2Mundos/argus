@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import itertools
+import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -41,6 +42,7 @@ class Tx:
     conn: aiosqlite.Connection
     now: datetime
     events: list[Event] = field(default_factory=list)
+    transient: list[Event] = field(default_factory=list)  # published, never stored
 
     @asynccontextmanager
     async def savepoint(self) -> AsyncGenerator[None]:
@@ -52,6 +54,7 @@ class Tx:
         """
         name = f"sp_{next(_savepoints)}"
         mark = len(self.events)
+        transient_mark = len(self.transient)
         await self.conn.execute(f"SAVEPOINT {name}")
         try:
             yield
@@ -59,6 +62,7 @@ class Tx:
             await self.conn.execute(f"ROLLBACK TO {name}")
             await self.conn.execute(f"RELEASE {name}")
             del self.events[mark:]
+            del self.transient[transient_mark:]
             raise
         await self.conn.execute(f"RELEASE {name}")
 
@@ -87,6 +91,7 @@ class Database:
         self._clock = clock
         self._writer = writer
         self._write_lock = asyncio.Lock()
+        self._write_since: float | None = None  # monotonic start of the open write
         self._readers: asyncio.Queue[aiosqlite.Connection] = asyncio.Queue()
         self._all_readers = readers
         for r in readers:
@@ -132,26 +137,39 @@ class Database:
         Events recorded in the transaction are published only after commit.
         """
         async with self._write_lock:
-            await self._writer.execute("BEGIN IMMEDIATE")
-            tx = Tx(self._writer, self._clock())
+            self._write_since = time.monotonic()
             try:
-                yield tx
-            except BaseException:
-                await self._writer.execute("ROLLBACK")
-                raise
-            try:
-                await self._writer.execute("COMMIT")
-            except BaseException:
-                # A cancelled COMMIT may still complete in aiosqlite's thread: roll
-                # back only what is still open, and never let a failed ROLLBACK
-                # replace the original error (a swallowed CancelledError leaves a
-                # background loop running forever).
-                if self._writer.in_transaction:
-                    with contextlib.suppress(Exception):
-                        await self._writer.execute("ROLLBACK")
-                raise
-        for event in tx.events:
+                await self._writer.execute("BEGIN IMMEDIATE")
+                tx = Tx(self._writer, self._clock())
+                try:
+                    yield tx
+                except BaseException:
+                    await self._writer.execute("ROLLBACK")
+                    raise
+                try:
+                    await self._writer.execute("COMMIT")
+                except BaseException:
+                    # A cancelled COMMIT may still complete in aiosqlite's thread: roll
+                    # back only what is still open, and never let a failed ROLLBACK
+                    # replace the original error (a swallowed CancelledError leaves a
+                    # background loop running forever).
+                    if self._writer.in_transaction:
+                        with contextlib.suppress(Exception):
+                            await self._writer.execute("ROLLBACK")
+                    raise
+            finally:
+                self._write_since = None
+        for event in (*tx.events, *tx.transient):
             self.bus.publish(event)
+
+    def write_held_for(self) -> float:
+        """Seconds the current write transaction has held the writer (0 if free).
+
+        Reads one float and never touches the lock, so an unauthenticated probe
+        can call it without queueing behind (or in front of) any writer.
+        """
+        since = self._write_since
+        return 0.0 if since is None else time.monotonic() - since
 
     @asynccontextmanager
     async def read(self) -> AsyncGenerator[aiosqlite.Connection]:

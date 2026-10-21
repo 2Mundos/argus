@@ -70,6 +70,10 @@ class Settings:
         return self.secrets_file or self.data_dir / "secrets.sops.yaml"
 
     @property
+    def model_policy_path(self) -> Path:
+        return self.data_dir / "model-policy.json"
+
+    @property
     def engines_ledger_path(self) -> Path:
         return self.engines_ledger or self.data_dir / "engines-ledger.json"
 

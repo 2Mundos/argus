@@ -37,7 +37,7 @@ and the dashboard's System tab.
 
   | Check | Failing when | Notes |
   | --- | --- | --- |
-  | `database` | a write transaction does not complete within 5 s | A wedged single writer is the failure that matters; a read alone would not show it. |
+  | `database` | a read snapshot does not complete within 5 s, or one write transaction has held the writer for over 5 s | A wedged single writer is the failure that matters. The probe never acquires the writer (3.1a). |
   | `reaper` | no pass completed within `max(3 × interval, 30 s)` | Leases would stop expiring. |
   | `reconciler` | same | Pools would stop converging. |
   | `disk` | free space on the data directory below 64 MiB | SQLite cannot write. |
@@ -45,6 +45,21 @@ and the dashboard's System tab.
 
   Readiness is `503` only when a check is `failing`; `degraded` still returns
   `200`. The body carries no secrets and no identifiers.
+
+### 3.1a `/readyz` is anonymous, so it must be cheap and cannot take the writer
+
+- Readiness never calls `Database.write()`: an unauthenticated client must not be
+  able to queue on, or hold, SQLite's single writer. The `database` check runs a
+  trivial query on a read connection under a 5 s timeout, and asks
+  `Database.write_held_for()` how long the current write transaction has held the
+  writer (a monotonic timestamp read, no lock). Held over 5 s means `failing`.
+- The result is cached per app for 2 s and concurrent callers share one in-flight
+  probe, so request rate does not change probe cost. `/api/system` reuses it.
+- Detail strings carry no identifiers.
+- Exposure: the image binds `UVICORN_HOST` (default `0.0.0.0` inside the
+  container, which published ports require). Who can connect is set by the publish
+  address, so the documented `docker run` publishes on `127.0.0.1`. Argus speaks
+  plain HTTP; TLS terminates at a reverse proxy, none of which ships in this repo.
 
 ## 3.2 Metrics
 
@@ -105,6 +120,7 @@ System tab renders it and refreshes with the event stream.
 
 - No new required dependency or service. Tests may use `prometheus-client` to
   validate the exposition format; the runtime does not.
+- `/readyz` never takes the writer and costs at most one probe per 2 s.
 - `/api/metrics` and `/readyz` are bounded: a fixed number of aggregate queries, no
   per-row scans, no filesystem walks.
 - `/readyz` must stay unauthenticated and free of identifiers, because probes and

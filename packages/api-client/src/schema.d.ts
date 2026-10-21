@@ -273,6 +273,9 @@ export interface paths {
          * @description Replace the credential (e.g. refreshed OAuth tokens). Allowed for the agent
          *     holding a lease on the account, or an admin. If it cannot be persisted, the
          *     account is disabled rather than left with a token that would be lost.
+         *
+         *     An agent must also hold the live task claim named by `task_id` and `attempt`,
+         *     checked before the store write (no transaction spans the store's I/O).
          */
         put: operations["update_credential_api_accounts__account_id__credential_put"];
         post?: never;
@@ -300,6 +303,50 @@ export interface paths {
          *     any next credential through `/accounts/lease`.
          */
         post: operations["report_exhausted_api_accounts__account_id__exhausted_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/models/{author}/{slug}/endpoints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Custom Model Endpoints
+         * @description The hosts serving an OpenRouter model, with quantization, context and price,
+         *     for the routing pickers (custom accounts spec 3). Proxied; `author` and `slug`
+         *     are validated as one path segment each.
+         */
+        get: operations["custom_model_endpoints_api_accounts__account_id__models__author___slug__endpoints_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Probe Custom Account
+         * @description Readiness of a custom account: `GET {base_url}/models` with its key (custom
+         *     accounts spec 3). Returns the model ids as suggestions; never the key, and
+         *     only a fixed reason, never upstream text.
+         */
+        post: operations["probe_custom_account_api_accounts__account_id__probe_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -623,6 +670,8 @@ export interface paths {
         /**
          * List Decisions
          * @description Decisions oldest first, in pages (max 100); open ones by default.
+         *     Workers only see decisions for tasks they have leased (and knowledge
+         *     proposals in those projects).
          */
         get: operations["list_decisions_api_decisions_get"];
         put?: never;
@@ -788,7 +837,8 @@ export interface paths {
         };
         /**
          * List Events
-         * @description Event history, newest first. Page backwards with `before`.
+         * @description Event history, newest first. Page backwards with `before`. Workers only
+         *     see events for projects of tasks they have leased.
          */
         get: operations["list_events_api_events_get"];
         put?: never;
@@ -1254,6 +1304,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Models
+         * @description The effective policy, its origin and revision. Availability of a model at
+         *     the provider is not checked.
+         */
+        get: operations["get_models_api_models_get"];
+        /**
+         * Put Models
+         * @description Validate and save the file policy, all or nothing.
+         */
+        put: operations["put_models_api_models_put"];
+        post?: never;
+        /**
+         * Restore Models
+         * @description Remove the file so the repository defaults apply again.
+         */
+        delete: operations["restore_models_api_models_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/overview": {
         parameters: {
             query?: never;
@@ -1496,7 +1575,8 @@ export interface paths {
          * @description Tasks newest first, in pages (max 100). `assignee` is the agent holding a
          *     task now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read
          *     instead: no other filter, no paging, unknown ids in `missing`. Archived tasks
-         *     are left out unless `archived=true`, which lists only those.
+         *     are left out unless `archived=true`, which lists only those. Workers only see
+         *     tasks they have leased.
          */
         get: operations["list_tasks_api_tasks_get"];
         put?: never;
@@ -1768,6 +1848,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Log
+         * @description Log lines of an attempt (default: the current one), oldest first. With
+         *     `after` (a `seq`), the lines after it; without, the newest `limit` lines.
+         *     Workers only read tasks they have leased.
+         */
+        get: operations["get_log_api_tasks__task_id__log_get"];
+        put?: never;
+        /**
+         * Post Log
+         * @description Append output lines to the live log of the attempt you hold (agent token).
+         *     Up to 200 lines of 2000 characters (longer ones are cut) and 64 KiB per batch,
+         *     one batch per second per source. Secrets are redacted before storing; the
+         *     batch is published as a `task.log` event and stored in a ring of 2000 lines
+         *     per attempt. Fenced like progress: a stale attempt is 409 `stale_attempt`.
+         */
+        post: operations["post_log_api_tasks__task_id__log_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/progress": {
         parameters: {
             query?: never;
@@ -1875,6 +1985,7 @@ export interface components {
             active_leases: number;
             /** Billing Day */
             billing_day?: number | null;
+            config?: components["schemas"]["CustomConfig"] | null;
             /**
              * Created At
              * Format: date-time
@@ -1961,6 +2072,7 @@ export interface components {
         };
         /** AccountCreate */
         AccountCreate: {
+            config?: components["schemas"]["CustomConfig"] | null;
             /** Credential */
             credential?: {
                 [key: string]: unknown;
@@ -2021,6 +2133,7 @@ export interface components {
              * @enum {string}
              */
             role?: "engine" | "executor" | "repository";
+            settings?: components["schemas"]["LeaseSettings"] | null;
         };
         /**
          * AccountState
@@ -2031,6 +2144,7 @@ export interface components {
         AccountUpdate: {
             /** Billing Day */
             billing_day?: number | null;
+            config?: components["schemas"]["CustomConfig"] | null;
             /** Enabled */
             enabled?: boolean | null;
             /** Labels */
@@ -2566,6 +2680,8 @@ export interface components {
             lease_ttl_s: number;
             /** Max Attempts */
             max_attempts: number;
+            /** Output At */
+            output_at?: string | null;
             /** Parent Id */
             parent_id: string | null;
             /** Priority */
@@ -2768,12 +2884,18 @@ export interface components {
         /**
          * CredentialUpdate
          * @description E.g. refreshed OAuth tokens for a subscription account.
+         *
+         *     An agent must name the live task claim it rotates for; an admin need not.
          */
         CredentialUpdate: {
+            /** Attempt */
+            attempt?: number | null;
             /** Credential */
             credential: {
                 [key: string]: unknown;
             };
+            /** Task Id */
+            task_id?: string | null;
         };
         /**
          * Criteria
@@ -2793,6 +2915,42 @@ export interface components {
              * @default []
              */
             must_contain?: string[];
+        };
+        /**
+         * CustomConfig
+         * @description The non-secret configuration of a `custom` account.
+         */
+        CustomConfig: {
+            /** Base Url */
+            base_url: string;
+            /** @default {} */
+            engine?: components["schemas"]["RoleSettings"];
+            /** @default {} */
+            executor?: components["schemas"]["RoleSettings"];
+            /** Label */
+            label: string;
+        };
+        /**
+         * CustomProbe
+         * @description The readiness of a custom account: `GET {base_url}/models` with the key.
+         */
+        CustomProbe: {
+            /** Exhausted Until */
+            exhausted_until?: string | null;
+            /** Http Status */
+            http_status?: number | null;
+            /**
+             * Models
+             * @default []
+             */
+            models?: string[];
+            /** Reason */
+            reason: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "unauthorized" | "exhausted" | "unreachable" | "failed";
         };
         /** DatabaseOut */
         DatabaseOut: {
@@ -3668,6 +3826,23 @@ export interface components {
             /** Task Id */
             task_id: string;
         };
+        /**
+         * LeaseSettings
+         * @description What a lease of a custom account adds to the credential: where to call,
+         *     which model, and the request-body `provider` block. No secret.
+         */
+        LeaseSettings: {
+            /** Base Url */
+            base_url: string;
+            /** Label */
+            label: string;
+            /** Model */
+            model: string | null;
+            /** Provider */
+            provider: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** LocalAttempt */
         LocalAttempt: {
             /** Completion Tokens */
@@ -3737,6 +3912,53 @@ export interface components {
             /** Verdict */
             verdict: string;
         };
+        /** LogAccepted */
+        LogAccepted: {
+            /** Accepted */
+            accepted: number;
+            /** Last Seq */
+            last_seq: number;
+            /** Output At */
+            output_at: string | null;
+        };
+        /** LogLine */
+        LogLine: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Line */
+            line: string;
+            /** Seq */
+            seq: number;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "worker" | "delegate";
+        };
+        /** LogPage */
+        LogPage: {
+            /** Attempt */
+            attempt: number;
+            /** Last Seq */
+            last_seq: number;
+            /** Lines */
+            lines: components["schemas"]["LogLine"][];
+        };
+        /** LogRequest */
+        LogRequest: {
+            /** Attempt */
+            attempt: number;
+            /** Lines */
+            lines: string[];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "worker" | "delegate";
+        };
         /** LoopOut */
         LoopOut: {
             /** Errors Total */
@@ -3749,6 +3971,68 @@ export interface components {
             passes_total: number;
             /** Status */
             status: string;
+        };
+        /**
+         * ModelEndpoint
+         * @description One host serving a model (OpenRouter `…/endpoints`), for the routing pickers.
+         */
+        ModelEndpoint: {
+            /** Completion Price */
+            completion_price?: string | null;
+            /** Context Length */
+            context_length?: number | null;
+            /** Max Completion Tokens */
+            max_completion_tokens?: number | null;
+            /** Prompt Price */
+            prompt_price?: string | null;
+            /** Provider Name */
+            provider_name: string;
+            /** Quantization */
+            quantization?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Tag */
+            tag?: string | null;
+        };
+        /** ModelEndpoints */
+        ModelEndpoints: {
+            /** Endpoints */
+            endpoints: components["schemas"]["ModelEndpoint"][];
+            /** Model */
+            model: string;
+        };
+        /** ModelPolicy */
+        ModelPolicy: {
+            /** Env Overrides */
+            env_overrides: boolean;
+            /** File Revision */
+            file_revision?: string | null;
+            /** Harness */
+            harness: {
+                [key: string]: string[];
+            };
+            /** Implementation */
+            implementation: {
+                [key: string]: string[];
+            };
+            /** Notice */
+            notice?: string | null;
+            /** Path */
+            path: string;
+            /** Revision */
+            revision: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "env" | "file" | "defaults";
+        };
+        /** ModelPolicyBody */
+        ModelPolicyBody: {
+            /** Harness */
+            harness: unknown;
+            /** Implementation */
+            implementation: unknown;
         };
         /**
          * NanoclawOptions
@@ -4603,6 +4887,16 @@ export interface components {
          * @enum {string}
          */
         Role: "orchestrator" | "worker";
+        /**
+         * RoleSettings
+         * @description What one lease role (`engine`: the NanoClaw harness, `executor`: the code
+         *     executor) uses on this account.
+         */
+        RoleSettings: {
+            /** Model */
+            model?: string | null;
+            routing_options?: components["schemas"]["RoutingOptions"] | null;
+        };
         /** RouteDecision */
         RouteDecision: {
             /** Blocked */
@@ -4671,6 +4965,29 @@ export interface components {
             touches_sensitive?: boolean;
         };
         /**
+         * RoutingOptions
+         * @description OpenRouter provider routing. A list or a comma-separated string is accepted.
+         */
+        RoutingOptions: {
+            /** Allow Fallbacks */
+            allow_fallbacks?: boolean | null;
+            /**
+             * Only
+             * @default []
+             */
+            only?: string[];
+            /**
+             * Order
+             * @default []
+             */
+            order?: string[];
+            /**
+             * Quantizations
+             * @default []
+             */
+            quantizations?: string[];
+        };
+        /**
          * RuntimeKind
          * @enum {string}
          */
@@ -4722,8 +5039,12 @@ export interface components {
         };
         /** ServingAccount */
         ServingAccount: {
+            /** Host */
+            host?: string | null;
             /** Id */
             id: string;
+            /** Model */
+            model?: string | null;
             /** Name */
             name: string;
             /** Provider */
@@ -4845,6 +5166,8 @@ export interface components {
             lease_ttl_s: number;
             /** Max Attempts */
             max_attempts: number;
+            /** Output At */
+            output_at?: string | null;
             /** Parent Id */
             parent_id: string | null;
             /** Priority */
@@ -5083,6 +5406,8 @@ export interface components {
             lease_ttl_s: number;
             /** Max Attempts */
             max_attempts: number;
+            /** Output At */
+            output_at?: string | null;
             /** Parent Id */
             parent_id: string | null;
             /** Priority */
@@ -5296,6 +5621,8 @@ export interface components {
             lease_expires_at: string | null;
             /** Max Attempts */
             max_attempts: number;
+            /** Output At */
+            output_at?: string | null;
             /** Parent Id */
             parent_id: string | null;
             /** Priority */
@@ -6212,6 +6539,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FallbackResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    custom_model_endpoints_api_accounts__account_id__models__author___slug__endpoints_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+                author: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelEndpoints"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    probe_custom_account_api_accounts__account_id__probe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomProbe"];
                 };
             };
             /** @description Validation Error */
@@ -7783,6 +8174,79 @@ export interface operations {
             };
         };
     };
+    get_models_api_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelPolicy"];
+                };
+            };
+        };
+    };
+    put_models_api_models_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelPolicyBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelPolicy"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_models_api_models_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelPolicy"];
+                };
+            };
+        };
+    };
     overview_api_overview_get: {
         parameters: {
             query?: never;
@@ -8727,6 +9191,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_log_api_tasks__task_id__log_get: {
+        parameters: {
+            query?: {
+                attempt?: number | null;
+                after?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_log_api_tasks__task_id__log_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LogRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogAccepted"];
                 };
             };
             /** @description Validation Error */
