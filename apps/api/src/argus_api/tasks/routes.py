@@ -3,6 +3,7 @@ from datetime import timedelta
 from typing import Annotated, Any, Literal
 
 from argus_core.auth import Scope
+from argus_core.task_edit import TaskAttempt, TaskEdit
 from argus_core.tasks import (
     ClaimedTask,
     Task,
@@ -269,6 +270,29 @@ async def retry_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
     """Return a `failed` task to `ready` with a fresh window of attempts (409 otherwise)."""
     async with db.write() as tx:
         return await service.retry(tx, task_id, caller.actor)
+
+
+@router.patch("/{task_id}")
+async def edit_task(
+    task_id: str, body: TaskEdit, db: DbDep, caller: ManagerDep
+) -> Task:
+    """Edit a task's title, spec, acceptance, priority, required capabilities,
+    knowledge pins or dependencies (orchestrator or admin). `changes` is a partial
+    patch: omitted fields stay, `null` clears. Which fields a state accepts is
+    `editable_fields` on the task. Stale `expected_version` is 409 `stale_version`,
+    a field the state does not allow 409 `task_not_editable`, an immutable or unknown
+    field 422 `immutable_field`; a refused edit writes nothing."""
+    async with db.write() as tx:
+        return await service.edit_task(
+            tx, task_id, body.changes, body.expected_version, caller.actor
+        )
+
+
+@router.get("/{task_id}/attempts")
+async def list_attempts(task_id: str, db: DbDep, _: CallerDep) -> list[TaskAttempt]:
+    """The definition each attempt was handed at claim, oldest first."""
+    async with db.read() as conn:
+        return await service.attempt_definitions(conn, task_id)
 
 
 @router.put("/{task_id}/dependencies")

@@ -417,7 +417,7 @@ anonymous access. Three scopes:
 | Scope | Can |
 | --- | --- |
 | `worker` | Claim, heartbeat, update/complete/fail/block its own tasks, report progress, ask questions, lease accounts, create subtasks under a task it holds. |
-| `orchestrator` | Everything `worker` can, plus create/cancel any task, edit deps of waiting tasks ([task dependencies](task-dependencies.spec.md)), answer `orchestrator` decisions, set `desired_replicas` up to `max_replicas`, drain agents. |
+| `orchestrator` | Everything `worker` can, plus create/cancel any task, edit deps of waiting tasks ([task dependencies](task-dependencies.spec.md)) and edit tasks ([task edit](task-edit.spec.md)), answer `orchestrator` decisions, set `desired_replicas` up to `max_replicas`, drain agents. |
 | `admin` (human) | Everything, including pool and account definitions, `max_replicas`, killing instances, revoking tokens. |
 
 Every route requires a token except `GET /healthz` and `POST /agents/register`
@@ -462,7 +462,7 @@ as a managed pool of size 1 uses the same model and comes later.
   `upload_text_artifact`, `list_artifacts`, `read_artifact`, `verify_artifact`,
   `leave`; `search_knowledge`, `get_knowledge_page`, `write_knowledge`;
   `lease_account`, `report_account_exhausted`; `list_engines`, `run_local`; and
-  for orchestrators `get_inbox`, `list_tasks`, `set_task_dependencies`,
+  for orchestrators `get_inbox`, `list_tasks`, `edit_task`, `set_task_dependencies`,
   `unblock_task`, `retry_task`,
   `cancel_task`, `list_agents`, `list_pools`, `scale_pool`,
   `inspect_pool`, `get_instance`, `get_instance_logs`, `drain_agent`,

@@ -1114,3 +1114,14 @@ button.link.account-name {
 .progress.stale {
   opacity: 0.6;
 }
+
+.edit-form .field {
+  margin-bottom: 0.75rem;
+}
+.edit-form textarea {
+  width: 100%;
+  font: inherit;
+}
+.edit-form [aria-invalid="true"] {
+  border-color: var(--danger, #c0392b);
+}
