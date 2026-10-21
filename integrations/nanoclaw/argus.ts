@@ -861,7 +861,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let executor: { id: string; name: string; provider: string } | null = null;
   let leasedAt = 0; // when the engine lease was last confirmed for a claimed task
   let switchFailure: string | null = null; // the runtime did not stop for the last switch
-  let recycleOnLease = false; // Argus moved us to another account: recycle once the next one is applied
+  let recycleOnLease = false; // the runtime must stop before the next claim/lease writes another account
   let engineInUse: string | null = null; // the harness the leased account selected
   let activeAccountLeases: AccountLease[] = [];
   let repositoryTarget: ApplyTarget | null = null;
@@ -1525,6 +1525,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             await acc.recycleRuntime?.();
           } catch (err) {
             switchFailure = err instanceof Error ? err.message : String(err);
+            // The old runtime may still be up: the next lease must stop it first
+            // (account-selection.spec.md 3.6, "recycles before it claims again").
+            recycleOnLease = true;
             throw err;
           }
           recycleOnLease = false;
@@ -1556,7 +1559,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       } else {
         log.warn("Could not lease/apply an account (will retry)", { err });
       }
-      await sleep(5000);
+      // A runtime that did not stop blocks the task now (runtime_switch_failed);
+      // only a lease that may yet succeed waits before the next claim.
+      if (switchFailure === null) await sleep(5000);
       return false;
     }
   }
@@ -1565,8 +1570,24 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     let backoff = 1000;
     while (!stopped) {
       if (draining) {
+        // A draining agent never claims again: it leaves once idle and its
+        // instance is stopped, so a pending recycle is not needed here.
         await sleep(1000);
         continue;
+      }
+      if (recycleOnLease && cfg.accounts?.recycleRuntime) {
+        // A runtime that did not stop for the last switch is stopped before the
+        // next claim (account-selection.spec.md 3.6), so a stuck one does not
+        // block task after task with runtime_switch_failed.
+        try {
+          await cfg.accounts.recycleRuntime();
+          recycleOnLease = false;
+        } catch (err) {
+          log.warn("The previous runtime still does not stop; not claiming yet", { err });
+          await sleep(backoff);
+          backoff = Math.min(backoff * 2, 30_000);
+          continue;
+        }
       }
       abortClaim = new AbortController();
       try {

@@ -164,6 +164,57 @@ jobs:
         if: always() && steps.need.outputs.build == 'true'
         run: docker rmi -f argus-tools-layer:ci argus-tools-layer-ci-base >/dev/null 2>&1 || true
 
+  # NanoClaw's own vitest suite with the Argus overlay, on a fresh checkout of the
+  # pinned commit: `provision.sh check` (clone, install.sh, gateway adapter,
+  # engines overlay, pnpm build, vitest) stops before any Docker step, so nothing
+  # is built, tagged or saved. The node job's `pnpm test` does not reach these
+  # tests: they only run inside a NanoClaw checkout. On PRs, skips when
+  # integrations/nanoclaw/ did not change.
+  nanoclaw-vitest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decide whether NanoClaw inputs changed
+        id: need
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE"
+          if git diff --name-only "$BASE" HEAD | grep -E '^(integrations/nanoclaw/|\.gitea/workflows/quality\.yaml$)' >/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping NanoClaw vitest: integrations/nanoclaw/ unchanged"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.need.outputs.run == 'true'
+        with:
+          node-version: "22"
+      - name: provision.sh check (fresh pinned NanoClaw, engines overlay)
+        if: steps.need.outputs.run == 'true'
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          # pnpm through corepack: inside the checkout it is NanoClaw's own pinned
+          # packageManager (its pnpm-workspace.yaml has no packages list, which
+          # Argus's pnpm 10.0.0 rejects), as on a provisioning host.
+          corepack enable
+          # Short state path: provision.sh caps the instances root at 56 characters.
+          state="/tmp/argus-nc-ci-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
+          rm -rf "$state"
+          ARGUS_NANOCLAW_STATE="$state" ARGUS_NANOCLAW_ENGINES=1 \
+            integrations/nanoclaw/provision.sh check
+      - name: Remove the checkout
+        if: always() && steps.need.outputs.run == 'true'
+        run: rm -rf "/tmp/argus-nc-ci-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
+
   # Real Docker: Argus starts echo-worker containers that must reach it back via
   # host.docker.internal. Manual until verified on the runner's network layout.
   docker-integration:
