@@ -222,6 +222,32 @@ async def test_generic_provider_failure_still_counts(
     assert await events(db, "account.failover") == []
 
 
+async def test_claude_session_limit_line_resets_at_the_next_utc_clock_time(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    a = await add(db, store, "acct-a", priority=100)
+    await add(db, store, "acct-b", priority=90)
+    await lease(db, store)
+    clock.advance(22 * 3600 + 6 * 60)  # 22:06Z, the incident's hour
+    task = await new_task(db)
+    line = "You\u2019ve hit your session limit \u00b7 resets 2am (UTC)"
+    after = await fail(db, store, task, line)
+    assert (after.state, after.failures) == (S.READY, 0)
+    async with db.read() as conn:
+        acct = await accounts.get_account(conn, a, clock.now)
+    assert acct.exhausted_until.isoformat() == "2026-01-02T02:00:00+00:00"  # type: ignore[union-attr]
+
+
+async def test_model_text_about_limits_still_counts_as_a_failure(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "acct-a")
+    await lease(db, store)
+    task = await new_task(db)
+    text = "I think you've hit your session limit \u00b7 resets 2am (UTC)"
+    assert (await fail(db, store, task, text)).failures == 1
+
+
 async def test_other_providers_quota_text_does_not_exhaust_the_engine_account(
     db: Database, store: MemorySecretStore
 ) -> None:

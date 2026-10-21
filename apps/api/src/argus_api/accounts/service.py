@@ -351,7 +351,7 @@ async def fail_task(
             (agent_id,),
         ) as cur:
             held = await cur.fetchone()
-    hit = classify_quota(error, held["provider"]) if held else None
+    hit = classify_quota(error, held["provider"], tx.now) if held else None
     if held is None or hit is None:
         return await tasks.fail(tx, agent_id, task_id, attempt, error, reason)
     await tasks.check_lease(tx, task_id, attempt, agent_id, allow_expired=True)

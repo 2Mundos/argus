@@ -19,6 +19,8 @@ cp "$here/argus.ts" "$target/src/channels/argus.ts"
 cp "$here/argus-accounts.ts" "$target/src/channels/argus-accounts.ts"
 cp "$here/argus.test.ts" "$target/src/channels/argus.test.ts"
 cp "$here/argus-accounts.test.ts" "$target/src/channels/argus-accounts.test.ts"
+# The quota patterns' shared fixture (Argus's packages/core), read by argus-accounts.test.ts.
+cp "$here/../../packages/core/tests/fixtures/quota-notices.json" "$target/src/channels/argus-quota-notices.json"
 cp "$here/argus-gitea-lease.test.ts" "$target/src/channels/argus-gitea-lease.test.ts"
 cp "$here/argus-codex-stub.ts" "$target/src/gateway-providers/argus-codex-stub.ts"
 cp "$here/argus-codex-stub.test.ts" "$target/src/gateway-providers/argus-codex-stub.test.ts"
@@ -342,6 +344,11 @@ fi
 providers_dir="$target/container/agent-runner/src/providers"
 mkdir -p "$providers_dir"
 cp "$here/overlays/codex-turn-timeout.ts" "$here/overlays/codex-turn-timeout.test.ts" "$providers_dir/"
+# Claude Code's quota block ("You've hit your session limit · resets 2am (UTC)") reaches the
+# channel as a structured providerFailure, never as upstream text.
+cp "$here/overlays/claude-rate-limit.ts" "$here/overlays/claude-rate-limit.test.ts" \
+  "$here/overlays/claude.rate-limit.test.ts" "$providers_dir/"
+python3 "$here/patch-claude-rate-limit.py" "$target"
 
 codex_provider="$providers_dir/codex.ts"
 if [ -f "$codex_provider" ]; then

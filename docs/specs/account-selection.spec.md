@@ -133,11 +133,20 @@ isolation or sandbox/TLS restrictions.
     while any account is usable, and only blocks tasks that worker could claim.
   - *Channel.* When a run ends, the channel treats as exhaustion: a quota notice,
     a structured `providerFailure` `{provider:"claude", kind:"rate_limit",
-    resetsAt?}` (anthropic account; fixed reason, never raw text), or the generic
-    "The agent run failed" notice plus a `Rate limit [..] (resets ..)` line in the
-    agent log tail. The log is read through the optional `agentLogTail` hook of
-    the channel config; a host that does not provide it only gets the notice and
-    structured cases (documented limit). On exhaustion it reports the account,
+    resets_at?}` (anthropic account; fixed reason, never raw text), or the generic
+    "The agent run failed" notice plus a `Rate limit [..] (resets ..)` or
+    `You've hit your session|usage|weekly limit · resets ..` line in the agent log
+    tail. The log is read through the optional `agentLogTail` hook of the channel
+    config; the NanoClaw host does not provide it (the channel has no handle on
+    the agent's log, and the runner already emits the structured field), so it
+    gets the notice and structured cases.
+  - *Runner.* The NanoClaw agent runner, as `install.sh` patches it, turns a
+    failed Claude turn whose result is exactly one
+    `^You('|’)ve hit your (session|usage|weekly) limit · resets .+$` line, or
+    that the SDK marked `rate_limit`, into that structured `providerFailure`
+    (`resets_at` only for a UTC clock time) with the generic notice text; no
+    other upstream text reaches the channel. The patch asserts its anchors in
+    NanoClaw's code, so upstream drift stops the install. On exhaustion it reports the account,
     leases the next one, recycles the runtime and resends the task on the same
     attempt, and it does not report a failure. If Argus itself recognised a
     quota notice on `/fail` and switched the account, the channel drops its stale
@@ -161,13 +170,15 @@ isolation or sandbox/TLS restrictions.
   revoked or ended agent's token gets 401 by design; a channel whose agent was
   ended (lost, left, re-registered) must re-register for a fresh token. Nothing in `authenticate` expires a live
   agent's token, so a 401 here means a stale registration, not a bug.
-- **Claude's own wording counts.** The channel recognises, for `anthropic`
-  accounts, `Rate limit […]`, `Out of credits`, `Usage limit reached` and
-  `You've hit your [session ]limit` (straight or curly apostrophe), and a
-  structured `{provider:"claude", kind:"rate_limit", resetsAt?}`. The reset is
-  `(resets <ISO>)` or `resets 11:50pm (UTC)` (the next such UTC clock time,
-  strictly in the future); unparsable means no `until` and the default cooldown.
-  Structured reports carry a fixed reason, never log text.
+- **Claude's own wording counts.** The channel and the API (`quota.py`, same
+  shared fixture) recognise, for `anthropic` accounts, `Rate limit […]`,
+  `Out of credits`, `Usage limit reached` and `You've hit your [session|usage|weekly ]limit`
+  (straight or curly apostrophe), and the channel a structured
+  `{provider:"claude", kind:"rate_limit", resets_at?}`. The reset is
+  `(resets <ISO>)` or `resets 2am (UTC)` / `resets 11:50pm (UTC)` (the next such
+  UTC clock time, strictly after now: the transaction time on the API, an
+  explicit `now` in the fixture); unparsable means no `until` and the default
+  cooldown. Structured reports carry a fixed reason, never log text.
 - **Claims wait for quota.** `POST /tasks/claim` returns nothing (no attempt
   consumed, the task stays `ready`) while at least one account is `exhausted`
   and none is `available`. Fleets with no accounts, or with any available
@@ -218,3 +229,7 @@ the model-policy snapshot or `argus-delegate` output.
   (the channel calls `/accounts/awaiting-quota`; an older Argus answers 404, which
   the channel logs and ignores). Provide `agentLogTail` from the host to enable the
   log-derived case.
+- Claude quota block in the runner: `integrations/nanoclaw/overlays/claude-rate-limit.ts`
+  and `patch-claude-rate-limit.py` (run by `install.sh`). It lives in the agent
+  image: rerun `provision.sh` (README, "Updating an installed copy") and recreate
+  the worker instances.
