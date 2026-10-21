@@ -56,7 +56,7 @@ and the dashboard's System tab.
 - The result is cached per app for 2 s and concurrent callers share one in-flight
   probe, so request rate does not change probe cost. `/api/system` reuses it.
 - Detail strings carry no identifiers.
-- Exposure: the image binds `ARGUS_BIND_HOST` (default `0.0.0.0` inside the
+- Exposure: the image binds `UVICORN_HOST` (default `0.0.0.0` inside the
   container, which published ports require). Who can connect is set by the publish
   address, so the documented `docker run` publishes on `127.0.0.1`. Argus speaks
   plain HTTP; TLS terminates at a reverse proxy, none of which ships in this repo.

@@ -44,7 +44,7 @@ docker build -f deploy/Dockerfile.api -t argus .
 docker run -p 127.0.0.1:8000:8000 -v argus-data:/data argus   # dashboard at http://localhost:8000
 # Publish on loopback as above: Argus serves plain HTTP and ships no reverse proxy,
 # so TLS must terminate at a proxy you run in front of it before exposing it beyond
-# this host. The container binds ARGUS_BIND_HOST (default 0.0.0.0, needed for
+# this host. The container binds UVICORN_HOST (default 0.0.0.0, needed for
 # published ports); exposure is controlled by the `-p` address.
 # First start saves the admin token to /data/admin-token (never logged);
 # or preset one with -e ARGUS_ADMIN_TOKEN=<32+ chars>.

@@ -78,7 +78,7 @@ async def test_readiness_never_queues_on_the_writer(
     assert all(r.ready for r in results)
     release.set()
     await holder
-    # The queued writer is next in line: probes did not take its turn.
+    # The queued writer still gets its turn once the holder lets go.
     await asyncio.wait_for(waiter, timeout=2)
 
 
@@ -287,6 +287,10 @@ def test_readyz_does_not_block_on_a_held_writer(client: TestClient) -> None:
         await entered.wait()
         return task
 
+    async def finish(task: asyncio.Task[None]) -> None:
+        release.set()
+        await task
+
     holder = portal.call(start)
     try:
         start_t = time.monotonic()
@@ -294,5 +298,4 @@ def test_readyz_does_not_block_on_a_held_writer(client: TestClient) -> None:
             assert client.get("/readyz").status_code == 200
         assert time.monotonic() - start_t < ops.WRITE_PROBE_TIMEOUT_S / 2
     finally:
-        portal.call(release.set)
-        portal.call(lambda: holder)
+        portal.call(finish, holder)
