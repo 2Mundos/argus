@@ -1080,8 +1080,9 @@ export interface paths {
         put?: never;
         /**
          * Recycle Instance
-         * @description Replace a running instance without interrupting work: its agents drain, it
-         *     stops once none holds a claimed task, and a new one starts in its place.
+         * @description Replace a running instance: its agents drain, it stops once none holds a
+         *     claimed task, and a new one starts in its place. By default work finishes
+         *     first; with `requeue` the claimed tasks are released now, no attempt counted.
          */
         post: operations["recycle_instance_api_instances__instance_id__recycle_post"];
         delete?: never;
@@ -1101,7 +1102,8 @@ export interface paths {
         put?: never;
         /**
          * Terminate Instance
-         * @description Stop an instance now: its agents end immediately (tasks released); its slot
+         * @description Stop an instance now: its agents end immediately and the tasks they hold are
+         *     requeued without counting an attempt (unless `requeue` is false); its slot
          *     frees once the provider confirms the container is gone.
          */
         post: operations["terminate_instance_api_instances__instance_id__terminate_post"];
@@ -1936,6 +1938,29 @@ export interface paths {
          * @description Post a progress note (at most one per 10 s). Also renews the lease.
          */
         post: operations["report_progress_api_tasks__task_id__progress_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release Task
+         * @description Take a claimed task back from its holder and requeue it without counting a
+         *     failed attempt (orchestrator or admin). 409 `task_not_claimed` in any other
+         *     state, 409 `stale_attempt` when `attempt` is not the current one. The holder's
+         *     next write for that attempt gets 409 and its heartbeat rejects the pair.
+         */
+        post: operations["release_task_api_tasks__task_id__release_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5103,6 +5128,14 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** RecycleRequest */
+        RecycleRequest: {
+            /**
+             * Requeue
+             * @default false
+             */
+            requeue?: boolean;
+        };
         /** Registration */
         Registration: {
             agent: components["schemas"]["Agent"];
@@ -5121,6 +5154,13 @@ export interface components {
             message: string;
             /** Task Id */
             task_id: string;
+        };
+        /** ReleaseRequest */
+        ReleaseRequest: {
+            /** Attempt */
+            attempt?: number | null;
+            /** Reason */
+            reason: string;
         };
         /** RenewedLease */
         RenewedLease: {
@@ -5677,6 +5717,10 @@ export interface components {
             definition: {
                 [key: string]: unknown;
             };
+            /** Outcome */
+            outcome?: "released" | null;
+            /** Outcome Reason */
+            outcome_reason?: string | null;
         };
         /**
          * TaskChanges
@@ -6128,6 +6172,14 @@ export interface components {
             name: string;
             /** Quantity */
             quantity: number;
+        };
+        /** TerminateRequest */
+        TerminateRequest: {
+            /**
+             * Requeue
+             * @default true
+             */
+            requeue?: boolean;
         };
         /**
          * Usage
@@ -8201,7 +8253,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RecycleRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -8232,7 +8288,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TerminateRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -9839,6 +9899,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ProgressRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_task_api_tasks__task_id__release_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReleaseRequest"];
             };
         };
         responses: {

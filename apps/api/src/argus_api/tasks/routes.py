@@ -13,7 +13,7 @@ from argus_core.tasks import (
     validate_milestone,
 )
 from fastapi import APIRouter, Query, Response, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from argus_api.access import require_task_readable, worker_task_filter
 from argus_api.accounts import service as accounts
@@ -97,6 +97,18 @@ class BulkArchiveRequest(BaseModel):
 class BulkArchiveResult(BaseModel):
     count: int  # tasks archived, or that would be with `dry_run`
     dry_run: bool
+
+
+class ReleaseRequest(BaseModel):
+    reason: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True, min_length=1, max_length=service.RELEASE_REASON_MAX
+        ),
+    ]
+    """Why the operator takes the task back (recorded on the event and attempt)."""
+    attempt: int | None = None
+    """Compare-and-set guard: release only if this is still the current attempt."""
 
 
 class BlockRequest(BaseModel):
@@ -324,6 +336,20 @@ async def retry_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
     """Return a `failed` task to `ready` with a fresh window of attempts (409 otherwise)."""
     async with db.write() as tx:
         return await service.retry(tx, task_id, caller.actor)
+
+
+@router.post("/{task_id}/release")
+async def release_task(
+    task_id: str, body: ReleaseRequest, db: DbDep, caller: ManagerDep
+) -> Task:
+    """Take a claimed task back from its holder and requeue it without counting a
+    failed attempt (orchestrator or admin). 409 `task_not_claimed` in any other
+    state, 409 `stale_attempt` when `attempt` is not the current one. The holder's
+    next write for that attempt gets 409 and its heartbeat rejects the pair."""
+    async with db.write() as tx:
+        return await service.release(
+            tx, task_id, caller.actor, body.reason, attempt=body.attempt
+        )
 
 
 @router.patch("/{task_id}")

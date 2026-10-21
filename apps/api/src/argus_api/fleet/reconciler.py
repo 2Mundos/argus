@@ -430,14 +430,28 @@ def _model_policy(pool: Pool, settings: FleetSettings) -> str | None:
     return policy
 
 
-async def begin_terminating(tx: Tx, instance_id: str, reason: str) -> None:
-    """Request the stop; its agents end now, its slot only when confirmed."""
+async def begin_terminating(
+    tx: Tx,
+    instance_id: str,
+    reason: str,
+    *,
+    release: str | None = None,
+    actor: str = "system",
+) -> None:
+    """Request the stop; its agents end now, its slot only when confirmed. Their
+    tasks are released with `release` (see `agents.end_instance`)."""
     await tx.conn.execute(
         "UPDATE instances SET state = 'terminating', terminating_at = ?, exit_reason = ?"
         " WHERE id = ? AND state IN ('reserved', 'running')",
         (ts(tx.now), reason, instance_id),
     )
-    await agents.end_instance(tx, instance_id, f"instance terminating: {reason}")
+    await agents.end_instance(
+        tx,
+        instance_id,
+        f"instance terminating: {reason}",
+        release=release,
+        actor=actor,
+    )
     await record(
         tx,
         "system",

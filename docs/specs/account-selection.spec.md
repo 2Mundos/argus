@@ -43,7 +43,10 @@ isolation or sandbox/TLS restrictions.
   `providers` field is accepted and ignored. Every credential-bearing lease is
   bound to `task_id` and `attempt` and requires that task to be currently claimed
   by the caller with an unexpired lease. NanoClaw claims first, then leases and
-  applies the engine credential; it does not fetch credentials while idle.
+  applies the engine credential; it does not fetch credentials while idle. An
+  operator release of the task ([worker lifecycle](worker-lifecycle.spec.md) 3.3)
+  ends the holder's account leases (`task_released`) unless it holds another
+  claim, and the released pair fails every one of these checks with `409`.
 - **Exhaustion and recovery use the same ranking.** After
   `POST /accounts/{id}/exhausted` the remaining usable accounts are ranked
   globally; the previous provider gets no preference. The response contains
