@@ -41,6 +41,7 @@ from argus_api.fleet.targets import TargetRegistry
 from argus_api.kinds.routes import router as kinds_router
 from argus_api.knowledge.routes import router as knowledge_router
 from argus_api.model_policy import router as models_router
+from argus_api.modeltrace.routes import router as model_trace_router
 from argus_api.ops import LoopStats, ReadinessCache
 from argus_api.ops_routes import probes as probes_router
 from argus_api.ops_routes import router as ops_router
@@ -139,6 +140,7 @@ app = FastAPI(title="Argus", version="0.1.0", lifespan=lifespan)
 api = APIRouter(prefix="/api")
 for router in (
     tasks_router,
+    model_trace_router,
     agents_router,
     admin_router,
     kinds_router,

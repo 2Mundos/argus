@@ -59,7 +59,9 @@ the caller must run gates and explicitly request the next model on rejection.
 # 4. Open Questions
 
 Provider-observed model IDs are not uniformly exposed by CLIs. They remain
-unknown rather than being inferred from the model sent in argv.
+unknown rather than being inferred from the model sent in argv. The evidence
+rule and the per-task record of observed models live in
+[model observability](model-observability.spec.md).
 
 # 4a. Operator surface
 

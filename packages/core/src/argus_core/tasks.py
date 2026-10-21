@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, Field
 
 from argus_core.knowledge import KnowledgeRef
+from argus_core.model_trace import ModelsSummary
 
 
 class TaskState(StrEnum):
@@ -298,6 +299,8 @@ class Task(BaseModel):
     refill_at: datetime | None = None
     serving_account: ServingAccount | None = None
     failover: Failover | None = None
+    # Models per layer (model observability 3.6): derived, never stored here.
+    models: ModelsSummary = ModelsSummary()
 
 
 class ClaimedTask(Task):

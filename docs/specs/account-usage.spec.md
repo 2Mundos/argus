@@ -240,6 +240,9 @@ account lease and must preserve the document structure and JSON value types.
   whole ChatGPT account, including use outside Argus. Whether to show it next
   to Argus's own count is undecided.
 
+Model observability executions carry the usage `run_key`; the join exposes the
+usage row of the same run, `null` when none ([spec](model-observability.spec.md)).
+
 # 5. Constraints
 
 - Single node, SQLite, no new service or dependency. The probe is an optional
