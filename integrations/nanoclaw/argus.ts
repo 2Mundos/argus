@@ -138,8 +138,9 @@ export interface ArgusConfig {
   /**
    * The tail of the agent's log (host-provided). A run that ends with only the
    * generic failure notice is checked for Claude Code's `Rate limit [..] (resets
-   * ..)` line. Absent: only the notice text and the structured providerFailure
-   * can show an exhausted account.
+   * ..)` or `You've hit your session limit · resets ..` line. Absent (the NanoClaw
+   * host): only the notice text and the structured providerFailure can show an
+   * exhausted account.
    */
   agentLogTail?: () => Promise<string>;
   /** Called once, after Argus drained this agent, its work is done, and it left. */

@@ -699,38 +699,69 @@ export function classifyFailure(
 /** Fixed, non-sensitive reason for a structured auth expiry; never the notice or log text. */
 const STRUCTURED_AUTH_EXPIRED_REASON = "OpenAI/Codex authentication expired";
 
-/** Fixed, non-sensitive reason for a structured Claude rate limit. */
-const STRUCTURED_RATE_LIMIT_REASON = "Claude usage limit reached";
+/** The runner's placeholder when the provider's own message did not reach the notice. */
+export function isGenericFailureNotice(noticeText: string): boolean {
+  return /^the agent run failed\b/i.test(noticeText.trim());
+}
+
+/** `Rate limit reached`, plus the reset when it is a valid timestamp. Starts like Claude Code's own notice so Argus's server-side patterns match it too. */
+function rateLimitReason(resetsAt: unknown): { reason: string; until?: string } {
+  const when = typeof resetsAt === "string" ? new Date(resetsAt) : null;
+  if (!when || Number.isNaN(when.getTime())) return { reason: "Rate limit reached" };
+  const until = when.toISOString();
+  return { reason: `Rate limit reached (resets ${until})`, until };
+}
 
 /**
  * The structured `content.providerFailure` of a NanoClaw failure notice
- * (docs/specs/codex-accounts.spec.md §3). `{provider:"codex",
- * kind:"auth_expired"}` against a held `openai` account, and `{provider:"claude",
- * kind:"rate_limit", resetsAt?}` against a held `anthropic` one, exhaust it
- * (`codex`/`claude` are the NanoClaw engines; Argus names the accounts by their
- * vendor). Anything else (unknown value, other account provider, bad shape) is
- * not a decision: null.
+ * (docs/specs/codex-accounts.spec.md §3, account-selection.spec.md 3.6).
+ * `{provider:"codex", kind:"auth_expired"}` against a held `openai` account and
+ * `{provider:"claude", kind:"rate_limit", resets_at?}` against a held `anthropic`
+ * account exhaust it (`codex`/`claude` are the NanoClaw engines; Argus names the
+ * accounts by their vendor). Anything else (unknown value, other account
+ * provider, bad shape) is not a decision: null. Reasons are fixed, never the raw text.
  */
 export function classifyProviderFailure(
   value: unknown,
   accountProvider?: string,
 ): FailureKind | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const { provider, kind, resetsAt } = value as {
+  const { provider, kind, resets_at } = value as {
     provider?: unknown;
     kind?: unknown;
-    resetsAt?: unknown;
+    resets_at?: unknown;
   };
   if (accountProvider === "openai" && provider === "codex" && kind === "auth_expired") {
     return { kind: "exhausted", reason: STRUCTURED_AUTH_EXPIRED_REASON, until: undefined };
   }
   if (accountProvider === "anthropic" && provider === "claude" && kind === "rate_limit") {
-    const when = typeof resetsAt === "string" ? new Date(resetsAt) : null;
-    return {
-      kind: "exhausted",
-      reason: STRUCTURED_RATE_LIMIT_REASON,
-      until: when && !Number.isNaN(when.getTime()) ? when.toISOString() : undefined,
-    };
+    return { kind: "exhausted", ...rateLimitReason(resets_at) };
   }
   return null;
+}
+
+/**
+ * Claude Code's own limit line in the agent log tail, for runs whose notice is
+ * only the generic placeholder: `Rate limit [window] (resets <ISO>)` or `You've
+ * hit your session|usage|weekly limit · resets 2am (UTC)` (the next such UTC time
+ * after `now`). The last occurrence wins; only a held `anthropic` account is
+ * affected. The reason is rebuilt from the parsed reset, never the log text.
+ */
+export function classifyLogTail(
+  logTail: string,
+  accountProvider?: string,
+  now: Date = new Date(),
+): FailureKind | null {
+  if (accountProvider !== "anthropic") return null;
+  const hits = [
+    ...logTail.matchAll(
+      /Rate limit \[[^\]\n]*\](?: \(resets ([^)\n]+)\))?|You(?:'|\u2019)ve hit your (?:session|usage|weekly) limit · (resets [^\n"]+)/gi,
+    ),
+  ];
+  const last = hits.at(-1);
+  if (!last) return null;
+  return {
+    kind: "exhausted",
+    ...rateLimitReason(last[2] ? parseResetTime(last[2], now) : last[1]),
+  };
 }

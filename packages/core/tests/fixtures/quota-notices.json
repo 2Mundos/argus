@@ -20,12 +20,72 @@
   { "provider": "anthropic", "notice": "Rate limit reached", "exhausted": true, "until": null },
   {
     "provider": "anthropic",
+    "notice": "You've hit your session limit · resets 2am (UTC)",
+    "now": "2026-10-20T22:06:00Z",
+    "exhausted": true,
+    "until": "2026-10-21T02:00:00.000Z"
+  },
+  {
+    "provider": "anthropic",
+    "notice": "You’ve hit your usage limit · resets 2:30pm (UTC)",
+    "now": "2026-10-20T12:00:00Z",
+    "exhausted": true,
+    "until": "2026-10-20T14:30:00.000Z"
+  },
+  {
+    "provider": "anthropic",
+    "notice": "Error: You've hit your weekly limit · resets 2am (UTC)",
+    "now": "2026-10-20T02:00:00Z",
+    "exhausted": true,
+    "until": "2026-10-21T02:00:00.000Z"
+  },
+  {
+    "provider": "anthropic",
+    "notice": "You've hit your session limit · resets 12am (UTC)",
+    "now": "2026-10-20T23:59:00Z",
+    "exhausted": true,
+    "until": "2026-10-21T00:00:00.000Z"
+  },
+  {
+    "provider": "anthropic",
+    "notice": "You've hit your session limit · resets 2am (America/Sao_Paulo)",
+    "now": "2026-10-20T22:06:00Z",
+    "exhausted": true,
+    "until": null
+  },
+  {
+    "provider": "anthropic",
+    "notice": "You've hit your session limit · resets 13am (UTC)",
+    "now": "2026-10-20T22:06:00Z",
+    "exhausted": true,
+    "until": null
+  },
+  {
+    "provider": "anthropic",
     "notice": "The agent run failed. Check the logs for details.",
     "exhausted": false
   },
   {
     "provider": "anthropic",
     "notice": "I hit a rate limit while calling the tool",
+    "exhausted": false
+  },
+  {
+    "provider": "anthropic",
+    "notice": "I think you've hit your session limit · resets 2am (UTC)",
+    "now": "2026-10-20T22:06:00Z",
+    "exhausted": false
+  },
+  {
+    "provider": "anthropic",
+    "notice": "The session limit resets 2am (UTC), so I paused",
+    "now": "2026-10-20T22:06:00Z",
+    "exhausted": false
+  },
+  {
+    "provider": "openai",
+    "notice": "You've hit your session limit · resets 2am (UTC)",
+    "now": "2026-10-20T22:06:00Z",
     "exhausted": false
   },
   { "provider": "anthropic", "notice": "usage_limit_reached", "exhausted": false },

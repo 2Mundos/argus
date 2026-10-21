@@ -59,6 +59,29 @@ ARGUS_CAPABILITIES=python,git pnpm start
 
 Without `ARGUS_URL` the channel is simply off.
 
+### Updating an installed copy
+
+Nothing here updates an installed NanoClaw by itself. The channel (`src/channels/`)
+runs in the host from the checkout's `dist/`, and agent containers mount the
+runner source (`container/agent-runner/src`) read-only from the checkout, so a
+change to either needs only a reinstall and a build of the checkout, not a new
+agent image:
+
+```bash
+integrations/nanoclaw/install.sh ~/.local/share/argus-nanoclaw/src   # idempotent
+cd ~/.local/share/argus-nanoclaw/src
+pnpm run build && ~/path/to/argus/integrations/nanoclaw/install.sh . >/dev/null   # restores JS assets tsc drops
+pnpm exec vitest run src/channels/
+```
+
+Rebuild the agent image (`provision.sh`, `ARGUS_NANOCLAW_ENGINES=1` on an engines
+node) only when the image's own inputs change (`container/Dockerfile`, CLI tools,
+`argus-delegate`, `gitea-api.mjs`). Then recreate the worker instances: running
+hosts keep the old channel and running agent containers the old runner. The
+runner hooks' own tests run with the image's Bun:
+`cd container/agent-runner && bun test src/providers/claude-rate-limit.test.ts
+src/providers/claude.rate-limit.test.ts`.
+
 ## Run it as an Argus runtime (`nanoclaw`)
 
 For the guided `nanoclaw` template, `integrations/nanoclaw/provision.sh` does the
@@ -194,12 +217,23 @@ worker provider list (the retired `account_providers` / `executor_providers` /
    only) from which `argus-delegate claude` restores the variable for its own
    child when the proxy and CA match; see
    [global account selection](../../docs/specs/account-selection.spec.md).
-   A generic "The agent run failed" notice counts too when the structured
-   `providerFailure` is `{provider:"claude", kind:"rate_limit", resets_at?}` or
-   the agent log tail (optional `agentLogTail` hook of the channel config) holds
-   `Rate limit [..] (resets ..)`; without the hook only the notice and the
-   structured field are seen. The task is resent on the same attempt and no
-   failure is reported. The channel logs `account_failover`.
+   Claude Code's own `You've hit your session|usage|weekly limit · resets 2am (UTC)`
+   counts too, until the next such UTC time. In the agent runner, `install.sh`
+   copies `overlays/claude-rate-limit.ts` and hooks `claude.ts` and `poll-loop.ts`
+   (`patch-claude-rate-limit.py`, which stops the install if NanoClaw's code
+   moved): a failed Claude turn whose result is exactly that one line, or that
+   the SDK marked `rate_limit`, reaches the channel as the generic "The agent run
+   failed" notice plus the structured `providerFailure`
+   `{provider:"claude", kind:"rate_limit", resets_at?}`; no other upstream text
+   leaves the container. (A runner without NanoClaw's add-codex
+   `providerFailure` field gets only the `claude.ts` hook and the line itself is
+   the notice.) A generic notice also counts when the agent log tail (optional
+   `agentLogTail` hook of the channel config) holds `Rate limit [..] (resets ..)`
+   or that line. This host does not wire the hook: the channel has no handle on
+   the agent container's log or transcript, and the runner hook already turns the
+   provider's own signal into the structured field, which is all the log would
+   be read for. The task is resent on the same attempt and no failure is
+   reported. The channel logs `account_failover`.
 3. With no replacement, Argus blocks the task as `awaiting_quota` (with
    `refill_at`) and the channel lets go of it; it leases again (and claims) once
    an account is usable. When it cannot lease at claim time it calls

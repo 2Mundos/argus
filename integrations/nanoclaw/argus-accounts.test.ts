@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import { accountsFromEnv, createArgusAdapter, renderTask } from "./argus.js";
 import {
@@ -445,33 +445,6 @@ describe("classifyFailure", () => {
     );
     expect(classifyFailure("Failed to authenticate. API Error: 401").kind).toBe("failed");
     expect(classifyFailure("the tool hit a rate limit in some API").kind).toBe("failed");
-  });
-});
-
-describe("classifyProviderFailure (claude)", () => {
-  it("exhausts an anthropic account on a structured rate limit", () => {
-    expect(
-      classifyProviderFailure(
-        { provider: "claude", kind: "rate_limit", resetsAt: "2026-10-20T23:50:00Z" },
-        "anthropic",
-      ),
-    ).toEqual({
-      kind: "exhausted",
-      reason: "Claude usage limit reached",
-      until: "2026-10-20T23:50:00.000Z",
-    });
-    expect(
-      classifyProviderFailure(
-        { provider: "claude", kind: "rate_limit", resetsAt: "nope" },
-        "anthropic",
-      ),
-    ).toMatchObject({ kind: "exhausted", until: undefined });
-  });
-  it("ignores other accounts and shapes", () => {
-    const v = { provider: "claude", kind: "rate_limit" };
-    expect(classifyProviderFailure(v, "openai")).toBeNull();
-    expect(classifyProviderFailure({ provider: "claude", kind: "other" }, "anthropic")).toBeNull();
-    expect(classifyProviderFailure(null, "anthropic")).toBeNull();
   });
 });
 
@@ -1622,12 +1595,23 @@ describe("global account selection in the channel", () => {
 describe("quota notices shared with Argus", () => {
   const cases = JSON.parse(
     readFileSync(
-      new URL("../../packages/core/tests/fixtures/quota-notices.json", import.meta.url),
+      // packages/core/tests/fixtures/quota-notices.json, copied here by install.sh.
+      new URL("./argus-quota-notices.json", import.meta.url),
       "utf8",
     ),
-  ) as Array<{ provider: string; notice: string; exhausted: boolean; until?: string | null }>;
+  ) as Array<{
+    provider: string;
+    notice: string;
+    now?: string;
+    exhausted: boolean;
+    until?: string | null;
+  }>;
   it.each(cases)("$provider: $notice", (c) => {
-    const f = classifyFailure(c.notice, c.provider === "anthropic" ? "anthropic" : "openai");
+    const f = classifyFailure(
+      c.notice,
+      c.provider === "anthropic" ? "anthropic" : "openai",
+      c.now ? new Date(c.now) : undefined,
+    );
     expect(f.kind).toBe(c.exhausted ? "exhausted" : "failed");
     if (c.exhausted) expect((f as { until?: string }).until ?? null).toBe(c.until ?? null);
   });
@@ -1649,6 +1633,13 @@ describe("a Claude rate limit that only the structured field or the log shows", 
     expect(
       classifyProviderFailure({ provider: "claude", kind: "rate_limit" }, "anthropic"),
     ).toEqual({ kind: "exhausted", reason: "Rate limit reached" });
+    expect(
+      classifyProviderFailure(
+        { provider: "claude", kind: "rate_limit", resets_at: "nope" },
+        "anthropic",
+      ),
+    ).toEqual({ kind: "exhausted", reason: "Rate limit reached" });
+    expect(classifyProviderFailure(null, "anthropic")).toBeNull();
     expect(classifyProviderFailure(v, "openai")).toBeNull();
     expect(classifyProviderFailure(v, undefined)).toBeNull();
     expect(classifyProviderFailure({ provider: "claude", kind: "other" }, "anthropic")).toBeNull();
@@ -1659,6 +1650,23 @@ describe("a Claude rate limit that only the structured field or the log shows", 
     expect(classifyLogTail(tail, "anthropic")).toMatchObject({ kind: "exhausted", until: resets });
     expect(classifyLogTail(tail, "openai")).toBeNull();
     expect(classifyLogTail("nothing here", "anthropic")).toBeNull();
+  });
+
+  it("classifyLogTail reads Claude Code's session-limit line, as logged or in a transcript", () => {
+    const now = new Date("2026-10-20T22:06:00Z");
+    const line = "You've hit your session limit · resets 2am (UTC)";
+    const transcript = `{"type":"assistant","error":"rate_limit","message":{"model":"<synthetic>","content":[{"type":"text","text":"${line}"}]}}\n`;
+    for (const tail of [`x\n${line}\n`, transcript]) {
+      expect(classifyLogTail(tail, "anthropic", now)).toEqual({
+        kind: "exhausted",
+        reason: "Rate limit reached (resets 2026-10-21T02:00:00.000Z)",
+        until: "2026-10-21T02:00:00.000Z",
+      });
+    }
+    expect(classifyLogTail("You've hit your weekly limit · resets soon", "anthropic", now)).toEqual(
+      { kind: "exhausted", reason: "Rate limit reached" },
+    );
+    expect(classifyLogTail(line, "openai", now)).toBeNull();
   });
 
   it("generic notice + structured rate_limit: exhausts, switches, resends on the same attempt", async () => {
@@ -1701,6 +1709,62 @@ describe("a Claude rate limit that only the structured field or the log shows", 
     expect(report.body).toMatchObject({ until: resets, attempt: 1 });
     await until(() => h.inbound.length === 2);
     expect(w.calls.some((c) => c.path.endsWith("/fail"))).toBe(false);
+  });
+
+  describe("Claude Code's session-limit line (incident of 2026-10-20)", () => {
+    const LINE = "You've hit your session limit · resets 2am (UTC)";
+    const NEXT_2AM = "2026-10-21T02:00:00.000Z";
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-20T22:06:00Z"));
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it.each([
+      ["the line as the notice", failure(LINE)],
+      [
+        "the generic notice + the runner's providerFailure",
+        {
+          kind: "chat",
+          content: {
+            text: GENERIC,
+            failureNotice: true,
+            providerFailure: { provider: "claude", kind: "rate_limit", resets_at: NEXT_2AM },
+          },
+        },
+      ],
+    ])(
+      "%s: A exhausted until the reset, the task resent on B in the same attempt",
+      async (_n, msg) => {
+        const w = world({ leases: [A, B], tasks: [task()] });
+        const h = harness(w);
+        live.push(h.adapter);
+        await h.adapter.setup(h.setup);
+        await until(() => h.inbound.length === 1);
+        await h.adapter.deliver("local", null, msg as any);
+        await until(() => h.inbound.length === 2);
+        const report = w.calls.find((c) => c.path === "/accounts/a-a/exhausted")!;
+        expect(report.body).toMatchObject({ until: NEXT_2AM, task_id: "t1", attempt: 1 });
+        expect(h.inbound[1].content.text).toContain("account was switched");
+        expect(w.calls.some((c) => c.path.endsWith("/fail"))).toBe(false);
+        expect(w.onecli.secrets[0]!.value).toBe("sk-ant-BBBB");
+      },
+    );
+
+    it.each([
+      `I think ${LINE}`,
+      "The session limit resets 2am (UTC), so I paused",
+      "Connection reset by peer (ECONNRESET)",
+    ])("model text or a generic error (%s) stays a plain failure", async (text) => {
+      const w = world({ leases: [A, B], tasks: [task()] });
+      const h = harness(w);
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length === 1);
+      await h.adapter.deliver("local", null, failure(text));
+      await until(() => w.calls.some((c) => c.path === "/tasks/t1/fail"));
+      expect(w.calls.some((c) => c.path.endsWith("/exhausted"))).toBe(false);
+    });
   });
 
   it("a generic notice with nothing else is still a plain failure", async () => {
