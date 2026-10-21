@@ -120,8 +120,11 @@ if "anthropic-redirect.mjs" not in s:
     s = s.replace("COPY install-cursor-agent.sh argus-delegate.mjs ", "COPY install-cursor-agent.sh argus-delegate.mjs anthropic-redirect.mjs ", 1)
     s = s.replace(" && rm -rf /tmp/argus-engines \\\n", " && install -m 0644 /tmp/argus-engines/anthropic-redirect.mjs /usr/local/bin/anthropic-redirect.mjs \\\n && rm -rf /tmp/argus-engines \\\n", 1)
 # account-settings.mjs (argus-delegate imports it; custom accounts) for checkouts patched before it existed.
-if "account-settings.mjs" not in s:
-    s = s.replace("COPY install-cursor-agent.sh argus-delegate.mjs ", "COPY install-cursor-agent.sh argus-delegate.mjs account-settings.mjs ", 1)
+# Keyed on the install step, not the name: an earlier version of this script could put
+# account-settings.mjs on the COPY line without installing it.
+if "/tmp/argus-engines/account-settings.mjs" not in s:
+    if not re.search(r"^COPY install-cursor-agent\.sh argus-delegate\.mjs[^\n]* account-settings\.mjs ", s, flags=re.M):
+        s = s.replace("COPY install-cursor-agent.sh argus-delegate.mjs ", "COPY install-cursor-agent.sh argus-delegate.mjs account-settings.mjs ", 1)
     s = s.replace(" && rm -rf /tmp/argus-engines \\\n", " && install -m 0644 /tmp/argus-engines/account-settings.mjs /usr/local/bin/ \\\n && rm -rf /tmp/argus-engines \\\n", 1)
 assert "/tmp/argus-engines/account-settings.mjs /usr/local/bin/" in s or "/tmp/argus-engines/account-settings.mjs /tmp/argus-engines/model-policy.mjs" in s
 assert "gitea-api.mjs /tmp/argus-engines/" in s
