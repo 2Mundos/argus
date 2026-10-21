@@ -276,12 +276,13 @@ fi
 # lookup threw "Database not initialized". The test now stubs only getAgentGroup
 # to find no group, which takes the hook's no-group path (config unchanged); the
 # group-found path is covered by argus-local-harness.test.ts. The mock goes right
-# after the test's vitest import (vi.mock is hoisted; the pattern spans a
-# multi-line import list); no such import stops the install, like every other
-# anchor here.
+# after the test's vitest import (vi.mock is hoisted; an import list split over
+# lines matches too, checked in the script); no such import stops the install,
+# like every other anchor here.
 if [ -f "$onecli_test" ] && grep -q "withLocalHarnessRuntimeForGroup" "$onecli_ts" \
     && ! grep -q "vi.mock('../db/agent-groups.js'" "$onecli_test"; then
-  python3 - "$onecli_test" <<'PY'
+  patch_result="$(
+    python3 - "$onecli_test" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p).read()
@@ -295,12 +296,19 @@ vi.mock('../db/agent-groups.js', async (original) => ({
   getAgentGroup: async () => undefined,
 }));
 """
-first = re.search(r"^import [^;]*\bfrom ['\"]vitest['\"];?[ \t]*\n", s, re.M)
+# [^;] also matches newlines, so an import list split over lines still matches.
+vitest_import = re.compile(r"^import [^;]*\bfrom ['\"]vitest['\"];?[ \t]*\n", re.M)
+assert vitest_import.search("import {\n  describe,\n  it,\n} from 'vitest';\n")
+first = vitest_import.search(s)
 assert first, "onecli test has no vitest import to anchor the mock on"
 at = first.end()
 open(p, "w").write(s[:at] + mock + s[at:])
+print("patched")
 PY
-  echo "patched $onecli_test (agent group lookup for the local-harness hook)"
+  )"
+  if [ "$patch_result" = patched ]; then
+    echo "patched $onecli_test (agent group lookup for the local-harness hook)"
+  fi
 fi
 
 codex_ts="$target/container/agent-runner/src/providers/codex-app-server.ts"
