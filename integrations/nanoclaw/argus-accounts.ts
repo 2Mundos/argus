@@ -371,12 +371,46 @@ export class OneCliError extends Error {
   }
 }
 
+const ONECLI_HTTP_HOSTS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "[::1]",
+  "host.docker.internal",
+]);
+
+/** Mirror of Argus `NanoclawOptions.onecli_url` (security-hardening spec). */
+export function assertOneCliUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`invalid OneCLI URL: ${url}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("OneCLI URL must not embed credentials");
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol === "https:") {
+    if (!host) throw new Error("OneCLI URL needs a host");
+    return url;
+  }
+  if (parsed.protocol === "http:" && ONECLI_HTTP_HOSTS.has(host)) {
+    return url;
+  }
+  throw new Error(
+    "OneCLI URL must be https://, or http:// to localhost / 127.0.0.1 / host.docker.internal",
+  );
+}
+
 export class OneCliClient {
   constructor(
     private readonly baseUrl: string,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly apiKey?: string,
-  ) {}
+  ) {
+    assertOneCliUrl(baseUrl);
+  }
 
   async call(method: string, path: string, body?: unknown): Promise<any> {
     const res = await this.fetchImpl(this.baseUrl.replace(/\/$/, "") + "/api" + path, {

@@ -83,6 +83,24 @@ class KubernetesOptions(BaseModel):
 NANOCLAW_MAX_ROOT_LEN = 107 - 1 - 36 - len("/data/ncl.sock")
 
 
+_ONECLI_HTTP_HOSTS = frozenset(
+    {"localhost", "127.0.0.1", "::1", "[::1]", "host.docker.internal"}
+)
+
+
+def onecli_url_ok(url: str) -> bool:
+    """https anywhere, or http only to loopback / host.docker.internal; no userinfo."""
+    parsed = urlsplit(url)
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme == "https":
+        return bool(host)
+    if parsed.scheme == "http":
+        return host in _ONECLI_HTTP_HOSTS
+    return False
+
+
 class NanoclawOptions(BaseModel):
     """The `nanoclaw` runtime (docs/research/2026-10-14.nanoclaw-integration).
 
@@ -113,6 +131,16 @@ class NanoclawOptions(BaseModel):
     repositories: dict[str, str] = {}
     user: str | None = None  # "uid:gid" to run the host container as
     group_add: list[str] = []  # e.g. the docker socket's group id
+
+    @field_validator("onecli_url")
+    @classmethod
+    def onecli_url_scheme(cls, value: str) -> str:
+        if not onecli_url_ok(value):
+            raise ValueError(
+                "onecli_url must be https://, or http:// to localhost /"
+                " 127.0.0.1 / host.docker.internal, without embedded credentials"
+            )
+        return value
 
     @model_validator(mode="before")
     @classmethod
