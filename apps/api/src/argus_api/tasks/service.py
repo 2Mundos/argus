@@ -35,6 +35,7 @@ from argus_core.tasks import (
 )
 from pydantic import ValidationError
 
+from argus_api.access import record_lease_grant
 from argus_api.accounts.usage import insert_usage
 from argus_api.db import Tx, ts
 from argus_api.decisions import store as decisions
@@ -246,6 +247,7 @@ async def claim(
         },
         data={"attempt": attempt, "agent_id": agent_id},
     )
+    await record_lease_grant(tx, row["id"], agent_id, attempt)
     task = await get_task(tx.conn, row["id"])
     await _snapshot_attempt(tx, task, agent_id)
     return task

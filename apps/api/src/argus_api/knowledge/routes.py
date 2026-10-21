@@ -19,6 +19,13 @@ from argus_core.knowledge import (
 )
 from fastapi import APIRouter, Path, Query, status
 
+from argus_api.access import (
+    is_global_reader,
+    leased_projects,
+    require_page_readable,
+    require_project_readable,
+    worker_project_filter,
+)
 from argus_api.auth import Identity
 from argus_api.config import Settings
 from argus_api.db import Database, utcnow
@@ -51,9 +58,14 @@ async def _page(db: Database, page_id: str, settings: Settings) -> Page:
 
 
 @router.get("/projects")
-async def list_projects(db: DbDep, _: CallerDep) -> list[Project]:
+async def list_projects(db: DbDep, caller: CallerDep) -> list[Project]:
     async with db.read() as conn:
-        return await service.list_projects(conn)
+        projects = await service.list_projects(conn)
+        if is_global_reader(caller):
+            return projects
+        assert caller.agent_id is not None
+        allowed = await leased_projects(conn, caller.agent_id)
+        return [p for p in projects if p.slug in allowed]
 
 
 @router.put("/projects/{slug}")
@@ -70,7 +82,7 @@ async def upsert_project(
 @router.get("/knowledge/pages")
 async def list_pages(
     db: DbDep,
-    _: CallerDep,
+    caller: CallerDep,
     settings: SettingsDep,
     project: str | None = None,
     include_archived: bool = False,
@@ -82,13 +94,14 @@ async def list_pages(
             project=project,
             include_archived=include_archived,
             stale_after=_stale(settings),
+            project_scope=worker_project_filter(caller),
         )
 
 
 @router.get("/knowledge/search")
 async def search(
     db: DbDep,
-    _: CallerDep,
+    caller: CallerDep,
     settings: SettingsDep,
     q: Annotated[str, Query(min_length=1, max_length=500)],
     project: str | None = None,
@@ -96,6 +109,7 @@ async def search(
 ) -> list[SearchHit]:
     """Full-text search over active pages (all words must match; if nothing does,
     any word may). Stale pages rank after fresh ones."""
+    scope = worker_project_filter(caller, column="p.project")
     async with db.read() as conn:
         for match_any in (False, True):
             hits = await service.search(
@@ -106,6 +120,7 @@ async def search(
                 limit=limit,
                 match_any=match_any,
                 stale_after=_stale(settings),
+                project_scope=scope,
             )
             if hits:
                 break
@@ -139,19 +154,27 @@ async def create_page(
 async def get_page(
     page_id: str,
     db: DbDep,
-    _: CallerDep,
+    caller: CallerDep,
     settings: SettingsDep,
     revision: int | None = None,
 ) -> Page:
     async with db.read() as conn:
-        return await service.get_page(
+        page = await service.get_page(
             conn, page_id, now=utcnow(), stale_after=_stale(settings), revision=revision
         )
+        await require_page_readable(conn, caller, page.id, page.project)
+        return page
 
 
 @router.get("/knowledge/pages/{page_id}/revisions")
-async def list_revisions(page_id: str, db: DbDep, _: CallerDep) -> list[Revision]:
+async def list_revisions(
+    page_id: str, db: DbDep, caller: CallerDep, settings: SettingsDep
+) -> list[Revision]:
     async with db.read() as conn:
+        page = await service.get_page(
+            conn, page_id, now=utcnow(), stale_after=_stale(settings)
+        )
+        await require_page_readable(conn, caller, page.id, page.project)
         return await service.list_revisions(conn, page_id)
 
 
@@ -227,14 +250,18 @@ async def mark_reviewed(
 
 @router.get("/knowledge/proposals")
 async def list_proposals(
-    db: DbDep, _: CallerDep, state: ProposalState | None = ProposalState.OPEN
+    db: DbDep, caller: CallerDep, state: ProposalState | None = ProposalState.OPEN
 ) -> list[Proposal]:
     """Proposals are resolved by answering their `knowledge` decision."""
     async with db.read() as conn:
-        return await service.list_proposals(conn, state)
+        return await service.list_proposals(
+            conn, state, project_scope=worker_project_filter(caller)
+        )
 
 
 @router.get("/knowledge/proposals/{proposal_id}")
-async def get_proposal(proposal_id: str, db: DbDep, _: CallerDep) -> Proposal:
+async def get_proposal(proposal_id: str, db: DbDep, caller: CallerDep) -> Proposal:
     async with db.read() as conn:
-        return await service.get_proposal(conn, proposal_id)
+        proposal = await service.get_proposal(conn, proposal_id)
+        await require_project_readable(conn, caller, proposal.project)
+        return proposal

@@ -44,8 +44,9 @@ Findings outside the gap list:
 
 - **Credential exposure:** `Pool.env` values reach every manager-scope reader,
   including MCP `list_pools`. Templates may put tokens there.
-- **Read scope:** `CallerDep` lets a worker read any task, decision or artifact.
-  This spec keeps that rule unchanged (§4).
+- **Read scope:** narrowed in [worker-read-scope](worker-read-scope.spec.md):
+  workers only see leased tasks/artifacts and project-scoped knowledge/events;
+  orchestrators and admins stay global.
 
 # 2. Non-Goals
 
@@ -280,10 +281,9 @@ heartbeat's `runtime`). The inbox journey is unchanged in calls; its context is
 
 # 4. Open Questions
 
-- **Worker read scope:** today a worker can read any task, decision or artifact
-  (`CallerDep`). This spec keeps that rule, as the issue requires. Whether to
-  narrow it is a separate issue and spec: workers may rely on reading their
-  dependencies' results.
+- **Worker dependency reads:** workers no longer have global task reads (see
+  [worker-read-scope](worker-read-scope.spec.md)). If dependency results must be
+  readable without a lease, that needs an explicit grant rule.
 - **Structured summaries per artifact role:** which roles have a schema worth
   parsing into a summary. Decide once roles are in use.
 
