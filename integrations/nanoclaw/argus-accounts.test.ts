@@ -46,7 +46,7 @@ vi.mock("../db/messaging-groups.js", () => ({
   getMessagingGroupAgents: async () => [{ agent_group_id: "group-1" }],
 }));
 vi.mock("../db/agent-groups.js", () => ({
-  getAgentGroup: async (id: string) => ({ id, name: "argus worker" }),
+  getAgentGroup: async (id: string) => ({ id, name: "argus worker", folder: "argus-worker" }),
 }));
 vi.mock("../db/sessions.js", () => ({
   getSessionsByAgentGroup: async (id: string) => (id === "group-1" ? nanoclaw.sessions : []),
@@ -1871,7 +1871,10 @@ describe("global account selection in the channel", () => {
     await until(() => h.inbound.length === 1);
     await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
     await until(() => h.inbound.length === 2, 5000);
-    expect(w.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(2);
+    const engineLeases = w.calls.filter(
+      (c) => c.path === "/accounts/lease" && (c.body?.role ?? "engine") === "engine",
+    );
+    expect(engineLeases).toHaveLength(2);
     expect(recycleRuntime).toHaveBeenCalledTimes(1); // the Codex runtime stops first
     const selected = w.calls.filter((c) => c.path === "/engines/selected").map((c) => c.body);
     expect(selected.map((b) => b.account_id)).toEqual(["a-codex-1", "a-strata"]);
