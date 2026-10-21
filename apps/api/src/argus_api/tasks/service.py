@@ -15,6 +15,7 @@ import aiosqlite
 from argus_core.accounts import EXECUTOR_ONLY, REPOSITORY_PROVIDER
 from argus_core.agents import LIVE, AgentState
 from argus_core.auth import Scope
+from argus_core.complexity import Complexity, ComplexitySource, classify
 from argus_core.custom_accounts import CustomConfig
 from argus_core.decisions import Audience, DecisionKind
 from argus_core.kinds import TaskKind
@@ -131,12 +132,16 @@ async def create_task(
 
     task_id = str(uuid4())
     now = ts(tx.now)
+    complexity = body.complexity or classify(body.title, body.spec)
+    source = (
+        ComplexitySource.EXPLICIT if body.complexity else ComplexitySource.HEURISTIC
+    )
     await tx.conn.execute(
         "INSERT INTO tasks (id, parent_id, kind, title, spec, acceptance, input,"
         " required_capabilities, priority, state, requires_approval, review,"
         " prompt_trust, lease_ttl_s, max_attempts, project, timeout_s, created_by,"
-        " created_at, updated_at, account_providers)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " created_at, updated_at, complexity, complexity_source, account_providers)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task_id,
             body.parent_id,
@@ -158,6 +163,8 @@ async def create_task(
             actor,
             now,
             now,
+            complexity,
+            source,
             _providers_json(body.account_providers),
         ),
     )
@@ -271,6 +278,12 @@ async def claim(
     task = await get_task(tx.conn, row["id"])
     await _snapshot_attempt(tx, task, agent_id)
     return task
+
+
+async def prefers_local(conn: aiosqlite.Connection, task_id: str) -> bool:
+    """A trivial task ranks the local model first (task complexity spec 3)."""
+    row = await _row(conn, task_id)
+    return row["complexity"] == Complexity.TRIVIAL
 
 
 async def account_providers(
@@ -758,6 +771,8 @@ async def edit_task(
         for f, v in changed.items()
         if f not in ("knowledge", "depends_on", "account_providers")
     }
+    if "complexity" in sets:
+        sets["complexity_source"] = ComplexitySource.EXPLICIT
     if "account_providers" in changed:
         sets["account_providers"] = _providers_json(changed["account_providers"])
     if sets:
@@ -880,7 +895,7 @@ def _digest(text: str) -> str:
 def _diff(field: str, old: Any, new: Any) -> dict[str, Any]:
     """What the audit keeps of one change. Spec and acceptance text never enter the
     event log (it is streamed and shown): only sizes and digests do."""
-    if field in ("title", "priority", "account_providers"):
+    if field in ("title", "priority", "complexity", "account_providers"):
         return {"from": old, "to": new}
     if field in ("required_capabilities", "knowledge", "depends_on"):
         return {

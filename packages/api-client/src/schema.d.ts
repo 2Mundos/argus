@@ -2745,6 +2745,10 @@ export interface components {
             attempt: number;
             /** Block Reason */
             block_reason: string | null;
+            /** @default standard */
+            complexity?: components["schemas"]["Complexity"];
+            /** @default heuristic */
+            complexity_source?: components["schemas"]["ComplexitySource"];
             /**
              * Created At
              * Format: date-time
@@ -2912,6 +2916,16 @@ export interface components {
             attempt: number;
             result: components["schemas"]["TaskResult-Input"];
         };
+        /**
+         * Complexity
+         * @enum {string}
+         */
+        Complexity: "trivial" | "standard";
+        /**
+         * ComplexitySource
+         * @enum {string}
+         */
+        ComplexitySource: "explicit" | "heuristic";
         /**
          * CostFigures
          * @description What one group spent. `runs = measured_runs + not_reported_runs`. A token
@@ -4299,6 +4313,10 @@ export interface components {
              * @enum {string}
              */
             source: "env" | "file" | "defaults";
+            /** Trivial */
+            trivial?: {
+                [key: string]: string[];
+            } | null;
         };
         /** ModelPolicyBody */
         ModelPolicyBody: {
@@ -4306,6 +4324,8 @@ export interface components {
             harness: unknown;
             /** Implementation */
             implementation: unknown;
+            /** Trivial */
+            trivial?: unknown;
         };
         /**
          * ModelTrace
@@ -5584,6 +5604,10 @@ export interface components {
             attempt: number;
             /** Block Reason */
             block_reason: string | null;
+            /** @default standard */
+            complexity?: components["schemas"]["Complexity"];
+            /** @default heuristic */
+            complexity_source?: components["schemas"]["ComplexitySource"];
             /**
              * Created At
              * Format: date-time
@@ -5734,6 +5758,7 @@ export interface components {
             acceptance?: string[] | null;
             /** Account Providers */
             account_providers?: string[] | null;
+            complexity?: components["schemas"]["Complexity"] | null;
             /** Depends On */
             depends_on?: string[] | null;
             /** Knowledge */
@@ -5758,6 +5783,7 @@ export interface components {
             acceptance?: string[];
             /** Account Providers */
             account_providers?: string[] | null;
+            complexity?: components["schemas"]["Complexity"] | null;
             /**
              * Depends On
              * @default []
@@ -5839,6 +5865,10 @@ export interface components {
             attempt: number;
             /** Block Reason */
             block_reason: string | null;
+            /** @default standard */
+            complexity?: components["schemas"]["Complexity"];
+            /** @default heuristic */
+            complexity_source?: components["schemas"]["ComplexitySource"];
             /**
              * Created At
              * Format: date-time

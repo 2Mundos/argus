@@ -124,6 +124,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
     timeoutMinutes: "",
     requires_approval: false,
     review: "none" as "none" | "human" | "orchestrator",
+    complexity: "" as "" | "trivial" | "standard",
   });
   const [error, setError] = useState<string>();
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
@@ -150,6 +151,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
             priority: form.priority,
             requires_approval: form.requires_approval,
             review: form.review,
+            ...(form.complexity ? { complexity: form.complexity } : {}),
             ...(form.timeoutMinutes ? { timeout_s: Number(form.timeoutMinutes) * 60 } : {}),
             ...(capabilities.length ? { required_capabilities: capabilities } : {}),
             ...(accountProviders.length ? { account_providers: accountProviders } : {}),
@@ -213,6 +215,17 @@ function NewTask({ onClose }: { onClose: () => void }) {
             </select>
           </label>
         </div>
+        <label>
+          Complexity (trivial work, such as a copy change, prefers the local model)
+          <select
+            value={form.complexity}
+            onChange={(e) => set("complexity", e.target.value as typeof form.complexity)}
+          >
+            <option value="">decide from the title and spec</option>
+            <option value="trivial">trivial</option>
+            <option value="standard">standard</option>
+          </select>
+        </label>
         <label>
           Required capabilities (comma-separated; empty uses the kind's default)
           <input value={form.capabilities} onChange={(e) => set("capabilities", e.target.value)} />

@@ -21,8 +21,8 @@ def test_editable_fields_keep_the_canonical_order_and_archived_is_read_only() ->
     assert editable_fields(TaskState.READY, archived=True) == []
 
 
-def test_title_and_priority_cannot_be_cleared() -> None:
-    assert set(EDITABLE) - {"title", "priority"} == CLEARABLE
+def test_title_priority_and_complexity_cannot_be_cleared() -> None:
+    assert set(EDITABLE) - {"title", "priority", "complexity"} == CLEARABLE
 
 
 def test_the_patch_tells_omitted_from_null_and_collects_unknown_keys() -> None:

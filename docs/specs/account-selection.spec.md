@@ -32,6 +32,9 @@ isolation or sandbox/TLS restrictions.
   before its reset (an exhausted account past its reset counts and is recovered
   on lease), a credential present in the secret store (a missing one disables
   the account and the next candidate is tried), and below `max_leases`.
+  Cloud accounts rank before the `local` one, except for a `trivial` task, which
+  prefers `local` and falls back to the cloud in the same call
+  ([task complexity](task-complexity.spec.md)).
   Slot accounting stays atomic in the one write transaction.
 - **Eligibility is technical, never preference.** `gitea` accounts serve only the
   `repository` role (scoped by the pool's `repositories`) and never become model

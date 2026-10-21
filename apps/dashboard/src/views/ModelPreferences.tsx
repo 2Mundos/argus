@@ -9,9 +9,9 @@ import {
   type ModelPolicy,
   moved,
   restoreModelDefaults,
-  SCOPES,
   type Scope,
   saveModelPolicy,
+  scopesOf,
   sourceLabel,
   toDraft,
   withChain,
@@ -20,6 +20,7 @@ import {
 const TITLES: Record<Scope, string> = {
   harness: "Harness (NanoClaw)",
   implementation: "Implementation (argus-delegate)",
+  trivial: "Trivial tasks and local leases (argus-delegate)",
 };
 
 /** Ordered model chains per engine, from GET/PUT/DELETE /api/models. */
@@ -105,11 +106,11 @@ export function ModelPreferences() {
               )}
             </p>
           )}
-          {SCOPES.map((scope) => (
+          {scopesOf(draft).map((scope) => (
             <ScopeEditor
               key={scope}
               scope={scope}
-              chains={draft[scope]}
+              chains={draft[scope] ?? {}}
               onChange={(engine, chain) => setDraft(withChain(draft, scope, engine, chain))}
             />
           ))}

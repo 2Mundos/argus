@@ -1269,3 +1269,46 @@ test("the Argus agent token is neither passed on nor relayed", async (t) => {
   const src = fs.readFileSync(new URL("./livelog.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(src, /ARGUS_AGENT_TOKEN|fetch\(/);
 });
+
+test("Cursor gets composer-2.5 from the trivial map for trivial tasks and local leases only", async (t) => {
+  const defaults = JSON.parse(
+    fs.readFileSync(new URL("./model-policy.defaults.json", import.meta.url), "utf8"),
+  );
+  const go = async (context) => {
+    const s = sandbox(t);
+    const rec = path.join(s.dir, "argv");
+    s.fake(
+      "agent",
+      `if [ "$1" = "--version" ]; then echo v; exit 0; fi\nprintf '%s\\n' "$@" > ${rec}\necho '{"result":"ok"}'`,
+    );
+    const cursor = path.join(s.home, ".config", "cursor");
+    fs.mkdirSync(cursor, { recursive: true });
+    fs.writeFileSync(path.join(cursor, "auth.json"), '{"accessToken":"sentinel"}');
+    const file = path.join(s.dir, "argus-model-policy.json");
+    fs.writeFileSync(file, JSON.stringify(policySnapshot(defaults, { task_id: "t1", ...context })));
+    const env = { ...s.env, ARGUS_MODEL_POLICY_FILE: file };
+    const { code, report } = await run(
+      ["agent", "--cwd", s.work, "--out", path.join(s.dir, "out"), "--timeout", "20"],
+      { env },
+    );
+    assert.equal(code, 0);
+    return { report, argv: fs.readFileSync(rec, "utf8") };
+  };
+  for (const context of [
+    { complexity: "trivial", account_provider: "anthropic" },
+    { complexity: "standard", account_provider: "local" },
+  ]) {
+    const { report, argv } = await go(context);
+    assert.match(argv, /^--model\ncomposer-2\.5$/m);
+    assert.deepEqual(
+      [report.model, report.model_source, report.policy_map],
+      ["composer-2.5", "policy", "trivial"],
+    );
+  }
+  const { report, argv } = await go({ complexity: "standard", account_provider: "anthropic" });
+  assert.ok(!argv.includes("--model"));
+  assert.deepEqual(
+    [report.model, report.model_source, report.policy_map],
+    [null, "native_default", "implementation"],
+  );
+});

@@ -8,6 +8,7 @@ export const EDIT_FIELDS = [
   "required_capabilities",
   "knowledge",
   "depends_on",
+  "complexity",
   "account_providers",
 ] as const;
 export type EditField = (typeof EDIT_FIELDS)[number];
@@ -23,6 +24,7 @@ export type Changes = {
   required_capabilities?: string[];
   knowledge?: string[];
   depends_on?: string[];
+  complexity?: "trivial" | "standard";
   account_providers?: string[];
 };
 
@@ -44,6 +46,7 @@ export function toDraft(task: Task): Draft {
     required_capabilities: task.required_capabilities.join("\n"),
     knowledge: task.knowledge.join("\n"),
     depends_on: task.depends_on.join("\n"),
+    complexity: task.complexity ?? "standard",
     account_providers: (task.account_providers ?? []).join("\n"),
   };
 }
@@ -78,6 +81,8 @@ export function buildChanges(base: Task, draft: Draft): { changes: Changes; erro
       if (value.trim() === "" || !Number.isInteger(n))
         errors.priority = "Priority is a whole number.";
       else changes.priority = n;
+    } else if (field === "complexity") {
+      changes.complexity = value as "trivial" | "standard";
     } else if (field === "spec") {
       changes.spec = value;
     } else {

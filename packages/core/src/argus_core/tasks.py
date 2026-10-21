@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, Field, field_validator
 
 from argus_core.accounts import ENGINE_PROVIDERS
+from argus_core.complexity import Complexity, ComplexitySource
 from argus_core.knowledge import KnowledgeRef
 from argus_core.model_trace import ModelsSummary
 
@@ -245,6 +246,8 @@ class TaskCreate(BaseModel):
     # Wall-clock cap per attempt, counted from the claim; heartbeats and progress
     # notes do not extend it. Unset: the kind's default, then the server's.
     timeout_s: int | None = Field(default=None, ge=60, le=7 * 24 * 3600)
+    # Unset: derived from the title and spec (task complexity spec).
+    complexity: Complexity | None = None
     # Restrict the task to these engine account providers (e.g. ["local"]); None:
     # unrestricted (local harness spec 3).
     account_providers: list[str] | None = None
@@ -311,6 +314,8 @@ class Task(BaseModel):
     depends_on: list[str]
     project: str
     knowledge: list[str]
+    complexity: Complexity = Complexity.STANDARD
+    complexity_source: ComplexitySource = ComplexitySource.HEURISTIC
     account_providers: list[str] | None = None
     created_by: str
     created_at: datetime

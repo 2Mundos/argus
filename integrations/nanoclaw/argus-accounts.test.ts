@@ -713,6 +713,12 @@ describe("preferredExecutorForLease", () => {
     const cursor = lease("cur", "", { provider: "cursor", role: "executor", credential: {} });
     expect(preferredExecutorForLease(engine, cursor)).toBe("agent");
   });
+  it("names agent for a trivial task whatever the account", () => {
+    const engine = codexLease();
+    expect(preferredExecutorForLease(engine, null)).toBe("codex");
+    expect(preferredExecutorForLease(engine, null, "standard")).toBe("codex");
+    expect(preferredExecutorForLease(engine, null, "trivial")).toBe("agent");
+  });
 });
 
 describe("openai (Codex) credential documents", () => {

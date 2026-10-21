@@ -321,15 +321,16 @@ export function executorFor(provider: string): string | null {
 /**
  * Preferred delegated CLI for a task: the executor lease when present, otherwise
  * the engine's. Local is engine-only; when the harness is local Strata, Cursor
- * `agent` is still preferred for implementation work.
+ * `agent` is still preferred for implementation work, and so for a trivial task.
  */
 export function preferredExecutorForLease(
   engine: Pick<AccountLease, "provider"> | null,
   executor: Pick<AccountLease, "provider"> | null,
+  complexity?: string | null,
 ): string | null {
   const best = executor ?? engine;
   if (!best) return null;
-  if (engine?.provider === "local") return "agent";
+  if (engine?.provider === "local" || complexity === "trivial") return "agent";
   return executorFor(best.provider);
 }
 

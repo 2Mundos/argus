@@ -23,6 +23,9 @@ router = APIRouter(tags=["models"])
 
 ENGINES = frozenset({"codex", "claude", "opencode", "agent"})
 SCOPES = ("harness", "implementation")
+# Optional: replaces `implementation` for trivial tasks and local leases (task
+# complexity spec). Absent from a policy, the revision is what it was without it.
+OPTIONAL_SCOPES = ("trivial",)
 _MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}")
 DEFAULTS_REL = "integrations/nanoclaw/engines/model-policy.defaults.json"
 
@@ -30,12 +33,17 @@ Policy = dict[str, dict[str, list[str]]]
 
 
 def validate(raw: Any) -> Policy:
-    if not isinstance(raw, dict) or sorted(raw) != list(SCOPES):
+    if (
+        not isinstance(raw, dict)
+        or not set(SCOPES) <= raw.keys()
+        or not raw.keys() <= {*SCOPES, *OPTIONAL_SCOPES}
+    ):
         raise ValidationFailedError(
-            "model policy requires only harness and implementation maps"
+            "model policy requires harness and implementation maps"
+            " and allows only an optional trivial one"
         )
     policy: Policy = {}
-    for scope in SCOPES:
+    for scope in (*SCOPES, *(s for s in OPTIONAL_SCOPES if s in raw)):
         if not isinstance(raw[scope], dict):
             raise ValidationFailedError(f"invalid {scope} map")
         policy[scope] = {}
@@ -70,6 +78,7 @@ def revision(policy: Policy) -> str:
 class ModelPolicy(BaseModel):
     harness: dict[str, list[str]]
     implementation: dict[str, list[str]]
+    trivial: dict[str, list[str]] | None = None
     revision: str
     source: Literal["env", "file", "defaults"]
     path: str
@@ -85,6 +94,7 @@ class ModelPolicyBody(BaseModel):
     # Shape is checked by `validate`, so a bad chain is named, not a pydantic path.
     harness: Any
     implementation: Any
+    trivial: Any = None
 
 
 def _parse(text: str, what: str) -> Policy:
@@ -161,6 +171,8 @@ def effective_env(path: Path) -> tuple[str, str]:
     ARGUS_MODEL_POLICY of a new instance. Raises ValidationFailedError if it is invalid."""
     policy = _read(path)
     plain: Policy = {"harness": policy.harness, "implementation": policy.implementation}
+    if policy.trivial is not None:
+        plain["trivial"] = policy.trivial
     return canonical(plain), policy.revision
 
 
@@ -203,7 +215,10 @@ async def put_models(
     body: ModelPolicyBody, settings: SettingsDep, db: DbDep, caller: AdminDep
 ) -> ModelPolicy:
     """Validate and save the file policy, all or nothing."""
-    policy = validate(body.model_dump())
+    given = body.model_dump()
+    if given["trivial"] is None:
+        del given["trivial"]  # null and absent both mean no trivial map
+    policy = validate(given)
     _env()  # a malformed ARGUS_MODEL_POLICY fails before the file changes
     _write(settings.model_policy_path, policy)
     result = _read(settings.model_policy_path)

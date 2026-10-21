@@ -39,6 +39,7 @@ thin callers of the same function with only `depends_on` set.
 | `priority` | integer | cannot be cleared (send `0` to reset) |
 | `required_capabilities` | list of strings | de-duplicated and sorted, as at creation; `null` or `[]` clears |
 | `knowledge` | list of page ids | replaces the pinned set; every page must exist and belong to the task's project or to `global` (`422 knowledge: …`); `null` or `[]` unpins all. Pins a *kind* adds at creation are not re-added |
+| `complexity` | `trivial` \| `standard` | cannot be cleared; sets `complexity_source` to `explicit` ([task complexity](task-complexity.spec.md)) |
 | `depends_on` | list of task ids | replaces the set; the rules of [task dependencies](task-dependencies.spec.md) 3.1: ids exist, no self-dependency, no cycle, at most 100 |
 | `account_providers` | list of providers | engine providers only, de-duplicated and sorted, as at creation ([local harness](local-harness.spec.md) 3); `null` or `[]` clears (no restriction) |
 
@@ -127,7 +128,7 @@ Every edit that changes something records one `task.edited` event in the
 transaction: actor (`admin:<label>` or `agent:<id>`), time, `from_version`,
 `to_version` and `changes`, a diff per changed field:
 
-- `title`, `priority`: `{from, to}`;
+- `title`, `priority`, `complexity`: `{from, to}`;
 - `required_capabilities`, `knowledge`, `depends_on`: `{added, removed}` ids;
 - `spec`, `acceptance`: only lengths/counts and a SHA-256 digest of the old and
   new text. The text itself is never copied into the event log, which is

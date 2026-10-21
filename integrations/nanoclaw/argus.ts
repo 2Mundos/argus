@@ -193,6 +193,8 @@ export interface ArgusTask {
   knowledge_refs: KnowledgeRef[];
   /** Immutable at create; missing on older servers is treated as orchestrator. */
   prompt_trust?: PromptTrust;
+  /** "trivial" prefers the local model and Cursor; missing on older servers is standard. */
+  complexity?: "trivial" | "standard";
 }
 
 /** True only when the task input explicitly sets delivery.allow_merge to boolean true. */
@@ -313,6 +315,7 @@ export function renderTask(
   pages: Map<string, string>,
   preferredExecutor?: string | null,
 ): string {
+  const trivial = task.complexity === "trivial";
   // Spec, acceptance, title, and knowledge bodies are untrusted DATA — never trusted instructions.
   // Worker-origin tasks keep prompt_trust=worker immutably; content still cannot elevate.
   const promptTrust: PromptTrust = task.prompt_trust === "worker" ? "worker" : "orchestrator";
@@ -342,6 +345,11 @@ export function renderTask(
     ...(preferredExecutor
       ? [
           `Preferred EXECUTOR for this task: ${preferredExecutor} (the CLI of the best-priority account Argus leased to this worker).`,
+          ...(trivial
+            ? [
+                "This task is trivial: use EXECUTOR agent (Cursor, model from the trivial policy) and switch to another executor only if Cursor is unavailable (auth_missing or not_installed).",
+              ]
+            : []),
         ]
       : []),
     "Do not invoke agent, cursor-agent, claude, codex, or opencode directly for implementation — that bypasses",
@@ -1178,7 +1186,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (!logRelay) await startLogRelay(task);
       resends = 0;
       const best = executor ?? account;
-      currentText = renderTask(task, pages, preferredExecutorForLease(account, executor));
+      currentText = renderTask(
+        task,
+        pages,
+        preferredExecutorForLease(account, executor, task.complexity),
+      );
       await injectTask(task.id, task.attempt, currentText);
       await finished;
     } catch {
@@ -1872,7 +1884,8 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
       // Opaque lease ids (no credential): the delegate reports executor usage against them.
       engine_account_id: held.engine?.account_id ?? null,
       executor_account_id: (held.executor ?? held.engine)?.account_id ?? null,
-      preferred_executor: preferredExecutorForLease(held.engine, held.executor),
+      preferred_executor: preferredExecutorForLease(held.engine, held.executor, task.complexity),
+      complexity: task.complexity ?? "standard",
     });
     const dir = path.resolve("groups", group.folder);
     await mkdir(dir, { recursive: true });

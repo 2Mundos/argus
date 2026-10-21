@@ -5,10 +5,22 @@ const engines = new Set(["codex", "claude", "opencode", "agent"]);
 const object = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
 
 export function validatePolicy(raw) {
-  if (!object(raw) || Object.keys(raw).sort().join(",") !== "harness,implementation")
-    throw new Error("model policy requires only harness and implementation maps");
+  const keys = object(raw) ? Object.keys(raw) : [];
+  if (
+    !object(raw) ||
+    !["harness", "implementation"].every((k) => keys.includes(k)) ||
+    keys.some((k) => !["harness", "implementation", "trivial"].includes(k))
+  )
+    throw new Error(
+      "model policy requires harness and implementation maps and allows only an optional trivial one",
+    );
   const policy = {};
-  for (const scope of ["harness", "implementation"]) {
+  // `trivial` is optional and last, so a policy without it keeps its old revision.
+  for (const scope of [
+    "harness",
+    "implementation",
+    ...(keys.includes("trivial") ? ["trivial"] : []),
+  ]) {
     if (!object(raw[scope])) throw new Error(`invalid ${scope} map`);
     policy[scope] = {};
     for (const name of Object.keys(raw[scope]).sort()) {
@@ -70,6 +82,7 @@ export function selectModel(snapshot, scope, engine, attempt = 1, reason = null,
     throw new Error("invalid model override");
   return {
     scope,
+    policy_map: scope,
     policy_engine: engine,
     requested_model: override ?? chain[0] ?? null,
     configured_model: model,
@@ -91,4 +104,14 @@ export function selectHarnessModel(snapshot, engine, task) {
     failures + reviews + 1,
     reviews ? "verification_rejected" : failures ? "previous_task_failure" : null,
   );
+}
+
+/**
+ * The map delegated selection reads: the optional `trivial` one when the pinned task is
+ * trivial or the engine runs on a local account and it has a chain for this executor,
+ * else `implementation`.
+ */
+export function implementationScope(snapshot, executor, context = snapshot.context) {
+  const light = context?.complexity === "trivial" || context?.account_provider === "local";
+  return light && snapshot.policy.trivial?.[executor] ? "trivial" : "implementation";
 }

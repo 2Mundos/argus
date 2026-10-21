@@ -3,7 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { loadPolicy, policySnapshot, selectHarnessModel, selectModel } from "./model-policy.mjs";
+import {
+  implementationScope,
+  loadPolicy,
+  policySnapshot,
+  selectHarnessModel,
+  selectModel,
+} from "./model-policy.mjs";
 
 const policy = {
   harness: { codex: ["luna", "sol"], claude: ["sonnet", "opus"] },
@@ -116,4 +122,33 @@ test("revisions match the fixture shared with the manager API", () => {
     assert.equal(snapshot.revision, c.revision, c.name);
   }
   assert.equal(loadPolicy({}).revision, cases[0].revision); // shipped defaults
+});
+
+test("the trivial map is optional, validated, last, and leaves old revisions alone", () => {
+  const base = policySnapshot(policy);
+  const light = policySnapshot({ ...policy, trivial: { agent: ["composer-2.5"] } });
+  assert.notEqual(light.revision, base.revision);
+  assert.deepEqual(Object.keys(light.policy), ["harness", "implementation", "trivial"]);
+  assert.equal(selectModel(light, "trivial", "agent").configured_model, "composer-2.5");
+  assert.equal(selectModel(light, "trivial", "agent").policy_map, "trivial");
+  for (const trivial of [{ agent: [] }, { typo: ["x"] }, { agent: ["--x"] }, [], "x"])
+    assert.throws(() => policySnapshot({ ...policy, trivial }), /trivial|map/);
+  assert.throws(() => policySnapshot({ ...policy, extra: {} }));
+});
+
+test("trivial tasks and local leases read the trivial map, others implementation", () => {
+  const snap = (context) =>
+    policySnapshot({ ...policy, trivial: { agent: ["composer-2.5"] } }, context);
+  const scope = (context, executor = "agent") => implementationScope(snap(context), executor);
+  assert.equal(scope({ complexity: "trivial", account_provider: "anthropic" }), "trivial");
+  assert.equal(scope({ complexity: "standard", account_provider: "local" }), "trivial");
+  assert.equal(scope({ complexity: "standard", account_provider: "anthropic" }), "implementation");
+  assert.equal(scope(null), "implementation");
+  // no chain for this executor in the trivial map: the implementation chain applies
+  assert.equal(scope({ complexity: "trivial" }, "claude"), "implementation");
+  // without a trivial map nothing changes
+  assert.equal(
+    implementationScope(policySnapshot(policy, { complexity: "trivial" }), "agent"),
+    "implementation",
+  );
 });
