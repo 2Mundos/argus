@@ -98,7 +98,7 @@ export function claudeEventLines(ev) {
     case "assistant":
       for (const b of blocks) {
         if (b?.type === "text" && typeof b.text === "string") {
-          for (const l of b.text.split("\n")) if (l.trim()) lines.push(l);
+          for (const l of b.text.split(/\r\n?|\n/)) if (l.trim()) lines.push(l);
         } else if (b?.type === "tool_use") {
           const args = toolArgs(b.input);
           lines.push(`▸ ${String(b.name ?? "tool").slice(0, 60)}${args ? ` ${args}` : ""}`);

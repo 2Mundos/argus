@@ -178,6 +178,16 @@ async def test_text_is_cleaned(db: Database, claimed, clock: FakeClock) -> None:
     assert again.accepted == 0
 
 
+def test_a_bare_carriage_return_splits_lines() -> None:
+    assert log.clean(["50%\r100%\r\ndone", "a\rb\r"], ()) == [
+        "50%",
+        "100%",
+        "done",
+        "a",
+        "b",
+    ]
+
+
 def test_escapes_are_stripped_before_redacting() -> None:
     token = "ghp_" + "a" * 36
     split = "ghp_\x1b[0m" + "a" * 36

@@ -28,6 +28,7 @@ MAX_SEQ = 2**63 - 1  # SQLite INTEGER: a larger bound would overflow (500, not 4
 
 Source = Literal["worker", "delegate"]
 
+_NEWLINE = re.compile(r"\r\n?")  # a bare \r (progress bars) ends a line too
 _CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b-\x1f\x7f]")
 
 
@@ -51,12 +52,14 @@ class LogAccepted(BaseModel):
 
 
 def clean(lines: list[str], secrets: tuple[str, ...]) -> list[str]:
-    """Strip terminal escapes, redact, split on newlines, cut long lines, drop blanks.
+    """Strip terminal escapes, redact, split lines (a bare CR too), cut long lines,
+    drop blanks.
     Escapes go first, so none can split a secret (`ghp_\x1b[0m…`). Private key blocks
     are masked on the whole batch, so one spanning lines cannot slip through; the
     other rules run on the batch with each line cut to REDACT_LINE_CHARS, before the
     final cut (so a secret about to be cut is still whole), and again after it."""
-    text = redact_private_keys(_CONTROL.sub("", "\n".join(lines)))
+    text = _NEWLINE.sub("\n", "\n".join(lines))
+    text = redact_private_keys(_CONTROL.sub("", text))
     text = "\n".join(raw[:REDACT_LINE_CHARS] for raw in text.splitlines())
     out: list[str] = []
     for raw in redact(text, secrets).splitlines():

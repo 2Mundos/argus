@@ -156,6 +156,14 @@ test("long names and URL passwords are masked; a JWT where a run starts", () => 
     assert.doesNotMatch(redactText(text), /eyJzdWIi/, text);
 });
 
+test("a bare carriage return splits text into lines", () => {
+  assert.deepEqual(claudeEventLines(assistant({ type: "text", text: "50%\r100%\r\ndone" })), [
+    "50%",
+    "100%",
+    "done",
+  ]);
+});
+
 test("secret-looking env values are masked exactly", () => {
   const env = {
     GITEA_TOKEN: " plainvalue-xyz123 ",
