@@ -481,6 +481,8 @@ const LOG_BACKOFF_MAX_MS = 30_000;
 const LOG_READ_MAX = 4 * 1024 * 1024; // per poll; a longer record is skipped
 const LOG_DRAIN_MS = 5000; // the final drain waits at most this long
 const LOG_DRAIN_PACE_MS = 1100; // the server takes one batch per second per source
+const LOG_DRAIN_MIN_WAIT_MS = 50; // the final drain never polls in a tight loop
+const LOG_DRAIN_MAX_FAILURES = 3; // consecutive failed polls that end the final drain
 
 /** The relay file sits in a directory the container can write: never follow a link there. */
 async function assertRealDir(dir: string): Promise<void> {
@@ -553,6 +555,7 @@ export function createDelegateLogRelay(opts: {
   let lastPostAt = Number.NEGATIVE_INFINITY; // of the last accepted batch
   let gapMs = 0; // least time between accepted batches: the pace while draining
   let fileSize = 0; // at the last read: bytes beyond `offset` are still unread
+  let failures = 0; // consecutive polls that threw
 
   let skipping = false; // inside a record longer than LOG_READ_MAX: drop it up to its newline
 
@@ -653,7 +656,9 @@ export function createDelegateLogRelay(opts: {
     busy = true;
     try {
       await step();
+      failures = 0;
     } catch (err) {
+      failures += 1;
       log.warn("Delegate log relay failed (will retry)", { err: String(err).slice(0, 200) });
     } finally {
       busy = false;
@@ -673,7 +678,8 @@ export function createDelegateLogRelay(opts: {
      * The last lines of the run: poll until everything written is read and posted, the
      * relay stops, or `timeoutMs` passes (wall clock). Each post waits the pace from the
      * last accepted one (a periodic poll may just have posted) and any back-off, so the
-     * server's rate limit is not hit needlessly. Never throws.
+     * server's rate limit is not hit needlessly; it waits at least 50 ms between polls and
+     * gives up after three consecutive failed polls. Never throws.
      */
     async drain(timeoutMs = LOG_DRAIN_MS): Promise<void> {
       const deadline = Date.now() + timeoutMs;
@@ -685,9 +691,18 @@ export function createDelegateLogRelay(opts: {
           const ran = await poll();
           const unread = fileSize > offset;
           if (stopped || (ran && !pending.length && !unread) || Date.now() >= deadline) return;
+          if (failures >= LOG_DRAIN_MAX_FAILURES) {
+            log.warn("Delegate log relay keeps failing; final drain abandoned", {
+              task: opts.task.id,
+              failures,
+            });
+            return;
+          }
           // the next post is due at the pace or the back-off; else a poll was in flight
-          // or a record is still being written
-          await sleep(ran && pending.length ? Math.max(notBefore, lastPostAt + gapMs) - now() : 50);
+          // or a record is still being written. Never less than a short wait: a poll that
+          // fails before posting would otherwise spin.
+          const due = ran && pending.length ? Math.max(notBefore, lastPostAt + gapMs) - now() : 0;
+          await sleep(Math.max(due, LOG_DRAIN_MIN_WAIT_MS));
         }
       } finally {
         gapMs = 0;

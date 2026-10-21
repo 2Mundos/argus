@@ -5,11 +5,11 @@ from datetime import datetime
 from typing import Literal
 
 import aiosqlite
-from argus_core.redact import redact, redact_private_keys
+from argus_core.redact import REDACTED, redact, redact_private_keys
 from pydantic import BaseModel
 
 from argus_api.db import Snapshot, Tx, ts
-from argus_api.errors import RateLimitedError, TooLargeError
+from argus_api.errors import NotFoundError, RateLimitedError, TooLargeError
 from argus_api.events import transient
 from argus_api.tasks import service
 
@@ -28,8 +28,8 @@ MAX_SEQ = 2**63 - 1  # SQLite INTEGER: a larger bound would overflow (500, not 4
 
 Source = Literal["worker", "delegate"]
 
-_NEWLINE = re.compile(r"\r\n?")  # a bare \r (progress bars) ends a line too
-_CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b-\x1f\x7f]")
+# a bare \r (progress bars) ends a line too: kept until redaction is done
+_CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 class LogLine(BaseModel):
@@ -42,7 +42,9 @@ class LogLine(BaseModel):
 class LogPage(BaseModel):
     attempt: int
     lines: list[LogLine]  # oldest first
-    last_seq: int  # of the last line returned, else `after` (0 when not given)
+    # of the last line returned, else `after`; an empty tail gives the task's log_seq,
+    # so the next line of the attempt (log_seq + 1) is known to follow without a gap
+    last_seq: int
 
 
 class LogAccepted(BaseModel):
@@ -57,19 +59,36 @@ def clean(lines: list[str], secrets: tuple[str, ...]) -> list[str]:
     Escapes go first, so none can split a secret (`ghp_\x1b[0m…`). Private key blocks
     are masked on the whole batch, so one spanning lines cannot slip through; the
     other rules run on the batch with each line cut to REDACT_LINE_CHARS, before the
-    final cut (so a secret about to be cut is still whole), and again after it."""
-    text = _NEWLINE.sub("\n", "\n".join(lines))
-    text = redact_private_keys(_CONTROL.sub("", text))
-    text = "\n".join(raw[:REDACT_LINE_CHARS] for raw in text.splitlines())
+    final cut (so a secret about to be cut is still whole), and again after it.
+    Redaction runs before a bare CR splits a line, so a CR used as a space
+    (`Bearer\r…`) splits no secret; a line whose CR splits a secret mid-token is
+    kept whole instead (`_join_split_secret`)."""
+    text = _CONTROL.sub("", "\n".join(lines).replace("\r\n", "\n"))
+    text = redact_private_keys(text)
+    text = "\n".join(
+        _join_split_secret(raw[:REDACT_LINE_CHARS], secrets) for raw in text.split("\n")
+    )
     out: list[str] = []
-    for raw in redact(text, secrets).splitlines():
-        line = raw.rstrip()
-        if not line:
-            continue
-        if len(line) > MAX_LINE_CHARS:
-            line = line[: MAX_LINE_CHARS - 1] + "…"
-        out.append(redact(line, secrets))
+    for row in redact(text, secrets).split("\n"):
+        for raw in row.split("\r"):
+            line = raw.rstrip()
+            if not line:
+                continue
+            if len(line) > MAX_LINE_CHARS:
+                line = line[: MAX_LINE_CHARS - 1] + "…"
+            out.append(redact(line, secrets))
     return out
+
+
+def _join_split_secret(row: str, secrets: tuple[str, ...]) -> str:
+    """`row` without its bare CRs when that leaves less unmasked (a CR split a secret
+    mid-token: `ghp_…\r…`), else as is."""
+    if "\r" not in row:
+        return row
+    joined = row.replace("\r", "")
+    shown = lambda s: len(s.replace(REDACTED, ""))  # noqa: E731
+    split = sum(shown(p) for p in redact(row, secrets).split("\r"))
+    return joined if shown(redact(joined, secrets)) < split else row
 
 
 def prepare(lines: list[str], secrets: tuple[str, ...] = ()) -> list[str]:
@@ -183,8 +202,15 @@ async def read(
 ) -> LogPage:
     """Lines of one attempt (default: the task's current one). With `after`, the
     lines after that seq, oldest first; without, the newest `limit` lines."""
-    task = await service.get_task(conn, task_id)
-    attempt = task.attempt if attempt is None else attempt
+    # log_seq is read before the lines: every line of the attempt up to it is in the page
+    async with conn.execute(
+        "SELECT attempt, log_seq FROM tasks WHERE id = ?", (task_id,)
+    ) as cur:
+        task = await cur.fetchone()
+    if task is None:
+        raise NotFoundError(f"task not found: {task_id}")
+    attempt = task["attempt"] if attempt is None else attempt
+    log_seq = task["log_seq"]
     if after is None:
         sql = (
             "SELECT * FROM (SELECT seq, source, at, line FROM task_log"
@@ -202,7 +228,7 @@ async def read(
     return LogPage(
         attempt=attempt,
         lines=lines,
-        last_seq=lines[-1].seq if lines else (after or 0),
+        last_seq=lines[-1].seq if lines else (log_seq if after is None else after),
     )
 
 

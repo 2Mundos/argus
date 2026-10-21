@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
+import { log } from "../log.js";
 import type { ChannelSetup } from "./adapter.js";
 import {
   type ArgusConfig,
@@ -1293,6 +1293,31 @@ describe("delegate live log relay", () => {
     await relay.drain(5000);
     expect(posts.map((p) => p.lines)).toEqual([["after"]]);
     fs.rmSync(dir, { recursive: true });
+  });
+
+  it("the final drain stops after repeated failing polls instead of spinning", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      paceMs: 0,
+      post: async (b) => void posts.push(b),
+    });
+    fs.writeFileSync(file, rec(Array.from({ length: 450 }, (_, i) => `l${i}`)));
+    await relay.poll(); // one batch posted, the rest pending
+    fs.rmSync(dir, { recursive: true }); // every later read throws
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const t0 = Date.now();
+      await relay.drain(5000);
+      expect(Date.now() - t0).toBeLessThan(1000);
+      expect(warn.mock.calls.length).toBeLessThanOrEqual(4); // three failures, one give-up
+      expect(warn.mock.calls.at(-1)?.[0]).toMatch(/final drain abandoned/);
+      expect(posts).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("the adapter relays the delegate log with the token on the host side only", async () => {

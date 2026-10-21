@@ -43,12 +43,14 @@ life for the no-signal indicator of [progress milestones](progress-milestones.sp
 
   A line is cut, not refused, because output the client cannot shorten is better
   shown cut than lost. A batch every 2-5 s is well inside the rate.
-- **Cleaning**, in this order, before the write transaction: `\r\n` and a bare `\r`
-  become newlines (a progress bar's frames are separate lines); terminal escape
-  sequences and control characters removed (so an escape cannot split a secret);
-  private key blocks masked across the batch; each line cut to 8 KiB; redaction
-  (3.2); trailing whitespace stripped; blank lines dropped; long lines cut; each line
-  redacted again (a cut never unmasks). A batch that is blank afterwards is accepted
+- **Cleaning**, in this order, before the write transaction: `\r\n` becomes a
+  newline; terminal escape sequences and control characters other than `\r` removed
+  (so an escape cannot split a secret); private key blocks masked across the batch;
+  each line cut to 8 KiB; a line's bare `\r`s dropped when that leaves less unmasked
+  (a `\r` split a secret mid-token); redaction (3.2); then a bare `\r` splits the line
+  too (a progress bar's frames are separate lines), so a `\r` used as a space cannot
+  split a secret either; trailing whitespace stripped; blank lines dropped; long lines
+  cut; each line redacted again (a cut never unmasks). A batch that is blank afterwards is accepted
   with `accepted: 0` and changes nothing.
 - Answer: `{accepted, last_seq, output_at}`.
 
@@ -102,8 +104,9 @@ run. URL schemes are bounded to 16 characters; names, URL users and passwords ar
 - `attempt` defaults to the task's current one. `after` is a `seq`: the lines after it,
   oldest first. Without it, the newest `limit` lines (default 200, max 1000), oldest
   first. Answer `{attempt, lines: [{seq, source, at, line}], last_seq}`; `last_seq` is
-  the last returned line's, else `after` (0 when not given). To follow, pass
-  `last_seq` as `after`.
+  the last returned line's, else `after`; an empty tail (no `after`) gives the task's
+  `log_seq`, so the attempt's next line (`log_seq + 1`, as `seq` counts across attempts)
+  follows without a gap. To follow, pass `last_seq` as `after`.
 - Read scope is the task's: managers read all, workers only tasks they have leased
   (`403 not_leased`).
 - MCP: `get_task_log(task_id, attempt?, after?, limit?)`, listed to every scope, same
@@ -115,8 +118,8 @@ run. URL schemes are bounded to 16 characters; names, URL users and passwords ar
   the shared event stream for that task, de-duplicated by `seq`. It shows the attempt,
   filters `todos` / `worker` / `delegate`, scrolls to the end while the reader is at the
   end, and has pause/resume (paused lines are buffered and shown on resume). When the
-  stream reconnects, or a batch's `seq` skips past the newest line held (or past 1 when
-  none is held), it reads the missed lines with `after`.
+  stream reconnects, or a batch's `seq` skips past the newest line held (or past the
+  empty tail's `last_seq` when none is held), it reads the missed lines with `after`.
 - **No signal** uses the later of `progress_at` and `output_at`; the threshold is
   unchanged (`NO_SIGNAL_MINUTES`, `VITE_NO_SIGNAL_MINUTES`).
 
@@ -124,8 +127,9 @@ run. URL schemes are bounded to 16 characters; names, URL users and passwords ar
 
 - `argus-delegate` runs claude with `--output-format stream-json --verbose` and follows
   its own stdout file. Events become short lines (assistant text, `▸ Tool arg`,
-  truncated tool results, errors), redacted best effort with the 3.2 patterns, and are
-  batched every ~3 s. After ~30 s of silence it adds `delegate alive, Ns since last
+  truncated tool results, errors), redacted best effort with the 3.2 patterns (text
+  before its `\r`/newline split as well as per line, as in 3.1), and are batched
+  every ~3 s. After ~30 s of silence it adds `delegate alive, Ns since last
   output`, so No signal reflects a live process.
 - The batches are appended as JSON lines `{v, task_id, attempt, at, lines}` to
   `argus-task-log.jsonl` in the agent group directory (beside the model-policy
@@ -145,7 +149,8 @@ run. URL schemes are bounded to 16 characters; names, URL users and passwords ar
   the batch; `429`, `5xx` and network errors back off (2 s doubling to 30 s) and retry.
   Before COMPLETE/FAIL/ASK it drains the file within a 5 s deadline: it keeps reading
   while unread bytes remain, and paces each post 1.1 s from the last accepted one (or
-  the back-off), so the drain does not cause a `429`.
+  the back-off), so the drain does not cause a `429`. It waits at least 50 ms between
+  polls and gives up (one warning) after three consecutive failed polls.
 
 # 4. Open Questions
 

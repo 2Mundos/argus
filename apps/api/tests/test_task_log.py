@@ -188,6 +188,23 @@ def test_a_bare_carriage_return_splits_lines() -> None:
     ]
 
 
+def test_a_bare_carriage_return_never_splits_a_secret() -> None:
+    head, tail = "ghp_" + "a" * 20, "b" * 16
+    [line] = log.clean([f"push {head}\r{tail} done"], ())
+    assert "aaaa" not in line and "bbbb" not in line and "[redacted]" in line
+    # a CR used as a space: redacted before the split
+    assert log.clean(["Authorization: Bearer\rabcdefgh12345"], ()) == [
+        "Authorization: [redacted]"
+    ]
+    assert log.clean(["curl -H 'Bearer\rabcdefgh12345'"], ()) == [
+        "curl -H 'Bearer",
+        "[redacted]'",
+    ]
+    # an ordinary progress line still splits, even where joining would hide a token
+    assert log.clean([f"10%\r{head}"], ()) == ["10%", "[redacted]"]
+    assert log.clean([f"abc\r{head}"], ()) == ["abc", "[redacted]"]
+
+
 def test_escapes_are_stripped_before_redacting() -> None:
     token = "ghp_" + "a" * 36
     split = "ghp_\x1b[0m" + "a" * 36
@@ -289,6 +306,25 @@ async def test_read_after_and_unknown_attempt(db: Database, claimed, clock) -> N
     assert (await read(db, claimed.id, attempt=9)).lines == []
     tail = await read(db, claimed.id, limit=2)
     assert [ln.line for ln in tail.lines] == ["b", "c"]
+
+
+async def test_an_empty_tail_gives_the_tasks_log_seq(
+    db: Database, claimed, clock: FakeClock
+) -> None:
+    assert (await read(db, claimed.id)).last_seq == 0  # nothing written yet
+    await post(db, claimed, ["a", "b", "c"])
+    clock.advance(claimed.lease_ttl_s + 1)
+    async with db.write() as tx:
+        await tasks.expire_leases(tx)
+    task = await claim(db, B)
+    assert task.attempt == 2
+    # seq counts across attempts: attempt 2's first line will be 4, with no gap before it
+    empty = await read(db, claimed.id)
+    assert empty.attempt == 2 and empty.lines == [] and empty.last_seq == 3
+    await post(db, task, ["d"], agent=B)
+    assert [ln.seq for ln in (await read(db, claimed.id)).lines] == [4]
+    # with `after`, an empty page still answers `after`
+    assert (await read(db, claimed.id, after=4)).last_seq == 4
 
 
 # -- SSE ---------------------------------------------------------------------------------

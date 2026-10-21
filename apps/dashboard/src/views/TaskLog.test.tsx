@@ -175,4 +175,18 @@ describe("TaskLog", () => {
     const shown = [...document.querySelectorAll(".log-line")].map((el) => el.textContent);
     expect(shown).toEqual(["missed first", "live"]);
   });
+
+  it("an empty tail of a later attempt starts after the task's log_seq: no needless read", async () => {
+    // seq counts across attempts: attempt 1 used seq 1..40, so attempt 2 starts at 41
+    mock.page = { attempt: 2, lines: [], last_seq: 40 };
+    render(<TaskLog taskId="t1" attempt={2} />);
+    await screen.findByText("Sem saída ainda.");
+    emit("t1", 2, 41, ["first of attempt 2"]);
+    await screen.findByText("first of attempt 2");
+    expect(mock.queries).toHaveLength(1); // the tail only
+    emit("t1", 2, 43, ["after a gap"]);
+    await waitFor(() =>
+      expect(mock.queries.at(-1)).toEqual({ attempt: 2, after: 41, limit: 1000 }),
+    );
+  });
 });

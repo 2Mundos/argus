@@ -77,7 +77,9 @@ export function TaskLog({ taskId, attempt }: { taskId: string; attempt: number }
         early.push(...got.lines);
         return;
       }
-      const before = last; // 0 when the tail was empty: seq 1 is then the only no-gap start
+      // seq counts across attempts: an empty tail's last_seq is the task's log_seq, so
+      // last_seq + 1 is a no-gap start for any attempt
+      const before = last;
       add(got.lines);
       if ((got.lines[0]?.seq ?? 0) > before + 1) backfill(before);
     });
@@ -89,7 +91,8 @@ export function TaskLog({ taskId, attempt }: { taskId: string; attempt: number }
       (page) => {
         if (cancelled) return;
         loaded = true;
-        for (const l of [...page.lines, ...early]) last = Math.max(last, l.seq);
+        last = page.last_seq;
+        for (const l of early) last = Math.max(last, l.seq);
         setLines(mergeLines(mergeLines([], page.lines), early));
         if (refill != null) {
           refill = null;

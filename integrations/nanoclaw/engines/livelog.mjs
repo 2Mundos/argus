@@ -55,6 +55,30 @@ export function redactText(text, secrets = []) {
   return out;
 }
 
+const shown = (s) => s.split(MASK).join("").length;
+
+/** `row` without its bare CRs when that leaves less unmasked (a CR split a secret mid-token). */
+function joinSplitSecret(row, secrets) {
+  if (!row.includes("\r")) return row;
+  const joined = row.replaceAll("\r", "");
+  const split = redactText(row, secrets)
+    .split("\r")
+    .reduce((n, p) => n + shown(p), 0);
+  return shown(redactText(joined, secrets)) < split ? joined : row;
+}
+
+/**
+ * The lines of `text` (a bare CR ends one too), redacted before the split as well, so
+ * no CR or newline splits a secret; a row whose CR splits one mid-token stays whole.
+ */
+export function textLines(text, secrets = []) {
+  const rows = String(text)
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((r) => joinSplitSecret(r, secrets));
+  return redactText(rows.join("\n"), secrets).split(/[\r\n]/);
+}
+
 const cut = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const oneLine = (s) => String(s).replace(/\s+/g, " ").trim();
 const isObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
@@ -82,9 +106,10 @@ const resultText = (content) =>
 
 /**
  * Readable lines for one Claude `--output-format stream-json` event. Unknown or
- * malformed events give no lines. Text keeps its line breaks (one output line each).
+ * malformed events give no lines. Text keeps its line breaks (one output line each),
+ * redacted with `secrets` before it is split.
  */
-export function claudeEventLines(ev) {
+export function claudeEventLines(ev, secrets = []) {
   if (!isObject(ev)) return [];
   const blocks = Array.isArray(ev.message?.content) ? ev.message.content : [];
   const lines = [];
@@ -98,7 +123,7 @@ export function claudeEventLines(ev) {
     case "assistant":
       for (const b of blocks) {
         if (b?.type === "text" && typeof b.text === "string") {
-          for (const l of b.text.split(/\r\n?|\n/)) if (l.trim()) lines.push(l);
+          for (const l of textLines(b.text, secrets)) if (l.trim()) lines.push(l);
         } else if (b?.type === "tool_use") {
           const args = toolArgs(b.input);
           lines.push(`▸ ${String(b.name ?? "tool").slice(0, 60)}${args ? ` ${args}` : ""}`);
@@ -134,7 +159,7 @@ export function createStreamParser({ executor, onLines, secrets = [] }) {
     let lines = [];
     if (executor === "claude") {
       try {
-        lines = claudeEventLines(JSON.parse(line));
+        lines = claudeEventLines(JSON.parse(line), secrets);
       } catch {
         return; // not a stream event (a plain JSON report, or noise)
       }

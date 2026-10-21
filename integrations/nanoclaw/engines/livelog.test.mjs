@@ -164,6 +164,21 @@ test("a bare carriage return splits text into lines", () => {
   ]);
 });
 
+test("a bare carriage return never splits a secret", () => {
+  const head = `ghp_${"a".repeat(20)}`;
+  const tail = "b".repeat(16);
+  const parsed = [];
+  const parser = createStreamParser({ executor: "claude", onLines: (l) => parsed.push(...l) });
+  parser.push(ev(assistant({ type: "text", text: `push ${head}\r${tail} done` })));
+  assert.equal(parsed.length, 1);
+  assert.doesNotMatch(parsed[0], /aaaa|bbbb/);
+  // a CR used as a space is redacted before the split; a progress line still splits
+  const lines = (text) => claudeEventLines(assistant({ type: "text", text }));
+  assert.deepEqual(lines("curl -H 'Bearer\rabcdefgh12345'"), ["curl -H '[redacted]'"]);
+  assert.deepEqual(lines(`10%\r${head}`), ["10%", "[redacted]"]);
+  assert.deepEqual(lines(`abc\r${head}`), ["abc", "[redacted]"]);
+});
+
 test("secret-looking env values are masked exactly", () => {
   const env = {
     GITEA_TOKEN: " plainvalue-xyz123 ",
