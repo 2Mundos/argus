@@ -1746,6 +1746,42 @@ describe("global account selection in the channel", () => {
     expect(claimsAtRecycle).toEqual([2, 2]);
   });
 
+  it("on lease_account_unusable drops the account and stops the runtime before the next claim", async () => {
+    const w = world({
+      leases: [codexLease(), lease("claude-1", "sk-ant")],
+      tasks: [task(), { ...task(), id: "t2" }],
+    });
+    let claims = 0;
+    const inner = w.fetchImpl;
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      if (String(url).endsWith("/tasks/claim") && ++claims === 2) {
+        w.calls.push({ who: "argus", method: "POST", path: "/tasks/claim", body: {}, search: "" });
+        return new Response(
+          JSON.stringify({ detail: { code: "lease_account_unusable", message: "exhausted" } }),
+          { status: 409 },
+        );
+      }
+      return inner(url, init);
+    }) as unknown as typeof fetch;
+    const claimsAtRecycle: number[] = [];
+    const recycleRuntime = vi.fn(async () => {
+      claimsAtRecycle.push(w.calls.filter((c) => c.path === "/tasks/claim").length);
+    });
+    const h = harness({ ...w, fetchImpl }, true, { recycleRuntime });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await until(() => h.inbound.length === 2, 5000); // t2 runs on the next account
+    expect(w.calls.some((c) => c.path === "/accounts/release" && c.search === "?role=engine")).toBe(
+      true,
+    );
+    // Stopped once, after the refused claim and before t2 was claimed.
+    expect(claimsAtRecycle).toEqual([2]);
+    const selected = w.calls.filter((c) => c.path === "/engines/selected").map((c) => c.body);
+    expect(selected.map((b) => b.account_id)).toEqual(["a-codex-1", "a-claude-1"]);
+  });
+
   it("keeps the established account when a re-evaluation finds nothing better or nothing usable", async () => {
     const w = world({
       leases: [codexLease(), "no_account", "no_account"],

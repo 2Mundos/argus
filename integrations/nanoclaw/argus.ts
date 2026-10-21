@@ -851,7 +851,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let executor: { id: string; name: string; provider: string } | null = null;
   let leasedAt = 0; // when the engine lease was last confirmed for a claimed task
   let switchFailure: string | null = null; // the runtime did not stop for the last switch
-  let recycleOnLease = false; // Argus moved us to another account: recycle once the next one is applied
+  let recycleOnLease = false; // the runtime must stop before the next claim/lease writes another account
   let engineInUse: string | null = null; // the harness the leased account selected
   let activeAccountLeases: AccountLease[] = [];
   let repositoryTarget: ApplyTarget | null = null;
@@ -1542,6 +1542,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     let backoff = 1000;
     while (!stopped) {
       if (draining) {
+        // A draining agent never claims again: it leaves once idle and its
+        // instance is stopped, so a pending recycle is not needed here.
         await sleep(1000);
         continue;
       }
