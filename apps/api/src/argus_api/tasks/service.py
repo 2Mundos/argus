@@ -12,7 +12,12 @@ from typing import Any
 from uuid import uuid4
 
 import aiosqlite
-from argus_core.accounts import EXECUTOR_ONLY, REPOSITORY_PROVIDER
+from argus_core.accounts import (
+    ENGINE_PROVIDERS,
+    EXECUTOR_ONLY,
+    LOCAL_PROVIDER,
+    REPOSITORY_PROVIDER,
+)
 from argus_core.agents import LIVE, AgentState
 from argus_core.auth import Scope
 from argus_core.complexity import Complexity, ComplexitySource, classify
@@ -221,9 +226,15 @@ async def claim(
 ) -> Task | None:
     """Claim the highest-priority, oldest ready task the agent is capable of.
 
-    A task restricted to `account_providers` is skipped (it stays ready, no attempt
-    spent) unless the caller's `runtime_providers` intersect its list and one of
-    those providers has a usable account now (local harness spec 3).
+    With `runtime_providers` and a fleet that manages model accounts, a task is
+    only claimed when the caller can run it now: it already holds an engine lease of
+    a provider the task allows, or such an account has a free lease slot (a task
+    restricted to `account_providers` allows only those; local harness spec 3). A
+    task nobody can serve (no free slot and no idle holder) is parked as
+    `awaiting_quota` instead, without spending an attempt, and is woken when an
+    account frees up (account selection 3.6); one an idle holder elsewhere can serve
+    stays ready for it. Without `runtime_providers` (or with an empty list) only
+    restricted tasks are gated.
 
     The attempt's wall-clock deadline is the task's `timeout_s` (which creation
     filled from its kind), else `default_timeout_s`; 0 means no deadline.
@@ -244,13 +255,30 @@ async def claim(
         (json.dumps(capabilities),),
     ) as cur:
         candidates = await cur.fetchall()
+    gated = bool(runtime_providers) and await _manages_accounts(tx.conn)
     row = None
     for candidate in candidates:
-        if candidate["account_providers"] is None or await _restriction_met(
-            tx, json.loads(candidate["account_providers"]), runtime_providers
-        ):
+        restricted = candidate["account_providers"] is not None
+        if not restricted and not gated:
             row = candidate
             break
+        providers = (
+            json.loads(candidate["account_providers"])
+            if restricted
+            else sorted(ENGINE_PROVIDERS)
+        )
+        if await _restriction_met(tx, providers, runtime_providers, agent_id):
+            row = candidate
+            break
+        if gated and not await can_serve(tx, candidate["account_providers"]):
+            await _apply(
+                tx,
+                candidate,
+                Action.BLOCK,
+                f"agent:{agent_id}",
+                set_={"block_reason": AWAITING_QUOTA},
+                data={"reason": AWAITING_QUOTA},
+            )
     if row is None:
         return None
     attempt = row["attempt"] + 1
@@ -296,26 +324,124 @@ async def account_providers(
 
 
 async def _restriction_met(
-    tx: Tx, providers: list[str], runtime_providers: list[str] | None
+    tx: Tx,
+    providers: list[str],
+    runtime_providers: list[str] | None,
+    agent_id: str | None = None,
 ) -> bool:
-    """Can a restricted task start now: the runtime applies one of its providers and
-    an account of those is usable (available or past its reset, below `max_leases`;
-    an unreachable local model is disabled by its probe, so it never counts)."""
+    """Can the caller start a task allowing `providers` now: the runtime applies one
+    of them and either the caller already holds an engine lease of one, or an account
+    of one is usable (available or past its reset, below `max_leases`; an
+    unreachable local model is disabled by its probe, so it never counts)."""
     wanted = sorted(set(providers) & set(runtime_providers or []))
     if not wanted:
         return False
     async with tx.conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM accounts a"
+        "SELECT EXISTS (SELECT 1 FROM account_leases l JOIN accounts a"
+        "  ON a.id = l.account_id WHERE l.agent_id = ? AND l.role = 'engine'"
+        "  AND l.released_at IS NULL"
+        "  AND a.provider IN (SELECT value FROM json_each(?)))"
+        " OR EXISTS (SELECT 1 FROM accounts a"
         " WHERE a.provider IN (SELECT value FROM json_each(?))"
         "  AND (a.state = 'available'"
         "   OR (a.state = 'exhausted' AND a.exhausted_until <= ?))"
         "  AND (a.max_leases IS NULL OR a.max_leases >"
         "   (SELECT count(*) FROM account_leases l"
         "    WHERE l.account_id = a.id AND l.released_at IS NULL)))",
-        (json.dumps(wanted), ts(tx.now)),
+        (agent_id, json.dumps(wanted), json.dumps(wanted), ts(tx.now)),
     ) as cur:
         row = await cur.fetchone()
     return bool(row and row[0])
+
+
+async def _manages_accounts(conn: aiosqlite.Connection) -> bool:
+    """Does the fleet manage model accounts at all (else claims are never gated)?"""
+    async with conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM accounts"
+        " WHERE provider IN (SELECT value FROM json_each(?)))",
+        (json.dumps(sorted(ENGINE_PROVIDERS)),),
+    ) as cur:
+        row = await cur.fetchone()
+    return bool(row and row[0])
+
+
+async def engine_capacity(tx: Tx) -> list[list[Any]]:
+    """`[provider, slots]` of each usable engine account, cloud before the local
+    model: how many more tasks it can serve now. Slots are the free lease slots plus
+    the engine leases held by agents with no claimed task (they can take one at
+    once); None means no lease limit. Accounts with no slot are left out."""
+    async with tx.conn.execute(
+        "SELECT a.provider, a.max_leases,"
+        " (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
+        "  AND l.released_at IS NULL) AS active,"
+        " (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
+        "  AND l.released_at IS NULL AND l.role = 'engine' AND NOT EXISTS ("
+        "   SELECT 1 FROM tasks t WHERE t.state = 'claimed'"
+        "   AND t.assignee_agent_id = l.agent_id)) AS idle"
+        " FROM accounts a WHERE a.state = 'available'"
+        "  OR (a.state = 'exhausted' AND a.exhausted_until <= ?)"
+        " ORDER BY a.priority DESC, a.id",
+        (ts(tx.now),),
+    ) as cur:
+        rows = await cur.fetchall()
+    out: list[list[Any]] = []
+    for r in rows:
+        if r["provider"] not in ENGINE_PROVIDERS:
+            continue
+        if r["max_leases"] is None:
+            out.append([r["provider"], None])
+            continue
+        slots = max(0, r["max_leases"] - r["active"]) + r["idle"]
+        if slots > 0:
+            out.append([r["provider"], slots])
+    out.sort(key=lambda c: c[0] == LOCAL_PROVIDER)  # stable: cloud first
+    return out
+
+
+def _allows(account_providers: str | None, provider: str) -> bool:
+    return account_providers is None or provider in json.loads(account_providers)
+
+
+async def can_serve(tx: Tx, account_providers: str | None) -> bool:
+    """Could any agent run a task with this (stored) restriction now?"""
+    return any(
+        _allows(account_providers, provider)
+        for provider, _ in await engine_capacity(tx)
+    )
+
+
+async def wake_waiting(tx: Tx, actor: str = "system") -> list[str]:
+    """Return tasks waiting for an account (`awaiting_quota`, or the older
+    `no_account`) to ready, highest priority first, but only as many as the usable
+    engine accounts can serve now: each woken task takes one slot of an account its
+    `account_providers` allow. No thundering herd: the rest keep waiting for the
+    next release, refill or account change. Returns the woken task ids."""
+    capacity = await engine_capacity(tx)
+    if not capacity:
+        return []
+    async with tx.conn.execute(
+        "SELECT id, account_providers FROM tasks WHERE state = 'blocked'"
+        " AND block_reason IN (?, ?) ORDER BY priority DESC, created_at, id",
+        QUOTA_WAIT_REASONS,
+    ) as cur:
+        rows = await cur.fetchall()
+    woken: list[str] = []
+    for r in rows:
+        slot = next(
+            (
+                c
+                for c in capacity
+                if (c[1] is None or c[1] > 0) and _allows(r["account_providers"], c[0])
+            ),
+            None,
+        )
+        if slot is None:
+            continue
+        if slot[1] is not None:
+            slot[1] -= 1
+        await unblock(tx, r["id"], actor)
+        woken.append(r["id"])
+    return woken
 
 
 async def awaiting_quota(conn: aiosqlite.Connection) -> bool:
@@ -467,9 +593,30 @@ async def fail(
     `error`. Without this a FAIL sent just after a lapse would be lost.
 
     Reason `quota` (the provider's limit, not the task's fault) is not a failure:
-    `failures` stays, the task returns to ready and waits for an account."""
+    `failures` stays. The task returns to ready when some agent can run it now (a
+    free account slot, or an idle agent holding a fitting lease); otherwise it waits
+    as `awaiting_quota` until `wake_waiting` frees it, instead of bouncing between
+    agents that cannot lease an account (account selection 3.6)."""
     row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
     quota = reason == "quota"
+    if (
+        quota
+        and await _manages_accounts(tx.conn)
+        and not await can_serve(tx, row["account_providers"])
+    ):
+        await _apply(
+            tx,
+            row,
+            Action.BLOCK,
+            f"agent:{agent_id}",
+            set_={
+                "error": error,
+                "block_reason": AWAITING_QUOTA,
+                "progress_message": f"provider quota; waiting for an account: {error}",
+            },
+            data={"error": error, "reason": reason},
+        )
+        return await get_task(tx.conn, task_id)
     await _apply(
         tx,
         row,
