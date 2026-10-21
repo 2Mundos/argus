@@ -223,11 +223,11 @@ async def test_reaper_loop_runs_passes_and_survives_errors(
     clock.advance(LOST_AFTER_S + 1)
     real_reap, calls = reaper.reap, []
 
-    async def flaky_reap(tx):
+    async def flaky_reap(tx, local=(None, "")):
         calls.append(1)
         if len(calls) == 1:
             raise RuntimeError("transient")
-        return await real_reap(tx)
+        return await real_reap(tx, local)
 
     monkeypatch.setattr(reaper, "reap", flaky_reap)
     loop = asyncio.create_task(reaper.run(db, interval=0.01))

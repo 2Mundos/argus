@@ -15,6 +15,7 @@ import {
   exchangeCursorApiKey,
   jwtExpiryMs,
   OneCliClient,
+  preferredExecutorForLease,
   releaseRepositoryLease,
 } from "./argus-accounts.js";
 
@@ -680,6 +681,21 @@ const chatgpt = {
 };
 const codexLease = (over: Partial<AccountLease> = {}) =>
   lease("codex-1", "", { provider: "openai", kind: "subscription", credential: chatgpt, ...over });
+
+describe("preferredExecutorForLease", () => {
+  it("names agent when the engine lease is local", () => {
+    const local = lease("loc", "", {
+      provider: "local",
+      credential: { base_url: "http://host.docker.internal:8080" },
+    });
+    expect(preferredExecutorForLease(local, null)).toBe("agent");
+  });
+  it("uses the cursor executor mapping when leased", () => {
+    const engine = codexLease();
+    const cursor = lease("cur", "", { provider: "cursor", role: "executor", credential: {} });
+    expect(preferredExecutorForLease(engine, cursor)).toBe("agent");
+  });
+});
 
 describe("openai (Codex) credential documents", () => {
   const target = { identifier: "g", name: "G" };

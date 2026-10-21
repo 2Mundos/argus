@@ -21,6 +21,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { anthropicRedirectRejection } from "./anthropic-redirect.mjs";
 import { createSink, createTracker, gitHead, waitingInput } from "./milestones.mjs";
 import { loadPolicy, selectModel } from "./model-policy.mjs";
 import { parseUsage, runKey, runKeyHash } from "./usage.mjs";
@@ -89,11 +90,19 @@ export function authStatus(executor, e = process.env, home = os.homedir()) {
   const xdg = e.XDG_CONFIG_HOME || path.join(home, ".config");
   const data = e.XDG_DATA_HOME || path.join(home, ".local/share");
   switch (executor) {
-    case "claude":
+    case "claude": {
+      const redirectReject = anthropicRedirectRejection(
+        e,
+        e.ARGUS_ALLOWED_ANTHROPIC_BASE_URL ?? "",
+      );
+      if (redirectReject) {
+        return { ok: false, need: `Anthropic API redirect not allowed (${redirectReject})` };
+      }
       return env(e, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN") ||
         present(path.join(e.CLAUDE_CONFIG_DIR || path.join(home, ".claude"), ".credentials.json"))
         ? { ok: true }
         : { ok: false, need: "ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or `claude login`" };
+    }
     case "codex":
       return env(e, "OPENAI_API_KEY") ||
         present(path.join(e.CODEX_HOME || path.join(home, ".codex"), "auth.json"))
@@ -150,6 +159,9 @@ const proxyAddress = (raw) => {
  * used) a reason code that never contains a value.
  */
 export function restoreClaudeGatewayAuth(e, stubPath = CLAUDE_GATEWAY_STUB) {
+  const redirectReject = anthropicRedirectRejection(e, e.ARGUS_ALLOWED_ANTHROPIC_BASE_URL ?? "");
+  if (redirectReject) return { env: e, source: null, stub: `rejected:${redirectReject}` };
+  if ((e.ANTHROPIC_BASE_URL ?? "").trim()) return { env: e, source: "local_harness" };
   if (env(e, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", CLAUDE_OAUTH))
     return { env: e, source: "env" };
   let st;
@@ -179,8 +191,8 @@ export function restoreClaudeGatewayAuth(e, stubPath = CLAUDE_GATEWAY_STUB) {
   )
     return reject("malformed");
   if (!isGatewaySentinel(doc.sentinel)) return reject("not_a_sentinel");
-  // The sentinel is only ever sent to the gateway the host recorded.
-  if (e.ANTHROPIC_BASE_URL || e.ANTHROPIC_UNIX_SOCKET) return reject("api_redirected");
+  // The sentinel is only ever sent to the gateway the host recorded (never a local redirect).
+  if (anthropicRedirectRejection(e, "") === "api_redirected") return reject("api_redirected");
   const proxy = proxyAddress(e.HTTPS_PROXY ?? e.https_proxy ?? "");
   if (!proxy || proxy !== doc.proxy) return reject("proxy_mismatch");
   if (typeof doc.ca !== "string" || !path.isAbsolute(doc.ca) || !present(doc.ca))

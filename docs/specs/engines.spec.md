@@ -144,6 +144,9 @@ In scope:
   socket, and the allow-list (one configured model, token and time budgets)
   lives in one place. Concurrency is one at a time (the server has one slot);
   a waiting request that exceeds its budget fails with `busy`.
+- **Local harness failover** ([local harness](local-harness.spec.md)): a `local`
+  account provider leases after every cloud account; NanoClaw runs `claude` against
+  Strata via `host.docker.internal` with a strict `ANTHROPIC_BASE_URL` allowlist.
 - **Scopes:** `admin` and `orchestrator` read the catalogue and may route;
   `worker` tokens may call `run_local` (budgeted) and `list_engines`.
 

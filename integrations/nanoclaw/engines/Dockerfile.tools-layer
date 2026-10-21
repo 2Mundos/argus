@@ -17,6 +17,7 @@ RUN apt-get update \
 # uv as a standalone binary: no pip, no PEP 668 workarounds, same version for every image.
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh \
  && command -v uv && uv --version
+COPY --chmod=0644 anthropic-redirect.mjs /usr/local/bin/anthropic-redirect.mjs
 COPY --chmod=0755 argus-delegate.mjs /usr/local/bin/argus-delegate
 COPY --chmod=0644 model-policy.mjs model-policy.defaults.json milestones.mjs gitea-api.mjs /usr/local/bin/
 USER node

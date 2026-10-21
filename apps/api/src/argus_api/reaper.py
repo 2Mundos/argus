@@ -31,10 +31,13 @@ class ReapResult:
         return not (self.failed_tasks or self.failed_agents or self.failed_stages)
 
 
-async def reap(tx: Tx) -> ReapResult:
+async def reap(tx: Tx, local: tuple[bool | None, str] = (None, "")) -> ReapResult:
     """One pass (3.4). The stages share the transaction but not their fate: each
     runs in a savepoint, and so does every task or agent inside lease/timeout
-    expiry and loss, so one bad row or stage never keeps leases from expiring."""
+    expiry and loss, so one bad row or stage never keeps leases from expiring.
+
+    `local` is the local model's probe, taken before the transaction opened:
+    reachable (or not), with the detail. `(None, "")` means it was not probed."""
     failed_tasks: list[str] = []
     failed_agents: list[str] = []
     failed_stages: list[str] = []
@@ -58,19 +61,34 @@ async def reap(tx: Tx) -> ReapResult:
     )
     lost = await stage("mark_lost", lambda: agents.mark_lost(tx, failed_agents))
     recovered = await stage("accounts.recover", lambda: accounts.recover(tx))
+    recovered += await stage(
+        "accounts.local_health", lambda: accounts.sync_local_health(tx, *local)
+    )
     return ReapResult(
         expired, lost, recovered, failed_tasks, failed_agents, failed_stages
     )
 
 
 async def run(
-    db: Database, interval: float = REAP_INTERVAL_S, stats: LoopStats | None = None
+    db: Database,
+    interval: float = REAP_INTERVAL_S,
+    stats: LoopStats | None = None,
+    local_probe: Callable[[], Awaitable[tuple[bool | None, str]]] | None = None,
 ) -> None:
     while True:
         started = time.monotonic()
         try:
+            local: tuple[bool | None, str] = (None, "")
+            if local_probe is not None:
+                # Outside the write transaction by design: no network call in one.
+                try:
+                    local = await local_probe()
+                except Exception:
+                    log.exception(
+                        "local model probe failed; leaving accounts as they are"
+                    )
             async with db.write() as tx:
-                result = await reap(tx)
+                result = await reap(tx, local)
             if stats:
                 stats.record(time.monotonic() - started)
             if not result.clean:

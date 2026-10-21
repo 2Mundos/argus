@@ -43,6 +43,8 @@ every new dependency is judged against it.
   request a worker from the dashboard or MCP; Argus reports what the node can run
 - [Engines, executors and the local model](specs/engines.spec.md) —
   who runs the worker loop vs. who gets delegated work; real readiness; local routing
+- [Local Strata harness](specs/local-harness.spec.md) — NanoClaw failover to the
+  node's Anthropic-compatible model when cloud accounts are unavailable
 - [Global account selection](specs/account-selection.spec.md) — leases rank every
   usable account by priority and availability; no pool or worker provider lists.
 - [Codex accounts](specs/codex-accounts.spec.md) — import or generate a ChatGPT

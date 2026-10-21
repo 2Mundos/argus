@@ -101,8 +101,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             "reaper": LoopStats("reaper", reaper.REAP_INTERVAL_S),
             "reconciler": LoopStats("reconciler", settings.reconcile_interval_s),
         }
+        local_model = app.state.local_model
+
+        async def local_probe() -> tuple[bool | None, str]:
+            """What the reaper tells the account registry about the local model:
+            `local` accounts are available exactly while it answers."""
+            if local_model is None:
+                return None, ""
+            info = await local_model.probe()
+            ok = info.reachable and info.model == local_model.model
+            return ok, info.error or f"serves {info.model}"
+
         loops = [
-            asyncio.create_task(reaper.run(db, stats=app.state.loops["reaper"])),
+            asyncio.create_task(
+                reaper.run(
+                    db,
+                    stats=app.state.loops["reaper"],
+                    local_probe=local_probe if local_model else None,
+                )
+            ),
             asyncio.create_task(app.state.quota.run()),
             asyncio.create_task(
                 reconciler.run(

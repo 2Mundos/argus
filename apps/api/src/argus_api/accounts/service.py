@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import aiosqlite
 from argus_core.accounts import (
+    LOCAL_PROVIDER,
     Account,
     AccountCreate,
     AccountLease,
@@ -22,6 +23,8 @@ from argus_core.accounts import (
     QuotaWindow,
     Usage,
     UsageReport,
+    fallback_tier,
+    quota_exempt,
     role_accepts,
 )
 from argus_core.quota import classify_quota
@@ -42,6 +45,9 @@ from argus_api.tasks import service as tasks
 log = logging.getLogger(__name__)
 DEFAULT_COOLDOWN = timedelta(hours=1)
 NO_ACCOUNT = "no_account"  # the lease error code; tasks wait as `awaiting_quota`
+# The one reason a local account is disabled by Argus itself, and the only one the
+# local probe may undo (a missing secret stays for `reconcile_secrets`).
+LOCAL_UNREACHABLE = "local model unreachable"
 
 
 class NoAccountError(ConflictError):
@@ -235,7 +241,13 @@ async def reconcile_secrets(tx: Tx, store: SecretStore) -> None:
         present = name is not None and store.get(name) is not None
         if not present and row["state"] != "disabled":
             await _disable(tx, row["id"], f"secret not found: {row['secret_ref']}")
-        elif present and row["state"] == "disabled" and row["auto_disabled"]:
+        elif (
+            present
+            and row["state"] == "disabled"
+            and row["auto_disabled"]
+            # An unreachable local model is only brought back by its own probe.
+            and not (row["disabled_reason"] or "").startswith(LOCAL_UNREACHABLE)
+        ):
             await tx.conn.execute(
                 "UPDATE accounts SET state = 'available', disabled_reason = NULL,"
                 " auto_disabled = 0, updated_at = ? WHERE id = ?",
@@ -260,8 +272,9 @@ async def lease(
     attempt: int,
 ) -> AccountLease:
     """Lease the best usable account for `role`, ranked globally by priority (then
-    least leased, then name). `runtime_providers` is only what the runtime can
-    technically apply, never an order or allowlist. An agent holds one lease per
+    least leased, then name); the local model is a tier below every cloud account,
+    so it serves only when none of them can. `runtime_providers` is only what the
+    runtime can technically apply, never an order or allowlist. An agent holds one lease per
     role (`engine`: its harness; `executor`: a delegated CLI; `repository`); a new
     lease replaces the previous one of the same role. Raises NoAccountError."""
     if not runtime_providers:
@@ -418,8 +431,21 @@ async def _mark_exhausted(
     cooldown: timedelta,
 ) -> str:
     """Exhaust the account until the reported reset (else the cooldown); never
-    shorten an existing mark. Returns the account name."""
+    shorten an existing mark. Returns the account name.
+
+    A quota-exempt provider (the local model) has no limit to hit: the report is
+    recorded and the account stays as it is, available or not by its own probe."""
     row = await _row(tx.conn, account_id)
+    if quota_exempt(row["provider"]):
+        await record(
+            tx,
+            f"agent:{agent_id}",
+            "account",
+            account_id,
+            "account.exhausted",
+            {"until": None, "reason": reason, "quota_exempt": True},
+        )
+        return row["name"]
     new = until if until and until > tx.now else tx.now + cooldown
     current = row["exhausted_until"]
     if (
@@ -514,6 +540,45 @@ async def recover(tx: Tx) -> list[str]:
     if ids:
         await release_waiting_tasks(tx)
     return ids
+
+
+async def sync_local_health(
+    tx: Tx, reachable: bool | None, detail: str = ""
+) -> list[str]:
+    """The local model's own probe is the only availability signal for `local`
+    accounts (they have no quota and no credential to lose): an unreachable server
+    disables them, a reachable one brings back exactly the ones Argus disabled for
+    that reason. Not probed (`None`) changes nothing. The probe itself runs before
+    the transaction: no network call happens in here."""
+    async with tx.conn.execute(
+        "SELECT id, state, auto_disabled, disabled_reason FROM accounts"
+        " WHERE provider = ?",
+        (LOCAL_PROVIDER,),
+    ) as cur:
+        rows = list(await cur.fetchall())
+    if reachable is None or not rows:
+        return []
+    changed: list[str] = []
+    for row in rows:
+        if not reachable and row["state"] != "disabled":
+            await _disable(tx, row["id"], f"{LOCAL_UNREACHABLE}: {detail}"[:500])
+            changed.append(row["id"])
+        elif (
+            reachable
+            and row["state"] == "disabled"
+            and row["auto_disabled"]
+            and (row["disabled_reason"] or "").startswith(LOCAL_UNREACHABLE)
+        ):
+            await tx.conn.execute(
+                "UPDATE accounts SET state = 'available', disabled_reason = NULL,"
+                " auto_disabled = 0, updated_at = ? WHERE id = ?",
+                (ts(tx.now), row["id"]),
+            )
+            await record(tx, "system", "account", row["id"], "account.available")
+            changed.append(row["id"])
+    if changed and reachable:
+        await release_waiting_tasks(tx)
+    return changed
 
 
 async def release_waiting_tasks(tx: Tx) -> list[str]:
@@ -611,8 +676,9 @@ async def _try_lease(
     *,
     reuse_held: bool = False,
 ) -> AccountLease | None:
-    """The best usable account for `role` across every provider: priority first,
-    then the least leased, then provider/name/id so ties are deterministic. Skips
+    """The best usable account for `role` across every provider: cloud before the
+    local model, then priority, the least leased, and provider/name/id so ties are
+    deterministic. Skips
     disabled, still-exhausted, full (`max_leases`) and credential-less accounts.
 
     With `reuse_held` (executor role), an account the agent already holds as its
@@ -683,8 +749,9 @@ async def _ranked(
     *,
     reuse: bool = False,
 ) -> list[aiosqlite.Row]:
-    """The usable accounts for `role` in lease order (priority, least leased, then
-    provider/name/id). An exhausted account past its reset is usable."""
+    """The usable accounts for `role` in lease order (cloud before the local
+    model, then priority, least leased, then provider/name/id). An exhausted
+    account past its reset is usable."""
     async with tx.conn.execute(
         "SELECT a.*, (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
         "  AND l.released_at IS NULL) AS active,"
@@ -706,7 +773,14 @@ async def _ranked(
                 or r["active"] < r["max_leases"]
             )
         ),
-        key=lambda r: (-r["priority"], r["active"], r["provider"], r["name"], r["id"]),
+        key=lambda r: (
+            fallback_tier(r["provider"]),
+            -r["priority"],
+            r["active"],
+            r["provider"],
+            r["name"],
+            r["id"],
+        ),
     )
 
 

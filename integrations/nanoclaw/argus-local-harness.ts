@@ -1,0 +1,200 @@
+/**
+ * NanoClaw harness on the node's local Anthropic-compatible model (Strata).
+ *
+ * The worker talks to `host.docker.internal` (or loopback on the host), never
+ * through the OneCLI cloud gateway. The trusted host materialises
+ * `ANTHROPIC_BASE_URL`, a placeholder token and the matching allowlist entry
+ * the delegate checks (`ARGUS_ALLOWED_ANTHROPIC_BASE_URL`).
+ */
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdir, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { ContainerConfig } from "@onecli-sh/sdk";
+import { CLAUDE_GATEWAY_STUB_PATH } from "./argus-claude-stub.js";
+import {
+  LOCAL_HARNESS_AUTH_TOKEN,
+  normalizeAnthropicBaseUrl,
+} from "./engines/anthropic-redirect.mjs";
+
+export { LOCAL_HARNESS_AUTH_TOKEN };
+
+export const LOCAL_HARNESS_FILENAME = "argus-local-harness.json";
+
+const ALLOWED_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "host.docker.internal"]);
+
+function mergeNoProxy(existing: string | undefined, hosts: string[]): string {
+  const set = new Set(
+    (existing ?? "")
+      .split(",")
+      .map((h) => h.trim())
+      .filter(Boolean),
+  );
+  for (const h of hosts) set.add(h);
+  return [...set].join(",");
+}
+
+export interface LocalHarnessConfig {
+  version: 1;
+  anthropic_base_url: string;
+  auth_token: string;
+  model?: string;
+}
+
+export function localCredentialProblem(credential: Record<string, unknown>): string | null {
+  const keys = new Set(Object.keys(credential));
+  const allowed = new Set(["base_url", "auth_token", "model"]);
+  const extra = [...keys].filter((k) => !allowed.has(k)).sort();
+  if (extra.length)
+    return `a local account credential holds only base_url, auth_token, model; remove ${extra.join(", ")}`;
+  const base = normalizeAnthropicBaseUrl(String(credential.base_url ?? ""));
+  if (!base) return "base_url must be an http(s) loopback or host.docker.internal URL";
+  try {
+    const host = new URL(base).hostname.toLowerCase();
+    if (!ALLOWED_HOSTS.has(host)) return "base_url host must be loopback or host.docker.internal";
+  } catch {
+    return "base_url must be an http(s) URL";
+  }
+  const token =
+    typeof credential.auth_token === "string" && credential.auth_token.trim()
+      ? credential.auth_token.trim()
+      : LOCAL_HARNESS_AUTH_TOKEN;
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(token) || token.startsWith("sk-"))
+    return "auth_token must be a short placeholder, never a credential";
+  const model = credential.model;
+  if (
+    model !== undefined &&
+    (typeof model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/.test(model))
+  )
+    return "model must be a plain model name";
+  return null;
+}
+
+export function localHarnessFromCredential(
+  credential: Record<string, unknown>,
+): LocalHarnessConfig | null {
+  if (localCredentialProblem(credential)) return null;
+  const base = normalizeAnthropicBaseUrl(String(credential.base_url))!;
+  const auth_token =
+    typeof credential.auth_token === "string" && credential.auth_token.trim()
+      ? credential.auth_token.trim()
+      : LOCAL_HARNESS_AUTH_TOKEN;
+  const model =
+    typeof credential.model === "string" && credential.model.trim()
+      ? credential.model.trim()
+      : undefined;
+  return { version: 1, anthropic_base_url: base, auth_token, ...(model ? { model } : {}) };
+}
+
+export function localHarnessEnv(harness: LocalHarnessConfig): Record<string, string> {
+  const base = normalizeAnthropicBaseUrl(harness.anthropic_base_url);
+  if (!base) throw new Error("invalid local harness base URL");
+  const out: Record<string, string> = {
+    ANTHROPIC_BASE_URL: base,
+    ANTHROPIC_AUTH_TOKEN: harness.auth_token,
+    ARGUS_ALLOWED_ANTHROPIC_BASE_URL: base,
+  };
+  if (harness.model) out.ANTHROPIC_MODEL = harness.model;
+  return out;
+}
+
+/** Drop cloud Anthropic material; the local server is reached directly. */
+export function withLocalHarnessRuntime(
+  config: ContainerConfig,
+  harness: LocalHarnessConfig | null,
+): ContainerConfig {
+  const stubs = (config.credentialStubs ?? []).filter(
+    (stub) => stub.containerPath !== CLAUDE_GATEWAY_STUB_PATH,
+  );
+  if (!harness) {
+    const env = { ...(config.env ?? {}) };
+    for (const key of [
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ARGUS_ALLOWED_ANTHROPIC_BASE_URL",
+      "ANTHROPIC_MODEL",
+    ])
+      delete env[key];
+    const droppedStubs =
+      stubs.length === (config.credentialStubs ?? []).length ? config.credentialStubs : stubs;
+    return droppedStubs === config.credentialStubs
+      ? { ...config, env }
+      : { ...config, env, credentialStubs: stubs };
+  }
+  const env = { ...(config.env ?? {}) };
+  for (const key of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_UNIX_SOCKET"])
+    delete env[key];
+  const base = normalizeAnthropicBaseUrl(harness.anthropic_base_url)!;
+  const host = new URL(base).hostname;
+  const noProxy = mergeNoProxy(env.NO_PROXY ?? env.no_proxy, [
+    host,
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "host.docker.internal",
+  ]);
+  return {
+    ...config,
+    credentialStubs: stubs,
+    env: {
+      ...env,
+      ...localHarnessEnv(harness),
+      NO_PROXY: noProxy,
+      no_proxy: noProxy,
+    },
+  };
+}
+
+export function localHarnessPath(dataDir: string, groupFolder: string): string {
+  return path.join(dataDir, "groups", groupFolder, LOCAL_HARNESS_FILENAME);
+}
+
+export function readLocalHarnessFile(
+  dataDir: string,
+  groupFolder: string,
+): LocalHarnessConfig | null {
+  try {
+    const raw = JSON.parse(readFileSync(localHarnessPath(dataDir, groupFolder), "utf8"));
+    if (raw?.version !== 1 || typeof raw.anthropic_base_url !== "string") return null;
+    return localHarnessFromCredential({
+      base_url: raw.anthropic_base_url,
+      auth_token: raw.auth_token,
+      model: raw.model,
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function writeLocalHarnessFile(
+  dataDir: string,
+  groupFolder: string,
+  harness: LocalHarnessConfig,
+): Promise<void> {
+  const dir = path.join(dataDir, "groups", groupFolder);
+  await mkdir(dir, { recursive: true });
+  const file = localHarnessPath(dataDir, groupFolder);
+  const tmp = `${file}.tmp`;
+  await writeFile(tmp, `${JSON.stringify(harness, null, 2)}\n`);
+  await rename(tmp, file);
+}
+
+export function removeLocalHarnessFile(dataDir: string, groupFolder: string): void {
+  try {
+    unlinkSync(localHarnessPath(dataDir, groupFolder));
+  } catch {
+    /* absent */
+  }
+}
+
+/** Read the harness file the Argus channel wrote for this agent group, if any. */
+export async function withLocalHarnessRuntimeForGroup(
+  config: ContainerConfig,
+  dataDir: string,
+  agentGroupId: string,
+): Promise<ContainerConfig> {
+  const { getAgentGroup } = await import("../db/agent-groups.js");
+  const group = await getAgentGroup(agentGroupId);
+  if (!group) return config;
+  const harness = readLocalHarnessFile(dataDir, group.folder);
+  return withLocalHarnessRuntime(config, harness);
+}

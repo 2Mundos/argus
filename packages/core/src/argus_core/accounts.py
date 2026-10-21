@@ -1,8 +1,10 @@
 """Provider account pool (worker lifecycle 3.9)."""
 
+import re
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -13,6 +15,10 @@ LeaseRole = Literal["engine", "executor", "repository"]
 # (never a NanoClaw harness) can run on.
 REPOSITORY_PROVIDER = "gitea"
 EXECUTOR_ONLY = frozenset({"cursor"})
+# The node's own model, served on loopback (local harness spec): a harness, never
+# a delegated CLI, holding no credential and no quota of its own.
+LOCAL_PROVIDER = "local"
+ENGINE_ONLY = frozenset({LOCAL_PROVIDER})
 
 
 def role_accepts(
@@ -20,16 +26,95 @@ def role_accepts(
 ) -> bool:
     """May an account of `provider` be leased for `role`? Repository accounts serve
     only the repository role and never become model accounts; a harness cannot run
-    on an executor-only provider. `runtime_providers` is what the leasing runtime
-    reports it can technically apply. Credential-bearing leases require an
-    explicit non-empty provider list."""
+    on an executor-only provider, and an engine-only one runs no delegated CLI.
+    `runtime_providers` is what the leasing runtime reports it can technically
+    apply. Credential-bearing leases require an explicit non-empty provider list."""
     if runtime_providers is None or provider not in runtime_providers:
         return False
     if role == "repository":
         return provider == REPOSITORY_PROVIDER
     if provider == REPOSITORY_PROVIDER:
         return False
-    return not (role == "engine" and provider in EXECUTOR_ONLY)
+    if role == "engine" and provider in EXECUTOR_ONLY:
+        return False
+    return not (role != "engine" and provider in ENGINE_ONLY)
+
+
+def fallback_tier(provider: str) -> int:
+    """Lease tier, ahead of priority: every cloud account (0) outranks the local
+    model (1), whatever the operator set, so the node's own GPU serves only when
+    nothing in the cloud can (local harness spec 3)."""
+    return 1 if provider == LOCAL_PROVIDER else 0
+
+
+def quota_exempt(provider: str) -> bool:
+    """The local model has no provider quota, so it is never marked exhausted; it
+    is unavailable only while its probe fails."""
+    return provider == LOCAL_PROVIDER
+
+
+# A local account's whole credential: where the model answers, the placeholder the
+# harness sends instead of a token, and the model name it configures.
+LOCAL_CREDENTIAL_KEYS = frozenset({"base_url", "auth_token", "model"})
+LOCAL_AUTH_TOKEN = "argus-local-harness"  # noqa: S105 — public placeholder, not a secret
+# The only hosts a local model is reached on: this node's loopback, or the name a
+# container resolves to its Docker host. Never a network address.
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "host.docker.internal"})
+_PLACEHOLDER = re.compile(r"[A-Za-z0-9._-]{1,64}")
+_MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}")
+
+
+def validate_local_base_url(url: object) -> str:
+    """The URL the local model answers on: http(s), a loopback or Docker-host
+    name, no credentials, no path, query or fragment. This is also the exact URL a
+    worker may redirect the Anthropic API to, so it is normalised here."""
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("a local account needs a base_url")
+    parts = urlsplit(url.strip())
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("base_url must be an http(s) URL")
+    if parts.username or parts.password or parts.query or parts.fragment:
+        raise ValueError("base_url must not carry credentials, a query or a fragment")
+    if parts.path.strip("/"):
+        raise ValueError("base_url must not carry a path")
+    if parts.hostname.lower() not in LOCAL_HOSTS:
+        raise ValueError(
+            "base_url host must be one of "
+            f"{', '.join(sorted(LOCAL_HOSTS))}: the local model is never reached "
+            "over the network"
+        )
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def local_credential_problem(credential: dict[str, Any]) -> str | None:
+    """Why this document cannot be a local account's credential, or None. A local
+    account holds no secret: a real-looking token is refused, not stored."""
+    unknown = sorted(set(credential) - LOCAL_CREDENTIAL_KEYS)
+    if unknown:
+        return (
+            "a local account credential holds only "
+            f"{', '.join(sorted(LOCAL_CREDENTIAL_KEYS))}; remove {', '.join(unknown)}"
+        )
+    try:
+        validate_local_base_url(credential.get("base_url"))
+    except ValueError as exc:
+        return str(exc)
+    token = credential.get("auth_token", LOCAL_AUTH_TOKEN)
+    if (
+        not isinstance(token, str)
+        or not _PLACEHOLDER.fullmatch(token)
+        or token.startswith("sk-")
+    ):
+        return (
+            "auth_token must be a short placeholder (the local server ignores it), "
+            "never a credential"
+        )
+    model = credential.get("model")
+    if model is not None and (
+        not isinstance(model, str) or not _MODEL_NAME.fullmatch(model)
+    ):
+        return "model must be a plain model name"
+    return None
 
 
 class AccountKind(StrEnum):
@@ -78,6 +163,24 @@ class AccountCreate(BaseModel):
     def one_secret_source(self) -> "AccountCreate":
         if (self.credential is None) == (self.secret_ref is None):
             raise ValueError("give exactly one of credential or secret_ref")
+        return self
+
+    @model_validator(mode="after")
+    def local_account_carries_no_secret(self) -> "AccountCreate":
+        """A local account's document is its endpoint, not a credential, and it
+        defaults to one lease: the node has one GPU and the server one slot."""
+        if self.provider != LOCAL_PROVIDER:
+            return self
+        if self.credential is None:
+            raise ValueError(
+                "a local account carries its base_url as the credential, "
+                "not a secret_ref"
+            )
+        problem = local_credential_problem(self.credential)
+        if problem is not None:
+            raise ValueError(problem)
+        if self.max_leases is None:
+            self.max_leases = 1
         return self
 
 

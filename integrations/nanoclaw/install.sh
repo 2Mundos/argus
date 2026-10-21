@@ -16,6 +16,8 @@ for dir in "$target/src/channels" "$target/dist/channels"; do
 done
 cp "$here/engines/model-policy.d.mts" "$target/src/channels/"
 cp "$here/argus.ts" "$target/src/channels/argus.ts"
+cp "$here/argus-local-forward.ts" "$target/src/channels/argus-local-forward.ts"
+cp "$here/argus-local-forward.test.ts" "$target/src/channels/argus-local-forward.test.ts"
 cp "$here/argus-accounts.ts" "$target/src/channels/argus-accounts.ts"
 cp "$here/argus.test.ts" "$target/src/channels/argus.test.ts"
 cp "$here/argus-accounts.test.ts" "$target/src/channels/argus-accounts.test.ts"
@@ -28,6 +30,9 @@ cp "$here/argus-cursor-stub.ts" "$target/src/gateway-providers/argus-cursor-stub
 cp "$here/argus-cursor-stub.test.ts" "$target/src/gateway-providers/argus-cursor-stub.test.ts"
 cp "$here/argus-claude-stub.ts" "$target/src/gateway-providers/argus-claude-stub.ts"
 cp "$here/argus-claude-stub.test.ts" "$target/src/gateway-providers/argus-claude-stub.test.ts"
+cp "$here/engines/anthropic-redirect.mjs" "$target/src/gateway-providers/anthropic-redirect.mjs"
+cp "$here/argus-local-harness.ts" "$target/src/gateway-providers/argus-local-harness.ts"
+cp "$here/argus-local-harness.test.ts" "$target/src/gateway-providers/argus-local-harness.test.ts"
 cp "$here/argus-onecli-git-ca.ts" "$target/src/gateway-providers/argus-onecli-git-ca.ts"
 cp "$here/argus-onecli-git-ca.test.ts" "$target/src/gateway-providers/argus-onecli-git-ca.test.ts"
 cp "$here/onecli-path-match.ts" "$target/src/gateway-providers/onecli-path-match.ts"
@@ -139,6 +144,29 @@ s = s.replace(old_tail, "        : false,\n  ));\n  log.info('OneCLI gateway app
 open(p, "w").write(s)
 PY
   echo "patched $onecli_ts (Claude delegate sentinel stub)"
+fi
+if [ -f "$onecli_ts" ] && ! grep -q "withLocalHarnessRuntimeForGroup" "$onecli_ts"; then
+  python3 - "$onecli_ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+needle = "import { withClaudeDelegateRuntime } from './argus-claude-stub.js';"
+assert needle in s, "run install after the Claude delegate hook is present"
+s = s.replace(
+    needle,
+    needle + "\nimport { withLocalHarnessRuntimeForGroup } from './argus-local-harness.js';",
+    1,
+)
+old = "  const config = withClaudeDelegateRuntime(await withCursorDelegateRuntime("
+new = "  const config = await withLocalHarnessRuntimeForGroup(withClaudeDelegateRuntime(await withCursorDelegateRuntime("
+assert old in s, "onecli.ts ensureSession shape changed upstream"
+s = s.replace(old, new, 1)
+old_tail = "        : false,\n  )));\n  log.info('OneCLI gateway applied'"
+new_tail = "        : false,\n  )), DATA_DIR, input.key.agentGroupId);\n  log.info('OneCLI gateway applied'"
+assert old_tail in s, "onecli.ts ensureSession tail changed upstream"
+open(p, "w").write(s.replace(old_tail, new_tail, 1))
+PY
+  echo "patched $onecli_ts (local Strata harness env)"
 fi
 onecli_test="$target/src/gateway-providers/onecli.test.ts"
 if [ -f "$onecli_test" ] && grep -q 'expect(fetchMock).toHaveBeenCalledTimes(1);' "$onecli_test"; then
