@@ -159,4 +159,20 @@ describe("TaskLog", () => {
     emit("t1", 2, 5, ["contiguous"]);
     expect(mock.queries).toHaveLength(2); // no gap, no read
   });
+
+  it("reads back a gap before the first live line when the tail was empty", async () => {
+    mock.page = { attempt: 2, lines: [], last_seq: 0 };
+    render(<TaskLog taskId="t1" attempt={2} />);
+    await screen.findByText("Sem saída ainda.");
+    mock.after = {
+      attempt: 2,
+      lines: [{ seq: 1, source: "worker", at, line: "missed first" }],
+      last_seq: 1,
+    };
+    emit("t1", 2, 2, ["live"]);
+    await screen.findByText("missed first");
+    expect(mock.queries.at(-1)).toEqual({ attempt: 2, after: 0, limit: 1000 });
+    const shown = [...document.querySelectorAll(".log-line")].map((el) => el.textContent);
+    expect(shown).toEqual(["missed first", "live"]);
+  });
 });

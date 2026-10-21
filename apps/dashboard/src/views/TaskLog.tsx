@@ -77,9 +77,9 @@ export function TaskLog({ taskId, attempt }: { taskId: string; attempt: number }
         early.push(...got.lines);
         return;
       }
-      const before = last;
+      const before = last; // 0 when the tail was empty: seq 1 is then the only no-gap start
       add(got.lines);
-      if (before > 0 && (got.lines[0]?.seq ?? 0) > before + 1) backfill(before);
+      if ((got.lines[0]?.seq ?? 0) > before + 1) backfill(before);
     });
     call(
       api.GET("/api/tasks/{task_id}/log", {
