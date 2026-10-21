@@ -53,6 +53,30 @@ describe("TaskFailover", () => {
     expect(screen.getByText(/acct-a → no account left/)).toBeTruthy();
   });
 
+  it("separates the codes, keeps an ambiguous reset as words and shows a failed switch", () => {
+    renderDl({
+      ...base,
+      serving_account: null,
+      failover: {
+        from_account: "codex-1",
+        to_account: "codex-2",
+        reason: "You\u2019ve hit your usage limit.",
+        reason_code: "quota_exhausted",
+        reset_status: "ambiguous",
+        reset_text: "Nov 19th, 2026 2:08 PM",
+        source: "notice",
+        outcome: "switch_failed",
+        apply: "failed",
+        apply_error: "previous runtime did not stop",
+        at: "2026-10-20T19:58:00Z",
+        attempt: 1,
+      },
+    });
+    expect(screen.getByText(/Quota exhausted/)).toBeTruthy();
+    expect(screen.getByText(/Nov 19th, 2026 2:08 PM/)).toBeTruthy();
+    expect(screen.getByText(/Runtime switch failed: previous runtime did not stop/)).toBeTruthy();
+  });
+
   it("renders nothing for a task that never failed over", () => {
     const { container } = renderDl({ ...base, serving_account: null, failover: null });
     expect(container.querySelector("dt")).toBeNull();

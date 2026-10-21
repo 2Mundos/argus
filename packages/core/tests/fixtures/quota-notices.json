@@ -17,7 +17,12 @@
     "exhausted": true,
     "until": null
   },
-  { "provider": "anthropic", "notice": "Rate limit reached", "exhausted": true, "until": null },
+  {
+    "provider": "anthropic",
+    "notice": "Rate limit reached",
+    "exhausted": true,
+    "until": null
+  },
   {
     "provider": "anthropic",
     "notice": "You've hit your session limit · resets 2am (UTC)",
@@ -88,15 +93,29 @@
     "now": "2026-10-20T22:06:00Z",
     "exhausted": false
   },
-  { "provider": "anthropic", "notice": "usage_limit_reached", "exhausted": false },
-  { "provider": "openai", "notice": "usage_limit_reached", "exhausted": true, "until": null },
+  {
+    "provider": "anthropic",
+    "notice": "usage_limit_reached",
+    "exhausted": false
+  },
+  {
+    "provider": "openai",
+    "notice": "usage_limit_reached",
+    "exhausted": true,
+    "until": null
+  },
   {
     "provider": "openai",
     "notice": "You’ve hit your usage limit",
     "exhausted": true,
     "until": null
   },
-  { "provider": "openai", "notice": "insufficient_quota", "exhausted": true, "until": null },
+  {
+    "provider": "openai",
+    "notice": "insufficient_quota",
+    "exhausted": true,
+    "until": null
+  },
   {
     "provider": "openai",
     "notice": "Error: HTTP 401 token_expired",
@@ -113,12 +132,143 @@
     "notice": "The agent run failed. Check the logs for details.",
     "exhausted": false
   },
-  { "provider": "custom", "notice": "429 Rate limit", "exhausted": true, "until": null },
-  { "provider": "custom", "notice": "HTTP 402 Payment required", "exhausted": true, "until": null },
-  { "provider": "custom", "notice": "insufficient credits", "exhausted": true, "until": null },
+  {
+    "provider": "custom",
+    "notice": "429 Rate limit",
+    "exhausted": true,
+    "until": null
+  },
+  {
+    "provider": "custom",
+    "notice": "HTTP 402 Payment required",
+    "exhausted": true,
+    "until": null
+  },
+  {
+    "provider": "custom",
+    "notice": "insufficient credits",
+    "exhausted": true,
+    "until": null
+  },
   {
     "provider": "custom",
     "notice": "The agent run failed. Check the logs for details.",
+    "exhausted": false
+  },
+  {
+    "provider": "openai",
+    "notice": "You’ve hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at Nov 19th, 2026 2:08 PM.",
+    "exhausted": true,
+    "until": null,
+    "reset_status": "ambiguous"
+  },
+  {
+    "provider": "openai",
+    "notice": "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at Nov 19th, 2026 2:08 PM.",
+    "exhausted": true,
+    "until": null,
+    "reset_status": "ambiguous"
+  },
+  {
+    "provider": "openai",
+    "notice": "Error: You’ve hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at Nov 19th, 2026 2:08 PM.",
+    "exhausted": true,
+    "until": null,
+    "reset_status": "ambiguous"
+  },
+  {
+    "provider": "openai",
+    "notice": "Codex error: You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at Nov 19th, 2026 2:08 PM.",
+    "exhausted": true,
+    "until": null,
+    "reset_status": "ambiguous"
+  },
+  {
+    "provider": "openai",
+    "notice": "turn failed: You’ve hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at Nov 19th, 2026 2:08 PM.",
+    "exhausted": true,
+    "until": null,
+    "reset_status": "ambiguous"
+  },
+  {
+    "provider": "openai",
+    "notice": "You have reached your usage limit. Try again at 2pm.",
+    "exhausted": true,
+    "until": null,
+    "reset_status": "ambiguous"
+  },
+  {
+    "provider": "openai",
+    "notice": "You’ve reached your usage limit.",
+    "exhausted": true,
+    "until": null,
+    "reset_status": "absent"
+  },
+  {
+    "provider": "openai",
+    "notice": "You exceeded your current quota, please check your plan and billing details.",
+    "exhausted": true,
+    "until": null,
+    "reset_status": "absent"
+  },
+  {
+    "provider": "openai",
+    "notice": "You've hit your usage limit (resets 2026-11-19T14:08:00Z)",
+    "exhausted": true,
+    "until": "2026-11-19T14:08:00+00:00",
+    "reset_status": "stated"
+  },
+  {
+    "provider": "openai",
+    "notice": "You've hit your usage limit (resets 2026-11-19T14:08:00-03:00)",
+    "exhausted": true,
+    "until": "2026-11-19T14:08:00-03:00",
+    "reset_status": "stated"
+  },
+  {
+    "provider": "openai",
+    "notice": "You've hit your usage limit (resets 2026-11-19T14:08:00)",
+    "exhausted": true,
+    "until": null,
+    "reset_status": "ambiguous"
+  },
+  {
+    "provider": "openai",
+    "notice": "{\"error\": {\"message\": \"You\\u2019ve hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at Nov 19th, 2026 2:08 PM.\", \"codexErrorInfo\": \"usageLimitExceeded\"}}",
+    "exhausted": true,
+    "until": null
+  },
+  {
+    "provider": "openai",
+    "notice": "{\"codexErrorInfo\": \"usage_limit_exceeded\", \"message\": \"limit\"}",
+    "exhausted": true,
+    "until": null
+  },
+  {
+    "provider": "openai",
+    "notice": "{\"error\": {\"code\": \"insufficient_quota\", \"message\": \"x\"}}",
+    "exhausted": true,
+    "until": null
+  },
+  {
+    "provider": "openai",
+    "notice": "{\"error\": {\"type\": \"usage_limit_reached\"}}",
+    "exhausted": true,
+    "until": null
+  },
+  {
+    "provider": "openai",
+    "notice": "{\"error\": {\"code\": \"rate_limit_exceeded\", \"message\": \"slow down\"}}",
+    "exhausted": false
+  },
+  {
+    "provider": "openai",
+    "notice": "I read somewhere that you've hit your usage limit",
+    "exhausted": false
+  },
+  {
+    "provider": "openai",
+    "notice": "The model said: you exceeded your current quota",
     "exhausted": false
   }
 ]

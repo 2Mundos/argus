@@ -401,6 +401,8 @@ cp "$here/overlays/codex-turn-timeout.ts" "$here/overlays/codex-turn-timeout.tes
 # channel as a structured providerFailure, never as upstream text.
 cp "$here/overlays/claude-rate-limit.ts" "$here/overlays/claude-rate-limit.test.ts" \
   "$here/overlays/claude.rate-limit.test.ts" "$providers_dir/"
+# Codex's usage limit ("You've hit your usage limit … try again at …") likewise.
+cp "$here/overlays/codex-usage-limit.ts" "$here/overlays/codex-usage-limit.test.ts" "$providers_dir/"
 python3 "$here/patch-claude-rate-limit.py" "$target"
 
 codex_provider="$providers_dir/codex.ts"

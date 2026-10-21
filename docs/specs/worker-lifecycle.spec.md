@@ -865,6 +865,14 @@ database never holds a secret.
   [account selection](account-selection.spec.md) 3.6). Such tasks return to
   `ready` as soon as any account becomes usable again (recovery, a new account,
   re-enabling, or a secrets reload), and whoever claims them leases afresh.
+- **Codex usage limit, reset provenance, runtime switch**: a Codex "You've hit
+  your usage limit … try again at <date>" is a quota like any other. The
+  provider's reset text is kept as words (`reset_text`, `reset_status`) and a
+  zoneless date is never given a zone. A rotation resumes the same task on the
+  same attempt after the old runtime is confirmed stopped; if it cannot be
+  stopped the task is blocked `runtime_switch_failed` with no attempt spent. A
+  claim from an agent whose engine account is exhausted is refused
+  (`lease_account_unusable`). See [account selection](account-selection.spec.md) 3.6.
 - **Usage is recorded, not enforced**: `result.usage.account_id` on completion,
   plus interim `POST /api/accounts/{id}/usage`. Accounts list usage for the last
   24 h and in total.

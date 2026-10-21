@@ -1219,7 +1219,7 @@ async def test_claim_is_not_held_while_an_account_is_available_or_none_exist(
     await lease(db, store)
     await exhaust(db, store, c1, until=clock.now + timedelta(hours=1))
     async with db.read() as conn:
-        assert not await tasks.awaiting_quota(conn)  # claude-2 is still available
+        assert not await tasks.awaiting_quota(conn, None)  # claude-2 is still available
     assert (await _claim(db)) is not None
 
 

@@ -360,6 +360,12 @@ class ExhaustedReport(BaseModel):
     # The task the agent was working on: blocked as `awaiting_quota` if nothing is left.
     task_id: str
     attempt: int = Field(ge=1)
+    # Provenance of the report (account selection 3.6). All optional: omitted, the
+    # server classifies `reason` itself.
+    source: Literal["structured", "notice", "log"] | None = None
+    reason_code: Literal["quota_exhausted", "auth_expired"] | None = None
+    reset_status: Literal["stated", "ambiguous", "absent"] | None = None
+    reset_text: str | None = Field(default=None, max_length=120)  # provider's words
 
 
 class AwaitingQuotaRequest(BaseModel):

@@ -5,11 +5,13 @@ these patterns; both are tested against `packages/core/tests/fixtures/quota-noti
 so they cannot drift (account selection 3.6).
 """
 
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from typing import Literal
 
 # Anchored at the start of the notice (after the runner's own prefix): a model that
 # merely talks about limits never counts. Keyed by the *account* provider.
@@ -27,8 +29,10 @@ QUOTA_NOTICES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "openai",
         re.compile(
-            r"^(usage_limit_reached|insufficient_quota|you(?:'|\u2019)ve hit your usage"
-            r" limit|you have hit your usage limit)",
+            r"^(usage_limit_(?:reached|exceeded)|usagelimitexceeded|insufficient_quota"
+            r"|you(?:'|\u2019)ve (?:hit|reached) your usage limit"
+            r"|you have (?:hit|reached) your usage limit"
+            r"|you exceeded your current quota)",
             re.I,
         ),
     ),
@@ -55,18 +59,92 @@ AUTH_EXPIRED_NOTICES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("custom", _AUTH_EXPIRED),
 )
 
-_PREFIX = re.compile(r"^(?:error:\s*|reconnecting\.{3}\s*\d+/\d+:\s*)", re.I)
+# Structured `codexErrorInfo` / `error.code` values of the Codex app-server that mean
+# "this account's quota is spent", keyed by the same account provider.
+STRUCTURED_QUOTA_CODES = frozenset(
+    {
+        "usagelimitexceeded",
+        "usage_limit_exceeded",
+        "usage_limit_reached",
+        "insufficient_quota",
+    }
+)
+# Failures that are the network's, not the account's or the task's.
+NETWORK_NOTICES = re.compile(
+    r"\b(?:etimedout|econnreset|econnrefused|enotfound|eai_again|epipe|ehostunreach)\b"
+    r"|fetch failed|network (?:error|is unreachable|unreachable)"
+    r"|connection (?:reset|refused|closed|timed out)"
+    r"|stream disconnected|timed? ?out|httpconnectionfailed|temporarily unavailable"
+    r"|service unavailable|bad gateway|gateway time-?out",
+    re.I,
+)
+
+_PREFIX = re.compile(
+    r"^(?:(?:codex |claude )?error:\s*|turn failed:\s*|reconnecting\.{3}\s*\d+/\d+:\s*)",
+    re.I,
+)
+_RESET_MARKER = re.compile(
+    r"\(resets |\bresets? (?:at |on )?|try again (?:at|in) ", re.I
+)
 _RESETS = re.compile(r"\(resets ([^)]+)\)", re.I)
 _RESETS_CLOCK = re.compile(
     r"\bresets\s+(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\s*\(UTC\)", re.I | re.A
 )
 REASON_MAX = 500
 
+ResetStatus = Literal["stated", "ambiguous", "absent"]
+FailureClass = Literal[
+    "quota_exhausted",
+    "auth_expired",
+    "network_unavailable",
+    "runtime_switch_failed",
+    "implementation",
+]
+
 
 @dataclass(frozen=True)
 class QuotaHit:
-    reason: str
-    until: datetime | None  # the provider's reset time, if the notice states one
+    reason: str  # the sanitized notice, as the provider wrote it
+    until: datetime | None  # the provider's reset time, only when it states a zone
+    code: Literal["quota_exhausted", "auth_expired"] = "quota_exhausted"
+    # `stated`: `until` is the provider's; `ambiguous`: the notice names a time we
+    # cannot place (no zone, unknown zone): `reset_text` keeps its words and `until`
+    # is None; `absent`: no reset in the notice.
+    reset_status: ResetStatus = "absent"
+    reset_text: str | None = None
+
+
+def sanitize_notice(notice: str, limit: int = REASON_MAX) -> str:
+    """One line of provider text: control characters folded to spaces, bearer-like
+    tokens and URL query strings dropped, bounded. Never a prompt or a credential."""
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", notice)
+    text = re.sub(
+        r"(?i)\b(?:bearer\s+|sk-|eyJ)[A-Za-z0-9._~+/=-]{8,}", "[redacted]", text
+    )
+    text = re.sub(r"(https?://[^\s?#)]+)[?#][^\s)]*", r"\1", text)
+    return re.sub(r"\s{2,}", " ", text).strip()[:limit]
+
+
+def _unwrap(body: str) -> str:
+    """A structured Codex error (`{"error": {"message", "codexErrorInfo"}}`, or the
+    same fields at top level) as the text its code or message would have been."""
+    if not body.startswith("{"):
+        return body
+    try:
+        doc = json.loads(body)
+    except ValueError:
+        return body
+    err = doc.get("error", doc) if isinstance(doc, dict) else None
+    if isinstance(err, str):
+        return err
+    if not isinstance(err, dict):
+        return body
+    message = err.get("message")
+    for key in ("codexErrorInfo", "code", "type"):
+        value = err.get(key)
+        if isinstance(value, str) and value.lower() in STRUCTURED_QUOTA_CODES:
+            return f"{value}: {message}" if isinstance(message, str) else value
+    return message if isinstance(message, str) else body
 
 
 def classify_quota(
@@ -75,13 +153,53 @@ def classify_quota(
     """The quota (or expired-login) hit a failure notice reports, or None. With
     `provider`, only that account provider's messages count. `now` anchors a
     clock-time reset ("resets 2am (UTC)"); it defaults to the current time."""
-    text = notice.strip()
-    body = _PREFIX.sub("", text, count=1)
-    for patterns, with_reset in ((AUTH_EXPIRED_NOTICES, False), (QUOTA_NOTICES, True)):
+    text = sanitize_notice(notice)
+    body = _PREFIX.sub("", _unwrap(_PREFIX.sub("", text, count=1)), count=1)
+    for patterns, code in (
+        (AUTH_EXPIRED_NOTICES, "auth_expired"),
+        (QUOTA_NOTICES, "quota_exhausted"),
+    ):
         if any(p.search(body) and provider in (None, name) for name, p in patterns):
-            until = _reset(body, now) if with_reset else None
-            return QuotaHit(text[:REASON_MAX], until)
+            if code == "auth_expired":
+                return QuotaHit(text, None, "auth_expired")
+            until, status, words = reset_of(body, now)
+            return QuotaHit(text, until, "quota_exhausted", status, words)
     return None
+
+
+def failure_class(
+    notice: str, reason: str = "", provider: str | None = None
+) -> FailureClass:
+    """What kind of failure a task error is, for REST/MCP/UI: a provider quota, an
+    expired login, the network, a failed runtime switch, or (the default) the work."""
+    if reason == "runtime_switch_failed":
+        return "runtime_switch_failed"
+    hit = classify_quota(notice, provider)
+    if hit is not None:
+        return hit.code
+    if NETWORK_NOTICES.search(notice):
+        return "network_unavailable"
+    return "implementation"
+
+
+def reset_of(
+    body: str, now: datetime | None = None
+) -> tuple[datetime | None, ResetStatus, str | None]:
+    """The reset a quota notice states: its time only when the notice carries a zone
+    (ISO with offset or `Z`, or a `(UTC)` clock time); otherwise the provider's words
+    are kept as text and the time stays unknown (never a guessed zone)."""
+    until = _reset(body, now)
+    marker = _RESET_MARKER.search(body)
+    words: str | None = None
+    if marker is not None:
+        rest = body[marker.end() :].split("\n", 1)[0]
+        if marker.group(0).startswith("("):
+            rest = rest.split(")", 1)[0]
+        rest = re.split(r"\.(?:\s|$)", rest, maxsplit=1)[0]
+        words = sanitize_notice(rest, 80).rstrip(".") or None
+    if until is not None:
+        return until, "stated", words
+    return None, ("ambiguous" if words else "absent"), words
 
 
 def _reset(body: str, now: datetime | None) -> datetime | None:
@@ -93,7 +211,8 @@ def _reset(body: str, now: datetime | None) -> datetime | None:
         except ValueError:
             pass
         else:
-            return when if when.tzinfo else when.replace(tzinfo=UTC)
+            if when.tzinfo is not None:
+                return when
     clock = _RESETS_CLOCK.search(body)
     if clock is None:
         return None

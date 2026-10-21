@@ -2107,6 +2107,24 @@
               }
             ]
           },
+          "failure_class": {
+            "anyOf": [
+              {
+                "enum": [
+                  "quota_exhausted",
+                  "auth_expired",
+                  "network_unavailable",
+                  "runtime_switch_failed",
+                  "implementation"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Class"
+          },
           "failures": {
             "title": "Failures",
             "type": "integer"
@@ -4102,6 +4120,18 @@
             "title": "Account Id",
             "type": "string"
           },
+          "attempt": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
+          },
           "engine": {
             "enum": [
               "codex",
@@ -4124,6 +4154,17 @@
             ],
             "title": "Reason",
             "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
           }
         },
         "required": [
@@ -4707,6 +4748,49 @@
             "title": "Reason",
             "type": "string"
           },
+          "reason_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "quota_exhausted",
+                  "auth_expired"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "reset_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "stated",
+                  "ambiguous",
+                  "absent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reset Status"
+          },
+          "reset_text": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reset Text"
+          },
           "role": {
             "default": "engine",
             "enum": [
@@ -4724,6 +4808,22 @@
             "minItems": 1,
             "title": "Runtime Providers",
             "type": "array"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "structured",
+                  "notice",
+                  "log"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
           },
           "task_id": {
             "title": "Task Id",
@@ -4779,7 +4879,8 @@
               "worker_fail",
               "channel_error",
               "provider_failure",
-              "quota"
+              "quota",
+              "runtime_switch_failed"
             ],
             "title": "Reason",
             "type": "string"
@@ -4795,6 +4896,46 @@
       "Failover": {
         "description": "The last switch of the account serving a task (account selection 3.6).",
         "properties": {
+          "applied_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied At"
+          },
+          "apply": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending",
+                  "applied",
+                  "not_needed",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apply"
+          },
+          "apply_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apply Error"
+          },
           "at": {
             "format": "date-time",
             "title": "At",
@@ -4815,9 +4956,95 @@
             ],
             "title": "From Account"
           },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "switched",
+                  "awaiting_quota",
+                  "switch_failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
           "reason": {
             "title": "Reason",
             "type": "string"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "quota_exhausted",
+                  "auth_expired"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "reset_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reset At"
+          },
+          "reset_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "stated",
+                  "ambiguous",
+                  "absent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reset Status"
+          },
+          "reset_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reset Text"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "structured",
+                  "notice",
+                  "log"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
           },
           "to_account": {
             "anyOf": [
@@ -10580,6 +10807,24 @@
               }
             ]
           },
+          "failure_class": {
+            "anyOf": [
+              {
+                "enum": [
+                  "quota_exhausted",
+                  "auth_expired",
+                  "network_unavailable",
+                  "runtime_switch_failed",
+                  "implementation"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Class"
+          },
           "failures": {
             "title": "Failures",
             "type": "integer"
@@ -11376,6 +11621,24 @@
                 "type": "null"
               }
             ]
+          },
+          "failure_class": {
+            "anyOf": [
+              {
+                "enum": [
+                  "quota_exhausted",
+                  "auth_expired",
+                  "network_unavailable",
+                  "runtime_switch_failed",
+                  "implementation"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Class"
           },
           "failures": {
             "title": "Failures",

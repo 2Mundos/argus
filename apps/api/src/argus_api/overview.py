@@ -19,6 +19,7 @@ from argus_core.knowledge import PageState, ProposalState
 from argus_core.tasks import TaskState
 from pydantic import BaseModel
 
+from argus_api.accounts.eligibility import engine_pool
 from argus_api.db import Database, utcnow
 
 Counts = dict[str, int]
@@ -186,9 +187,8 @@ async def overview(db: Database) -> Overview:
                 accounts_by_provider.setdefault(provider, _zeros(AccountState))[
                     state
                 ] = n
-            next_reset = await scalar(
-                "SELECT min(exhausted_until) FROM accounts WHERE state = 'exhausted'"
-            )
+            pool = await engine_pool(conn, now)
+            next_reset = (await engine_pool(conn, None)).next_reset
             quota_measured = bool(
                 await scalar("SELECT EXISTS (SELECT 1 FROM account_quota)")
             )
@@ -249,10 +249,8 @@ async def overview(db: Database) -> Overview:
             by_state=accounts,
             total=sum(accounts.values()),
             by_provider=accounts_by_provider,
-            next_reset_at=datetime.fromisoformat(next_reset) if next_reset else None,
-            awaiting_quota=bool(
-                accounts.get("exhausted") and not accounts.get("available")
-            ),
+            next_reset_at=next_reset,
+            awaiting_quota=pool.awaiting_quota,
             quota_measured=quota_measured,
         ),
         decisions=DecisionsOverview(

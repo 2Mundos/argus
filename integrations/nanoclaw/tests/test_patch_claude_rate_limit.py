@@ -90,6 +90,9 @@ def test_hooks_claude_and_the_poll_loop_once(tmp_path: Path) -> None:
     assert (
         "if (providerName === 'claude') return claudeRateLimitFailure(error);" in poll
     )
+    assert "const limit = codexUsageLimitFailure(error);" in poll
+    assert "from './providers/codex-usage-limit.js';" in poll
+    assert "reset_text?: string;" in (src / "formatter.ts").read_text()
 
     before = {p: p.read_text() for p in src.rglob("*.ts")}
     again = patch(tmp_path)
