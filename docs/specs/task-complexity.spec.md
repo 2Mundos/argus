@@ -71,7 +71,7 @@ the engine role, and the model-policy map that pins the model.
 # 5. Constraints
 
 - Single-node spec; no new service. The heuristic is a pure function, no I/O.
-- One migration (`0031_task_complexity.sql`); all writes go through
+- One migration (`0032_task_complexity.sql`); all writes go through
   `Database.write()`.
 
 # 6. Implementation Consequences
