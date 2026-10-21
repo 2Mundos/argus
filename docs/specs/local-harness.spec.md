@@ -92,6 +92,12 @@ for router delegations.
     (`auth_missing`, reason `local_harness_engine_only`) because it would inherit
     `ANTHROPIC_BASE_URL` and run on the local model. `agent` and `codex` are
     unaffected.
+  - *Cursor first.* The executor lease on a local engine lease asks for
+    `runtime_providers: ["cursor"]` first (falling back to any provider on
+    `no_account`), so the preferred `agent` has its Cursor stub even when a cloud
+    Anthropic account outranks Cursor. Same rule on a custom engine lease
+    ([custom harness](custom-harness.spec.md)), whose `claude` executor runs only on a
+    real Anthropic account through the gateway.
   - *Safety net: compaction sized to the window.* The local credential may name
     `context_tokens` (an integer, 4096 to 4 000 000; per account). When absent,
     `POST /accounts/lease` fills it from the local model probe's `n_ctx`; when
