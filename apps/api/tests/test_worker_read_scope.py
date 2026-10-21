@@ -304,7 +304,7 @@ def test_live_stream_filter_matches_replay_rule(client: TestClient) -> None:
 
     def allowed(task_id: str) -> bool:
         event = Event(1, datetime.now(UTC), "x", "task", task_id, "task.updated", {})
-        return client.portal.call(_live_allowed, db, event, {"alpha"}, agent_id)  # type: ignore[union-attr]
+        return client.portal.call(_live_allowed, db, event, {"alpha"}, agent_id, set())  # type: ignore[union-attr]
 
     assert allowed(claimed["id"])
     assert not allowed(other["id"])

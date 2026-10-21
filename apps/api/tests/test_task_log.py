@@ -329,6 +329,31 @@ async def test_stream_delivers_task_log_only_to_the_lessee(
     await owner.aclose()
 
 
+async def test_stream_checks_the_lease_once_per_task(
+    db: Database, claimed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from argus_api.eventlog import routes
+
+    checks: list[str] = []
+    real = routes.has_leased_task
+
+    async def counting(conn, agent_id, task_id):
+        checks.append(task_id)
+        return await real(conn, agent_id, task_id)
+
+    monkeypatch.setattr(routes, "has_leased_task", counting)
+    owner = event_stream(db, after=None, keepalive=5, projects={"global"}, agent_id=A)
+    pending = asyncio.ensure_future(anext(owner))
+    await asyncio.sleep(0.05)
+    for source in ("worker", "delegate"):  # one batch per source per interval
+        await post(db, claimed, [source], source=source)
+        await asyncio.wait_for(pending, 2)
+        pending = asyncio.ensure_future(anext(owner))
+    pending.cancel()
+    await owner.aclose()
+    assert checks == [claimed.id]
+
+
 async def test_a_rolled_back_batch_publishes_nothing(db: Database, claimed) -> None:
     stream = event_stream(db, after=None, keepalive=0.1)
     pending = asyncio.ensure_future(anext(stream))
