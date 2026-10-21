@@ -165,7 +165,9 @@ Per-field errors (`details` entries `<field>: …`, `dependency_cycle` and
 missing dependencies on *Depends on*) show beside their field. On
 `stale_version` the form stays open with the operator's draft untouched, says
 who is ahead, and offers *Reload latest* (discard the draft) or *Keep editing
-on the latest version* (re-base the draft on the current version). Live
+on the latest version* (re-base the draft on the current version). A re-based
+draft that changes a field the new state does not allow shows that field's
+error instead of dropping the change. Live
 refreshes never overwrite a draft. Cancel closes without a request.
 
 # 4. Open Questions
