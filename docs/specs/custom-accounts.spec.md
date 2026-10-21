@@ -120,7 +120,7 @@ Make an OpenAI-compatible endpoint (first case OpenRouter,
 
 - `packages/core/src/argus_core/custom_accounts.py`: models, parser, `chat_body`,
   endpoints parsing; `quota.py`: custom pattern and `quota_notice_from_response`.
-- Migration `0026_account_config.sql` adds `accounts.config`.
+- Migration `0027_account_config.sql` adds `accounts.config`.
 - `apps/api/src/argus_api/accounts/custom.py`: probe and endpoints proxy; routes in
   `accounts/routes.py`; lease `settings` in `accounts/service.py`; test transport via
   `app.state.custom_transport`.

@@ -721,7 +721,7 @@ value to the next account, and re-sends the task. Details and limits in
 `integrations/nanoclaw/README.md`.
 
 Provider `custom` (an OpenAI-compatible endpoint) is specified in
-[custom accounts](custom-accounts.spec.md); `accounts.config` (migration 0026) holds
+[custom accounts](custom-accounts.spec.md); `accounts.config` (migration 0027) holds
 its non-secret settings and a lease returns them as `settings`.
 
 Agents run on subscription or API accounts (Claude, Codex, Cursor, …) that hit
