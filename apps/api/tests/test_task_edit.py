@@ -414,6 +414,7 @@ async def test_each_state_permits_exactly_its_documented_fields(
         "knowledge": [],
         "depends_on": [],
         "complexity": "trivial",
+        "account_providers": ["local"],
     }
     assert set(values) == set(EDITABLE)
     for field, value in values.items():

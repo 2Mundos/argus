@@ -19,6 +19,7 @@ const LABELS: Record<EditField, string> = {
   knowledge: "Pinned page ids (one per line)",
   depends_on: "Depends on (task ids, one per line)",
   complexity: "Complexity",
+  account_providers: "Restrict to account providers (one per line, e.g. local; empty: any)",
 };
 
 const MULTILINE = new Set<EditField>([
@@ -27,6 +28,7 @@ const MULTILINE = new Set<EditField>([
   "required_capabilities",
   "knowledge",
   "depends_on",
+  "account_providers",
 ]);
 
 /**

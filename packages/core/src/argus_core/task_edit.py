@@ -21,6 +21,7 @@ EDITABLE = (
     "knowledge",
     "depends_on",
     "complexity",
+    "account_providers",
 )
 # `null` clears these to their empty value; title, priority and complexity cannot be.
 CLEARABLE = frozenset(EDITABLE) - {"title", "priority", "complexity"}
@@ -65,6 +66,7 @@ class TaskChanges(BaseModel):
     knowledge: list[str] | None = None
     depends_on: list[str] | None = None
     complexity: Complexity | None = None
+    account_providers: list[str] | None = None
 
     def given(self) -> dict[str, Any]:
         """Editable fields the caller named (even as null), by name."""

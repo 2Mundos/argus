@@ -530,6 +530,24 @@ describe("channel with accounts", () => {
     expect(w.onecli.secrets[0]!.value).toBe("sk-ant-AAAA");
   });
 
+  it("claims with the providers it can apply and leases a restricted task on the local account", async () => {
+    const restricted = { ...task(), account_providers: ["local"] };
+    const w = world({ leases: [lease("a", "sk-ant-AAAA")], tasks: [restricted] });
+    const h = harness(w);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    const claim = w.calls.find((c) => c.path === "/tasks/claim")!;
+    expect(claim.body).toMatchObject({ runtime_providers: ["anthropic", "openai", "local"] });
+    // the restriction is the server's: the lease request is unchanged and names the task
+    const leaseCall = w.calls.find((c) => c.path === "/accounts/lease")!;
+    expect(leaseCall.body).toMatchObject({
+      runtime_providers: ["anthropic", "openai", "local"],
+      task_id: "t1",
+      attempt: 1,
+    });
+  });
+
   it("does not claim while no account is usable, and starts once one is", async () => {
     const w = world({ leases: ["no_account", lease("a", "sk-ant-AAAA")], tasks: [task()] });
     const h = harness(w);

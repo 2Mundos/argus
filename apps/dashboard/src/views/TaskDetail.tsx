@@ -120,6 +120,12 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                     <dd>{task.required_capabilities.join(", ")}</dd>
                   </>
                 )}
+                {task.account_providers && (
+                  <>
+                    <dt>Runs on</dt>
+                    <dd>{task.account_providers.join(", ")}</dd>
+                  </>
+                )}
                 {task.depends_on.length > 0 && (
                   <>
                     <dt>Depends on</dt>

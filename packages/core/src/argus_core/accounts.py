@@ -22,6 +22,9 @@ EXECUTOR_ONLY = frozenset({"cursor"})
 # a delegated CLI, holding no credential and no quota of its own.
 LOCAL_PROVIDER = "local"
 ENGINE_ONLY = frozenset({LOCAL_PROVIDER})
+# Account providers a harness (the `engine` role) can run on: what a task may be
+# restricted to. Never the repository provider or the executor-only ones.
+ENGINE_PROVIDERS = frozenset({"anthropic", "openai", CUSTOM_PROVIDER, LOCAL_PROVIDER})
 
 
 def role_accepts(

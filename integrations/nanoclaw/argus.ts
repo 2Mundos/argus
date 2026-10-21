@@ -1410,7 +1410,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         const { status, data } = await client.call(
           "POST",
           "/tasks/claim",
-          { capabilities: cfg.capabilities, wait_s: cfg.claimWaitS ?? CLAIM_WAIT_S },
+          {
+            capabilities: cfg.capabilities,
+            wait_s: cfg.claimWaitS ?? CLAIM_WAIT_S,
+            runtime_providers: runtimeProviders("engine"),
+          },
           abortClaim.signal,
         );
         backoff = 1000;

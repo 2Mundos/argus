@@ -251,16 +251,25 @@ ArtifactRole = Literal[
 
 @tool(AGENTS)
 async def claim_task(
-    ctx: Context, capabilities: list[str] | None = None, wait_s: float = 20
+    ctx: Context,
+    capabilities: list[str] | None = None,
+    wait_s: float = 20,
+    runtime_providers: list[str] | None = None,
 ) -> dict:
     """Claim the next task you can do, waiting up to wait_s seconds (max 30) for one.
+    `runtime_providers` are the account providers you can apply; a task restricted to
+    other providers (account_providers) is skipped and stays ready.
     Returns the task (keep its `id` and `attempt`) with `knowledge_refs`: pages to
     read first. Returns {"task": null} when nothing became ready."""
     task = await _call(
         ctx,
         "POST",
         "/tasks/claim",
-        json={"capabilities": capabilities or [], "wait_s": wait_s},
+        json={
+            "capabilities": capabilities or [],
+            "wait_s": wait_s,
+            "runtime_providers": runtime_providers or [],
+        },
     )
     return {"task": task}
 
@@ -512,13 +521,16 @@ async def create_task(
     acceptance: list[str] | None = None,
     knowledge: list[str] | None = None,
     complexity: Literal["trivial", "standard"] | None = None,
+    account_providers: list[str] | None = None,
 ) -> dict:
     """Create a task. Workers may only create subtasks of a task they hold (set
     parent_id; the project is inherited). Orchestrators create any task and must name
     a project. `knowledge` pins pages the claiming agent should read. `complexity`:
     "trivial" for the easiest work (a copy change, a typo, a translation) lets the
     node's local model take it first, with the cloud as the fallback; omit it and
-    Argus decides conservatively from the title and spec."""
+    Argus decides conservatively from the title and spec.
+    `account_providers` (e.g. ["local"]) restricts the task to those engine account
+    providers; leave it out for no restriction."""
     body: dict[str, Any] = {
         "title": title,
         "project": project,
@@ -534,6 +546,8 @@ async def create_task(
         body["required_capabilities"] = required_capabilities
     if complexity is not None:
         body["complexity"] = complexity
+    if account_providers is not None:
+        body["account_providers"] = account_providers
     return await _call(ctx, "POST", "/tasks", json=body)
 
 
@@ -756,10 +770,11 @@ async def edit_task(
     ctx: Context, task_id: str, expected_version: str, changes: TaskChanges
 ) -> dict:
     """Edit a task's definition: title, spec, acceptance, priority,
-    required_capabilities, knowledge (pinned page ids), depends_on and complexity
-    (trivial | standard; not clearable). `changes` is
-    a partial patch: a field you leave out is kept, null clears spec, acceptance,
-    required_capabilities, knowledge or depends_on. Pass the task's `version` as
+    required_capabilities, knowledge (pinned page ids), depends_on,
+    account_providers and complexity (trivial | standard; not clearable). `changes`
+    is a partial patch: a field you leave out is kept, null clears spec, acceptance,
+    required_capabilities, knowledge, depends_on or account_providers (no
+    restriction). Pass the task's `version` as
     expected_version (409 stale_version carries the current one). The task's
     `editable_fields` says what its state allows: ready, pending and
     awaiting_approval tasks take everything; blocked, claimed and in_review only

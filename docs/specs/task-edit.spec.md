@@ -41,6 +41,7 @@ thin callers of the same function with only `depends_on` set.
 | `knowledge` | list of page ids | replaces the pinned set; every page must exist and belong to the task's project or to `global` (`422 knowledge: …`); `null` or `[]` unpins all. Pins a *kind* adds at creation are not re-added |
 | `complexity` | `trivial` \| `standard` | cannot be cleared; sets `complexity_source` to `explicit` ([task complexity](task-complexity.spec.md)) |
 | `depends_on` | list of task ids | replaces the set; the rules of [task dependencies](task-dependencies.spec.md) 3.1: ids exist, no self-dependency, no cycle, at most 100 |
+| `account_providers` | list of providers | engine providers only, de-duplicated and sorted, as at creation ([local harness](local-harness.spec.md) 3); `null` or `[]` clears (no restriction) |
 
 **Immutable**: `state`/`status`, `assignee_agent_id`, `lease_expires_at`,
 `lease_ttl_s`, `timeout_s`, `timeout_at`, `attempt`, `failures`,

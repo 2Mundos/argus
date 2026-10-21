@@ -203,6 +203,7 @@ def test_editable_fields_come_from_one_source_in_task_and_tool_text(
         "knowledge",
         "depends_on",
         "complexity",
+        "account_providers",
     }
     listing = rpc(client, ADMIN_TOKEN, "tools/list")["tools"]
     schema = next(t for t in listing if t["name"] == "edit_task")
