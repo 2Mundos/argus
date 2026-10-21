@@ -8,6 +8,7 @@ export const EDIT_FIELDS = [
   "required_capabilities",
   "knowledge",
   "depends_on",
+  "account_providers",
 ] as const;
 export type EditField = (typeof EDIT_FIELDS)[number];
 
@@ -22,6 +23,7 @@ export type Changes = {
   required_capabilities?: string[];
   knowledge?: string[];
   depends_on?: string[];
+  account_providers?: string[];
 };
 
 export type FieldErrors = Partial<Record<EditField | "form", string>>;
@@ -42,6 +44,7 @@ export function toDraft(task: Task): Draft {
     required_capabilities: task.required_capabilities.join("\n"),
     knowledge: task.knowledge.join("\n"),
     depends_on: task.depends_on.join("\n"),
+    account_providers: (task.account_providers ?? []).join("\n"),
   };
 }
 

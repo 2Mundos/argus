@@ -120,6 +120,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
     project: "global",
     priority: 0,
     capabilities: "",
+    accountProviders: "",
     timeoutMinutes: "",
     requires_approval: false,
     review: "none" as "none" | "human" | "orchestrator",
@@ -135,6 +136,10 @@ function NewTask({ onClose }: { onClose: () => void }) {
         .split(",")
         .map((c) => c.trim())
         .filter(Boolean);
+      const accountProviders = form.accountProviders
+        .split(",")
+        .map((c) => c.trim())
+        .filter(Boolean);
       await call(
         api.POST("/api/tasks", {
           body: {
@@ -147,6 +152,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
             review: form.review,
             ...(form.timeoutMinutes ? { timeout_s: Number(form.timeoutMinutes) * 60 } : {}),
             ...(capabilities.length ? { required_capabilities: capabilities } : {}),
+            ...(accountProviders.length ? { account_providers: accountProviders } : {}),
           },
         }),
       );
@@ -210,6 +216,13 @@ function NewTask({ onClose }: { onClose: () => void }) {
         <label>
           Required capabilities (comma-separated; empty uses the kind's default)
           <input value={form.capabilities} onChange={(e) => set("capabilities", e.target.value)} />
+        </label>
+        <label>
+          Restrict to account providers (comma-separated, e.g. local; empty: any)
+          <input
+            value={form.accountProviders}
+            onChange={(e) => set("accountProviders", e.target.value)}
+          />
         </label>
         <label>
           Timeout in minutes (empty: the kind's, then the server's default)
