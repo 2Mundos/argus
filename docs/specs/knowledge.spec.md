@@ -84,7 +84,10 @@ sources.
   `global`. Pages are pinned on the task (`TaskCreate.knowledge`) or on its kind
   (`TaskKind.default_knowledge`, e.g. the deploy runbook for every `deploy`
   task); kind pins merge with the task's own. References only, so the claim
-  stays small and the agent decides what to read.
+  stays small and the agent decides what to read. When the NanoClaw channel
+  inlines page bodies into the worker prompt, they are untrusted DATA inside a
+  length-framed JSON block ([prompt-data isolation](prompt-data-isolation.spec.md)),
+  never trusted instructions.
 - **Search**: `GET /api/knowledge/search?q=&project=` over title, summary, body,
   and tags (FTS5 with Porter stemming, ranked by bm25 weighted towards titles
   and tags), all words required, falling back to any word. User input is

@@ -112,17 +112,8 @@ afterEach(() => {
   resetGatewayProvider();
 });
 
-describe("composition: per-worker opt-in", () => {
-  it("default: no profile on any container and docker is never asked", async () => {
-    const spec = compose({ groupProvider: "codex" });
-    expect(spec.containers.every((c) => c.securityProfile === undefined)).toBe(true);
-    const [args] = await createArgv(spec);
-    expect(args.join(" ")).not.toMatch(/apparmor|seccomp/);
-    expect(cli.joined().some((c) => c.startsWith("info "))).toBe(false);
-  });
-
-  it("opted-in worker, codex group: profile on the agent and exactly the fixed flags", async () => {
-    vi.stubEnv(CODEX_SANDBOX_ENV, "codex-bwrap");
+describe("composition: codex-bwrap default on", () => {
+  it("default (unset): profile on the codex agent with the fixed flags", async () => {
     const spec = compose({ groupProvider: "codex" });
     expect(spec.containers[0].securityProfile).toBe("codex-bwrap");
     const [args] = await createArgv(spec);
@@ -135,8 +126,21 @@ describe("composition: per-worker opt-in", () => {
     );
   });
 
-  it("a session-pinned codex provider counts, as spawn resolves it", () => {
+  it("explicit off: no profile and docker is never asked for security opts", async () => {
+    vi.stubEnv(CODEX_SANDBOX_ENV, "off");
+    const spec = compose({ groupProvider: "codex" });
+    expect(spec.containers.every((c) => c.securityProfile === undefined)).toBe(true);
+    const [args] = await createArgv(spec);
+    expect(args.join(" ")).not.toMatch(/apparmor|seccomp/);
+    expect(cli.joined().some((c) => c.startsWith("info "))).toBe(false);
+  });
+
+  it("explicit codex-bwrap matches the default", () => {
     vi.stubEnv(CODEX_SANDBOX_ENV, "codex-bwrap");
+    expect(compose({ groupProvider: "codex" }).containers[0].securityProfile).toBe("codex-bwrap");
+  });
+
+  it("a session-pinned codex provider counts, as spawn resolves it", () => {
     expect(
       compose({ sessionProvider: "codex", groupProvider: "claude" }).containers[0].securityProfile,
     ).toBe("codex-bwrap");
@@ -145,8 +149,7 @@ describe("composition: per-worker opt-in", () => {
     ).toBeUndefined();
   });
 
-  it("opted-in worker, non-codex group (claude, opencode, unset): no policy", async () => {
-    vi.stubEnv(CODEX_SANDBOX_ENV, "codex-bwrap");
+  it("non-codex group (claude, opencode, unset): no profile on the agent", async () => {
     for (const groupProvider of [undefined, "claude", "opencode"]) {
       const spec = compose({ groupProvider });
       expect(spec.containers[0].securityProfile, String(groupProvider)).toBeUndefined();
@@ -155,17 +158,15 @@ describe("composition: per-worker opt-in", () => {
     expect(args.join(" ")).not.toMatch(/apparmor|seccomp/);
   });
 
-  it("a neighbouring worker without the env is unaffected by the opted-in one", () => {
-    vi.stubEnv(CODEX_SANDBOX_ENV, "codex-bwrap");
-    const optedIn = compose({ groupProvider: "codex" });
-    vi.unstubAllEnvs();
+  it("a neighbouring worker with off is unaffected by a default-on peer", () => {
+    const defaultOn = compose({ groupProvider: "codex" });
+    vi.stubEnv(CODEX_SANDBOX_ENV, "off");
     const neighbour = compose({ groupProvider: "codex" });
-    expect(optedIn.containers[0].securityProfile).toBe("codex-bwrap");
+    expect(defaultOn.containers[0].securityProfile).toBe("codex-bwrap");
     expect(neighbour.containers[0].securityProfile).toBeUndefined();
   });
 
   it("auxiliary gateway containers never get it, and the agent does", async () => {
-    vi.stubEnv(CODEX_SANDBOX_ENV, "codex-bwrap");
     const spec = compose({ groupProvider: "codex", gatewayContainers: true });
     expect(spec.containers.map((c) => [c.role, c.securityProfile])).toEqual([
       ["agent", "codex-bwrap"],
@@ -185,14 +186,13 @@ describe("composition: per-worker opt-in", () => {
     expect(cli.calls).toEqual([]);
   });
 
-  it("the opt-in never reaches the agent container environment", () => {
+  it("the profile env never reaches the agent container environment", () => {
     vi.stubEnv(CODEX_SANDBOX_ENV, "codex-bwrap");
     const agent = compose({ groupProvider: "codex" }).containers[0];
     expect(Object.keys({ ...agent.env, ...agent.contributedEnv })).not.toContain(CODEX_SANDBOX_ENV);
   });
 
   it("a daemon without AppArmor refuses even when composition succeeded", async () => {
-    vi.stubEnv(CODEX_SANDBOX_ENV, "codex-bwrap");
     cli.responses[1] = { match: /^info /, output: '["name=seccomp"]' };
     await expect(createArgv(compose({ groupProvider: "codex" }))).rejects.toThrow(/AppArmor/);
     expect(cli.calls.some((c) => c.args[0] === "create")).toBe(false);

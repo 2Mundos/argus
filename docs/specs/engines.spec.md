@@ -107,7 +107,8 @@ In scope:
   executor's account; it never changes the exit code
   ([account usage](account-usage.spec.md) §3.8).
   The Argus NanoClaw channel states this contract in every claimed task body
-  (`integrations/nanoclaw/argus.ts` `renderTask`): implementation must use
+  (`integrations/nanoclaw/argus.ts` `renderTask`; see
+  [prompt-data isolation](prompt-data-isolation.spec.md)): implementation must use
   `/usr/local/bin/argus-delegate` (Cursor → `agent`); direct `cursor-agent` /
   vendor CLIs are forbidden for delegated coding; materialized gateway stubs are
   authorized non-secret metadata; the worker attaches the delegate JSON report

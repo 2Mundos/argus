@@ -2546,6 +2546,7 @@ export interface components {
             progress_percent: number | null;
             /** Project */
             project: string;
+            prompt_trust: components["schemas"]["PromptTrust"];
             /** Refill At */
             refill_at?: string | null;
             /** Required Capabilities */
@@ -4329,6 +4330,16 @@ export interface components {
             /** Name */
             name: string;
         };
+        /**
+         * PromptTrust
+         * @description Immutable origin of task content for prompt isolation.
+         *
+         *     Orchestrator/admin-created tasks are `orchestrator`. Worker-created subtasks
+         *     are always `worker` and never elevate, even under an orchestrator parent.
+         *     Spec/acceptance/knowledge remain untrusted DATA in the worker prompt either way.
+         * @enum {string}
+         */
+        PromptTrust: "orchestrator" | "worker";
         /** Proposal */
         Proposal: {
             /** Author */
@@ -4791,6 +4802,7 @@ export interface components {
             progress_percent: number | null;
             /** Project */
             project: string;
+            prompt_trust: components["schemas"]["PromptTrust"];
             /** Refill At */
             refill_at?: string | null;
             /** Required Capabilities */
@@ -4977,6 +4989,7 @@ export interface components {
             progress_percent: number | null;
             /** Project */
             project: string;
+            prompt_trust: components["schemas"]["PromptTrust"];
             /** Refill At */
             refill_at?: string | null;
             /** Required Capabilities */

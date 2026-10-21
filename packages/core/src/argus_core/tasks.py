@@ -127,6 +127,18 @@ class Review(StrEnum):
     ORCHESTRATOR = "orchestrator"
 
 
+class PromptTrust(StrEnum):
+    """Immutable origin of task content for prompt isolation.
+
+    Orchestrator/admin-created tasks are `orchestrator`. Worker-created subtasks
+    are always `worker` and never elevate, even under an orchestrator parent.
+    Spec/acceptance/knowledge remain untrusted DATA in the worker prompt either way.
+    """
+
+    ORCHESTRATOR = "orchestrator"
+    WORKER = "worker"
+
+
 @dataclass(frozen=True)
 class TransitionContext:
     """Task facts some transitions depend on."""
@@ -246,6 +258,7 @@ class Task(BaseModel):
     state: TaskState
     requires_approval: bool
     review: Review
+    prompt_trust: PromptTrust
     assignee_agent_id: str | None
     lease_expires_at: datetime | None
     lease_ttl_s: int

@@ -3,8 +3,9 @@
 Estado: **WIP — CANDIDATAS, não carregadas, não verificadas em runtime; sem aprovação de deploy** (sem sudo, sem `docker run`
 nesta etapa). Compilam offline; nada aqui prova que o Bubblewrap funciona. A prova é o
 [RUNBOOK](RUNBOOK.md). Mudança de comportamento exige spec antes de ativar (AGENTS.md):
-[codex-sandbox-profile.spec.md](../../../docs/specs/codex-sandbox-profile.spec.md). O opt-in por worker
-que aplica estes artefatos está implementado, mas as políticas em si continuam candidatas.
+[codex-sandbox-profile.spec.md](../../../docs/specs/codex-sandbox-profile.spec.md). O perfil
+(`codex-bwrap` por default; `off` para desligar) que aplica estes artefatos está implementado, mas as
+políticas em si continuam candidatas.
 
 ## Fontes primárias (consultadas em 2026-10-19)
 

@@ -74,7 +74,9 @@ documents.
 - **`tasks`** — `id`, `parent_id`, `kind`, `title`, `spec` (Markdown),
   `acceptance` (json list), `input` (json), `required_capabilities` (json),
   `priority`, `state`, `requires_approval`, `review` (`none` | `human` |
-  `orchestrator`), `assignee_agent_id`, `lease_expires_at`, `lease_ttl_s`,
+  `orchestrator`), `prompt_trust` (`orchestrator` | `worker`, immutable at
+  create; see [prompt-data isolation](prompt-data-isolation.spec.md)),
+  `assignee_agent_id`, `lease_expires_at`, `lease_ttl_s`,
   `attempt`, `failures`, `max_attempts`, `result` (json), `error`,
   `block_reason`, `created_by`, timestamps. A database `CHECK` enforces that an
   assignee and lease exist exactly while the task is `claimed`.
@@ -425,7 +427,12 @@ Every route requires a token except `GET /healthz` and `POST /agents/register`
 and agents. Worker operations (claim, heartbeat, complete/fail/block, leave)
 need an *agent* token, which orchestrators also hold; admin tokens are not
 agents. Workers may create a task only as a subtask of one they currently hold.
-A task with `review: human` can only be reviewed with an admin token.
+Worker-created subtasks always receive `prompt_trust: worker`, force
+`requires_approval` (start in `awaiting_approval`), and never elevate to
+orchestrator trust — even under an orchestrator parent — so injected child
+prompts cannot silently become ready work for another agent
+([prompt-data isolation](prompt-data-isolation.spec.md)). A task with
+`review: human` can only be reviewed with an admin token.
 
 Agent tokens are scoped to one agent and revoked when the agent becomes `lost`
 or `gone`, or its instance terminates. Unused bootstrap tokens for that instance

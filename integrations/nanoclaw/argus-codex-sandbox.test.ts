@@ -73,22 +73,26 @@ beforeEach(() => {
   clock = 1_000;
 });
 
-describe("opt-in token", () => {
-  it("is off by default and for blank values", () => {
-    expect(codexSandboxProfileFromEnv({})).toBeUndefined();
-    expect(codexSandboxProfileFromEnv({ [CODEX_SANDBOX_ENV]: "  " })).toBeUndefined();
+describe("sandbox profile token (default on)", () => {
+  it("defaults to codex-bwrap when unset or blank", () => {
+    expect(codexSandboxProfileFromEnv({})).toBe("codex-bwrap");
+    expect(codexSandboxProfileFromEnv({ [CODEX_SANDBOX_ENV]: "  " })).toBe("codex-bwrap");
   });
 
-  it("accepts only the exact token", () => {
+  it("accepts explicit codex-bwrap and explicit off", () => {
     expect(codexSandboxProfileFromEnv({ [CODEX_SANDBOX_ENV]: "codex-bwrap" })).toBe("codex-bwrap");
+    expect(codexSandboxProfileFromEnv({ [CODEX_SANDBOX_ENV]: "off" })).toBeUndefined();
+  });
+
+  it("refuses unknown tokens (negative: prior 'off-as-typo' and other values)", () => {
     for (const bad of [
       "true",
       "1",
-      "off",
       "CODEX-BWRAP",
       "codex-bwrap,unconfined",
       "unconfined",
       "../x",
+      "docker-default",
     ]) {
       expect(() => codexSandboxProfileFromEnv({ [CODEX_SANDBOX_ENV]: bad }), bad).toThrow(
         /not a known profile/,
@@ -96,13 +100,24 @@ describe("opt-in token", () => {
     }
   });
 
-  it("refuses a private inner Docker daemon", () => {
+  it("refuses a private inner Docker daemon when the profile is on", () => {
+    expect(() =>
+      codexSandboxProfileFromEnv({
+        ARGUS_NANOCLAW_INNER_DOCKER: "1",
+      }),
+    ).toThrow(/inner Docker daemon/);
     expect(() =>
       codexSandboxProfileFromEnv({
         [CODEX_SANDBOX_ENV]: "codex-bwrap",
         ARGUS_NANOCLAW_INNER_DOCKER: "1",
       }),
     ).toThrow(/inner Docker daemon/);
+    expect(
+      codexSandboxProfileFromEnv({
+        [CODEX_SANDBOX_ENV]: "off",
+        ARGUS_NANOCLAW_INNER_DOCKER: "1",
+      }),
+    ).toBeUndefined();
   });
 
   it("applies to the native codex provider only, but validates for every provider", () => {
@@ -110,7 +125,8 @@ describe("opt-in token", () => {
     expect(securityProfileForProvider("codex", env)).toBe("codex-bwrap");
     for (const other of ["claude", "opencode", "cursor"])
       expect(securityProfileForProvider(other, env)).toBeUndefined();
-    expect(securityProfileForProvider("codex", {})).toBeUndefined();
+    expect(securityProfileForProvider("codex", {})).toBe("codex-bwrap");
+    expect(securityProfileForProvider("codex", { [CODEX_SANDBOX_ENV]: "off" })).toBeUndefined();
     expect(() => securityProfileForProvider("claude", { [CODEX_SANDBOX_ENV]: "nope" })).toThrow();
   });
 });

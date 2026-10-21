@@ -1,11 +1,13 @@
-# Codex worker sandbox profile (opt-in implemented; profiles candidate)
+# Codex worker sandbox profile (default on; profiles candidate)
 
-> **Status.** The per-worker opt-in is **implemented in code and tested offline**. The
-> AppArmor and seccomp profiles it applies are **candidates and have NOT passed a runtime
-> test**: the first real probe (profile v1, enforce mode, Docker) failed on the positive
-> check, `bwrap: Failed to make / slave: Permission denied`, and no task ever ran under the
+> **Status.** The profile switch is **implemented in code and tested offline**, and now
+> **defaults on** (`codex-bwrap`) for native Codex agent containers. The AppArmor and
+> seccomp profiles it applies are **candidates and have NOT passed a runtime test**: the
+> first real probe (profile v1, enforce mode, Docker) failed on the positive check,
+> `bwrap: Failed to make / slave: Permission denied`, and no task ever ran under the
 > profile. Profile v2 corrects the cause but is not loaded yet. Nothing here approves a
-> deploy or an activation, and the contract as a whole is **not met** until the probe passes.
+> deploy, and the contract as a whole is **not met** until the probe passes. Pools that
+> cannot enforce the profile must set `ARGUS_CODEX_SANDBOX_PROFILE=off` explicitly.
 
 # 1. Purpose and Scope
 
@@ -14,9 +16,9 @@ worker container, Docker's default AppArmor and seccomp profiles deny the user
 and mount namespaces Bubblewrap needs (`Failed to make / slave`), so Codex tasks
 that need that sandbox are blocked.
 
-This spec describes an **opt-in, per-worker** security profile for Codex workers
-that would allow only what Bubblewrap needs, and the evidence required before
-anyone enables it.
+This spec describes a **default-on, per-pool** security profile for Codex workers
+that would allow only what Bubblewrap needs, the explicit `off` escape hatch when
+architecture cannot enforce it, and the evidence required before relying on it.
 
 In scope:
 
@@ -36,12 +38,11 @@ In scope:
 - Loading the AppArmor profile on any host. That needs root and is an explicit
   operator action (RUNBOOK step 1); provisioning never does it.
 - Applying the profile to gateways, auxiliary containers, other providers, a Codex
-  CLI delegated from another provider (`argus-delegate`), or workers that did not opt
-  in.
+  CLI delegated from another provider (`argus-delegate`), or hosts with
+  `ARGUS_CODEX_SANDBOX_PROFILE=off`.
 - `--privileged`, `CAP_SYS_ADMIN`, `unconfined`, global sysctls, or any
   credential handling.
 - Disabling the Codex internal sandbox as a workaround.
-- A default change: workers without the opt-in keep the Docker defaults.
 
 # 3. Decisions Made
 
@@ -62,23 +63,23 @@ In scope:
    `unconfined`, `--privileged`, `CAP_SYS_ADMIN`, or a global sysctl, the Codex
    task remains blocked and the blocker is reported to the owner. The internal
    sandbox is not turned off, and the profile is not relaxed to make it pass.
-4. **Opt-in: one pool, one token, fixed profile.** Implemented.
+4. **Default on: one pool env, fixed profile, explicit off.** Implemented.
    - *Where.* The pool's existing `env` (`PUT/PATCH /api/pools/{name}`): the variable
-     `ARGUS_CODEX_SANDBOX_PROFILE`, only value `codex-bwrap`, default unset (= exactly
-     today's behaviour). Argus copies pool `env` into the NanoClaw **host** container
-     (`fleet/runtimes.py`), which is the host process's `process.env`. A pool is the
-     unit; instances of one pool share it, other pools are untouched. Example:
-     `PATCH /api/pools/<pool>` with
-     `{"expected_version": "<pool.version>", "env": {"ARGUS_CODEX_SANDBOX_PROFILE": "codex-bwrap"}}`
-     (value `null` removes it). It takes effect for NanoClaw host containers created
-     afterwards; this change recycles nothing. Argus does not mark a node or template
-     ready because of it.
+     `ARGUS_CODEX_SANDBOX_PROFILE`. Accepted values: unset/blank (same as
+     `codex-bwrap` — **default on**), `codex-bwrap`, or `off` (disable for
+     architectures that cannot enforce AppArmor/seccomp, e.g. private inner Docker).
+     Any other value refuses. Argus copies pool `env` into the NanoClaw **host**
+     container (`fleet/runtimes.py`), which is the host process's `process.env`.
+     Example disable: `PATCH /api/pools/<pool>` with
+     `{"expected_version": "<pool.version>", "env": {"ARGUS_CODEX_SANDBOX_PROFILE": "off"}}`.
+     It takes effect for NanoClaw host containers created afterwards; this change
+     recycles nothing.
    - *Path.* `composeSessionSpec` resolves the session's provider exactly as spawn does
      (session, then group, then `claude`). Only provider `codex` gets
-     `ContainerSpec.securityProfile = "codex-bwrap"` on the **agent** container, a
-     closed token, not a flag. `validateSpec` refuses the token on any other role or
-     any other value. The Docker driver maps the token to fixed options:
-     `--security-opt apparmor=argus-codex-worker` and
+     `ContainerSpec.securityProfile = "codex-bwrap"` on the **agent** container when
+     the profile is on, a closed token, not a flag. `validateSpec` refuses the token
+     on any other role or any other value. The Docker driver maps the token to fixed
+     options: `--security-opt apparmor=argus-codex-worker` and
      `--security-opt seccomp=<install>/security/argus-codex-worker.seccomp.json`,
      appended after the unchanged `--cap-drop=ALL` / `no-new-privileges` / `--init`.
    - *Not configurable by the agent.* The variable lives in the host process; it is
@@ -87,18 +88,19 @@ In scope:
    - *Installed by tracked artifacts.* `install.sh` copies the driver module, tests
      and the seccomp JSON into the checkout and patches `drivers/types.ts`,
      `drivers/docker-driver.ts` and `container-runner.ts` idempotently (a second run
-     changes nothing). `deploy/nanoclaw-host/entrypoint.sh` refuses to boot a host
-     with a bad value.
+     changes nothing). `deploy/nanoclaw-host/entrypoint.sh` treats unset as
+     `codex-bwrap`, accepts `off`, and refuses unknown values / inner-docker+on.
 5. **Fail closed, no fallback.** Each of these refuses (non-retryable) and nothing is
-   created: a value other than `codex-bwrap` (checked for every provider, so a typo is
-   never "off"); a private inner Docker daemon (`nanoclaw-sandbox`); a seccomp file that
-   is missing, unreadable, not JSON, not an object, without syscall rules, or whose
-   `defaultAction` does not deny; a daemon whose `docker info` does not report both
-   AppArmor and seccomp; a seccomp path containing a comma or whitespace; and any
-   failure of the enforcement probe (decision 6).
+   created: a value other than `codex-bwrap` or `off` (checked for every provider, so
+   a typo is never silent policy); a private inner Docker daemon when the profile is
+   on (`nanoclaw-sandbox` must set `off`); a seccomp file that is missing, unreadable,
+   not JSON, not an object, without syscall rules, or whose `defaultAction` does not
+   deny; a daemon whose `docker info` does not report both AppArmor and seccomp; a
+   seccomp path containing a comma or whitespace; and any failure of the enforcement
+   probe (decision 6).
 6. **Enforcement is proven on the daemon, per spawn, before the task.** `docker info`
    only says AppArmor exists; it does not say the profile is loaded or enforcing. So
-   before `docker create` for an opted-in agent the driver runs one disposable container
+   before `docker create` for a profiled agent the driver runs one disposable container
    on the same daemon (so a remote daemon is the one asked) with the agent's image and
    hardening flags plus the two profile options, `--network none`, `--read-only`,
    `--pull=never`, small pids/memory limits, **no mounts, no env, no credentials**, and
@@ -107,26 +109,26 @@ In scope:
    `complain`, `unconfined`, another profile, an unreadable label, a profile that is not
    loaded (runc `change_onexec ... label not found`, observed) or a probe that cannot run
    all refuse. A pass is cached per client and image for 30 s. Cost: one short container per
-   opted-in spawn at most every 30 s. Limit: it proves the state at probe time, not for the
+   profiled spawn at most every 30 s. Limit: it proves the state at probe time, not for the
    life of the session, and the container that actually runs is not re-read after start.
    The seccomp JSON is read by the `docker` CLI on the host process's side and inlined
    to the daemon; the AppArmor profile lives in the daemon's kernel and is only visible
    through this probe.
 7. **Adoption never downgrades.** `prepare` returns an existing session container
-   (idempotency on key). With the opt-in on, the driver first inspects its real host
+   (idempotency on key). With the profile on, the driver first inspects its real host
    config (only `SecurityOpt`, `CapDrop`, `CapAdd`, `Privileged`, `AppArmorProfile`,
    `Init`; never `Config.Env`) and adopts it only if it carries exactly
    `no-new-privileges`, `apparmor=argus-codex-worker`, a `seccomp=` whose content equals the
    installed JSON, `CapDrop=[ALL]`, no `CapAdd`, not privileged, init, and the profile
    still enforces. Anything else is refused and the container is left untouched (not
-   stopped, not removed: it may belong to another lease). Without the opt-in adoption is
+   stopped, not removed: it may belong to another lease). With `off`, adoption is
    unchanged and reads nothing. Labels alone are never trusted.
 8. **A backend that cannot realize the profile refuses it.** `DriverCapabilities` gains
    an optional `securityProfiles`; the Docker driver lists `codex-bwrap`. `validateSpec`
    denies a profile the driver does not list (or any when no capabilities handle is given),
    and the spawn path checks `capabilities().securityProfiles` right after composition,
    before claiming the session. The inner-daemon refusal (`ARGUS_NANOCLAW_INNER_DOCKER`)
-   stays as an extra guard.
+   stays as an extra guard when the profile is on.
 
 # 4. Open Questions
 
@@ -181,7 +183,7 @@ byte-identical to the pristine install):
    the real probe log).
 3. The spawn-path capability gate in `container-runner.ts` is covered through its helper and
    `validateSpec`, not by running `spawnContainer`.
-4. The first real spawn with the opt-in on is the first time a task runs under the profile.
+4. The first real spawn with the profile on (the default) is the first time a task runs under it.
 
 Next, each its own PR: the operator reloads AppArmor v2 and attaches a passing probe log as a
-dated report; narrow the `/**` mount rules; only then enable one pool.
+dated report; narrow the `/**` mount rules; keep `off` only where architecture requires it.
