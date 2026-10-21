@@ -7,6 +7,7 @@ import os
 import signal
 import stat
 import sys
+import tempfile
 from collections.abc import Generator
 from pathlib import Path
 
@@ -263,9 +264,14 @@ async def test_login_completes_into_an_account(
 
 
 def tempfile_dir() -> str:
-    import tempfile
-
     return tempfile.gettempdir()
+
+
+@pytest.fixture(autouse=True)
+def own_tempdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tempdir per test: parallel workers' logins share /tmp otherwise."""
+    (tmp_path / "tmp").mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
 
 
 async def test_login_isolated_by_owner_and_limited(
