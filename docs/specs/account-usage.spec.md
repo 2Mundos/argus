@@ -69,6 +69,9 @@ scope (orchestrator, admin), as `GET /api/accounts` is. There is no MCP tool yet
     be null. A `measured` report needs at least one of the token or cost
     fields. Both rules are validation errors: a missing figure is never
     stored as 0;
+  - optional `reason` (`[a-z0-9_]{1,60}`): only with `not_reported`, stored as
+    `unmeasured_reason` on the row and aggregated in read APIs as
+    `unmeasured_reasons` counts (missing reason reads as `unknown` in totals);
   - optional `rate_limits: [{window_minutes | pool, used_percent, resets_at,
     exhausted_until}]`.
 - `result.usage` on task completion maps to the same insert.
@@ -89,6 +92,12 @@ account lease and must preserve the document structure and JSON value types.
   probe of the accounts the agent held. It also queues one on "Refresh quota".
   Probes are coalesced per account, and an account is probed at most once
   per 5 minutes.
+- A background sweep also queues probes for Codex accounts whose latest snapshot
+  or probe outcome is older than 30 minutes: the first sweep runs 10 s after
+  startup, then at most every 15 minutes, up to 10 accounts per sweep with a 2 s
+  gap between probes that actually ran. Unsupported providers are never queued.
+  The latest probe outcome per account (`updated | skipped | rate_limited |
+  failed`, with a short `reason`) is stored separately from provider snapshots.
 - The probe runs `ARGUS_CODEX_BIN app-server` (the binary the Codex login
   already uses) in a throwaway `CODEX_HOME` holding only that account's
   `auth.json`. It calls the read-only `account/rateLimits/read` and stores
@@ -210,13 +219,17 @@ account lease and must preserve the document structure and JSON value types.
 - **Spool file.** Always, `<out>/usage-<first 16 hex of sha256(run_key)>.json`
   holds `{account_id, payload}`, the exact body that is (or would be) sent, so
   a missed report can be replayed; the key makes a replay idempotent.
-- **Best-effort POST.** Only when `ARGUS_URL` and `ARGUS_AGENT_TOKEN` are set
-  and the pinned task context (`argus-model-policy.json`) carries
-  `executor_account_id`. The body is `{task_id, model, engine, role:
-  "executor", measurement, input_tokens, output_tokens, cached_input_tokens,
-  cost_usd, run_key}`, where `engine` is the executor CLI that ran. The token
-  is only in the `Authorization` header and never in the body, the spool file,
-  the report or the logs. The call has a 5 s timeout; on any failure the
+- **Best-effort POST or host relay.** When `ARGUS_URL` and `ARGUS_AGENT_TOKEN`
+  are set in the delegate process and the pinned task context
+  (`argus-model-policy.json`) carries `executor_account_id`, the delegate POSTs
+  directly. Otherwise it appends the same body (plus `task_id`, `attempt`,
+  `account_id`, `role: "executor"`) as one JSON line to `argus-usage.jsonl` in
+  the agent group's mounted directory for the NanoClaw host to post (§3.9). The
+  body is `{task_id, model, engine, role, measurement, input_tokens,
+  output_tokens, cached_input_tokens, cost_usd, run_key, reason?}`, where
+  `engine` is the executor CLI that ran. Credentials stay only in the
+  `Authorization` header on a direct POST and never appear in the relay file,
+  spool file, report or logs. A direct POST has a 5 s timeout; on failure the
   delegate writes one line to stderr and goes on. It never throws and never
   changes its exit code.
 - **Report fields.** The JSON report (and each entry of `attempts`) gains
@@ -228,6 +241,44 @@ account lease and must preserve the document structure and JSON value types.
   separate executor lease the executor account is the engine's, as for
   `executor_account_provider`. The delegate always acts as role `executor`;
   `engine_account_id` is for a harness-side reporter.
+
+## 3.9 NanoClaw host relay (engine and executor)
+
+Agent containers hold no Argus token. Both roles append **untrusted** usage
+records to `argus-usage.jsonl` (same path in the group mount; 4 MiB cap per
+file, further records dropped):
+
+- **Executor** (`engines/usage.mjs` via `argus-delegate.mjs`): one record per
+  delegated CLI attempt, `source: "delegate"`, `role: "executor"`, figures from
+  `parseUsage`, `run_key` as in §3.8. When a direct POST is skipped
+  (`usage_report.reason=no_api_env`), the relay line is still written when
+  possible.
+- **Engine** (`overlays/harness-usage.ts`, patched into the agent runner's
+  `claude.ts` and `codex.ts` when present): one record per harness turn that
+  spent tokens or explicitly failed to measure, `source: "harness"`,
+  `role: "engine"`, `run_key` `h1:<task>:<attempt>:<engine>:<query>:<seq>`.
+
+Each line is `{v:1, kind:"usage", source, role, task_id, attempt, account_id,
+payload}` where `account_id` in the file is the reporter's view; the host
+**never** trusts it for billing.
+
+On the host, `argus-usage-relay.ts` (installed into the NanoClaw channel) tails
+the file for the claimed task:
+
+- Validates envelope, `task_id`, `attempt`, `role` and rebuilds the POST body
+  from `payload`.
+- Bills the account the host actually holds for that role: `engine` →
+  `engine_account_id`; `executor` → `executor_account_id`, or the engine's
+  account when no separate executor lease exists (same lease, never doubled).
+- Drops records for another task, a mismatched account, bad figures, symlinks on
+  the relay path, or HTTP 4xx other than retryable codes; retries transient
+  failures with backoff and drains pending lines for up to 10 s after the task
+  ends.
+- Posts `POST /api/accounts/{id}/usage` with the host's agent token.
+
+Idempotency is unchanged: `run_key` on the API deduplicates executor runs;
+harness keys deduplicate per turn. Measured stream totals use deltas so resume
+and cache accounting do not double-count.
 
 # 4. Open Questions
 
@@ -253,16 +304,18 @@ usage row of the same run, `null` when none ([spec](model-observability.spec.md)
 
 # 6. Implementation Consequences
 
-- Migrations `0015_account_usage.sql` and `0019_account_usage_runs.sql`
-  (`run_key` with a partial unique index, `measurement`, `token_limits`). Core models in `argus_core.accounts`.
+- Migrations `0015_account_usage.sql`, `0019_account_usage_runs.sql`
+  (`run_key` with a partial unique index, `measurement`, `token_limits`) and
+  `0039_usage_telemetry.sql` (`unmeasured_reason`, `account_quota_probe`). Core
+  models in `argus_core.accounts`.
 - `accounts/service.py` (ingest, quota upsert, aggregation),
   `accounts/quota_probe.py` (the probe and its loop), and routes.
 - Metrics in `ops.py`. `overview.quota_measured` becomes true once any account
   has a snapshot.
 - Dashboard `views/Accounts.tsx`, plus `charts.tsx`, `providerIcons.tsx` and
   `usage.ts` (pure helpers, unit-tested).
-- NanoClaw side: `engines/usage.mjs`, `argus-delegate.mjs` (§3.8) and the
-  context keys pinned by `argus.ts`.
+- NanoClaw side: `engines/usage.mjs`, `argus-delegate.mjs` (§3.8),
+  `argus-usage-relay.ts`, `overlays/harness-usage.ts`, `patch-harness-usage.py`,
+  wired by `install.sh` and the context keys pinned by `argus.ts` (§3.9).
 - Follow-ups:
-  - NanoClaw executors report Cursor pool exhaustion;
-  - a NanoClaw harness patch forwards the main engine's usage and rate limits.
+  - NanoClaw executors report Cursor pool exhaustion.

@@ -67,7 +67,8 @@ async def get_account(
     conn: aiosqlite.Connection, account_id: str, now: datetime
 ) -> Account:
     async with conn.execute(
-        _SELECT + " WHERE a.id = ?", (ts(now - timedelta(days=1)), account_id)
+        _SELECT + " WHERE a.id = :id",
+        {"since": ts(now - timedelta(days=1)), "id": account_id},
     ) as cur:
         row = await cur.fetchone()
     if row is None:
@@ -78,7 +79,7 @@ async def get_account(
 async def list_accounts(conn: aiosqlite.Connection, now: datetime) -> list[Account]:
     async with conn.execute(
         _SELECT + " ORDER BY a.provider, a.priority DESC, a.name",
-        (ts(now - timedelta(days=1)),),
+        {"since": ts(now - timedelta(days=1))},
     ) as cur:
         rows = await cur.fetchall()
     return [await _to_account(conn, r, now) for r in rows]
@@ -1023,16 +1024,42 @@ async def _row(conn: aiosqlite.Connection, account_id: str) -> aiosqlite.Row:
 _USAGE = (
     "coalesce(sum(u.input_tokens), 0), coalesce(sum(u.output_tokens), 0),"
     " coalesce(sum(u.cached_input_tokens), 0), coalesce(sum(u.cost_usd), 0.0),"
-    " count(*), coalesce(sum(u.measurement = 'not_reported'), 0)"
+    " count(*), coalesce(sum(u.measurement = 'not_reported'), 0),"
+    " coalesce(sum(u.measurement = 'measured'), 0)"
 )
+
+
+def _usage_sql(since: str) -> str:
+    """Totals, plus unmeasured reasons and runs by role, of the account's rows
+    (`since` is "" or a `u.at > :since` filter). Constant fragments only."""
+    where = f" AND u.at > {since}" if since else ""
+    grouped = (
+        "(SELECT json_group_object(k, n) FROM (SELECT coalesce(u.{col}, 'unknown')"  # noqa: S608
+        " AS k, count(*) AS n FROM account_usage u WHERE u.account_id = a.id{more}"
+        + where
+        + " GROUP BY k))"
+    )
+    return (
+        "(SELECT json_array("  # noqa: S608
+        + _USAGE
+        + ", "
+        + grouped.format(
+            col="unmeasured_reason", more=" AND u.measurement = 'not_reported'"
+        )
+        + ", "
+        + grouped.format(col="role", more="")
+        + ") FROM account_usage u WHERE u.account_id = a.id"
+        + where
+        + ")"
+    )
+
+
 _SELECT = (  # constant fragments only
     "SELECT a.*,"  # noqa: S608
     " (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
     "  AND l.released_at IS NULL) AS active_leases,"
-    " (SELECT json_array(" + _USAGE + ") FROM account_usage u"
-    "  WHERE u.account_id = a.id AND u.at > ?) AS usage_24h,"
-    " (SELECT json_array(" + _USAGE + ") FROM account_usage u"
-    "  WHERE u.account_id = a.id) AS usage_total,"
+    " " + _usage_sql(":since") + " AS usage_24h,"
+    " " + _usage_sql("") + " AS usage_total,"
     " (SELECT json_group_array(json_object('window', q.window,"
     "  'window_minutes', q.window_minutes, 'used_percent', q.used_percent,"
     "  'resets_at', q.resets_at, 'exhausted_until', q.exhausted_until,"
@@ -1043,8 +1070,13 @@ _SELECT = (  # constant fragments only
 )
 
 
+def _counts(raw: dict | str | None) -> dict[str, int]:
+    # A JSON object that crossed a subquery boundary comes back as text.
+    return (json.loads(raw) if isinstance(raw, str) else raw) or {}
+
+
 def _usage(raw: str) -> Usage:
-    i, o, cached, cost, runs, unmeasured = json.loads(raw)
+    i, o, cached, cost, runs, unmeasured, measured, reasons, roles = json.loads(raw)
     return Usage(
         input_tokens=i,
         output_tokens=o,
@@ -1052,6 +1084,9 @@ def _usage(raw: str) -> Usage:
         cost_usd=cost,
         runs=runs,
         unmeasured_runs=unmeasured,
+        measured_runs=measured,
+        unmeasured_reasons=_counts(reasons),
+        runs_by_role=_counts(roles),
     )
 
 

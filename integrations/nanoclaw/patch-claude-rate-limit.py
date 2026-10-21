@@ -36,7 +36,15 @@ def edit(root: Path, path: str, hooks: list[Hook]) -> None:
         for old in rest[0] if rest else ():
             if s.count(old) == 1 and (new not in s or new in old):
                 s = s.replace(old, new, 1)
+        if what == "import" and "from './claude-rate-limit.js'" in s:
+            continue
         if new in s:
+            continue
+        # harness-usage.ts inserts a line between resultAsError and the rate-limit hook.
+        if (
+            what == "result error"
+            and "claudeRateLimitError(m.result, rateLimited)" in s
+        ):
             continue
         if s.count(anchor) != 1:
             raise SystemExit(f"{p}: {what}: upstream shape changed")

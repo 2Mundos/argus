@@ -5181,6 +5181,24 @@ export interface components {
          * @enum {string}
          */
         ProposalState: "open" | "accepted" | "rejected" | "withdrawn";
+        /**
+         * QuotaProbe
+         * @description The latest quota probe of an account (one per account), whatever came of it.
+         */
+        QuotaProbe: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "updated" | "skipped" | "rate_limited" | "failed";
+        };
         /** QuotaRefresh */
         QuotaRefresh: {
             /** Quota */
@@ -5213,15 +5231,25 @@ export interface components {
         /**
          * QuotaStatus
          * @description Whether Argus knows this account's quota, and if not, why (never a 0/100).
+         *
+         *     `known`: provider snapshots all fresh, or local estimates against
+         *     `token_limits`. `stale`: snapshots exist (listed in `quota`) but one was
+         *     observed over an hour ago or its window has already reset. `unknown`: no
+         *     figure, with the reason.
          */
         QuotaStatus: {
+            /** Collector */
+            collector?: ("codex_rate_limits" | "worker_report") | null;
+            last_probe?: components["schemas"]["QuotaProbe"] | null;
+            /** Observed At */
+            observed_at?: string | null;
             /** Reason */
-            reason?: ("no_usage_records" | "provider_does_not_expose" | "window_not_configured") | null;
+            reason?: ("no_usage_records" | "provider_does_not_expose" | "window_not_configured" | "unsupported_provider" | "api_key_account" | "not_yet_probed" | "probe_failed" | "probe_skipped" | "probe_rate_limited") | null;
             /**
              * State
              * @enum {string}
              */
-            state: "known" | "unknown";
+            state: "known" | "stale" | "unknown";
             /**
              * Windows
              * @default []
@@ -6412,6 +6440,11 @@ export interface components {
             cost_usd: number;
             /** Input Tokens */
             input_tokens: number;
+            /**
+             * Measured Runs
+             * @default 0
+             */
+            measured_runs?: number;
             /** Output Tokens */
             output_tokens: number;
             /** Runs */
@@ -6471,6 +6504,8 @@ export interface components {
              * @default []
              */
             rate_limits?: components["schemas"]["QuotaReport"][];
+            /** Reason */
+            reason?: string | null;
             /** Role */
             role?: ("engine" | "executor") | null;
             /** Run Key */
@@ -6562,6 +6597,11 @@ export interface components {
             cost_usd: number;
             /** Input Tokens */
             input_tokens: number;
+            /**
+             * Measured Runs
+             * @default 0
+             */
+            measured_runs?: number;
             /** Output Tokens */
             output_tokens: number;
             /**
@@ -6569,6 +6609,20 @@ export interface components {
              * @default 0
              */
             runs?: number;
+            /**
+             * Runs By Role
+             * @default {}
+             */
+            runs_by_role?: {
+                [key: string]: number;
+            };
+            /**
+             * Unmeasured Reasons
+             * @default {}
+             */
+            unmeasured_reasons?: {
+                [key: string]: number;
+            };
             /**
              * Unmeasured Runs
              * @default 0

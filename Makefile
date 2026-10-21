@@ -45,7 +45,7 @@ typecheck: ## ty + tsc.
 	$(UV) run ty check
 	$(PNPM) typecheck
 test: ## Run Python and Node tests.
-	$(UV) run pytest
+	$(UV) run pytest -n auto
 	$(PNPM) test
 build: ## Build the dashboard.
 	$(PNPM) build

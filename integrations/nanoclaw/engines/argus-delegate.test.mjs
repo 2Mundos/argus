@@ -835,7 +835,30 @@ test("usage: the report carries parsed usage and a run_key, and a spool file is 
   assert.equal(report.usage.measurement, "measured");
   assert.equal(report.usage.output_tokens, 18073);
   assert.match(report.run_key, /^r1:t1:.+:codex:claude:/);
-  assert.deepEqual(report.usage_report, { status: "skipped", reason: "no_api_env" });
+  // No Argus env in the container (the host holds the token): the record waits for the host relay.
+  assert.deepEqual(report.usage_report, {
+    status: "queued",
+    reason: "host_relay",
+    direct: { status: "skipped", reason: "no_api_env" },
+  });
+  const [queued, ...rest] = fs
+    .readFileSync(path.join(s.dir, "argus-usage.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  assert.equal(rest.length, 0);
+  const { payload: queuedPayload, ...envelope } = queued;
+  assert.deepEqual(envelope, {
+    v: 1,
+    kind: "usage",
+    source: "delegate",
+    role: "executor",
+    task_id: "t1",
+    attempt: 1,
+    account_id: "acc-9",
+  });
+  assert.equal(queuedPayload.run_key, report.run_key);
+  assert.equal(queuedPayload.measurement, "measured");
   const spool = JSON.parse(fs.readFileSync(report.usage_spool, "utf8"));
   assert.equal(path.dirname(report.usage_spool), s.out);
   assert.equal(spool.account_id, "acc-9");
@@ -864,9 +887,12 @@ test("usage: POSTs to the executor account with the bearer token only in the hea
     output_tokens: 18073,
     cached_input_tokens: 1156589,
     cost_usd: 0.5325657,
+    reason: null,
     run_key: report.run_key,
   });
   assert.deepEqual(report.usage_report, { status: "sent", reason: "recorded" });
+  // Sent directly: nothing is queued for the host (no second report of the same run).
+  assert.equal(fs.existsSync(path.join(s.dir, "argus-usage.jsonl")), false);
   for (const text of [
     JSON.stringify(call.body),
     JSON.stringify(report),
@@ -882,12 +908,17 @@ test("usage: a failing or unreachable API never changes the exit code", async (t
     env: { ...s.env, ARGUS_URL: api.url, ARGUS_AGENT_TOKEN: "tok" },
   });
   assert.equal(failed.code, 0);
-  assert.deepEqual(failed.report.usage_report, { status: "failed", reason: "http_500" });
+  // A failed direct report falls back to the host relay; the run_key makes a double report harmless.
+  assert.deepEqual(failed.report.usage_report, {
+    status: "queued",
+    reason: "host_relay",
+    direct: { status: "failed", reason: "http_500" },
+  });
   const down = await run(["claude", "--cwd", s.work, "--out", s.out], {
     env: { ...s.env, ARGUS_URL: "http://127.0.0.1:1", ARGUS_AGENT_TOKEN: "tok" },
   });
   assert.equal(down.code, 0);
-  assert.equal(down.report.usage_report.status, "failed");
+  assert.equal(down.report.usage_report.direct.status, "failed");
   assert.equal(fs.existsSync(down.report.usage_spool), true);
 });
 
@@ -932,6 +963,7 @@ test("usage: output without figures is reported not_reported with null figures",
   assert.equal(report.usage.measurement, "not_reported");
   const [call] = api.calls;
   assert.equal(call.body.measurement, "not_reported");
+  assert.equal(call.body.reason, "no_result_object");
   for (const k of ["input_tokens", "output_tokens", "cached_input_tokens", "cost_usd"])
     assert.equal(call.body[k], null);
 });

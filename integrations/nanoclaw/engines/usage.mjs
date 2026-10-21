@@ -17,8 +17,14 @@
 //              shapes, with no real sample yet. Their fixtures in usage.test.mjs are
 //              hand-made. Treat a wrong guess as "not_reported", never as a number.
 import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 
 const MAX_RUN_KEY = 200;
+
+/** Where usage records wait for the NanoClaw host, which holds the Argus token (spec 3.8). */
+export const USAGE_RELAY_FILE = "argus-usage.jsonl";
+export const USAGE_RELAY_MAX_BYTES = 4 * 1024 * 1024; // per file; further records are dropped
 
 /** A finite, non-negative number or null. */
 const num = (x) => (typeof x === "number" && Number.isFinite(x) && x >= 0 ? x : null);
@@ -211,3 +217,21 @@ export function runKey({ taskId, agentId, engine, executor, startedAt }) {
 
 /** Short filename-safe digest of a run key (spool file name). */
 export const runKeyHash = (key) => createHash("sha256").update(key).digest("hex").slice(0, 16);
+
+/**
+ * Append one usage record for the host to post: identifiers and figures only, never a
+ * credential. `record` is `{source, role, task_id, attempt, account_id, payload}`. Returns
+ * true when the record is on disk; never throws (a measurement must not break a delivery).
+ */
+export function appendUsageRecord(file, record) {
+  try {
+    const line = `${JSON.stringify({ v: 1, kind: "usage", ...record })}\n`;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (fs.existsSync(file) && fs.statSync(file).size + line.length > USAGE_RELAY_MAX_BYTES)
+      return false;
+    fs.appendFileSync(file, line, { mode: 0o660 });
+    return true;
+  } catch {
+    return false;
+  }
+}

@@ -19,6 +19,8 @@ cp "$here/argus.ts" "$target/src/channels/argus.ts"
 cp "$here/argus-local-forward.ts" "$target/src/channels/argus-local-forward.ts"
 cp "$here/argus-local-forward.test.ts" "$target/src/channels/argus-local-forward.test.ts"
 cp "$here/argus-accounts.ts" "$target/src/channels/argus-accounts.ts"
+cp "$here/argus-usage-relay.ts" "$target/src/channels/argus-usage-relay.ts"
+cp "$here/argus-usage-relay.test.ts" "$target/src/channels/argus-usage-relay.test.ts"
 cp "$here/argus.test.ts" "$target/src/channels/argus.test.ts"
 cp "$here/argus-accounts.test.ts" "$target/src/channels/argus-accounts.test.ts"
 # The quota patterns' shared fixture (Argus's packages/core), read by argus-accounts.test.ts.
@@ -443,6 +445,9 @@ cp "$here/overlays/claude-rate-limit.ts" "$here/overlays/claude-rate-limit.test.
 # Codex's usage limit ("You've hit your usage limit … try again at …") likewise.
 cp "$here/overlays/codex-usage-limit.ts" "$here/overlays/codex-usage-limit.test.ts" "$providers_dir/"
 python3 "$here/patch-claude-rate-limit.py" "$target"
+# The harness's own token usage (claude.ts, codex.ts) for the host to post (account usage spec 3.9).
+cp "$here/overlays/harness-usage.ts" "$here/overlays/harness-usage.test.ts" "$providers_dir/"
+python3 "$here/patch-harness-usage.py" "$target"
 
 codex_provider="$providers_dir/codex.ts"
 if [ -f "$codex_provider" ]; then

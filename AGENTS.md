@@ -6,7 +6,7 @@ Instructions for AI agents working in this repo.
 - Python 3.12+, `uv` workspace (`apps/api`, `packages/core`), `ruff`, `ty`, `pytest`.
 - Toolchain versions pinned in `mise.toml`.
 - TypeScript 5 / Node 22, `pnpm` workspace (`apps/dashboard`), Vite + React 19, Biome, Vitest.
-- CI: Gitea Actions (`.gitea/workflows/quality.yaml`). Local mirror: `make check`.
+- CI: Gitea Actions (`.gitea/workflows/quality.yaml`). Local mirror: `make check`, run on every push by the pre-push hook (`make hooks`).
 
 ## Rules
 - **Lightweight, single-node first** ([spec](docs/specs/single-node.spec.md)). One

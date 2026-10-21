@@ -115,15 +115,114 @@ export function bucketLabel(startIso: string, bucket: "hour" | "day", tz: string
     : d.toLocaleDateString("en", { month: "short", day: "numeric", timeZone: tz });
 }
 
+const PROVIDER_NAMES: Record<string, string> = {
+  anthropic: "Claude",
+  cursor: "Cursor",
+  openai: "Codex",
+  local: "The local model",
+};
+
 /** Why Argus has no quota figure; never a mute "unknown". */
 export const QUOTA_REASON_LABELS: Record<string, string> = {
   no_usage_records: "No usage reported yet",
   provider_does_not_expose: "Provider does not expose quota",
   window_not_configured: "No quota window configured",
+  api_key_account: "API-key account: the provider reports no quota window",
+  not_yet_probed: "Quota not read yet",
+  probe_failed: "The last quota read failed",
+  probe_skipped: "The last quota read was skipped",
+  probe_rate_limited: "Quota read postponed (read recently)",
 };
 
-export function quotaUnknownLabel(status: Pick<QuotaStatus, "reason">): string {
+/** A human sentence per reason code. `provider` names the account's provider. */
+export function quotaUnknownLabel(status: Pick<QuotaStatus, "reason">, provider?: string): string {
+  if (status.reason === "unsupported_provider") {
+    const who = provider ? (PROVIDER_NAMES[provider] ?? provider) : undefined;
+    return who
+      ? `${who} does not expose a quota Argus can read`
+      : "This provider does not expose a quota Argus can read";
+  }
   return (status.reason && QUOTA_REASON_LABELS[status.reason]) || "Quota unknown";
+}
+
+type Probe = NonNullable<QuotaStatus["last_probe"]>;
+
+/** "Last read: skipped (codex binary not configured), 2 minutes ago", or null. */
+export function probeNote(probe: Probe | null | undefined, ago: string): string | null {
+  if (!probe) return null;
+  const outcome = {
+    updated: "updated",
+    skipped: "skipped",
+    rate_limited: "postponed",
+    failed: "failed",
+  }[probe.status];
+  return `Last read ${outcome}${probe.reason ? ` (${probe.reason})` : ""}, ${ago}`;
+}
+
+export const STALE_AFTER_MS = HOUR;
+
+/** A snapshot is stale when observed over an hour ago or its window already reset. */
+export function snapshotStale(q: QuotaWindow, now: number = Date.now()): boolean {
+  if (now - new Date(q.observed_at).getTime() > STALE_AFTER_MS) return true;
+  return q.resets_at != null && new Date(q.resets_at).getTime() <= now;
+}
+
+/** Runs that carried figures. Older servers send no count: derive it. */
+export function measuredRuns(t: {
+  runs?: number;
+  unmeasured_runs?: number;
+  measured_runs?: number;
+}): number {
+  return t.measured_runs ?? Math.max((t.runs ?? 0) - (t.unmeasured_runs ?? 0), 0);
+}
+
+/** Runs happened, but none gave figures: show "not measured", never 0 tokens. */
+export function notMeasured(t: {
+  runs?: number;
+  unmeasured_runs?: number;
+  measured_runs?: number;
+}): boolean {
+  return (t.runs ?? 0) > 0 && measuredRuns(t) === 0;
+}
+
+export const NOT_MEASURED = "Not measured";
+
+/** A token figure, or an em dash when nothing was measured. */
+export function tokensOrDash(
+  t: { runs?: number; unmeasured_runs?: number; measured_runs?: number },
+  n: number,
+): string {
+  return notMeasured(t) ? "—" : tokens(n);
+}
+
+/** "no usage in output ×2, unknown ×1": the unmeasured reasons, most frequent first. */
+export function reasonsNote(reasons: Record<string, number> | undefined): string | null {
+  const entries = Object.entries(reasons ?? {}).sort(
+    (x, y) => y[1] - x[1] || x[0].localeCompare(y[0]),
+  );
+  if (entries.length === 0) return null;
+  return entries.map(([k, n]) => `${k.replaceAll("_", " ")} ×${n}`).join(", ");
+}
+
+const ROLE_LABELS: Record<string, string> = {
+  engine: "Harness",
+  executor: "Executor",
+  unknown: "Role unknown",
+};
+
+/** "Harness 2 · Executor 1": runs by role, or null when none are known. */
+export function roleSplit(runsByRole: Record<string, number> | undefined): string | null {
+  const order = ["engine", "executor", "unknown"];
+  const parts = order
+    .filter((k) => (runsByRole?.[k] ?? 0) > 0)
+    .map((k) => `${ROLE_LABELS[k]} ${runsByRole?.[k]}`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** Tokens of a bucket for a chart: null when its runs were all unmeasured (a gap,
+ * not a zero). A bucket with no runs is a measured zero. */
+export function bucketTokens(b: UsageBucket): number | null {
+  return notMeasured(b) ? null : totalTokens(b);
 }
 
 /** "3 runs without measurement", or null when every run was measured. */
