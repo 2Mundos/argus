@@ -22,6 +22,7 @@ from argus_core.tasks import (
     TERMINAL,
     Action,
     Failover,
+    PromptTrust,
     Review,
     ServingAccount,
     Task,
@@ -104,6 +105,13 @@ async def create_task(
                 code="project_required",
             )
         body = body.model_copy(update={"project": parent["project"]})
+    # Worker-authored child tasks: immutable worker trust; always await approval so
+    # injected prompts cannot silently become ready work for another agent.
+    if as_worker is not None:
+        body = body.model_copy(update={"requires_approval": True})
+        prompt_trust = PromptTrust.WORKER
+    else:
+        prompt_trust = PromptTrust.ORCHESTRATOR
     await _check_project_and_pins(tx.conn, body)
     deps = sorted(set(body.depends_on))
     dep_states = await _states(tx.conn, deps)
@@ -123,9 +131,9 @@ async def create_task(
     await tx.conn.execute(
         "INSERT INTO tasks (id, parent_id, kind, title, spec, acceptance, input,"
         " required_capabilities, priority, state, requires_approval, review,"
-        " lease_ttl_s, max_attempts, project, timeout_s, created_by, created_at,"
-        " updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " prompt_trust, lease_ttl_s, max_attempts, project, timeout_s, created_by,"
+        " created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task_id,
             body.parent_id,
@@ -139,6 +147,7 @@ async def create_task(
             state,
             int(body.requires_approval),
             body.review,
+            prompt_trust,
             body.lease_ttl_s,
             body.max_attempts,
             body.project,

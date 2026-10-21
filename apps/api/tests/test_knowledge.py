@@ -348,6 +348,24 @@ def test_publish_setting_lets_workers_publish(tmp_path, monkeypatch) -> None:
         assert res["page"]["title"] == "Direct"
 
 
+def test_knowledge_worker_writes_defaults_to_propose_when_env_unset(
+    tmp_path, monkeypatch
+) -> None:
+    """Negative: unset ARGUS_KNOWLEDGE_WORKER_WRITES must not publish (stays propose)."""
+    monkeypatch.setenv("ARGUS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", ADMIN_TOKEN)
+    monkeypatch.delenv("ARGUS_KNOWLEDGE_WORKER_WRITES", raising=False)
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/knowledge/pages",
+            json={"title": "Should propose", "body": "x", "reason": "default"},
+            headers=worker(client),
+        )
+        assert res.status_code == 201
+        assert res.json()["status"] == "proposed"
+        assert client.get("/api/knowledge/pages", headers=ADMIN_H).json() == []
+
+
 async def test_kind_pins_merge_with_task_pins(db: Database, clock: FakeClock) -> None:
     from argus_api.kinds import service as kinds
     from argus_core.kinds import TaskKindUpsert

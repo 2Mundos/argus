@@ -2072,6 +2072,9 @@
             "title": "Project",
             "type": "string"
           },
+          "prompt_trust": {
+            "$ref": "#/components/schemas/PromptTrust"
+          },
           "refill_at": {
             "anyOf": [
               {
@@ -2175,6 +2178,7 @@
           "state",
           "requires_approval",
           "review",
+          "prompt_trust",
           "assignee_agent_id",
           "lease_expires_at",
           "lease_ttl_s",
@@ -7263,6 +7267,15 @@
         "title": "ProjectUpsert",
         "type": "object"
       },
+      "PromptTrust": {
+        "description": "Immutable origin of task content for prompt isolation.\n\nOrchestrator/admin-created tasks are `orchestrator`. Worker-created subtasks\nare always `worker` and never elevate, even under an orchestrator parent.\nSpec/acceptance/knowledge remain untrusted DATA in the worker prompt either way.",
+        "enum": [
+          "orchestrator",
+          "worker"
+        ],
+        "title": "PromptTrust",
+        "type": "string"
+      },
       "Proposal": {
         "properties": {
           "author": {
@@ -8582,6 +8595,9 @@
             "title": "Project",
             "type": "string"
           },
+          "prompt_trust": {
+            "$ref": "#/components/schemas/PromptTrust"
+          },
           "refill_at": {
             "anyOf": [
               {
@@ -8685,6 +8701,7 @@
           "state",
           "requires_approval",
           "review",
+          "prompt_trust",
           "assignee_agent_id",
           "lease_expires_at",
           "lease_ttl_s",
@@ -9263,6 +9280,9 @@
             "title": "Project",
             "type": "string"
           },
+          "prompt_trust": {
+            "$ref": "#/components/schemas/PromptTrust"
+          },
           "refill_at": {
             "anyOf": [
               {
@@ -9390,6 +9410,7 @@
           "input",
           "required_capabilities",
           "requires_approval",
+          "prompt_trust",
           "lease_ttl_s",
           "timeout_s",
           "timeout_at",

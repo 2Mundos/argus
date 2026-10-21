@@ -76,9 +76,12 @@ every new dependency is judged against it.
   capabilities, pins and dependencies with one rule set for REST, MCP and the dashboard
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes
   that say whether an upgrade can be rolled back, the tagged image
+- [Prompt-data isolation](specs/prompt-data-isolation.spec.md) — task spec,
+  acceptance, and knowledge bodies as length-framed untrusted DATA; immutable
+  `prompt_trust`; worker child tasks await approval
 - [Codex worker sandbox profile (candidate)](specs/codex-sandbox-profile.spec.md) —
-  WIP, not implemented: opt-in AppArmor/seccomp candidates so Codex's Bubblewrap
-  can run in a worker; [provenance](../integrations/nanoclaw/security/PROVENANCE.md)
+  default-on AppArmor/seccomp candidates so Codex's Bubblewrap can run in a
+  worker (`off` escape hatch); [provenance](../integrations/nanoclaw/security/PROVENANCE.md)
   and [runbook](../integrations/nanoclaw/security/RUNBOOK.md)
 
 ### Drafts

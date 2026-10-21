@@ -36,13 +36,14 @@ leases use OneCLI path `/{owner}/{repo}.git/*` for smart-HTTP injection while th
 Operator `docker exec` Git probes do not substitute for a full native worker checkout under
 Codex; see [worker lifecycle spec 3.8](../../docs/specs/worker-lifecycle.spec.md).
 
-### Codex sandbox profile (opt-in per pool)
+### Codex sandbox profile (default on for Codex agents)
 
-`install.sh` also installs the per-pool Codex sandbox opt-in
+`install.sh` also installs the Codex sandbox profile
 (`argus-codex-sandbox.ts`, patches to the driver, the spec type and `composeSessionSpec`, and the
-seccomp JSON under `<checkout>/security/`). It does nothing unless the pool's `env` sets
-`ARGUS_CODEX_SANDBOX_PROFILE=codex-bwrap`, and the AppArmor profile it names must be loaded by an
-operator first; before each opted-in spawn the driver proves on the daemon that the profile is
+seccomp JSON under `<checkout>/security/`). For native Codex agent containers it defaults to
+`codex-bwrap` when `ARGUS_CODEX_SANDBOX_PROFILE` is unset; set `off` only when architecture cannot
+enforce AppArmor/seccomp (e.g. private inner Docker). The AppArmor profile must be loaded by an
+operator first; before each profiled spawn the driver proves on the daemon that the profile is
 _enforcing_ (a disposable, credential-free probe container), and it refuses to adopt an existing
 container that lacks the profile. See the [spec](../../docs/specs/codex-sandbox-profile.spec.md) and the
 [runbook](security/RUNBOOK.md); the profiles are still candidates. Verify offline with

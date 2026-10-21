@@ -100,12 +100,12 @@ docker ps -a --format '{{.Names}}' | xargs -r docker inspect --format '{{.Name}}
 sudo apparmor_parser -R /etc/apparmor.d/argus-codex-worker && sudo rm /etc/apparmor.d/argus-codex-worker
 ```
 
-## 7. Ativar por worker (pool) — só depois do passo 3
+## 7. Perfil por pool — só depois do passo 3 (default on)
 
-O opt-in é **uma variável no `env` da pool**, nada global. Valor único `codex-bwrap`; ausente = comportamento
-de hoje. Vale só para o container **agente** do provider **`codex`** nativo; gateways/auxiliares, outros
-providers e o Codex delegado (`argus-delegate`) não recebem. Não vale para `nanoclaw-sandbox` (daemon interno): recusado.
-Ela não marca nada como pronto; é uma flag de operador.
+`ARGUS_CODEX_SANDBOX_PROFILE` no `env` da pool (nada global). **Default on:** ausente/blank =
+`codex-bwrap`. Valores: `codex-bwrap` | `off` (escape hatch). Vale só para o container **agente** do
+provider **`codex`** nativo; gateways/auxiliares, outros providers e o Codex delegado (`argus-delegate`)
+não recebem. `nanoclaw-sandbox` (daemon interno) **exige** `off` (on é recusado).
 
 **a) Instalar os artefatos no checkout (sem root, idempotente; é o que o `provision.sh` já roda):**
 ```bash
@@ -129,18 +129,23 @@ de sessão já existente só é adotado se o `docker inspect` (apenas `SecurityO
 `AppArmorProfile`, `Init`) mostrar exatamente o perfil, o seccomp idêntico ao JSON instalado e `cap-drop ALL`; senão é recusado e
 **não é tocado**. Sem root não há como carregar o perfil; nesse caso **não ligue**.
 
-**c) Ligar uma pool (as instâncias já em execução não são recicladas; vale para hosts criados depois):**
+**c) Explicitar on (opcional — já é o default) ou desligar uma pool:**
 ```bash
+# on explícito (redundante com o default):
 curl -fsS -X PATCH "$ARGUS_URL/api/pools/<pool>" -H "Authorization: Bearer $ARGUS_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"expected_version":"<pool.version>","env":{"ARGUS_CODEX_SANDBOX_PROFILE":"codex-bwrap"}}'
+# off (arquiteturas que não podem enforce, ex. inner Docker):
+curl -fsS -X PATCH "$ARGUS_URL/api/pools/<pool>" -H "Authorization: Bearer $ARGUS_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"expected_version":"<pool.version>","env":{"ARGUS_CODEX_SANDBOX_PROFILE":"off"}}'
 ```
 Valor desconhecido (`true`, `unconfined`, `CODEX-BWRAP`…): o host recusa subir (`entrypoint.sh`, exit 78) e,
-se chegar ao spawn, o spawn é negado. Não há fallback para o default nem para `unconfined`.
+se chegar ao spawn, o spawn é negado. Não há fallback para `unconfined`.
 
-**d) Rollback de uma pool:** `"env":{"ARGUS_CODEX_SANDBOX_PROFILE":null}` no mesmo `PATCH`; hosts novos voltam ao
-default. Containers agentes já criados com o perfil só mudam quando forem recriados. Só descarregue o AppArmor
-(passo 6) depois que nenhum container dependente existir.
+**d) Remover a chave do env:** `"env":{"ARGUS_CODEX_SANDBOX_PROFILE":null}` no mesmo `PATCH`; hosts novos
+voltam ao **default on** (`codex-bwrap`). Containers agentes já criados só mudam quando forem recriados.
+Só descarregue o AppArmor (passo 6) depois que nenhum container dependente existir.
 
 **Não faça:** `security_opt` arbitrário, `unconfined`, `--privileged`, `SYS_ADMIN`, ligar fora do provider Codex,
 ou reciclar workers vivos como parte disto.

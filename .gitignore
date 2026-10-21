@@ -30,3 +30,6 @@ node_modules
 
 # Local Argus data (SQLite, artifacts)
 /data/
+
+# Delegate runtime scratch (local auth stubs / chat state)
+.argus-delegate-runtime/
