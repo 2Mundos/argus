@@ -21,6 +21,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createFileRelay, envSecrets, RELAY_FILE, startLiveLog } from "./livelog.mjs";
 import { createSink, createTracker, gitHead, waitingInput } from "./milestones.mjs";
 import { loadPolicy, selectModel } from "./model-policy.mjs";
 import { parseUsage, runKey, runKeyHash } from "./usage.mjs";
@@ -75,6 +76,76 @@ export const READ_ONLY_PROMPT_PREFIX =
 /** Claude acceptEdits blocks Bash unless explicitly allowed (headless gate pitfall). */
 const CLAUDE_WORKSPACE_TOOLS = "Bash,Edit,Write,Read,Glob,Grep";
 
+/**
+ * A custom (OpenAI-compatible) account's lease `settings` (docs/specs/custom-accounts.spec.md):
+ * `base_url`, `label`, `model`, `provider`. They come from the pinned task context
+ * (`executor_settings`) or `ARGUS_ACCOUNT_SETTINGS` (JSON, plain runtimes); no secret in either.
+ * The API key is only ever read from this environment variable, by the executor itself.
+ */
+export const CUSTOM_KEY_ENV = "ARGUS_ACCOUNT_API_KEY";
+export const CUSTOM_PROVIDER_ID = "argus_custom";
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
+const isObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+
+/** Validated settings, null when absent; throws on a malformed document (value never echoed). */
+export function parseAccountSettings(raw) {
+  if (raw === undefined || raw === null || raw === "") return null;
+  let doc = raw;
+  if (typeof raw === "string") {
+    try {
+      doc = JSON.parse(raw);
+    } catch {
+      throw new Error("account settings are not valid JSON");
+    }
+  }
+  if (!isObject(doc)) throw new Error("account settings must be an object");
+  let url;
+  try {
+    url = new URL(doc.base_url);
+  } catch {
+    throw new Error("account settings base_url is not a URL");
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    !url.hostname ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  )
+    throw new Error(
+      "account settings base_url must be http(s) without credentials, query or fragment",
+    );
+  if (doc.model != null && !(typeof doc.model === "string" && MODEL_ID.test(doc.model)))
+    throw new Error("account settings model is invalid");
+  if (doc.provider != null && !isObject(doc.provider))
+    throw new Error("account settings provider must be an object");
+  return {
+    base_url: String(doc.base_url).replace(/\/+$/, ""),
+    label: typeof doc.label === "string" ? doc.label : null,
+    model: doc.model ?? null,
+    provider: doc.provider ?? null,
+  };
+}
+
+/** What the executor can take from the settings; Codex cannot add body fields (`provider`). */
+export function settingsSupport(executor) {
+  return (
+    { opencode: ["base_url", "model", "provider"], codex: ["base_url", "model"] }[executor] ?? []
+  );
+}
+
+/**
+ * Model precedence: explicit --model, the account's model, the policy chain, the native
+ * default (null). Returns the model and where it came from.
+ */
+export function effectiveModel({ override, settings, policyModel }) {
+  if (override) return { model: override, source: "cli" };
+  if (settings?.model) return { model: settings.model, source: "account" };
+  if (policyModel) return { model: policyModel, source: "policy" };
+  return { model: null, source: "native_default" };
+}
+
 const present = (p) => {
   try {
     return fs.statSync(p).size > 2; // "{}" or an empty stub is not a credential
@@ -85,7 +156,12 @@ const present = (p) => {
 const env = (e, ...names) => names.some((n) => (e[n] ?? "").trim() !== "");
 
 /** Is a credential present for this executor? Presence only, never content. */
-export function authStatus(executor, e = process.env, home = os.homedir()) {
+export function authStatus(executor, e = process.env, home = os.homedir(), settings = null) {
+  if (settings && settingsSupport(executor).length) {
+    return env(e, CUSTOM_KEY_ENV)
+      ? { ok: true }
+      : { ok: false, need: `${CUSTOM_KEY_ENV} (the custom account's key, from the lease)` };
+  }
   const xdg = e.XDG_CONFIG_HOME || path.join(home, ".config");
   const data = e.XDG_DATA_HOME || path.join(home, ".local/share");
   switch (executor) {
@@ -190,8 +266,52 @@ export function restoreClaudeGatewayAuth(e, stubPath = CLAUDE_GATEWAY_STUB) {
   return { env: { ...e, [CLAUDE_OAUTH]: doc.sentinel }, source: "gateway_sentinel" };
 }
 
+/** Codex `-c` overrides for a custom provider; the key is named by env var, never passed. */
+function codexProviderArgs(settings) {
+  const q = (v) => JSON.stringify(v);
+  const k = `model_providers.${CUSTOM_PROVIDER_ID}`;
+  return [
+    "-c",
+    `model_provider=${q(CUSTOM_PROVIDER_ID)}`,
+    "-c",
+    `${k}.name=${q(settings.label || CUSTOM_PROVIDER_ID)}`,
+    "-c",
+    `${k}.base_url=${q(settings.base_url)}`,
+    "-c",
+    `${k}.env_key=${q(CUSTOM_KEY_ENV)}`,
+  ];
+}
+
+/**
+ * The environment for an executor on a custom account. OpenCode gets an inline config
+ * (OPENCODE_CONFIG_CONTENT) whose key is the reference `{env:ARGUS_ACCOUNT_API_KEY}`, so the
+ * value is neither in argv nor in a file. Codex has no equivalent for the body `provider`.
+ */
+export function applySettingsEnv(executor, e, settings, model) {
+  if (!settings || executor !== "opencode") return e;
+  const entry = {
+    npm: "@ai-sdk/openai-compatible",
+    name: settings.label || CUSTOM_PROVIDER_ID,
+    options: { baseURL: settings.base_url, apiKey: `{env:${CUSTOM_KEY_ENV}}` },
+    models: model
+      ? { [model]: settings.provider ? { options: { provider: settings.provider } } : {} }
+      : {},
+  };
+  return {
+    ...e,
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({
+      $schema: "https://opencode.ai/config.json",
+      provider: { [CUSTOM_PROVIDER_ID]: entry },
+    }),
+  };
+}
+
 /** The exact argv for one non-interactive run. `prompt` is passed on stdin or as an argument. */
-export function buildCommand(executor, { cwd, model, readOnly, lastMessageFile }, e = process.env) {
+export function buildCommand(
+  executor,
+  { cwd, model, readOnly, lastMessageFile, settings = null },
+  e = process.env,
+) {
   switch (executor) {
     case "claude":
       return {
@@ -199,7 +319,8 @@ export function buildCommand(executor, { cwd, model, readOnly, lastMessageFile }
         args: [
           "-p",
           "--output-format",
-          "json",
+          "stream-json",
+          "--verbose",
           "--no-session-persistence",
           "--permission-mode",
           readOnly ? "plan" : "acceptEdits",
@@ -223,6 +344,7 @@ export function buildCommand(executor, { cwd, model, readOnly, lastMessageFile }
           readOnly ? "read-only" : "workspace-write",
           "-o",
           lastMessageFile,
+          ...(settings ? codexProviderArgs(settings) : []),
           ...(model ? ["-m", model] : []),
           "-",
         ],
@@ -239,7 +361,7 @@ export function buildCommand(executor, { cwd, model, readOnly, lastMessageFile }
           "--dir",
           cwd,
           ...(e.ARGUS_OPENCODE_ATTACH ? ["--attach", e.ARGUS_OPENCODE_ATTACH] : []),
-          ...(model ? ["-m", model] : []),
+          ...(model ? ["-m", settings ? `${CUSTOM_PROVIDER_ID}/${model}` : model] : []),
         ],
         promptVia: "argv",
         readOnlyEnforcement: "prompt_only",
@@ -485,6 +607,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
 
   let snapshot;
   let selection;
+  let settings = null;
   try {
     snapshot = loadPolicy(
       e,
@@ -504,13 +627,26 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
         preferred_executor: snapshot.context.preferred_executor,
         matches_preferred: snapshot.context.preferred_executor === executor,
       };
+    settings = parseAccountSettings(
+      snapshot.context?.executor_settings ?? e.ARGUS_ACCOUNT_SETTINGS,
+    );
+    if (settings) {
+      if (!settingsSupport(executor).length)
+        throw new Error(`executor ${executor} cannot use a custom account`);
+      identity = {
+        ...identity,
+        account_label: settings.label,
+        account_base_url: settings.base_url,
+      };
+    }
+    // --model, then the account's model (a fixed choice: no chain), then the policy chain.
     selection = selectModel(
       snapshot,
       "implementation",
       executor,
       opts.modelAttempt ?? 1,
       opts.fallbackReason,
-      opts.model,
+      opts.model || settings?.model || undefined,
     );
   } catch (err) {
     finish(64, { ...identity, error: "model_policy_invalid", detail: err.message });
@@ -536,7 +672,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
   e = withCliToolsPath(e);
 
   // Auth first: a missing credential blocks, it never reroutes.
-  const auth = authStatus(executor, e);
+  const auth = authStatus(executor, e, os.homedir(), settings);
   if (!auth.ok) finish(78, { ...identity, blocked: "auth_missing", need: auth.need });
 
   const version = versionOf(executor === "agent" ? "agent" : executor, e);
@@ -561,6 +697,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
       snapshot,
       selection,
       deadline,
+      settings,
     );
     attempts.push(outcome.report);
     if (
@@ -643,7 +780,13 @@ async function runAttempt(
   snapshot,
   selection,
   deadline,
+  settings = null,
 ) {
+  const modelChoice = effectiveModel({
+    override: opts.model,
+    settings,
+    policyModel: selection.configured_model,
+  });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const out = path.resolve(opts.out || path.join(cwd, ".argus-delegate"));
   fs.mkdirSync(out, { recursive: true });
@@ -654,9 +797,10 @@ async function runAttempt(
   const lastMessageFile = `${base}.last-message.txt`;
   const cmd = buildCommand(
     executor,
-    { cwd, model: selection.configured_model, readOnly: opts.readOnly, lastMessageFile },
+    { cwd, model: selection.configured_model, readOnly: opts.readOnly, lastMessageFile, settings },
     e,
   );
+  e = applySettingsEnv(executor, e, settings, selection.configured_model);
   const args = cmd.promptVia === "argv" ? [...cmd.args, prompt] : cmd.args;
 
   const stdoutFile = `${base}.out`;
@@ -673,6 +817,34 @@ async function runAttempt(
   });
   child.stdin.on("error", () => {});
   child.stdin.end(cmd.promptVia === "stdin" ? prompt : "");
+
+  // The live log: readable lines for the host's relay file. No token, no network;
+  // the host (argus.ts) posts them. A failure here never touches the run.
+  let live = null;
+  try {
+    const taskId = snapshot.context?.task_id;
+    const attempt = Number(snapshot.context?.attempt);
+    if (taskId && Number.isSafeInteger(attempt) && attempt >= 1) {
+      const relayFile =
+        e.ARGUS_TASK_LOG_FILE ||
+        path.join(
+          path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
+          RELAY_FILE,
+        );
+      const seconds = (v) => (Number(v) > 0 ? Number(v) * 1000 : undefined);
+      live = startLiveLog({
+        stdoutFile,
+        executor,
+        send: createFileRelay({ file: relayFile, taskId, attempt }),
+        secrets: [e[CUSTOM_KEY_ENV]?.trim(), ...envSecrets(e)],
+        flushMs: seconds(e.ARGUS_LIVELOG_FLUSH_S),
+        keepaliveMs: seconds(e.ARGUS_LIVELOG_KEEPALIVE_S),
+        intervalMs: seconds(e.ARGUS_LIVELOG_TICK_S),
+      });
+    }
+  } catch {
+    live = null;
+  }
 
   // Milestones come from real state, polled while the executor runs and once after it.
   const sink = createSink({ e, out });
@@ -730,6 +902,7 @@ async function runAttempt(
   killTree("SIGKILL"); // grandchildren that outlived the CLI
   fs.closeSync(outFd);
   fs.closeSync(errFd);
+  live?.stop();
   clearInterval(poller);
   await polling;
   await tracker.poll();
@@ -740,7 +913,9 @@ async function runAttempt(
   if (fs.existsSync(lastMessageFile)) artifacts.push(lastMessageFile);
   const stdoutText = fs.readFileSync(stdoutFile, "utf8");
   const tailSource = fs.existsSync(lastMessageFile) ? lastMessageFile : stdoutFile;
-  const tail = fs.readFileSync(tailSource, "utf8").slice(-TAIL_CHARS);
+  const secret = (e[CUSTOM_KEY_ENV] ?? "").trim();
+  const redact = (text) => (secret ? text.split(secret).join("[redacted]") : text);
+  const tail = redact(fs.readFileSync(tailSource, "utf8")).slice(-TAIL_CHARS);
   const jsonFail = !timedOut && code === 0 ? executorJsonFailure(executor, stdoutText) : null;
   const exit = timedOut ? 124 : interrupted || jsonFail || code !== 0 ? 1 : 0;
   const startedAt = new Date(started).toISOString();
@@ -773,6 +948,9 @@ async function runAttempt(
     status: "finished",
     version,
     model: selection.configured_model,
+    model_source: modelChoice.source,
+    provider_block_applied:
+      Boolean(settings?.provider) && settingsSupport(executor).includes("provider"),
     cwd,
     read_only: opts.readOnly,
     read_only_enforcement: cmd.readOnlyEnforcement ?? "unknown",
@@ -787,8 +965,8 @@ async function runAttempt(
     usage_spool: spoolFile,
     usage_report: usageReport,
     tail,
-    stderr_tail: fs.readFileSync(stderrFile, "utf8").slice(-TAIL_CHARS),
-    ...(jsonFail ? { executor_error: jsonFail } : {}),
+    stderr_tail: redact(fs.readFileSync(stderrFile, "utf8")).slice(-TAIL_CHARS),
+    ...(jsonFail ? { executor_error: { ...jsonFail, detail: redact(jsonFail.detail) } } : {}),
   };
   fs.writeFileSync(reportFile, JSON.stringify(report, null, 2) + "\n");
   return { exit, report };

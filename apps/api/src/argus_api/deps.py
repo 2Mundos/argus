@@ -56,10 +56,18 @@ def require_agent(caller: Annotated[Identity, Depends(get_caller)]) -> str:
     return caller.agent_id
 
 
+def bearer_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> str | None:
+    """The raw token exactly as `get_caller` parsed it (the same, cached dependency)."""
+    return credentials.credentials if credentials else None
+
+
 DbDep = Annotated[Database, Depends(get_db)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 SecretsDep = Annotated[SecretStore, Depends(get_secrets)]
 CallerDep = Annotated[Identity, Depends(get_caller)]
 AgentDep = Annotated[str, Depends(require_agent)]
+TokenDep = Annotated[str | None, Depends(bearer_token)]
 ManagerDep = Annotated[Identity, require(Scope.ORCHESTRATOR, Scope.ADMIN)]
 AdminDep = Annotated[Identity, require(Scope.ADMIN)]

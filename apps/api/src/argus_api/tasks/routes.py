@@ -15,6 +15,7 @@ from argus_core.tasks import (
 from fastapi import APIRouter, Query, Response, status
 from pydantic import BaseModel, Field, model_validator
 
+from argus_api.access import require_task_readable, worker_task_filter
 from argus_api.accounts import service as accounts
 from argus_api.db import utcnow
 from argus_api.deps import (
@@ -25,12 +26,13 @@ from argus_api.deps import (
     ManagerDep,
     SecretsDep,
     SettingsDep,
+    TokenDep,
 )
 from argus_api.errors import ValidationFailedError
 from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
 from argus_api.paging import DEFAULT_LIMIT, View
-from argus_api.tasks import service, views
+from argus_api.tasks import log, service, views
 from argus_api.tasks.views import TaskPage
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -58,6 +60,12 @@ class ProgressRequest(BaseModel):
     def _milestone(self) -> "ProgressRequest":
         validate_milestone(self.kind, self.data)
         return self
+
+
+class LogRequest(BaseModel):
+    attempt: int
+    source: log.Source
+    lines: list[str] = Field(min_length=1, max_length=log.MAX_LINES)
 
 
 class FailRequest(BaseModel):
@@ -113,7 +121,7 @@ async def create_task(
 @router.get("")
 async def list_tasks(
     db: DbDep,
-    _: CallerDep,
+    caller: CallerDep,
     state: Annotated[list[TaskState] | None, Query()] = None,
     project: str | None = None,
     kind: str | None = None,
@@ -127,7 +135,9 @@ async def list_tasks(
     """Tasks newest first, in pages (max 100). `assignee` is the agent holding a
     task now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read
     instead: no other filter, no paging, unknown ids in `missing`. Archived tasks
-    are left out unless `archived=true`, which lists only those."""
+    are left out unless `archived=true`, which lists only those. Workers only see
+    tasks they have leased."""
+    scope = worker_task_filter(caller)
     async with db.snapshot() as snap:
         if ids is not None:
             if state or project or kind or assignee or archived or cursor:
@@ -135,7 +145,7 @@ async def list_tasks(
                     "ids is a batch read; it takes no other filter or cursor",
                     code="ids_exclusive",
                 )
-            return await views.get_tasks(snap, ids.split(","), view)
+            return await views.get_tasks(snap, ids.split(","), view, task_scope=scope)
         return await views.list_tasks(
             snap,
             states=state,
@@ -146,6 +156,7 @@ async def list_tasks(
             view=view,
             limit=limit,
             cursor=cursor,
+            task_scope=scope,
         )
 
 
@@ -195,8 +206,9 @@ def _became_ready(event: Event) -> bool:
 
 
 @router.get("/{task_id}")
-async def get_task(task_id: str, db: DbDep, _: CallerDep) -> Task:
+async def get_task(task_id: str, db: DbDep, caller: CallerDep) -> Task:
     async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
         return await service.get_task(conn, task_id)
 
 
@@ -224,6 +236,45 @@ async def report_progress(
             body.kind,
             body.data,
         )
+
+
+@router.post("/{task_id}/log")
+async def post_log(
+    task_id: str,
+    body: LogRequest,
+    db: DbDep,
+    agent_id: AgentDep,
+    token: TokenDep,
+) -> log.LogAccepted:
+    """Append output lines to the live log of the attempt you hold (agent token).
+    Up to 200 lines of 2000 characters (longer ones are cut) and 64 KiB per batch,
+    one batch per second per source. Secrets are redacted before storing; the
+    batch is published as a `task.log` event and stored in a ring of 2000 lines
+    per attempt. Fenced like progress: a stale attempt is 409 `stale_attempt`."""
+    async with db.snapshot() as snap:  # refuse cheaply before the costly cleaning
+        await log.admit(snap, agent_id, task_id, body.attempt, body.source)
+    lines = log.prepare(
+        body.lines, (token,) if token else ()
+    )  # redaction stays outside the writer
+    async with db.write() as tx:
+        return await log.append(tx, agent_id, task_id, body.attempt, body.source, lines)
+
+
+@router.get("/{task_id}/log")
+async def get_log(
+    task_id: str,
+    db: DbDep,
+    caller: CallerDep,
+    attempt: Annotated[int | None, Query(ge=0, le=log.MAX_SEQ)] = None,
+    after: Annotated[int | None, Query(ge=0, le=log.MAX_SEQ)] = None,
+    limit: Annotated[int, Query(ge=1, le=log.MAX_READ)] = log.DEFAULT_TAIL,
+) -> log.LogPage:
+    """Log lines of an attempt (default: the current one), oldest first. With
+    `after` (a `seq`), the lines after it; without, the newest `limit` lines.
+    Workers only read tasks they have leased."""
+    async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
+        return await log.read(conn, task_id, attempt, after, limit)
 
 
 @router.post("/{task_id}/fail")
@@ -289,9 +340,12 @@ async def edit_task(
 
 
 @router.get("/{task_id}/attempts")
-async def list_attempts(task_id: str, db: DbDep, _: CallerDep) -> list[TaskAttempt]:
+async def list_attempts(
+    task_id: str, db: DbDep, caller: CallerDep
+) -> list[TaskAttempt]:
     """The definition each attempt was handed at claim, oldest first."""
     async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
         return await service.attempt_definitions(conn, task_id)
 
 

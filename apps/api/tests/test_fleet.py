@@ -1,7 +1,10 @@
 import json
+from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from api_support import DONE, FakeClock, FakeTarget
+from argus_api import model_policy
 from argus_api.agents import service as agents
 from argus_api.auth import Identity
 from argus_api.db import Database
@@ -477,6 +480,63 @@ async def test_a_persisted_legacy_pool_cannot_keep_filtering_accounts(
         pool = await fleet.get_pool(conn, "web")
     assert pool.nanoclaw is not None
     assert "account_providers" not in pool.nanoclaw.model_dump()
+
+
+async def test_nanoclaw_instance_gets_the_effective_model_policy(
+    db: Database,
+    registry: TargetRegistry,
+    target: FakeTarget,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ARGUS_MODEL_POLICY", raising=False)
+    path = tmp_path / "model-policy.json"
+    policy = {
+        "implementation": {"codex": ["b-2", "b-1"]},
+        "harness": {"claude": ["a-1"]},
+    }
+    path.write_text(json.dumps(policy, indent=2))
+    settings = replace(SETTINGS, model_policy_path=path)
+    await _nanoclaw_pool(db)
+    await tick(db, registry, settings)
+    [spec] = target.specs.values()
+    env = spec.env["ARGUS_MODEL_POLICY"]
+    assert env == (
+        '{"harness":{"claude":["a-1"]},"implementation":{"codex":["b-2","b-1"]}}'
+    )
+    # The same policy and revision GET /api/models reports.
+    served = model_policy._read(path)
+    assert model_policy.revision(json.loads(env)) == served.revision
+    assert (env, served.revision) == model_policy.effective_env(path)
+
+
+async def test_invalid_model_policy_fails_the_start_with_a_named_error(
+    db: Database,
+    registry: TargetRegistry,
+    target: FakeTarget,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ARGUS_MODEL_POLICY", raising=False)
+    path = tmp_path / "model-policy.json"
+    path.write_text('{"harness":{"codex":[]},"implementation":{}}')
+    await _nanoclaw_pool(db)
+    await tick(db, registry, replace(SETTINGS, model_policy_path=path))
+    assert target.specs == {}
+    [inst] = await instances(db)
+    assert inst.last_error is not None
+    assert "model policy is invalid" in inst.last_error
+    assert "harness.codex" in inst.last_error
+
+
+async def test_plain_pool_gets_no_model_policy_env(
+    db: Database, registry: TargetRegistry, target: FakeTarget, tmp_path: Path
+) -> None:
+    await make_pool(db, 1)
+    settings = replace(SETTINGS, model_policy_path=tmp_path / "model-policy.json")
+    await tick(db, registry, settings)
+    [spec] = target.specs.values()
+    assert "ARGUS_MODEL_POLICY" not in spec.env
 
 
 async def _nanoclaw_pool(db: Database) -> None:

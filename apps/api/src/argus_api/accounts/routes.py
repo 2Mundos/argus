@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from argus_core import claude_auth, codex_auth, cursor_auth
+from argus_core import claude_auth, codex_auth, cursor_auth, custom_accounts
 from argus_core.accounts import (
     Account,
     AccountCreate,
@@ -24,7 +24,7 @@ from argus_core.cost import CostReport, CostWindow
 from fastapi import APIRouter, Query, Request, status
 from pydantic import BaseModel, Field
 
-from argus_api.accounts import cost, pricing, service, usage
+from argus_api.accounts import cost, custom, pricing, service, usage
 from argus_api.db import utcnow
 from argus_api.deps import (
     AdminDep,
@@ -36,7 +36,8 @@ from argus_api.deps import (
     SettingsDep,
 )
 from argus_api.errors import ForbiddenError, ValidationFailedError
-from argus_api.secrets import SecretStoreError
+from argus_api.secrets import SecretStoreError, ref_name
+from argus_api.tasks import service as tasks
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -54,6 +55,9 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
             found = codex_auth.validate(credential)
         elif provider == cursor_auth.PROVIDER:
             found = cursor_auth.validate(credential)
+        elif provider == custom_accounts.PROVIDER:
+            custom_accounts.validate_credential(credential)
+            return "api_key", "api_key"
         elif provider == "gitea":
             token = credential.get("token")
             username = credential.get("username")
@@ -85,6 +89,7 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
         claude_auth.ClaudeAuthError,
         codex_auth.CodexAuthError,
         cursor_auth.CursorAuthError,
+        custom_accounts.CustomAccountError,
     ) as exc:
         raise ValidationFailedError(f"invalid {provider} credential: {exc}") from None
     return found.kind, found.mode
@@ -155,6 +160,10 @@ async def create_account(
     if body.provider == "gitea" and body.credential is None:
         raise ValidationFailedError(
             "invalid gitea credential: username and token must be validated at registration"
+        )
+    if body.provider == custom_accounts.PROVIDER and body.credential is None:
+        raise ValidationFailedError(
+            "invalid custom credential: give the api_key as credential"
         )
     if checked := check_credential(body.provider, body.credential):
         body = body.model_copy(update={"kind": checked[0]})
@@ -299,6 +308,53 @@ async def refresh_quota(
     return await request.app.state.quota.refresh(account_id)
 
 
+async def _custom_account(
+    request: Request, db: DbDep, account_id: str
+) -> tuple[custom_accounts.CustomConfig, str | None]:
+    """The account's config and (if stored) key; 422 for any other provider."""
+    async with db.read() as conn:
+        account = await service.get_account(conn, account_id, utcnow())
+    if account.config is None:
+        raise ValidationFailedError("not a custom account")
+    name = ref_name(account.secret_ref)
+    stored = request.app.state.secrets.get(name) if name else None
+    key = stored.get("api_key") if isinstance(stored, dict) else None
+    return account.config, key if isinstance(key, str) else None
+
+
+@router.post("/{account_id}/probe")
+async def probe_custom_account(
+    account_id: str, request: Request, db: DbDep, _: AdminDep
+) -> custom.CustomProbe:
+    """Readiness of a custom account: `GET {base_url}/models` with its key (custom
+    accounts spec 3). Returns the model ids as suggestions; never the key, and
+    only a fixed reason, never upstream text."""
+    config, key = await _custom_account(request, db, account_id)
+    if key is None:
+        return custom.CustomProbe(status="failed", reason="credential not found")
+    return await custom.probe(
+        config, key, getattr(request.app.state, "custom_transport", None)
+    )
+
+
+@router.get("/{account_id}/models/{author}/{slug}/endpoints")
+async def custom_model_endpoints(
+    account_id: str,
+    author: str,
+    slug: str,
+    request: Request,
+    db: DbDep,
+    _: ManagerDep,
+) -> custom_accounts.ModelEndpoints:
+    """The hosts serving an OpenRouter model, with quantization, context and price,
+    for the routing pickers (custom accounts spec 3). Proxied; `author` and `slug`
+    are validated as one path segment each."""
+    config, _key = await _custom_account(request, db, account_id)
+    return await custom.model_endpoints(
+        config, author, slug, getattr(request.app.state, "custom_transport", None)
+    )
+
+
 @router.patch("/{account_id}")
 async def update_account(
     account_id: str, body: AccountUpdate, db: DbDep, caller: AdminDep
@@ -440,12 +496,20 @@ async def update_credential(
 ) -> None:
     """Replace the credential (e.g. refreshed OAuth tokens). Allowed for the agent
     holding a lease on the account, or an admin. If it cannot be persisted, the
-    account is disabled rather than left with a token that would be lost."""
+    account is disabled rather than left with a token that would be lost.
+
+    An agent must also hold the live task claim named by `task_id` and `attempt`,
+    checked before the store write (no transaction spans the store's I/O)."""
     if caller.agent_id is None and caller.scope != "admin":
         raise ForbiddenError("requires the leasing agent or an admin")
     async with db.read() as conn:
         name = await service.secret_name_for_update(conn, account_id, caller.agent_id)
         account = await service.get_account(conn, account_id, utcnow())
+    if caller.agent_id is not None:
+        if body.task_id is None or body.attempt is None:
+            raise ValidationFailedError("task_id and attempt are required")
+        async with db.write() as tx:
+            await tasks.check_lease(tx, body.task_id, body.attempt, caller.agent_id)
     checked = check_credential(account.provider, body.credential)
     if caller.agent_id is not None:
         prior = secrets.get(name)
@@ -455,6 +519,10 @@ async def update_credential(
             raise ValidationFailedError(
                 "an agent may rotate only the same credential document shape"
             )
+        if account.provider == "gitea" and prior.get("username") != body.credential.get(
+            "username"
+        ):
+            raise ValidationFailedError("gitea username cannot change during rotation")
         if checked is not None and checked[0] != account.kind:
             raise ValidationFailedError(
                 "credential kind cannot change during agent rotation"

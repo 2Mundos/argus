@@ -12,6 +12,7 @@ from fastapi import APIRouter, Query, status
 from pydantic import BaseModel
 
 from argus_api import inbox as inbox_module
+from argus_api.access import require_decision_readable, worker_decision_filter
 from argus_api.decisions import service, store, views
 from argus_api.decisions.service import AnswerBatch, AnsweredDecision, AnswerOutcome
 from argus_api.decisions.views import DecisionPage
@@ -52,7 +53,7 @@ async def inbox(
 @router.get("/decisions")
 async def list_decisions(
     db: DbDep,
-    _: CallerDep,
+    caller: CallerDep,
     state: DecisionState | None = DecisionState.OPEN,
     subject_id: str | None = None,
     project: str | None = None,
@@ -61,7 +62,9 @@ async def list_decisions(
     limit: int = DEFAULT_LIMIT,
     cursor: str | None = None,
 ) -> DecisionPage:
-    """Decisions oldest first, in pages (max 100); open ones by default."""
+    """Decisions oldest first, in pages (max 100); open ones by default.
+    Workers only see decisions for tasks they have leased (and knowledge
+    proposals in those projects)."""
     async with db.snapshot() as snap:
         return await views.list_decisions(
             snap,
@@ -72,12 +75,14 @@ async def list_decisions(
             view=view,
             limit=limit,
             cursor=cursor,
+            decision_scope=worker_decision_filter(caller),
         )
 
 
 @router.get("/decisions/{decision_id}")
-async def get_decision(decision_id: str, db: DbDep, _: CallerDep) -> Decision:
+async def get_decision(decision_id: str, db: DbDep, caller: CallerDep) -> Decision:
     async with db.read() as conn:
+        await require_decision_readable(conn, caller, decision_id)
         return await store.get(conn, decision_id)
 
 

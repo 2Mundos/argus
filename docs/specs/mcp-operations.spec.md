@@ -44,8 +44,9 @@ Findings outside the gap list:
 
 - **Credential exposure:** `Pool.env` values reach every manager-scope reader,
   including MCP `list_pools`. Templates may put tokens there.
-- **Read scope:** `CallerDep` lets a worker read any task, decision or artifact.
-  This spec keeps that rule unchanged (§4).
+- **Read scope:** narrowed in [worker-read-scope](worker-read-scope.spec.md):
+  workers only see leased tasks/artifacts and project-scoped knowledge/events;
+  orchestrators and admins stay global.
 
 # 2. Non-Goals
 
@@ -105,6 +106,9 @@ Findings outside the gap list:
 - **Batch read:** `GET /api/tasks?ids=a,b,c&view=detail` (≤50 ids) → MCP
   `get_tasks(ids, view)`. Unknown ids come back in `missing: [...]`; nothing
   fails as a whole. `ids` takes no other filter or cursor (`422 ids_exclusive`).
+- **Task log:** MCP `get_task_log(task_id, attempt?, after?, limit?)` reads the live
+  log tail like `GET /api/tasks/{id}/log` ([task live log](task-live-log.spec.md) 3.5),
+  with REST's permissions; it is listed to every scope.
 - **Decisions:** MCP `list_decisions` exposes REST's `state` and `subject_id`
   filters and the new `project` and `kind` filters, with the page envelope. Add
   MCP `get_decision`.
@@ -174,6 +178,11 @@ Findings outside the gap list:
   `null` removes it. A stale version is `409 stale_version` with the current
   version in `details`; a result that breaks a pool rule is `422 invalid_pool`.
   `update_pool` is listed to admins only.
+- **Model policy:** `GET/PUT/DELETE /api/models` ([model selection](model-selection.spec.md))
+  → MCP `get_model_policy` (anyone), `set_model_policy(harness, implementation)` and
+  `reset_model_policy` (admin only). They are thin calls to the same routes, so
+  validation (422 naming the chain), the audit event and the env-wins rule are
+  identical. Availability of a model at the provider is not checked.
 - **Redaction:** in every pool response, on every surface, `env` comes back as
   `{key: "***"}` unless the caller is admin and asks for `reveal_env=true` over
   REST (`GET /api/pools/{name}`; anyone else gets a 403). MCP never sends that
@@ -209,7 +218,7 @@ Findings outside the gap list:
   managers (orchestrator and admin), or anyone. Workers see the task-working
   and knowledge tools. Orchestrators see everything. Admins see everything
   except the tools that need an agent identity (`claim_task`, `heartbeat`, …).
-  Admin-only tools (`update_pool`) appear only for admins. A test calls every
+  Admin-only tools (`update_pool`, `set_model_policy`, `reset_model_policy`) appear only for admins. A test calls every
   listed tool for each scope and fails if REST refuses one on scope. Calling an
   unlisted tool still follows REST's rules. Hiding a tool is not access control.
 - The server `instructions` name the inbox journey and the fleet journey. They
@@ -280,10 +289,9 @@ heartbeat's `runtime`). The inbox journey is unchanged in calls; its context is
 
 # 4. Open Questions
 
-- **Worker read scope:** today a worker can read any task, decision or artifact
-  (`CallerDep`). This spec keeps that rule, as the issue requires. Whether to
-  narrow it is a separate issue and spec: workers may rely on reading their
-  dependencies' results.
+- **Worker dependency reads:** workers no longer have global task reads (see
+  [worker-read-scope](worker-read-scope.spec.md)). If dependency results must be
+  readable without a lease, that needs an explicit grant rule.
 - **Structured summaries per artifact role:** which roles have a schema worth
   parsing into a summary. Decide once roles are in use.
 

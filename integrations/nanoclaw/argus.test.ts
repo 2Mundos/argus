@@ -1,14 +1,23 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
+import { log } from "../log.js";
 import type { ChannelSetup } from "./adapter.js";
 import {
   type ArgusConfig,
+  ArgusError,
   createArgusAdapter,
+  createDelegateLogRelay,
   frameUntrustedTaskData,
   fromEnv,
   parseFramedUntrustedTaskData,
   parseReply,
+  relayLines,
   renderTask,
+  resetRelayFile,
+  takeLogBatch,
   taskAuthorizesMerge,
   UNTRUSTED_TASK_DATA_RULES,
   utf8ByteLength,
@@ -993,5 +1002,387 @@ describe("describeError", () => {
       "<html>oops</html>",
     );
     expect(describeError({ detail: { weird: true } }, "x").message).toBe('{"weird":true}');
+  });
+});
+
+describe("delegate live log relay", () => {
+  const rec = (lines: string[], over: Record<string, unknown> = {}) =>
+    `${JSON.stringify({ v: 1, task_id: "t1", attempt: 1, at: "x", lines, ...over })}\n`;
+  const tmp = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-"));
+    return { dir, file: path.join(dir, "argus-task-log.jsonl") };
+  };
+
+  it("only takes records of this task and attempt and ignores torn lines", () => {
+    const text =
+      rec(["a", "b"]) +
+      rec(["other attempt"], { attempt: 2 }) +
+      rec(["other task"], { task_id: "t9" }) +
+      "{torn\n" +
+      rec(["c", 5 as unknown as string, "d".repeat(3000)]);
+    const got = relayLines(text, { id: "t1", attempt: 1 });
+    expect(got.slice(0, 3)).toEqual(["a", "b", "c"]);
+    expect(got[3]).toHaveLength(2000);
+    expect(got).toHaveLength(4);
+  });
+
+  it("batches stay within 200 lines and 64 KiB", () => {
+    expect(takeLogBatch(Array.from({ length: 450 }, (_, i) => `l${i}`))).toHaveLength(200);
+    const big = Array.from({ length: 100 }, () => "x".repeat(2000));
+    const batch = takeLogBatch(big);
+    expect(batch.length).toBeLessThan(100);
+    expect(JSON.stringify({ attempt: 1, source: "delegate", lines: batch }).length).toBeLessThan(
+      64 * 1024,
+    );
+    expect(takeLogBatch(["only"])).toEqual(["only"]);
+  });
+
+  it("posts what the delegate wrote, in order, as source delegate; a half-written record waits", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      post: async (b) => void posts.push(b),
+    });
+    await relay.poll(); // no file yet
+    fs.writeFileSync(file, rec(["one", "two"]) + rec(["three"]).slice(0, 20));
+    await relay.poll();
+    expect(posts).toEqual([{ attempt: 1, source: "delegate", lines: ["one", "two"] }]);
+    fs.appendFileSync(file, rec(["three"]).slice(20));
+    await relay.poll();
+    expect(posts[1].lines).toEqual(["three"]);
+    await relay.poll();
+    expect(posts).toHaveLength(2);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("backs off on 429 without losing the batch", async () => {
+    const { dir, file } = tmp();
+    let clock = 0;
+    let status = 429;
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      now: () => clock,
+      post: async (b) => {
+        posts.push(b);
+        if (status !== 200) throw new ArgusError(status, "rate_limited", "slow down");
+      },
+    });
+    fs.writeFileSync(file, rec(["a"]));
+    await relay.poll();
+    expect(posts).toHaveLength(1);
+    clock += 500;
+    await relay.poll(); // still backing off: no request
+    expect(posts).toHaveLength(1);
+    clock += 3000;
+    status = 200;
+    await relay.poll();
+    expect(posts).toHaveLength(2);
+    expect(posts[1].lines).toEqual(["a"]);
+    expect(relay.stopped).toBe(false);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("stops for good on stale_attempt / not_assignee, but only drops the batch on other 409s", async () => {
+    for (const [code, stops] of [
+      ["stale_attempt", true],
+      ["not_assignee", true],
+      ["lease_expired", false],
+    ] as const) {
+      const { dir, file } = tmp();
+      const posts: any[] = [];
+      const relay = createDelegateLogRelay({
+        file,
+        task: { id: "t1", attempt: 1 },
+        post: async (b) => {
+          posts.push(b);
+          throw new ArgusError(409, code, "no");
+        },
+      });
+      fs.writeFileSync(file, rec(["a"]));
+      await relay.poll();
+      expect(relay.stopped).toBe(stops);
+      fs.appendFileSync(file, rec(["b"]));
+      await relay.poll();
+      expect(posts.length).toBe(stops ? 1 : 2);
+      expect(posts.at(-1).lines).toEqual(stops ? ["a"] : ["b"]); // the refused batch is not resent
+      fs.rmSync(dir, { recursive: true });
+    }
+  });
+
+  it("drops a batch the server can never accept (413/422)", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      post: async (b) => {
+        posts.push(b);
+        throw new ArgusError(422, "validation_failed", "bad");
+      },
+    });
+    fs.writeFileSync(file, rec(["a"]));
+    await relay.poll();
+    await relay.poll();
+    expect(posts).toHaveLength(1);
+    expect(relay.stopped).toBe(false);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("never follows a symlink planted at the relay path: the target stays untouched and unread", async () => {
+    const { dir, file } = tmp();
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "outside-"));
+    const target = path.join(outside, "host-secret");
+    fs.writeFileSync(target, rec(["host secret"]));
+    // Planted before the host resets the file: the link is replaced, not truncated through.
+    fs.symlinkSync(target, file);
+    await resetRelayFile(file);
+    expect(fs.lstatSync(file).isFile()).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toBe(rec(["host secret"]));
+    // Planted after: the relay refuses to open it and stops.
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      post: async (b) => void posts.push(b),
+    });
+    fs.rmSync(file);
+    fs.symlinkSync(target, file);
+    await relay.poll();
+    await relay.drain(50);
+    expect(posts).toEqual([]);
+    expect(relay.stopped).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toBe(rec(["host secret"]));
+    fs.rmSync(dir, { recursive: true });
+    fs.rmSync(outside, { recursive: true });
+  });
+
+  it("refuses a hard link, a FIFO, and a symlinked parent directory", async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "outside-"));
+    const target = path.join(outside, "host-secret");
+    fs.writeFileSync(target, rec(["host secret"]));
+    const cases: Array<[string, (file: string) => void]> = [
+      ["hard link", (file) => fs.linkSync(target, file)],
+      ["fifo", (file) => execFileSync("mkfifo", [file])],
+    ];
+    for (const [, plant] of cases) {
+      const { dir, file } = tmp();
+      plant(file);
+      const posts: any[] = [];
+      const relay = createDelegateLogRelay({
+        file,
+        task: { id: "t1", attempt: 1 },
+        post: async (b) => void posts.push(b),
+      });
+      await relay.poll();
+      expect(posts).toEqual([]);
+      expect(relay.stopped).toBe(true);
+      fs.rmSync(dir, { recursive: true });
+    }
+    const { dir } = tmp();
+    const linkedDir = path.join(dir, "group");
+    fs.symlinkSync(outside, linkedDir);
+    await expect(resetRelayFile(path.join(linkedDir, "host-secret"))).rejects.toThrow();
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file: path.join(linkedDir, "host-secret"),
+      task: { id: "t1", attempt: 1 },
+      post: async (b) => void posts.push(b),
+    });
+    await relay.poll();
+    expect(posts).toEqual([]);
+    expect(fs.readFileSync(target, "utf8")).toBe(rec(["host secret"]));
+    fs.rmSync(dir, { recursive: true });
+    fs.rmSync(outside, { recursive: true });
+  });
+
+  it("skips a record longer than the read buffer instead of stalling", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      post: async (b) => void posts.push(b),
+    });
+    fs.writeFileSync(file, "x".repeat(5 * 1024 * 1024));
+    await relay.poll(); // a full buffer and no newline
+    fs.appendFileSync(file, `tail of the huge record\n${rec(["after"])}`);
+    await relay.poll();
+    await relay.poll();
+    expect(posts.map((p) => p.lines)).toEqual([["after"]]);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("the final drain posts every pending batch, pacing to the server limit, within a deadline", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    let first = true;
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      paceMs: 5,
+      post: async (b) => {
+        posts.push(b);
+        if (first) {
+          first = false;
+          throw new ArgusError(503, "unavailable", "later");
+        }
+      },
+    });
+    fs.writeFileSync(file, rec(Array.from({ length: 450 }, (_, i) => `l${i}`)));
+    await relay.drain(5000);
+    // 503 backs off 2 s on the injected clock (real time here), then three batches.
+    expect(posts.slice(1).flatMap((p) => p.lines)).toHaveLength(450);
+    // A drain that cannot finish returns at its deadline.
+    const stuck = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      paceMs: 5,
+      post: async () => {
+        throw new ArgusError(503, "unavailable", "later");
+      },
+    });
+    const t0 = Date.now();
+    await stuck.drain(200);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    fs.rmSync(dir, { recursive: true });
+  }, 10_000);
+
+  it("the final drain paces from the last post, so a drain right after a poll is not refused", async () => {
+    const { dir, file } = tmp();
+    const pace = 300;
+    const accepted: number[] = [];
+    const refused: number[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      paceMs: pace,
+      post: async () => {
+        const t = Date.now();
+        if (accepted.length && t - (accepted.at(-1) as number) < pace) {
+          refused.push(t);
+          throw new ArgusError(429, "rate_limited", "slow down");
+        }
+        accepted.push(t);
+      },
+    });
+    fs.writeFileSync(file, rec(["periodic"]));
+    await relay.poll();
+    fs.appendFileSync(file, rec(["last"]));
+    await relay.drain(5000);
+    expect(refused).toEqual([]);
+    expect(accepted).toHaveLength(2);
+    expect(accepted[1] - accepted[0]).toBeGreaterThanOrEqual(pace - 5);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("the final drain keeps reading while unread bytes remain", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      paceMs: 5,
+      post: async (b) => void posts.push(b),
+    });
+    // A record longer than one read: the first poll only skips, nothing is pending yet.
+    fs.writeFileSync(file, `${"x".repeat(5 * 1024 * 1024)}\n${rec(["after"])}`);
+    await relay.drain(5000);
+    expect(posts.map((p) => p.lines)).toEqual([["after"]]);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("the final drain stops after repeated failing polls instead of spinning", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      paceMs: 0,
+      post: async (b) => void posts.push(b),
+    });
+    fs.writeFileSync(file, rec(Array.from({ length: 450 }, (_, i) => `l${i}`)));
+    await relay.poll(); // one batch posted, the rest pending
+    fs.rmSync(dir, { recursive: true }); // every later read throws
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const t0 = Date.now();
+      await relay.drain(5000);
+      expect(Date.now() - t0).toBeLessThan(1000);
+      expect(warn.mock.calls.length).toBeLessThanOrEqual(4); // three failures, one give-up
+      expect(warn.mock.calls.at(-1)?.[0]).toMatch(/final drain abandoned/);
+      expect(posts).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("the final drain does not count failed periodic polls from before it", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    let slow = true;
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      paceMs: 5,
+      post: async (b) => {
+        if (slow) {
+          slow = false;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        posts.push(b);
+      },
+    });
+    fs.rmSync(dir, { recursive: true });
+    const warn = vi.spyOn(log, "warn");
+    try {
+      for (let i = 0; i < 3; i++) await relay.poll(); // three periodic polls fail
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(file, rec(Array.from({ length: 250 }, (_, i) => `l${i}`)));
+      const inFlight = relay.poll(); // a periodic poll is still posting when the drain starts
+      await relay.drain(5000);
+      await inFlight;
+      expect(warn.mock.calls.some((c) => /final drain abandoned/.test(String(c[0])))).toBe(false);
+      expect(posts.flatMap((p) => p.lines)).toHaveLength(250);
+    } finally {
+      warn.mockRestore();
+      fs.rmSync(dir, { recursive: true });
+    }
+  });
+
+  it("the adapter relays the delegate log with the token on the host side only", async () => {
+    const { dir, file } = tmp();
+    fs.writeFileSync(file, rec(["stale line from a previous run"]));
+    const fake = fakeArgus({ tasks: [task()] });
+    const authHeaders: string[] = [];
+    const inner = fake.fetchImpl;
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      if (String(url).endsWith("/tasks/t1/log"))
+        authHeaders.push((init.headers as Record<string, string>).Authorization);
+      return inner(url as never, init);
+    }) as unknown as typeof fetch;
+    const h = harness(
+      { calls: fake.calls, fetchImpl },
+      {
+        delegateLogFile: async () => file,
+        logPollMs: 20,
+      },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    // The relay file is the only thing the container can write; it starts empty.
+    expect(fs.readFileSync(file, "utf8")).toBe("");
+    fs.appendFileSync(file, rec(["▸ Bash ls", "  ↳ ok"]));
+    await until(() => fake.calls.some((c) => c.path === "/tasks/t1/log"));
+    const post = fake.calls.find((c) => c.path === "/tasks/t1/log")!;
+    expect(post.body).toEqual({ attempt: 1, source: "delegate", lines: ["▸ Bash ls", "  ↳ ok"] });
+    expect(authHeaders[0]).toBe("Bearer argus_agent_x");
+    expect(JSON.stringify(post.body)).not.toContain("argus_agent_x");
+    expect(fs.readFileSync(file, "utf8")).not.toContain("argus_agent_x");
+    fs.rmSync(dir, { recursive: true });
   });
 });
