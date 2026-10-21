@@ -12,7 +12,7 @@ from argus_core.tasks import (
     TaskState,
     validate_milestone,
 )
-from fastapi import APIRouter, Header, Query, Response, status
+from fastapi import APIRouter, Query, Response, status
 from pydantic import BaseModel, Field, model_validator
 
 from argus_api.access import require_task_readable, worker_task_filter
@@ -26,6 +26,7 @@ from argus_api.deps import (
     ManagerDep,
     SecretsDep,
     SettingsDep,
+    TokenDep,
 )
 from argus_api.errors import ValidationFailedError
 from argus_api.events import Event, OverflowedError
@@ -243,17 +244,16 @@ async def post_log(
     body: LogRequest,
     db: DbDep,
     agent_id: AgentDep,
-    authorization: Annotated[str | None, Header()] = None,
+    token: TokenDep,
 ) -> log.LogAccepted:
     """Append output lines to the live log of the attempt you hold (agent token).
     Up to 200 lines of 2000 characters (longer ones are cut) and 64 KiB per batch,
     one batch per second per source. Secrets are redacted before storing; the
     batch is published as a `task.log` event and stored in a ring of 2000 lines
     per attempt. Fenced like progress: a stale attempt is 409 `stale_attempt`."""
-    token = (
-        (authorization or "").removeprefix("Bearer ").removeprefix("bearer ").strip()
-    )
-    lines = log.prepare(body.lines, (token,))  # redaction stays outside the writer
+    lines = log.prepare(
+        body.lines, (token,) if token else ()
+    )  # redaction stays outside the writer
     async with db.write() as tx:
         return await log.append(tx, agent_id, task_id, body.attempt, body.source, lines)
 
@@ -263,8 +263,8 @@ async def get_log(
     task_id: str,
     db: DbDep,
     caller: CallerDep,
-    attempt: Annotated[int | None, Query(ge=0)] = None,
-    after: Annotated[int | None, Query(ge=0)] = None,
+    attempt: Annotated[int | None, Query(ge=0, le=log.MAX_SEQ)] = None,
+    after: Annotated[int | None, Query(ge=0, le=log.MAX_SEQ)] = None,
     limit: Annotated[int, Query(ge=1, le=log.MAX_READ)] = log.DEFAULT_TAIL,
 ) -> log.LogPage:
     """Log lines of an attempt (default: the current one), oldest first. With

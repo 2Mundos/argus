@@ -416,6 +416,28 @@ def test_rest_permissions_and_contract(client: TestClient) -> None:
     assert "output_at" in client.get("/openapi.json").text
 
 
+def test_the_token_is_masked_whatever_the_scheme_case(client: TestClient) -> None:
+    claimed, _, _, token = start(client)
+    url = f"/api/tasks/{claimed['id']}/log"
+    body = {
+        "attempt": claimed["attempt"],
+        "source": "worker",
+        "lines": [f"saw {token}"],
+    }
+    res = client.post(url, json=body, headers={"Authorization": f"BEARER  {token}"})
+    assert res.status_code == 200, res.text
+    got = client.get(url).json()
+    assert [ln["line"] for ln in got["lines"]] == ["saw [redacted]"]
+
+
+def test_read_bounds_are_422_not_500(client: TestClient) -> None:
+    claimed, *_ = start(client)
+    url = f"/api/tasks/{claimed['id']}/log"
+    for param in ("attempt", "after"):
+        assert client.get(f"{url}?{param}={2**63}").status_code == 422
+        assert client.get(f"{url}?{param}={2**63 - 1}").status_code == 200
+
+
 def test_mcp_get_task_log(client: TestClient) -> None:
     from test_mcp import rpc, tool
 

@@ -24,6 +24,7 @@ RING_LINES = 2000  # per attempt
 KEEP_ATTEMPTS = 3  # the current attempt and the two before it
 DEFAULT_TAIL = 200
 MAX_READ = 1000
+MAX_SEQ = 2**63 - 1  # SQLite INTEGER: a larger bound would overflow (500, not 422)
 
 Source = Literal["worker", "delegate"]
 
