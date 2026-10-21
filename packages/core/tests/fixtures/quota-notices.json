@@ -112,5 +112,13 @@
     "provider": "openai",
     "notice": "The agent run failed. Check the logs for details.",
     "exhausted": false
+  },
+  { "provider": "custom", "notice": "429 Rate limit", "exhausted": true, "until": null },
+  { "provider": "custom", "notice": "HTTP 402 Payment required", "exhausted": true, "until": null },
+  { "provider": "custom", "notice": "insufficient credits", "exhausted": true, "until": null },
+  {
+    "provider": "custom",
+    "notice": "The agent run failed. Check the logs for details.",
+    "exhausted": false
   }
 ]

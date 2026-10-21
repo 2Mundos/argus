@@ -31,8 +31,15 @@ cp "$here/argus-cursor-stub.test.ts" "$target/src/gateway-providers/argus-cursor
 cp "$here/argus-claude-stub.ts" "$target/src/gateway-providers/argus-claude-stub.ts"
 cp "$here/argus-claude-stub.test.ts" "$target/src/gateway-providers/argus-claude-stub.test.ts"
 cp "$here/engines/anthropic-redirect.mjs" "$target/src/gateway-providers/anthropic-redirect.mjs"
+mkdir -p "$target/src/gateway-providers/engines" "$target/dist/gateway-providers/engines"
+cp "$here/engines/account-settings.mjs" "$here/engines/anthropic-openai-bridge.mjs" \
+  "$target/src/gateway-providers/engines/" "$target/dist/gateway-providers/engines/"
 cp "$here/argus-local-harness.ts" "$target/src/gateway-providers/argus-local-harness.ts"
 cp "$here/argus-local-harness.test.ts" "$target/src/gateway-providers/argus-local-harness.test.ts"
+cp "$here/argus-custom-harness.ts" "$target/src/gateway-providers/argus-custom-harness.ts"
+cp "$here/argus-custom-harness.test.ts" "$target/src/gateway-providers/argus-custom-harness.test.ts"
+cp "$here/argus-custom-bridge.ts" "$target/src/gateway-providers/argus-custom-bridge.ts"
+cp "$here/argus-custom-bridge.test.ts" "$target/src/gateway-providers/argus-custom-bridge.test.ts"
 # The harness and forwarder import "./engines/anthropic-redirect.mjs" (repo layout); give both
 # installed directories that path, with types for tsc and the runtime copy in dist/.
 for dir in channels gateway-providers; do

@@ -45,15 +45,14 @@ QUOTA_NOTICES: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 # An expired engine login is handled like an exhausted account: lease another one.
+_AUTH_EXPIRED = re.compile(
+    r"^(?:error:\s*)?(?:http\s*)?401\b.*token_expired|^(?:error:\s*)?token_expired\b"
+    r"|^(?:error:\s*)?(?:http\s*)?401\b.*(?:authentication|unauthori[sz]ed)",
+    re.I,
+)
 AUTH_EXPIRED_NOTICES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    (
-        "openai",
-        re.compile(
-            r"^(?:error:\s*)?(?:http\s*)?401\b.*token_expired|^(?:error:\s*)?token_expired\b"
-            r"|^(?:error:\s*)?(?:http\s*)?401\b.*(?:authentication|unauthori[sz]ed)",
-            re.I,
-        ),
-    ),
+    ("openai", _AUTH_EXPIRED),
+    ("custom", _AUTH_EXPIRED),
 )
 
 _PREFIX = re.compile(r"^(?:error:\s*|reconnecting\.{3}\s*\d+/\d+:\s*)", re.I)

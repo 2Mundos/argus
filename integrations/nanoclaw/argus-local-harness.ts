@@ -185,7 +185,7 @@ export function removeLocalHarnessFile(dataDir: string, groupFolder: string): vo
   }
 }
 
-/** Read the harness file the Argus channel wrote for this agent group, if any. */
+/** Read harness files the Argus channel wrote for this agent group, if any. */
 export async function withLocalHarnessRuntimeForGroup(
   config: ContainerConfig,
   dataDir: string,
@@ -194,6 +194,11 @@ export async function withLocalHarnessRuntimeForGroup(
   const { getAgentGroup } = await import("../db/agent-groups.js");
   const group = await getAgentGroup(agentGroupId);
   if (!group) return config;
+  const { readCustomHarnessFile, withCustomHarnessRuntime } = await import(
+    "./argus-custom-harness.js"
+  );
+  const custom = readCustomHarnessFile(dataDir, group.folder);
+  if (custom) return withCustomHarnessRuntime(config, custom);
   const harness = readLocalHarnessFile(dataDir, group.folder);
   return withLocalHarnessRuntime(config, harness);
 }

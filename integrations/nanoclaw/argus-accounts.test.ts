@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import { accountsFromEnv, createArgusAdapter, renderTask } from "./argus.js";
@@ -9,6 +10,7 @@ import {
   applyLeasesDetailed,
   applyRepositoryLease,
   CURSOR_EXPIRY_MARGIN_MS,
+  runtimeProviders,
   classifyFailure,
   classifyLogTail,
   classifyProviderFailure,
@@ -538,11 +540,11 @@ describe("channel with accounts", () => {
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
     const claim = w.calls.find((c) => c.path === "/tasks/claim")!;
-    expect(claim.body).toMatchObject({ runtime_providers: ["anthropic", "openai", "local"] });
+    expect(claim.body).toMatchObject({ runtime_providers: ["anthropic", "openai", "local", "custom"] });
     // the restriction is the server's: the lease request is unchanged and names the task
     const leaseCall = w.calls.find((c) => c.path === "/accounts/lease")!;
     expect(leaseCall.body).toMatchObject({
-      runtime_providers: ["anthropic", "openai", "local"],
+      runtime_providers: ["anthropic", "openai", "local", "custom"],
       task_id: "t1",
       attempt: 1,
     });
@@ -815,10 +817,10 @@ describe("engine and executor leases in the channel", () => {
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
     const leaseCalls = w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body);
     expect(leaseCalls).toEqual([
-      { runtime_providers: ["anthropic", "openai", "local"], task_id: "t1", attempt: 1 },
+      { runtime_providers: ["anthropic", "openai", "local", "custom"], task_id: "t1", attempt: 1 },
       {
         role: "executor",
-        runtime_providers: ["anthropic", "openai", "local", "cursor"],
+        runtime_providers: ["anthropic", "openai", "local", "custom", "cursor"],
         reuse_held: true,
         task_id: "t1",
         attempt: 1,
@@ -899,6 +901,13 @@ describe("classifyFailure for Codex and by provider", () => {
   ])("treats %j as auth expiry for an openai engine", (text) => {
     expect(classifyFailure(text, "openai").kind).toBe("exhausted");
   });
+
+  it.each(["401 Unauthorized", "HTTP 401 unauthorized"])(
+    "treats %j as auth expiry for a custom engine",
+    (text) => {
+      expect(classifyFailure(text, "custom").kind).toBe("exhausted");
+    },
+  );
 
   it.each([
     "usage_limit_reached",
@@ -1084,10 +1093,10 @@ describe("cursor executor selection in the channel", () => {
     await adapter.setup(setup);
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
     expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
-      { runtime_providers: ["anthropic", "openai", "local"], task_id: "t1", attempt: 1 },
+      { runtime_providers: ["anthropic", "openai", "local", "custom"], task_id: "t1", attempt: 1 },
       {
         role: "executor",
-        runtime_providers: ["anthropic", "openai", "local", "cursor"],
+        runtime_providers: ["anthropic", "openai", "local", "custom", "cursor"],
         reuse_held: true,
         task_id: "t1",
         attempt: 1,
@@ -1181,7 +1190,7 @@ describe("structured providerFailure on a failure notice", () => {
     expect(call?.body).toEqual({
       reason: "OpenAI/Codex authentication expired",
       role: "engine",
-      runtime_providers: ["anthropic", "openai", "local"],
+      runtime_providers: ["anthropic", "openai", "local", "custom"],
       task_id: "t1",
       attempt: 1,
     });
@@ -1268,10 +1277,10 @@ describe("task-scoped repository auth", () => {
       );
       expect(h.inbound[0].content.text).not.toContain("dummy-gitea-token");
       expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
-        { runtime_providers: ["anthropic", "openai", "local"], task_id: "t1", attempt: 1 },
+        { runtime_providers: ["anthropic", "openai", "local", "custom"], task_id: "t1", attempt: 1 },
         {
           role: "executor",
-          runtime_providers: ["anthropic", "openai", "local", "cursor"],
+          runtime_providers: ["anthropic", "openai", "local", "custom", "cursor"],
           reuse_held: true,
           task_id: "t1",
           attempt: 1,
@@ -1618,7 +1627,7 @@ describe("global account selection in the channel", () => {
     expect(calls).toEqual([
       {
         role: "executor",
-        runtime_providers: ["anthropic", "openai", "local", "cursor"],
+        runtime_providers: ["anthropic", "openai", "local", "custom", "cursor"],
         reuse_held: true,
         task_id: "t1",
         attempt: 1,
@@ -1696,16 +1705,67 @@ describe("global account selection in the channel", () => {
   });
 });
 
+describe("custom (OpenRouter) engine accounts", () => {
+  const target = { identifier: "g", name: "G" };
+  const settings = {
+    base_url: "https://openrouter.ai/api/v1",
+    label: "openrouter",
+    model: "deepseek/deepseek-v4.1-flash-1017",
+    provider: null,
+  };
+
+  it("lists custom among engine runtime providers", () => {
+    expect(runtimeProviders("engine")).toContain("custom");
+    expect(runtimeProviders("executor")).not.toContain("custom");
+  });
+
+  it("applyLeases does not write a OneCLI secret for a custom engine lease", async () => {
+    const w = world({ leases: [] });
+    const engine = await applyLeasesDetailed(
+      w.onecli,
+      target,
+      [
+        lease("or", "sk-or-key", {
+          provider: "custom",
+          credential: { api_key: "sk-or-key" },
+          settings,
+        }),
+      ],
+    );
+    expect(engine.engine).toBe("claude");
+    expect(w.onecli.secrets).toHaveLength(0);
+    const agent = w.onecli.agents.find((a) => a.identifier === "g")!;
+    expect(agent.secrets).toHaveLength(0);
+  });
+
+  it("applyLeases still applies a separate cursor executor lease", async () => {
+    const w = world({ leases: [] });
+    await applyLeasesDetailed(w.onecli, target, [
+      lease("or", "sk-or-key", {
+        provider: "custom",
+        credential: { api_key: "sk-or-key" },
+        settings,
+      }),
+      cursorLease(),
+    ]);
+    expect(w.onecli.secrets.some((s) => s.name.includes("-cursor"))).toBe(true);
+    expect(w.onecli.secrets.some((s) => s.name.includes("-custom"))).toBe(false);
+  });
+});
+
 // -- quota failover (account-selection.spec.md 3.6) -----------------------------------
 
+function quotaNoticesFixturePath(): string {
+  // install.sh copies the canonical fixture beside this test in NanoClaw src/channels/.
+  const installed = fileURLToPath(new URL("./argus-quota-notices.json", import.meta.url));
+  if (existsSync(installed)) return installed;
+  return fileURLToPath(
+    new URL("../../packages/core/tests/fixtures/quota-notices.json", import.meta.url),
+  );
+}
+
 describe("quota notices shared with Argus", () => {
-  const cases = JSON.parse(
-    readFileSync(
-      // packages/core/tests/fixtures/quota-notices.json, copied here by install.sh.
-      new URL("./argus-quota-notices.json", import.meta.url),
-      "utf8",
-    ),
-  ) as Array<{
+  const cases = JSON.parse(readFileSync(quotaNoticesFixturePath(), "utf8")) as Array<{
     provider: string;
     notice: string;
     now?: string;
@@ -1715,7 +1775,7 @@ describe("quota notices shared with Argus", () => {
   it.each(cases)("$provider: $notice", (c) => {
     const f = classifyFailure(
       c.notice,
-      c.provider === "anthropic" ? "anthropic" : "openai",
+      c.provider === "anthropic" ? "anthropic" : c.provider === "custom" ? "custom" : "openai",
       c.now ? new Date(c.now) : undefined,
     );
     expect(f.kind).toBe(c.exhausted ? "exhausted" : "failed");
@@ -1894,7 +1954,7 @@ describe("no usable account at claim time", () => {
     // the lease retry sleeps 5 s before the task is given back
     await until(() => w.calls.some((c) => c.path === "/accounts/awaiting-quota"), 7000);
     const call = w.calls.find((c) => c.path === "/accounts/awaiting-quota")!;
-    expect(call.body).toMatchObject({ runtime_providers: ["anthropic", "openai", "local"] });
+    expect(call.body).toMatchObject({ runtime_providers: ["anthropic", "openai", "local", "custom"] });
     expect(w.calls.some((c) => c.path === "/tasks/claim")).toBe(true);
     expect(w.calls.find((c) => c.path === "/tasks/t1/fail")!.body).toMatchObject({
       reason: "quota",

@@ -49,12 +49,12 @@ In scope:
 # 3. Decisions Made
 
 - **OpenAI-compatible endpoints** (OpenRouter first) are `custom` accounts, see
-  [custom accounts](custom-accounts.spec.md). `engines/local.py::validate_url` and
-  the account `base_url` share one URL rule. Claude Code cannot use them; NanoClaw
-  does not lease them yet (vault host mapping missing). `argus-delegate` runs OpenCode
-  (`base_url`, `model`, `provider` block) and Codex (`base_url`, `model`; no `provider`
-  block) on them from the lease `settings`, with the key only in `ARGUS_ACCOUNT_API_KEY`
-  and never in argv; `claude` and `agent` are refused.
+  [custom accounts](custom-accounts.spec.md) and the NanoClaw [custom harness](custom-harness.spec.md).
+  `engines/local.py::validate_url` and the account `base_url` share one URL rule.
+  `argus-delegate` runs OpenCode (`base_url`, `model`, `provider` block) and Codex
+  (`base_url`, `model`; no `provider` block) on executor leases from `settings`, with
+  the key only in `ARGUS_ACCOUNT_API_KEY`; `claude` and `agent` are refused there.
+  The harness uses Claude Code against a host bridge, not the provider URL directly.
 
 - **Readiness is three separate facts, never one.** `installed` (the binary
   exists in the image and reports the pinned version), `authenticated` (a

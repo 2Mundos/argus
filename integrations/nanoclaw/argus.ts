@@ -41,6 +41,7 @@ import type { ChannelAdapter, ChannelDefaults, ChannelSetup, OutboundMessage } f
 import {
   type AccountLease,
   type ApplyTarget,
+  type CustomLeaseSettings,
   applyLeases,
   applyLeasesDetailed,
   applyRepositoryLease,
@@ -56,6 +57,12 @@ import {
   releaseRepositoryLease,
   runtimeProviders,
 } from "./argus-accounts.js";
+import { syncCustomHarnessBridge } from "./argus-custom-bridge.js";
+import {
+  customHarnessFromLease,
+  removeCustomHarnessFile,
+  writeCustomHarnessFile,
+} from "./argus-custom-harness.js";
 import { syncLocalStrataForward } from "./argus-local-forward.js";
 import {
   localHarnessFromCredential,
@@ -99,6 +106,8 @@ const RECYCLE_TIMEOUT_MS = 30_000; // wait for the old container to exit after a
 export interface HeldAccounts {
   engine: { provider: string; account_id: string } | null;
   executor: { provider: string; account_id: string } | null;
+  engine_settings?: CustomLeaseSettings | null;
+  executor_settings?: CustomLeaseSettings | null;
 }
 
 export interface ArgusConfig {
@@ -1105,9 +1114,17 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   async function prepareModels(task: ArgusTask): Promise<void> {
     if (!cfg.selectModels) return;
+    const engineLease = activeAccountLeases.find(
+      (l) => l.role !== "repository" && l.role !== "executor",
+    );
+    const executorLease = activeAccountLeases.find((l) => l.role === "executor");
     const selection = await cfg.selectModels(task, {
       engine: account ? { provider: account.provider, account_id: account.id } : null,
       executor: executor ? { provider: executor.provider, account_id: executor.id } : null,
+      engine_settings:
+        engineLease?.provider === "custom" ? (engineLease.settings ?? null) : null,
+      executor_settings:
+        executorLease?.provider === "custom" ? (executorLease.settings ?? null) : null,
     });
     const bytes = new TextEncoder().encode(JSON.stringify(selection, null, 2));
     const sha = createHash("sha256").update(bytes).digest("hex");
@@ -1339,6 +1356,32 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     } catch {
       /* integrations tests: no NanoClaw config module */
     }
+    const fetchImpl = cfg.fetch ?? fetch;
+    if (lease.provider === "custom" && lease.role !== "executor") {
+      removeLocalHarnessFile(dataDir, group.folder);
+      const key =
+        typeof lease.credential.api_key === "string" ? lease.credential.api_key.trim() : "";
+      const containerUrl = await syncCustomHarnessBridge(
+        group.folder,
+        lease.settings ?? null,
+        key || null,
+        fetchImpl,
+      );
+      if (!containerUrl || !lease.settings) {
+        log.warn("Custom engine lease is missing settings or api_key; harness not applied");
+        removeCustomHarnessFile(dataDir, group.folder);
+        return;
+      }
+      const harness = customHarnessFromLease(containerUrl, lease.settings);
+      if (!harness) {
+        removeCustomHarnessFile(dataDir, group.folder);
+        return;
+      }
+      await writeCustomHarnessFile(dataDir, group.folder, harness);
+      return;
+    }
+    await syncCustomHarnessBridge(group.folder, null, null, fetchImpl);
+    removeCustomHarnessFile(dataDir, group.folder);
     if (lease.provider === "local") {
       const harness = localHarnessFromCredential(lease.credential);
       if (!harness) {
@@ -1886,6 +1929,8 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
       executor_account_id: (held.executor ?? held.engine)?.account_id ?? null,
       preferred_executor: preferredExecutorForLease(held.engine, held.executor, task.complexity),
       complexity: task.complexity ?? "standard",
+      engine_settings: held.engine_settings ?? null,
+      executor_settings: held.executor_settings ?? null,
     });
     const dir = path.resolve("groups", group.folder);
     await mkdir(dir, { recursive: true });
