@@ -4,8 +4,16 @@
 # TAG may equal BASE's tag: the layer is added on top of BASE as it is now, so
 # running it twice stacks a harmless no-op layer. provision.sh calls it after
 # tagging the fresh build, so a rebuild from scratch reproduces the result.
+# The build context is a staging copy of this directory plus ../gitea-api.mjs,
+# which the layer installs but which lives one level up (shared with install.sh).
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 base="${1:?usage: apply-tools-layer.sh BASE TAG}"
 tag="${2:?usage: apply-tools-layer.sh BASE TAG}"
-docker build --build-arg "BASE=$base" -f "$here/Dockerfile.tools-layer" -t "$tag" "$here"
+gitea_src="$here/../gitea-api.mjs"
+[[ -f "$gitea_src" ]] || { echo "missing Gitea helper: $gitea_src" >&2; exit 2; }
+ctx="$(mktemp -d)"
+trap 'rm -rf "$ctx"' EXIT
+cp -p "$here"/*.mjs "$here"/*.json "$ctx/"
+cp -p "$gitea_src" "$ctx/gitea-api.mjs"
+docker build --build-arg "BASE=$base" -f "$here/Dockerfile.tools-layer" -t "$tag" "$ctx"

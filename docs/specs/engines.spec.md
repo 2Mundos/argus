@@ -194,6 +194,13 @@ In scope:
   CLI manifest, the image steps for opencode and the Cursor agent (checksum
   pinned), `argus-delegate.mjs` and its tests, `smoke.sh`, and the tools layer
   (`Dockerfile.tools-layer`, `apply-tools-layer.sh`: openssh-client and rsync on
-  top of NanoClaw's image, applied by `provision.sh`).
+  top of NanoClaw's image, applied by `provision.sh`; its build context is a
+  staged copy of `engines/` plus `../gitea-api.mjs`, and CI's `tools-layer` job
+  builds it on a minimal base and loads every `argus-delegate` import).
+  `patch-engines-dockerfile.py` (called by `install-engines.sh`) writes the
+  specialist CLIs block into NanoClaw's Dockerfile and upgrades blocks earlier
+  installs left: each module gets its install step, then the COPY line lists
+  every file the RUN step reads from `/tmp/argus-engines/`. Its tests run on
+  real Dockerfile states (`integrations/nanoclaw/fixtures/engines-dockerfile/`).
 - The dashboard combo reads `GET /api/engines` (a later increment); the
   catalogue already carries everything it needs.
