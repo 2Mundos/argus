@@ -33,8 +33,8 @@
  *                             instance ends; only when ARGUS_INSTANCE_ID is set)
  */
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { mkdir, open, rename, stat, writeFile } from "node:fs/promises";
+import { constants as fsc, readFileSync } from "node:fs";
+import { lstat, mkdir, open, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { log } from "../log.js";
 import type { ChannelAdapter, ChannelDefaults, ChannelSetup, OutboundMessage } from "./adapter.js";
@@ -478,6 +478,27 @@ const LOG_PENDING_MAX = 2000;
 const LOG_POLL_MS = 2000;
 const LOG_BACKOFF_MIN_MS = 2000;
 const LOG_BACKOFF_MAX_MS = 30_000;
+const LOG_READ_MAX = 4 * 1024 * 1024; // per poll; a longer record is skipped
+const LOG_DRAIN_MS = 5000; // the final drain waits at most this long
+const LOG_DRAIN_PACE_MS = 1100; // the server takes one batch per second per source
+
+/** The relay file sits in a directory the container can write: never follow a link there. */
+async function assertRealDir(dir: string): Promise<void> {
+  const st = await lstat(dir);
+  if (!st.isDirectory()) throw new Error("relay directory is not a plain directory");
+}
+
+/** Replace whatever is at `file` with a new empty regular file, without following a link. */
+export async function resetRelayFile(file: string): Promise<void> {
+  const dir = path.dirname(file);
+  await mkdir(dir, { recursive: true });
+  await assertRealDir(dir);
+  await unlink(file).catch((err) => {
+    if (err?.code !== "ENOENT") throw err;
+  });
+  const flags = fsc.O_WRONLY | fsc.O_CREAT | fsc.O_EXCL | fsc.O_NOFOLLOW;
+  await (await open(file, flags, 0o666)).close();
+}
 
 /** The lines of the relay records written for this very task and attempt; anything else is ignored. */
 export function relayLines(text: string, task: { id: string; attempt: number }): string[] {
@@ -519,6 +540,8 @@ export function createDelegateLogRelay(opts: {
   task: { id: string; attempt: number };
   post: (body: { attempt: number; source: "delegate"; lines: string[] }) => Promise<unknown>;
   now?: () => number;
+  /** Between batches in `drain()`; default just over the server's one-per-second limit. */
+  paceMs?: number;
 }) {
   const now = opts.now ?? Date.now;
   let offset = 0;
@@ -528,22 +551,53 @@ export function createDelegateLogRelay(opts: {
   let backoffMs = 0;
   let notBefore = 0;
 
+  let skipping = false; // inside a record longer than LOG_READ_MAX: drop it up to its newline
+
+  const unsafe = (why: string) => {
+    stopped = true;
+    log.warn("Delegate log relay file is not a plain file; relay stopped", {
+      task: opts.task.id,
+      why,
+    });
+  };
+
   async function readNew(): Promise<void> {
-    let size: number;
+    await assertRealDir(path.dirname(opts.file));
+    let handle: Awaited<ReturnType<typeof open>>;
     try {
-      size = (await stat(opts.file)).size;
-    } catch {
-      return; // not written yet
+      handle = await open(opts.file, fsc.O_RDONLY | fsc.O_NOFOLLOW | fsc.O_NONBLOCK);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === "ENOENT") return; // not written yet
+      if (code === "ELOOP") return unsafe("symlink");
+      throw err;
     }
-    if (size < offset) offset = 0; // truncated: start over
-    if (size === offset) return;
-    const handle = await open(opts.file, "r");
     try {
-      const buf = Buffer.alloc(Math.min(size - offset, 4 * 1024 * 1024));
+      const st = await handle.stat();
+      if (!st.isFile() || st.nlink !== 1) return unsafe(st.isFile() ? "hard link" : "not a file");
+      if (st.size < offset) offset = 0; // truncated or replaced: start over
+      if (st.size === offset) return;
+      const buf = Buffer.alloc(Math.min(st.size - offset, LOG_READ_MAX));
       const { bytesRead } = await handle.read(buf, 0, buf.length, offset);
-      const end = buf.subarray(0, bytesRead).lastIndexOf(0x0a) + 1; // whole records only
+      let chunk = buf.subarray(0, bytesRead);
+      if (skipping) {
+        const nl = chunk.indexOf(0x0a);
+        if (nl < 0) {
+          offset += bytesRead;
+          return;
+        }
+        offset += nl + 1;
+        chunk = chunk.subarray(nl + 1);
+        skipping = false;
+      }
+      const end = chunk.lastIndexOf(0x0a) + 1; // whole records only
+      if (end === 0 && chunk.length === LOG_READ_MAX) {
+        offset += chunk.length; // one record fills the buffer: skip it, do not stall
+        skipping = true;
+        return;
+      }
       offset += end;
-      pending.push(...relayLines(buf.subarray(0, end).toString("utf8"), opts.task));
+      pending.push(...relayLines(chunk.subarray(0, end).toString("utf8"), opts.task));
       if (pending.length > LOG_PENDING_MAX) pending = pending.slice(-LOG_PENDING_MAX);
     } finally {
       await handle.close();
@@ -555,6 +609,53 @@ export function createDelegateLogRelay(opts: {
     notBefore = now() + backoffMs;
   };
 
+  async function step(): Promise<void> {
+    await readNew();
+    if (!pending.length || now() < notBefore) return;
+    const batch = takeLogBatch(pending);
+    try {
+      await opts.post({ attempt: opts.task.attempt, source: "delegate", lines: batch });
+      pending = pending.slice(batch.length);
+      backoffMs = 0;
+    } catch (err) {
+      if (err instanceof ArgusError && err.status === 409) {
+        if (["stale_attempt", "not_assignee", "not_claimed"].includes(err.code)) {
+          stopped = true;
+          log.warn("Argus refuses the delegate log; relay stopped", {
+            task: opts.task.id,
+            code: err.code,
+          });
+        } else pending = pending.slice(batch.length);
+      } else if (err instanceof ArgusError && err.status === 401) {
+        stopped = true;
+      } else if (err instanceof ArgusError && err.permanent) {
+        pending = pending.slice(batch.length); // 413 / 422: this batch can never be accepted
+        log.warn("Argus rejected a delegate log batch; dropped", {
+          task: opts.task.id,
+          status: err.status,
+          code: err.code,
+        });
+      } else {
+        retryLater(); // 429, 5xx, network
+      }
+    }
+  }
+
+  /** Read what is new and post at most one batch. Never throws; false when a poll is in flight. */
+  async function poll(): Promise<boolean> {
+    if (stopped) return true;
+    if (busy) return false;
+    busy = true;
+    try {
+      await step();
+    } catch (err) {
+      log.warn("Delegate log relay failed (will retry)", { err: String(err).slice(0, 200) });
+    } finally {
+      busy = false;
+    }
+    return true;
+  }
+
   return {
     get stopped(): boolean {
       return stopped;
@@ -562,44 +663,18 @@ export function createDelegateLogRelay(opts: {
     stop(): void {
       stopped = true;
     },
-    /** Read what is new and post at most one batch. Never throws. */
-    async poll(): Promise<void> {
-      if (stopped || busy) return;
-      busy = true;
-      try {
-        await readNew();
-        if (!pending.length || now() < notBefore) return;
-        const batch = takeLogBatch(pending);
-        try {
-          await opts.post({ attempt: opts.task.attempt, source: "delegate", lines: batch });
-          pending = pending.slice(batch.length);
-          backoffMs = 0;
-        } catch (err) {
-          if (err instanceof ArgusError && err.status === 409) {
-            if (["stale_attempt", "not_assignee", "not_claimed"].includes(err.code)) {
-              stopped = true;
-              log.warn("Argus refuses the delegate log; relay stopped", {
-                task: opts.task.id,
-                code: err.code,
-              });
-            } else pending = pending.slice(batch.length);
-          } else if (err instanceof ArgusError && err.status === 401) {
-            stopped = true;
-          } else if (err instanceof ArgusError && err.permanent) {
-            pending = pending.slice(batch.length); // 413 / 422: this batch can never be accepted
-            log.warn("Argus rejected a delegate log batch; dropped", {
-              task: opts.task.id,
-              status: err.status,
-              code: err.code,
-            });
-          } else {
-            retryLater(); // 429, 5xx, network
-          }
-        }
-      } catch (err) {
-        log.warn("Delegate log relay failed (will retry)", { err: String(err).slice(0, 200) });
-      } finally {
-        busy = false;
+    poll: async (): Promise<void> => void (await poll()),
+    /**
+     * The last lines of the run: poll until everything written is posted, the relay
+     * stops, or `timeoutMs` passes (wall clock). Never throws.
+     */
+    async drain(timeoutMs = LOG_DRAIN_MS): Promise<void> {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const ran = await poll();
+        if (stopped || (ran && !pending.length) || Date.now() >= deadline) return;
+        const wait = ran ? (opts.paceMs ?? LOG_DRAIN_PACE_MS) : 50;
+        await new Promise((r) => setTimeout(r, Math.min(wait, deadline - Date.now())));
       }
     },
   };
@@ -778,8 +853,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     try {
       const file = await cfg.delegateLogFile?.();
       if (!file) return;
-      await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, ""); // only this attempt's output is relayed
+      await resetRelayFile(file); // only this attempt's output is relayed
       const relay = createDelegateLogRelay({
         file,
         task,
@@ -1478,7 +1552,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         typeof content === "object" && content !== null && content.failureNotice === true;
       const d = parseReply(text);
       // The last lines of the run, before the attempt ends and Argus stops taking them.
-      if (d.kind !== "progress" && !isFailureNotice) await logRelay?.poll();
+      if (d.kind !== "progress" && !isFailureNotice) await logRelay?.drain();
       try {
         if (isFailureNotice) {
           await handleFailure(task, text, (content as Record<string, unknown>).providerFailure);

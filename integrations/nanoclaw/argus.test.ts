@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ import {
   parseReply,
   relayLines,
   renderTask,
+  resetRelayFile,
   takeLogBatch,
   taskAuthorizesMerge,
   UNTRUSTED_TASK_DATA_RULES,
@@ -1129,6 +1131,125 @@ describe("delegate live log relay", () => {
     expect(relay.stopped).toBe(false);
     fs.rmSync(dir, { recursive: true });
   });
+
+  it("never follows a symlink planted at the relay path: the target stays untouched and unread", async () => {
+    const { dir, file } = tmp();
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "outside-"));
+    const target = path.join(outside, "host-secret");
+    fs.writeFileSync(target, rec(["host secret"]));
+    // Planted before the host resets the file: the link is replaced, not truncated through.
+    fs.symlinkSync(target, file);
+    await resetRelayFile(file);
+    expect(fs.lstatSync(file).isFile()).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toBe(rec(["host secret"]));
+    // Planted after: the relay refuses to open it and stops.
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      post: async (b) => void posts.push(b),
+    });
+    fs.rmSync(file);
+    fs.symlinkSync(target, file);
+    await relay.poll();
+    await relay.drain(50);
+    expect(posts).toEqual([]);
+    expect(relay.stopped).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toBe(rec(["host secret"]));
+    fs.rmSync(dir, { recursive: true });
+    fs.rmSync(outside, { recursive: true });
+  });
+
+  it("refuses a hard link, a FIFO, and a symlinked parent directory", async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "outside-"));
+    const target = path.join(outside, "host-secret");
+    fs.writeFileSync(target, rec(["host secret"]));
+    const cases: Array<[string, (file: string) => void]> = [
+      ["hard link", (file) => fs.linkSync(target, file)],
+      ["fifo", (file) => execFileSync("mkfifo", [file])],
+    ];
+    for (const [, plant] of cases) {
+      const { dir, file } = tmp();
+      plant(file);
+      const posts: any[] = [];
+      const relay = createDelegateLogRelay({
+        file,
+        task: { id: "t1", attempt: 1 },
+        post: async (b) => void posts.push(b),
+      });
+      await relay.poll();
+      expect(posts).toEqual([]);
+      expect(relay.stopped).toBe(true);
+      fs.rmSync(dir, { recursive: true });
+    }
+    const { dir } = tmp();
+    const linkedDir = path.join(dir, "group");
+    fs.symlinkSync(outside, linkedDir);
+    await expect(resetRelayFile(path.join(linkedDir, "host-secret"))).rejects.toThrow();
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file: path.join(linkedDir, "host-secret"),
+      task: { id: "t1", attempt: 1 },
+      post: async (b) => void posts.push(b),
+    });
+    await relay.poll();
+    expect(posts).toEqual([]);
+    expect(fs.readFileSync(target, "utf8")).toBe(rec(["host secret"]));
+    fs.rmSync(dir, { recursive: true });
+    fs.rmSync(outside, { recursive: true });
+  });
+
+  it("skips a record longer than the read buffer instead of stalling", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      post: async (b) => void posts.push(b),
+    });
+    fs.writeFileSync(file, "x".repeat(5 * 1024 * 1024));
+    await relay.poll(); // a full buffer and no newline
+    fs.appendFileSync(file, `tail of the huge record\n${rec(["after"])}`);
+    await relay.poll();
+    await relay.poll();
+    expect(posts.map((p) => p.lines)).toEqual([["after"]]);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("the final drain posts every pending batch, pacing to the server limit, within a deadline", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    let first = true;
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      paceMs: 5,
+      post: async (b) => {
+        posts.push(b);
+        if (first) {
+          first = false;
+          throw new ArgusError(503, "unavailable", "later");
+        }
+      },
+    });
+    fs.writeFileSync(file, rec(Array.from({ length: 450 }, (_, i) => `l${i}`)));
+    await relay.drain(5000);
+    // 503 backs off 2 s on the injected clock (real time here), then three batches.
+    expect(posts.slice(1).flatMap((p) => p.lines)).toHaveLength(450);
+    // A drain that cannot finish returns at its deadline.
+    const stuck = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      paceMs: 5,
+      post: async () => {
+        throw new ArgusError(503, "unavailable", "later");
+      },
+    });
+    const t0 = Date.now();
+    await stuck.drain(200);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    fs.rmSync(dir, { recursive: true });
+  }, 10_000);
 
   it("the adapter relays the delegate log with the token on the host side only", async () => {
     const { dir, file } = tmp();
