@@ -16,7 +16,10 @@
 # the Codex sentinel fix. Off by default; `env` prints the matching tag.
 #
 # Overrides: ARGUS_NANOCLAW_STATE (default ${XDG_DATA_HOME:-~/.local/share}/argus-nanoclaw),
-# NANOCLAW_COMMIT, NANOCLAW_REPO. Idempotent: rerunning reuses what is built.
+# NANOCLAW_COMMIT, NANOCLAW_REPO, and the image tags ARGUS_NANOCLAW_AGENT_TAG /
+# ARGUS_NANOCLAW_HOST_IMAGE (a verification run on a host that already serves
+# workers sets both, so it never retags what the fleet runs). Idempotent:
+# rerunning reuses what is built.
 set -euo pipefail
 
 # Pinned: the commit the integration was developed and tested against.
@@ -30,7 +33,7 @@ ARCHIVE="$STATE/agent-image.tar"
 ENGINES="${ARGUS_NANOCLAW_ENGINES:-0}"
 TAG_SUFFIX=""
 if [ "$ENGINES" = 1 ]; then TAG_SUFFIX="-engines"; fi
-AGENT_TAG="argus-nanoclaw-agent:${NANOCLAW_COMMIT:0:12}$TAG_SUFFIX"
+AGENT_TAG="${ARGUS_NANOCLAW_AGENT_TAG:-argus-nanoclaw-agent:${NANOCLAW_COMMIT:0:12}$TAG_SUFFIX}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
 

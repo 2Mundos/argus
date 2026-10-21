@@ -271,6 +271,29 @@ PY
     echo "patched $onecli_test (expects GIT_SSL_CAINFO on gateway contribution)"
   fi
 fi
+# Upstream's onecli.test.ts never opens NanoClaw's database, but the local-harness
+# hook patched into ensureSession above looks the agent group up there. The test's
+# groups are not Argus groups: getAgentGroup answers "no such group" (the hook's
+# real no-group path, config unchanged) and the rest of the module stays real.
+if [ -f "$onecli_test" ] && grep -q "withLocalHarnessRuntimeForGroup" "$onecli_ts" \
+    && ! grep -q "vi.mock('../db/agent-groups.js'" "$onecli_test"; then
+  python3 - "$onecli_test" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+anchor = "vi.mock('../log.js', () => ({\n"
+mock = """// Argus: the local-harness hook in ensureSession reads the agent group; these
+// test groups are not in a database, so the lookup finds none (install.sh).
+vi.mock('../db/agent-groups.js', async (original) => ({
+  ...(await original<typeof import('../db/agent-groups.js')>()),
+  getAgentGroup: async () => undefined,
+}));
+"""
+assert s.count(anchor) == 1, "onecli test mocks shape changed upstream"
+open(p, "w").write(s.replace(anchor, mock + anchor, 1))
+PY
+  echo "patched $onecli_test (agent group lookup for the local-harness hook)"
+fi
 
 codex_ts="$target/container/agent-runner/src/providers/codex-app-server.ts"
 if [ -f "$codex_ts" ]; then
