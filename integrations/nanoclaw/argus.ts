@@ -493,6 +493,8 @@ const LOG_POLL_MS = 2000;
 const LOG_BACKOFF_MIN_MS = 2000;
 const LOG_BACKOFF_MAX_MS = 30_000;
 const LOG_READ_MAX = 4 * 1024 * 1024; // per poll; a longer record is skipped
+/** 409 codes meaning the claim is no longer ours: released, superseded or reassigned. */
+const CLAIM_LOST = ["stale_attempt", "not_assignee", "not_claimed"];
 const LOG_DRAIN_MS = 5000; // the final drain waits at most this long
 const LOG_DRAIN_PACE_MS = 1100; // the server takes one batch per second per source
 const LOG_DRAIN_MIN_WAIT_MS = 50; // the final drain never polls in a tight loop
@@ -641,7 +643,7 @@ export function createDelegateLogRelay(opts: {
       backoffMs = 0;
     } catch (err) {
       if (err instanceof ArgusError && err.status === 409) {
-        if (["stale_attempt", "not_assignee", "not_claimed"].includes(err.code)) {
+        if (CLAIM_LOST.includes(err.code)) {
           stopped = true;
           log.warn("Argus refuses the delegate log; relay stopped", {
             task: opts.task.id,
@@ -862,10 +864,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         draining = true;
         void completeDrainIfIdle();
       }
-      if (current && data.rejected?.some((r: any) => r.task_id === current!.id)) {
-        log.warn("Argus lease on the task was rejected; abandoning it", { task: current.id });
-        finishTask();
-      }
+      const lost = current && data.rejected?.find((r: any) => r.task_id === current!.id);
+      if (lost) await abandonTask(lost.code);
     } catch (err) {
       if (err instanceof ArgusError && err.status === 401) {
         log.error("Argus rejected this agent token; the channel stops", { err });
@@ -876,6 +876,27 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         log.warn("Argus heartbeat failed (will retry)", { err });
       }
     }
+  }
+
+  /**
+   * Argus ended our claim (an operator released it, the lease expired, another agent
+   * holds it): stop the run and report nothing. The task is forgotten first, so a late
+   * reply is dropped instead of landing on the next task; the session is stopped before
+   * the next claim; and the next task leases its accounts afresh, as a release ends them.
+   */
+  async function abandonTask(code: string): Promise<void> {
+    const task = current;
+    if (!task) return;
+    log.warn("Argus ended our claim on the task; stopping the run", { task: task.id, code });
+    current = null;
+    account = null;
+    try {
+      await cfg.accounts?.recycleRuntime?.();
+    } catch (err) {
+      log.error("The abandoned run could not be stopped; recycling before the next task", { err });
+      recycleOnLease = true;
+    }
+    finishTask();
   }
 
   /** Once drained and idle: leave Argus, stop claiming, and let the host exit. */
@@ -1552,6 +1573,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     } catch (err) {
       if (err instanceof ArgusError && err.status === 429)
         pendingProgress = text; // retry on the timer
+      else if (err instanceof ArgusError && err.status === 409 && CLAIM_LOST.includes(err.code))
+        await abandonTask(err.code);
       else
         log.warn("Argus progress note failed", {
           permanent: err instanceof ArgusError ? err.permanent : false,

@@ -5,7 +5,7 @@ policy from here.
 """
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -90,3 +90,6 @@ class TaskAttempt(BaseModel):
     agent_id: str
     claimed_at: datetime
     definition: dict[str, Any]
+    # Set only when an operator released the attempt (worker lifecycle 3.3).
+    outcome: Literal["released"] | None = None
+    outcome_reason: str | None = None

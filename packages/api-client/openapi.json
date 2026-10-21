@@ -9119,6 +9119,17 @@
         "title": "ReadinessOut",
         "type": "object"
       },
+      "RecycleRequest": {
+        "properties": {
+          "requeue": {
+            "default": false,
+            "title": "Requeue",
+            "type": "boolean"
+          }
+        },
+        "title": "RecycleRequest",
+        "type": "object"
+      },
       "Registration": {
         "properties": {
           "agent": {
@@ -9167,6 +9178,32 @@
           "message"
         ],
         "title": "RejectedLease",
+        "type": "object"
+      },
+      "ReleaseRequest": {
+        "properties": {
+          "attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ReleaseRequest",
         "type": "object"
       },
       "RenewedLease": {
@@ -10862,6 +10899,29 @@
             "additionalProperties": true,
             "title": "Definition",
             "type": "object"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "const": "released",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "outcome_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome Reason"
           }
         },
         "required": [
@@ -12323,6 +12383,17 @@
           "extra_hosts"
         ],
         "title": "TemplateDefaults",
+        "type": "object"
+      },
+      "TerminateRequest": {
+        "properties": {
+          "requeue": {
+            "default": true,
+            "title": "Requeue",
+            "type": "boolean"
+          }
+        },
+        "title": "TerminateRequest",
         "type": "object"
       },
       "Usage-Input": {
@@ -16205,7 +16276,7 @@
     },
     "/api/instances/{instance_id}/recycle": {
       "post": {
-        "description": "Replace a running instance without interrupting work: its agents drain, it\nstops once none holds a claimed task, and a new one starts in its place.",
+        "description": "Replace a running instance: its agents drain, it stops once none holds a\nclaimed task, and a new one starts in its place. By default work finishes\nfirst; with `requeue` the claimed tasks are released now, no attempt counted.",
         "operationId": "recycle_instance_api_instances__instance_id__recycle_post",
         "parameters": [
           {
@@ -16218,6 +16289,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RecycleRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -16253,7 +16341,7 @@
     },
     "/api/instances/{instance_id}/terminate": {
       "post": {
-        "description": "Stop an instance now: its agents end immediately (tasks released); its slot\nfrees once the provider confirms the container is gone.",
+        "description": "Stop an instance now: its agents end immediately and the tasks they hold are\nrequeued without counting an attempt (unless `requeue` is false); its slot\nfrees once the provider confirms the container is gone.",
         "operationId": "terminate_instance_api_instances__instance_id__terminate_post",
         "parameters": [
           {
@@ -16266,6 +16354,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/TerminateRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -19073,6 +19178,64 @@
           }
         ],
         "summary": "Report Progress",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/release": {
+      "post": {
+        "description": "Take a claimed task back from its holder and requeue it without counting a\nfailed attempt (orchestrator or admin). 409 `task_not_claimed` in any other\nstate, 409 `stale_attempt` when `attempt` is not the current one. The holder's\nnext write for that attempt gets 409 and its heartbeat rejects the pair.",
+        "operationId": "release_task_api_tasks__task_id__release_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Release Task",
         "tags": [
           "tasks"
         ]

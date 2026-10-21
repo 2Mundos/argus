@@ -22,6 +22,7 @@ from argus_core.fleet import (
     PoolUpsert,
 )
 
+from argus_api.accounts import service as accounts
 from argus_api.config import Settings
 from argus_api.db import Tx, ts
 from argus_api.decisions import store as decisions
@@ -259,10 +260,15 @@ async def get_instance(conn: aiosqlite.Connection, instance_id: str) -> Instance
     return await _to_instance(conn, row)
 
 
-async def recycle(tx: Tx, instance_id: str, actor: str) -> None:
+async def recycle(
+    tx: Tx, instance_id: str, actor: str, *, requeue: bool = False
+) -> list[str]:
     """Drain an instance so the reconciler replaces it: it stops only once none
-    of its agents holds a claimed task, then a new one starts (3.3)."""
+    of its agents holds a claimed task, then a new one starts (3.5). With
+    `requeue` the tasks they hold are released now (no failure counted), so it
+    stops on the next pass. Returns the released task ids."""
     from argus_api.agents import service as agents
+    from argus_api.tasks import service as tasks
 
     async with tx.conn.execute(
         "SELECT state, draining FROM instances WHERE id = ?", (instance_id,)
@@ -275,18 +281,36 @@ async def recycle(tx: Tx, instance_id: str, actor: str) -> None:
             f"instance {instance_id} is {row['state']}; only a running one is recycled",
             code="instance_not_running",
         )
-    if row["draining"]:
-        return  # already on its way out: a retry changes nothing
-    await tx.conn.execute(
-        "UPDATE instances SET draining = 1 WHERE id = ?", (instance_id,)
-    )
-    async with tx.conn.execute(
-        "SELECT id FROM agents WHERE instance_id = ? AND state = 'active'",
-        (instance_id,),
-    ) as cur:
-        for agent in await cur.fetchall():
-            await agents.drain(tx, agent["id"], actor)
-    await record(tx, actor, "instance", instance_id, "instance.recycling")
+    if not row["draining"]:  # already on its way out: a retry only requeues
+        await tx.conn.execute(
+            "UPDATE instances SET draining = 1 WHERE id = ?", (instance_id,)
+        )
+        async with tx.conn.execute(
+            "SELECT id FROM agents WHERE instance_id = ? AND state = 'active'",
+            (instance_id,),
+        ) as cur:
+            for agent in await cur.fetchall():
+                await agents.drain(tx, agent["id"], actor)
+        await record(
+            tx,
+            actor,
+            "instance",
+            instance_id,
+            "instance.recycling",
+            {"requeue": requeue},
+        )
+    released: list[str] = []
+    if requeue:
+        async with tx.conn.execute(
+            "SELECT id FROM agents WHERE instance_id = ?"
+            " AND state IN ('active', 'draining') ORDER BY id",
+            (instance_id,),
+        ) as cur:
+            holders = [a["id"] for a in await cur.fetchall()]
+        for agent_id in holders:
+            released += await tasks.release_agent_tasks(tx, agent_id, actor, "recycle")
+            await accounts.release(tx, agent_id, "task_released")
+    return released
 
 
 async def inspect(conn: aiosqlite.Connection, name: str) -> PoolInspection:
@@ -333,8 +357,12 @@ def _runtime(pool: Pool, inst: Instance) -> InstanceRuntime:
     )
 
 
-async def request_termination(tx: Tx, instance_id: str, reason: str) -> None:
-    """Admin kill: the reconciler stops it and confirms before freeing the slot."""
+async def request_termination(
+    tx: Tx, instance_id: str, actor: str, *, requeue: bool = True
+) -> None:
+    """Admin kill: the reconciler stops it and confirms before freeing the slot.
+    With `requeue` (the default) the tasks its agents hold are released, not
+    failed: the operator stopped them, the work did not break (3.5)."""
     from argus_api.fleet.reconciler import begin_terminating
 
     async with tx.conn.execute(
@@ -345,7 +373,13 @@ async def request_termination(tx: Tx, instance_id: str, reason: str) -> None:
         raise NotFoundError(f"instance not found: {instance_id}")
     if row["state"] in ("terminating", "terminated"):
         raise ConflictError(f"instance {instance_id} is already {row['state']}")
-    await begin_terminating(tx, row["id"], reason)
+    await begin_terminating(
+        tx,
+        row["id"],
+        f"terminated by {actor}",
+        release="operator_terminate" if requeue else None,
+        actor=actor,
+    )
 
 
 _POOL_SELECT = (

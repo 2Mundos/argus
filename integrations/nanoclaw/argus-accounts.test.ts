@@ -1345,6 +1345,22 @@ describe("task-scoped repository auth", () => {
     await until(() => w.calls.some((call) => isRepositoryRelease(call)));
   });
 
+  it("stops the session when Argus releases the claim, and reports nothing", async () => {
+    const w = world({
+      leases: [lease("engine", "dummy-engine-key")],
+      tasks: [task()],
+      heartbeatIntervalS: 1,
+      rejectHeartbeat: true,
+    });
+    const recycleRuntime = vi.fn(async () => undefined);
+    const h = harness(w, true, { recycleRuntime });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    await until(() => recycleRuntime.mock.calls.length > 0, 3000);
+    expect(w.calls.some((call) => call.path.startsWith("/tasks/t1/"))).toBe(false);
+  });
+
   it("fails closed before requesting Gitea access without a known base lease set", async () => {
     const w = world({
       leases: [],

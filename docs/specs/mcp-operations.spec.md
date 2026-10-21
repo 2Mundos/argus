@@ -144,7 +144,9 @@ Findings outside the gap list:
   not repeat the decision's question; `get_decision` reads it in full. REST serves it as
   `POST /api/decisions/answers`; a malformed or oversized batch is a 422 as a
   whole, and an item's domain error (`{status, code, message}`) fails only it.
-- **Unblock and retry** are exposed as MCP `unblock_task` and `retry_task`.
+- **Unblock and retry** are exposed as MCP `unblock_task` and `retry_task`;
+  `release_task(task_id, reason, attempt?)` requeues a claimed task without
+  counting an attempt ([worker lifecycle](worker-lifecycle.spec.md) 3.3).
 
 ## 3.2b Model observability
 
@@ -198,9 +200,13 @@ token) wrap the model trace endpoints ([spec](model-observability.spec.md)).
   instance `draining`. The reconciler terminates it only once none of its agents
   holds a claimed task, then starts a replacement up to `desired_replicas`. A
   recycle never interrupts active work or a running delegate. Checkpoints stay
-  the worker runtime's job. Orchestrators and admins may recycle; only a
+  the worker runtime's job. `recycle_instance(instance_id, requeue=true)`
+  instead releases the instance's claimed tasks now (no attempt counted), so it
+  stops on the next pass ([worker lifecycle](worker-lifecycle.spec.md) 3.5).
+  Orchestrators and admins may recycle; only a
   `running` instance can be (`409 instance_not_running`), and recycling one that
-  is already draining changes nothing. The same stop rule now covers every
+  is already draining changes nothing (except that `requeue` still releases its
+  tasks). The same stop rule now covers every
   draining instance, so an idle drained worker that never calls `leave` no
   longer holds its slot.
 - **Bounded wait:** `GET /api/events/wait?after=<id>&wait_s≤30&subject_type&subject_id`

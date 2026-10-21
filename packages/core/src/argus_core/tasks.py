@@ -133,6 +133,7 @@ class Action(StrEnum):
     EXPIRE = "expire"
     BLOCK = "block"
     REQUEUE = "requeue"  # a provider quota ended the attempt: ready again, no failure
+    RELEASE = "release"  # an operator took the claim back: ready again, no failure
     UNBLOCK = "unblock"
     ACCEPT = "accept"
     REJECT = "reject"
@@ -192,7 +193,7 @@ def transition(state: TaskState, action: Action, ctx: TransitionContext) -> Task
             return S.SUCCEEDED if ctx.review is Review.NONE else S.IN_REVIEW
         case S.CLAIMED, A.FAIL | A.EXPIRE:
             return S.READY if ctx.failures + 1 < ctx.max_attempts else S.FAILED
-        case S.CLAIMED, A.REQUEUE:
+        case S.CLAIMED, A.REQUEUE | A.RELEASE:
             return S.READY
         case S.CLAIMED | S.READY, A.BLOCK:  # a ready task may wait for quota (3.9)
             return S.BLOCKED

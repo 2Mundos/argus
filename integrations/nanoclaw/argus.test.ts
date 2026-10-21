@@ -525,6 +525,29 @@ describe("Argus channel", () => {
     expect(fake.calls.some((c) => c.path === "/agents/me/leave")).toBe(true);
   });
 
+  it("a released claim stops the run: nothing is reported and it claims again", async () => {
+    const fake = fakeArgus({
+      tasks: [task()],
+      heartbeat: {
+        state: "active",
+        renewed: [],
+        rejected: [{ task_id: "t1", attempt: 1, code: "not_claimed" }],
+      },
+    });
+    const h = harness(fake);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    const claims = () => fake.calls.filter((c) => c.path === "/tasks/claim").length;
+    const before = claims();
+    // The next heartbeat rejects the pair (an operator released it): back to claiming.
+    await until(() => claims() > before, 3000);
+    // A late reply from the abandoned run is dropped, not reported.
+    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(fake.calls.some((c) => c.path.startsWith("/tasks/t1/"))).toBe(false);
+  });
+
   it("leaves Argus on teardown", async () => {
     const fake = fakeArgus();
     const h = harness(fake);
