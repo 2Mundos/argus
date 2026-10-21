@@ -65,6 +65,24 @@ describe("assertOneCliUrl", () => {
   });
 });
 
+describe("OneCliClient error bodies", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("omits the response body unless ARGUS_ONECLI_DEBUG_BODY=1", async () => {
+    const secretBody = '{"error":"vault-secret-xyz","detail":"do-not-leak"}';
+    const fetchImpl = (async () => new Response(secretBody, { status: 503 })) as typeof fetch;
+    const client = new OneCliClient("http://127.0.0.1:10254", fetchImpl);
+    await expect(client.call("GET", "/agents")).rejects.toThrow(/503 vault-secret-xyz/);
+    await expect(client.call("GET", "/agents")).rejects.not.toThrow(/do-not-leak/);
+
+    vi.stubEnv("ARGUS_ONECLI_DEBUG_BODY", "1");
+    const debugClient = new OneCliClient("http://127.0.0.1:10254", fetchImpl);
+    await expect(debugClient.call("GET", "/agents")).rejects.toThrow(/do-not-leak/);
+  });
+});
+
 describe("recycleRuntime (real hook, NanoClaw modules faked)", () => {
   const recycle = () => {
     vi.stubEnv("ONECLI_URL", "http://127.0.0.1:10254");

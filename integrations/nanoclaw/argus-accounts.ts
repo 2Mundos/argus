@@ -424,11 +424,19 @@ export class OneCliClient {
     const raw = await res.text();
     const data = raw ? JSON.parse(raw) : null;
     if (res.status >= 400) {
-      // Never echo a request body: it can hold a credential.
-      throw new OneCliError(
-        res.status,
-        `OneCLI ${method} ${path} failed: ${res.status} ${raw.slice(0, 200)}`,
-      );
+      // Never echo a response body by default: it can hold secrets or PII.
+      const debug = process.env.ARGUS_ONECLI_DEBUG_BODY === "1";
+      let code = "error";
+      if (data && typeof data === "object" && "error" in data) {
+        const err = (data as { error?: unknown }).error;
+        if (typeof err === "string" && err.length <= 64) code = err;
+        else if (err && typeof err === "object" && "code" in err) {
+          const c = (err as { code?: unknown }).code;
+          if (typeof c === "string" && c.length <= 64) code = c;
+        }
+      }
+      const detail = debug ? ` ${raw.slice(0, 200)}` : ` ${code}`;
+      throw new OneCliError(res.status, `OneCLI ${method} ${path} failed: ${res.status}${detail}`);
     }
     return data;
   }
