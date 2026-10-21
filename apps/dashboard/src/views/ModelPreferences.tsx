@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { useLiveData } from "../live";
 import {
   addProblem,
+  compactDraft,
   type Draft,
+  emptyChains,
   engineLabel,
   fetchModelPolicy,
   KNOWN_ENGINES,
@@ -35,6 +37,7 @@ export function ModelPreferences() {
   const [busy, setBusy] = useState(false);
 
   const dirty = !!policy && !!draft && JSON.stringify(draft) !== JSON.stringify(toDraft(policy));
+  const empties = draft ? emptyChains(draft) : [];
 
   // Live refreshes update the server view; unsaved edits are kept until saved or discarded.
   useEffect(() => {
@@ -116,11 +119,17 @@ export function ModelPreferences() {
               onChange={(engine, chain) => setDraft(withChain(draft, scope, engine, chain))}
             />
           ))}
+          {empties.length > 0 && (
+            <p className="muted small">
+              Empty chains ({empties.join(", ")}) need a model before they are kept; they are omitted
+              on save.
+            </p>
+          )}
           <div className="toolbar">
             <button
               type="button"
               disabled={busy || !dirty}
-              onClick={() => run(() => saveModelPolicy(draft), "Saved")}
+              onClick={() => run(() => saveModelPolicy(compactDraft(draft)), "Saved")}
             >
               Save
             </button>

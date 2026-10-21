@@ -172,6 +172,36 @@ describe("ModelPreferences", () => {
     expect((add as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("omits an empty hard_harness.codex chain on save instead of 422", async () => {
+    m.fetchModelPolicy.mockResolvedValue(
+      policy({
+        hard_harness: { claude: ["claude-opus-5-5"] },
+        hard_implementation: { claude: ["claude-opus-5-5"] },
+      }),
+    );
+    m.saveModelPolicy.mockResolvedValue(
+      policy({
+        source: "file",
+        revision: NEW_REV,
+        file_revision: NEW_REV,
+        hard_harness: { claude: ["claude-opus-5-5"] },
+        hard_implementation: { claude: ["claude-opus-5-5"] },
+      }),
+    );
+    render(<ModelPreferences />);
+    expect(await screen.findByRole("button", { name: "add hard_harness codex" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "add hard_harness codex" }));
+    expect(screen.getByText(/Empty chains \(hard_harness\.codex\)/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(m.saveModelPolicy).toHaveBeenCalledTimes(1));
+    expect(m.saveModelPolicy.mock.calls[0]?.[0]).toEqual({
+      harness: { codex: ["gpt-6-luna"], claude: ["sonnet", "opus"] },
+      implementation: { codex: ["gpt-6.1-sol"] },
+      hard_harness: { claude: ["claude-opus-5-5"] },
+      hard_implementation: { claude: ["claude-opus-5-5"] },
+    });
+  });
+
   it("shows the API's validation error inline and keeps the draft", async () => {
     m.saveModelPolicy.mockRejectedValue(
       new ApiError(422, "validation_failed", "invalid model chain: implementation.codex"),

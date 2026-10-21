@@ -27,17 +27,41 @@ export const engineLabel = (e: string) => (e === "agent" ? "agent (Cursor)" : e)
 export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
 
 export const fetchModelPolicy = () => call(api.GET("/api/models"));
-export const saveModelPolicy = (draft: Draft) =>
-  call(
+export const saveModelPolicy = (draft: Draft) => {
+  const body = compactDraft(draft);
+  return call(
     api.PUT("/api/models", {
       body: {
-        harness: draft.harness,
-        implementation: draft.implementation,
-        ...optionals(draft, (c) => c),
+        harness: body.harness,
+        implementation: body.implementation,
+        ...optionals(body, (c) => c),
       },
     }),
   );
+};
 export const restoreModelDefaults = () => call(api.DELETE("/api/models"));
+
+/** Drop engines whose chain is still empty ("Add engine" before the first model). */
+export function compactDraft(d: Draft): Draft {
+  const compact = (c: Chains): Chains =>
+    Object.fromEntries(Object.entries(c).filter(([, chain]) => chain.length > 0));
+  return {
+    harness: compact(d.harness),
+    implementation: compact(d.implementation),
+    ...optionals(d, compact),
+  };
+}
+
+/** Engines added but still without a model, as `scope.engine` labels. */
+export function emptyChains(d: Draft): string[] {
+  const out: string[] = [];
+  for (const scope of scopesOf(d)) {
+    for (const [engine, chain] of Object.entries(d[scope] ?? {})) {
+      if (chain.length === 0) out.push(`${scope}.${engine}`);
+    }
+  }
+  return out;
+}
 
 export function toDraft(p: Pick<ModelPolicy, "harness" | "implementation" | OptionalScope>): Draft {
   const copy = (c: Chains): Chains =>

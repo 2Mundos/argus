@@ -11,13 +11,16 @@ import {
 type Probe = { status: string; reason: string; models?: string[] };
 
 /** Register an OpenAI-compatible endpoint (OpenRouter first) as an account, then check it
- * with `GET {base_url}/models`. The key is sent once and never shown again. */
+ * with `GET {base_url}/models`. After a successful probe the model list fills the harness
+ * and executor fields; preferences are PATCHed before Done. The key is sent once and never
+ * shown again. */
 export function CustomAccount({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const [name, setName] = useState("OpenRouter");
   const [key, setKey] = useState("");
   const [form, setForm] = useState<CustomForm>(emptyForm);
   const [error, setError] = useState<string>();
   const [probe, setProbe] = useState<Probe>();
+  const [accountId, setAccountId] = useState<string>();
   const [busy, setBusy] = useState(false);
   const openrouter = form.label.trim() === "openrouter";
 
@@ -43,6 +46,7 @@ export function CustomAccount({ onClose, onDone }: { onClose: () => void; onDone
         }),
       );
       setKey(""); // the key does not stay in the page
+      setAccountId(account.id);
       setProbe(
         await call(
           api.POST("/api/accounts/{account_id}/probe", {
@@ -50,6 +54,25 @@ export function CustomAccount({ onClose, onDone }: { onClose: () => void; onDone
           }),
         ),
       );
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function savePreferences() {
+    if (!accountId) return;
+    setError(undefined);
+    setBusy(true);
+    try {
+      await call(
+        api.PATCH("/api/accounts/{account_id}", {
+          params: { path: { account_id: accountId } },
+          body: { config: buildConfig(form) },
+        }),
+      );
+      onDone();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -75,15 +98,34 @@ export function CustomAccount({ onClose, onDone }: { onClose: () => void; onDone
           Any OpenAI-compatible endpoint. The key is stored encrypted as an Argus account and is
           never shown again.
         </p>
-        {probe ? (
+        {probe && accountId ? (
           <>
             <p role="status">
               Saved. Check: <strong>{probe.status}</strong> — {probe.reason}
               {probe.models?.length ? ` (${probe.models.length} models)` : ""}
             </p>
+            <p className="muted small">
+              Pick a model for the NanoClaw harness (and optionally the code executor). Suggestions
+              come from the provider catalogue when the check succeeded.
+            </p>
+            {role("engine", "NanoClaw harness")}
+            {role("executor", "Code executor")}
+            {error && (
+              <p role="alert" className="error">
+                {error}
+              </p>
+            )}
             <div className="row">
-              <button type="button" className="primary" onClick={onDone}>
-                Done
+              <button
+                type="button"
+                className="primary"
+                disabled={busy}
+                onClick={() => void savePreferences()}
+              >
+                {busy ? "Saving…" : "Save preferences"}
+              </button>
+              <button type="button" disabled={busy} onClick={onDone}>
+                Skip
               </button>
             </div>
           </>
@@ -125,8 +167,10 @@ export function CustomAccount({ onClose, onDone }: { onClose: () => void; onDone
                 required
               />
             </label>
-            {role("engine", "NanoClaw harness")}
-            {role("executor", "Code executor")}
+            <p className="muted small">
+              After the account is checked you can pick harness and executor models from the
+              provider list.
+            </p>
             {error && (
               <p role="alert" className="error">
                 {error}
