@@ -1,0 +1,158 @@
+import { useState } from "react";
+import { ApiError, api, call, type Task } from "../api";
+import {
+  buildChanges,
+  type Draft,
+  EDIT_FIELDS,
+  type EditField,
+  errorsFrom,
+  type FieldErrors,
+  toDraft,
+} from "../taskEdit";
+
+const LABELS: Record<EditField, string> = {
+  title: "Title",
+  spec: "Spec",
+  acceptance: "Acceptance criteria (one per line)",
+  priority: "Priority",
+  required_capabilities: "Required capabilities (one per line)",
+  knowledge: "Pinned page ids (one per line)",
+  depends_on: "Depends on (task ids, one per line)",
+};
+
+const MULTILINE = new Set<EditField>([
+  "spec",
+  "acceptance",
+  "required_capabilities",
+  "knowledge",
+  "depends_on",
+]);
+
+/**
+ * Edit form for one task. It works from `task` as it was when opened (or last re-based) and
+ * never from live refreshes, so an operator's draft is never overwritten; a stale version
+ * keeps the draft and lets the operator choose to reload or to re-base it.
+ */
+export function TaskEditForm({ task, onDone }: { task: Task; onDone: (saved?: Task) => void }) {
+  const [base, setBase] = useState(task);
+  const [draft, setDraft] = useState<Draft>(toDraft(task));
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [conflict, setConflict] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  const allowed = new Set<string>(base.editable_fields ?? []);
+
+  async function latest(): Promise<Task> {
+    return call(api.GET("/api/tasks/{task_id}", { params: { path: { task_id: base.id } } }));
+  }
+
+  async function save() {
+    const { changes, errors: local } = buildChanges(base, draft);
+    setConflict(undefined);
+    if (Object.keys(local).length > 0) return setErrors(local);
+    if (Object.keys(changes).length === 0) return onDone();
+    setSaving(true);
+    try {
+      const saved = await call(
+        api.PATCH("/api/tasks/{task_id}", {
+          params: { path: { task_id: base.id } },
+          body: { expected_version: base.version, changes },
+        }),
+      );
+      onDone(saved);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "stale_version") {
+        setErrors({});
+        setConflict(err.details[0] ?? "");
+      } else setErrors(errorsFrom(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function reload() {
+    const fresh = await latest();
+    setBase(fresh);
+    setDraft(toDraft(fresh));
+    setConflict(undefined);
+    setErrors({});
+  }
+
+  /** Re-base: the operator's own edits win; every other field takes the latest value. */
+  async function keepEditing() {
+    const fresh = await latest();
+    const before = toDraft(base);
+    const mine = Object.fromEntries(
+      EDIT_FIELDS.filter((f) => draft[f] !== before[f]).map((f) => [f, draft[f]]),
+    );
+    setBase(fresh);
+    setDraft({ ...toDraft(fresh), ...mine });
+    setConflict(undefined);
+  }
+
+  return (
+    <form
+      className="edit-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+    >
+      {conflict !== undefined && (
+        <div className="error" role="alert">
+          <p>
+            Someone changed this task while you were editing (now at version {conflict}). Your draft
+            is kept.
+          </p>
+          <div className="actions left">
+            <button type="button" onClick={() => void reload()}>
+              Reload latest
+            </button>
+            <button type="button" className="primary" onClick={() => void keepEditing()}>
+              Keep editing on the latest version
+            </button>
+          </div>
+        </div>
+      )}
+      {EDIT_FIELDS.map((field) => {
+        const id = `edit-${field}`;
+        const disabled = !allowed.has(field);
+        const common = {
+          id,
+          disabled,
+          value: draft[field],
+          "aria-invalid": errors[field] ? true : undefined,
+          "aria-describedby": errors[field] ? `${id}-error` : undefined,
+          onChange: (e: { target: { value: string } }) =>
+            setDraft({ ...draft, [field]: e.target.value }),
+        };
+        return (
+          <div key={field} className="field">
+            <label htmlFor={id}>{LABELS[field]}</label>
+            {MULTILINE.has(field) ? (
+              <textarea rows={field === "spec" ? 8 : 3} {...common} />
+            ) : (
+              <input type={field === "priority" ? "number" : "text"} {...common} />
+            )}
+            {disabled && (
+              <p className="muted small">Not editable while the task is {base.state}.</p>
+            )}
+            {errors[field] && (
+              <p id={`${id}-error`} className="error">
+                {errors[field]}
+              </p>
+            )}
+          </div>
+        );
+      })}
+      {errors.form && <p className="error">{errors.form}</p>}
+      <div className="actions left">
+        <button type="submit" className="primary" disabled={saving}>
+          Save
+        </button>
+        <button type="button" onClick={() => onDone()}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}

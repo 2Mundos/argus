@@ -9,12 +9,14 @@ import { TaskLabel } from "../TaskLabel";
 import { Activity } from "./Activity";
 import { AgentDetail } from "./AgentDetail";
 import { EventList } from "./Events";
+import { TaskEditForm } from "./TaskEditForm";
 
 export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () => void }) {
   const [error, setError] = useState<string>();
   const [confirmingRetry, setConfirmingRetry] = useState(false);
   const [agentId, setAgentId] = useState<string | null>(null);
-  const { data } = useLiveData(
+  const [editing, setEditing] = useState(false);
+  const { data, reload } = useLiveData(
     () =>
       Promise.all([
         call(api.GET("/api/tasks/{task_id}", { params: { path: { task_id: taskId } } })),
@@ -122,6 +124,11 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                 </dd>
               </dl>
               <div className="actions left">
+                {(task.editable_fields ?? []).length > 0 && !editing && (
+                  <button type="button" onClick={() => setEditing(true)}>
+                    Edit
+                  </button>
+                )}
                 {task.state === "blocked" && (
                   <button type="button" onClick={() => act("unblock")}>
                     Unblock
@@ -163,10 +170,22 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
               </div>
               {error && <p className="error">{error}</p>}
               {task.error && <p className="error">Last error: {task.error}</p>}
-              <h3>Spec</h3>
-              <div className="spec">
-                <Markdown>{task.spec || "_No spec._"}</Markdown>
-              </div>
+              {editing ? (
+                <TaskEditForm
+                  task={task}
+                  onDone={(saved) => {
+                    setEditing(false);
+                    if (saved) reload();
+                  }}
+                />
+              ) : (
+                <>
+                  <h3>Spec</h3>
+                  <div className="spec">
+                    <Markdown>{task.spec || "_No spec._"}</Markdown>
+                  </div>
+                </>
+              )}
               {task.result && (
                 <>
                   <h3>Result</h3>
