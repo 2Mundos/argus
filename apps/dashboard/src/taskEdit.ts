@@ -13,6 +13,7 @@ export const EDIT_FIELDS = [
   "account_providers",
   "harness_model",
   "executor_model",
+  "harness_account",
 ] as const;
 export type EditField = (typeof EDIT_FIELDS)[number];
 
@@ -34,6 +35,7 @@ export type Changes = {
   account_providers?: string[];
   harness_model?: HarnessPin | null;
   executor_model?: ExecutorPin | null;
+  harness_account?: string | null;
 };
 
 export type HarnessPin = NonNullable<Task["harness_model"]>;
@@ -89,6 +91,7 @@ export function toDraft(task: Task): Draft {
     account_providers: (task.account_providers ?? []).join("\n"),
     harness_model: pinText(task.harness_model),
     executor_model: pinText(task.executor_model),
+    harness_account: task.harness_account ?? "",
   };
 }
 
@@ -129,6 +132,8 @@ export function buildChanges(base: Task, draft: Draft): { changes: Changes; erro
       if (pin && !MODEL_ID.test(pin.model)) errors[field] = "Enter a model ID.";
       else if (field === "harness_model") changes.harness_model = harnessPin(value);
       else changes.executor_model = executorPin(value);
+    } else if (field === "harness_account") {
+      changes.harness_account = value.trim() || null;
     } else if (field === "spec") {
       changes.spec = value;
     } else {

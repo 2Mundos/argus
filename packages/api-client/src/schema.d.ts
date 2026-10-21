@@ -2780,6 +2780,8 @@ export interface components {
             failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
+            /** Harness Account */
+            harness_account?: string | null;
             harness_model?: components["schemas"]["HarnessModel"] | null;
             /** Id */
             id: string;
@@ -5763,6 +5765,8 @@ export interface components {
             failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
+            /** Harness Account */
+            harness_account?: string | null;
             harness_model?: components["schemas"]["HarnessModel"] | null;
             /** Id */
             id: string;
@@ -5899,6 +5903,8 @@ export interface components {
             depends_on?: string[] | null;
             difficulty?: components["schemas"]["Difficulty"] | null;
             executor_model?: components["schemas"]["ExecutorModel"] | null;
+            /** Harness Account */
+            harness_account?: string | null;
             harness_model?: components["schemas"]["HarnessModel"] | null;
             /** Knowledge */
             knowledge?: string[] | null;
@@ -5930,6 +5936,8 @@ export interface components {
             difficulty?: components["schemas"]["Difficulty"] | null;
             difficulty_source?: components["schemas"]["DifficultySource"] | null;
             executor_model?: components["schemas"]["ExecutorModel"] | null;
+            /** Harness Account */
+            harness_account?: string | null;
             harness_model?: components["schemas"]["HarnessModel"] | null;
             /**
              * Input
@@ -6042,6 +6050,8 @@ export interface components {
             failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
+            /** Harness Account */
+            harness_account?: string | null;
             harness_model?: components["schemas"]["HarnessModel"] | null;
             /** Id */
             id: string;

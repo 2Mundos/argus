@@ -12,6 +12,7 @@ import {
   createDelegateLogRelay,
   frameUntrustedTaskData,
   fromEnv,
+  heldAccountFits,
   parseFramedUntrustedTaskData,
   parseReply,
   relayLines,
@@ -177,6 +178,27 @@ describe("parseReply", () => {
       kind: "progress",
       text: "almost COMPLETE: soon",
     });
+  });
+});
+
+describe("heldAccountFits", () => {
+  const codex = { id: "a-codex", provider: "openai" };
+  it("fits an unrestricted task", () => {
+    expect(heldAccountFits(codex, {})).toBe(true);
+  });
+  it("needs the pinned account itself", () => {
+    expect(heldAccountFits(codex, { harness_account: "a-codex" })).toBe(true);
+    expect(heldAccountFits(codex, { harness_account: "a-strata" })).toBe(false);
+  });
+  it("needs a provider the task allows and its pinned engine's provider", () => {
+    expect(heldAccountFits(codex, { account_providers: ["local"] })).toBe(false);
+    expect(heldAccountFits(codex, { account_providers: ["openai", "local"] })).toBe(true);
+    expect(
+      heldAccountFits(codex, { harness_model: { engine: "claude", model: "claude-opus-5-5" } }),
+    ).toBe(false);
+    expect(
+      heldAccountFits(codex, { harness_model: { engine: "codex", model: "gpt-6.1-sol" } }),
+    ).toBe(true);
   });
 });
 
