@@ -75,7 +75,9 @@ class NanoclawOptions(BaseModel):
     # The NanoClaw agent image, already present on that Docker daemon.
     agent_image: str = Field(min_length=1)
     onecli_url: str = "http://host.docker.internal:10254"
-    docker_socket: str = Field(default="/var/run/docker.sock", pattern=r"^/")
+    # Absolute path on the Docker host. Unset in sandboxed mode (`docker.runtime`);
+    # unset in socket mode means `/var/run/docker.sock`.
+    docker_socket: str | None = Field(default=None, pattern=r"^/")
     # A `docker save` archive on the Docker host, loaded into the instance's own
     # daemon when `docker.runtime` is set (that daemon starts without images).
     # Absent: `agent_image` is pulled from its registry.
@@ -150,11 +152,17 @@ class PoolUpsert(BaseModel):
                 raise ValueError("the nanoclaw runtime needs the `nanoclaw` options")
             if self.agents_per_instance != 1:
                 raise ValueError("the nanoclaw runtime runs one agent per instance")
-            if self.docker.runtime and (self.nanoclaw.user or self.nanoclaw.group_add):
-                raise ValueError(
-                    "with docker.runtime the host runs as root inside its sandbox:"
-                    " leave nanoclaw.user and nanoclaw.group_add empty"
-                )
+            if self.docker.runtime:
+                if self.nanoclaw.user or self.nanoclaw.group_add:
+                    raise ValueError(
+                        "with docker.runtime the host runs as root inside its sandbox:"
+                        " leave nanoclaw.user and nanoclaw.group_add empty"
+                    )
+                if self.nanoclaw.docker_socket is not None:
+                    raise ValueError(
+                        "with docker.runtime the host has no Docker socket:"
+                        " leave nanoclaw.docker_socket unset"
+                    )
         elif self.docker.runtime and self.target == TargetKind.KUBERNETES:
             raise ValueError("docker.runtime applies to the docker target")
         return self

@@ -4331,11 +4331,8 @@ export interface components {
             agent_image: string;
             /** Agent Image Archive */
             agent_image_archive?: string | null;
-            /**
-             * Docker Socket
-             * @default /var/run/docker.sock
-             */
-            docker_socket?: string;
+            /** Docker Socket */
+            docker_socket?: string | null;
             /**
              * Group Add
              * @default []
@@ -4373,11 +4370,8 @@ export interface components {
             agent_image: string;
             /** Agent Image Archive */
             agent_image_archive: string | null;
-            /**
-             * Docker Socket
-             * @default /var/run/docker.sock
-             */
-            docker_socket: string;
+            /** Docker Socket */
+            docker_socket: string | null;
             /**
              * Group Add
              * @default []

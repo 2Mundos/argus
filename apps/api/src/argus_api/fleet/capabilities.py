@@ -171,7 +171,12 @@ async def judge_pool(
             ]
             if not pool.docker.runtime:
                 checks.append(
-                    path_check("docker_socket", nc.docker_socket, fs, is_dir=False)
+                    path_check(
+                        "docker_socket",
+                        nc.docker_socket or "/var/run/docker.sock",
+                        fs,
+                        is_dir=False,
+                    )
                 )
     blockers = [c.detail for c in checks if c.ok is False]
     return PoolCapability(

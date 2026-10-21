@@ -351,6 +351,7 @@ def test_each_selection_binds_its_own_isolation(
         == extra_env["ARGUS_NANOCLAW_AGENT_IMAGE_ARCHIVE"]
     )
     assert box["nanoclaw"]["user"] is None and box["nanoclaw"]["group_add"] == []
+    assert box["nanoclaw"]["docker_socket"] is None
     uid_gid = f"{os.getuid()}:{os.getgid()}"
     assert (sock["template"], sock["docker"]["runtime"]) == ("nanoclaw-socket", None)
     assert sock["nanoclaw"]["agent_image_archive"] is None
@@ -517,6 +518,7 @@ def test_request_cannot_override_isolation(
         client, template="nanoclaw-sandbox", name="b", docker={"runtime": None}
     ).json()["pool"]
     assert box["docker"]["runtime"] == "sysbox-runc"
+    assert box["nanoclaw"]["docker_socket"] is None
     assert create(client, template="nanoclaw", name="old").status_code == 422
 
 
