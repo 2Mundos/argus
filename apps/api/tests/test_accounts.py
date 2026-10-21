@@ -759,7 +759,11 @@ def test_accounts_over_http(client: TestClient) -> None:
 
     changed_shape = client.put(
         f"/api/accounts/{account['id']}/credential",
-        json={"credential": {"api_key": "sk-ant-api03-new", "refresh": "x"}},
+        json={
+            "credential": {"api_key": "sk-ant-api03-new", "refresh": "x"},
+            "task_id": task["id"],
+            "attempt": claimed["attempt"],
+        },
         headers=worker,
     )
     assert changed_shape.status_code == 422
@@ -768,7 +772,11 @@ def test_accounts_over_http(client: TestClient) -> None:
     # A credential that cannot be persisted disables the account loudly.
     res = client.put(
         f"/api/accounts/{account['id']}/credential",
-        json={"credential": {"api_key": "sk-ant-api03-y"}},
+        json={
+            "credential": {"api_key": "sk-ant-api03-y"},
+            "task_id": task["id"],
+            "attempt": claimed["attempt"],
+        },
         headers=worker,
     )
     assert res.status_code == 503
@@ -1245,4 +1253,156 @@ async def test_quota_fail_keeps_failures_and_requeues_even_on_the_last_attempt(
     assert (
         after.progress_message is not None
         and "hit your limit" in after.progress_message
+    )
+
+
+# -- credential write is bound to the live claim and the same document --------------------
+
+
+def _gitea(client: TestClient, name: str = "writer", priority: int = 0) -> dict:
+    res = client.post(
+        "/api/accounts",
+        json={
+            "name": name,
+            "provider": "gitea",
+            "priority": priority,
+            "credential": {"username": "argus-writer", "token": "tok-original"},
+        },
+        headers=ADMIN,
+    )
+    assert res.status_code == 201
+    return res.json()
+
+
+def _put(client, account, worker, credential, task=None, attempt=None):
+    body: dict = {"credential": credential}
+    if task is not None:
+        body.update(task_id=task["id"], attempt=attempt or task["attempt"])
+    return client.put(
+        f"/api/accounts/{account['id']}/credential", json=body, headers=worker
+    )
+
+
+def _secret(account) -> dict:
+    return app.state.secrets.get(f"account-{account['id']}")
+
+
+def test_agent_credential_put_needs_a_live_claim_and_leaves_secret_unchanged(
+    client: TestClient,
+) -> None:
+    account = _gitea(client)
+    worker = register(client)
+    task = claimed_task(client, worker)
+    leased = client.post(
+        "/api/accounts/lease",
+        json=lease_payload(task, ["gitea"], role="repository"),
+        headers=worker,
+    )
+    assert leased.status_code == 200
+    original = _secret(account)
+    new = {"username": "argus-writer", "token": "tok-attacker"}
+    # Lease alone, no task named.
+    assert _put(client, account, worker, new).status_code == 422
+    # Wrong attempt.
+    assert _put(client, account, worker, new, task, attempt=99).status_code == 409
+    # Someone else's task.
+    other = register(client)
+    other_task = claimed_task(client, other)
+    assert _put(client, account, worker, new, other_task).status_code == 409
+    assert _secret(account) == original
+    # Claim ends (task completed) while the account lease survives.
+    done = client.post(
+        f"/api/tasks/{task['id']}/complete",
+        json={"attempt": task["attempt"], "result": {"summary": "x"}},
+        headers=worker,
+    )
+    assert done.status_code == 200, done.text
+    stale = _put(client, account, worker, new, task)
+    assert stale.status_code == 409 and "tok-attacker" not in stale.text
+    assert _secret(account) == original
+
+
+def test_agent_credential_put_rejects_other_shape_kind_identity_and_accounts(
+    client: TestClient,
+) -> None:
+    account = _gitea(client, priority=5)
+    foreign = _gitea(client, "other-writer")
+    worker = register(client)
+    task = claimed_task(client, worker)
+    # No lease at all: a live claim is not enough.
+    new = {"username": "argus-writer", "token": "tok-attacker"}
+    assert _put(client, account, worker, new, task).status_code == 403
+    client.post(
+        "/api/accounts/lease",
+        json=lease_payload(task, ["gitea"], role="repository"),
+        headers=worker,
+    )
+    original = _secret(account)
+    # Extra field, changed username, a type change: all refused, secret kept.
+    for bad in (
+        {**new, "extra": "x"},
+        {"username": "someone-else", "token": "tok-attacker"},
+        {"username": "argus-writer", "token": 5},
+        {"token": "tok-attacker"},
+    ):
+        res = _put(client, account, worker, bad, task)
+        assert res.status_code == 422 and "tok-attacker" not in res.text, bad
+        assert _secret(account) == original
+    # An account the agent does not lease.
+    assert _put(client, foreign, worker, new, task).status_code == 403
+    assert _secret(foreign)["token"] == "tok-original"
+    # The same document, rotated, is accepted.
+    assert _put(client, account, worker, new, task).status_code == 204
+    assert _secret(account) == new
+
+
+def test_agent_credential_put_cannot_change_kind(client: TestClient) -> None:
+    created = client.post(
+        "/api/accounts",
+        json={
+            "name": "claude-key",
+            "provider": "anthropic",
+            "credential": {"api_key": "sk-ant-api03-orig"},
+        },
+        headers=ADMIN,
+    ).json()
+    worker = register(client)
+    task = claimed_task(client, worker)
+    client.post(
+        "/api/accounts/lease", json=lease_payload(task, ["anthropic"]), headers=worker
+    )
+    login = {"claudeAiOauth": {"accessToken": "a", "refreshToken": "r", "expiresAt": 1}}
+    res = _put(client, created, worker, login, task)
+    assert res.status_code == 422 and "sk-ant-api03-orig" not in res.text
+    assert _secret(created) == {"api_key": "sk-ant-api03-orig"}
+
+
+def test_lease_requires_a_claim_and_declared_providers_and_exhausted_hides_secrets(
+    client: TestClient,
+) -> None:
+    client.post(
+        "/api/accounts",
+        json={"name": "a1", "provider": "acme", "credential": {"api_key": "sec-a1"}},
+        headers=ADMIN,
+    )
+    worker = register(client)
+    # No claim: nothing is delivered.
+    unclaimed = client.post(
+        "/api/accounts/lease",
+        json={"runtime_providers": ["acme"], "task_id": "nope", "attempt": 1},
+        headers=worker,
+    )
+    assert unclaimed.status_code in (404, 409) and "sec-a1" not in unclaimed.text
+    task = claimed_task(client, worker)
+    # Undeclared provider: no account, no credential.
+    undeclared = client.post(
+        "/api/accounts/lease", json=lease_payload(task, ["other"]), headers=worker
+    )
+    assert undeclared.status_code == 409 and "sec-a1" not in undeclared.text
+    # The agent token cannot be replaced by an admin-only path or no token.
+    assert (
+        client.post(
+            "/api/accounts/lease", json=lease_payload(task, ["acme"])
+        ).status_code
+        == 401
     )
