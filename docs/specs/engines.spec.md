@@ -48,6 +48,11 @@ In scope:
 
 # 3. Decisions Made
 
+- **OpenAI-compatible endpoints** (OpenRouter first) are `custom` accounts, see
+  [custom accounts](custom-accounts.spec.md). `engines/local.py::validate_url` and
+  the account `base_url` share one URL rule. Claude Code cannot use them; NanoClaw
+  does not lease them yet (vault host mapping missing).
+
 - **Readiness is three separate facts, never one.** `installed` (the binary
   exists in the image and reports the pinned version), `authenticated` (a
   credential for *that container's* use exists), `validated` (a real

@@ -23,6 +23,10 @@ Defaults: Codex harness `gpt-6-luna`, Codex implementation `gpt-6-luna` (the acc
 supports; no alias rewriting. Other executors keep their native default unless
 configured. Revisions are SHA-256 of canonical policy content.
 
+A `custom` account's role `model` ([custom accounts](custom-accounts.spec.md)) sits
+between an explicit `--model` and the policy chain: `--model`, account model, policy
+chain, native default. `argus-delegate` does not read the lease `settings` yet.
+
 At each claim, the channel applies the harness selection before injecting work,
 using the existing NanoClaw model setting, killing stale session containers when
 it changes. Task failures advance the harness chain (bounded at the last model);

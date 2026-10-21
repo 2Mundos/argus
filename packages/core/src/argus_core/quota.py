@@ -6,8 +6,10 @@ so they cannot drift (account selection 3.6).
 """
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 
 # Anchored at the start of the notice (after the runner's own prefix): a model that
 # merely talks about limits never counts. Keyed by the *account* provider.
@@ -27,6 +29,16 @@ QUOTA_NOTICES: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             r"^(usage_limit_reached|insufficient_quota|you(?:'|\u2019)ve hit your usage"
             r" limit|you have hit your usage limit)",
+            re.I,
+        ),
+    ),
+    # Custom OpenAI-compatible providers (OpenRouter): HTTP 402 (credits) and 429
+    # (rate limit), as `quota_notice_from_response` words them.
+    (
+        "custom",
+        re.compile(
+            r"^(?:http\s*)?(?:402|429)\b|^(?:insufficient credits|payment required"
+            r"|rate limit)",
             re.I,
         ),
     ),
@@ -93,3 +105,51 @@ def _reset(body: str, now: datetime | None) -> datetime | None:
     base = (now or datetime.now(UTC)).astimezone(UTC)
     at = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
     return at if at > base else at + timedelta(days=1)
+
+
+def quota_notice_from_response(
+    status: int, headers: Mapping[str, str], now: datetime | None = None
+) -> str | None:
+    """The quota notice for an HTTP 402/429 from a custom provider, or None for any
+    other status. The reset comes from `Retry-After` (seconds or an HTTP date), else
+    `X-RateLimit-Reset` (epoch seconds or milliseconds). The body is never used:
+    only the status and a reset time reach the notice (and so a log or an event)."""
+    if status not in (402, 429):
+        return None
+    base = (now or datetime.now(UTC)).astimezone(UTC)
+    lowered = {k.lower(): v for k, v in headers.items()}
+    until = _retry_after(lowered.get("retry-after"), base) or _epoch(
+        lowered.get("x-ratelimit-reset"), base
+    )
+    what = "insufficient credits" if status == 402 else "rate limited"
+    suffix = f" (resets {until.isoformat()})" if until else ""
+    return f"HTTP {status} {what}{suffix}"
+
+
+def _retry_after(value: str | None, base: datetime) -> datetime | None:
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return base + timedelta(seconds=min(int(value), 7 * 86400))
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    when = when if when.tzinfo else when.replace(tzinfo=UTC)
+    return when if when > base else None
+
+
+def _epoch(value: str | None, base: datetime) -> datetime | None:
+    if not value:
+        return None
+    try:
+        raw = float(value)
+    except ValueError:
+        return None
+    seconds = raw / 1000 if raw > 1e11 else raw  # OpenRouter sends milliseconds
+    try:
+        when = datetime.fromtimestamp(seconds, UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+    return when if base < when <= base + timedelta(days=7) else None

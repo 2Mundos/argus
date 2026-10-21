@@ -243,6 +243,10 @@ class ServingAccount(BaseModel):
     id: str
     name: str
     provider: str
+    # Custom accounts only (custom accounts spec 3): the configured engine model and
+    # the host calls go to. Not provider-observed: the model actually served may differ.
+    model: str | None = None
+    host: str | None = None
 
 
 class Task(BaseModel):
