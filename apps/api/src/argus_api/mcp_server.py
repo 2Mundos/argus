@@ -16,6 +16,7 @@ from typing import Annotated, Any, Literal
 import httpx2 as httpx
 from argus_core.auth import Scope
 from argus_core.task_edit import TaskChanges
+from argus_core.tasks import ExecutorModel, HarnessModel
 from fastapi import FastAPI
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import Context, MCPServer
@@ -523,6 +524,8 @@ async def create_task(
     knowledge: list[str] | None = None,
     complexity: Literal["trivial", "standard", "hard"] | None = None,
     account_providers: list[str] | None = None,
+    harness_model: HarnessModel | None = None,
+    executor_model: ExecutorModel | None = None,
 ) -> dict:
     """Create a task. Workers may only create subtasks of a task they hold (set
     parent_id; the project is inherited). Orchestrators create any task and must name
@@ -533,7 +536,11 @@ async def create_task(
     data migration, security, several services) runs a Claude harness and executor
     on the policy's hard chains (Opus); set it explicitly.
     `account_providers` (e.g. ["local"]) restricts the task to those engine account
-    providers; leave it out for no restriction."""
+    providers; leave it out for no restriction. `harness_model` ({engine: claude |
+    codex, model}) and `executor_model` ({executor: claude | codex | agent, model})
+    pin the engine/executor and its model for every attempt, with no fallback chain;
+    the task then only runs on that provider's accounts. Leave them out to follow
+    the model policy."""
     body: dict[str, Any] = {
         "title": title,
         "project": project,
@@ -551,6 +558,10 @@ async def create_task(
         body["complexity"] = complexity
     if account_providers is not None:
         body["account_providers"] = account_providers
+    if harness_model is not None:
+        body["harness_model"] = harness_model.model_dump()
+    if executor_model is not None:
+        body["executor_model"] = executor_model.model_dump()
     return await _call(ctx, "POST", "/tasks", json=body)
 
 
@@ -774,10 +785,11 @@ async def edit_task(
 ) -> dict:
     """Edit a task's definition: title, spec, acceptance, priority,
     required_capabilities, knowledge (pinned page ids), depends_on,
-    account_providers and complexity (trivial | standard | hard; not clearable). `changes`
+    account_providers, complexity (trivial | standard | hard; not clearable),
+    harness_model ({engine, model}) and executor_model ({executor, model}). `changes`
     is a partial patch: a field you leave out is kept, null clears spec, acceptance,
-    required_capabilities, knowledge, depends_on or account_providers (no
-    restriction). Pass the task's `version` as
+    required_capabilities, knowledge, depends_on, account_providers (no
+    restriction) or a model pin (back to the policy). Pass the task's `version` as
     expected_version (409 stale_version carries the current one). The task's
     `editable_fields` says what its state allows: ready, pending and
     awaiting_approval tasks take everything; blocked, claimed and in_review only
@@ -789,7 +801,7 @@ async def edit_task(
         f"/tasks/{task_id}",
         json={
             "expected_version": expected_version,
-            "changes": changes.model_dump(exclude_unset=True),
+            "changes": changes.model_dump(mode="json", exclude_unset=True),
         },
     )
 

@@ -189,6 +189,20 @@ describe("renderTask", () => {
     expect(trivial).toContain("This task is trivial: use EXECUTOR agent");
     expect(trivial).toContain("only if Cursor is unavailable");
   });
+  it("names a pinned executor over the trivial and lease preference", () => {
+    const pinned = renderTask(
+      {
+        ...task(),
+        complexity: "trivial",
+        executor_model: { executor: "codex", model: "gpt-6.1-sol" },
+      } as any,
+      new Map(),
+      "agent",
+    );
+    expect(pinned).toContain("This task pins EXECUTOR codex (model gpt-6.1-sol)");
+    expect(pinned).not.toContain("This task is trivial");
+    expect(pinned).not.toContain("Preferred EXECUTOR");
+  });
   it("tells a local-lease harness to orchestrate only and keep its context small", () => {
     const local = renderTask(task() as any, new Map(), "agent", { localHarness: true });
     expect(local).toContain("Local harness (mandatory)");

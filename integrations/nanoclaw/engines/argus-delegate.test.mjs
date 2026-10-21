@@ -17,6 +17,7 @@ import {
   localHarnessRefusal,
   materializePrivateCursorConfig,
   parseAccountSettings,
+  pinnedModel,
   prepareExecutorEnv,
   READ_ONLY_PROMPT_PREFIX,
   withCliToolsPath,
@@ -117,6 +118,31 @@ test("the pinned task context names the leased engine and account provider (glob
   assert.deepEqual([report.preferred_executor, report.matches_preferred], ["claude", true]);
   assert.equal(report.task.account_provider, "anthropic");
   assert.equal(JSON.stringify(report).includes("placeholder"), false);
+});
+
+test("a task's executor pin sets the model for that executor only, with no chain", async (t) => {
+  const s = sandbox(t);
+  s.fake(
+    "claude",
+    'if [ "$1" = "--version" ]; then echo "9.9.9 (Claude Code)"; exit 0; fi\ncat >/dev/null; echo \'{"result":"hi"}\'',
+  );
+  const policy = JSON.parse(
+    fs.readFileSync(new URL("./model-policy.defaults.json", import.meta.url), "utf8"),
+  );
+  const snapshot = policySnapshot(policy, {
+    task_id: "t1",
+    attempt: 1,
+    engine: "claude",
+    preferred_executor: "claude",
+    executor_model: { executor: "claude", model: "claude-opus-5-5" },
+  });
+  const file = path.join(s.dir, "argus-model-policy.json");
+  fs.writeFileSync(file, JSON.stringify(snapshot));
+  const env = { ...s.env, ANTHROPIC_API_KEY: "placeholder", ARGUS_MODEL_POLICY_FILE: file };
+  const { code, report } = await run(["claude", "--cwd", s.work, "--timeout", "20"], { env });
+  assert.equal(code, 0);
+  assert.deepEqual([report.model, report.model_source], ["claude-opus-5-5", "task"]);
+  assert.equal(pinnedModel(snapshot, "codex"), undefined);
 });
 
 test("missing credentials block with 78 and run nothing, with no fallback", async (t) => {

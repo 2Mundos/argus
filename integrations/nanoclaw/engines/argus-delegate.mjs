@@ -86,11 +86,12 @@ const CLAUDE_WORKSPACE_TOOLS = "Bash,Edit,Write,Read,Glob,Grep";
 export { CUSTOM_KEY_ENV, CUSTOM_PROVIDER_ID, parseAccountSettings, settingsSupport };
 
 /**
- * Model precedence: explicit --model, the account's model, the policy chain, the native
- * default (null). Returns the model and where it came from.
+ * Model precedence: explicit --model, the task's pin, the account's model, the policy
+ * chain, the native default (null). Returns the model and where it came from.
  */
-export function effectiveModel({ override, settings, policyModel }) {
+export function effectiveModel({ override, taskModel, settings, policyModel }) {
   if (override) return { model: override, source: "cli" };
+  if (taskModel) return { model: taskModel, source: "task" };
   if (settings?.model) return { model: settings.model, source: "account" };
   if (policyModel) return { model: policyModel, source: "policy" };
   return { model: null, source: "native_default" };
@@ -104,6 +105,12 @@ const present = (p) => {
   }
 };
 const env = (e, ...names) => names.some((n) => (e[n] ?? "").trim() !== "");
+
+/** The model the pinned task names for this executor (task models spec), if any. */
+export function pinnedModel(snapshot, executor) {
+  const pin = snapshot?.context?.executor_model;
+  return pin?.executor === executor ? pin.model : undefined;
+}
 
 /** Is a credential present for this executor? Presence only, never content. */
 export function authStatus(executor, e = process.env, home = os.homedir(), settings = null) {
@@ -616,14 +623,15 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
         account_base_url: settings.base_url,
       };
     }
-    // --model, then the account's model (a fixed choice: no chain), then the policy chain.
+    // --model, then the task's pin and the account's model (fixed choices: no chain),
+    // then the policy chain.
     selection = selectModel(
       snapshot,
       implementationScope(snapshot, executor),
       executor,
       opts.modelAttempt ?? 1,
       opts.fallbackReason,
-      opts.model || settings?.model || undefined,
+      opts.model || pinnedModel(snapshot, executor) || settings?.model || undefined,
     );
   } catch (err) {
     finish(64, { ...identity, error: "model_policy_invalid", detail: err.message });
@@ -769,6 +777,7 @@ async function runAttempt(
 ) {
   const modelChoice = effectiveModel({
     override: opts.model,
+    taskModel: pinnedModel(snapshot, executor),
     settings,
     policyModel: selection.configured_model,
   });

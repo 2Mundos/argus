@@ -117,6 +117,8 @@ every new dependency is judged against it.
 - [Preferred models](specs/model-selection.spec.md)
 - [Task complexity and local routing](specs/task-complexity.spec.md) — trivial tasks prefer
   the local Strata account and Cursor `composer-2.5`.
+- [Task models](specs/task-models.spec.md) — pin a queued task's harness engine/model
+  and executor/model; narrows its leases, no fallback chain
 - [Model policy operation](runbooks/2026-10-17.model-selection.ref.md)
 - [Project agent images](runbooks/2026-10-17.project-agent-images.ref.md) —
   base × tools × project layers, building and pointing a pool at one

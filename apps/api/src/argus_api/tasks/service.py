@@ -28,7 +28,9 @@ from argus_core.task_edit import CLEARABLE, TaskAttempt, TaskChanges, editable_f
 from argus_core.tasks import (
     TERMINAL,
     Action,
+    ExecutorModel,
     Failover,
+    HarnessModel,
     PromptTrust,
     Review,
     ServingAccount,
@@ -37,6 +39,7 @@ from argus_core.tasks import (
     TaskResult,
     TaskState,
     TransitionContext,
+    check_harness_providers,
     transition,
     validate_milestone,
 )
@@ -145,8 +148,10 @@ async def create_task(
         "INSERT INTO tasks (id, parent_id, kind, title, spec, acceptance, input,"
         " required_capabilities, priority, state, requires_approval, review,"
         " prompt_trust, lease_ttl_s, max_attempts, project, timeout_s, created_by,"
-        " created_at, updated_at, complexity, complexity_source, account_providers)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " created_at, updated_at, complexity, complexity_source, account_providers,"
+        " harness_model, executor_model)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
+        " ?, ?)",
         (
             task_id,
             body.parent_id,
@@ -171,6 +176,8 @@ async def create_task(
             complexity,
             source,
             _providers_json(body.account_providers),
+            _pin_json(body.harness_model),
+            _pin_json(body.executor_model),
         ),
     )
     await tx.conn.executemany(
@@ -264,19 +271,19 @@ async def claim(
     gated = bool(runtime_providers) and await _manages_accounts(tx.conn)
     row = None
     for candidate in candidates:
-        restricted = candidate["account_providers"] is not None
-        if not restricted and not gated:
+        restriction = engine_restriction(candidate)
+        if restriction is None and not gated:
             row = candidate
             break
         providers = (
-            json.loads(candidate["account_providers"])
-            if restricted
+            json.loads(restriction)
+            if restriction is not None
             else sorted(ENGINE_PROVIDERS)
         )
         if await _restriction_met(tx, providers, runtime_providers, agent_id):
             row = candidate
             break
-        if gated and not await can_serve(tx, candidate["account_providers"]):
+        if gated and not await can_serve(tx, restriction):
             await _apply(
                 tx,
                 candidate,
@@ -323,10 +330,30 @@ async def prefers_local(conn: aiosqlite.Connection, task_id: str) -> bool:
 async def account_providers(
     conn: aiosqlite.Connection, task_id: str
 ) -> list[str] | None:
-    """The task's provider restriction, None when unrestricted."""
-    row = await _row(conn, task_id)
-    raw = row["account_providers"]
+    """The task's engine provider restriction (its pinned harness included), None
+    when unrestricted."""
+    raw = engine_restriction(await _row(conn, task_id))
     return None if raw is None else json.loads(raw)
+
+
+async def executor_provider(conn: aiosqlite.Connection, task_id: str) -> str | None:
+    """The provider of the task's pinned executor, None when not pinned."""
+    pin = (await _row(conn, task_id))["executor_model"]
+    return None if pin is None else ExecutorModel.model_validate_json(pin).provider
+
+
+def engine_restriction(row: aiosqlite.Row) -> str | None:
+    """The stored `account_providers`, narrowed to the pinned harness's provider
+    (task models spec 3.2); None when unrestricted."""
+    pin = row["harness_model"]
+    if pin is None:
+        return row["account_providers"]
+    provider = HarnessModel.model_validate_json(pin).provider
+    if row["account_providers"] is not None and provider not in json.loads(
+        row["account_providers"]
+    ):
+        return json.dumps([])  # edits refuse this; never widen if it happens anyway
+    return json.dumps([provider])
 
 
 async def _restriction_met(
@@ -463,7 +490,7 @@ async def wake_waiting(tx: Tx, actor: str = "system") -> list[str]:
     if not capacity:
         return []
     async with tx.conn.execute(
-        "SELECT id, account_providers FROM tasks WHERE state = 'blocked'"
+        "SELECT id, account_providers, harness_model FROM tasks WHERE state = 'blocked'"
         " AND block_reason IN (?, ?) ORDER BY priority DESC, created_at, id",
         QUOTA_WAIT_REASONS,
     ) as cur:
@@ -474,7 +501,7 @@ async def wake_waiting(tx: Tx, actor: str = "system") -> list[str]:
             (
                 c
                 for c in capacity
-                if (c[1] is None or c[1] > 0) and _allows(r["account_providers"], c[0])
+                if (c[1] is None or c[1] > 0) and _allows(engine_restriction(r), c[0])
             ),
             None,
         )
@@ -645,7 +672,7 @@ async def fail(
     if (
         quota
         and await _manages_accounts(tx.conn)
-        and not await can_serve(tx, row["account_providers"])
+        and not await can_serve(tx, engine_restriction(row))
     ):
         await _apply(
             tx,
@@ -946,6 +973,14 @@ async def edit_task(
     changed = {f: v for f, v in new.items() if v != getattr(current, f)}
     if not changed:
         return current  # nothing differs: no write, same version
+    if why := check_harness_providers(
+        new.get("harness_model", current.harness_model),
+        new.get("account_providers", current.account_providers),
+    ):
+        raise ValidationFailedError(
+            f"invalid values: harness_model: {why}",
+            details=[f"harness_model: {why}"],
+        )
 
     deps = changed.get("depends_on")
     dep_states: dict[str, TaskState] = {}
@@ -959,12 +994,15 @@ async def edit_task(
     sets: dict[str, Any] = {
         f: json.dumps(v) if f in _JSON_FIELDS else v
         for f, v in changed.items()
-        if f not in ("knowledge", "depends_on", "account_providers")
+        if f not in ("knowledge", "depends_on", "account_providers", *_PIN_FIELDS)
     }
     if "complexity" in sets:
         sets["complexity_source"] = ComplexitySource.EXPLICIT
     if "account_providers" in changed:
         sets["account_providers"] = _providers_json(changed["account_providers"])
+    for f in _PIN_FIELDS:
+        if f in changed:
+            sets[f] = _pin_json(changed[f])
     if sets:
         assignments = ", ".join(f"{k} = ?" for k in sets)
         await tx.conn.execute(
@@ -1034,7 +1072,7 @@ def _normalized_edit(row: aiosqlite.Row, given: dict[str, Any]) -> dict[str, Any
     values: dict[str, Any] = {}
     for field, value in given.items():
         if value is None:
-            if field == "account_providers":
+            if field in ("account_providers", *_PIN_FIELDS):
                 values[field] = None
             elif field not in CLEARABLE:
                 errors.append(f"{field}: cannot be cleared")
@@ -1078,6 +1116,13 @@ def _providers_json(providers: list[str] | None) -> str | None:
     return None if providers is None else json.dumps(providers)
 
 
+_PIN_FIELDS = ("harness_model", "executor_model")
+
+
+def _pin_json(pin: HarnessModel | ExecutorModel | None) -> str | None:
+    return None if pin is None else pin.model_dump_json()
+
+
 def _digest(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
@@ -1085,6 +1130,11 @@ def _digest(text: str) -> str:
 def _diff(field: str, old: Any, new: Any) -> dict[str, Any]:
     """What the audit keeps of one change. Spec and acceptance text never enter the
     event log (it is streamed and shown): only sizes and digests do."""
+    if field in _PIN_FIELDS:
+        return {
+            "from": old and old.model_dump(),
+            "to": new and new.model_dump(),
+        }
     if field in ("title", "priority", "complexity", "account_providers"):
         return {"from": old, "to": new}
     if field in ("required_capabilities", "knowledge", "depends_on"):
@@ -1167,6 +1217,9 @@ async def _snapshot_attempt(tx: Tx, task: Task, agent_id: str) -> None:
             "depends_on",
         )
     }
+    for f in _PIN_FIELDS:
+        pin = getattr(task, f)
+        definition[f] = pin and pin.model_dump()
     await tx.conn.execute(
         "INSERT INTO task_attempts (task_id, attempt, agent_id, claimed_at, definition)"
         " VALUES (?, ?, ?, ?, ?)",
@@ -1765,6 +1818,9 @@ async def _to_task(conn: aiosqlite.Connection, row: aiosqlite.Row) -> Task:
         data["progress_data"] = json.loads(data["progress_data"])
     if data["account_providers"] is not None:
         data["account_providers"] = json.loads(data["account_providers"])
+    for f in _PIN_FIELDS:
+        if data[f] is not None:
+            data[f] = json.loads(data[f])
     data["requires_approval"] = bool(data["requires_approval"])
     data["version"] = row["updated_at"]
     data["editable_fields"] = editable_fields(

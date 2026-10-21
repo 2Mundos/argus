@@ -204,11 +204,38 @@ def test_editable_fields_come_from_one_source_in_task_and_tool_text(
         "depends_on",
         "complexity",
         "account_providers",
+        "harness_model",
+        "executor_model",
     }
     listing = rpc(client, ADMIN_TOKEN, "tools/list")["tools"]
     schema = next(t for t in listing if t["name"] == "edit_task")
     assert "changes" in schema["inputSchema"]["properties"]
     assert "expected_version" in schema["inputSchema"]["required"]
+
+
+def test_model_pins_over_rest_and_mcp(client: TestClient) -> None:
+    opus = {"engine": "claude", "model": "claude-opus-5-5"}
+    sol = {"executor": "codex", "model": "gpt-6.1-sol"}
+    created = tool(
+        client,
+        ADMIN_TOKEN,
+        "create_task",
+        title="pinned",
+        project="global",
+        harness_model=opus,
+    )
+    assert created["harness_model"] == opus and created["executor_model"] is None
+    edited = mcp_edit(client, ADMIN_TOKEN, created, executor_model=sol)
+    assert edited["executor_model"] == sol
+    cleared = rest_edit(client, ADMIN_TOKEN, edited, harness_model=None)
+    assert cleared.status_code == 200 and cleared.json()["harness_model"] is None
+    refused = rest_edit(
+        client,
+        ADMIN_TOKEN,
+        cleared.json(),
+        harness_model={"engine": "agent", "model": "x"},
+    )
+    assert refused.status_code == 422 and "harness_model" in refused.text
 
 
 def test_attempt_snapshots_are_listed_over_rest(client: TestClient) -> None:

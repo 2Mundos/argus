@@ -16,6 +16,21 @@ const policy = {
   implementation: { codex: ["sol-6.1"], claude: ["sonnet", "opus"] },
 };
 
+test("a task's harness pin is fixed for its engine and ignored for another", () => {
+  const snap = policySnapshot(policy);
+  const task = {
+    spec: "## Review notes (attempt 1)\nfail",
+    failures: 2,
+    harness_model: { engine: "claude", model: "claude-opus-5-5" },
+  };
+  const pinned = selectHarnessModel(snap, "claude", task);
+  assert.deepEqual(
+    [pinned.configured_model, pinned.policy_map, pinned.has_next, pinned.fallback_reason],
+    ["claude-opus-5-5", "task", false, null],
+  );
+  assert.equal(selectHarnessModel(snap, "codex", task).configured_model, "sol");
+});
+
 test("separate scopes, stable content hash, bounded fallback and pinned override", () => {
   const a = policySnapshot(policy);
   const b = policySnapshot({

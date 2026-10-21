@@ -7,10 +7,17 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from argus_core.accounts import ENGINE_PROVIDERS
 from argus_core.complexity import Complexity, ComplexitySource
@@ -31,6 +38,58 @@ def validate_account_providers(value: list[str] | None) -> list[str] | None:
             f" (known: {', '.join(sorted(ENGINE_PROVIDERS))})"
         )
     return sorted(set(value))
+
+
+# The account provider a pinned engine or executor needs (task models spec 3.1).
+HARNESS_PROVIDERS: dict[str, str] = {"claude": "anthropic", "codex": "openai"}
+EXECUTOR_PROVIDERS: dict[str, str] = {
+    "claude": "anthropic",
+    "codex": "openai",
+    "agent": "cursor",
+}
+ModelId = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
+]
+
+
+class HarnessModel(BaseModel):
+    """A task's pinned harness engine and model (task models spec)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    engine: Literal["claude", "codex"]
+    model: ModelId
+
+    @property
+    def provider(self) -> str:
+        return HARNESS_PROVIDERS[self.engine]
+
+
+class ExecutorModel(BaseModel):
+    """A task's pinned delegated executor and model (task models spec)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    executor: Literal["claude", "codex", "agent"]
+    model: ModelId
+
+    @property
+    def provider(self) -> str:
+        return EXECUTOR_PROVIDERS[self.executor]
+
+
+def check_harness_providers(
+    harness: HarnessModel | None, account_providers: list[str] | None
+) -> str | None:
+    """Why a harness pin cannot run under the task's provider restriction, or None."""
+    if harness is None or account_providers is None:
+        return None
+    if harness.provider in account_providers:
+        return None
+    return (
+        f"engine {harness.engine} needs provider {harness.provider},"
+        " excluded by account_providers"
+    )
 
 
 class TaskState(StrEnum):
@@ -251,11 +310,20 @@ class TaskCreate(BaseModel):
     # Restrict the task to these engine account providers (e.g. ["local"]); None:
     # unrestricted (local harness spec 3).
     account_providers: list[str] | None = None
+    # Pinned engine/executor and model; None: policy and account priority.
+    harness_model: HarnessModel | None = None
+    executor_model: ExecutorModel | None = None
 
     @field_validator("account_providers")
     @classmethod
     def _engine_providers(cls, value: list[str] | None) -> list[str] | None:
         return validate_account_providers(value)
+
+    @model_validator(mode="after")
+    def _harness_allowed(self) -> "TaskCreate":
+        if why := check_harness_providers(self.harness_model, self.account_providers):
+            raise ValueError(f"harness_model: {why}")
+        return self
 
 
 class Failover(BaseModel):
@@ -317,6 +385,8 @@ class Task(BaseModel):
     complexity: Complexity = Complexity.STANDARD
     complexity_source: ComplexitySource = ComplexitySource.HEURISTIC
     account_providers: list[str] | None = None
+    harness_model: HarnessModel | None = None
+    executor_model: ExecutorModel | None = None
     created_by: str
     created_at: datetime
     updated_at: datetime

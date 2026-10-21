@@ -12,7 +12,7 @@ from argus_api.knowledge import service as kn
 from argus_api.tasks import service as tasks
 from argus_core.knowledge import PageCreate, ProjectUpsert
 from argus_core.task_edit import EDITABLE, EDITABLE_BY_STATE, TaskChanges
-from argus_core.tasks import TaskCreate
+from argus_core.tasks import ExecutorModel, HarnessModel, TaskCreate
 from argus_core.tasks import TaskState as S
 
 A = "agent-a"
@@ -414,7 +414,9 @@ async def test_each_state_permits_exactly_its_documented_fields(
         "knowledge": [],
         "depends_on": [],
         "complexity": "trivial",
-        "account_providers": ["local"],
+        "account_providers": ["anthropic", "local"],
+        "harness_model": HarnessModel(engine="claude", model="claude-opus-5-5"),
+        "executor_model": ExecutorModel(executor="codex", model="gpt-6.1-sol"),
     }
     assert set(values) == set(EDITABLE)
     for field, value in values.items():

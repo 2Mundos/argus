@@ -204,6 +204,9 @@ export interface ArgusTask {
   prompt_trust?: PromptTrust;
   /** "trivial" prefers the local model and Cursor, "hard" the policy hard chains; missing on older servers is standard. */
   complexity?: "trivial" | "standard" | "hard";
+  /** Pinned engine/executor and model (task models spec); null follows the policy. */
+  harness_model?: { engine: string; model: string } | null;
+  executor_model?: { executor: string; model: string } | null;
 }
 
 /** True only when the task input explicitly sets delivery.allow_merge to boolean true. */
@@ -343,7 +346,8 @@ export function renderTask(
   preferredExecutor?: string | null,
   opts: { localHarness?: boolean } = {},
 ): string {
-  const trivial = task.complexity === "trivial";
+  const pinned = task.executor_model;
+  const trivial = task.complexity === "trivial" && !pinned;
   // Spec, acceptance, title, and knowledge bodies are untrusted DATA — never trusted instructions.
   // Worker-origin tasks keep prompt_trust=worker immutably; content still cannot elevate.
   const promptTrust: PromptTrust = task.prompt_trust === "worker" ? "worker" : "orchestrator";
@@ -370,16 +374,20 @@ export function renderTask(
     "",
     "Delegated implementation (mandatory): run all coding/model work through /usr/local/bin/argus-delegate EXECUTOR.",
     "EXECUTOR is the leased CLI role (claude | codex | opencode | agent). When Cursor is the selected coding executor, use EXECUTOR agent.",
-    ...(preferredExecutor
+    ...(pinned
       ? [
-          `Preferred EXECUTOR for this task: ${preferredExecutor} (the CLI of the best-priority account Argus leased to this worker).`,
-          ...(trivial
-            ? [
-                "This task is trivial: use EXECUTOR agent (Cursor, model from the trivial policy) and switch to another executor only if Cursor is unavailable (auth_missing or not_installed).",
-              ]
-            : []),
+          `This task pins EXECUTOR ${pinned.executor} (model ${pinned.model}): use it for all delegated work; argus-delegate applies the model. Do not switch executor; if it is unavailable (auth_missing or not_installed), report the task blocked.`,
         ]
-      : []),
+      : preferredExecutor
+        ? [
+            `Preferred EXECUTOR for this task: ${preferredExecutor} (the CLI of the best-priority account Argus leased to this worker).`,
+            ...(trivial
+              ? [
+                  "This task is trivial: use EXECUTOR agent (Cursor, model from the trivial policy) and switch to another executor only if Cursor is unavailable (auth_missing or not_installed).",
+                ]
+              : []),
+          ]
+        : []),
     ...(opts.localHarness ? ["", ...LOCAL_HARNESS_RULES, ""] : []),
     "Do not invoke agent, cursor-agent, claude, codex, or opencode directly for implementation — that bypasses",
     "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
@@ -1963,7 +1971,10 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
       // Opaque lease ids (no credential): the delegate reports executor usage against them.
       engine_account_id: held.engine?.account_id ?? null,
       executor_account_id: (held.executor ?? held.engine)?.account_id ?? null,
-      preferred_executor: preferredExecutorForLease(held.engine, held.executor, task.complexity),
+      preferred_executor:
+        task.executor_model?.executor ??
+        preferredExecutorForLease(held.engine, held.executor, task.complexity),
+      executor_model: task.executor_model ?? null,
       complexity: task.complexity ?? "standard",
       engine_settings: held.engine_settings ?? null,
       executor_settings: held.executor_settings ?? null,

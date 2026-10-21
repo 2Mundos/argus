@@ -23,6 +23,8 @@ export interface PolicySnapshot {
     preferred_executor?: string | null;
     /** Task complexity (trivial | standard | hard); trivial prefers the local model. */
     complexity?: string | null;
+    /** The task's pinned executor and model (task models spec); null follows the policy. */
+    executor_model?: { executor: string; model: string } | null;
   } | null;
 }
 export interface ModelSelection {
@@ -50,5 +52,9 @@ export function selectModel(
 export function selectHarnessModel(
   snapshot: PolicySnapshot,
   engine: string,
-  task: { spec: string; failures?: number },
+  task: {
+    spec: string;
+    failures?: number;
+    harness_model?: { engine: string; model: string } | null;
+  },
 ): ModelSelection;

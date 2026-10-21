@@ -93,6 +93,12 @@ export function selectModel(snapshot, scope, engine, attempt = 1, reason = null,
 }
 
 export function selectHarnessModel(snapshot, engine, task) {
+  // A task pin is fixed (task models spec 3.3): no chain, no fallback.
+  if (task.harness_model?.engine === engine)
+    return {
+      ...selectModel(snapshot, "harness", engine, 1, null, task.harness_model.model),
+      policy_map: "task",
+    };
   const reviews = (task.spec.match(/^## Review notes \(attempt /gm) ?? []).length;
   const failures = task.failures ?? 0;
   const scope =

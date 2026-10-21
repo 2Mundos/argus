@@ -9,6 +9,7 @@ import {
   type FieldErrors,
   toDraft,
 } from "../taskEdit";
+import { ModelPin } from "./ModelPin";
 
 const LABELS: Record<EditField, string> = {
   title: "Title",
@@ -20,6 +21,8 @@ const LABELS: Record<EditField, string> = {
   depends_on: "Depends on (task ids, one per line)",
   complexity: "Complexity",
   account_providers: "Restrict to account providers (one per line, e.g. local; empty: any)",
+  harness_model: "Harness engine and model (pinned for every attempt)",
+  executor_model: "Coding executor and model (pinned for every attempt)",
 };
 
 const MULTILINE = new Set<EditField>([
@@ -139,6 +142,14 @@ export function TaskEditForm({ task, onDone }: { task: Task; onDone: (saved?: Ta
                 <option value="trivial">trivial (prefers the local model)</option>
                 <option value="hard">hard (Claude runs on Opus)</option>
               </select>
+            ) : field === "harness_model" || field === "executor_model" ? (
+              <ModelPin
+                field={field}
+                id={id}
+                value={draft[field]}
+                disabled={disabled}
+                onChange={(value) => setDraft({ ...draft, [field]: value })}
+              />
             ) : (
               <input type={field === "priority" ? "number" : "text"} {...common} />
             )}

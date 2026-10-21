@@ -2767,9 +2767,11 @@ export interface components {
             editable_fields?: string[];
             /** Error */
             error: string | null;
+            executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failures */
             failures: number;
+            harness_model?: components["schemas"]["HarnessModel"] | null;
             /** Id */
             id: string;
             /** Input */
@@ -3572,6 +3574,19 @@ export interface components {
             state: "selected" | "running" | "succeeded" | "failed" | "cancelled";
         };
         /**
+         * ExecutorModel
+         * @description A task's pinned delegated executor and model (task models spec).
+         */
+        ExecutorModel: {
+            /**
+             * Executor
+             * @enum {string}
+             */
+            executor: "claude" | "codex" | "agent";
+            /** Model */
+            model: string;
+        };
+        /**
          * ExhaustedReport
          * @description Mark a held account exhausted for the caller's live task claim.
          *
@@ -3722,6 +3737,19 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HarnessModel
+         * @description A task's pinned harness engine and model (task models spec).
+         */
+        HarnessModel: {
+            /**
+             * Engine
+             * @enum {string}
+             */
+            engine: "claude" | "codex";
+            /** Model */
+            model: string;
         };
         /** HeartbeatRequest */
         HeartbeatRequest: {
@@ -5638,9 +5666,11 @@ export interface components {
             editable_fields?: string[];
             /** Error */
             error: string | null;
+            executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failures */
             failures: number;
+            harness_model?: components["schemas"]["HarnessModel"] | null;
             /** Id */
             id: string;
             /** Input */
@@ -5775,6 +5805,8 @@ export interface components {
             complexity?: components["schemas"]["Complexity"] | null;
             /** Depends On */
             depends_on?: string[] | null;
+            executor_model?: components["schemas"]["ExecutorModel"] | null;
+            harness_model?: components["schemas"]["HarnessModel"] | null;
             /** Knowledge */
             knowledge?: string[] | null;
             /** Priority */
@@ -5803,6 +5835,8 @@ export interface components {
              * @default []
              */
             depends_on?: string[];
+            executor_model?: components["schemas"]["ExecutorModel"] | null;
+            harness_model?: components["schemas"]["HarnessModel"] | null;
             /**
              * Input
              * @default {}
@@ -5901,9 +5935,11 @@ export interface components {
             editable_fields?: string[];
             /** Error */
             error: string | null;
+            executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failures */
             failures: number;
+            harness_model?: components["schemas"]["HarnessModel"] | null;
             /** Id */
             id: string;
             /** Input */
