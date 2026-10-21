@@ -16,7 +16,7 @@ account's configured `base_url` with the leased API key held only in host memory
 
 - Codex as the harness on a custom account (Claude Code is the supported harness).
 - Using OpenRouter as the executor in this flow (delegation stays on Cursor or another
-  executor provider).
+  executor provider). In particular a Claude Code executor never runs on the bridge.
 - Storing the API key in harness files, container env, prompts or logs.
 - Calling any host other than the account's configured `base_url` (no redirects followed).
 - Replacing the egress proxy or relaxing SSRF rules for cloud Anthropic traffic.
@@ -92,6 +92,35 @@ account's configured `base_url` with the leased API key held only in host memory
   `engine: claude`. Model-policy context carries `engine_settings` / `executor_settings`
   (no secrets) so `argus-delegate` reports executor model and label separately from the
   harness account.
+- **Harness orchestrates only; the executor never rides the bridge (2026-10-21).** The
+  custom account serves only the NanoClaw harness. The smoke run 7bc671b6 showed the gap:
+  the engine lease was OpenRouter and the executor lease the best Anthropic account, but
+  `withCustomHarnessRuntime` had removed the Claude gateway stub and left
+  `ANTHROPIC_BASE_URL` (bridge), `ANTHROPIC_AUTH_TOKEN` (`argus-custom-harness`) and
+  `ANTHROPIC_CUSTOM_HEADERS` in the container env. `argus-delegate claude` inherited them,
+  so its "claude-sonnet-5-5" run went through the bridge and ran on the custom model
+  (the bridge always sends the account's model). Cursor `agent` was blocked with
+  `auth_missing` because no Cursor account was leased, so no Cursor stub was mounted. So:
+  - *Marker.* The custom harness env carries `ARGUS_CUSTOM_HARNESS=1` (a redirect with the
+    `argus-custom-harness` placeholder counts too, for older envs).
+  - *Delegate env.* On a custom harness `argus-delegate` removes the bridge variables
+    (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ARGUS_ALLOWED_ANTHROPIC_BASE_URL`,
+    `ANTHROPIC_MODEL`, `ANTHROPIC_CUSTOM_HEADERS`, `ARGUS_CUSTOM_HARNESS`) from every
+    executor's environment before anything else; no executor reaches the bridge or sees
+    its key.
+  - *Claude Code executor only on a real Anthropic account.* `withCustomHarnessRuntime`
+    keeps the Claude gateway stub (it is written only when OneCLI issued an Anthropic
+    sentinel for the group, i.e. an Anthropic executor lease is held; the harness itself
+    does not read it). `argus-delegate claude` on a custom harness runs only when the stub
+    restores the sentinel through the gateway (`auth_source: gateway_sentinel`); otherwise
+    it refuses (`auth_missing`, reason `custom_harness_engine_only`) and nothing runs.
+  - *Cursor first.* On a custom or local engine lease the channel leases the executor
+    with `runtime_providers: ["cursor"]` first, so the Cursor stub is mounted, and falls
+    back to the ordinary executor lease (any provider) only on `no_account`. The
+    preferred executor is `agent` (Cursor), as on a local lease.
+  - *Prompt.* The task message adds the custom harness rules: orchestrate, delegate
+    implementation, gates and review to `argus-delegate agent`; `claude` only as the
+    fallback, and it never runs on the harness's account.
 - **Mutual exclusion.** At most one of local Strata harness or custom bridge harness is
   active per agent group; applying one removes the other's files and forwarder.
 

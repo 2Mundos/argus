@@ -12,6 +12,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 from starlette.types import Scope
 
@@ -49,6 +50,33 @@ from argus_api.secrets import open_store
 from argus_api.tasks.routes import router as tasks_router
 
 log = logging.getLogger("argus")
+
+# HTML CSP for the dashboard; API/JSON responses only get frame-ancestors.
+_DASHBOARD_CSP = (
+    "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+    "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
+    "object-src 'none'; base-uri 'none'"
+)
+_API_CSP = "frame-ancestors 'none'"
+
+
+def _api_docs_enabled() -> bool:
+    return os.environ.get("ARGUS_API_DOCS") == "1"
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Baseline browser hardening on every response (security-hardening spec)."""
+
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        ct = response.headers.get("content-type", "")
+        csp = _DASHBOARD_CSP if "text/html" in ct else _API_CSP
+        response.headers.setdefault("Content-Security-Policy", csp)
+        return response
 
 
 @asynccontextmanager
@@ -151,7 +179,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             await db.close()
 
 
-app = FastAPI(title="Argus", version="0.1.0", lifespan=lifespan)
+_docs = _api_docs_enabled()
+app = FastAPI(
+    title="Argus",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
+)
 
 # The API lives under /api; the dashboard is served at / by the same process.
 api = APIRouter(prefix="/api")
@@ -178,6 +214,7 @@ app.include_router(probes_router)
 mcp_server.bind(app)
 app.mount("/mcp", mcp_server.endpoint)
 app.add_middleware(mcp_server.SlashAlias)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 @app.exception_handler(DomainError)

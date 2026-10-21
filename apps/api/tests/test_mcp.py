@@ -24,7 +24,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestCli
 def rpc(
     client: TestClient, token: str | None, method: str, params: dict | None = None
 ) -> dict:
-    headers = {"Accept": "application/json, text/event-stream"}
+    # Host must be on the MCP DNS-rebinding allowlist (security-hardening spec).
+    headers = {"Accept": "application/json, text/event-stream", "Host": "127.0.0.1"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     res = client.post(
@@ -98,7 +99,7 @@ def test_tools_are_listed_by_scope(client: TestClient) -> None:
 
 @pytest.mark.parametrize("token", [None, "not-a-token"])
 def test_tools_list_needs_a_valid_token(client: TestClient, token: str | None) -> None:
-    headers = {"Accept": "application/json, text/event-stream"}
+    headers = {"Accept": "application/json, text/event-stream", "Host": "127.0.0.1"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     res = client.post(
@@ -107,6 +108,21 @@ def test_tools_list_needs_a_valid_token(client: TestClient, token: str | None) -
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
     )
     assert "401 unauthorized" in res.json()["error"]["message"]
+
+
+def test_mcp_rejects_unlisted_host(client: TestClient) -> None:
+    token = register(client)
+    res = client.post(
+        "/mcp",
+        headers={
+            "Accept": "application/json, text/event-stream",
+            "Host": "evil.example",
+            "Authorization": f"Bearer {token}",
+        },
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+    )
+    assert res.status_code == 421
+    assert "Invalid Host" in res.text
 
 
 def _placeholder(schema: dict) -> object:
@@ -130,7 +146,7 @@ def test_no_listed_tool_is_refused_for_scope(client: TestClient, role: str) -> N
             name: _placeholder(schema["properties"][name])
             for name in schema.get("required", [])
         }
-        if t["name"] == "claim_task":
+        if t["name"] in ("claim_task", "wait_for_events"):
             args["wait_s"] = 0
         result = tool(client, token, t["name"], **args)
         error = result.get("error", "") if isinstance(result, dict) else ""

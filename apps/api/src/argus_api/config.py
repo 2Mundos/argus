@@ -12,6 +12,10 @@ class Settings:
     data_dir: Path
     admin_token: str | None = None
     artifact_max_bytes: int = 100 * 1024 * 1024
+    # Sum of artifact sizes one agent may own; default 2 GiB.
+    artifact_agent_quota_bytes: int = 2 * 1024 * 1024 * 1024
+    # Absolute lifetime of an agent bearer token; heartbeats slide it forward.
+    agent_token_ttl_s: int = 7 * 24 * 3600
     # Wall-clock cap per task attempt unless the task or its kind sets one;
     # 0 disables. Heartbeats keep a lease alive, only this ends a stuck attempt.
     task_timeout_s: int = 6 * 3600
@@ -94,6 +98,14 @@ class Settings:
             admin_token=os.environ.get("ARGUS_ADMIN_TOKEN") or None,
             artifact_max_bytes=int(
                 os.environ.get("ARGUS_ARTIFACT_MAX_BYTES", 100 * 1024 * 1024)
+            ),
+            artifact_agent_quota_bytes=int(
+                os.environ.get(
+                    "ARGUS_ARTIFACT_AGENT_QUOTA_BYTES", 2 * 1024 * 1024 * 1024
+                )
+            ),
+            agent_token_ttl_s=int(
+                os.environ.get("ARGUS_AGENT_TOKEN_TTL_S", 7 * 24 * 3600)
             ),
             task_timeout_s=int(os.environ.get("ARGUS_TASK_TIMEOUT_S", 6 * 3600)),
             max_tasks_per_agent_hour=int(

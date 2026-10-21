@@ -5,6 +5,7 @@ import { reportPage, useLiveData } from "../live";
 import { TaskSignal } from "../milestones";
 import { TaskLabel } from "../TaskLabel";
 import { executorPin, harnessPin } from "../taskEdit";
+import { AccountPin } from "./AccountPin";
 import { useNow } from "./Activity";
 import { ArchiveTasks } from "./ArchiveTasks";
 import { ModelPin } from "./ModelPin";
@@ -138,6 +139,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
     difficulty: "" as "" | "trivial" | "simple" | "standard" | "hard",
     harnessModel: "",
     executorModel: "",
+    harnessAccount: "",
   });
   const [error, setError] = useState<string>();
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
@@ -172,6 +174,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
             ...(accountProviders.length ? { account_providers: accountProviders } : {}),
             ...(harness ? { harness_model: harness } : {}),
             ...(executor ? { executor_model: executor } : {}),
+            ...(form.harnessAccount ? { harness_account: form.harnessAccount } : {}),
           },
         }),
       );
@@ -263,6 +266,14 @@ function NewTask({ onClose }: { onClose: () => void }) {
             id="new-harness-model"
             value={form.harnessModel}
             onChange={(v) => set("harnessModel", v)}
+          />
+        </label>
+        <label>
+          Harness account (empty: any; local and custom accounts bring their own model)
+          <AccountPin
+            id="new-harness-account"
+            value={form.harnessAccount}
+            onChange={(v) => set("harnessAccount", v)}
           />
         </label>
         <label>

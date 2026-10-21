@@ -18,11 +18,13 @@ import {
   applyLeases,
   applyLeasesDetailed,
   applyRepositoryLease,
+  assertOneCliUrl,
   CURSOR_EXPIRY_MARGIN_MS,
   classifyFailure,
   classifyLogTail,
   classifyProviderFailure,
   exchangeCursorApiKey,
+  executorFirst,
   jwtExpiryMs,
   OneCliClient,
   preferredExecutorForLease,
@@ -57,9 +59,43 @@ vi.mock("../container-runner.js", () => ({
   },
 }));
 
+describe("assertOneCliUrl", () => {
+  it("accepts the default host.docker.internal URL", () => {
+    expect(assertOneCliUrl("http://host.docker.internal:10254")).toBe(
+      "http://host.docker.internal:10254",
+    );
+  });
+
+  it("rejects http to a non-allowlisted host", () => {
+    expect(() => assertOneCliUrl("http://onecli.example:10254")).toThrow(/https/);
+  });
+
+  it("rejects embedded credentials", () => {
+    expect(() => assertOneCliUrl("https://user:pass@onecli.example")).toThrow(/credential/);
+  });
+});
+
+describe("OneCliClient error bodies", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("omits the response body unless ARGUS_ONECLI_DEBUG_BODY=1", async () => {
+    const secretBody = '{"error":"vault-secret-xyz","detail":"do-not-leak"}';
+    const fetchImpl = (async () => new Response(secretBody, { status: 503 })) as typeof fetch;
+    const client = new OneCliClient("http://127.0.0.1:10254", fetchImpl);
+    await expect(client.call("GET", "/agents")).rejects.toThrow(/503 vault-secret-xyz/);
+    await expect(client.call("GET", "/agents")).rejects.not.toThrow(/do-not-leak/);
+
+    vi.stubEnv("ARGUS_ONECLI_DEBUG_BODY", "1");
+    const debugClient = new OneCliClient("http://127.0.0.1:10254", fetchImpl);
+    await expect(debugClient.call("GET", "/agents")).rejects.toThrow(/do-not-leak/);
+  });
+});
+
 describe("recycleRuntime (real hook, NanoClaw modules faked)", () => {
   const recycle = () => {
-    vi.stubEnv("ONECLI_URL", "http://onecli.test");
+    vi.stubEnv("ONECLI_URL", "http://127.0.0.1:10254");
     return accountsFromEnv()!.recycleRuntime!;
   };
   afterEach(() => {
@@ -122,7 +158,7 @@ const lease = (name: string, key: string, over: Partial<AccountLease> = {}): Acc
 describe("repository lease vault mapping", () => {
   it("assigns a generic Authorization secret for only the allowlisted Gitea host and unassigns on release", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     const target = { identifier: "group-r", name: "repo worker" };
     await applyRepositoryLease(
       onecli,
@@ -201,7 +237,7 @@ function world(opts: {
     const u = new URL(url);
     const body = init.body ? JSON.parse(init.body as string) : undefined;
     const method = init.method ?? "GET";
-    if (u.host === "onecli.test") {
+    if (u.hostname === "127.0.0.1") {
       const path = u.pathname.replace(/^\/api/, "");
       calls.push({ who: "onecli", method, path, body });
       if (method === "GET" && path === "/agents") return json(200, onecli.agents);
@@ -329,7 +365,7 @@ function harness(
     accounts: withAccounts
       ? {
           models: true,
-          onecli: new OneCliClient("http://onecli.test", w.fetchImpl),
+          onecli: new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
           resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
           ...extra,
         }
@@ -362,7 +398,7 @@ describe("anthropic credential documents", () => {
   const apply = async (credential: Record<string, unknown>) => {
     const w = world({ leases: [] });
     await applyLease(
-      new OneCliClient("http://onecli.test", w.fetchImpl),
+      new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
       { identifier: "g", name: "G" },
       lease("x", "", { credential }),
     );
@@ -428,15 +464,16 @@ describe("classifyFailure", () => {
       reason: "Rate limit [five_hour] (resets 2026-10-15T01:00:00.000Z)",
       until: "2026-10-15T01:00:00.000Z",
       resetStatus: "stated",
+      resetText: "2026-10-15T01:00:00.000Z",
     });
-    expect(classifyFailure("Out of credits")).toMatchObject({
+    const credits = classifyFailure("Out of credits");
+    expect(credits).toMatchObject({
       kind: "exhausted",
       code: "quota_exhausted",
       source: "notice",
       resetStatus: "absent",
     });
-    const outOfCredits = classifyFailure("Out of credits");
-    expect(outOfCredits.kind === "exhausted" && outOfCredits.until).toBeUndefined();
+    expect(credits).not.toHaveProperty("until");
   });
   it("recognizes Claude's session-limit wording and the UTC clock reset", () => {
     const now = new Date("2026-10-20T20:00:00.000Z");
@@ -457,20 +494,18 @@ describe("classifyFailure", () => {
     expect(
       classifyFailure("You've hit your session limit · resets 1:05am (UTC)", "anthropic", now),
     ).toMatchObject({ until: "2026-10-21T01:05:00.000Z" });
-    expect(classifyFailure("Usage limit reached", "anthropic", now)).toMatchObject({
-      kind: "exhausted",
-      code: "quota_exhausted",
-      resetStatus: "absent",
-    });
-    const usageLimit = classifyFailure("Usage limit reached", "anthropic", now);
-    expect(usageLimit.kind === "exhausted" && usageLimit.until).toBeUndefined();
-    const vagueReset = classifyFailure("You've hit your limit · resets sometime", "anthropic", now);
-    expect(vagueReset).toMatchObject({
+    const usage = classifyFailure("Usage limit reached", "anthropic", now);
+    expect(usage).toMatchObject({ kind: "exhausted", resetStatus: "absent" });
+    expect(usage).not.toHaveProperty("until");
+    // Words but no time with a zone: kept as the provider's text, never a guessed time.
+    const vague = classifyFailure("You've hit your limit · resets sometime", "anthropic", now);
+    expect(vague).toMatchObject({
       kind: "exhausted",
       code: "quota_exhausted",
       resetStatus: "ambiguous",
+      resetText: "sometime",
     });
-    expect(vagueReset.kind === "exhausted" && vagueReset.until).toBeUndefined();
+    expect(vague).not.toHaveProperty("until");
     expect(
       classifyFailure("Rate limit [five_hour] (resets 2026-10-20T23:50:00.000Z)", "anthropic"),
     ).toMatchObject({ until: "2026-10-20T23:50:00.000Z" });
@@ -492,7 +527,7 @@ describe("classifyFailure", () => {
 describe("applyLease", () => {
   it("creates the agent and a selective secret, then updates it in place on a switch", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     const target = { identifier: "ag-group-1", name: "Worker" };
 
     await applyLease(onecli, target, lease("a", "sk-ant-AAAA"));
@@ -515,7 +550,7 @@ describe("applyLease", () => {
   it("uses an OAuth token for subscription accounts", async () => {
     const w = world({ leases: [] });
     await applyLease(
-      new OneCliClient("http://onecli.test", w.fetchImpl),
+      new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
       { identifier: "g", name: "n" },
       lease("sub", "", { kind: "subscription", credential: { oauth_token: "sk-ant-oat01-XYZ" } }),
     );
@@ -524,7 +559,7 @@ describe("applyLease", () => {
 
   it("rejects unknown providers and credentials with no usable field, without echoing values", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     await expect(
       applyLease(onecli, { identifier: "g", name: "n" }, lease("x", "k", { provider: "mystery" })),
     ).rejects.toThrow(/cannot be applied/);
@@ -669,7 +704,7 @@ describe("channel with accounts", () => {
   it("gives the account back when it cannot be applied to the vault", async () => {
     const w = world({ leases: [lease("a", "sk-ant-AAAA")], tasks: [task()] });
     const failing = ((url: string, init: RequestInit) =>
-      new URL(url).host === "onecli.test"
+      new URL(url).hostname === "127.0.0.1"
         ? Promise.resolve(new Response('{"error":"down"}', { status: 503 }))
         : w.fetchImpl(url, init)) as typeof fetch;
     const inbound: any[] = [];
@@ -682,7 +717,7 @@ describe("channel with accounts", () => {
       claimWaitS: 1,
       accounts: {
         models: true,
-        onecli: new OneCliClient("http://onecli.test", failing),
+        onecli: new OneCliClient("http://127.0.0.1:10254", failing),
         resolveTarget: async () => ({ identifier: "g", name: "n" }),
       },
     });
@@ -773,7 +808,7 @@ describe("openai (Codex) credential documents", () => {
   it("gives OneCLI the whole ChatGPT auth.json as an openai secret for chatgpt.com", async () => {
     const w = world({ leases: [] });
     const engine = await applyLease(
-      new OneCliClient("http://onecli.test", w.fetchImpl),
+      new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
       target,
       codexLease(),
     );
@@ -790,7 +825,7 @@ describe("openai (Codex) credential documents", () => {
   it("maps an API-key document to api.openai.com", async () => {
     const w = world({ leases: [] });
     await applyLease(
-      new OneCliClient("http://onecli.test", w.fetchImpl),
+      new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
       target,
       codexLease({ kind: "api_key", credential: { auth_mode: "apikey", OPENAI_API_KEY: "sk-1" } }),
     );
@@ -803,7 +838,7 @@ describe("openai (Codex) credential documents", () => {
     let message = "";
     try {
       await applyLease(
-        new OneCliClient("http://onecli.test", w.fetchImpl),
+        new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
         target,
         codexLease({ credential: bad }),
       );
@@ -817,7 +852,7 @@ describe("openai (Codex) credential documents", () => {
 
   it("assigns exactly the secrets of the leases held", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     const claude = lease("claude-1", "sk-ant", { role: "executor" });
     expect(await applyLeases(onecli, target, [codexLease(), claude])).toBe("codex");
     const agent = w.onecli.agents[0]!;
@@ -861,7 +896,8 @@ describe("engine and executor leases in the channel", () => {
     expect(JSON.stringify(leaseCalls)).not.toContain('"providers"');
     expect(selectEngine).toHaveBeenCalledWith("codex");
     const selected = w.calls.find((c) => c.path === "/engines/selected")!.body;
-    expect(selected).toMatchObject({
+    // task_id/attempt close the failover trail (account-selection.spec.md 3.6).
+    expect(selected).toEqual({
       engine: "codex",
       provider: "openai",
       account_id: "a-codex-1",
@@ -1010,7 +1046,7 @@ describe("cursor credential documents", () => {
 
   it("maps an OAuth login to two generic secrets on api2.cursor.sh only", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     await applyLeases(onecli, target, [codexLease(), cursorLease()]);
     const posts = w.calls.filter((c) => c.path === "/secrets" && c.method === "POST");
     const agent = posts.find((c) => c.body.name === "argus-g-cursor-agent")!;
@@ -1043,7 +1079,7 @@ describe("cursor credential documents", () => {
       }
       return w.fetchImpl(url, init as RequestInit);
     }) as typeof fetch;
-    const onecli = new OneCliClient("http://onecli.test", fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", fetchImpl);
     await applyLeases(
       onecli,
       target,
@@ -1063,7 +1099,7 @@ describe("cursor credential documents", () => {
 
   it("rejects settings-only and expired documents without echoing secrets", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     for (const credential of [
       CURSOR_SETTINGS,
       { accessToken: cursorJwt(Math.floor(Date.now() / 1000) - 60), refreshToken: CURSOR_REFRESH },
@@ -1085,7 +1121,7 @@ describe("cursor credential documents", () => {
 
   it("unassigns cursor secrets when the executor lease ends but keeps the engine", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     await applyLeases(onecli, target, [codexLease(), cursorLease()]);
     const names = w.onecli.agents[0]!.secrets.map(
       (id) => w.onecli.secrets.find((s) => s.id === id)!.name,
@@ -1143,7 +1179,7 @@ describe("cursor executor selection in the channel", () => {
 describe("applyLeasesDetailed", () => {
   it("reports executor JWT expiry for a Cursor executor lease", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     const exp = jwtExpiryMs(CURSOR_ACCESS);
     const out = await applyLeasesDetailed(onecli, { identifier: "g", name: "G" }, [
       codexLease(),
@@ -1459,7 +1495,7 @@ describe("runtime recycling on an account rotation", () => {
     name: "codex-2",
   };
 
-  it("stops the old runtime after the new account is applied and before the task is resent", async () => {
+  it("stops the old runtime before the new account is applied and the task is resent", async () => {
     const w = world({
       leases: [codexLease(), "no_account", codex2, "no_account"],
       tasks: [task()],
@@ -1479,7 +1515,8 @@ describe("runtime recycling on an account rotation", () => {
     await h.adapter.deliver("local", null, expired as any);
     await until(() => h.inbound.length === 2);
     expect(recycleRuntime).toHaveBeenCalledTimes(1);
-    expect(order[0]).toMatch(/^recycle\(inbound=1,/);
+    // Recycled before the replacement's secret was written (account-selection.spec.md 3.6).
+    expect(order[0]).toMatch(/^recycle\(inbound=1, secret=1\)$/);
     expect(h.inbound[1].content.text).toContain("account was switched");
     // Same task and attempt: nothing was failed or retried to renew the session.
     expect(w.calls.some((c) => /\/tasks\/t1\/fail$/.test(c.path))).toBe(false);
@@ -1487,7 +1524,7 @@ describe("runtime recycling on an account rotation", () => {
     expect(selected.map((b) => b.account_id)).toEqual(["a-codex-1", "a-codex-2"]);
   });
 
-  it("also runs on a cross-provider fallback, after the engine is selected", async () => {
+  it("also runs on a cross-provider fallback, before the new engine is selected", async () => {
     const w = world({
       leases: [codexLease(), "no_account", lease("claude-1", "sk-ant")],
       tasks: [task()],
@@ -1502,6 +1539,7 @@ describe("runtime recycling on an account rotation", () => {
     await until(() => h.inbound.length === 1);
     await h.adapter.deliver("local", null, expired as any);
     await until(() => h.inbound.length === 2);
+    // The old runtime stops before the new account is written and its engine selected.
     expect(calls).toEqual(["select:codex", "recycle", "select:claude"]);
   });
 
@@ -1569,7 +1607,7 @@ describe("global account selection in the channel", () => {
   });
 
   it("ignores the retired provider lists in the environment", () => {
-    vi.stubEnv("ONECLI_URL", "http://onecli.test");
+    vi.stubEnv("ONECLI_URL", "http://127.0.0.1:10254");
     vi.stubEnv("ARGUS_ACCOUNT_PROVIDERS", "openai");
     vi.stubEnv("ARGUS_EXECUTOR_PROVIDERS", "cursor");
     const accounts = accountsFromEnv()!;
@@ -1583,7 +1621,7 @@ describe("global account selection in the channel", () => {
     vi.stubEnv("ARGUS_ACCOUNT_PROVIDERS", "");
     vi.stubEnv("ARGUS_REPOSITORIES_JSON", "");
     expect(accountsFromEnv()).toBeUndefined();
-    vi.stubEnv("ONECLI_URL", "http://onecli.test");
+    vi.stubEnv("ONECLI_URL", "http://127.0.0.1:10254");
     expect(accountsFromEnv()?.models).toBe(true);
   });
 
@@ -1612,7 +1650,7 @@ describe("global account selection in the channel", () => {
       selectModels,
       accounts: {
         models: true,
-        onecli: new OneCliClient("http://onecli.test", w.fetchImpl),
+        onecli: new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
         resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
       },
     });
@@ -1658,7 +1696,7 @@ describe("global account selection in the channel", () => {
       claimWaitS: 1,
       accounts: {
         models: true,
-        onecli: new OneCliClient("http://onecli.test", fetchImpl),
+        onecli: new OneCliClient("http://127.0.0.1:10254", fetchImpl),
         resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
         selectEngine,
       },
@@ -1737,6 +1775,66 @@ describe("global account selection in the channel", () => {
     expect(fail.body.error).toContain("could not be stopped");
   });
 
+  it("stops the stuck runtime before it claims again after runtime_switch_failed", async () => {
+    const w = world({
+      leases: [codexLease(), lease("claude-1", "sk-ant"), lease("claude-1", "sk-ant")],
+      tasks: [task(), { ...task(), id: "t2" }, { ...task(), id: "t3" }],
+    });
+    const claimsAtRecycle: number[] = [];
+    const recycleRuntime = vi.fn(async () => {
+      claimsAtRecycle.push(w.calls.filter((c) => c.path === "/tasks/claim").length);
+      if (recycleRuntime.mock.calls.length === 1) throw new Error("session s1 did not stop");
+    });
+    const h = harness(w, true, { rebalanceMs: 30, recycleRuntime });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await new Promise((r) => setTimeout(r, 60));
+    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await until(() => h.inbound.length === 2, 5000); // t3 runs once the runtime stopped
+    const fail = w.calls.find((c) => c.path === "/tasks/t2/fail")!;
+    expect(fail.body.reason).toBe("runtime_switch_failed");
+    // The failed stop (during t2's lease) and the retry both happen before t3 is claimed.
+    expect(recycleRuntime).toHaveBeenCalledTimes(2);
+    expect(claimsAtRecycle).toEqual([2, 2]);
+  });
+
+  it("on lease_account_unusable drops the account and stops the runtime before the next claim", async () => {
+    const w = world({
+      leases: [codexLease(), lease("claude-1", "sk-ant")],
+      tasks: [task(), { ...task(), id: "t2" }],
+    });
+    let claims = 0;
+    const inner = w.fetchImpl;
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      if (String(url).endsWith("/tasks/claim") && ++claims === 2) {
+        w.calls.push({ who: "argus", method: "POST", path: "/tasks/claim", body: {}, search: "" });
+        return new Response(
+          JSON.stringify({ detail: { code: "lease_account_unusable", message: "exhausted" } }),
+          { status: 409 },
+        );
+      }
+      return inner(url, init);
+    }) as unknown as typeof fetch;
+    const claimsAtRecycle: number[] = [];
+    const recycleRuntime = vi.fn(async () => {
+      claimsAtRecycle.push(w.calls.filter((c) => c.path === "/tasks/claim").length);
+    });
+    const h = harness({ ...w, fetchImpl }, true, { recycleRuntime });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await until(() => h.inbound.length === 2, 5000); // t2 runs on the next account
+    expect(w.calls.some((c) => c.path === "/accounts/release" && c.search === "?role=engine")).toBe(
+      true,
+    );
+    // Stopped once, after the refused claim and before t2 was claimed.
+    expect(claimsAtRecycle).toEqual([2]);
+    const selected = w.calls.filter((c) => c.path === "/engines/selected").map((c) => c.body);
+    expect(selected.map((b) => b.account_id)).toEqual(["a-codex-1", "a-claude-1"]);
+  });
+
   it("keeps the established account when a re-evaluation finds nothing better or nothing usable", async () => {
     const w = world({
       leases: [codexLease(), "no_account", "no_account"],
@@ -1754,6 +1852,29 @@ describe("global account selection in the channel", () => {
     expect(selectEngine).toHaveBeenCalledTimes(1);
     expect(w.calls.some((c) => /\/exhausted$/.test(c.path))).toBe(false);
     expect(w.calls.some((c) => c.path === "/tasks/t2/fail")).toBe(false);
+  });
+
+  it("leases afresh at once when the held account does not fit the next task's pin", async () => {
+    const strata = lease("strata", "", {
+      provider: "local",
+      credential: { base_url: "http://host.docker.internal:8080" },
+    });
+    const w = world({
+      leases: [codexLease(), strata],
+      tasks: [task(), { ...task(), id: "t2", harness_account: "a-strata" }],
+    });
+    const recycleRuntime = vi.fn(async () => undefined);
+    // An hour between re-evaluations: only the pin makes the second claim lease.
+    const h = harness(w, true, { rebalanceMs: 3_600_000, recycleRuntime });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await until(() => h.inbound.length === 2, 5000);
+    expect(w.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(2);
+    expect(recycleRuntime).toHaveBeenCalledTimes(1); // the Codex runtime stops first
+    const selected = w.calls.filter((c) => c.path === "/engines/selected").map((c) => c.body);
+    expect(selected.map((b) => b.account_id)).toEqual(["a-codex-1", "a-strata"]);
   });
 
   it("never rotates while a task is in flight", async () => {
@@ -1790,7 +1911,7 @@ describe("custom (OpenRouter) engine accounts", () => {
 
   it("applyLeases does not write a OneCLI secret for a custom engine lease", async () => {
     const w = world({ leases: [] });
-    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
     const engine = await applyLeasesDetailed(onecli, target, [
       lease("or", "sk-or-key", {
         provider: "custom",
@@ -1804,7 +1925,7 @@ describe("custom (OpenRouter) engine accounts", () => {
 
   it("applyLeases still applies a separate cursor executor lease", async () => {
     const w = world({ leases: [] });
-    await applyLeasesDetailed(new OneCliClient("http://onecli.test", w.fetchImpl), target, [
+    await applyLeasesDetailed(new OneCliClient("http://127.0.0.1:10254", w.fetchImpl), target, [
       lease("or", "sk-or-key", {
         provider: "custom",
         credential: { api_key: "sk-or-key" },
@@ -2246,5 +2367,94 @@ describe("usage relay in the channel", () => {
       r.w.calls.filter((c) => c.path === "/accounts/lease" && c.body?.role === "executor").length,
     ).toBeLessThanOrEqual(1);
     rmSync(r.dir, { recursive: true });
+  });
+});
+
+// -- executor lease on a harness that only orchestrates (custom/local harness specs) ------
+
+describe("Cursor first on a local or custom engine lease", () => {
+  const settings = {
+    base_url: "https://openrouter.ai/api/v1",
+    label: "openrouter",
+    model: "deepseek/deepseek-v4.1-flash-1017",
+    provider: null,
+  };
+  const custom = () =>
+    lease("or", "sk-or-key", {
+      provider: "custom",
+      credential: { api_key: "sk-or-key" },
+      settings,
+    });
+
+  it("executorFirst names cursor only for local and custom engines", () => {
+    expect(executorFirst("custom")).toBe("cursor");
+    expect(executorFirst("local")).toBe("cursor");
+    expect(executorFirst("anthropic")).toBeNull();
+    expect(executorFirst("openai")).toBeNull();
+    expect(executorFirst(null)).toBeNull();
+  });
+
+  it("prefers agent on a custom engine lease even when an Anthropic executor is held", () => {
+    const anthropic = lease("claude-1", "sk-ant", { role: "executor" });
+    expect(preferredExecutorForLease(custom(), anthropic)).toBe("agent");
+    expect(preferredExecutorForLease(custom(), null)).toBe("agent");
+  });
+
+  async function executorCalls(answers: Array<"no_account" | AccountLease>) {
+    const w = world({ leases: [custom()], tasks: [task()] });
+    const calls: any[] = [];
+    const inner = w.fetchImpl;
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      const body = init.body ? JSON.parse(init.body as string) : undefined;
+      if (String(url).endsWith("/accounts/lease") && body?.role === "executor") {
+        calls.push(body);
+        const next = answers.shift();
+        if (!next || next === "no_account")
+          return new Response(
+            JSON.stringify({ detail: { code: "no_account", message: "no usable account" } }),
+            { status: 409 },
+          );
+        return new Response(JSON.stringify(next), { status: 200 });
+      }
+      return inner(url, init);
+    }) as unknown as typeof fetch;
+    const h = createArgusAdapter({
+      url: "http://argus.test",
+      bootstrapToken: "boot",
+      capabilities: [],
+      name: "w",
+      fetch: fetchImpl,
+      claimWaitS: 1,
+      accounts: {
+        models: true,
+        onecli: new OneCliClient("http://127.0.0.1:10254", fetchImpl),
+        resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
+        selectEngine: vi.fn(async (_engine: string) => true),
+      },
+    });
+    live.push(h);
+    await h.setup({
+      onInbound: vi.fn(),
+      onInboundEvent: vi.fn(),
+      onMetadata: vi.fn(),
+      onAction: vi.fn(),
+    } as unknown as ChannelSetup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    return { calls: calls.map((c) => c.runtime_providers), w };
+  }
+
+  it("leases the Cursor executor first so its stub is mounted", async () => {
+    const cursor = lease("cur", "", {
+      provider: "cursor",
+      role: "executor",
+      credential: { api_key: "crsr" },
+    });
+    const { calls } = await executorCalls([cursor]);
+    expect(calls).toEqual([["cursor"]]);
+  });
+
+  it("falls back to any executor provider when no Cursor account is usable", async () => {
+    const { calls } = await executorCalls(["no_account", "no_account"]);
+    expect(calls).toEqual([["cursor"], ["anthropic", "openai", "local", "custom", "cursor"]]);
   });
 });

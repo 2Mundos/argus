@@ -8,6 +8,8 @@
 #   integrations/nanoclaw/provision.sh          # build everything
 #   integrations/nanoclaw/provision.sh env      # only print the ARGUS_* lines
 #   integrations/nanoclaw/provision.sh env-file [path]   # write them (0600)
+#   integrations/nanoclaw/provision.sh check    # checkout, install, build and the
+#                                               # vitest suite only: no Docker, no image
 #
 # Optional engines overlay (docs/specs/engines.spec.md, codex-accounts.spec.md):
 #   ARGUS_NANOCLAW_ENGINES=1 integrations/nanoclaw/provision.sh
@@ -69,6 +71,8 @@ ARGUS_NANOCLAW_AGENT_IMAGE_ARCHIVE=$ARCHIVE
 ENV
 }
 if [ "${1:-}" = env ]; then print_env; exit 0; fi
+CHECK_ONLY=0
+if [ "${1:-}" = check ]; then CHECK_ONLY=1; fi
 if [ "${1:-}" = env-file ]; then
   # A non-secret file for a service manager's EnvironmentFile=; mode 0600.
   out="${2:-${XDG_CONFIG_HOME:-$HOME/.config}/argus/nanoclaw.env}"
@@ -123,6 +127,11 @@ if [ "$ENGINES" = 1 ]; then "$here/engines/install-engines.sh" "$SRC"; fi
   "$here/install.sh" "$SRC" >/dev/null
   pnpm exec vitest run src/channels/argus.test.ts src/channels/argus-accounts.test.ts src/channels/argus-gitea-lease.test.ts src/gateway-providers/argus-cursor-stub.test.ts src/gateway-providers/argus-local-harness.test.ts src/gateway-providers/argus-onecli-git-ca.test.ts src/gateway-providers/onecli.test.ts src/gateway-providers/onecli-files.test.ts src/gateway-providers/gateway-provider-registry.test.ts src/drivers/argus-codex-sandbox.test.ts src/argus-codex-sandbox-composition.test.ts src/drivers/docker-driver.test.ts
 )
+
+if [ "$CHECK_ONLY" = 1 ]; then
+  echo "Checked: $SRC installs, builds and passes the Argus vitest suite (no image built)."
+  exit 0
+fi
 
 # Agent image: NanoClaw's own build script, then a stable tag and a `docker save`
 # archive (the sandboxed host's private daemon starts without images).

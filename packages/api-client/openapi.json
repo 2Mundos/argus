@@ -2150,6 +2150,17 @@
             "title": "Failures",
             "type": "integer"
           },
+          "harness_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Account"
+          },
           "harness_model": {
             "anyOf": [
               {
@@ -8167,6 +8178,11 @@
             "title": "Agents Per Instance",
             "type": "integer"
           },
+          "allow_mutable_images": {
+            "default": false,
+            "title": "Allow Mutable Images",
+            "type": "boolean"
+          },
           "capabilities": {
             "default": [],
             "items": {
@@ -8319,6 +8335,7 @@
           "env",
           "cpus",
           "memory_mb",
+          "allow_mutable_images",
           "docker",
           "kubernetes",
           "nanoclaw",
@@ -8540,6 +8557,17 @@
             ],
             "title": "Agents Per Instance"
           },
+          "allow_mutable_images": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Mutable Images"
+          },
           "capabilities": {
             "anyOf": [
               {
@@ -8696,6 +8724,11 @@
             "minimum": 1.0,
             "title": "Agents Per Instance",
             "type": "integer"
+          },
+          "allow_mutable_images": {
+            "default": false,
+            "title": "Allow Mutable Images",
+            "type": "boolean"
           },
           "capabilities": {
             "default": [],
@@ -11125,6 +11158,17 @@
             "title": "Failures",
             "type": "integer"
           },
+          "harness_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Account"
+          },
           "harness_model": {
             "anyOf": [
               {
@@ -11592,6 +11636,19 @@
               }
             ]
           },
+          "harness_account": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Account"
+          },
           "harness_model": {
             "anyOf": [
               {
@@ -11644,6 +11701,7 @@
           "spec": {
             "anyOf": [
               {
+                "maxLength": 200000,
                 "type": "string"
               },
               {
@@ -11728,6 +11786,19 @@
                 "type": "null"
               }
             ]
+          },
+          "harness_account": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Account"
           },
           "harness_model": {
             "anyOf": [
@@ -11818,6 +11889,7 @@
           },
           "spec": {
             "default": "",
+            "maxLength": 200000,
             "title": "Spec",
             "type": "string"
           },
@@ -12021,6 +12093,17 @@
           "failures": {
             "title": "Failures",
             "type": "integer"
+          },
+          "harness_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Account"
           },
           "harness_model": {
             "anyOf": [

@@ -858,13 +858,13 @@ async def test_run_loop_sweeps_after_a_delay_probes_one_at_a_time_with_a_gap(
         assert (s.state, s.last_probe.status) == ("known", "updated")
 
 
-async def test_migration_0038_applies_to_a_database_at_0037(
+async def test_migration_0039_applies_to_a_database_at_0038(
     tmp_path: Path,
 ) -> None:
     migrations = load_migrations()
-    assert [m.version for m in migrations][36:38] == [37, 38]
+    assert [m.version for m in migrations][37:39] == [38, 39]
     path = tmp_path / "old.db"
-    old = await Database.open(path, migrations=migrations[:37])
+    old = await Database.open(path, migrations=migrations[:38])
     async with old.write() as tx:
         await tx.conn.execute(
             "INSERT INTO accounts (id, name, provider, kind, secret_ref, state,"

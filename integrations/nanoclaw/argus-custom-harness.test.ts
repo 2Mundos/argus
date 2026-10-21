@@ -39,7 +39,23 @@ describe("withCustomHarnessRuntime", () => {
     expect(out.env?.ANTHROPIC_BASE_URL).toBe("http://host.docker.internal:9");
     expect(out.env?.ANTHROPIC_AUTH_TOKEN).toBe(CUSTOM_HARNESS_AUTH_TOKEN);
     expect(out.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
-    expect(out.credentialStubs).toEqual([]);
+    expect(out.env?.ARGUS_CUSTOM_HARNESS).toBe("1");
+    // The Claude gateway stub stays: argus-delegate claude, after dropping the bridge
+    // env, runs on the leased Anthropic account through the gateway (never the bridge).
+    expect(out.credentialStubs).toEqual([
+      { containerPath: CLAUDE_GATEWAY_STUB_PATH, content: "{}" },
+    ]);
+  });
+
+  it("clears the custom harness marker without a harness", () => {
+    const out = withCustomHarnessRuntime(
+      {
+        env: { ARGUS_CUSTOM_HARNESS: "1", ANTHROPIC_BASE_URL: "http://host.docker.internal:9" },
+      } as never,
+      null,
+    );
+    expect(out.env?.ARGUS_CUSTOM_HARNESS).toBeUndefined();
+    expect(out.env?.ANTHROPIC_BASE_URL).toBeUndefined();
   });
 
   it("customHarnessEnv never includes upstream host in no_proxy omission", () => {

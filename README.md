@@ -31,7 +31,7 @@ Requires `uv`, [mise](https://mise.jdx.dev) (pins Python, Node, pnpm, uv, gitlea
 
 ```bash
 make setup        # uv sync + pnpm install
-make hooks        # enable the pre-push hook
+make hooks        # enable the pre-push hook: make check + build + secret scan, skips trees that passed
 make dev-api      # API on :8000 under /api (state in ./data, override with ARGUS_DATA_DIR)
 make dev-dashboard # http://localhost:3000, proxies /api to :8000
 make check        # lint + typecheck + test (what CI runs)

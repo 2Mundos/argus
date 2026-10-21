@@ -303,6 +303,7 @@ async def lease(
         allowed,
         reuse_held=reuse_held,
         prefer_local=await _prefer_local(tx, task_id, role),
+        only_account=await _pinned_account(tx, task_id, role),
     )
     if result is None:
         reset = await earliest_reset(tx, role, allowed)
@@ -361,12 +362,15 @@ async def exhausted(
     )
     await release(tx, agent_id, "exhausted", role)
     allowed = await _narrowed(tx, task_id, role, report.runtime_providers)
-    next_candidate = await _ranked(
-        tx,
-        agent_id,
-        role,
-        allowed,
-        prefer_local=await _prefer_local(tx, task_id, role),
+    next_candidate = _only(
+        await _ranked(
+            tx,
+            agent_id,
+            role,
+            allowed,
+            prefer_local=await _prefer_local(tx, task_id, role),
+        ),
+        await _pinned_account(tx, task_id, role),
     )
     # The switch itself happens at the next claim, through a lease bound to it.
     await _failover(
@@ -437,12 +441,15 @@ async def fail_task(
         tx, task_id, "engine", json.loads(held["providers"]) or None
     )
     # No lease here: the next claim leases (bound to it) and the channel applies it.
-    next_candidate = await _ranked(
-        tx,
-        agent_id,
-        "engine",
-        runtime,
-        prefer_local=await _prefer_local(tx, task_id, "engine"),
+    next_candidate = _only(
+        await _ranked(
+            tx,
+            agent_id,
+            "engine",
+            runtime,
+            prefer_local=await _prefer_local(tx, task_id, "engine"),
+        ),
+        await _pinned_account(tx, task_id, "engine"),
     )
     task = await tasks.pause_for_quota(
         tx, agent_id, task_id, attempt, hit.reason, wait=not next_candidate
@@ -811,6 +818,17 @@ async def _prefer_local(tx: Tx, task_id: str, role: LeaseRole) -> bool:
     return role == "engine" and await tasks.prefers_local(tx.conn, task_id)
 
 
+async def _pinned_account(tx: Tx, task_id: str, role: LeaseRole) -> str | None:
+    """The one account the task's engine lease may use (its harness account pin,
+    task models spec 3.4); None for any other role or an unpinned task."""
+    return await tasks.harness_account(tx.conn, task_id) if role == "engine" else None
+
+
+def _only(rows: list[aiosqlite.Row], account_id: str | None) -> list[aiosqlite.Row]:
+    """The ranked candidates cut down to the pinned account, when there is one."""
+    return rows if account_id is None else [r for r in rows if r["id"] == account_id]
+
+
 async def _narrowed(
     tx: Tx, task_id: str, role: LeaseRole, runtime_providers: list[str] | None
 ) -> list[str] | None:
@@ -840,6 +858,7 @@ async def _try_lease(
     *,
     reuse_held: bool = False,
     prefer_local: bool = False,
+    only_account: str | None = None,
 ) -> AccountLease | None:
     """The best usable account for `role` across every provider: cloud before the
     local model (the reverse with `prefer_local`, whose fallback is the cloud in this
@@ -849,11 +868,15 @@ async def _try_lease(
 
     With `reuse_held` (executor role), an account the agent already holds as its
     engine stays a candidate even at `max_leases`, and winning returns that
-    engine lease as is (no second row, no extra slot)."""
+    engine lease as is (no second row, no extra slot).
+
+    With `only_account` (a task's harness account pin, task models spec 3.4) that
+    account is the only candidate: when it cannot serve, nothing is leased."""
     reuse = reuse_held and role == "executor"
     candidates = await _ranked(
         tx, agent_id, role, runtime_providers, reuse=reuse, prefer_local=prefer_local
     )
+    candidates = _only(candidates, only_account)
     for row in candidates:
         name = ref_name(row["secret_ref"])
         credential = store.get(name) if name else None

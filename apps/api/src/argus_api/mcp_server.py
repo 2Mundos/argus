@@ -12,6 +12,7 @@ from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from types import FunctionType
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 import httpx2 as httpx
 from argus_core.auth import Scope
@@ -95,7 +96,7 @@ async def _list_tools_for_caller(
         if scheme.lower() != "bearer" or not token:
             raise UnauthorizedError("missing bearer token")
         async with _app.state.db.read() as conn:
-            scope = (await authenticate(conn, token)).scope
+            scope = (await authenticate(conn, token, now=_app.state.db.now())).scope
     except UnauthorizedError as exc:
         raise MCPError(INVALID_REQUEST, f"401 unauthorized: {exc}") from exc
     tools = [t for t in result["tools"] if scope in audiences[t["name"]]]
@@ -147,16 +148,69 @@ class Endpoint:
 endpoint = Endpoint()
 
 
+def allowed_mcp_hosts(public_url: str | None) -> tuple[list[str], list[str]]:
+    """Host/Origin allowlist for MCP DNS-rebinding protection."""
+    hosts = [
+        "localhost",
+        "localhost:*",
+        "127.0.0.1",
+        "127.0.0.1:*",
+        "[::1]",
+        "[::1]:*",
+        "host.docker.internal",
+        "host.docker.internal:*",
+    ]
+    origins = [
+        "http://localhost",
+        "http://localhost:*",
+        "https://localhost",
+        "https://localhost:*",
+        "http://127.0.0.1",
+        "http://127.0.0.1:*",
+        "https://127.0.0.1",
+        "https://127.0.0.1:*",
+        "http://[::1]",
+        "http://[::1]:*",
+        "https://[::1]",
+        "https://[::1]:*",
+        "http://host.docker.internal",
+        "http://host.docker.internal:*",
+        "https://host.docker.internal",
+        "https://host.docker.internal:*",
+    ]
+    if public_url:
+        parsed = urlsplit(public_url)
+        host = parsed.hostname
+        if host:
+            if parsed.port:
+                hosts.append(f"{host}:{parsed.port}")
+                origins.append(f"{parsed.scheme}://{host}:{parsed.port}")
+            else:
+                hosts.append(host)
+                hosts.append(f"{host}:*")
+                origins.append(f"{parsed.scheme}://{host}")
+                origins.append(f"{parsed.scheme}://{host}:*")
+            # Containers often reach a local Argus as host.docker.internal:PORT.
+            if host in ("localhost", "127.0.0.1", "::1", "host.docker.internal"):
+                port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                hosts.append(f"host.docker.internal:{port}")
+                origins.append(f"{parsed.scheme}://host.docker.internal:{port}")
+    return hosts, origins
+
+
 def _build() -> ASGIApp:
-    # DNS-rebinding protection only allows localhost Host headers, but agents in
-    # containers reach Argus by other names. Every tool call needs a bearer token
-    # a browser page cannot attach, which is what that protection guards against.
+    public_url = None
+    if _app is not None and hasattr(_app.state, "settings"):
+        public_url = _app.state.settings.public_url
+    hosts, origins = allowed_mcp_hosts(public_url)
     return server.streamable_http_app(
         streamable_http_path="/",
         stateless_http=True,
         json_response=True,
         transport_security=TransportSecuritySettings(
-            enable_dns_rebinding_protection=False
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=hosts,
+            allowed_origins=origins,
         ),
     )
 
@@ -528,6 +582,7 @@ async def create_task(
     account_providers: list[str] | None = None,
     harness_model: HarnessModel | None = None,
     executor_model: ExecutorModel | None = None,
+    harness_account: str | None = None,
 ) -> dict:
     """Create a task. Workers may only create subtasks of a task they hold (set
     parent_id; the project is inherited). Orchestrators create any task and must name
@@ -546,7 +601,11 @@ async def create_task(
     codex, model}) and `executor_model` ({executor: claude | codex | agent, model})
     pin the engine/executor and its model for every attempt, with no fallback chain;
     the task then only runs on that provider's accounts. Leave them out to follow
-    the model policy."""
+    the model policy. `harness_account` (an account id or name, e.g. "strata-local"
+    or a custom OpenRouter account) pins the engine lease to that one account: the
+    task waits as awaiting_quota while it cannot serve and never runs on another.
+    Local and custom accounts bring their own model, so pair them with no
+    harness_model; a local (Strata) harness delegates only to the Cursor agent."""
     body: dict[str, Any] = {
         "title": title,
         "project": project,
@@ -570,6 +629,8 @@ async def create_task(
         body["harness_model"] = harness_model.model_dump()
     if executor_model is not None:
         body["executor_model"] = executor_model.model_dump()
+    if harness_account is not None:
+        body["harness_account"] = harness_account
     return await _call(ctx, "POST", "/tasks", json=body)
 
 
@@ -794,10 +855,11 @@ async def edit_task(
     """Edit a task's definition: title, spec, acceptance, priority,
     required_capabilities, knowledge (pinned page ids), depends_on,
     account_providers, difficulty (trivial | simple | standard | hard; not clearable),
-    harness_model ({engine, model}) and executor_model ({executor, model}). `changes`
-    is a partial patch: a field you leave out is kept, null clears spec, acceptance,
-    required_capabilities, knowledge, depends_on, account_providers (no
-    restriction) or a model pin (back to the policy). Pass the task's `version` as
+    harness_model ({engine, model}), executor_model ({executor, model}) and
+    harness_account (an account id or name). `changes` is a partial patch: a field
+    you leave out is kept, null clears spec, acceptance, required_capabilities,
+    knowledge, depends_on, account_providers (no restriction), a model pin (back to
+    the policy) or the harness account pin (any account). Pass the task's `version` as
     expected_version (409 stale_version carries the current one). The task's
     `editable_fields` says what its state allows: ready, pending and
     awaiting_approval tasks take everything; blocked, claimed and in_review only

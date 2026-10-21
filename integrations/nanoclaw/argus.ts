@@ -49,6 +49,7 @@ import {
   classifyFailure,
   classifyLogTail,
   classifyProviderFailure,
+  executorFirst,
   type FailureKind,
   isGenericFailureNotice,
   normalizeRepositoryUrl,
@@ -208,6 +209,28 @@ export interface ArgusTask {
   /** Pinned engine/executor and model (task models spec); null follows the policy. */
   harness_model?: { engine: string; model: string } | null;
   executor_model?: { executor: string; model: string } | null;
+  /** Engine providers the task may run on (local harness spec); null: any. */
+  account_providers?: string[] | null;
+  /** The one account its engine lease may use (task models spec 3.4); null: any. */
+  harness_account?: string | null;
+}
+
+const PIN_PROVIDERS: Record<string, string> = { claude: "anthropic", codex: "openai" };
+
+/**
+ * Does the engine account the worker holds fit what the task allows (harness account
+ * pin, `account_providers`, harness engine pin)? When not, the claim leases afresh at
+ * once instead of keeping the account until the next re-evaluation.
+ */
+export function heldAccountFits(
+  held: { id: string; provider: string },
+  task: Pick<ArgusTask, "harness_account" | "account_providers" | "harness_model">,
+): boolean {
+  if (task.harness_account && held.id !== task.harness_account) return false;
+  if (task.account_providers?.length && !task.account_providers.includes(held.provider))
+    return false;
+  const pinned = task.harness_model && PIN_PROVIDERS[task.harness_model.engine];
+  return !pinned || pinned === held.provider;
 }
 
 /** True only when the task input explicitly sets delivery.allow_merge to boolean true. */
@@ -340,12 +363,20 @@ export const LOCAL_HARNESS_RULES = [
   "Never use EXECUTOR claude here: the local model serves only this harness and the delegate refuses it.",
 ];
 
+export const CUSTOM_HARNESS_RULES = [
+  "Custom harness (mandatory): this harness runs on a custom account (e.g. OpenRouter) that serves only the harness.",
+  "You orchestrate: delegate investigation, implementation, gates and review to /usr/local/bin/argus-delegate agent",
+  "(Cursor; add --read-only for investigation or review). Use EXECUTOR claude only when Cursor is unavailable",
+  "(auth_missing or not_installed); it runs on a leased Anthropic account through the gateway, never on this",
+  "harness's account, and refuses (custom_harness_engine_only) when none is leased.",
+];
+
 /** The message a claimed task becomes. `pages` are inlined knowledge bodies by page id. */
 export function renderTask(
   task: ArgusTask,
   pages: Map<string, string>,
   preferredExecutor?: string | null,
-  opts: { localHarness?: boolean } = {},
+  opts: { localHarness?: boolean; customHarness?: boolean } = {},
 ): string {
   const pinned = task.executor_model;
   const trivial = task.complexity === "trivial" && !pinned;
@@ -390,6 +421,7 @@ export function renderTask(
           ]
         : []),
     ...(opts.localHarness ? ["", ...LOCAL_HARNESS_RULES, ""] : []),
+    ...(opts.customHarness ? ["", ...CUSTOM_HARNESS_RULES, ""] : []),
     "Do not invoke agent, cursor-agent, claude, codex, or opencode directly for implementation — that bypasses",
     "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
     "Direct Git, gates, QA, and other non-delegated shell commands in the checkout are fine when they are not a",
@@ -852,7 +884,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let executor: { id: string; name: string; provider: string } | null = null;
   let leasedAt = 0; // when the engine lease was last confirmed for a claimed task
   let switchFailure: string | null = null; // the runtime did not stop for the last switch
-  let recycleOnLease = false; // Argus moved us to another account: recycle once the next one is applied
+  let recycleOnLease = false; // the runtime must stop before the next claim/lease writes another account
   let engineInUse: string | null = null; // the harness the leased account selected
   let activeAccountLeases: AccountLease[] = [];
   let repositoryTarget: ApplyTarget | null = null;
@@ -1297,6 +1329,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       renderCurrent = () =>
         renderTask(task, pages, preferredExecutorForLease(account, executor, task.complexity), {
           localHarness: account?.provider === "local",
+          customHarness: account?.provider === "custom",
         });
       currentText = renderCurrent();
       await injectTask(task.id, task.attempt, currentText);
@@ -1351,17 +1384,34 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     // too. It is held only when it is of another provider than the engine's: the
     // vault keeps one account per provider, and the engine's serves the CLI of its
     // own provider.
+    const leaseExecutor = async (runtime_providers: string[]) =>
+      (
+        await client.call("POST", "/accounts/lease", {
+          role: "executor",
+          runtime_providers,
+          // The engine's own credential already serves its provider's CLI: if that
+          // account is the best executor too, Argus returns it and takes no slot.
+          reuse_held: true,
+          task_id: task.id,
+          attempt: task.attempt,
+        })
+      ).data as AccountLease;
     try {
-      const { data } = await client.call("POST", "/accounts/lease", {
-        role: "executor",
-        runtime_providers: runtimeProviders("executor"),
-        // The engine's own credential already serves its provider's CLI: if that
-        // account is the best executor too, Argus returns it and takes no slot.
-        reuse_held: true,
-        task_id: task.id,
-        attempt: task.attempt,
-      });
-      const candidate = data as AccountLease;
+      // A local or custom harness only orchestrates and prefers Cursor: lease Cursor
+      // first so its stub is mounted, any provider only when none is usable. Each call
+      // replaces the agent's executor lease, as the single call did; nothing is
+      // applied to the vault until both are done, so a failed Cursor try leaves the
+      // same end state (the fallback's lease, or none).
+      let candidate: AccountLease | null = null;
+      const first = executorFirst(lease.provider);
+      if (first) {
+        try {
+          candidate = await leaseExecutor([first]);
+        } catch (err) {
+          if (!(err instanceof ArgusError && err.code === "no_account")) throw err;
+        }
+      }
+      candidate ??= await leaseExecutor(runtimeProviders("executor"));
       if (candidate.role === "executor" && candidate.provider !== lease.provider)
         held.push(candidate);
     } catch (err) {
@@ -1520,7 +1570,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
     if (!acc.models) return true;
     const rebalancing = account !== null;
-    if (rebalancing) {
+    if (rebalancing && account && heldAccountFits(account, task)) {
       const every = acc.rebalanceMs ?? REBALANCE_MS;
       if (every <= 0 || (cfg.now?.() ?? Date.now()) - leasedAt < every) return true;
       leasedAt = cfg.now?.() ?? Date.now();
@@ -1540,6 +1590,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             await acc.recycleRuntime?.();
           } catch (err) {
             switchFailure = err instanceof Error ? err.message : String(err);
+            // The old runtime may still be up: the next lease must stop it first
+            // (account-selection.spec.md 3.6, "recycles before it claims again").
+            recycleOnLease = true;
             throw err;
           }
           recycleOnLease = false;
@@ -1575,7 +1628,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       } else {
         log.warn("Could not lease/apply an account (will retry)", { err });
       }
-      await sleep(5000);
+      // A runtime that did not stop blocks the task now (runtime_switch_failed);
+      // only a lease that may yet succeed waits before the next claim.
+      if (switchFailure === null) await sleep(5000);
       return false;
     }
   }
@@ -1584,8 +1639,24 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     let backoff = 1000;
     while (!stopped) {
       if (draining) {
+        // A draining agent never claims again: it leaves once idle and its
+        // instance is stopped, so a pending recycle is not needed here.
         await sleep(1000);
         continue;
+      }
+      if (recycleOnLease && cfg.accounts?.recycleRuntime) {
+        // A runtime that did not stop for the last switch is stopped before the
+        // next claim (account-selection.spec.md 3.6), so a stuck one does not
+        // block task after task with runtime_switch_failed.
+        try {
+          await cfg.accounts.recycleRuntime();
+          recycleOnLease = false;
+        } catch (err) {
+          log.warn("The previous runtime still does not stop; not claiming yet", { err });
+          await sleep(backoff);
+          backoff = Math.min(backoff * 2, 30_000);
+          continue;
+        }
       }
       abortClaim = new AbortController();
       try {

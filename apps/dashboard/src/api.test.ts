@@ -1,10 +1,29 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, newestTasks, setToken } from "./api";
+import { api, loadToken, newestTasks, saveToken, setToken } from "./api";
+
+const TOKEN_KEY = "argus.token";
 
 afterEach(() => {
   vi.restoreAllMocks();
   setToken(null);
+  sessionStorage.clear();
+  localStorage.clear();
+});
+
+describe("token storage", () => {
+  it("writes to sessionStorage and not localStorage", () => {
+    saveToken("argus_admin_test");
+    expect(sessionStorage.getItem(TOKEN_KEY)).toBe("argus_admin_test");
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+  });
+
+  it("migrates a leftover localStorage token once on read", () => {
+    localStorage.setItem(TOKEN_KEY, "legacy-token");
+    expect(loadToken()).toBe("legacy-token");
+    expect(sessionStorage.getItem(TOKEN_KEY)).toBe("legacy-token");
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+  });
 });
 
 describe("newestTasks", () => {

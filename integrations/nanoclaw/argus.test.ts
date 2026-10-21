@@ -12,6 +12,7 @@ import {
   createDelegateLogRelay,
   frameUntrustedTaskData,
   fromEnv,
+  heldAccountFits,
   parseFramedUntrustedTaskData,
   parseReply,
   relayLines,
@@ -180,6 +181,27 @@ describe("parseReply", () => {
   });
 });
 
+describe("heldAccountFits", () => {
+  const codex = { id: "a-codex", provider: "openai" };
+  it("fits an unrestricted task", () => {
+    expect(heldAccountFits(codex, {})).toBe(true);
+  });
+  it("needs the pinned account itself", () => {
+    expect(heldAccountFits(codex, { harness_account: "a-codex" })).toBe(true);
+    expect(heldAccountFits(codex, { harness_account: "a-strata" })).toBe(false);
+  });
+  it("needs a provider the task allows and its pinned engine's provider", () => {
+    expect(heldAccountFits(codex, { account_providers: ["local"] })).toBe(false);
+    expect(heldAccountFits(codex, { account_providers: ["openai", "local"] })).toBe(true);
+    expect(
+      heldAccountFits(codex, { harness_model: { engine: "claude", model: "claude-opus-5-5" } }),
+    ).toBe(false);
+    expect(
+      heldAccountFits(codex, { harness_model: { engine: "codex", model: "gpt-6.1-sol" } }),
+    ).toBe(true);
+  });
+});
+
 describe("renderTask", () => {
   it("tells the harness to prefer Cursor for a trivial task, and only then", () => {
     const standard = renderTask(task() as any, new Map(), "agent");
@@ -210,6 +232,14 @@ describe("renderTask", () => {
     expect(local).toContain("Never use EXECUTOR claude here");
     const cloud = renderTask(task() as any, new Map(), "agent");
     expect(cloud).not.toContain("Local harness (mandatory)");
+  });
+  it("tells a custom-lease harness to orchestrate and keep Claude Code off its account", () => {
+    const custom = renderTask(task() as any, new Map(), "agent", { customHarness: true });
+    expect(custom).toContain("Custom harness (mandatory)");
+    expect(custom).toContain("argus-delegate agent");
+    expect(custom).toContain("custom_harness_engine_only");
+    expect(custom).not.toContain("Local harness (mandatory)");
+    expect(renderTask(task() as any, new Map(), "agent")).not.toContain("Custom harness");
   });
   it("includes identity, framed untrusted data, and the reply protocol", () => {
     const text = renderTask(task() as any, new Map([["p1", "Step 1\nStep 2"]]));

@@ -9,6 +9,7 @@ import {
   type FieldErrors,
   toDraft,
 } from "../taskEdit";
+import { AccountPin } from "./AccountPin";
 import { ModelPin } from "./ModelPin";
 
 const LABELS: Record<EditField, string> = {
@@ -23,6 +24,7 @@ const LABELS: Record<EditField, string> = {
   account_providers: "Restrict to account providers (one per line, e.g. local; empty: any)",
   harness_model: "Harness engine and model (pinned for every attempt)",
   executor_model: "Coding executor and model (pinned for every attempt)",
+  harness_account: "Harness account (e.g. strata-local or an OpenRouter account; empty: any)",
 };
 
 const MULTILINE = new Set<EditField>([
@@ -146,6 +148,13 @@ export function TaskEditForm({ task, onDone }: { task: Task; onDone: (saved?: Ta
             ) : field === "harness_model" || field === "executor_model" ? (
               <ModelPin
                 field={field}
+                id={id}
+                value={draft[field]}
+                disabled={disabled}
+                onChange={(value) => setDraft({ ...draft, [field]: value })}
+              />
+            ) : field === "harness_account" ? (
+              <AccountPin
                 id={id}
                 value={draft[field]}
                 disabled={disabled}

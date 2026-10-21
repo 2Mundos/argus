@@ -48,7 +48,8 @@ for router delegations.
   redirect plus any cloud credential (`ANTHROPIC_API_KEY`,
   `CLAUDE_CODE_OAUTH_TOKEN`, or non-placeholder `ANTHROPIC_AUTH_TOKEN`) is
   rejected. Local harness mode drops the Claude gateway credential stub and cloud
-  sentinel env from the container config.
+  sentinel env from the container config. (A custom harness keeps the stub for its
+  `claude` executor, see [custom harness](custom-harness.spec.md).)
 - **Observability.** `POST /engines/selected` records `provider: local`; task
   views already show `serving_account` and milestones from existing fields.
 - **Per-task provider restriction.** A task may carry `account_providers`: a
@@ -92,6 +93,12 @@ for router delegations.
     (`auth_missing`, reason `local_harness_engine_only`) because it would inherit
     `ANTHROPIC_BASE_URL` and run on the local model. `agent` and `codex` are
     unaffected.
+  - *Cursor first.* The executor lease on a local engine lease asks for
+    `runtime_providers: ["cursor"]` first (falling back to any provider on
+    `no_account`), so the preferred `agent` has its Cursor stub even when a cloud
+    Anthropic account outranks Cursor. Same rule on a custom engine lease
+    ([custom harness](custom-harness.spec.md)), whose `claude` executor runs only on a
+    real Anthropic account through the gateway.
   - *Safety net: compaction sized to the window.* The local credential may name
     `context_tokens` (an integer, 4096 to 4 000 000; per account). When absent,
     `POST /accounts/lease` fills it from the local model probe's `n_ctx`; when

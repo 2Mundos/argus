@@ -3,6 +3,7 @@
 See docs/specs/worker-lifecycle.spec.md 3.2.
 """
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -49,6 +50,10 @@ EXECUTOR_PROVIDERS: dict[str, str] = {
     "codex": "openai",
     "agent": "cursor",
 }
+# An account id or name: what a harness account pin names (task models spec 3.4).
+AccountRef = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
 ModelId = Annotated[
     str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
 ]
@@ -287,9 +292,13 @@ class TaskResult(BaseModel):
     usage: Usage | None = None
 
 
+SPEC_MAX_LENGTH = 200_000
+INPUT_MAX_CHARS = 100_000
+
+
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
-    spec: str = ""
+    spec: str = Field(default="", max_length=SPEC_MAX_LENGTH)
     kind: str = "generic"
     acceptance: list[str] = []
     input: dict[str, Any] = {}
@@ -317,6 +326,18 @@ class TaskCreate(BaseModel):
     # Pinned engine/executor and model; None: policy and account priority.
     harness_model: HarnessModel | None = None
     executor_model: ExecutorModel | None = None
+    # Pin the engine lease to one account (id or name; stored as its id), e.g. the
+    # local Strata account or one custom account (task models spec 3.4).
+    harness_account: AccountRef | None = None
+
+    @field_validator("input")
+    @classmethod
+    def _input_size(cls, value: dict[str, Any]) -> dict[str, Any]:
+        # Compact JSON length, mirroring the knowledge body character cap.
+        encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+        if len(encoded) > INPUT_MAX_CHARS:
+            raise ValueError(f"input exceeds {INPUT_MAX_CHARS} characters")
+        return value
 
     @field_validator("account_providers")
     @classmethod
@@ -401,6 +422,7 @@ class Task(BaseModel):
     account_providers: list[str] | None = None
     harness_model: HarnessModel | None = None
     executor_model: ExecutorModel | None = None
+    harness_account: str | None = None
     created_by: str
     created_at: datetime
     updated_at: datetime

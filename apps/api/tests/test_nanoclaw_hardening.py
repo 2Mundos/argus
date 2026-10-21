@@ -130,7 +130,7 @@ def test_prepare_dir_uses_host_side_on_local_daemon(
 
 
 def test_prepare_dir_remote_avoids_shell() -> None:
-    target = DockerTarget(host="tcp://remote:2375")
+    target = DockerTarget(host="tcp://remote:2375?tls=true")
     client = MagicMock()
     mount = Mount("/srv/nc-i/i-1", "/srv/nc-i/i-1", "rw", create_owner="1000:1000")
     target._prepare_dir(client, "img:1", mount)
@@ -183,6 +183,123 @@ def test_docker_start_passes_hardening(monkeypatch: pytest.MonkeyPatch) -> None:
     assert runs[0]["read_only"] is True
     assert runs[0]["pids_limit"] == 2048
     assert runs[0]["tmpfs"] == RUNTIME_TMPFS
+
+
+def test_mutable_tag_present_locally_is_not_pulled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from argus_api.fleet.targets import ContainerSpec
+
+    pulls: list[str] = []
+
+    class FakeImages:
+        def get(self, image):
+            return MagicMock()
+
+        def pull(self, image):
+            pulls.append(image)
+
+    class FakeContainers:
+        def get(self, name):
+            from docker.errors import NotFound
+
+            raise NotFound("missing")
+
+        def run(self, image, **kwargs):
+            return MagicMock()
+
+    class FakeClient:
+        containers = FakeContainers()
+        images = FakeImages()
+
+    target = DockerTarget(host=None)
+    monkeypatch.setattr(target, "_docker", lambda: FakeClient())
+    spec = ContainerSpec(
+        instance_id="11111111-2222-3333-4444-555555555555",
+        image="worker:latest",
+        env={},
+        labels={"argus.pool": "web", "argus.instance_id": "x", "argus.managed": "true"},
+    )
+    target._start(spec)
+    assert pulls == []
+
+
+def test_mutable_tag_missing_is_refused_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from argus_api.fleet.targets import ContainerSpec, TargetError
+
+    class FakeImages:
+        def get(self, image):
+            from docker.errors import ImageNotFound
+
+            raise ImageNotFound("missing")
+
+        def pull(self, image):
+            raise AssertionError("must not pull")
+
+    class FakeContainers:
+        def get(self, name):
+            from docker.errors import NotFound
+
+            raise NotFound("missing")
+
+    class FakeClient:
+        containers = FakeContainers()
+        images = FakeImages()
+
+    target = DockerTarget(host=None)
+    monkeypatch.setattr(target, "_docker", lambda: FakeClient())
+    spec = ContainerSpec(
+        instance_id="11111111-2222-3333-4444-555555555555",
+        image="worker:latest",
+        env={},
+        labels={"argus.pool": "web", "argus.instance_id": "x", "argus.managed": "true"},
+    )
+    with pytest.raises(TargetError, match=r"mutable tag"):
+        target._start(spec)
+
+
+def test_mutable_tag_missing_pulls_when_pool_opts_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from argus_api.fleet.targets import ContainerSpec
+
+    pulls: list[str] = []
+
+    class FakeImages:
+        def get(self, image):
+            from docker.errors import ImageNotFound
+
+            raise ImageNotFound("missing")
+
+        def pull(self, image):
+            pulls.append(image)
+
+    class FakeContainers:
+        def get(self, name):
+            from docker.errors import NotFound
+
+            raise NotFound("missing")
+
+        def run(self, image, **kwargs):
+            return MagicMock()
+
+    class FakeClient:
+        containers = FakeContainers()
+        images = FakeImages()
+
+    target = DockerTarget(host=None)
+    monkeypatch.setattr(target, "_docker", lambda: FakeClient())
+    spec = ContainerSpec(
+        instance_id="11111111-2222-3333-4444-555555555555",
+        image="worker:latest",
+        env={},
+        labels={"argus.pool": "web", "argus.instance_id": "x", "argus.managed": "true"},
+        allow_mutable_images=True,
+    )
+    target._start(spec)
+    assert pulls == ["worker:latest"]
 
 
 def _socket_pool(**overrides: object):
