@@ -62,8 +62,12 @@ def quota_exempt(provider: str) -> bool:
 
 
 # A local account's whole credential: where the model answers, the placeholder the
-# harness sends instead of a token, and the model name it configures.
-LOCAL_CREDENTIAL_KEYS = frozenset({"base_url", "auth_token", "model"})
+# harness sends instead of a token, the model name it configures and, optionally,
+# the model's context window in tokens (`context_tokens`; when absent the lease
+# carries the window the local model's probe measured). The harness compacts well
+# before that window (local harness spec, "Harness orchestrates only").
+LOCAL_CREDENTIAL_KEYS = frozenset({"base_url", "auth_token", "model", "context_tokens"})
+LOCAL_CONTEXT_TOKENS_RANGE = (4096, 4_000_000)
 LOCAL_AUTH_TOKEN = "argus-local-harness"  # noqa: S105 — public placeholder, not a secret
 # The only hosts a local model is reached on: this node's loopback, or the name a
 # container resolves to its Docker host. Never a network address.
@@ -122,6 +126,12 @@ def local_credential_problem(credential: dict[str, Any]) -> str | None:
         not isinstance(model, str) or not _MODEL_NAME.fullmatch(model)
     ):
         return "model must be a plain model name"
+    ctx = credential.get("context_tokens")
+    low, high = LOCAL_CONTEXT_TOKENS_RANGE
+    if ctx is not None and (
+        not isinstance(ctx, int) or isinstance(ctx, bool) or not low <= ctx <= high
+    ):
+        return f"context_tokens must be an integer from {low} to {high}"
     return None
 
 

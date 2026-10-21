@@ -16,6 +16,9 @@ export interface PolicySnapshot {
     /** Leased account ids for usage reports (the executor falls back to the engine's account). */
     engine_account_id?: string | null;
     executor_account_id?: string | null;
+    /** A custom (OpenRouter) engine lease's settings (base URL, model; no secret). */
+    engine_settings?: object | null;
+    executor_settings?: object | null;
     /** The delegate CLI of the best-priority leased account (claude | codex | agent). */
     preferred_executor?: string | null;
     /** Task complexity (trivial | standard | hard); trivial prefers the local model. */

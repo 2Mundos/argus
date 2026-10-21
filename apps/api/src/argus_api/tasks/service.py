@@ -245,6 +245,12 @@ async def claim(
             f"agent {agent_id} is {state}; it may not claim new tasks",
             code=f"agent_{state}",
         )
+    if runtime_providers and await _record_runtime_providers(
+        tx, agent_id, runtime_providers
+    ):
+        # A runtime that can apply a provider no live agent could before makes
+        # waiting tasks servable: wake them (bounded) before choosing.
+        await wake_waiting(tx)
     if await awaiting_quota(tx.conn):
         return None
     async with tx.conn.execute(
@@ -365,11 +371,46 @@ async def _manages_accounts(conn: aiosqlite.Connection) -> bool:
     return bool(row and row[0])
 
 
+async def _record_runtime_providers(
+    tx: Tx, agent_id: str, runtime_providers: list[str]
+) -> bool:
+    """Store the providers the agent's runtime applies (its latest claim). True
+    when that adds a provider no live agent declared before."""
+    wanted = sorted(set(runtime_providers))
+    before = await _served_providers(tx.conn)
+    async with tx.conn.execute(
+        "SELECT runtime_providers FROM agents WHERE id = ?", (agent_id,)
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None or (row[0] and json.loads(row[0]) == wanted):
+        return False
+    await tx.conn.execute(
+        "UPDATE agents SET runtime_providers = ? WHERE id = ?",
+        (json.dumps(wanted), agent_id),
+    )
+    return before is not None and not set(wanted) <= before
+
+
+async def _served_providers(conn: aiosqlite.Connection) -> set[str] | None:
+    """Providers some live (active) agent's runtime applies, as declared on its
+    claims; None when no live agent declared any (older workers): then every
+    provider counts, as before."""
+    async with conn.execute(
+        "SELECT DISTINCT p.value FROM agents a, json_each(a.runtime_providers) p"
+        " WHERE a.state = 'active' AND a.runtime_providers IS NOT NULL"
+    ) as cur:
+        rows = await cur.fetchall()
+    return {r[0] for r in rows} or None
+
+
 async def engine_capacity(tx: Tx) -> list[list[Any]]:
     """`[provider, slots]` of each usable engine account, cloud before the local
     model: how many more tasks it can serve now. Slots are the free lease slots plus
     the engine leases held by agents with no claimed task (they can take one at
-    once); None means no lease limit. Accounts with no slot are left out."""
+    once); None means no lease limit. Accounts with no slot are left out, and so are
+    accounts of a provider no live agent's runtime can apply (a `custom` account no
+    worker runs is no capacity)."""
+    served = await _served_providers(tx.conn)
     async with tx.conn.execute(
         "SELECT a.provider, a.max_leases,"
         " (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
@@ -387,6 +428,8 @@ async def engine_capacity(tx: Tx) -> list[list[Any]]:
     out: list[list[Any]] = []
     for r in rows:
         if r["provider"] not in ENGINE_PROVIDERS:
+            continue
+        if served is not None and r["provider"] not in served:
             continue
         if r["max_leases"] is None:
             out.append([r["provider"], None])

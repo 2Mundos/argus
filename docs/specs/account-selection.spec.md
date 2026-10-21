@@ -180,6 +180,15 @@ isolation or sandbox/TLS restrictions.
     task taking a slot of an account its `account_providers` allow (an account
     without `max_leases` wakes all that fit). The rest keep waiting; none spends a
     failure.
+  - *Capacity counts only providers a live worker runs (2026-10-21).* Each claim
+    records the caller's `runtime_providers` on its agent row (migration `0034`).
+    Capacity (claim parking, `FAIL` quota parking and waking) counts an account only
+    when some `active` agent declared its provider: a free `custom` account no worker
+    runs is no capacity, so tasks park as `awaiting_quota` instead of sitting
+    `ready` that nobody can take. Lost, gone and draining agents do not count. A
+    claim whose runtime adds a provider no live agent declared before wakes the
+    waiting tasks (bounded as above) before choosing. With no declarations at all
+    (older workers) every provider counts, as before.
   - *Channel.* When a run ends, the channel treats as exhaustion: a quota notice,
     a structured `providerFailure` `{provider:"claude", kind:"rate_limit",
     resets_at?}` (anthropic account; fixed reason, never raw text), or the generic

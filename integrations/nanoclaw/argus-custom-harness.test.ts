@@ -28,7 +28,7 @@ describe("withCustomHarnessRuntime", () => {
       {
         env: { CLAUDE_CODE_OAUTH_TOKEN: "sentinel", ANTHROPIC_API_KEY: "x" },
         credentialStubs: [{ containerPath: CLAUDE_GATEWAY_STUB_PATH, content: "{}" }],
-      },
+      } as never,
       customHarnessFromLease("http://host.docker.internal:9", {
         base_url: "https://openrouter.ai/api/v1",
         label: "openrouter",

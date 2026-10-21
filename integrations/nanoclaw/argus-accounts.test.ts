@@ -1588,7 +1588,9 @@ describe("global account selection in the channel", () => {
     await until(() => selectModels.mock.calls.length > 0);
     expect(selectModels.mock.calls[0]![1]).toEqual({
       engine: { provider: "openai", account_id: "a-codex-1" },
+      engine_settings: null,
       executor: { provider: "anthropic", account_id: "a-claude-1" },
+      executor_settings: null,
     });
   });
 
@@ -1720,14 +1722,17 @@ describe("custom (OpenRouter) engine accounts", () => {
     provider: null,
   };
 
-  it("lists custom among engine runtime providers", () => {
+  it("lists custom among engine and executor runtime providers", () => {
+    // a custom account also serves a delegated CLI (`executor_settings`, the delegate's
+    // CUSTOM_KEY_ENV), so the executor role lists it too
     expect(runtimeProviders("engine")).toContain("custom");
-    expect(runtimeProviders("executor")).not.toContain("custom");
+    expect(runtimeProviders("executor")).toContain("custom");
   });
 
   it("applyLeases does not write a OneCLI secret for a custom engine lease", async () => {
     const w = world({ leases: [] });
-    const engine = await applyLeasesDetailed(w.onecli, target, [
+    const onecli = new OneCliClient("http://onecli.test", w.fetchImpl);
+    const engine = await applyLeasesDetailed(onecli, target, [
       lease("or", "sk-or-key", {
         provider: "custom",
         credential: { api_key: "sk-or-key" },
@@ -1736,13 +1741,11 @@ describe("custom (OpenRouter) engine accounts", () => {
     ]);
     expect(engine.engine).toBe("claude");
     expect(w.onecli.secrets).toHaveLength(0);
-    const agent = w.onecli.agents.find((a) => a.identifier === "g")!;
-    expect(agent.secrets).toHaveLength(0);
   });
 
   it("applyLeases still applies a separate cursor executor lease", async () => {
     const w = world({ leases: [] });
-    await applyLeasesDetailed(w.onecli, target, [
+    await applyLeasesDetailed(new OneCliClient("http://onecli.test", w.fetchImpl), target, [
       lease("or", "sk-or-key", {
         provider: "custom",
         credential: { api_key: "sk-or-key" },

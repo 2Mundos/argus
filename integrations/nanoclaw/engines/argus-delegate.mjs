@@ -27,7 +27,7 @@ import {
   parseAccountSettings,
   settingsSupport,
 } from "./account-settings.mjs";
-import { anthropicRedirectRejection } from "./anthropic-redirect.mjs";
+import { anthropicRedirectRejection, LOCAL_HARNESS_AUTH_TOKEN } from "./anthropic-redirect.mjs";
 import { createFileRelay, envSecrets, RELAY_FILE, startLiveLog } from "./livelog.mjs";
 import { createSink, createTracker, gitHead, waitingInput } from "./milestones.mjs";
 import { implementationScope, loadPolicy, selectModel } from "./model-policy.mjs";
@@ -147,6 +147,22 @@ export function authStatus(executor, e = process.env, home = os.homedir(), setti
     default:
       return { ok: false, need: "unknown executor" };
   }
+}
+
+/**
+ * Is this the harness of a local lease (Strata)? The local model serves only the
+ * NanoClaw harness: a Claude Code executor started here would inherit its
+ * ANTHROPIC_BASE_URL and run the implementation on the small local context.
+ */
+export function localHarnessRefusal(executor, e = process.env) {
+  if (executor !== "claude") return null;
+  const local =
+    e.ARGUS_LOCAL_HARNESS === "1" ||
+    ((e.ANTHROPIC_BASE_URL ?? "").trim() !== "" &&
+      (e.ANTHROPIC_AUTH_TOKEN ?? "").trim() === LOCAL_HARNESS_AUTH_TOKEN);
+  return local
+    ? "the local model serves only the harness; delegate with EXECUTOR agent (Cursor) or codex"
+    : null;
 }
 
 /** Where the trusted host mounts the gateway stub (argus-claude-stub.ts); never configurable. */
@@ -623,6 +639,14 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
       allowed_roots: roots,
     });
 
+  const localRefusal = localHarnessRefusal(executor, e);
+  if (localRefusal)
+    finish(78, {
+      ...identity,
+      blocked: "auth_missing",
+      reason: "local_harness_engine_only",
+      need: localRefusal,
+    });
   if (executor === "claude") {
     const restored = restoreClaudeGatewayAuth(e, claudeStub);
     e = restored.env;

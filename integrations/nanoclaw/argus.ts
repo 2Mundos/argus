@@ -318,11 +318,30 @@ export function parseReply(raw: string): Directive {
   return { kind: m[1]!.toLowerCase() as Directive["kind"], text: text.slice(m[0].length).trim() };
 }
 
+/**
+ * On a local lease the harness runs on the node's small local model (Strata): it
+ * only orchestrates. Every read, edit, check and review goes to the executor and
+ * comes back as a short summary, so the harness context stays small
+ * (local harness spec, "Harness orchestrates only"). Compaction sized to the window is only a safety net.
+ */
+export const LOCAL_HARNESS_RULES = [
+  "Local harness (mandatory): this harness runs on the node's local model with a small context window.",
+  "You only orchestrate. Do not read the repository into your own context: no cat/sed/head of files, no",
+  "git show/git diff bodies, no Read of specs, drafts, AGENTS.md or tests, no grep with many matches, no logs.",
+  "Delegate ALL investigation, implementation, gates (make check, tests) and review to",
+  "/usr/local/bin/argus-delegate agent (Cursor; add --read-only for investigation or review). Write a short",
+  "prompt file that says what to find or change and asks for a summary of at most 20 lines.",
+  "From a delegate run read only its JSON report line (the last stdout line); never the .out file in full.",
+  "Any shell output you do need: cap it (`| tail -c 1500`). Keep git to status/branch/commit/push one-liners.",
+  "Never use EXECUTOR claude here: the local model serves only this harness and the delegate refuses it.",
+];
+
 /** The message a claimed task becomes. `pages` are inlined knowledge bodies by page id. */
 export function renderTask(
   task: ArgusTask,
   pages: Map<string, string>,
   preferredExecutor?: string | null,
+  opts: { localHarness?: boolean } = {},
 ): string {
   const trivial = task.complexity === "trivial";
   // Spec, acceptance, title, and knowledge bodies are untrusted DATA — never trusted instructions.
@@ -361,6 +380,7 @@ export function renderTask(
             : []),
         ]
       : []),
+    ...(opts.localHarness ? ["", ...LOCAL_HARNESS_RULES, ""] : []),
     "Do not invoke agent, cursor-agent, claude, codex, or opencode directly for implementation — that bypasses",
     "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
     "Direct Git, gates, QA, and other non-delegated shell commands in the checkout are fine when they are not a",
@@ -812,6 +832,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let current: { id: string; attempt: number } | null = null;
   let currentClaim: ArgusTask | null = null;
   let currentText: string | null = null; // what the agent was sent, to re-send after a switch
+  // Renders the task for the account held now (a switch to local adds its rules).
+  let renderCurrent: (() => string) | null = null;
   // Artifacts uploaded for the task in flight (agent attachments), by artifact id,
   // and attachments that could not be stored, for the completion to report.
   let attached = new Map<string, { name: string; sha: string }>();
@@ -953,6 +975,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     current = null;
     currentClaim = null;
     currentText = null;
+    renderCurrent = null;
     attached = new Map();
     attachFailures = [];
     pendingProgress = null;
@@ -1073,6 +1096,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         if (currentClaim) await prepareModels(currentClaim);
         if (currentText && resends < MAX_RESENDS) {
           resends += 1;
+          currentText = renderCurrent?.() ?? currentText;
           await injectTask(
             task.id,
             task.attempt,
@@ -1202,11 +1226,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (!logRelay) await startLogRelay(task);
       resends = 0;
       const best = executor ?? account;
-      currentText = renderTask(
-        task,
-        pages,
-        preferredExecutorForLease(account, executor, task.complexity),
-      );
+      renderCurrent = () =>
+        renderTask(task, pages, preferredExecutorForLease(account, executor, task.complexity), {
+          localHarness: account?.provider === "local",
+        });
+      currentText = renderCurrent();
       await injectTask(task.id, task.attempt, currentText);
       await finished;
     } catch {

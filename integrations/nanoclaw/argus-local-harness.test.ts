@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { CLAUDE_GATEWAY_STUB_PATH, withClaudeDelegateRuntime } from "./argus-claude-stub.js";
 import {
+  DEFAULT_LOCAL_CONTEXT_TOKENS,
   LOCAL_HARNESS_AUTH_TOKEN,
+  LOCAL_HARNESS_ENV_KEYS,
+  localContextEnv,
   localCredentialProblem,
   localHarnessEnv,
   localHarnessFromCredential,
@@ -123,5 +126,49 @@ describe("localCredentialProblem", () => {
     expect(localCredentialProblem({ base_url: "http://192.168.1.5:8080" })).toContain(
       "host.docker.internal",
     );
+  });
+});
+
+describe("local context window (local harness spec)", () => {
+  const base = "http://host.docker.internal:8080";
+  it("sizes Claude Code's window and auto-compact from the account's context_tokens", () => {
+    const harness = localHarnessFromCredential({ base_url: base, context_tokens: 65536 })!;
+    expect(harness.context_tokens).toBe(65536);
+    const env = localHarnessEnv(harness);
+    expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("65536");
+    const compactAt = Number(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW);
+    const output = Number(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS);
+    // compaction starts with room for the reply and a tokenizer margin to spare
+    expect(compactAt + output).toBeLessThan(65536 * 0.85);
+    expect(compactAt).toBeGreaterThan(65536 / 2);
+    expect(env.ARGUS_LOCAL_HARNESS).toBe("1");
+    expect(Number(env.CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS)).toBeLessThanOrEqual(4000);
+    expect(Number(env.BASH_MAX_OUTPUT_LENGTH)).toBeLessThanOrEqual(8000);
+  });
+  it("assumes a small window when neither the account nor the probe names one", () => {
+    const env = localHarnessEnv(localHarnessFromCredential({ base_url: base })!);
+    expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe(String(DEFAULT_LOCAL_CONTEXT_TOKENS));
+    expect(Number(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)).toBeLessThan(DEFAULT_LOCAL_CONTEXT_TOKENS);
+  });
+  it("follows a bigger configured window", () => {
+    expect(localContextEnv(131072).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("131072");
+    expect(Number(localContextEnv(131072).CLAUDE_CODE_AUTO_COMPACT_WINDOW)).toBeGreaterThan(
+      Number(localContextEnv(65536).CLAUDE_CODE_AUTO_COMPACT_WINDOW),
+    );
+  });
+  it("validates context_tokens", () => {
+    expect(localCredentialProblem({ base_url: base, context_tokens: 65536 })).toBeNull();
+    for (const bad of [1024, 65536.5, "65536", true])
+      expect(localCredentialProblem({ base_url: base, context_tokens: bad })).toContain(
+        "context_tokens",
+      );
+  });
+  it("cloud mode clears every local harness variable", () => {
+    const local = withLocalHarnessRuntime(
+      { env: {} } as never,
+      localHarnessFromCredential({ base_url: base, context_tokens: 65536 }),
+    );
+    const cloud = withLocalHarnessRuntime(local, null);
+    for (const key of LOCAL_HARNESS_ENV_KEYS) expect(cloud.env?.[key]).toBeUndefined();
   });
 });
