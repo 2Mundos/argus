@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CLAUDE_GATEWAY_STUB_PATH, withClaudeDelegateRuntime } from "./argus-claude-stub.js";
+import { writeCustomHarnessFile } from "./argus-custom-harness.js";
 import {
   DEFAULT_LOCAL_CONTEXT_TOKENS,
   LOCAL_HARNESS_AUTH_TOKEN,
@@ -15,7 +16,6 @@ import {
   withLocalHarnessRuntimeForGroup,
   writeLocalHarnessFile,
 } from "./argus-local-harness.js";
-import { writeCustomHarnessFile } from "./argus-custom-harness.js";
 import {
   anthropicRedirectRejection,
   normalizeAnthropicBaseUrl,
