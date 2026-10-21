@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Literal
 
@@ -23,10 +24,7 @@ router = APIRouter(tags=["models"])
 ENGINES = frozenset({"codex", "claude", "opencode", "agent"})
 SCOPES = ("harness", "implementation")
 _MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}")
-DEFAULTS_PATH = (
-    Path(__file__).resolve().parents[4]
-    / "integrations/nanoclaw/engines/model-policy.defaults.json"
-)
+DEFAULTS_REL = "integrations/nanoclaw/engines/model-policy.defaults.json"
 
 Policy = dict[str, dict[str, list[str]]]
 
@@ -96,27 +94,63 @@ def _parse(text: str, what: str) -> Policy:
         raise ValidationFailedError(f"{what} is not valid JSON: {e}") from e
 
 
-def _read(path: Path) -> ModelPolicy:
+def _parse_file(path: Path, what: str) -> Policy:
+    """Parse a policy file; an unreadable one is the same named error as a corrupt one."""
+    try:
+        text = path.read_text()
+    except (OSError, UnicodeDecodeError) as e:
+        raise ValidationFailedError(f"{what} is not readable: {e}") from e
+    return _parse(text, what)
+
+
+def _defaults_path() -> Path:
+    """ARGUS_MODEL_DEFAULTS_FILE, else the repository copy (also in the image)."""
+    if override := os.environ.get("ARGUS_MODEL_DEFAULTS_FILE"):
+        return Path(override)
+    parents = Path(__file__).resolve().parents
+    return (parents[4] if len(parents) > 4 else Path()) / DEFAULTS_REL
+
+
+def _env() -> Policy | None:
     env = os.environ.get("ARGUS_MODEL_POLICY")
-    file = _parse(path.read_text(), path.name) if path.exists() else None
-    if env:
-        policy, source = _parse(env, "ARGUS_MODEL_POLICY"), "env"
-    elif file is not None:
-        policy, source = file, "file"
+    return _parse(env, "ARGUS_MODEL_POLICY") if env else None
+
+
+def _read(path: Path) -> ModelPolicy:
+    env = _env()
+    file: Policy | None = None
+    if env is not None:
+        # The file is informational here: a bad one must not break the effective read.
+        try:
+            file = _parse_file(path, path.name) if path.exists() else None
+        except ValidationFailedError:
+            file = None
+        policy, source = env, "env"
     else:
-        defaults = _parse(DEFAULTS_PATH.read_text(), DEFAULTS_PATH.name)
-        policy, source = defaults, "defaults"
+        file = _parse_file(path, path.name) if path.exists() else None
+        if file is not None:
+            policy, source = file, "file"
+        else:
+            defaults = _defaults_path()
+            try:
+                policy = _parse_file(defaults, defaults.name)
+            except ValidationFailedError as e:
+                raise ValidationFailedError(
+                    f"model policy defaults unavailable ({e}); "
+                    "set ARGUS_MODEL_DEFAULTS_FILE"
+                ) from e
+            source = "defaults"
     return ModelPolicy(
         **policy,
         revision=revision(policy),
         source=source,  # type: ignore[arg-type]
         path=str(path),
-        env_overrides=bool(env),
+        env_overrides=env is not None,
         file_revision=revision(file) if file is not None else None,
         notice=(
             "ARGUS_MODEL_POLICY is set and wins over the file; edits are saved but "
             "have no effect until it is removed."
-            if env
+            if env is not None
             else None
         ),
     )
@@ -131,10 +165,18 @@ def effective_env(path: Path) -> tuple[str, str]:
 
 
 def _write(path: Path, policy: Policy) -> None:
+    """Atomic: unique temp file in the same directory, fsync, then rename over."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(policy, indent=2) + "\n")
-    tmp.replace(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(policy, indent=2) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 async def _audit(db: DbDep, actor: str, action: str, result: ModelPolicy) -> None:
@@ -161,7 +203,9 @@ async def put_models(
     body: ModelPolicyBody, settings: SettingsDep, db: DbDep, caller: AdminDep
 ) -> ModelPolicy:
     """Validate and save the file policy, all or nothing."""
-    _write(settings.model_policy_path, validate(body.model_dump()))
+    policy = validate(body.model_dump())
+    _env()  # a malformed ARGUS_MODEL_POLICY fails before the file changes
+    _write(settings.model_policy_path, policy)
     result = _read(settings.model_policy_path)
     await _audit(db, caller.actor, "saved", result)
     return result
@@ -172,6 +216,7 @@ async def restore_models(
     settings: SettingsDep, db: DbDep, caller: AdminDep
 ) -> ModelPolicy:
     """Remove the file so the repository defaults apply again."""
+    _env()  # fail before the file is removed
     settings.model_policy_path.unlink(missing_ok=True)
     result = _read(settings.model_policy_path)
     await _audit(db, caller.actor, "restored", result)

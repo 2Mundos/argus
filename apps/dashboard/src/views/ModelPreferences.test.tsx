@@ -37,7 +37,7 @@ vi.mock("../live", async () => {
       useEffect(() => {
         load().then(setData, setError);
       }, []);
-      return { data, error, reload: () => {} };
+      return { data, error, reload: () => load().then(setData, setError) };
     },
   };
 });
@@ -136,6 +136,28 @@ describe("ModelPreferences", () => {
     const impl = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
     const at = (model: string) => impl.findIndex((t) => t.includes(model));
     expect(at("composer-1")).toBeLessThan(at("auto"));
+  });
+
+  it("keeps unsaved edits when live data refreshes, and adopts it when clean", async () => {
+    render(<ModelPreferences />);
+    await screen.findByText("sonnet");
+    fireEvent.click(screen.getByRole("button", { name: "move opus up in harness claude" }));
+    m.fetchModelPolicy.mockResolvedValue(policy({ revision: NEW_REV, source: "file" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    expect(await screen.findByText(NEW_REV.slice(0, 8))).toBeTruthy();
+    const claude = () =>
+      screen
+        .getAllByRole("listitem")
+        .map((li) => li.textContent ?? "")
+        .filter((t) => t.includes("sonnet") || t.includes("opus"));
+    expect(claude()[0]).toContain("opus");
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(claude()[0]).toContain("sonnet");
+    m.fetchModelPolicy.mockResolvedValue(
+      policy({ revision: REV, harness: { claude: ["fresh"] }, implementation: {} }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    expect(await screen.findByText("fresh")).toBeTruthy();
   });
 
   it("rejects a duplicate or malformed model before calling the API", async () => {

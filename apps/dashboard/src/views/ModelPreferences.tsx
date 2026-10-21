@@ -31,8 +31,13 @@ export function ModelPreferences() {
   const [done, setDone] = useState<string>();
   const [busy, setBusy] = useState(false);
 
+  const dirty = !!policy && !!draft && JSON.stringify(draft) !== JSON.stringify(toDraft(policy));
+
+  // Live refreshes update the server view; unsaved edits are kept until saved or discarded.
   useEffect(() => {
-    if (data) adopt(data);
+    if (!data) return;
+    if (dirty) setPolicy(data);
+    else adopt(data);
   }, [data]);
 
   function adopt(p: ModelPolicy) {
@@ -60,8 +65,6 @@ export function ModelPreferences() {
       setBusy(false);
     }
   }
-
-  const dirty = !!policy && !!draft && JSON.stringify(draft) !== JSON.stringify(toDraft(policy));
 
   return (
     <section className="model-preferences">

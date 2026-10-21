@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from argus_api import model_policy
+from argus_api.errors import ValidationFailedError
 from argus_api.main import app
 from fastapi.testclient import TestClient
 from test_launch import ADMIN, agent_token, bearer
@@ -152,7 +153,7 @@ def test_invalid_policy_is_422_and_writes_nothing(
     assert res.status_code == 422, res.text
     assert message in res.json()["detail"]["message"]
     assert path.read_text() == saved
-    assert not path.with_name(path.name + ".tmp").exists()
+    assert not list(path.parent.glob("*.tmp"))
 
 
 def test_invalid_first_put_leaves_no_file(client: TestClient) -> None:
@@ -172,3 +173,79 @@ def test_delete_restores_the_defaults(client: TestClient) -> None:
     assert res.json() == defaults
     assert not file_of(client).exists()
     assert client.delete("/api/models", headers=ADMIN).json() == defaults
+
+
+def test_malformed_env_blocks_put_and_delete_without_touching_the_file(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client.put("/api/models", json=POLICY, headers=ADMIN)
+    path = file_of(client)
+    saved = path.read_text()
+    monkeypatch.setenv("ARGUS_MODEL_POLICY", "not json")
+    other = chains(harness={"claude": ["other"]})
+    assert client.put("/api/models", json=other, headers=ADMIN).status_code == 422
+    assert path.read_text() == saved
+    assert client.delete("/api/models", headers=ADMIN).status_code == 422
+    assert path.read_text() == saved
+    kinds = client.get(
+        "/api/events", params={"kind": "models.policy_saved"}, headers=ADMIN
+    )
+    assert json.dumps(kinds.json()).count("models.policy_saved") <= 1
+
+
+def test_corrupt_file_is_a_named_error_and_env_ignores_it(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = file_of(client)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff{garbage")
+    res = client.get("/api/models", headers=ADMIN)
+    assert res.status_code == 422
+    assert path.name in res.text
+    env = {"harness": {"claude": ["from-env"]}, "implementation": {}}
+    monkeypatch.setenv("ARGUS_MODEL_POLICY", json.dumps(env))
+    body = client.get("/api/models", headers=ADMIN).json()
+    assert body["source"] == "env"
+    assert body["file_revision"] is None
+
+
+def test_unreadable_file_is_the_named_error_not_a_crash(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = file_of(client)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}")
+    real = Path.read_text
+
+    def boom(self: Path, *a: object, **k: object) -> str:
+        if self == path:
+            raise PermissionError("denied")
+        return real(self, *a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", boom)
+    with pytest.raises(ValidationFailedError, match="not readable"):
+        model_policy.effective_env(path)
+    assert client.get("/api/models", headers=ADMIN).status_code == 422
+
+
+def test_missing_defaults_is_a_named_error_and_overridable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ARGUS_MODEL_DEFAULTS_FILE", str(tmp_path / "nope.json"))
+    res = client.get("/api/models", headers=ADMIN)
+    assert res.status_code == 422
+    assert "ARGUS_MODEL_DEFAULTS_FILE" in res.text
+    custom = tmp_path / "defaults.json"
+    custom.write_text(json.dumps(POLICY))
+    monkeypatch.setenv("ARGUS_MODEL_DEFAULTS_FILE", str(custom))
+    body = client.get("/api/models", headers=ADMIN).json()
+    assert body["source"] == "defaults"
+    assert body["revision"] == model_policy.revision(POLICY)
+
+
+def test_write_is_atomic_with_unique_temp_files(tmp_path: Path) -> None:
+    path = tmp_path / "model-policy.json"
+    model_policy._write(path, model_policy.validate(POLICY))
+    model_policy._write(path, model_policy.validate(chains()))
+    assert json.loads(path.read_text()) == chains()
+    assert [p.name for p in tmp_path.iterdir()] == [path.name]
