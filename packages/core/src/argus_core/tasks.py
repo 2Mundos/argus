@@ -269,6 +269,9 @@ class Task(BaseModel):
     created_at: datetime
     updated_at: datetime
     archived_at: datetime | None  # set while an operator has archived it
+    version: str  # updated_at; pass it back as expected_version
+    # The fields an edit may change in this state (docs/specs/task-edit.spec.md 3.4).
+    editable_fields: list[str] = []
     # Derived on read, never stored: when the earliest exhausted account is usable
     # again (blocked as awaiting_quota), the account running the current attempt,
     # and the last account switch.
