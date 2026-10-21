@@ -258,6 +258,22 @@ describe("withLocalHarnessRuntimeForGroup (the OneCLI ensureSession hook)", () =
     expect(out.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("onecli-managed-sentinel");
   });
 
+  it("falls back to the local harness file when a stale custom file's bridge is gone", async () => {
+    const dir = dataDir();
+    await writeCustomHarnessFile(dir, "argus-local-group", {
+      version: 1,
+      anthropic_base_url: "http://host.docker.internal:32774",
+      bridge_key: "c".repeat(32),
+    });
+    const local = localHarnessFromCredential({ base_url: "http://host.docker.internal:8080" })!;
+    await writeLocalHarnessFile(dir, "argus-local-group", local);
+    const out = await withLocalHarnessRuntimeForGroup(cloud(), dir, "ag-local");
+    expect(out.env?.ANTHROPIC_BASE_URL).toBe("http://host.docker.internal:8080");
+    expect(out.env?.ANTHROPIC_AUTH_TOKEN).toBe(LOCAL_HARNESS_AUTH_TOKEN);
+    expect(out.env?.ANTHROPIC_CUSTOM_HEADERS).toBeUndefined();
+    expect(out.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+
   it("returns the config unchanged for a group it does not know", async () => {
     const config = cloud();
     expect(await withLocalHarnessRuntimeForGroup(config, dataDir(), "ag-other")).toBe(config);

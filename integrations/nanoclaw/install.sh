@@ -276,8 +276,9 @@ fi
 # lookup threw "Database not initialized". The test now stubs only getAgentGroup
 # to find no group, which takes the hook's no-group path (config unchanged); the
 # group-found path is covered by argus-local-harness.test.ts. The mock goes right
-# after the test's vitest import (vi.mock is hoisted); no such import stops the
-# install, like every other anchor here.
+# after the test's vitest import (vi.mock is hoisted; the pattern spans a
+# multi-line import list); no such import stops the install, like every other
+# anchor here.
 if [ -f "$onecli_test" ] && grep -q "withLocalHarnessRuntimeForGroup" "$onecli_ts" \
     && ! grep -q "vi.mock('../db/agent-groups.js'" "$onecli_test"; then
   python3 - "$onecli_test" <<'PY'
