@@ -1,6 +1,7 @@
 export interface ModelPolicy {
   harness: Record<string, string[]>;
   implementation: Record<string, string[]>;
+  trivial?: Record<string, string[]>;
 }
 export interface PolicySnapshot {
   policy: ModelPolicy;
@@ -17,6 +18,8 @@ export interface PolicySnapshot {
     executor_account_id?: string | null;
     /** The delegate CLI of the best-priority leased account (claude | codex | agent). */
     preferred_executor?: string | null;
+    /** Task complexity (trivial | standard | hard); trivial prefers the local model. */
+    complexity?: string | null;
   } | null;
 }
 export interface ModelSelection {

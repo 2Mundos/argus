@@ -469,6 +469,8 @@ async function reconcileSecretAssignments(
     if (lease.role === "repository") continue;
     const mapping = PROVIDERS[lease.provider];
     if (!mapping) throw new Error("unsupported active lease provider");
+    // A harness-env-only account (local Strata) has no OneCLI secret.
+    if (mapping.harnessEnvOnly) continue;
     secretNames(identifier, mapping).forEach((name) => names.add(name));
   }
   const repositoryNames = [
