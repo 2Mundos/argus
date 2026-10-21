@@ -4795,6 +4795,11 @@ export interface components {
              */
             agents_per_instance: number;
             /**
+             * Allow Mutable Images
+             * @default false
+             */
+            allow_mutable_images: boolean;
+            /**
              * Capabilities
              * @default []
              */
@@ -4931,6 +4936,8 @@ export interface components {
         PoolPatch: {
             /** Agents Per Instance */
             agents_per_instance?: number | null;
+            /** Allow Mutable Images */
+            allow_mutable_images?: boolean | null;
             /** Capabilities */
             capabilities?: string[] | null;
             /** Cpus */
@@ -4965,6 +4972,11 @@ export interface components {
              * @default 1
              */
             agents_per_instance?: number;
+            /**
+             * Allow Mutable Images
+             * @default false
+             */
+            allow_mutable_images?: boolean;
             /**
              * Capabilities
              * @default []

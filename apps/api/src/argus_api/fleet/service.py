@@ -34,6 +34,7 @@ _CONFIG_FIELDS = (
     "env",
     "cpus",
     "memory_mb",
+    "allow_mutable_images",
     "docker",
     "kubernetes",
     "nanoclaw",

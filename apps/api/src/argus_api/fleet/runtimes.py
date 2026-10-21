@@ -151,6 +151,7 @@ def container_spec(
         runtime=pool.docker.runtime,
         tmpfs=tmpfs,
         pids_limit=pids_limit,
+        allow_mutable_images=pool.allow_mutable_images,
         kubernetes=(
             KubernetesPlacement(
                 namespace=pool.kubernetes.namespace,

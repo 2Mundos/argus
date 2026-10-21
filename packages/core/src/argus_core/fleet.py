@@ -2,9 +2,9 @@
 
 from datetime import datetime
 from enum import StrEnum
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from argus_core.agents import AgentRuntime
 
@@ -21,6 +21,21 @@ class RuntimeKind(StrEnum):
     NANOCLAW = "nanoclaw"
 
 
+def _docker_host_ok(host: str) -> bool:
+    """unix://, ssh://, https://, or tcp:// with TLS query params."""
+    parsed = urlsplit(host)
+    scheme = parsed.scheme.lower()
+    if scheme in ("unix", "ssh", "https"):
+        return True
+    if scheme != "tcp":
+        return False
+    qs = {k.lower(): [x.lower() for x in v] for k, v in parse_qs(parsed.query).items()}
+    for key in ("tls", "tlsverify"):
+        if qs.get(key, [""])[0] in ("1", "true", "yes"):
+            return True
+    return False
+
+
 class DockerOptions(BaseModel):
     model_config = ConfigDict(json_schema_serialization_defaults_required=True)
 
@@ -30,6 +45,18 @@ class DockerOptions(BaseModel):
     # OCI runtime for the container, e.g. "sysbox-runc". For the nanoclaw runtime
     # it replaces the shared Docker socket with a daemon inside the instance.
     runtime: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_.-]*$")
+
+    @field_validator("host")
+    @classmethod
+    def host_scheme(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if not _docker_host_ok(value):
+            raise ValueError(
+                "docker host must be unix://, ssh://, https://, or tcp:// with"
+                " ?tls=true (plain tcp:// is refused)"
+            )
+        return value
 
 
 IN_CLUSTER = "in-cluster"
@@ -133,6 +160,9 @@ class PoolUpsert(BaseModel):
     env: dict[str, str] = {}
     cpus: float | None = Field(default=None, gt=0)
     memory_mb: int | None = Field(default=None, ge=16)
+    # When false (default), a tag-only image missing locally is refused; Argus
+    # never silently re-pulls a mutable tag that is already present.
+    allow_mutable_images: bool = False
     docker: DockerOptions = DockerOptions()
     kubernetes: KubernetesOptions | None = None  # required for the kubernetes target
     nanoclaw: NanoclawOptions | None = None  # required for the nanoclaw runtime
@@ -207,6 +237,7 @@ class PoolPatch(BaseModel):
     env: dict[str, str | None] | None = None
     cpus: float | None = Field(default=None, gt=0)
     memory_mb: int | None = Field(default=None, ge=16)
+    allow_mutable_images: bool | None = None
     docker: DockerOptions | None = None
     kubernetes: KubernetesOptions | None = None
     nanoclaw: NanoclawOptions | None = None

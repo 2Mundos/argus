@@ -137,8 +137,13 @@ def test_manifest_is_a_hardened_one_shot_pod() -> None:
     assert s["serviceAccountName"] == "worker"
     assert s["imagePullSecrets"] == [{"name": "regcred"}]
     assert s["nodeSelector"] == {"pool": "gpu"}
+    assert s["securityContext"] == {
+        "runAsNonRoot": True,
+        "seccompProfile": {"type": "RuntimeDefault"},
+    }
     c = s["containers"][0]
     assert c["securityContext"] == {
+        "runAsNonRoot": True,
         "allowPrivilegeEscalation": False,
         "readOnlyRootFilesystem": True,
         "capabilities": {"drop": ["ALL"]},

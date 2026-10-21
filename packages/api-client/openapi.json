@@ -8167,6 +8167,11 @@
             "title": "Agents Per Instance",
             "type": "integer"
           },
+          "allow_mutable_images": {
+            "default": false,
+            "title": "Allow Mutable Images",
+            "type": "boolean"
+          },
           "capabilities": {
             "default": [],
             "items": {
@@ -8319,6 +8324,7 @@
           "env",
           "cpus",
           "memory_mb",
+          "allow_mutable_images",
           "docker",
           "kubernetes",
           "nanoclaw",
@@ -8540,6 +8546,17 @@
             ],
             "title": "Agents Per Instance"
           },
+          "allow_mutable_images": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Mutable Images"
+          },
           "capabilities": {
             "anyOf": [
               {
@@ -8696,6 +8713,11 @@
             "minimum": 1.0,
             "title": "Agents Per Instance",
             "type": "integer"
+          },
+          "allow_mutable_images": {
+            "default": false,
+            "title": "Allow Mutable Images",
+            "type": "boolean"
           },
           "capabilities": {
             "default": [],
