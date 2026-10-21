@@ -42,12 +42,69 @@ async def test_a_wedged_writer_makes_it_unready(
 ) -> None:
     monkeypatch.setattr(ops, "WRITE_PROBE_TIMEOUT_S", 0.2)
     async with db.write():  # someone holds the single writer
+        assert (await ops.readiness(db, {}, tmp_path, secrets_ok=True)).ready
+        await asyncio.sleep(0.3)
         r = await ops.readiness(db, {}, tmp_path, secrets_ok=True)
     assert not r.ready
     assert r.checks["database"].status == "failing"
-    assert "no write slot" in r.checks["database"].detail
+    assert "writer busy" in r.checks["database"].detail
     # …and it recovers as soon as the writer is free again.
     assert (await ops.readiness(db, {}, tmp_path, secrets_ok=True)).ready
+
+
+async def test_readiness_never_queues_on_the_writer(
+    db: Database, tmp_path: Path
+) -> None:
+    """Anonymous probes must not wait for, hold, or delay the single writer."""
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def hold() -> None:
+        async with db.write():
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(hold())
+    await entered.wait()
+    waiter = asyncio.create_task(_write_once(db))  # a real writer queued behind
+    await asyncio.sleep(0)
+    start = time.monotonic()
+    results = await asyncio.wait_for(
+        asyncio.gather(
+            *(ops.readiness(db, {}, tmp_path, secrets_ok=True) for _ in range(50))
+        ),
+        timeout=ops.WRITE_PROBE_TIMEOUT_S / 2,
+    )
+    assert time.monotonic() - start < ops.WRITE_PROBE_TIMEOUT_S / 2
+    assert all(r.ready for r in results)
+    release.set()
+    await holder
+    # The queued writer is next in line: probes did not take its turn.
+    await asyncio.wait_for(waiter, timeout=2)
+
+
+async def _write_once(db: Database) -> None:
+    async with db.write():
+        pass
+
+
+async def test_readiness_cache_runs_one_probe_per_window() -> None:
+    cache = ops.ReadinessCache(ttl_s=60)
+    calls = 0
+
+    async def probe() -> ops.Readiness:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.05)
+        return ops.Readiness({"database": ops.Check("ok")})
+
+    results = await asyncio.gather(*(cache.get(probe) for _ in range(100)))
+    await cache.get(probe)
+    assert calls == 1
+    assert all(r is results[0] for r in results)
+    expired = ops.ReadinessCache(ttl_s=0)
+    await expired.get(probe)
+    await expired.get(probe)
+    assert calls == 3
 
 
 async def test_a_stalled_loop_is_failing_and_a_new_one_gets_a_grace_window(
@@ -213,3 +270,29 @@ def test_unready_returns_503(
     res = client.get("/readyz")
     assert res.status_code == 503
     assert res.json()["checks"]["disk"]["status"] == "failing"
+
+
+def test_readyz_does_not_block_on_a_held_writer(client: TestClient) -> None:
+    db: Database = client.app.state.db  # type: ignore[attr-defined]
+    portal = client.portal  # type: ignore[attr-defined]
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def hold() -> None:
+        async with db.write():
+            entered.set()
+            await release.wait()
+
+    async def start() -> asyncio.Task[None]:
+        task = asyncio.create_task(hold())
+        await entered.wait()
+        return task
+
+    holder = portal.call(start)
+    try:
+        start_t = time.monotonic()
+        for _ in range(20):
+            assert client.get("/readyz").status_code == 200
+        assert time.monotonic() - start_t < ops.WRITE_PROBE_TIMEOUT_S / 2
+    finally:
+        portal.call(release.set)
+        portal.call(lambda: holder)

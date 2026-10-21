@@ -41,7 +41,11 @@ make check        # lint + typecheck + test (what CI runs)
 
 ```bash
 docker build -f deploy/Dockerfile.api -t argus .
-docker run -p 8000:8000 -v argus-data:/data argus   # dashboard at http://localhost:8000
+docker run -p 127.0.0.1:8000:8000 -v argus-data:/data argus   # dashboard at http://localhost:8000
+# Publish on loopback as above: Argus serves plain HTTP and ships no reverse proxy,
+# so TLS must terminate at a proxy you run in front of it before exposing it beyond
+# this host. The container binds ARGUS_BIND_HOST (default 0.0.0.0, needed for
+# published ports); exposure is controlled by the `-p` address.
 # First start saves the admin token to /data/admin-token (never logged);
 # or preset one with -e ARGUS_ADMIN_TOKEN=<32+ chars>.
 # Provider accounts: mount an age key so Argus can read/write its SOPS file:
@@ -59,7 +63,7 @@ docker run -p 8000:8000 -v argus-data:/data argus   # dashboard at http://localh
 | Endpoint | Auth | Use |
 | --- | --- | --- |
 | `GET /healthz` | none | liveness: the process is up |
-| `GET /readyz` | none | readiness: `503` when the database writer is wedged, a loop stalled, or the disk is full (`degraded` is still `200`) |
+| `GET /readyz` | none | readiness: `503` when the database is unreadable or the writer is held over 5 s, a loop stalled, or the disk is full (`degraded` is still `200`); never takes the writer, result cached ~2 s |
 | `GET /api/metrics` | admin token | Prometheus text: tasks, agents, pools, accounts, queue age, loop health, DB and disk size |
 | `GET /api/system` | any token | the same facts as JSON; the dashboard's System tab |
 

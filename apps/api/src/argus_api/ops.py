@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +18,10 @@ from argus_api.db import Database, utcnow
 
 # Baked into release images (docs/specs/releases.spec.md 3.5).
 VERSION = os.environ.get("ARGUS_VERSION", "0.0.0+dev")
+# The writer counts as wedged once one write has held it this long; the read probe
+# gets the same budget. Readiness never takes the writer itself.
 WRITE_PROBE_TIMEOUT_S = 5.0
+READINESS_CACHE_TTL_S = 2.0
 MIN_FREE_BYTES = 64 * 1024 * 1024
 MIN_STALE_WINDOW_S = 30.0
 
@@ -93,12 +97,17 @@ async def readiness(
     checks: dict[str, Check] = {}
     try:
         async with asyncio.timeout(WRITE_PROBE_TIMEOUT_S):
-            async with db.write():  # an empty transaction: proves the writer is free
-                pass
-        checks["database"] = Check("ok")
+            async with db.read() as conn:
+                await (await conn.execute("SELECT 1")).close()
+        if db.write_held_for() > WRITE_PROBE_TIMEOUT_S:
+            checks["database"] = Check(
+                "failing", f"writer busy over {WRITE_PROBE_TIMEOUT_S:g} s"
+            )
+        else:
+            checks["database"] = Check("ok")
     except TimeoutError:
         checks["database"] = Check(
-            "failing", f"no write slot within {WRITE_PROBE_TIMEOUT_S:g} s"
+            "failing", f"no read within {WRITE_PROBE_TIMEOUT_S:g} s"
         )
     except Exception as exc:
         checks["database"] = Check("failing", type(exc).__name__)
@@ -116,6 +125,28 @@ async def readiness(
         "ok" if secrets_ok else "degraded", "" if secrets_ok else "store not loaded"
     )
     return Readiness(checks)
+
+
+class ReadinessCache:
+    """Shares one readiness probe among all callers within a short window.
+
+    /readyz is anonymous, so its cost must not scale with the request rate:
+    callers arriving while a probe runs wait for it, and a fresh result is reused.
+    """
+
+    def __init__(self, ttl_s: float = READINESS_CACHE_TTL_S) -> None:
+        self._ttl_s = ttl_s
+        self._lock = asyncio.Lock()
+        self._at = 0.0
+        self._value: Readiness | None = None
+
+    async def get(self, probe: Callable[[], Awaitable[Readiness]]) -> Readiness:
+        async with self._lock:
+            now = time.monotonic()
+            if self._value is None or now - self._at >= self._ttl_s:
+                self._value = await probe()
+                self._at = time.monotonic()
+            return self._value
 
 
 def disk_free(path: Path) -> int:

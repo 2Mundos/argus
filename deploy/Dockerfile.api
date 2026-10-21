@@ -53,6 +53,12 @@ ENV PATH="/app/.venv/bin:$PATH" ARGUS_DATA_DIR=/data ARGUS_DASHBOARD_DIR=/app/da
     ARGUS_VERSION=$ARGUS_VERSION
 VOLUME /data
 USER nobody
+# Inside the container 0.0.0.0 is required for published ports to reach it; who can
+# connect is decided by the publish address (`-p 127.0.0.1:8000:8000`), not here.
+# Argus speaks plain HTTP: terminate TLS at a reverse proxy in front of it.
+ENV ARGUS_BIND_HOST=0.0.0.0
 EXPOSE 8000
 ENTRYPOINT ["argus-entrypoint"]
-CMD ["uvicorn", "argus_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# `sh -c exec` expands ARGUS_BIND_HOST and still makes uvicorn the process the
+# entrypoint (and Litestream) signals.
+CMD ["sh", "-c", "exec uvicorn argus_api.main:app --host \"$ARGUS_BIND_HOST\" --port 8000"]
