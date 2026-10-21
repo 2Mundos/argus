@@ -38,7 +38,7 @@ from pydantic import ValidationError
 
 from argus_api.access import record_lease_grant
 from argus_api.accounts.usage import insert_usage
-from argus_api.db import Tx, ts
+from argus_api.db import Snapshot, Tx, ts
 from argus_api.decisions import store as decisions
 from argus_api.errors import (
     ConflictError,
@@ -1094,14 +1094,25 @@ async def _expire_where(
 
 
 async def check_lease(
-    tx: Tx, task_id: str, attempt: int, agent_id: str, *, allow_expired: bool = False
+    tx: Tx | Snapshot,
+    task_id: str,
+    attempt: int,
+    agent_id: str,
+    *,
+    allow_expired: bool = False,
 ) -> aiosqlite.Row:
-    """Public ownership check for writes owned by other modules (artifacts, accounts)."""
+    """Public ownership check for writes owned by other modules (artifacts, accounts).
+    On a read `Snapshot` it is only a cheap early refusal; the write repeats it."""
     return await _owned(tx, task_id, attempt, agent_id, allow_expired=allow_expired)
 
 
 async def _owned(
-    tx: Tx, task_id: str, attempt: int, agent_id: str, *, allow_expired: bool = False
+    tx: Tx | Snapshot,
+    task_id: str,
+    attempt: int,
+    agent_id: str,
+    *,
+    allow_expired: bool = False,
 ) -> aiosqlite.Row:
     """Check the caller holds the current, unexpired lease (3.3), inside `tx`.
 

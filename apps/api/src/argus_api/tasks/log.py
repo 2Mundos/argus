@@ -8,7 +8,7 @@ import aiosqlite
 from argus_core.redact import redact, redact_private_keys
 from pydantic import BaseModel
 
-from argus_api.db import Tx, ts
+from argus_api.db import Snapshot, Tx, ts
 from argus_api.errors import RateLimitedError, TooLargeError
 from argus_api.events import transient
 from argus_api.tasks import service
@@ -80,17 +80,12 @@ def prepare(lines: list[str], secrets: tuple[str, ...] = ()) -> list[str]:
     return clean(lines, secrets)
 
 
-async def append(
-    tx: Tx,
-    agent_id: str,
-    task_id: str,
-    attempt: int,
-    source: Source,
-    kept: list[str],
-) -> LogAccepted:
-    """Store a batch (already through `prepare`) for the attempt the caller holds the
-    live lease on, then publish it as a transient `task.log` event. Does not renew
-    the lease (heartbeats and progress do)."""
+async def admit(
+    tx: Tx | Snapshot, agent_id: str, task_id: str, attempt: int, source: Source
+) -> aiosqlite.Row:
+    """The lease and rate checks of `append`, without writing. The route runs them on
+    a read snapshot first, so a refused batch costs no cleaning; `append` repeats them
+    in the writer, where they are authoritative."""
     row = await service.check_lease(tx, task_id, attempt, agent_id)
     async with tx.conn.execute(
         "SELECT at FROM task_log WHERE task_id = ? AND attempt = ? AND source = ?"
@@ -108,6 +103,21 @@ async def append(
                 f"at most one {source} log batch per {MIN_INTERVAL_S:g} s;"
                 f" retry in {wait:.1f} s"
             )
+    return row
+
+
+async def append(
+    tx: Tx,
+    agent_id: str,
+    task_id: str,
+    attempt: int,
+    source: Source,
+    kept: list[str],
+) -> LogAccepted:
+    """Store a batch (already through `prepare`) for the attempt the caller holds the
+    live lease on, then publish it as a transient `task.log` event. Does not renew
+    the lease (heartbeats and progress do)."""
+    row = await admit(tx, agent_id, task_id, attempt, source)
     first = row["log_seq"] + 1
     if kept:
         at = ts(tx.now)

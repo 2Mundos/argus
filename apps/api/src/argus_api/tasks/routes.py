@@ -251,6 +251,8 @@ async def post_log(
     one batch per second per source. Secrets are redacted before storing; the
     batch is published as a `task.log` event and stored in a ring of 2000 lines
     per attempt. Fenced like progress: a stale attempt is 409 `stale_attempt`."""
+    async with db.snapshot() as snap:  # refuse cheaply before the costly cleaning
+        await log.admit(snap, agent_id, task_id, body.attempt, body.source)
     lines = log.prepare(
         body.lines, (token,) if token else ()
     )  # redaction stays outside the writer

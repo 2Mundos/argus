@@ -453,6 +453,24 @@ def test_rest_permissions_and_contract(client: TestClient) -> None:
     assert "output_at" in client.get("/openapi.json").text
 
 
+def test_a_refused_batch_is_never_cleaned(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claimed, worker, other, _ = start(client)
+    url = f"/api/tasks/{claimed['id']}/log"
+    body = {"attempt": claimed["attempt"], "source": "worker", "lines": ["go"]}
+    assert client.post(url, json=body, headers=worker).status_code == 200
+
+    def costly(*_: object) -> list[str]:
+        raise AssertionError("cleaned a batch that is refused anyway")
+
+    monkeypatch.setattr(log, "clean", costly)
+    stale = client.post(url, json={**body, "attempt": 7}, headers=worker)
+    assert stale.status_code == 409, stale.text
+    assert client.post(url, json=body, headers=other).status_code == 409
+    assert client.post(url, json=body, headers=worker).status_code == 429
+
+
 def test_the_token_is_masked_whatever_the_scheme_case(client: TestClient) -> None:
     claimed, _, _, token = start(client)
     url = f"/api/tasks/{claimed['id']}/log"
