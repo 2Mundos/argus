@@ -104,6 +104,8 @@ Prerequisites, all on the Docker host:
 3. A **short** directory for per-instance working directories.
 
 ```bash
+# Required for any socket-mounted NanoClaw pool (templates and raw PUT alike):
+# export ARGUS_NANOCLAW_ALLOW_DOCKER_SOCKET=true
 docker build -t argus-nanoclaw-host:dev deploy/nanoclaw-host
 curl -X PUT $ARGUS/api/pools/nc -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' -d '{
   "runtime": "nanoclaw", "image": "argus-nanoclaw-host:dev",
@@ -124,8 +126,18 @@ How it works and what to know:
   them on the daemon's filesystem. Argus mounts `install_dir` (read-only),
   the instance's own directory under `instances_root` and the Docker socket at the
   same absolute path inside the host container. A host sees only its own
-  directory, never its siblings'. Argus creates it (owned by `user`) with a
-  one-shot container from the same image before starting the host.
+  directory, never its siblings'. Argus creates the instance directory (owned by
+  `user`) on the host when the daemon shares this filesystem; otherwise a
+  one-shot container mounts only the parent directory and runs `mkdir`/`chown`
+  as argv (no shell).
+- **Socket opt-in.** `ARGUS_NANOCLAW_ALLOW_DOCKER_SOCKET=true` on the Argus
+  process is required before any pool that mounts the Docker socket can be
+  upserted (`403 docker_socket_not_allowed` otherwise). Sandboxed pools
+  (`docker.runtime`) do not need it and must leave `nanoclaw.docker_socket`
+  unset.
+- **Hardened host containers.** Argus starts every runtime container with
+  `--cap-drop=ALL`, `no-new-privileges`, a read-only root filesystem (tmpfs for
+  `/tmp` and friends) and a PID limit.
 - **One working directory per instance** (`<instances_root>/<instance id>`): its
   own `data/`, `groups/`, `store/`; code and the files NanoClaw mounts into agents
   are symlinked from the install. Directories are kept after an instance ends.

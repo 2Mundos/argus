@@ -620,6 +620,8 @@ export interface paths {
         /**
          * List Decisions
          * @description Decisions oldest first, in pages (max 100); open ones by default.
+         *     Workers only see decisions for tasks they have leased (and knowledge
+         *     proposals in those projects).
          */
         get: operations["list_decisions_api_decisions_get"];
         put?: never;
@@ -785,7 +787,8 @@ export interface paths {
         };
         /**
          * List Events
-         * @description Event history, newest first. Page backwards with `before`.
+         * @description Event history, newest first. Page backwards with `before`. Workers only
+         *     see events for projects of tasks they have leased.
          */
         get: operations["list_events_api_events_get"];
         put?: never;
@@ -1493,7 +1496,8 @@ export interface paths {
          * @description Tasks newest first, in pages (max 100). `assignee` is the agent holding a
          *     task now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read
          *     instead: no other filter, no paging, unknown ids in `missing`. Archived tasks
-         *     are left out unless `archived=true`, which lists only those.
+         *     are left out unless `archived=true`, which lists only those. Workers only see
+         *     tasks they have leased.
          */
         get: operations["list_tasks_api_tasks_get"];
         put?: never;
@@ -3744,11 +3748,8 @@ export interface components {
             agent_image: string;
             /** Agent Image Archive */
             agent_image_archive?: string | null;
-            /**
-             * Docker Socket
-             * @default /var/run/docker.sock
-             */
-            docker_socket?: string;
+            /** Docker Socket */
+            docker_socket?: string | null;
             /**
              * Group Add
              * @default []
@@ -3786,11 +3787,8 @@ export interface components {
             agent_image: string;
             /** Agent Image Archive */
             agent_image_archive: string | null;
-            /**
-             * Docker Socket
-             * @default /var/run/docker.sock
-             */
-            docker_socket: string;
+            /** Docker Socket */
+            docker_socket: string | null;
             /**
              * Group Add
              * @default []

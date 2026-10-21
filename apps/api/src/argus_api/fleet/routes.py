@@ -23,7 +23,7 @@ from fastapi.responses import PlainTextResponse
 
 from argus_api.deps import AdminDep, DbDep, ManagerDep, SettingsDep
 from argus_api.errors import DomainError, ForbiddenError
-from argus_api.fleet import capabilities, runtimes, service, templates
+from argus_api.fleet import capabilities, policy, runtimes, service, templates
 from argus_api.fleet.targets import TargetError, TargetRegistry
 
 router = APIRouter(tags=["fleet"])
@@ -88,6 +88,7 @@ async def create_worker(
     # Probed before the write: no target call inside a write transaction.
     cat = await templates.catalog(settings, pools, request.app.state.targets)
     name, upsert = templates.build_pool(settings, cat, body, pools)
+    policy.enforce_nanoclaw_socket_policy(upsert, settings)
     async with db.write() as tx:
         pool = await service.create_pool(tx, name, upsert, caller.actor)
     return CreateWorkerResult(
@@ -118,24 +119,37 @@ async def get_pool(
 
 @router.put("/pools/{name}")
 async def upsert_pool(
-    name: PoolName, body: PoolUpsert, db: DbDep, caller: AdminDep
+    name: PoolName,
+    body: PoolUpsert,
+    db: DbDep,
+    settings: SettingsDep,
+    caller: AdminDep,
 ) -> Pool:
     """Create or replace a pool definition, including its replica cap (admin only).
     The reconciler converges instances to it within seconds. This replaces `env`
     whole; PATCH changes single variables without resending the others."""
+    policy.enforce_nanoclaw_socket_policy(body, settings)
     async with db.write() as tx:
         return service.redact(await service.upsert_pool(tx, name, body, caller.actor))
 
 
 @router.patch("/pools/{name}")
 async def patch_pool(
-    name: PoolName, body: PoolPatch, db: DbDep, caller: AdminDep
+    name: PoolName,
+    body: PoolPatch,
+    db: DbDep,
+    settings: SettingsDep,
+    caller: AdminDep,
 ) -> Pool:
     """Change some of a pool's options (admin only), keeping the rest. Requires
     the `version` you read as `expected_version` (409 stale_version otherwise).
     Name, target and runtime cannot change. `env` merges; null removes a key."""
+    # Policy runs after merge inside patch_pool so a PATCH that introduces a
+    # socket-mounted NanoClaw config is refused the same way as PUT.
     async with db.write() as tx:
-        return service.redact(await service.patch_pool(tx, name, body, caller.actor))
+        return service.redact(
+            await service.patch_pool(tx, name, body, caller.actor, settings)
+        )
 
 
 @router.get("/pools/{name}/inspect")

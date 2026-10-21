@@ -20,6 +20,20 @@ MANAGED_LABEL = "argus.managed"
 POOL_LABEL = "argus.pool"
 INSTANCE_LABEL = "argus.instance_id"
 
+# Default hardening for every container Argus starts (worker lifecycle 3.8).
+RUNTIME_TMPFS: dict[str, str] = {
+    "/tmp": "rw,nosuid,nodev,size=64m",  # noqa: S108 — container scratch, not host temp
+    "/var/tmp": "rw,nosuid,nodev,size=16m",  # noqa: S108
+    "/run": "rw,nosuid,nodev,size=16m",
+}
+# Sandboxed NanoClaw runs an inner dockerd on a read-only root; give it scratch.
+SANDBOX_TMPFS: dict[str, str] = {
+    **RUNTIME_TMPFS,
+    "/var/lib/docker": "rw,nosuid,nodev,size=2g",
+    "/var/log": "rw,nosuid,nodev,size=64m",
+    "/var/run": "rw,nosuid,nodev,size=16m",
+}
+
 
 class TargetError(Exception):
     """The provider could not be reached or refused the call."""
@@ -61,6 +75,12 @@ class ContainerSpec:
     user: str | None = None
     group_add: list[str] = field(default_factory=list)
     runtime: str | None = None  # OCI runtime (Docker target), e.g. sysbox-runc
+    # Hardening applied on every Docker start (and mirrored on Kubernetes pods).
+    cap_drop: list[str] = field(default_factory=lambda: ["ALL"])
+    security_opt: list[str] = field(default_factory=lambda: ["no-new-privileges:true"])
+    read_only: bool = True
+    pids_limit: int | None = 2048
+    tmpfs: dict[str, str] = field(default_factory=lambda: dict(RUNTIME_TMPFS))
     kubernetes: KubernetesPlacement | None = None
 
     @property
@@ -259,29 +279,70 @@ class DockerTarget:
                 user=spec.user,
                 group_add=spec.group_add or None,
                 runtime=spec.runtime,
+                cap_drop=list(spec.cap_drop) or None,
+                security_opt=list(spec.security_opt) or None,
+                read_only=spec.read_only,
+                pids_limit=spec.pids_limit,
+                tmpfs=dict(spec.tmpfs) or None,
             )
         except APIError as exc:
             if exc.status_code != 409:  # 409: created concurrently under our name
                 raise
         return spec.name
 
+    def _prepare_dir(self, client: Any, image: str, mount: Mount) -> None:
+        """Create a bind-mount source owned by the instance user.
+
+        Prefer host-side mkdir/chown when this process shares the daemon's
+        filesystem (local unix socket). For a remote daemon, run a one-shot
+        container that mounts only the parent directory and invokes mkdir/chown
+        as argv (no shell).
+        """
+        if not mount.create_owner:
+            return
+        if self._local_unix_daemon():
+            self._prepare_dir_on_host(mount)
+            return
+        self._prepare_dir_remote(client, image, mount)
+
+    def _local_unix_daemon(self) -> bool:
+        effective = self.host or os.environ.get("DOCKER_HOST")
+        return effective is None or effective.startswith("unix://")
+
     @staticmethod
-    def _prepare_dir(client: Any, image: str, mount: Mount) -> None:
-        """Create a bind-mount source on the daemon's filesystem, owned by the
-        user the instance runs as. A one-shot container does it because the
-        daemon may be remote; `mkdir -p` and `chown` make it idempotent."""
+    def _prepare_dir_on_host(mount: Mount) -> None:
+        owner = mount.create_owner
+        if owner is None:
+            return
+        path = Path(mount.host)
+        path.mkdir(parents=True, exist_ok=True)
+        uid_s, gid_s = owner.split(":", 1)
+        os.chown(path, int(uid_s), int(gid_s))
+
+    @staticmethod
+    def _prepare_dir_remote(client: Any, image: str, mount: Mount) -> None:
+        parent = str(Path(mount.host).parent)
+        volumes = {parent: {"bind": parent, "mode": "rw"}}
+        # Root is still required for chown across uids; drop every capability
+        # except the two mkdir/chown need, no network, no new privileges.
+        common = {
+            "user": "0:0",
+            "volumes": volumes,
+            "remove": True,
+            "network_mode": "none",
+            "cap_drop": ["ALL"],
+            "cap_add": ["CHOWN", "DAC_OVERRIDE", "FOWNER"],
+            "security_opt": ["no-new-privileges:true"],
+            "read_only": True,
+            "tmpfs": {"/tmp": "rw,nosuid,nodev,size=1m"},  # noqa: S108
+        }
+        client.containers.run(
+            image, entrypoint=["/bin/mkdir", "-p", mount.host], **common
+        )
         client.containers.run(
             image,
-            entrypoint=["sh", "-c", 'mkdir -p "$1" && chown "$2" "$1"', "sh"],
-            command=[mount.host, mount.create_owner],
-            user="0:0",
-            volumes={
-                str(Path(mount.host).parent): {
-                    "bind": str(Path(mount.host).parent),
-                    "mode": "rw",
-                }
-            },
-            remove=True,
+            entrypoint=["/bin/chown", mount.create_owner, mount.host],
+            **common,
         )
 
     def _stop(self, ref: str, grace: int) -> None:
@@ -497,6 +558,11 @@ def pod_manifest(spec: ContainerSpec, namespace: str) -> dict[str, Any]:
         resources.setdefault("limits", {})["memory"] = f"{spec.memory_mb}Mi"
     if "limits" in resources:  # requests = limits: a predictable QoS class
         resources["requests"] = dict(resources["limits"])
+    security: dict[str, Any] = {
+        "allowPrivilegeEscalation": False,
+        "readOnlyRootFilesystem": spec.read_only,
+        "capabilities": {"drop": list(spec.cap_drop) or ["ALL"]},
+    }
     pod_spec: dict[str, Any] = {
         "restartPolicy": "Never",
         # Workers talk to Argus, not to the cluster API.
@@ -506,7 +572,7 @@ def pod_manifest(spec: ContainerSpec, namespace: str) -> dict[str, Any]:
                 "name": "worker",
                 "image": spec.image,
                 "env": [{"name": n, "value": v} for n, v in spec.env.items()],
-                "securityContext": {"allowPrivilegeEscalation": False},
+                "securityContext": security,
                 **({"resources": resources} if resources else {}),
             }
         ],

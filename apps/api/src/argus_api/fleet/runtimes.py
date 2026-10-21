@@ -8,11 +8,18 @@ from argus_api.fleet.targets import (
     INSTANCE_LABEL,
     MANAGED_LABEL,
     POOL_LABEL,
+    RUNTIME_TMPFS,
+    SANDBOX_TMPFS,
     ContainerSpec,
     KubernetesPlacement,
     Mount,
     TargetError,
 )
+
+DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock"
+# NanoClaw host may run an inner dockerd (sandbox) or spawn sibling agents; keep
+# headroom above the agent-container default of 2048.
+NANOCLAW_HOST_PIDS_LIMIT = 4096
 
 
 def descendant_label(pool: Pool) -> str | None:
@@ -58,6 +65,8 @@ def container_spec(
     mounts: list[Mount] = []
     user: str | None = None
     group_add: list[str] = []
+    tmpfs = dict(RUNTIME_TMPFS)
+    pids_limit = 2048
     if pool.runtime == "nanoclaw":
         nc = pool.nanoclaw
         if nc is None:  # guarded by PoolUpsert; kept for a clear error on bad rows
@@ -83,17 +92,20 @@ def container_spec(
             # Only this instance's directory: hosts cannot see each other's state.
             Mount(workdir, workdir, "rw", create_owner=nc.user),
         ]
+        pids_limit = NANOCLAW_HOST_PIDS_LIMIT
         if sandboxed:
             # No host socket: the instance runs its own daemon inside the sandbox
             # runtime, so a compromised host cannot reach the real Docker host.
             env["ARGUS_NANOCLAW_INNER_DOCKER"] = "1"
+            tmpfs = dict(SANDBOX_TMPFS)
             if nc.agent_image_archive:
                 env["ARGUS_NANOCLAW_AGENT_IMAGE_ARCHIVE"] = nc.agent_image_archive
                 mounts.append(
                     Mount(nc.agent_image_archive, nc.agent_image_archive, "ro")
                 )
         else:
-            mounts.append(Mount(nc.docker_socket, "/var/run/docker.sock", "rw"))
+            socket = nc.docker_socket or DEFAULT_DOCKER_SOCKET
+            mounts.append(Mount(socket, "/var/run/docker.sock", "rw"))
             user, group_add = nc.user, list(nc.group_add)
     elif pool.runtime != "plain":
         raise TargetError(f"runtime {pool.runtime!r} is not supported")
@@ -114,6 +126,8 @@ def container_spec(
         user=user,
         group_add=group_add,
         runtime=pool.docker.runtime,
+        tmpfs=tmpfs,
+        pids_limit=pids_limit,
         kubernetes=(
             KubernetesPlacement(
                 namespace=pool.kubernetes.namespace,
