@@ -85,6 +85,36 @@ def test_size_limit(
     assert not any((data_dir / "artifacts" / ".staging").iterdir())
 
 
+def test_agent_quota_refuses_over_cap(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ARGUS_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", ADMIN_TOKEN)
+    monkeypatch.setenv("ARGUS_ARTIFACT_MAX_BYTES", "1024")
+    monkeypatch.setenv("ARGUS_ARTIFACT_AGENT_QUOTA_BYTES", "10")
+    with TestClient(app) as client:
+        boot = client.post(
+            "/api/agents/bootstrap-tokens", json={}, headers=ADMIN
+        ).json()
+        worker = {
+            "Authorization": (
+                "Bearer "
+                + client.post(
+                    "/api/agents/register", json={"bootstrap_token": boot["token"]}
+                ).json()["token"]
+            )
+        }
+        client.post(
+            "/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN
+        )
+        claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
+        first = upload(client, worker, claimed, name="a.md", body=b"1234567890")
+        assert first.status_code == 201, first.text
+        second = upload(client, worker, claimed, name="b.md", body=b"x")
+        assert second.status_code == 400
+        assert second.json()["detail"]["code"] == "artifact_quota"
+
+
 @pytest.mark.parametrize("name", ["../escape", ".hidden", "a/b", "", "x" * 201])
 def test_bad_names_are_rejected(
     client: TestClient, worker: dict[str, str], claimed: dict, name: str

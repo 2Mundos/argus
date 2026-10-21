@@ -13,7 +13,7 @@ from fastapi import APIRouter, status
 from pydantic import BaseModel
 
 from argus_api.agents import service
-from argus_api.deps import AdminDep, AgentDep, CallerDep, DbDep, ManagerDep
+from argus_api.deps import AdminDep, AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
 from argus_api.modeltrace import service as modeltrace
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -71,9 +71,11 @@ async def create_bootstrap_token(
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
-async def register(body: AgentRegister, db: DbDep) -> Registration:
+async def register(
+    body: AgentRegister, db: DbDep, settings: SettingsDep
+) -> Registration:
     async with db.write() as tx:
-        reg = await service.register(tx, body)
+        reg = await service.register(tx, body, token_ttl_s=settings.agent_token_ttl_s)
     return Registration(
         agent=reg.agent,
         token=reg.token,
@@ -91,7 +93,7 @@ async def list_agents(
 
 @router.post("/me/heartbeat")
 async def heartbeat(
-    body: HeartbeatRequest, db: DbDep, agent_id: AgentDep
+    body: HeartbeatRequest, db: DbDep, agent_id: AgentDep, settings: SettingsDep
 ) -> HeartbeatResponse:
     """Prove liveness and renew the listed task leases (each one independently)."""
     async with db.write() as tx:
@@ -100,6 +102,7 @@ async def heartbeat(
             agent_id,
             [(lease.task_id, lease.attempt) for lease in body.leases],
             body.runtime,
+            token_ttl_s=settings.agent_token_ttl_s,
         )
     return HeartbeatResponse(
         state=hb.state,

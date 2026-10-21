@@ -96,6 +96,9 @@ every new dependency is judged against it.
   default-on AppArmor/seccomp candidates so Codex's Bubblewrap can run in a
   worker (`off` escape hatch); [provenance](../integrations/nanoclaw/security/PROVENANCE.md)
   and [runbook](../integrations/nanoclaw/security/RUNBOOK.md)
+- [Security hardening (2026-10-20 medium/low)](specs/security-hardening.spec.md) —
+  response headers and CSP, docs off by default, sessionStorage tokens, pod and
+  container hardening, OneCLI URL rules, task/artifact caps, agent token expiry
 
 ### Drafts
 

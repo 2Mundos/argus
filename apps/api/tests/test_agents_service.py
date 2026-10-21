@@ -32,7 +32,7 @@ async def register(db: Database, caps: list[str] | None = None, **kw):
 
 async def authenticate(db: Database, token: str):
     async with db.read() as conn:
-        return await auth_authenticate(conn, token)
+        return await auth_authenticate(conn, token, now=db.now())
 
 
 async def reap(db: Database) -> reaper.ReapResult:

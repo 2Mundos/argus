@@ -3,6 +3,7 @@
 See docs/specs/worker-lifecycle.spec.md 3.2.
 """
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -287,9 +288,13 @@ class TaskResult(BaseModel):
     usage: Usage | None = None
 
 
+SPEC_MAX_LENGTH = 200_000
+INPUT_MAX_CHARS = 100_000
+
+
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
-    spec: str = ""
+    spec: str = Field(default="", max_length=SPEC_MAX_LENGTH)
     kind: str = "generic"
     acceptance: list[str] = []
     input: dict[str, Any] = {}
@@ -317,6 +322,15 @@ class TaskCreate(BaseModel):
     # Pinned engine/executor and model; None: policy and account priority.
     harness_model: HarnessModel | None = None
     executor_model: ExecutorModel | None = None
+
+    @field_validator("input")
+    @classmethod
+    def _input_size(cls, value: dict[str, Any]) -> dict[str, Any]:
+        # Compact JSON length, mirroring the knowledge body character cap.
+        encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+        if len(encoded) > INPUT_MAX_CHARS:
+            raise ValueError(f"input exceeds {INPUT_MAX_CHARS} characters")
+        return value
 
     @field_validator("account_providers")
     @classmethod

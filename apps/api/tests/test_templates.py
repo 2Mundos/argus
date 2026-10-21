@@ -376,7 +376,7 @@ GATEWAY = pytest.mark.parametrize(
         lambda d: (
             nanoclaw_env(d)
             | {
-                "ARGUS_NANOCLAW_ONECLI_URL": "http://onecli:10254",
+                "ARGUS_NANOCLAW_ONECLI_URL": "https://onecli.example:10254",
                 "ARGUS_NANOCLAW_ACCOUNT_PROVIDERS": "openai, anthropic",
                 "ARGUS_NANOCLAW_EXECUTOR_PROVIDERS": "cursor",
                 "ARGUS_NANOCLAW_NETWORK": "onecli-control",
@@ -393,7 +393,7 @@ def test_guided_nanoclaw_worker_inherits_the_gateway_and_ignores_retired_provide
 ) -> None:
     ready_node(target)
     pool = create(client, template="nanoclaw-socket", name="inherits").json()["pool"]
-    assert pool["nanoclaw"]["onecli_url"] == "http://onecli:10254"
+    assert pool["nanoclaw"]["onecli_url"] == "https://onecli.example:10254"
     # The retired provider env never becomes pool configuration.
     assert "account_providers" not in pool["nanoclaw"]
     assert "executor_providers" not in pool["nanoclaw"]

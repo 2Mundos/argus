@@ -13,7 +13,7 @@ from argus_api.artifacts.service import (
     Verification,
 )
 from argus_api.artifacts.store import LocalArtifactStore
-from argus_api.deps import AgentDep, CallerDep, DbDep
+from argus_api.deps import AgentDep, CallerDep, DbDep, SettingsDep
 
 router = APIRouter(tags=["artifacts"])
 
@@ -38,6 +38,7 @@ async def upload_artifact(
     db: DbDep,
     store: StoreDep,
     agent_id: AgentDep,
+    settings: SettingsDep,
     attempt: Annotated[int, Query()],
     name: Annotated[str, Query()],
     role: Annotated[ArtifactRole | None, Query()] = None,
@@ -58,6 +59,7 @@ async def upload_artifact(
         media_type=media_type,
         chunks=request.stream(),
         role=role,
+        agent_quota_bytes=settings.artifact_agent_quota_bytes,
     )
 
 
