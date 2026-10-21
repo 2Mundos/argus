@@ -274,7 +274,8 @@ export interface paths {
          *     holding a lease on the account, or an admin. If it cannot be persisted, the
          *     account is disabled rather than left with a token that would be lost.
          *
-         *     An agent must also hold the live task claim named by `task_id` and `attempt`.
+         *     An agent must also hold the live task claim named by `task_id` and `attempt`,
+         *     checked before the store write (no transaction spans the store's I/O).
          */
         put: operations["update_credential_api_accounts__account_id__credential_put"];
         post?: never;
