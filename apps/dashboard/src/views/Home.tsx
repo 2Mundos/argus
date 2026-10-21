@@ -15,8 +15,10 @@ import {
 } from "../overview";
 import { EventList } from "./Events";
 
-function useSource<T>(load: () => Promise<T>): Source<T> & { reload: () => void } {
-  const { data, error, reload } = useLiveData(load, []);
+function useSource<T>(
+  load: (signal: AbortSignal) => Promise<T>,
+): Source<T> & { reload: () => void } {
+  const { data, error, reload } = useLiveData((signal) => load(signal), []);
   const [updatedAt, setUpdatedAt] = useState<number>();
   useEffect(() => {
     if (data !== undefined) setUpdatedAt(Date.now());
@@ -28,10 +30,10 @@ const fmt = (n: number | undefined) => (n === undefined ? "—" : String(n));
 
 export function Home() {
   const { status } = useLive();
-  const overview = useSource<Overview>(() => call(api.GET("/api/overview")));
-  const system = useSource(() => call(api.GET("/api/system")));
-  const events = useSource(() =>
-    call(api.GET("/api/events", { params: { query: { limit: 10 } } })),
+  const overview = useSource<Overview>((signal) => call(api.GET("/api/overview", { signal })));
+  const system = useSource((signal) => call(api.GET("/api/system", { signal })));
+  const events = useSource((signal) =>
+    call(api.GET("/api/events", { params: { query: { limit: 10 } }, signal })),
   );
   const live = status === "live";
   const att = attention({ stream: status, overview, system });

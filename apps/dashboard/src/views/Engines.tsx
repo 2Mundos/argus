@@ -4,7 +4,7 @@ import { ModelPreferences } from "./ModelPreferences";
 
 /** Engines, executors and the local model — from GET /api/engines (read-only). */
 export function Engines() {
-  const { data: catalog, error, reload } = useLiveData(() => fetchEngineCatalog(), []);
+  const { data: catalog, error, reload } = useLiveData((signal) => fetchEngineCatalog(signal), []);
 
   return (
     <section>
@@ -31,7 +31,7 @@ export function Engines() {
         <thead>
           <tr>
             <th>Engine</th>
-            <th>Role</th>
+            <th>Layer</th>
             <th>Model provider</th>
             <th>Executor</th>
             <th>Harness</th>
@@ -60,31 +60,45 @@ export function Engines() {
 }
 
 function EngineRow({ entry }: { entry: EngineEntry }) {
-  const r = entry.readiness;
+  // One row per layer: harness and executor are validated and routed separately.
+  const layers = entry.layers.length
+    ? entry.layers
+    : [{ layer: "harness" as const, readiness: entry.readiness, usable: entry.usable }];
   return (
-    <tr>
-      <td>
-        <strong>{entry.label}</strong>
-        <span className="muted small"> {entry.id}</span>
-        {entry.version && <div className="muted small">{entry.version}</div>}
-      </td>
-      <td className="small">{entry.role.replaceAll("_", " ")}</td>
-      <td className="small" title={entry.axes.model ?? ""}>
-        {entry.axes.model_provider}
-        {entry.axes.model ? ` / ${entry.axes.model}` : ""}
-      </td>
-      <td className="small">{entry.axes.executor ?? "—"}</td>
-      <td className="small">{entry.axes.harness}</td>
-      <td className="small">{readinessLabel(r.installed)}</td>
-      <td className="small" title={r.authenticated.detail}>
-        {readinessLabel(r.authenticated)}
-      </td>
-      <td className="small">{readinessLabel(r.validated)}</td>
-      <td>
-        <span className={`badge ${entry.usable ? "account-enabled" : "account-disabled"}`}>
-          {entry.usable ? "yes" : "no"}
-        </span>
-      </td>
-    </tr>
+    <>
+      {layers.map((l, i) => {
+        const r = l.readiness;
+        return (
+          <tr key={l.layer}>
+            <td>
+              {i === 0 && (
+                <>
+                  <strong>{entry.label}</strong>
+                  <span className="muted small"> {entry.id}</span>
+                  {entry.version && <div className="muted small">{entry.version}</div>}
+                </>
+              )}
+            </td>
+            <td className="small">{l.layer}</td>
+            <td className="small" title={entry.axes.model ?? ""}>
+              {entry.axes.model_provider}
+              {entry.axes.model ? ` / ${entry.axes.model}` : ""}
+            </td>
+            <td className="small">{entry.axes.executor ?? "—"}</td>
+            <td className="small">{entry.axes.harness}</td>
+            <td className="small">{readinessLabel(r.installed)}</td>
+            <td className="small" title={r.authenticated.detail}>
+              {readinessLabel(r.authenticated)}
+            </td>
+            <td className="small">{readinessLabel(r.validated)}</td>
+            <td>
+              <span className={`badge ${l.usable ? "account-enabled" : "account-disabled"}`}>
+                {l.usable ? "yes" : "no"}
+              </span>
+            </td>
+          </tr>
+        );
+      })}
+    </>
   );
 }

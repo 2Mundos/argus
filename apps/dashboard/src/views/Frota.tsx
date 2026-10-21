@@ -37,7 +37,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 export function Frota() {
   const [window, setWindow] = useState(24);
   const { data, error, reload } = useLiveData(
-    () => call(api.GET("/api/fleet/health", { params: { query: { window } } })),
+    (signal) => call(api.GET("/api/fleet/health", { params: { query: { window } }, signal })),
     [window],
   );
 

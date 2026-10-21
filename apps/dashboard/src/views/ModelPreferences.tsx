@@ -29,7 +29,7 @@ const TITLES: Record<Scope, string> = {
 
 /** Ordered model chains per engine, from GET/PUT/DELETE /api/models. */
 export function ModelPreferences() {
-  const { data, error, reload } = useLiveData(() => fetchModelPolicy(), []);
+  const { data, error, reload } = useLiveData((signal) => fetchModelPolicy(signal), []);
   const [policy, setPolicy] = useState<ModelPolicy>();
   const [draft, setDraft] = useState<Draft>();
   const [failure, setFailure] = useState<string>();

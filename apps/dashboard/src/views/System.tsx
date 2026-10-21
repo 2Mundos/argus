@@ -10,7 +10,7 @@ function duration(seconds: number | null | undefined): string {
 }
 
 export function System() {
-  const { data, error } = useLiveData(() => call(api.GET("/api/system")), []);
+  const { data, error } = useLiveData((signal) => call(api.GET("/api/system", { signal })), []);
   if (error) return <p className="error">{error.message}</p>;
   if (!data) return null;
   const ready = data.readiness.status === "ready";

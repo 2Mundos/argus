@@ -26,7 +26,7 @@ export const engineLabel = (e: string) => (e === "agent" ? "agent (Cursor)" : e)
 // Mirrors the API: a CLI model ID, not a claim that the provider serves it.
 export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
 
-export const fetchModelPolicy = () => call(api.GET("/api/models"));
+export const fetchModelPolicy = (signal?: AbortSignal) => call(api.GET("/api/models", { signal }));
 export const saveModelPolicy = (draft: Draft) => {
   const body = compactDraft(draft);
   return call(

@@ -5,7 +5,10 @@ import { useLiveData } from "../live";
 
 /** Archive terminal tasks in bulk: criteria, a dry-run count, then confirmation. */
 export function ArchiveTasks({ onClose }: { onClose: () => void }) {
-  const { data: projects } = useLiveData(() => call(api.GET("/api/projects")), []);
+  const { data: projects } = useLiveData(
+    (signal) => call(api.GET("/api/projects", { signal })),
+    [],
+  );
   const [criteria, setCriteria] = useState<ArchiveCriteria>({
     states: ["failed", "cancelled"],
     project: "",

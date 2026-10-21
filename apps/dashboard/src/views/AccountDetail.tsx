@@ -24,12 +24,13 @@ export function AccountDetail(props: { account: Account; onClose: () => void }) 
   const tz = viewerTimeZone();
   const model = hasModelUsage(a.provider);
   const { data, error } = useLiveData(
-    () =>
+    (signal) =>
       call(
         api.GET("/api/accounts/usage", {
           params: {
             query: { ...windowQuery(win, new Date(), a.created_at), tz, account_id: a.id },
           },
+          signal,
         }),
       ),
     [win, a.id],

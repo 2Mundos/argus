@@ -7,8 +7,11 @@ import { AgentDetail } from "./AgentDetail";
 import { NewWorker } from "./GuidedWorker";
 
 function CreateWorker({ onError }: { onError: (message?: string) => void }) {
-  const { data: pools } = useLiveData(() => call(api.GET("/api/pools")), []);
-  const { data: instances } = useLiveData(() => call(api.GET("/api/instances")), []);
+  const { data: pools } = useLiveData((signal) => call(api.GET("/api/pools", { signal })), []);
+  const { data: instances } = useLiveData(
+    (signal) => call(api.GET("/api/instances", { signal })),
+    [],
+  );
   const [caps, setCaps] = useState<FleetCapabilities>();
   const [capsError, setCapsError] = useState<string>();
   const [chosen, setChosen] = useState<string>();
@@ -145,7 +148,7 @@ export function Agents() {
   const [opened, setOpened] = useState<string | null>(null);
   const [issued, setIssued] = useState<{ token: string; expires_at: string }>();
   const [error, setError] = useState<string>();
-  const { data: agents } = useLiveData(() => call(api.GET("/api/agents")), []);
+  const { data: agents } = useLiveData((signal) => call(api.GET("/api/agents", { signal })), []);
   const visible = (agents ?? []).filter(
     (a) => showEnded || a.state === "active" || a.state === "draining",
   );

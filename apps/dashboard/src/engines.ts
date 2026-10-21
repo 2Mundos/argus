@@ -13,6 +13,16 @@ export type EngineAxes = {
   account_provider: string | null;
 };
 
+export type EngineLayerState = {
+  layer: "harness" | "executor";
+  readiness: {
+    installed: EngineFact;
+    authenticated: EngineFact;
+    validated: EngineFact;
+  };
+  usable: boolean;
+};
+
 export type EngineEntry = {
   id: string;
   label: string;
@@ -26,6 +36,7 @@ export type EngineEntry = {
     validated: EngineFact;
   };
   usable: boolean;
+  layers: EngineLayerState[];
   notes: string;
 };
 
@@ -40,10 +51,11 @@ export type EngineCatalog = {
   } | null;
 };
 
-export async function fetchEngineCatalog(): Promise<EngineCatalog> {
+export async function fetchEngineCatalog(signal?: AbortSignal): Promise<EngineCatalog> {
   const token = loadToken();
   const res = await fetch("/api/engines", {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
+    signal,
   });
   if (!res.ok) {
     throw new Error(`engines catalogue: HTTP ${res.status}`);

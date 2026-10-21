@@ -26,7 +26,7 @@ for router delegations.
   to 1 (single GPU slot). Never marked exhausted for quota; availability follows
   the same probe as `ARGUS_LOCAL_MODEL_URL` via the reaper (`sync_local_health`).
 - **Lease ranking.** `fallback_tier`: every non-`local` account sorts before
-  `local` (inverted for `trivial` tasks, see [task complexity](task-complexity.spec.md)), then `priority`, load, and deterministic ties (account selection spec).
+  `local` (inverted for `trivial` tasks, see [task difficulty](task-difficulty.spec.md)), then `priority`, load, and deterministic ties (account selection spec).
 - **Harness.** NanoClaw `provider` stays `claude`; engine mapping for `local` is
   `claude` on the redirected API. Executor preference: `agent` (Cursor).
 - **Container → host.** Strata listens on `127.0.0.1:8080` on the host only (not
@@ -106,7 +106,7 @@ for router delegations.
 # 4. Open Questions
 
 - Task-level “requires cloud” policy for hard tasks (no label in schema yet).
-- `trivial` tasks invert the ranking for themselves ([task complexity](task-complexity.spec.md));
+- `trivial` tasks invert the ranking for themselves ([task difficulty](task-difficulty.spec.md));
   `standard` tasks keep it.
 - Whether to add harness model names for `local` in default model policy.
 

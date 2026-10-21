@@ -35,7 +35,7 @@ isolation or sandbox/TLS restrictions.
   the account and the next candidate is tried), and below `max_leases`.
   Cloud accounts rank before the `local` one, except for a `trivial` task, which
   prefers `local` and falls back to the cloud in the same call
-  ([task complexity](task-complexity.spec.md)).
+  ([task difficulty](task-difficulty.spec.md)).
   Slot accounting stays atomic in the one write transaction.
 - **Eligibility is technical, never preference.** `gitea` accounts serve only the
   `repository` role (scoped by the pool's `repositories`) and never become model

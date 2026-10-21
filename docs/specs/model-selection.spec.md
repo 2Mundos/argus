@@ -26,7 +26,7 @@ and implementation `claude-sonnet-5-5` then fallback `claude-opus-5-5`. They liv
 supports; no alias rewriting. Other executors keep their native default unless
 configured. An optional `trivial` map (same shape; default Cursor `agent`: `composer-2.5`) replaces
 `implementation` when the task is `trivial` or the engine lease is a `local` account
-([task complexity](task-complexity.spec.md)); `model_source` stays `policy` and
+([task difficulty](task-difficulty.spec.md)); `model_source` stays `policy` and
 `policy_map` says which map. Optional `hard_harness` and `hard_implementation` maps
 (same shape; default Claude `claude-opus-5-5` in both) replace `harness` and
 `implementation` for a `hard` task, per engine, only where they have a chain; Codex has

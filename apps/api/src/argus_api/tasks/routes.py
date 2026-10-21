@@ -79,8 +79,11 @@ class FailRequest(BaseModel):
         "provider_failure",
         "quota",
         "runtime_switch_failed",
+        "context_overflow",
+        "verification_failed",
     ] = "worker_fail"
-    """Why the attempt failed: the worker said so, or the channel detected it."""
+    """Why the attempt failed: the worker said so, or the channel detected it. The
+    last two raise the task's difficulty one level for the next attempt."""
 
 
 class DependenciesRequest(BaseModel):

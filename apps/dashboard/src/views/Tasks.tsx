@@ -1,7 +1,7 @@
 import { type FormEvent, useState } from "react";
 import { api, call, newestTasks, type TaskKind, type TaskState, type TaskSummary } from "../api";
 import { relative, shortId } from "../format";
-import { useLiveData } from "../live";
+import { reportPage, useLiveData } from "../live";
 import { TaskSignal } from "../milestones";
 import { TaskLabel } from "../TaskLabel";
 import { useNow } from "./Activity";
@@ -25,7 +25,10 @@ export function Tasks() {
   const [creating, setCreating] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [archived, setArchived] = useState(false);
-  const { data, error } = useLiveData(() => newestTasks(5, archived), [archived]);
+  const { data, error } = useLiveData(
+    (signal) => newestTasks(5, archived, { signal, onPage: (page) => reportPage(signal, page) }),
+    [archived],
+  );
   const tasks = data?.items;
 
   return (
@@ -111,8 +114,14 @@ function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
 }
 
 function NewTask({ onClose }: { onClose: () => void }) {
-  const { data: kinds } = useLiveData<TaskKind[]>(() => call(api.GET("/api/task-kinds")), []);
-  const { data: projects } = useLiveData(() => call(api.GET("/api/projects")), []);
+  const { data: kinds } = useLiveData<TaskKind[]>(
+    (signal) => call(api.GET("/api/task-kinds", { signal })),
+    [],
+  );
+  const { data: projects } = useLiveData(
+    (signal) => call(api.GET("/api/projects", { signal })),
+    [],
+  );
   const [form, setForm] = useState({
     title: "",
     spec: "",
@@ -124,7 +133,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
     timeoutMinutes: "",
     requires_approval: false,
     review: "none" as "none" | "human" | "orchestrator",
-    complexity: "" as "" | "trivial" | "standard" | "hard",
+    difficulty: "" as "" | "trivial" | "simple" | "standard" | "hard",
   });
   const [error, setError] = useState<string>();
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
@@ -151,7 +160,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
             priority: form.priority,
             requires_approval: form.requires_approval,
             review: form.review,
-            ...(form.complexity ? { complexity: form.complexity } : {}),
+            ...(form.difficulty ? { difficulty: form.difficulty } : {}),
             ...(form.timeoutMinutes ? { timeout_s: Number(form.timeoutMinutes) * 60 } : {}),
             ...(capabilities.length ? { required_capabilities: capabilities } : {}),
             ...(accountProviders.length ? { account_providers: accountProviders } : {}),
@@ -216,16 +225,16 @@ function NewTask({ onClose }: { onClose: () => void }) {
           </label>
         </div>
         <label>
-          Complexity (trivial work, such as a copy change, prefers the local model; hard work runs
-          Claude on Opus)
+          Difficulty (trivial and simple work goes to a cheap executor; hard work to the strongest)
           <select
-            value={form.complexity}
-            onChange={(e) => set("complexity", e.target.value as typeof form.complexity)}
+            value={form.difficulty}
+            onChange={(e) => set("difficulty", e.target.value as typeof form.difficulty)}
           >
             <option value="">decide from the title and spec</option>
             <option value="trivial">trivial</option>
+            <option value="simple">simple</option>
             <option value="standard">standard</option>
-            <option value="hard">hard (Claude runs on Opus)</option>
+            <option value="hard">hard</option>
           </select>
         </label>
         <label>

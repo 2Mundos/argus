@@ -15,7 +15,7 @@ from argus_core.engines import (
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
-from argus_api import events
+from argus_api import events, model_policy
 from argus_api.accounts import service as accounts_service
 from argus_api.db import utcnow
 from argus_api.deps import (
@@ -129,6 +129,8 @@ async def route_task(
         max_input_fraction=settings.local_max_input_fraction,
         output_reserve=settings.local_output_reserve,
         chat_template_overhead=settings.local_chat_template_overhead,
+        policy=model_policy.effective_policy(settings.model_policy_path),
+        executor_chains=settings.difficulty_executors,
     )
     async with db.write() as tx:
         await events.record(
@@ -146,6 +148,10 @@ async def route_task(
                 "context_tokens": decision.context_tokens,
                 "blocked": decision.blocked,
                 "fallback_from": decision.fallback_from,
+                "difficulty": decision.difficulty,
+                "executor": decision.executor,
+                "executor_model": decision.executor_model,
+                "executor_reason": decision.executor_reason,
             },
         )
     return decision

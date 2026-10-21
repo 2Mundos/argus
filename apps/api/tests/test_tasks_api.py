@@ -5,7 +5,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from argus_api.db import Database
 from argus_api.main import app
+from argus_api.tasks.views import LIST_COLUMNS, Refs, TaskSummary
 from fastapi.testclient import TestClient
 
 ADMIN_TOKEN = "test-admin-token-" + "x" * 32
@@ -48,6 +50,12 @@ def test_create_get_list(client: TestClient) -> None:
         task["id"]
     ]
     assert client.get("/api/tasks?state=failed").json()["total"] == 0
+    summary = client.get("/api/tasks").json()["items"][0]
+    assert summary["title"] == "write docs"
+    assert "spec" not in summary
+    assert (
+        "spec" in client.get("/api/tasks", params={"view": "detail"}).json()["items"][0]
+    )
 
 
 def test_claim_and_complete(client: TestClient, agent: dict[str, str]) -> None:
@@ -275,3 +283,43 @@ def test_progress_milestone_over_rest(
     assert summary["progress_kind"] == "pr_opened"
     assert summary["progress_data"]["number"] == 3
     assert summary["progress_at"] is not None
+
+
+def test_list_columns_skip_task_bodies() -> None:
+    bodies = {"spec", "acceptance", "input", "required_capabilities", "result", "error"}
+    assert bodies.isdisjoint(LIST_COLUMNS)
+
+
+def test_list_columns_cover_summary_fields() -> None:
+    computed = {"version", "models", "age_s", "truncated"} | set(Refs.model_fields)
+    assert set(TaskSummary.model_fields) - computed <= set(LIST_COLUMNS)
+
+
+async def test_newest_list_uses_partial_index(db: Database) -> None:
+    # Archived COUNT(*) may use the older tasks_archived index; the ordered
+    # lists and the active count need the newest-first indexes.
+    queries = {
+        "active": (
+            "SELECT id FROM tasks WHERE archived_at IS NULL"
+            " ORDER BY created_at DESC, id DESC LIMIT 101",
+            "tasks_active_newest",
+        ),
+        "archived": (
+            "SELECT id FROM tasks WHERE archived_at IS NOT NULL"
+            " ORDER BY created_at DESC, id DESC LIMIT 101",
+            "tasks_archived_newest",
+        ),
+        "active_count": (
+            "SELECT count(*) FROM tasks WHERE archived_at IS NULL",
+            "tasks_active_newest",
+        ),
+        "archived_count": (
+            "SELECT count(*) FROM tasks WHERE archived_at IS NOT NULL",
+            "tasks_archived",
+        ),
+    }
+    async with db.read() as conn:
+        for name, (sql, index) in queries.items():
+            async with conn.execute("EXPLAIN QUERY PLAN " + sql) as cur:
+                plan = " | ".join(row["detail"] for row in await cur.fetchall())
+            assert index in plan, (name, plan)

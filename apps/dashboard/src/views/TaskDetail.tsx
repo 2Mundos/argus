@@ -18,11 +18,21 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
   const [agentId, setAgentId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const { data, reload } = useLiveData(
-    () =>
+    (signal) =>
       Promise.all([
-        call(api.GET("/api/tasks/{task_id}", { params: { path: { task_id: taskId } } })),
-        call(api.GET("/api/tasks/{task_id}/artifacts", { params: { path: { task_id: taskId } } })),
-        call(api.GET("/api/events", { params: { query: { subject_id: taskId, limit: 50 } } })),
+        call(api.GET("/api/tasks/{task_id}", { params: { path: { task_id: taskId } }, signal })),
+        call(
+          api.GET("/api/tasks/{task_id}/artifacts", {
+            params: { path: { task_id: taskId } },
+            signal,
+          }),
+        ),
+        call(
+          api.GET("/api/events", {
+            params: { query: { subject_id: taskId, limit: 50 } },
+            signal,
+          }),
+        ),
       ]),
     [taskId],
   );
@@ -69,12 +79,12 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                 </dd>
                 <dt>Kind</dt>
                 <dd>{task.kind}</dd>
-                <dt>Complexity</dt>
+                <dt>Difficulty</dt>
                 <dd>
-                  <span className={`badge complexity-${task.complexity ?? "standard"}`}>
-                    {task.complexity ?? "standard"}
+                  <span className={`badge difficulty-${task.difficulty ?? "standard"}`}>
+                    {task.difficulty ?? "standard"}
                   </span>{" "}
-                  <span className="muted small">({task.complexity_source ?? "heuristic"})</span>
+                  <span className="muted small">({task.difficulty_source ?? "inferred"})</span>
                 </dd>
                 {task.project && (
                   <>

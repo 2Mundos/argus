@@ -22,7 +22,8 @@ export function Cost() {
   const [win, setWin] = useState<CostWindow>("7d");
   const tz = viewerTimeZone();
   const { data, error } = useLiveData(
-    () => call(api.GET("/api/accounts/cost", { params: { query: { window: win, tz } } })),
+    (signal) =>
+      call(api.GET("/api/accounts/cost", { params: { query: { window: win, tz } }, signal })),
     [win, tz],
   );
   return (

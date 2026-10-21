@@ -19,7 +19,10 @@ It shows, in order:
 Totals come from one read-only endpoint, `GET /api/overview`, readable by the
 manager, orchestrator and admin scopes (never workers). The dashboard uses the API
 only and the existing live stream: it refetches when events arrive and after every
-reconnect.
+reconnect. Becoming live the first time is not a reconnect, so it does not start
+another fetch or discard the one already in flight. A refetch leaves data on screen
+until the new response arrives; a view that is still empty shows the first response
+that returns.
 
 # 2. Non-Goals
 

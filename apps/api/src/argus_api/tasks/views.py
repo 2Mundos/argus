@@ -78,6 +78,34 @@ SUMMARY_OMITS = sorted(
     set(Task.model_fields) - set(TaskSummary.model_fields) - {"updated_at"}
 )
 
+# Columns a list row needs. Bodies (spec, acceptance, input, result, error) stay
+# in the table; view=detail loads them per id.
+LIST_COLUMNS = (
+    "id",
+    "parent_id",
+    "kind",
+    "title",
+    "project",
+    "state",
+    "priority",
+    "review",
+    "attempt",
+    "max_attempts",
+    "assignee_agent_id",
+    "lease_expires_at",
+    "block_reason",
+    "progress_message",
+    "progress_percent",
+    "progress_at",
+    "progress_kind",
+    "progress_data",
+    "output_at",
+    "created_at",
+    "archived_at",
+    "updated_at",
+)
+_LIST_SQL = ", ".join(LIST_COLUMNS)
+
 
 async def list_tasks(
     snap: Snapshot,
@@ -129,7 +157,7 @@ async def list_tasks(
         where.append("(created_at, id) < (?, ?)")
         params += after
     async with conn.execute(
-        f"SELECT * FROM tasks WHERE {' AND '.join(where)}"  # noqa: S608
+        f"SELECT {_LIST_SQL} FROM tasks WHERE {' AND '.join(where)}"  # noqa: S608
         " ORDER BY created_at DESC, id DESC LIMIT ?",
         [*params, limit + 1],
     ) as cur:
@@ -157,7 +185,7 @@ async def get_tasks(
     ids = list(dict.fromkeys(ids))
     if not 1 <= len(ids) <= MAX_IDS:
         raise ValidationFailedError(f"ids takes 1 to {MAX_IDS} task ids")
-    sql = f"SELECT * FROM tasks WHERE id IN ({','.join('?' * len(ids))})"  # noqa: S608
+    sql = f"SELECT {_LIST_SQL} FROM tasks WHERE id IN ({','.join('?' * len(ids))})"  # noqa: S608
     params: list[Any] = list(ids)
     if task_scope is not None:
         clause, scope_params = task_scope
