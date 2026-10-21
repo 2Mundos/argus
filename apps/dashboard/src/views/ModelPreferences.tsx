@@ -121,8 +121,8 @@ export function ModelPreferences() {
           ))}
           {empties.length > 0 && (
             <p className="muted small">
-              Empty chains ({empties.join(", ")}) need a model before they are kept; they are omitted
-              on save.
+              Empty chains ({empties.join(", ")}) need a model before they are kept; they are
+              omitted on save.
             </p>
           )}
           <div className="toolbar">
