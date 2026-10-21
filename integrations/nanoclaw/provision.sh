@@ -16,7 +16,11 @@
 # the Codex sentinel fix. Off by default; `env` prints the matching tag.
 #
 # Overrides: ARGUS_NANOCLAW_STATE (default ${XDG_DATA_HOME:-~/.local/share}/argus-nanoclaw),
-# NANOCLAW_COMMIT, NANOCLAW_REPO. Idempotent: rerunning reuses what is built.
+# NANOCLAW_COMMIT, NANOCLAW_REPO, and the image tags ARGUS_NANOCLAW_AGENT_TAG (the
+# full ref; no "-engines" suffix is added to it) and ARGUS_NANOCLAW_HOST_IMAGE. A
+# full run builds, tags and saves whatever those name, so a verification run on a
+# host that already serves workers sets both to refs the fleet does not use.
+# Idempotent: rerunning reuses what is built.
 set -euo pipefail
 
 # Pinned: the commit the integration was developed and tested against.
@@ -30,7 +34,7 @@ ARCHIVE="$STATE/agent-image.tar"
 ENGINES="${ARGUS_NANOCLAW_ENGINES:-0}"
 TAG_SUFFIX=""
 if [ "$ENGINES" = 1 ]; then TAG_SUFFIX="-engines"; fi
-AGENT_TAG="argus-nanoclaw-agent:${NANOCLAW_COMMIT:0:12}$TAG_SUFFIX"
+AGENT_TAG="${ARGUS_NANOCLAW_AGENT_TAG:-argus-nanoclaw-agent:${NANOCLAW_COMMIT:0:12}$TAG_SUFFIX}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
 
@@ -117,7 +121,7 @@ if [ "$ENGINES" = 1 ]; then "$here/engines/install-engines.sh" "$SRC"; fi
   pnpm run build
   # tsc does not emit imported JS assets; restore them even if build cleaned dist.
   "$here/install.sh" "$SRC" >/dev/null
-  pnpm exec vitest run src/channels/argus.test.ts src/channels/argus-accounts.test.ts src/channels/argus-gitea-lease.test.ts src/gateway-providers/argus-cursor-stub.test.ts src/gateway-providers/argus-onecli-git-ca.test.ts src/gateway-providers/onecli.test.ts src/gateway-providers/onecli-files.test.ts src/gateway-providers/gateway-provider-registry.test.ts src/drivers/argus-codex-sandbox.test.ts src/argus-codex-sandbox-composition.test.ts src/drivers/docker-driver.test.ts
+  pnpm exec vitest run src/channels/argus.test.ts src/channels/argus-accounts.test.ts src/channels/argus-gitea-lease.test.ts src/gateway-providers/argus-cursor-stub.test.ts src/gateway-providers/argus-local-harness.test.ts src/gateway-providers/argus-onecli-git-ca.test.ts src/gateway-providers/onecli.test.ts src/gateway-providers/onecli-files.test.ts src/gateway-providers/gateway-provider-registry.test.ts src/drivers/argus-codex-sandbox.test.ts src/argus-codex-sandbox-composition.test.ts src/drivers/docker-driver.test.ts
 )
 
 # Agent image: NanoClaw's own build script, then a stable tag and a `docker save`

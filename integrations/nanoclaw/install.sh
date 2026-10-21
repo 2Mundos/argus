@@ -298,6 +298,7 @@ vi.mock('../db/agent-groups.js', async (original) => ({
   getAgentGroup: async () => undefined,
 }));
 """
+# [^;] also matches newlines, so an import list split over lines still matches.
 vitest_import = re.compile(r"^import [^;]*\bfrom ['\"]vitest['\"];?[ \t]*\n", re.M)
 assert vitest_import.search("import {\n  describe,\n  it,\n} from 'vitest';\n")
 first = vitest_import.search(s)
