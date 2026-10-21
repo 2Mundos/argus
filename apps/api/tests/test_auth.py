@@ -158,13 +158,19 @@ def test_admin_token_management(client: TestClient) -> None:
     assert client.get("/api/admin/tokens", headers=second).status_code == 401
 
 
-def test_first_start_without_preset_logs_and_writes_token(
+def test_first_start_without_preset_logs_path_never_token(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setenv("ARGUS_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("ARGUS_ADMIN_TOKEN", raising=False)
+    caplog.set_level(0)
     with TestClient(app) as c:
         token = (tmp_path / "admin-token").read_text().strip()
         headers = {"Authorization": f"Bearer {token}"}
         assert c.get("/api/tasks", headers=headers).status_code == 200
-    assert token in caplog.text
+    assert token
+    for record in caplog.records:
+        assert token not in record.getMessage()
+        assert token not in str(record.msg)
+        assert token not in str(record.args)
+    assert str(tmp_path / "admin-token") in caplog.text

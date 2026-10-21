@@ -42,7 +42,7 @@ make check        # lint + typecheck + test (what CI runs)
 ```bash
 docker build -f deploy/Dockerfile.api -t argus .
 docker run -p 8000:8000 -v argus-data:/data argus   # dashboard at http://localhost:8000
-# First start prints the admin token and saves it to /data/admin-token;
+# First start saves the admin token to /data/admin-token (never logged);
 # or preset one with -e ARGUS_ADMIN_TOKEN=<32+ chars>.
 # Provider accounts: mount an age key so Argus can read/write its SOPS file:
 #   -v ./age-key.txt:/keys/age.txt:ro -e SOPS_AGE_KEY_FILE=/keys/age.txt \

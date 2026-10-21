@@ -434,7 +434,7 @@ are also revoked; revocation does not wait for an unreachable container to stop.
 **Admin tokens.** No users or passwords in v1 (single-node 3.5):
 
 - On first start with no live admin token, Argus generates one, writes it to
-  `/data/admin-token` (mode 0600), and logs it once.
+  `/data/admin-token` (mode 0600), and logs only that path, never the token.
 - `ARGUS_ADMIN_TOKEN` (at least 32 characters) presets one instead. It is
   registered the first time Argus sees it; once revoked it stays revoked even if
   the variable is still set.

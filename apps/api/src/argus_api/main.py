@@ -78,9 +78,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             await accounts.reconcile_secrets(tx, secrets)
         if generated:
             log.warning(
-                "Created the initial admin token (also saved to %s): %s",
+                "Created the initial admin token; read it from %s",
                 settings.data_dir / "admin-token",
-                generated,
             )
         app.state.local_model = (
             LocalModel(
