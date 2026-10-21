@@ -53,7 +53,8 @@ tool you need is missing, say which and stop; do not script REST around it.
 
 For the fleet: inspect_pool shows what each instance is proven to run (a fact's
 `source`, or `unknown`); recycle_instance and drain_agent never interrupt claimed
-work; admins change options with update_pool(expected_version=the pool's version).
+work (recycle_instance(requeue=true) and release_task requeue it without costing an
+attempt); admins change options with update_pool(expected_version=the pool's version).
 wait_for_events(subject_type, subject_id) waits for the change to happen instead
 of polling; then inspect_pool or get_tasks reads back the effect."""
 
@@ -798,6 +799,20 @@ async def retry_task(ctx: Context, task_id: str) -> dict:
 
 
 @tool(MANAGERS)
+async def release_task(
+    ctx: Context, task_id: str, reason: str, attempt: int | None = None
+) -> dict:
+    """Take a claimed task back from its worker and requeue it without counting a
+    failed attempt (e.g. to free a worker for a recycle). `reason` is required;
+    pass `attempt` to release only that claim (409 stale_attempt otherwise). 409
+    task_not_claimed if it is not claimed."""
+    body: dict = {"reason": reason}
+    if attempt is not None:
+        body["attempt"] = attempt
+    return await _call(ctx, "POST", f"/tasks/{task_id}/release", json=body)
+
+
+@tool(MANAGERS)
 async def cancel_task(ctx: Context, task_id: str) -> dict:
     """Cancel a task (orchestrators and admins)."""
     return await _call(ctx, "POST", f"/tasks/{task_id}/cancel")
@@ -892,11 +907,16 @@ async def drain_agent(ctx: Context, agent_id: str) -> dict:
 
 
 @tool(MANAGERS)
-async def recycle_instance(ctx: Context, instance_id: str) -> dict:
-    """Replace a running instance without interrupting work: its agents drain, it
-    stops once none holds a claimed task, then a new one starts. Follow it with
-    inspect_pool."""
-    return await _call(ctx, "POST", f"/instances/{instance_id}/recycle")
+async def recycle_instance(
+    ctx: Context, instance_id: str, requeue: bool = False
+) -> dict:
+    """Replace a running instance: its agents drain, it stops once none holds a
+    claimed task, then a new one starts. By default work finishes first; with
+    `requeue` its claimed tasks are released now (no attempt counted) so it stops
+    on the next pass. Follow it with inspect_pool."""
+    return await _call(
+        ctx, "POST", f"/instances/{instance_id}/recycle", json={"requeue": requeue}
+    )
 
 
 @tool(MANAGERS)

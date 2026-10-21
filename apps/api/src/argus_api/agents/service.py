@@ -195,9 +195,14 @@ async def drain(tx: Tx, agent_id: str, actor: str) -> Agent:
 
 
 async def leave(tx: Tx, agent_id: str) -> Agent:
-    """Clean exit. Any task still held is expired, as if its lease ran out."""
-    await _live_state(tx.conn, agent_id)
-    await _end(tx, agent_id, AgentState.GONE, "left", f"agent:{agent_id}")
+    """Clean exit. Any task still held is expired, as if its lease ran out, unless
+    the agent was draining: an operator asked it to go, so the task is released
+    without counting a failure (3.4)."""
+    state = await _live_state(tx.conn, agent_id)
+    release = "drain" if state is AgentState.DRAINING else None
+    await _end(
+        tx, agent_id, AgentState.GONE, "left", f"agent:{agent_id}", release=release
+    )
     return await get_agent(tx.conn, agent_id)
 
 
@@ -228,9 +233,24 @@ async def mark_lost(tx: Tx, failed: list[str] | None = None) -> list[str]:
     return lost
 
 
-async def end_instance(tx: Tx, instance_id: str, reason: str) -> list[str]:
-    """An instance is going away: its live agents are lost (tasks released,
-    tokens revoked) and its unused bootstrap tokens revoked, in this transaction."""
+async def end_instance(
+    tx: Tx,
+    instance_id: str,
+    reason: str,
+    *,
+    release: str | None = None,
+    actor: str = "system",
+) -> list[str]:
+    """An instance is going away: its live agents are lost (tokens revoked) and its
+    unused bootstrap tokens revoked, in this transaction. Their tasks are released
+    with reason `release`, or `recycle` when the instance was draining (an operator
+    ended it, 3.4); otherwise they expire as failures."""
+    if release is None:
+        async with tx.conn.execute(
+            "SELECT draining FROM instances WHERE id = ?", (instance_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        release = "recycle" if row is not None and row["draining"] else None
     async with tx.conn.execute(
         "SELECT id FROM agents WHERE instance_id = ? AND state IN ('active', 'draining')"
         " ORDER BY id",
@@ -238,7 +258,7 @@ async def end_instance(tx: Tx, instance_id: str, reason: str) -> list[str]:
     ) as cur:
         ids = [r["id"] for r in await cur.fetchall()]
     for agent_id in ids:
-        await _end(tx, agent_id, AgentState.LOST, reason, "system")
+        await _end(tx, agent_id, AgentState.LOST, reason, actor, release=release)
     await tx.conn.execute(
         "UPDATE tokens SET revoked_at = ? WHERE revoked_at IS NULL AND kind = 'bootstrap'"
         " AND used_at IS NULL AND instance_id = ?",
@@ -248,10 +268,17 @@ async def end_instance(tx: Tx, instance_id: str, reason: str) -> list[str]:
 
 
 async def _end(
-    tx: Tx, agent_id: str, state: AgentState, reason: str, actor: str
+    tx: Tx,
+    agent_id: str,
+    state: AgentState,
+    reason: str,
+    actor: str,
+    *,
+    release: str | None = None,
 ) -> None:
-    """End an identity: release its tasks and revoke its credentials atomically.
+    """End an identity: give up its tasks and revoke its credentials atomically.
 
+    With `release` its tasks are released (no failure counted), else expired.
     Revocation covers the agent's tokens and every unused bootstrap token of its
     instance, so a lost instance can never register a replacement identity.
     """
@@ -272,7 +299,10 @@ async def _end(
         " AND instance_id = ?))",
         (now, agent_id, instance_id, instance_id),
     )
-    released = await tasks.expire_agent_leases(tx, agent_id)
+    released = (
+        await tasks.release_agent_tasks(tx, agent_id, actor, release) if release else []
+    )
+    released += await tasks.expire_agent_leases(tx, agent_id)
     await accounts.release(tx, agent_id, state)
     await record(
         tx,

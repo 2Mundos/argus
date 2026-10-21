@@ -918,6 +918,8 @@ async def attempt_definitions(
                 agent_id=r["agent_id"],
                 claimed_at=r["claimed_at"],
                 definition=json.loads(r["definition"]),
+                outcome=r["outcome"],
+                outcome_reason=r["outcome_reason"],
             )
             for r in await cur.fetchall()
         ]
@@ -963,6 +965,80 @@ async def add_clarification(
     await tx.conn.execute(
         "UPDATE tasks SET spec = ?, updated_at = ? WHERE id = ?",
         (spec, ts(tx.now), task_id),
+    )
+
+
+RELEASE_REASON_MAX = 500
+
+
+async def release(
+    tx: Tx, task_id: str, actor: str, reason: str, *, attempt: int | None = None
+) -> Task:
+    """An operator takes a claimed task back from its holder: `ready` again with
+    `failures` untouched, so the attempt never counts toward `max_attempts` (3.3).
+    `attempt`, when given, must be the current one. The holder's account leases
+    end with it unless it holds another claim; its next write gets 409."""
+    from argus_api.accounts import service as accounts  # it imports this module
+
+    row = await _row(tx.conn, task_id)
+    if row["state"] != S.CLAIMED:
+        raise ConflictError(
+            f"task is {row['state']}, not claimed", code="task_not_claimed"
+        )
+    if attempt is not None and attempt != row["attempt"]:
+        raise ConflictError(
+            f"task {task_id} is at attempt {row['attempt']}, not {attempt}",
+            code="stale_attempt",
+        )
+    holder = row["assignee_agent_id"]
+    await release_claim(tx, row, actor, reason)
+    async with tx.conn.execute(
+        "SELECT 1 FROM tasks WHERE state = 'claimed' AND assignee_agent_id = ?",
+        (holder,),
+    ) as cur:
+        if await cur.fetchone() is None:
+            await accounts.release(tx, holder, "task_released")
+    return await get_task(tx.conn, task_id)
+
+
+async def release_agent_tasks(
+    tx: Tx, agent_id: str, actor: str, reason: str
+) -> list[str]:
+    """Release every task an agent holds (an operator ended it: 3.4). The caller
+    deals with the agent's account leases."""
+    async with tx.conn.execute(
+        "SELECT * FROM tasks WHERE state = 'claimed' AND assignee_agent_id = ?"
+        " ORDER BY id",
+        (agent_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    for row in rows:
+        await release_claim(tx, row, actor, reason)
+    return [r["id"] for r in rows]
+
+
+async def release_claim(tx: Tx, row: aiosqlite.Row, actor: str, reason: str) -> None:
+    """Requeue a claimed row without a failure and mark its attempt `released`."""
+    await _apply(
+        tx,
+        row,
+        Action.RELEASE,
+        actor,
+        set_={
+            "error": None,
+            "progress_message": f"attempt {row['attempt']} released: {reason};"
+            " requeued",
+            "progress_percent": None,
+            "progress_at": ts(tx.now),
+        },
+        data={"reason": reason, "previous_holder": row["assignee_agent_id"]},
+        event="task.released",
+    )
+    await tx.conn.execute(
+        "UPDATE task_attempts SET outcome = 'released', outcome_reason = ?"
+        " WHERE id = (SELECT max(id) FROM task_attempts"
+        "  WHERE task_id = ? AND attempt = ?)",
+        (reason, row["id"], row["attempt"]),
     )
 
 
@@ -1157,8 +1233,10 @@ async def _apply(
     data: dict[str, Any] | None = None,
     deps_done: bool = True,
     counts_failure: bool = True,
+    event: str | None = None,
 ) -> TaskState:
-    """Validate and persist one transition, its event, and its knock-on effects.
+    """Validate and persist one transition, its event (`task.<action>` unless
+    `event` names it), and its knock-on effects.
 
     `counts_failure=False` evaluates a fail/expire as if no failure had counted, so it
     can never exhaust the attempts (the caller leaves `failures` unchanged)."""
@@ -1189,7 +1267,7 @@ async def _apply(
         actor,
         "task",
         row["id"],
-        f"task.{action}",
+        event or f"task.{action}",
         {"from": old, "to": new, "attempt": row["attempt"], **(data or {})},
     )
     # Decisions that waited on the old state are moot once the task leaves it

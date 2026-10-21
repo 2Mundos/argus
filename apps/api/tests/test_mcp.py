@@ -327,6 +327,31 @@ def test_inbox_journey_tools_match_rest(client: TestClient) -> None:
     assert (tasks["total"], tasks["has_more"]) == (1, False)
 
 
+def test_release_task_over_mcp(client: TestClient) -> None:
+    orchestrator, worker = register(client, "orchestrator"), register(client)
+    task = tool(client, ADMIN_TOKEN, "create_task", title="t", project="global")
+    claimed = tool(client, worker, "claim_task", wait_s=0)["task"]
+    assert (
+        "403"
+        in tool(client, worker, "release_task", task_id=task["id"], reason="x")["error"]
+    )
+    stale = tool(
+        client,
+        orchestrator,
+        "release_task",
+        task_id=task["id"],
+        reason="recycle",
+        attempt=claimed["attempt"] + 1,
+    )
+    assert stale["error"].startswith("409 stale_attempt")
+    released = tool(
+        client, orchestrator, "release_task", task_id=task["id"], reason="recycle"
+    )
+    assert (released["state"], released["failures"]) == ("ready", 0)
+    again = tool(client, orchestrator, "release_task", task_id=task["id"], reason="x")
+    assert again["error"].startswith("409 task_not_claimed")
+
+
 def test_answers_over_mcp_are_safe_to_retry(client: TestClient) -> None:
     orchestrator = register(client, "orchestrator")
     ids = []
@@ -413,6 +438,10 @@ def test_fleet_tools_forward_and_redact(client: TestClient) -> None:
 
     recycled = tool(client, orchestrator, "recycle_instance", instance_id="i-1")
     assert recycled["draining"] is True
+    requeued = tool(
+        client, orchestrator, "recycle_instance", instance_id="i-1", requeue=True
+    )
+    assert requeued["draining"] is True  # nothing claimed: nothing to release
     version = inspected["pool"]["version"]
     assert "error" in tool(
         client, orchestrator, "update_pool", name="web", expected_version=version

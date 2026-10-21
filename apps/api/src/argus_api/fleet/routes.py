@@ -20,6 +20,7 @@ from argus_core.fleet import (
 )
 from fastapi import APIRouter, Path, Query, Request
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
 
 from argus_api.deps import AdminDep, DbDep, ManagerDep, SettingsDep
 from argus_api.errors import DomainError, ForbiddenError
@@ -225,24 +226,50 @@ async def get_instance(instance_id: str, db: DbDep, _: ManagerDep) -> Instance:
         return await service.get_instance(conn, instance_id)
 
 
+class TerminateRequest(BaseModel):
+    requeue: bool = True
+    """Release the tasks its agents hold without counting a failed attempt.
+    False expires them as failures (a worker that keeps breaking on its task)."""
+
+
+class RecycleRequest(BaseModel):
+    requeue: bool = False
+    """Release the tasks its agents hold now (no failed attempt) instead of
+    waiting for them to finish, so the instance stops on the next pass."""
+
+
 @router.post("/instances/{instance_id}/terminate")
-async def terminate_instance(instance_id: str, db: DbDep, caller: AdminDep) -> Instance:
-    """Stop an instance now: its agents end immediately (tasks released); its slot
+async def terminate_instance(
+    instance_id: str,
+    db: DbDep,
+    caller: AdminDep,
+    body: TerminateRequest | None = None,
+) -> Instance:
+    """Stop an instance now: its agents end immediately and the tasks they hold are
+    requeued without counting an attempt (unless `requeue` is false); its slot
     frees once the provider confirms the container is gone."""
+    body = body or TerminateRequest()
     async with db.write() as tx:
         await service.request_termination(
-            tx, instance_id, f"terminated by {caller.actor}"
+            tx, instance_id, caller.actor, requeue=body.requeue
         )
     async with db.read() as conn:
         return await service.get_instance(conn, instance_id)
 
 
 @router.post("/instances/{instance_id}/recycle")
-async def recycle_instance(instance_id: str, db: DbDep, caller: ManagerDep) -> Instance:
-    """Replace a running instance without interrupting work: its agents drain, it
-    stops once none holds a claimed task, and a new one starts in its place."""
+async def recycle_instance(
+    instance_id: str,
+    db: DbDep,
+    caller: ManagerDep,
+    body: RecycleRequest | None = None,
+) -> Instance:
+    """Replace a running instance: its agents drain, it stops once none holds a
+    claimed task, and a new one starts in its place. By default work finishes
+    first; with `requeue` the claimed tasks are released now, no attempt counted."""
+    body = body or RecycleRequest()
     async with db.write() as tx:
-        await service.recycle(tx, instance_id, caller.actor)
+        await service.recycle(tx, instance_id, caller.actor, requeue=body.requeue)
     async with db.read() as conn:
         return await service.get_instance(conn, instance_id)
 
