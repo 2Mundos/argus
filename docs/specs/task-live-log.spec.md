@@ -14,7 +14,8 @@ life for the no-signal indicator of [progress milestones](progress-milestones.sp
 - Not a replacement for the artifacts a worker uploads or for `get_instance_logs`
   (container output of a pool instance).
 - No write tool over MCP; the producers are the NanoClaw channel and
-  `argus-delegate`, which call REST. The delegate/channel client is a follow-up.
+  `argus-delegate`. The delegate has no token: it writes to a relay file and the
+  NanoClaw channel, which holds the token, posts it (3.7).
 - Redaction is best effort; it does not make it safe to print secrets.
 
 # 3. Decisions Made
@@ -107,10 +108,28 @@ clients should send a block in one batch.
 - **No signal** uses the later of `progress_at` and `output_at`; the threshold is
   unchanged (`NO_SIGNAL_MINUTES`, `VITE_NO_SIGNAL_MINUTES`).
 
+## 3.7 Delegate client
+
+- `argus-delegate` runs claude with `--output-format stream-json --verbose` and follows
+  its own stdout file. Events become short lines (assistant text, `▸ Tool arg`,
+  truncated tool results, errors), redacted best effort with the 3.2 patterns, and are
+  batched every ~3 s. After ~30 s of silence it adds `delegate alive, Ns since last
+  output`, so No signal reflects a live process.
+- The batches are appended as JSON lines `{v, task_id, attempt, at, lines}` to
+  `argus-task-log.jsonl` in the agent group directory (beside the model-policy
+  snapshot, no new mount). The file is capped at 8 MiB per run; a relay failure is
+  silent and never fails or slows the run. The token is never in that environment.
+- The channel (`integrations/nanoclaw/argus.ts`) empties the file at task start, polls
+  it every 2 s, keeps only records of its current task and attempt, and posts one batch
+  per poll with `source: "delegate"` (<= 200 lines, 60 KiB). `409` `stale_attempt`,
+  `not_assignee`, `not_claimed` or `401` stop the relay; other `409`, `413`, `422` drop
+  the batch; `429`, `5xx` and network errors back off (2 s doubling to 30 s) and retry.
+  A last poll runs before COMPLETE/FAIL/ASK.
+
 # 4. Open Questions
 
-- The delegate and the channel do not post yet; the contract above is what they build
-  on. Until then the panel shows an empty state.
+- Only the `claude` executor is parsed into readable lines; other executors give
+  keepalive lines only.
 - A per-batch rate limit of one second may be too tight for a very chatty executor;
   the client batches, so it is not expected to matter.
 
