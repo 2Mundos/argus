@@ -21,6 +21,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createFileRelay, RELAY_FILE, startLiveLog } from "./livelog.mjs";
 import { createSink, createTracker, gitHead, waitingInput } from "./milestones.mjs";
 import { loadPolicy, selectModel } from "./model-policy.mjs";
 import { parseUsage, runKey, runKeyHash } from "./usage.mjs";
@@ -318,7 +319,8 @@ export function buildCommand(
         args: [
           "-p",
           "--output-format",
-          "json",
+          "stream-json",
+          "--verbose",
           "--no-session-persistence",
           "--permission-mode",
           readOnly ? "plan" : "acceptEdits",
@@ -816,6 +818,34 @@ async function runAttempt(
   child.stdin.on("error", () => {});
   child.stdin.end(cmd.promptVia === "stdin" ? prompt : "");
 
+  // The live log: readable lines for the host's relay file. No token, no network;
+  // the host (argus.ts) posts them. A failure here never touches the run.
+  let live = null;
+  try {
+    const taskId = snapshot.context?.task_id;
+    const attempt = Number(snapshot.context?.attempt);
+    if (taskId && Number.isSafeInteger(attempt) && attempt >= 1) {
+      const relayFile =
+        e.ARGUS_TASK_LOG_FILE ||
+        path.join(
+          path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
+          RELAY_FILE,
+        );
+      const seconds = (v) => (Number(v) > 0 ? Number(v) * 1000 : undefined);
+      live = startLiveLog({
+        stdoutFile,
+        executor,
+        send: createFileRelay({ file: relayFile, taskId, attempt }),
+        secrets: [e[CUSTOM_KEY_ENV]?.trim()],
+        flushMs: seconds(e.ARGUS_LIVELOG_FLUSH_S),
+        keepaliveMs: seconds(e.ARGUS_LIVELOG_KEEPALIVE_S),
+        intervalMs: seconds(e.ARGUS_LIVELOG_TICK_S),
+      });
+    }
+  } catch {
+    live = null;
+  }
+
   // Milestones come from real state, polled while the executor runs and once after it.
   const sink = createSink({ e, out });
   const pending = [];
@@ -872,6 +902,7 @@ async function runAttempt(
   killTree("SIGKILL"); // grandchildren that outlived the CLI
   fs.closeSync(outFd);
   fs.closeSync(errFd);
+  live?.stop();
   clearInterval(poller);
   await polling;
   await tracker.poll();

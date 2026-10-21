@@ -18,6 +18,6 @@ RUN apt-get update \
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh \
  && command -v uv && uv --version
 COPY --chmod=0755 argus-delegate.mjs /usr/local/bin/argus-delegate
-COPY --chmod=0644 model-policy.mjs model-policy.defaults.json milestones.mjs gitea-api.mjs /usr/local/bin/
+COPY --chmod=0644 model-policy.mjs model-policy.defaults.json milestones.mjs livelog.mjs gitea-api.mjs /usr/local/bin/
 USER node
 LABEL dev.argus.tools-layer="openssh-client rsync python3 uv make argus-delegate model-policy"
