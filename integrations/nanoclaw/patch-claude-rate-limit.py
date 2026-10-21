@@ -25,7 +25,15 @@ def edit(root: Path, path: str, hooks: list[tuple[str, str, str]]) -> None:
     s = p.read_text()
     original = s
     for what, anchor, new in hooks:
+        if what == "import" and "from './claude-rate-limit.js'" in s:
+            continue
         if new in s:
+            continue
+        # harness-usage.ts inserts a line between resultAsError and the rate-limit hook.
+        if (
+            what == "result error"
+            and "claudeRateLimitError(m.result, rateLimited)" in s
+        ):
             continue
         if s.count(anchor) != 1:
             raise SystemExit(f"{p}: {what}: upstream shape changed")

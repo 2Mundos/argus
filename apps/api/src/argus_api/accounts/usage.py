@@ -10,13 +10,16 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 import aiosqlite
-from argus_core import claude_auth, cursor_auth
+from argus_core import codex_auth
 from argus_core.accounts import (
     PERIOD_HOURS,
     AccountUsage,
+    QuotaCollector,
+    QuotaProbe,
     QuotaReport,
     QuotaSource,
     QuotaStatus,
+    QuotaStatusReason,
     QuotaStatusWindow,
     QuotaWindow,
     Usage,
@@ -46,12 +49,14 @@ async def insert_usage(
     role: str | None = None,
     run_key: str | None = None,
     measurement: str = "measured",
+    reason: str | None = None,
 ) -> None:
     """One row per report. A repeated `run_key` for the account adds nothing."""
     await tx.conn.execute(
         "INSERT INTO account_usage (account_id, agent_id, task_id, input_tokens,"
         " output_tokens, cached_input_tokens, cost_usd, model, engine, role, at,"
-        " run_key, measurement) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " run_key, measurement, unmeasured_reason)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         " ON CONFLICT DO NOTHING",
         (
             account_id,
@@ -67,6 +72,7 @@ async def insert_usage(
             ts(tx.now),
             run_key,
             measurement,
+            reason if measurement == "not_reported" else None,
         ),
     )
 
@@ -206,6 +212,21 @@ async def series(
                 acc[k] += v
     async with conn.execute("SELECT DISTINCT account_id FROM account_usage") as cur:
         reported = {r[0] for r in await cur.fetchall()}
+    reasons: dict[str, dict[str, int]] = defaultdict(dict)
+    roles: dict[str, dict[str, int]] = defaultdict(dict)
+    for target, column, only_unmeasured in (
+        (reasons, "unmeasured_reason", True),
+        (roles, "role", False),
+    ):
+        async with conn.execute(
+            f"SELECT account_id, coalesce({column}, 'unknown'), count(*)"  # noqa: S608
+            " FROM account_usage WHERE at >= ? AND at < ?"
+            + (" AND measurement = 'not_reported'" if only_unmeasured else "")
+            + " GROUP BY 1, 2",
+            (ts(start), ts(end)),
+        ) as cur:
+            for account_id, key, n in await cur.fetchall():
+                target[account_id][key] = n
     out = []
     for account_id in account_ids:
         per = sums.get(account_id, {})
@@ -218,6 +239,7 @@ async def series(
                 cost_usd=float(v[3]),
                 runs=int(v[4]),
                 unmeasured_runs=int(v[5]),
+                measured_runs=int(v[4]) - int(v[5]),
             )
             for s in starts
         ]
@@ -232,6 +254,9 @@ async def series(
                     cost_usd=sum(b.cost_usd for b in buckets),
                     runs=sum(b.runs for b in buckets),
                     unmeasured_runs=sum(b.unmeasured_runs for b in buckets),
+                    measured_runs=sum(b.measured_runs for b in buckets),
+                    unmeasured_reasons=reasons.get(account_id, {}),
+                    runs_by_role=roles.get(account_id, {}),
                 ),
                 buckets=buckets,
             )
@@ -241,8 +266,51 @@ async def series(
 
 # -- quota status ---------------------------------------------------------------
 
-# Providers that expose no quota Argus may read, however the account is used.
-_NO_QUOTA_PROVIDERS = frozenset({claude_auth.PROVIDER, cursor_auth.PROVIDER})
+STALE_AFTER = timedelta(hours=1)  # a provider snapshot older than this is stale
+
+_COLLECTORS: dict[str, QuotaCollector] = {
+    "polled": "codex_rate_limits",
+    "reported": "worker_report",
+}
+_PROBE_REASONS: dict[str, QuotaStatusReason] = {
+    "failed": "probe_failed",
+    "skipped": "probe_skipped",
+    "rate_limited": "probe_rate_limited",
+}
+
+
+def snapshot_is_fresh(q: QuotaWindow, now: datetime) -> bool:
+    """Observed recently, and its window has not already reset."""
+    if now - q.observed_at > STALE_AFTER:
+        return False
+    return q.resets_at is None or q.resets_at > now
+
+
+async def record_probe(
+    tx: Tx, account_id: str, status: str, reason: str | None, *, keep: bool = False
+) -> None:
+    """The account's latest probe outcome (one row; `keep`: never replace one)."""
+    on_conflict = (
+        "NOTHING"
+        if keep
+        else "UPDATE SET status = excluded.status, reason = excluded.reason,"
+        " at = excluded.at"
+    )
+    await tx.conn.execute(
+        "INSERT INTO account_quota_probe (account_id, status, reason, at)"  # noqa: S608
+        " SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?)"
+        f" ON CONFLICT (account_id) DO {on_conflict}",
+        (account_id, status, reason[:200] if reason else None, ts(tx.now), account_id),
+    )
+
+
+async def last_probe(conn: aiosqlite.Connection, account_id: str) -> QuotaProbe | None:
+    async with conn.execute(
+        "SELECT status, reason, at FROM account_quota_probe WHERE account_id = ?",
+        (account_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return QuotaProbe.model_validate(dict(row)) if row else None
 
 
 async def quota_status(
@@ -251,10 +319,30 @@ async def quota_status(
     snapshots: list[QuotaWindow],
     now: datetime,
 ) -> QuotaStatus:
-    """Do we know this account's quota? Provider snapshots first, then local
-    estimates against `token_limits`; otherwise unknown with the reason."""
-    if snapshots:
-        return QuotaStatus(state="known")
+    """Do we know this account's quota? Provider snapshots first (`known` when all
+    are fresh, else `stale`), then local estimates against `token_limits`;
+    otherwise unknown, with the first reason that applies: the provider or account
+    kind exposes none, the last probe's outcome, not probed yet. Having no usage
+    rows says nothing about quota."""
+    probe = await last_probe(conn, account["id"])
+    newest = max(snapshots, key=lambda q: q.observed_at) if snapshots else None
+
+    def status(
+        state: Literal["known", "stale", "unknown"],
+        reason: QuotaStatusReason | None = None,
+        windows: list[QuotaStatusWindow] | None = None,
+    ) -> QuotaStatus:
+        return QuotaStatus(
+            state=state,
+            reason=reason,
+            windows=windows or [],
+            observed_at=newest.observed_at if newest else None,
+            collector=_COLLECTORS.get(newest.source) if newest else None,
+            last_probe=probe,
+        )
+
+    if snapshots and all(snapshot_is_fresh(q, now) for q in snapshots):
+        return status("known")
     limits = json.loads(account["token_limits"]) if account["token_limits"] else {}
     if limits:
         windows = []
@@ -279,12 +367,13 @@ async def quota_status(
                     used_percent=min(round(used / limit * 100, 1), 100.0),
                 )
             )
-        return QuotaStatus(state="known", windows=windows)
-    async with conn.execute(
-        "SELECT 1 FROM account_usage WHERE account_id = ? LIMIT 1", (account["id"],)
-    ) as cur:
-        if await cur.fetchone() is None:
-            return QuotaStatus(state="unknown", reason="no_usage_records")
-    if account["kind"] == "api_key" or account["provider"] in _NO_QUOTA_PROVIDERS:
-        return QuotaStatus(state="unknown", reason="provider_does_not_expose")
-    return QuotaStatus(state="unknown", reason="window_not_configured")
+        return status("known", windows=windows)
+    if snapshots:
+        return status("stale")
+    if account["kind"] == "api_key":
+        return status("unknown", "api_key_account")
+    if account["provider"] != codex_auth.PROVIDER:
+        return status("unknown", "unsupported_provider")
+    if probe is not None and probe.status in _PROBE_REASONS:
+        return status("unknown", _PROBE_REASONS[probe.status])
+    return status("unknown", "not_yet_probed")

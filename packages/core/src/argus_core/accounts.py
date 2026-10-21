@@ -226,6 +226,13 @@ class Usage(BaseModel):
     cost_usd: float
     runs: int = 0  # usage reports counted (every row)
     unmeasured_runs: int = 0  # of those, runs whose engine reported no figures
+    # Runs that carried figures. 0 means the tokens above were never measured
+    # (read them as "not measured", not as zero tokens).
+    measured_runs: int = 0
+    # Unmeasured runs by reason code (`unknown` when the reporter gave none).
+    unmeasured_reasons: dict[str, int] = {}
+    # All runs by the lease role that ran them: engine, executor, unknown.
+    runs_by_role: dict[str, int] = {}
 
 
 QuotaSource = Literal["reported", "polled", "estimated"]
@@ -271,15 +278,43 @@ class QuotaStatusWindow(BaseModel):
     source: Literal["estimated"] = "estimated"
 
 
-class QuotaStatus(BaseModel):
-    """Whether Argus knows this account's quota, and if not, why (never a 0/100)."""
+ProbeStatus = Literal["updated", "skipped", "rate_limited", "failed"]
+QuotaCollector = Literal["codex_rate_limits", "worker_report"]
+QuotaStatusReason = Literal[
+    "no_usage_records",
+    "provider_does_not_expose",  # kept valid; new code prefers the two below
+    "window_not_configured",
+    "unsupported_provider",
+    "api_key_account",
+    "not_yet_probed",
+    "probe_failed",
+    "probe_skipped",
+    "probe_rate_limited",
+]
 
-    state: Literal["known", "unknown"]
-    reason: (
-        Literal["no_usage_records", "provider_does_not_expose", "window_not_configured"]
-        | None
-    ) = None
+
+class QuotaProbe(BaseModel):
+    """The latest quota probe of an account (one per account), whatever came of it."""
+
+    status: ProbeStatus
+    reason: str | None = None  # short, never a credential value
+    at: datetime
+
+
+class QuotaStatus(BaseModel):
+    """Whether Argus knows this account's quota, and if not, why (never a 0/100).
+
+    `known`: provider snapshots all fresh, or local estimates against
+    `token_limits`. `stale`: snapshots exist (listed in `quota`) but one was
+    observed over an hour ago or its window has already reset. `unknown`: no
+    figure, with the reason."""
+
+    state: Literal["known", "stale", "unknown"]
+    reason: QuotaStatusReason | None = None
     windows: list[QuotaStatusWindow] = []
+    observed_at: datetime | None = None  # newest provider snapshot
+    collector: QuotaCollector | None = None  # who produced that snapshot
+    last_probe: QuotaProbe | None = None
 
 
 class Account(BaseModel):
@@ -415,6 +450,8 @@ class UsageReport(BaseModel):
     run_key: str | None = Field(default=None, min_length=1, max_length=200)
     # not_reported: the run happened but the engine gave no figures (all null).
     measurement: Literal["measured", "not_reported"] = "measured"
+    # Why nothing was measured (not_reported only), e.g. `no_usage_in_output`.
+    reason: str | None = Field(default=None, pattern=r"^[a-z0-9_]{1,60}$")
 
     @model_validator(mode="after")
     def honest_figures(self) -> "UsageReport":
@@ -426,6 +463,8 @@ class UsageReport(BaseModel):
         )
         if self.measurement == "not_reported" and any(f is not None for f in figures):
             raise ValueError("a not_reported run must not carry tokens or cost")
+        if self.reason is not None and self.measurement != "not_reported":
+            raise ValueError("reason is only allowed with measurement=not_reported")
         if self.measurement == "measured" and all(f is None for f in figures):
             raise ValueError(
                 "a measured run needs tokens or cost; use measurement=not_reported"
@@ -441,6 +480,7 @@ class UsageBucket(BaseModel):
     cost_usd: float
     runs: int
     unmeasured_runs: int = 0
+    measured_runs: int = 0
 
 
 class AccountUsage(BaseModel):
@@ -459,7 +499,7 @@ class UsageSeries(BaseModel):
 
 
 class QuotaRefresh(BaseModel):
-    status: Literal["updated", "skipped", "rate_limited", "failed"]
+    status: ProbeStatus
     reason: str | None = None
     quota: list[QuotaWindow]
 

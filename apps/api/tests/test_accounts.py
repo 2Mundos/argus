@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Generator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -1406,3 +1406,68 @@ def test_lease_requires_a_claim_and_declared_providers_and_exhausted_hides_secre
         ).status_code
         == 401
     )
+
+
+def test_usage_reports_over_http_reason_idempotency_and_lease(
+    client: TestClient,
+) -> None:
+    mine, other = _create(client, "mine"), _create(client, "other")
+    worker = register(client)
+    task = claimed_task(client, worker)
+    leased = client.post(
+        "/api/accounts/lease", json=lease_payload(task, ["acme"]), headers=worker
+    ).json()
+    account_id = leased["account_id"]
+    unleased = other["id"] if account_id == mine["id"] else mine["id"]
+    url = f"/api/accounts/{account_id}/usage"
+    # a reason belongs to a not_reported run only
+    res = client.post(
+        url, json={"input_tokens": 1, "reason": "no_usage_in_output"}, headers=worker
+    )
+    assert res.status_code == 422
+    bad = {"measurement": "not_reported", "reason": "Not Valid"}
+    assert client.post(url, json=bad, headers=worker).status_code == 422
+    body = {
+        "measurement": "not_reported",
+        "reason": "no_usage_in_output",
+        "role": "executor",
+        "run_key": "r1:t:a:e:x:0",
+    }
+    for _ in range(2):  # same key twice: both 204, one row
+        assert client.post(url, json=body, headers=worker).status_code == 204
+    got = client.get(f"/api/accounts/{account_id}", headers=ADMIN).json()
+    total = got["usage_total"]
+    assert (total["runs"], total["unmeasured_runs"], total["measured_runs"]) == (
+        1,
+        1,
+        0,
+    )
+    assert total["unmeasured_reasons"] == {"no_usage_in_output": 1}
+    assert total["runs_by_role"] == {"executor": 1}
+    assert got["quota_status"]["reason"] == "api_key_account"
+    now = datetime.now(UTC)
+    series = client.get(
+        "/api/accounts/usage",
+        params={
+            "from": (now - timedelta(days=1)).isoformat(),
+            "to": (now + timedelta(days=1)).isoformat(),
+            "bucket": "day",
+            "account_id": account_id,
+        },
+        headers=ADMIN,
+    )
+    assert series.status_code == 200
+    totals = series.json()["accounts"][0]["totals"]
+    assert (totals["measured_runs"], totals["unmeasured_reasons"]) == (
+        0,
+        {"no_usage_in_output": 1},
+    )
+    # an account the caller holds no lease on
+    res = client.post(
+        f"/api/accounts/{unleased}/usage",
+        json={"input_tokens": 1},
+        headers=worker,
+    )
+    assert res.status_code == 403
+    client.post("/api/accounts/release", headers=worker)  # no lease at all
+    assert client.post(url, json={"input_tokens": 1}, headers=worker).status_code == 403

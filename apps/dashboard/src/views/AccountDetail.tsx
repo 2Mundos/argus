@@ -4,7 +4,12 @@ import { relative } from "../format";
 import { useLiveData } from "../live";
 import {
   hasModelUsage,
-  tokens,
+  NOT_MEASURED,
+  notMeasured,
+  probeNote,
+  reasonsNote,
+  roleSplit,
+  tokensOrDash,
   totalTokens,
   unmeasuredNote,
   viewerTimeZone,
@@ -89,14 +94,26 @@ export function AccountDetail(props: { account: Account; onClose: () => void }) 
             <p className="muted small">
               The provider's figures, with where they came from and when.
             </p>
-            {(a.quota ?? []).length === 0 ? (
-              <QuotaStatusView status={a.quota_status} />
-            ) : (
+            {(a.quota ?? []).length > 0 && (
               <div className="quota-list">
                 {(a.quota ?? []).map((q) => (
                   <QuotaMeter key={q.window} q={q} />
                 ))}
               </div>
+            )}
+            {a.quota_status.state === "stale" && (
+              <p className="small stale">
+                Stale: the figures above are older than an hour or their window has reset. They are
+                shown for reference only.
+              </p>
+            )}
+            {((a.quota ?? []).length === 0 || (a.quota_status.windows ?? []).length > 0) && (
+              <QuotaStatusView status={a.quota_status} provider={a.provider} />
+            )}
+            {probeNote(a.quota_status.last_probe, relative(a.quota_status.last_probe?.at)) && (
+              <p className="muted small">
+                {probeNote(a.quota_status.last_probe, relative(a.quota_status.last_probe?.at))}
+              </p>
             )}
             {a.provider === "openai" && (
               <p className="small">
@@ -133,19 +150,21 @@ export function AccountDetail(props: { account: Account; onClose: () => void }) 
                 <dl className="stats">
                   <div className="stat">
                     <dt>Total</dt>
-                    <dd className="n">{tokens(totalTokens(usage.totals))}</dd>
+                    <dd className="n">{tokensOrDash(usage.totals, totalTokens(usage.totals))}</dd>
                   </div>
                   <div className="stat">
                     <dt>Input</dt>
-                    <dd className="n">{tokens(usage.totals.input_tokens)}</dd>
+                    <dd className="n">{tokensOrDash(usage.totals, usage.totals.input_tokens)}</dd>
                   </div>
                   <div className="stat">
                     <dt>Cached input</dt>
-                    <dd className="n">{tokens(usage.totals.cached_input_tokens ?? 0)}</dd>
+                    <dd className="n">
+                      {tokensOrDash(usage.totals, usage.totals.cached_input_tokens ?? 0)}
+                    </dd>
                   </div>
                   <div className="stat">
                     <dt>Output</dt>
-                    <dd className="n">{tokens(usage.totals.output_tokens)}</dd>
+                    <dd className="n">{tokensOrDash(usage.totals, usage.totals.output_tokens)}</dd>
                   </div>
                   <div className="stat">
                     <dt>Runs</dt>
@@ -154,14 +173,31 @@ export function AccountDetail(props: { account: Account; onClose: () => void }) 
                   {a.kind === "api_key" && (
                     <div className="stat">
                       <dt>Reported cost</dt>
-                      <dd className="n">${usage.totals.cost_usd.toFixed(2)}</dd>
+                      <dd className="n">
+                        {notMeasured(usage.totals) ? "—" : `$${usage.totals.cost_usd.toFixed(2)}`}
+                      </dd>
                     </div>
                   )}
                 </dl>
-                {unmeasuredNote(usage.totals.unmeasured_runs) && (
+                {roleSplit(usage.totals.runs_by_role) && (
+                  <p className="muted small">Runs: {roleSplit(usage.totals.runs_by_role)}</p>
+                )}
+                {notMeasured(usage.totals) && (
                   <p className="muted small">
-                    {unmeasuredNote(usage.totals.unmeasured_runs)}: the engine gave no figures, so
-                    they are not counted in the tokens above.
+                    {NOT_MEASURED}: no run gave figures
+                    {reasonsNote(usage.totals.unmeasured_reasons)
+                      ? ` (${reasonsNote(usage.totals.unmeasured_reasons)})`
+                      : ""}
+                    . Tokens are shown as — rather than 0.
+                  </p>
+                )}
+                {!notMeasured(usage.totals) && unmeasuredNote(usage.totals.unmeasured_runs) && (
+                  <p className="muted small">
+                    {unmeasuredNote(usage.totals.unmeasured_runs)}
+                    {reasonsNote(usage.totals.unmeasured_reasons)
+                      ? ` (${reasonsNote(usage.totals.unmeasured_reasons)})`
+                      : ""}
+                    : the engine gave no figures, so they are not counted in the tokens above.
                   </p>
                 )}
                 <StackedBars buckets={usage.buckets} bucket={data.bucket} tz={tz} />
