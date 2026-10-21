@@ -88,16 +88,20 @@ describe("checkUsageRecord", () => {
       ),
       "measured_without_figures",
     ],
-    ["unmeasured with figures", record({}, { measurement: "not_reported" }), "unmeasured_with_figures"],
+    [
+      "unmeasured with figures",
+      record({}, { measurement: "not_reported" }),
+      "unmeasured_with_figures",
+    ],
     ["unknown measurement", record({}, { measurement: "guess" }), "bad_measurement"],
   ])("drops %s", (_n, rec, why) => {
     expect(checkUsageRecord(rec, task, held)).toEqual({ ok: false, why });
   });
 
   it("drops a record when no account is held for the role", () => {
-    expect(checkUsageRecord(record({ role: "engine" }), task, { engine: null, executor: null })).toEqual(
-      { ok: false, why: "no_account_held" },
-    );
+    expect(
+      checkUsageRecord(record({ role: "engine" }), task, { engine: null, executor: null }),
+    ).toEqual({ ok: false, why: "no_account_held" });
   });
 
   it("keeps an unmeasured run with its reason and never turns a missing figure into 0", () => {
@@ -123,7 +127,14 @@ describe("checkUsageRecord", () => {
     const noReason = checkUsageRecord(
       record(
         {},
-        { measurement: "not_reported", reason: "Bad Reason!", input_tokens: null, output_tokens: null, cached_input_tokens: null, cost_usd: null },
+        {
+          measurement: "not_reported",
+          reason: "Bad Reason!",
+          input_tokens: null,
+          output_tokens: null,
+          cached_input_tokens: null,
+          cost_usd: null,
+        },
       ),
       task,
       held,

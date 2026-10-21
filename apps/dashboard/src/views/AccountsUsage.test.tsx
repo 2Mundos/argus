@@ -247,9 +247,7 @@ describe("accounts usage", () => {
     expect(within(stale).getByText("60% left")).toBeTruthy();
     expect(within(stale).getByText(/stale, observed/)).toBeTruthy();
     const claude = screen.getByText("claude-sub").closest("tr") as HTMLElement;
-    expect(
-      within(claude).getByText("Claude does not expose a quota Argus can read"),
-    ).toBeTruthy();
+    expect(within(claude).getByText("Claude does not expose a quota Argus can read")).toBeTruthy();
     const failed = screen.getByText("codex-failed").closest("tr") as HTMLElement;
     const why = within(failed).getByText("The last quota read failed");
     expect(why.getAttribute("title")).toMatch(/Last read failed \(TimeoutError\)/);

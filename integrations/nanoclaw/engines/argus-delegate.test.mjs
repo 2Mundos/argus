@@ -848,18 +848,15 @@ test("usage: the report carries parsed usage and a run_key, and a spool file is 
     .map((l) => JSON.parse(l));
   assert.equal(rest.length, 0);
   const { payload: queuedPayload, ...envelope } = queued;
-  assert.deepEqual(
-    envelope,
-    {
-      v: 1,
-      kind: "usage",
-      source: "delegate",
-      role: "executor",
-      task_id: "t1",
-      attempt: 1,
-      account_id: "acc-9",
-    },
-  );
+  assert.deepEqual(envelope, {
+    v: 1,
+    kind: "usage",
+    source: "delegate",
+    role: "executor",
+    task_id: "t1",
+    attempt: 1,
+    account_id: "acc-9",
+  });
   assert.equal(queuedPayload.run_key, report.run_key);
   assert.equal(queuedPayload.measurement, "measured");
   const spool = JSON.parse(fs.readFileSync(report.usage_spool, "utf8"));

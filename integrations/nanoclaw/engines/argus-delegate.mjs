@@ -31,13 +31,7 @@ import { anthropicRedirectRejection, LOCAL_HARNESS_AUTH_TOKEN } from "./anthropi
 import { createFileRelay, envSecrets, RELAY_FILE, startLiveLog } from "./livelog.mjs";
 import { createSink, createTracker, gitHead, waitingInput } from "./milestones.mjs";
 import { implementationScope, loadPolicy, selectModel } from "./model-policy.mjs";
-import {
-  appendUsageRecord,
-  parseUsage,
-  runKey,
-  runKeyHash,
-  USAGE_RELAY_FILE,
-} from "./usage.mjs";
+import { appendUsageRecord, parseUsage, runKey, runKeyHash, USAGE_RELAY_FILE } from "./usage.mjs";
 
 export const EXECUTORS = ["claude", "codex", "opencode", "agent"];
 const KILL_GRACE_MS = 5000;
