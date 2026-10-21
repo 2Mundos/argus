@@ -20,7 +20,7 @@ async def ensure(db: Database, data_dir: Path, preset: str | None = None):
 
 async def whoami(db: Database, token: str) -> auth.Identity:
     async with db.read() as conn:
-        return await auth.authenticate(conn, token)
+        return await auth.authenticate(conn, token, now=db.now())
 
 
 # -- admin token bootstrap ----------------------------------------------------------

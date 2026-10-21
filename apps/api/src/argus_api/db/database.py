@@ -162,6 +162,10 @@ class Database:
         for event in (*tx.events, *tx.transient):
             self.bus.publish(event)
 
+    def now(self) -> datetime:
+        """The same clock write transactions use (`tx.now`)."""
+        return self._clock()
+
     def write_held_for(self) -> float:
         """Seconds the current write transaction has held the writer (0 if free).
 

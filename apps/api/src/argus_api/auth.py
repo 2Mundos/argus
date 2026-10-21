@@ -38,7 +38,12 @@ class Identity:
         return f"admin:{self.label or self.token_id[:8]}"
 
 
-async def authenticate(conn: aiosqlite.Connection, token: str) -> Identity:
+async def authenticate(
+    conn: aiosqlite.Connection,
+    token: str,
+    *,
+    now: datetime | None = None,
+) -> Identity:
     """Resolve an agent or admin token. Bootstrap, revoked, unknown tokens, and
     tokens of agents that have ended, all fail."""
     async with conn.execute(
@@ -55,7 +60,8 @@ async def authenticate(conn: aiosqlite.Connection, token: str) -> Identity:
         expires = datetime.fromisoformat(row["expires_at"])
         if expires.tzinfo is None:
             expires = expires.replace(tzinfo=UTC)
-        if expires <= datetime.now(UTC):
+        current = now if now is not None else datetime.now(UTC)
+        if expires <= current:
             raise UnauthorizedError("token expired", code="token_expired")
     return Identity(row["id"], Scope(row["role"]), row["agent_id"], row["label"])
 

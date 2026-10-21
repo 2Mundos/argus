@@ -96,7 +96,7 @@ async def _list_tools_for_caller(
         if scheme.lower() != "bearer" or not token:
             raise UnauthorizedError("missing bearer token")
         async with _app.state.db.read() as conn:
-            scope = (await authenticate(conn, token)).scope
+            scope = (await authenticate(conn, token, now=_app.state.db.now())).scope
     except UnauthorizedError as exc:
         raise MCPError(INVALID_REQUEST, f"401 unauthorized: {exc}") from exc
     tools = [t for t in result["tools"] if scope in audiences[t["name"]]]
