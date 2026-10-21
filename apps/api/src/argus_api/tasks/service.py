@@ -3,6 +3,7 @@
 See docs/specs/worker-lifecycle.spec.md 3.2 and 3.3.
 """
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from argus_core.agents import LIVE, AgentState
 from argus_core.auth import Scope
 from argus_core.decisions import Audience, DecisionKind
 from argus_core.kinds import TaskKind
+from argus_core.task_edit import CLEARABLE, TaskAttempt, TaskChanges, editable_fields
 from argus_core.tasks import (
     TERMINAL,
     Action,
@@ -30,6 +32,7 @@ from argus_core.tasks import (
     transition,
     validate_milestone,
 )
+from pydantic import ValidationError
 
 from argus_api.accounts.usage import insert_usage
 from argus_api.db import Tx, ts
@@ -234,7 +237,9 @@ async def claim(
         },
         data={"attempt": attempt, "agent_id": agent_id},
     )
-    return await get_task(tx.conn, row["id"])
+    task = await get_task(tx.conn, row["id"])
+    await _snapshot_attempt(tx, task, agent_id)
+    return task
 
 
 async def awaiting_quota(conn: aiosqlite.Connection) -> bool:
@@ -612,7 +617,42 @@ _DEPS_EDITABLE = (S.PENDING, S.AWAITING_APPROVAL, S.READY)
 async def set_dependencies(
     tx: Tx, task_id: str, depends_on: list[str], expected_version: str, actor: str
 ) -> Task:
-    """Replace a waiting task's dependencies (task dependencies 3.1)."""
+    """Replace a waiting task's dependencies (task dependencies 3.1): an edit of
+    `depends_on` alone, which keeps its own code for a task that is not waiting."""
+    return await edit_task(
+        tx,
+        task_id,
+        TaskChanges(depends_on=depends_on),
+        expected_version,
+        actor,
+        state_code="task_not_waiting",
+    )
+
+
+async def edit_task(
+    tx: Tx,
+    task_id: str,
+    changes: TaskChanges,
+    expected_version: str,
+    actor: str,
+    *,
+    state_code: str = "task_not_editable",
+) -> Task:
+    """Edit a task's definition (task edit spec). The one path for REST, MCP and
+    the dashboard: every check runs before the first write, so a refused edit
+    leaves the task as it was."""
+    if unknown := changes.unknown():
+        raise ValidationFailedError(
+            "these fields cannot be edited: " + ", ".join(unknown),
+            code="immutable_field",
+            details=unknown,
+        )
+    given = changes.given()
+    if not given:
+        raise ValidationFailedError(
+            "nothing to change: name at least one field",
+            details=["changes: nothing to change"],
+        )
     row = await _row(tx.conn, task_id)
     if row["updated_at"] != expected_version:
         raise ConflictError(
@@ -622,13 +662,166 @@ async def set_dependencies(
             details=[row["updated_at"]],
         )
     state = S(row["state"])
-    if state not in _DEPS_EDITABLE:
+    allowed = editable_fields(state, archived=row["archived_at"] is not None)
+    if rejected := [f for f in given if f not in allowed]:
         raise ConflictError(
-            f"task {task_id} is {state}; dependencies change only while it waits"
-            " (pending, awaiting_approval or ready)",
-            code="task_not_waiting",
+            f"task {task_id} is {state}{' (archived)' if row['archived_at'] else ''};"
+            f" {', '.join(rejected)} cannot be edited now",
+            code=state_code,
+            details=[
+                f"state: {state}",
+                f"not editable: {', '.join(rejected)}",
+                f"editable: {', '.join(allowed) or 'none'}",
+            ],
         )
-    deps = sorted(set(depends_on))
+    current = await get_task(tx.conn, task_id)
+    new = _normalized_edit(row, given)
+    changed = {f: v for f, v in new.items() if v != getattr(current, f)}
+    if not changed:
+        return current  # nothing differs: no write, same version
+
+    deps = changed.get("depends_on")
+    dep_states: dict[str, TaskState] = {}
+    if deps is not None:
+        dep_states = await _check_dependencies(tx.conn, task_id, deps)
+    if (pins := changed.get("knowledge")) is not None:
+        await _check_new_pins(
+            tx.conn, row["project"], [p for p in pins if p not in current.knowledge]
+        )
+
+    sets: dict[str, Any] = {
+        f: json.dumps(v) if f in _JSON_FIELDS else v
+        for f, v in changed.items()
+        if f not in ("knowledge", "depends_on")
+    }
+    if sets:
+        assignments = ", ".join(f"{k} = ?" for k in sets)
+        await tx.conn.execute(
+            f"UPDATE tasks SET {assignments} WHERE id = ?",  # noqa: S608 - keys are code-controlled
+            (*sets.values(), task_id),
+        )
+    if pins is not None:
+        await tx.conn.execute(
+            "DELETE FROM task_knowledge WHERE task_id = ?", (task_id,)
+        )
+        await tx.conn.executemany(
+            "INSERT INTO task_knowledge (task_id, page_id) VALUES (?, ?)",
+            [(task_id, p) for p in pins],
+        )
+    if deps is not None:
+        await tx.conn.execute("DELETE FROM task_deps WHERE task_id = ?", (task_id,))
+        await tx.conn.executemany(
+            "INSERT INTO task_deps (task_id, depends_on_id) VALUES (?, ?)",
+            [(task_id, d) for d in deps],
+        )
+        added = sorted(set(deps) - set(current.depends_on))
+        await record(
+            tx,
+            actor,
+            "task",
+            task_id,
+            "task.dependencies_changed",
+            {"added": added, "removed": sorted(set(current.depends_on) - set(deps))},
+        )
+        for dep in added:
+            if dep_states[dep] in (S.FAILED, S.CANCELLED):
+                await _dependency_failed_event(tx, task_id, dep, dep_states[dep])
+        deps_done = all(s is S.SUCCEEDED for s in dep_states.values())
+        if state is S.READY and not deps_done:
+            await _apply(tx, row, Action.DEPS_ADDED, actor)
+        elif state is S.PENDING and deps_done:
+            await _apply(tx, row, Action.DEPS_SATISFIED, actor)
+    # A version that did not move would let a stale editor through, so it only grows.
+    version = ts(max(tx.now, datetime.fromisoformat(row["updated_at"]) + _TICK))
+    await tx.conn.execute(
+        "UPDATE tasks SET updated_at = ? WHERE id = ?", (version, task_id)
+    )
+    await record(
+        tx,
+        actor,
+        "task",
+        task_id,
+        "task.edited",
+        {
+            "from_version": row["updated_at"],
+            "to_version": version,
+            "changes": {
+                f: _diff(f, getattr(current, f), v) for f, v in changed.items()
+            },
+        },
+    )
+    return await get_task(tx.conn, task_id)
+
+
+_TICK = timedelta(microseconds=1)
+
+
+def _normalized_edit(row: aiosqlite.Row, given: dict[str, Any]) -> dict[str, Any]:
+    """The values an edit would store, checked with the creation rules: a clear
+    becomes the empty value, lists are de-duplicated as at creation."""
+    errors: list[str] = []
+    values: dict[str, Any] = {}
+    for field, value in given.items():
+        if value is None:
+            if field not in CLEARABLE:
+                errors.append(f"{field}: cannot be cleared")
+                continue
+            values[field] = "" if field == "spec" else []
+        else:
+            values[field] = value
+    if "required_capabilities" in values:
+        values["required_capabilities"] = sorted(set(values["required_capabilities"]))
+    if "knowledge" in values:
+        values["knowledge"] = list(dict.fromkeys(values["knowledge"]))
+    if "depends_on" in values:
+        values["depends_on"] = sorted(set(values["depends_on"]))
+    try:
+        TaskCreate.model_validate(
+            {"project": row["project"], "kind": row["kind"], "title": row["title"]}
+            | values
+        )
+    except ValidationError as exc:
+        errors += [
+            f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
+            for e in exc.errors(include_input=False, include_url=False)
+            if e["loc"] and e["loc"][0] in values
+        ]
+    if errors:
+        raise ValidationFailedError(
+            "invalid values: " + "; ".join(errors), details=errors
+        )
+    return values
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def _diff(field: str, old: Any, new: Any) -> dict[str, Any]:
+    """What the audit keeps of one change. Spec and acceptance text never enter the
+    event log (it is streamed and shown): only sizes and digests do."""
+    if field in ("title", "priority"):
+        return {"from": old, "to": new}
+    if field in ("required_capabilities", "knowledge", "depends_on"):
+        return {
+            "added": sorted(set(new) - set(old)),
+            "removed": sorted(set(old) - set(new)),
+        }
+    texts = (old, new) if field == "spec" else (json.dumps(old), json.dumps(new))
+    sizes = (len(old), len(new))
+    return {
+        "from_size": sizes[0],
+        "to_size": sizes[1],
+        "from_sha256": _digest(texts[0]),
+        "to_sha256": _digest(texts[1]),
+    }
+
+
+async def _check_dependencies(
+    conn: aiosqlite.Connection, task_id: str, deps: list[str]
+) -> dict[str, TaskState]:
+    """The rules for a task's dependencies (task dependencies 3.1); returns the
+    state of each. Raises before anything is written."""
     if len(deps) > MAX_DEPENDENCIES:
         raise ValidationFailedError(f"at most {MAX_DEPENDENCIES} dependencies")
     if task_id in deps:
@@ -637,43 +830,82 @@ async def set_dependencies(
             code="dependency_cycle",
             details=[task_id, task_id],
         )
-    dep_states = await _states(tx.conn, deps)
-    if missing := set(deps) - dep_states.keys():
-        raise NotFoundError(f"dependency not found: {', '.join(sorted(missing))}")
-    if cycle := await _path_back(tx.conn, deps, task_id):
+    dep_states = await _states(conn, deps)
+    if missing := sorted(set(deps) - dep_states.keys()):
+        raise NotFoundError(
+            f"dependency not found: {', '.join(missing)}",
+            details=[f"depends_on: {m}" for m in missing],
+        )
+    if cycle := await _path_back(conn, deps, task_id):
         raise ValidationFailedError(
             "these dependencies would close a cycle: " + " -> ".join(cycle),
             code="dependency_cycle",
             details=cycle,
         )
+    return dep_states
 
-    old = await _deps(tx.conn, task_id)
-    await tx.conn.execute("DELETE FROM task_deps WHERE task_id = ?", (task_id,))
-    await tx.conn.executemany(
-        "INSERT INTO task_deps (task_id, depends_on_id) VALUES (?, ?)",
-        [(task_id, d) for d in deps],
-    )
+
+async def _check_new_pins(
+    conn: aiosqlite.Connection, project: str, added: list[str]
+) -> None:
+    """Pages an edit adds must exist and belong to the task's project or `global`."""
+    if not added:
+        return
+    await _check_pages_exist(conn, added)
+    marks = ",".join("?" * len(added))
+    async with conn.execute(
+        f"SELECT id FROM knowledge_pages WHERE id IN ({marks})"  # noqa: S608
+        " AND project NOT IN (?, 'global')",
+        [*added, project],
+    ) as cur:
+        foreign = sorted(r[0] for r in await cur.fetchall())
+    if foreign:
+        raise ValidationFailedError(
+            f"pages of another project cannot be pinned: {', '.join(foreign)}",
+            details=[f"knowledge: {p}: not in {project} or global" for p in foreign],
+        )
+
+
+async def _snapshot_attempt(tx: Tx, task: Task, agent_id: str) -> None:
+    """Keep the definition this attempt was handed (task edit 3.5)."""
+    definition = {
+        f: getattr(task, f)
+        for f in (
+            "kind",
+            "project",
+            "title",
+            "spec",
+            "acceptance",
+            "priority",
+            "required_capabilities",
+            "knowledge",
+            "depends_on",
+        )
+    }
     await tx.conn.execute(
-        "UPDATE tasks SET updated_at = ? WHERE id = ?", (ts(tx.now), task_id)
+        "INSERT INTO task_attempts (task_id, attempt, agent_id, claimed_at, definition)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (task.id, task.attempt, agent_id, ts(tx.now), json.dumps(definition)),
     )
-    added = sorted(set(deps) - set(old))
-    await record(
-        tx,
-        actor,
-        "task",
-        task_id,
-        "task.dependencies_changed",
-        {"added": added, "removed": sorted(set(old) - set(deps))},
-    )
-    for dep in added:
-        if dep_states[dep] in (S.FAILED, S.CANCELLED):
-            await _dependency_failed_event(tx, task_id, dep, dep_states[dep])
-    deps_done = all(s is S.SUCCEEDED for s in dep_states.values())
-    if state is S.READY and not deps_done:
-        await _apply(tx, row, Action.DEPS_ADDED, actor)
-    elif state is S.PENDING and deps_done:
-        await _apply(tx, row, Action.DEPS_SATISFIED, actor)
-    return await get_task(tx.conn, task_id)
+
+
+async def attempt_definitions(
+    conn: aiosqlite.Connection, task_id: str
+) -> list[TaskAttempt]:
+    """The definition of every attempt, oldest first."""
+    await _row(conn, task_id)
+    async with conn.execute(
+        "SELECT * FROM task_attempts WHERE task_id = ? ORDER BY id", (task_id,)
+    ) as cur:
+        return [
+            TaskAttempt(
+                attempt=r["attempt"],
+                agent_id=r["agent_id"],
+                claimed_at=r["claimed_at"],
+                definition=json.loads(r["definition"]),
+            )
+            for r in await cur.fetchall()
+        ]
 
 
 async def _path_back(
@@ -912,7 +1144,9 @@ async def _apply(
         deps_done=deps_done,
     )
     new = transition(old, action, ctx)
-    fields: dict[str, Any] = {"state": new, "updated_at": ts(tx.now), **(set_ or {})}
+    # strictly greater than the old version, so a transition always stales a pending edit
+    bumped = ts(max(tx.now, datetime.fromisoformat(row["updated_at"]) + _TICK))
+    fields: dict[str, Any] = {"state": new, "updated_at": bumped, **(set_ or {})}
     if old is S.CLAIMED and new is not S.CLAIMED:
         fields |= {
             "assignee_agent_id": None,
@@ -1045,9 +1279,16 @@ async def _check_project_and_pins(conn: aiosqlite.Connection, body: TaskCreate) 
                     f"unknown project: {body.project}", code="unknown_project"
                 )
     if body.knowledge:
-        found = set((await _states_of(conn, "knowledge_pages", body.knowledge)).keys())
-        if missing := sorted(set(body.knowledge) - found):
-            raise NotFoundError(f"knowledge page not found: {', '.join(missing)}")
+        await _check_pages_exist(conn, body.knowledge)
+
+
+async def _check_pages_exist(conn: aiosqlite.Connection, pages: list[str]) -> None:
+    found = set((await _states_of(conn, "knowledge_pages", pages)).keys())
+    if missing := sorted(set(pages) - found):
+        raise NotFoundError(
+            f"knowledge page not found: {', '.join(missing)}",
+            details=[f"knowledge: {m}" for m in missing],
+        )
 
 
 async def _states_of(
@@ -1149,6 +1390,10 @@ async def _to_task(conn: aiosqlite.Connection, row: aiosqlite.Row) -> Task:
     if data["progress_data"] is not None:
         data["progress_data"] = json.loads(data["progress_data"])
     data["requires_approval"] = bool(data["requires_approval"])
+    data["version"] = row["updated_at"]
+    data["editable_fields"] = editable_fields(
+        S(row["state"]), archived=row["archived_at"] is not None
+    )
     data["depends_on"] = await _deps(conn, row["id"])
     data["refill_at"] = await _refill_at(conn, row)
     data["serving_account"] = await _serving_account(conn, row)

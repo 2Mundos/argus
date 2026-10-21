@@ -15,6 +15,7 @@ from typing import Annotated, Any, Literal
 
 import httpx2 as httpx
 from argus_core.auth import Scope
+from argus_core.task_edit import TaskChanges
 from fastapi import FastAPI
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import Context, MCPServer
@@ -45,7 +46,8 @@ As an orchestrator, work the inbox: get_inbox lists what waits (blocked, in revi
 awaiting approval) with decision and artifact ids; list_decisions(view="detail") or
 get_decision reads the questions; list_artifacts, verify_artifact and read_artifact
 check evidence; answer_decision or answer_decisions acts (give each answer a
-request_id, so retries are safe); get_tasks(ids) reads the effects back. Lists
+request_id, so retries are safe); get_tasks(ids) reads the effects back. edit_task changes a task's title, spec,
+acceptance, priority, capabilities, pins or dependencies (pass its `version`). Lists
 are paged: `total` counts every match, follow `next_cursor` while `has_more`. If a
 tool you need is missing, say which and stop; do not script REST around it.
 
@@ -672,6 +674,30 @@ async def list_tasks(
             "view": view,
             "limit": limit,
             "cursor": cursor,
+        },
+    )
+
+
+@tool(MANAGERS)
+async def edit_task(
+    ctx: Context, task_id: str, expected_version: str, changes: TaskChanges
+) -> dict:
+    """Edit a task's definition: title, spec, acceptance, priority,
+    required_capabilities, knowledge (pinned page ids) and depends_on. `changes` is
+    a partial patch: a field you leave out is kept, null clears spec, acceptance,
+    required_capabilities, knowledge or depends_on. Pass the task's `version` as
+    expected_version (409 stale_version carries the current one). The task's
+    `editable_fields` says what its state allows: ready, pending and
+    awaiting_approval tasks take everything; blocked, claimed and in_review only
+    priority; finished ones nothing (409 task_not_editable). Returns the task with
+    its new `version`. Nothing is written when any field is refused."""
+    return await _call(
+        ctx,
+        "PATCH",
+        f"/tasks/{task_id}",
+        json={
+            "expected_version": expected_version,
+            "changes": changes.model_dump(exclude_unset=True),
         },
     )
 
