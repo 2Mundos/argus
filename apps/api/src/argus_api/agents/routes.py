@@ -1,3 +1,4 @@
+from collections import Counter
 from datetime import datetime
 
 from argus_core.agents import (
@@ -7,11 +8,13 @@ from argus_core.agents import (
     AgentState,
     BootstrapTokenCreate,
 )
+from argus_core.model_trace import Execution, LayerModels
 from fastapi import APIRouter, status
 from pydantic import BaseModel
 
 from argus_api.agents import service
 from argus_api.deps import AdminDep, AgentDep, CallerDep, DbDep, ManagerDep
+from argus_api.modeltrace import service as modeltrace
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -117,6 +120,27 @@ async def leave(db: DbDep, agent_id: AgentDep) -> Agent:
 async def get_agent(agent_id: str, db: DbDep, _: CallerDep) -> Agent:
     async with db.read() as conn:
         return await service.get_agent(conn, agent_id)
+
+
+class AgentModels(BaseModel):
+    """What the worker ran lately: its latest run per layer and its history, each
+    with its evidence. `current` is the latest recorded run, not a live claim."""
+
+    agent_id: str
+    current: dict[str, LayerModels]
+    history: list[Execution]
+
+
+@router.get("/{agent_id}/models")
+async def get_agent_models(agent_id: str, db: DbDep, _: CallerDep) -> AgentModels:
+    async with db.read() as conn:
+        await service.get_agent(conn, agent_id)
+        history = await modeltrace.agent_history(conn, agent_id)
+    counts = Counter(run.layer for run in history)
+    current: dict[str, LayerModels] = {}
+    for run in reversed(history):  # oldest first: the last one per layer wins
+        current[run.layer] = modeltrace.layer_models(run, counts[run.layer])
+    return AgentModels(agent_id=agent_id, current=current, history=history)
 
 
 @router.post("/{agent_id}/drain")

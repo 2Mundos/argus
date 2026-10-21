@@ -72,6 +72,8 @@ every new dependency is judged against it.
   provider account: reported usage, Codex quota probe, Cursor pools, charts
 - [Cost view](specs/cost-view.spec.md) — the Custo tab: tokens and estimated cost
   per project and account over 24h/7d/30d, price table, unpriced models
+- [Model observability](specs/model-observability.spec.md) — which model ran in the
+  harness and delegate layers, with evidence, and the routing/fallback timeline
 - [MCP operations](specs/mcp-operations.spec.md) — inbox and fleet journeys over
   MCP with compact, paged responses; REST/MCP coverage audit
 - [Worker read scope](specs/worker-read-scope.spec.md) — workers may only read

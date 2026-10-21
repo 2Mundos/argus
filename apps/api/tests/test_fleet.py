@@ -426,6 +426,9 @@ async def test_nanoclaw_runtime_spec(
         ("/var/run/docker.sock", "/var/run/docker.sock", "rw"),
     ]
     assert spec.mounts[1].create_owner == "1000:1000"
+    assert spec.cap_drop == ["ALL"] and spec.read_only is True
+    assert "no-new-privileges:true" in spec.security_opt
+    assert spec.pids_limit == 4096
     assert spec.env["CONTAINER_IMAGE"] == "nanoclaw-agent:1"
     # Selection is global by account priority: no provider list reaches the worker.
     assert "ARGUS_ACCOUNT_PROVIDERS" not in spec.env
@@ -663,6 +666,7 @@ def test_sandboxed_nanoclaw_has_no_docker_socket() -> None:
     from datetime import UTC, datetime
 
     from argus_api.fleet.runtimes import container_spec
+    from argus_api.fleet.targets import SANDBOX_TMPFS
     from argus_core.fleet import Pool
 
     now = datetime.now(UTC)
@@ -685,8 +689,51 @@ def test_sandboxed_nanoclaw_has_no_docker_socket() -> None:
     ]
     assert spec.env["ARGUS_NANOCLAW_INNER_DOCKER"] == "1"
     assert spec.user is None and spec.group_add == []
+    assert spec.cap_drop == ["ALL"]
+    assert "no-new-privileges:true" in spec.security_opt
+    assert spec.read_only is True
+    assert spec.pids_limit == 4096
+    assert spec.tmpfs == SANDBOX_TMPFS
 
 
 def test_sandboxed_nanoclaw_runs_as_root_in_its_sandbox() -> None:
     with pytest.raises(ValueError, match=r"docker\.runtime"):
         _sandboxed_pool(user="1000:1000")
+
+
+def test_sandboxed_nanoclaw_rejects_docker_socket() -> None:
+    with pytest.raises(ValueError, match=r"docker\.runtime.*docker_socket"):
+        _sandboxed_pool(docker_socket="/var/run/docker.sock")
+
+
+async def test_nanoclaw_runtime_spec_is_hardened(
+    db: Database, registry: TargetRegistry, target: FakeTarget
+) -> None:
+    from argus_api.fleet.targets import RUNTIME_TMPFS
+    from argus_core.fleet import NanoclawOptions
+
+    async with db.write() as tx:
+        await fleet.upsert_pool(
+            tx,
+            "web",
+            PoolUpsert(
+                runtime="nanoclaw",
+                image="argus-nanoclaw-host:dev",
+                desired_replicas=1,
+                max_replicas=2,
+                nanoclaw=NanoclawOptions(
+                    install_dir="/opt/nanoclaw",
+                    instances_root="/srv/nc-i",
+                    agent_image="nanoclaw-agent:1",
+                    user="1000:1000",
+                ),
+            ),
+            "admin:test",
+        )
+    await tick(db, registry)
+    [spec] = target.specs.values()
+    assert spec.cap_drop == ["ALL"]
+    assert spec.security_opt == ["no-new-privileges:true"]
+    assert spec.read_only is True
+    assert spec.pids_limit == 4096
+    assert spec.tmpfs == RUNTIME_TMPFS
