@@ -11,6 +11,21 @@ set -eu
 INSTALL="${ARGUS_NANOCLAW_INSTALL_DIR:?}"
 WORK="${ARGUS_NANOCLAW_INSTANCES_ROOT:?}/${ARGUS_INSTANCE_ID:?}"
 
+# Absolute path only; reject quotes/newlines so nothing is interpolated into node.
+case "$INSTALL" in
+  /*) ;;
+  *)
+    echo "ARGUS_NANOCLAW_INSTALL_DIR must be an absolute path" >&2
+    exit 78
+    ;;
+esac
+case "$INSTALL" in
+  *\'* | *\"* | *$'\n'* | *$'\r'*)
+    echo "ARGUS_NANOCLAW_INSTALL_DIR must not contain quotes or newlines" >&2
+    exit 78
+    ;;
+esac
+
 [ -f "$INSTALL/dist/index.js" ] || {
   echo "no built NanoClaw at $INSTALL (run: pnpm install && pnpm run build there)" >&2
   exit 78
@@ -77,7 +92,7 @@ cd "$WORK"
 # overwrite one, so a later code upgrade still trips it as NanoClaw intends.
 # No .git here, so commit/tree are 'unknown' (the documented no-git case).
 if [ ! -e data/upgrade-state.json ]; then
-  version="$(node -p "require('$INSTALL/package.json').version")"
+  version="$(node -e 'process.stdout.write(require(process.argv[1]).version)' "$INSTALL/package.json")"
   printf '{"version":"%s","commit":"unknown","tree":"unknown","updatedAt":"%s","via":"argus-runtime"}\n' \
     "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > data/upgrade-state.json
 fi
