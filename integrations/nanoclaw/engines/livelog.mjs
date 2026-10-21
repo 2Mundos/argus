@@ -18,12 +18,13 @@ const ARG_MAX = 120;
 const RESULT_MAX = 200;
 
 const MASK = "[redacted]";
-// Every open-ended run is bounded so the work stays linear in the input (no ReDoS).
+// Linear in the input (no ReDoS): a rule starts only where its run starts (a lookbehind,
+// or a literal keyword), so no two starts rescan the same run.
 const PATTERNS = [
   /-----BEGIN [A-Z ]{0,32}PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]{0,32}PRIVATE KEY-----|$)/g,
   /\b(?:authorization|proxy-authorization)\s*[:=]\s*\S+(?:[ \t]+\S+)?/gi,
   /\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
-  /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*/g,
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*/g,
   /\bsk-[A-Za-z0-9_-]{16,}/g,
   /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}/g,
   /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
@@ -31,10 +32,10 @@ const PATTERNS = [
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
   /\bAIza[A-Za-z0-9_-]{30,}/g,
-  /(\b[a-z][a-z0-9+.-]{0,16}:\/\/[^\s/:@]{1,256}:)[^\s/@]{1,256}(?=@)/gi,
-  // NAME=value, name: value, "name": "value" for secret-looking names
-  /(\b[\w.-]{0,64}(?:token|secret|password|passwd|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credentials?)["']?\s*[:=]\s*["']?)[^\s"',;]+/gi,
-  /(--[\w-]{0,64}(?:token|secret|password|api-key)[\w-]{0,64}[ =])\S+/gi,
+  /(\b[a-z][a-z0-9+.-]{0,16}:\/\/[^\s/:@]+:)[^\s/@]+(?=@)/gi,
+  // NAME=value, name: value, "name": "value" for secret-looking names (any prefix)
+  /((?:token|secret|password|passwd|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credentials?)["']?\s*[:=]\s*["']?)[^\s"',;]+/gi,
+  /(?<![\w-])(\w*--(?=[\w-]*?(?:token|secret|password|api-key))[\w-]*[ =])\S+/gi,
 ];
 
 /** Values of secret-looking variables (`*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*`), to mask exactly. */

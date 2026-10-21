@@ -70,7 +70,16 @@ def test_redaction_is_idempotent() -> None:
         "bearer " * 9_000,
         "eyJ" + "a" * 64_000,
         "authorization:" + " " * 64_000,
+        "-eyJ" * 30_000,
+        "eyJ" + "a." * 60_000,
+        "eyJaaaaaaaa." * 12_000,
+        "a" * 120_000 + "token",
+        "token" * 24_000,
+        "--" + "token" * 24_000,
+        "-" * 120_000,
+        "x://" + "a" * 120_000,
     ],
+    ids=lambda text: f"{text[:12]}…{len(text)}",
 )
 def test_worst_case_input_stays_linear(text: str) -> None:
     started = time.perf_counter()
@@ -78,9 +87,19 @@ def test_worst_case_input_stays_linear(text: str) -> None:
     assert time.perf_counter() - started < 1.0
 
 
-def test_bounded_names_still_mask_ordinary_long_names() -> None:
-    name = "MY_" + "X" * 50 + "_TOKEN"
+def test_long_names_and_url_passwords_are_masked() -> None:
+    name = "MY_" + "X" * 300 + "_TOKEN"
     assert redact(f"{name}=s3cr3tvalue") == f"{name}=[redacted]"
-    assert redact("tool --gitea-access-token s3cr3tvalue") == (
-        "tool --gitea-access-token [redacted]"
+    flag = "--gitea-" + "x" * 300 + "-access-token"
+    assert redact(f"tool {flag} s3cr3tvalue") == f"tool {flag} [redacted]"
+    assert redact("tool x--token s3cr3tvalue") == "tool x--token [redacted]"
+    user, password = "u" * 300, "p" * 300
+    assert redact(f"https://{user}:{password}@gitea.local/x.git") == (
+        f"https://{user}:[redacted]@gitea.local/x.git"
     )
+
+
+def test_a_jwt_is_masked_where_a_run_starts() -> None:
+    jwt = SECRETS["jwt"]
+    for text in (jwt, f"jwt={jwt}", f"'{jwt}'", f"x.{jwt}"):
+        assert "eyJzdWIi" not in redact(text)

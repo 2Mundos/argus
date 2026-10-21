@@ -124,6 +124,14 @@ test("redaction stays linear on adversarial input (no ReDoS)", () => {
     "token=".repeat(10_000),
     `eyJ${"a".repeat(64_000)}`,
     `authorization:${" ".repeat(64_000)}`,
+    "-eyJ".repeat(30_000),
+    `eyJ${"a.".repeat(60_000)}`,
+    "eyJaaaaaaaa.".repeat(12_000),
+    `${"a".repeat(120_000)}token`,
+    "token".repeat(24_000),
+    `--${"token".repeat(24_000)}`,
+    "-".repeat(120_000),
+    `x://${"a".repeat(120_000)}`,
   ];
   for (const text of worst) {
     const t0 = performance.now();
@@ -131,6 +139,21 @@ test("redaction stays linear on adversarial input (no ReDoS)", () => {
     const ms = performance.now() - t0;
     assert.ok(ms < 1000, `${ms.toFixed(0)} ms for ${text.slice(0, 20)}…`);
   }
+});
+
+test("long names and URL passwords are masked; a JWT where a run starts", () => {
+  const name = `MY_${"X".repeat(300)}_TOKEN`;
+  assert.equal(redactText(`${name}=s3cr3tvalue`), `${name}=[redacted]`);
+  const flag = `--gitea-${"x".repeat(300)}-access-token`;
+  assert.equal(redactText(`tool ${flag} s3cr3tvalue`), `tool ${flag} [redacted]`);
+  const [user, password] = ["u".repeat(300), "p".repeat(300)];
+  assert.equal(
+    redactText(`https://${user}:${password}@gitea.local/x.git`),
+    `https://${user}:[redacted]@gitea.local/x.git`,
+  );
+  const jwt = "eyJhbGciOi.eyJzdWIiOi.sig123";
+  for (const text of [jwt, `jwt=${jwt}`, `'${jwt}'`, `x.${jwt}`])
+    assert.doesNotMatch(redactText(text), /eyJzdWIi/, text);
 });
 
 test("secret-looking env values are masked exactly", () => {
