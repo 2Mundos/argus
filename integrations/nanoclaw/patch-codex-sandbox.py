@@ -18,6 +18,10 @@ def ensure(text, what, new, *, anchor=None, replace=(), insert=None):
     """new: final text. replace: older texts to upgrade from. insert: (old, new_with_old) on a pristine tree."""
     if new in text:
         return text
+    if what == "imports" and "from './argus-codex-sandbox.js'" in text:
+        return text
+    if what == "adoption hook" and "assertAdoptable" in text:
+        return text
     for older in replace:
         if older in text:
             return text.replace(older, new, 1)
@@ -117,9 +121,25 @@ import { JsonDocumentStream } from './json-stream.js';"""
 OPTS_V1 = """  /** Test seam for the Codex sandbox seccomp file; production uses the fixed install path. */
   seccompSource?: SeccompSource;
 }"""
+OPTS_V2_OLD = """  /** Test seams for the Codex sandbox: the seccomp file (production: the fixed install path) and the clock. */
+  seccompSource?: SeccompSource;
+  now?: () => number;
+}"""
+OPTS_V2_TEARDOWN = """  /** Test seams for the Codex sandbox: the seccomp file (production: the fixed install path) and the clock. */
+  seccompSource?: SeccompSource;
+  now?: () => number;
+  /** Test seams for bounded `docker ps` confirmation after a failed `docker rm`. */
+  removalConfirmDeadlineMs?: number;
+  removalConfirmPollMs?: number;
+}"""
 OPTS_V2 = """  /** Test seams for the Codex sandbox: the seccomp file (production: the fixed install path) and the clock. */
   seccompSource?: SeccompSource;
   now?: () => number;
+  /** Test seams for bounded `docker ps` confirmation after a failed `docker rm`. */
+  removalConfirmDeadlineMs?: number;
+  removalConfirmPollMs?: number;
+  removalConfirmNow?: () => number;
+  removalConfirmSleep?: (ms: number) => Promise<void>;
 }"""
 METHOD_V1 = """  #securityArgs(agent: ContainerSpec): string[] {
     if (!agent.securityProfile) return [];
@@ -173,7 +193,7 @@ edit(
             "DockerDriverOptions",
             OPTS_V2,
             {
-                "replace": (OPTS_V1,),
+                "replace": (OPTS_V1, OPTS_V2_OLD, OPTS_V2_TEARDOWN),
                 "insert": (
                     "  reconcileNetworkAccess?: (access: NetworkAccessIntent) => void;\n}",
                     "  reconcileNetworkAccess?: (access: NetworkAccessIntent) => void;\n"

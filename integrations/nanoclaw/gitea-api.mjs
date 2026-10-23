@@ -3,23 +3,24 @@ import { readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-let ProxyAgent;
-let undiciFetch;
-try {
-  ({ ProxyAgent, fetch: undiciFetch } = require("undici"));
-} catch {
-  // Installed into a dedicated, pinned runtime location in the agent image.
-  ({ ProxyAgent, fetch: undiciFetch } = createRequire("/usr/local/lib/argus-gitea/package.json")(
-    "undici",
-  ));
+
+function loadUndici() {
+  try {
+    return require("undici");
+  } catch {
+    // Installed into a dedicated, pinned runtime location in the agent image.
+    return createRequire("/usr/local/lib/argus-gitea/package.json")("undici");
+  }
 }
 
 /** Route Undici fetch calls through OneCLI's HTTPS proxy; never fall back to direct. */
 export function createGatewayFetch({
-  fetchImpl = undiciFetch,
+  fetchImpl,
   proxy = process.env.HTTPS_PROXY ?? process.env.https_proxy,
   requestTls,
 } = {}) {
+  const { ProxyAgent, fetch: undiciFetch } = loadUndici();
+  fetchImpl ??= undiciFetch;
   if (!proxy) throw new Error("OneCLI HTTPS proxy is not configured");
   const proxyUrl = new URL(proxy);
   if (!["http:", "https:"].includes(proxyUrl.protocol))
