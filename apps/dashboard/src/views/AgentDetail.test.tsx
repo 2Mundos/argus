@@ -8,7 +8,9 @@ const mock = vi.hoisted(() => ({
   agent: {} as Record<string, unknown>,
   tasks: [] as unknown[],
   events: [] as unknown[],
+  taskLog: { attempt: 2, lines: [] as unknown[], last_seq: 0 },
   fetchText: undefined as unknown as ReturnType<typeof vi.fn>,
+  listener: undefined as undefined | ((e: unknown) => void),
 }));
 
 vi.mock("../api", () => ({
@@ -17,6 +19,7 @@ vi.mock("../api", () => ({
     if (path === "/api/agents/{agent_id}") return mock.agent;
     if (path === "/api/tasks") return { items: mock.tasks };
     if (path === "/api/events") return mock.events;
+    if (path === "/api/tasks/{task_id}/log") return mock.taskLog;
     throw new Error(`unexpected ${path}`);
   },
   fetchText: (path: string) => mock.fetchText(path),
@@ -24,6 +27,15 @@ vi.mock("../api", () => ({
 
 vi.mock("../live", async () => {
   const { useEffect, useState } = await import("react");
+  // Stable subscribe, like the real context value (TaskLog depends on that).
+  const live = {
+    subscribe: (fn: (e: unknown) => void) => {
+      mock.listener = fn;
+      return () => {
+        mock.listener = undefined;
+      };
+    },
+  };
   return {
     useLiveData: <T,>(load: () => Promise<T>) => {
       const [data, setData] = useState<T>();
@@ -32,6 +44,7 @@ vi.mock("../live", async () => {
       }, []);
       return { data, error: undefined, reload: () => {} };
     },
+    useLive: () => ({ ...live, connection: 1 }),
   };
 });
 
@@ -79,6 +92,12 @@ beforeEach(() => {
     note(2, 2, "cloned the repo"),
     note(1, 1, "from the failed attempt"),
   ];
+  mock.taskLog = {
+    attempt: 2,
+    lines: [{ seq: 1, source: "delegate", at: NOW, line: "thinking about the canary" }],
+    last_seq: 1,
+  };
+  mock.listener = undefined;
 });
 
 afterEach(() => {
@@ -110,23 +129,36 @@ describe("Activity", () => {
 });
 
 describe("AgentDetail", () => {
-  it("shows the agent, its work and its container output, re-read while open", async () => {
-    const { unmount } = render(<AgentDetail agentId="agent-1" onClose={() => {}} />);
-    await flush();
+  it("shows the agent, its work and the task live log while holding a task", async () => {
+    render(<AgentDetail agentId="agent-1" onClose={() => {}} />);
+    await flush(); // agent + work
+    await flush(); // TaskLog backfill
     expect(screen.getByText("nanoclaw/1.2 · codex · unknown")).toBeTruthy();
     expect(screen.getByText("Global - Finance canary")).toBeTruthy();
-    expect(screen.getByText("cloned the repo")).toBeTruthy();
+    expect(screen.getByText("running the tests")).toBeTruthy();
+    expect(screen.getByText("40%")).toBeTruthy();
+    expect(screen.getByLabelText("Ao vivo")).toBeTruthy();
+    expect(screen.getByText("thinking about the canary")).toBeTruthy();
+    expect(mock.fetchText).not.toHaveBeenCalled();
+  });
+
+  it("falls back to container output when the agent holds no task", async () => {
+    mock.tasks = [];
+    const { unmount } = render(<AgentDetail agentId="agent-1" onClose={() => {}} />);
+    await flush();
+    expect(screen.getByText("Holds no task.")).toBeTruthy();
     expect(screen.getByText(/session started/)).toBeTruthy();
     expect(mock.fetchText).toHaveBeenCalledWith("/api/instances/inst-1/logs?tail=200");
 
-    await flush(10_000);
-    expect(mock.fetchText).toHaveBeenCalledTimes(3);
+    await flush(4_000);
+    expect(mock.fetchText).toHaveBeenCalledTimes(3); // t=0, 2s, 4s
     unmount();
     await flush(10_000);
     expect(mock.fetchText).toHaveBeenCalledTimes(3); // closing stops the reads
   });
 
-  it("stops reading while paused", async () => {
+  it("stops container reads while paused", async () => {
+    mock.tasks = [];
     render(<AgentDetail agentId="agent-1" onClose={() => {}} />);
     await flush();
     act(() => screen.getByRole("button", { name: "Pause" }).click());

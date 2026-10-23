@@ -178,7 +178,9 @@ refreshes never overwrite a draft. Cancel closes without a request.
 # 4. Open Questions
 
 - Whether `claimed` tasks should accept a spec edit delivered to the running
-  worker (a clarification-like message). Not without a worker-side contract.
+  worker (a clarification-like message). Not without a worker-side contract;
+  [task steering](task-steering.spec.md) proposes one, as a message rather than an
+  edit.
 - Whether kind pins should be re-merged on edit.
 
 # 5. Constraints

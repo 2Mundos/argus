@@ -130,12 +130,18 @@ export function TaskLog({ taskId, attempt }: { taskId: string; attempt: number }
       box.current.scrollTop = box.current.scrollHeight;
   }, [shown.length, pausedAt]);
 
+  const paused = pausedAt != null;
   return (
-    <section className="task-log" aria-label="Ao vivo">
-      <div className="toolbar">
-        <h3>Ao vivo</h3>
-        <span className="muted small">tentativa {attempt}</span>
+    <section className={`term task-log${paused ? " term-paused" : ""}`} aria-label="Ao vivo">
+      <div className="term-bar">
+        <span className="term-traffic" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="term-title">{`ao vivo · tentativa ${attempt}`}</span>
         <select
+          className="term-filter"
           aria-label="Origem"
           value={filter}
           onChange={(e) => setFilter(e.target.value as LogFilter)}
@@ -146,17 +152,21 @@ export function TaskLog({ taskId, attempt }: { taskId: string; attempt: number }
             </option>
           ))}
         </select>
+        <span className={`term-pulse${paused ? "" : " on"}`} title={paused ? "Paused" : "Live"}>
+          {paused ? "paused" : "live"}
+        </span>
         <button
           type="button"
-          onClick={() => setPausedAt(pausedAt == null ? (lines.at(-1)?.seq ?? 0) : null)}
+          className="term-action"
+          onClick={() => setPausedAt(paused ? null : (lines.at(-1)?.seq ?? 0))}
         >
-          {pausedAt == null ? "Pausar" : `Retomar${behind ? ` (+${behind})` : ""}`}
+          {paused ? `Retomar${behind ? ` (+${behind})` : ""}` : "Pausar"}
         </button>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="term-error">{error}</p>}
       <pre
         ref={box}
-        className="log"
+        className="term-body log"
         tabIndex={0}
         onScroll={(e) => {
           const el = e.currentTarget;
@@ -164,11 +174,11 @@ export function TaskLog({ taskId, attempt }: { taskId: string; attempt: number }
         }}
       >
         {shown.length === 0 ? (
-          <span className="muted">Sem saída ainda.</span>
+          <span className="term-empty">Sem saída ainda.</span>
         ) : (
           shown.map((l) => (
             <div key={l.seq} className={`log-line ${l.source}`}>
-              <span className="muted">{l.source === "delegate" ? "[delegate] " : ""}</span>
+              <span className="term-dim">{l.source === "delegate" ? "[delegate] " : ""}</span>
               {l.line}
             </div>
           ))

@@ -67,9 +67,7 @@ def clean(lines: list[str], secrets: tuple[str, ...]) -> list[str]:
     text = _CONTROL.sub("", "\n".join(lines).replace("\r\n", "\n"))
     text = redact_private_keys(text)
     text = "\n".join(
-        _join_split_secret(
-            "\r".join(f[:REDACT_LINE_CHARS] for f in raw.split("\r")), secrets
-        )
+        _join_split_secret(_truncate_cr_frames(raw), secrets)
         for raw in text.split("\n")
     )
     out: list[str] = []
@@ -84,6 +82,35 @@ def clean(lines: list[str], secrets: tuple[str, ...]) -> list[str]:
     return out
 
 
+def _truncate_cr_frames(row: str) -> str:
+    """Cut long \\r frames before redaction; skip splitting when every frame fits."""
+    if "\r" not in row:
+        return row[:REDACT_LINE_CHARS] if len(row) > REDACT_LINE_CHARS else row
+    start = 0
+    while start < len(row):
+        end = row.find("\r", start)
+        if end < 0:
+            end = len(row)
+        if end - start > REDACT_LINE_CHARS:
+            return "\r".join(part[:REDACT_LINE_CHARS] for part in row.split("\r"))
+        if end == len(row):
+            break
+        start = end + 1
+    return row
+
+
+def _cr_frame_chars(row: str) -> int:
+    total = 0
+    start = 0
+    while start <= len(row):
+        end = row.find("\r", start)
+        if end < 0:
+            return total + len(row) - start
+        total += end - start
+        start = end + 1
+    return total
+
+
 def _join_split_secret(row: str, secrets: tuple[str, ...]) -> str:
     """`row` without its bare CRs when that leaves less unmasked (a CR split a secret
     mid-token: `ghp_…\r…`), else as is."""
@@ -91,7 +118,11 @@ def _join_split_secret(row: str, secrets: tuple[str, ...]) -> str:
         return row
     joined = row.replace("\r", "")
     shown = lambda s: len(s.replace(REDACTED, ""))  # noqa: E731
-    split = sum(shown(p) for p in redact(row, secrets).split("\r"))
+    redacted_row = redact(row, secrets)
+    if redacted_row == row:
+        split = _cr_frame_chars(row)
+    else:
+        split = sum(shown(part) for part in redacted_row.split("\r"))
     return joined if shown(redact(joined, secrets)) < split else row
 
 

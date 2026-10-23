@@ -1,0 +1,61 @@
+<svg width="256" height="256" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Gradient for the outer eye shell -->
+    <linearGradient id="eyeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" /> <!-- Sky Blue -->
+      <stop offset="100%" stop-color="#818CF8" /> <!-- Indigo -->
+    </linearGradient>
+    
+    <!-- Gradient for the central orchestrator core -->
+    <linearGradient id="coreGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3B82F6" /> <!-- Blue -->
+      <stop offset="100%" stop-color="#A855F7" /> <!-- Purple -->
+    </linearGradient>
+    
+    <!-- Core glow effect -->
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="coloredBlur" />
+      <feMerge>
+        <feMergeNode in="coloredBlur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Premium dark background (Rounded for app icon feel) -->
+  <rect width="100%" height="100%" fill="#0B1120" rx="32" />
+
+  <!-- Icon Section (Translated to center exactly in the 200x200 box) -->
+  <g transform="translate(30, 30)">
+    
+    <!-- Outer Eye Path (Vesica Piscis) -->
+    <path d="M 10 70 Q 70 -20 130 70 Q 70 160 10 70 Z" fill="#1E293B" fill-opacity="0.4" stroke="url(#eyeGrad)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+    
+    <!-- Orbit Track -->
+    <circle cx="70" cy="70" r="45" fill="none" stroke="#334155" stroke-width="1.5" stroke-dasharray="6 6" />
+    
+    <!-- Inner Orchestration Network Lines -->
+    <path d="M 38 38 L 70 70 L 102 38 M 38 102 L 70 70 L 102 102 M 10 70 L 130 70 M 70 10 L 70 130" fill="none" stroke="#334155" stroke-width="1.5" opacity="0.7" />
+
+    <!-- Peripheral Fleet Agents (Orbiting Nodes) -->
+    <circle cx="38" cy="38" r="5" fill="#38BDF8" />
+    <circle cx="102" cy="38" r="5" fill="#38BDF8" />
+    <circle cx="38" cy="102" r="5" fill="#818CF8" />
+    <circle cx="102" cy="102" r="5" fill="#818CF8" />
+
+    <!-- Compass Anchor Nodes -->
+    <circle cx="70" cy="25" r="3.5" fill="#A855F7" />
+    <circle cx="70" cy="115" r="3.5" fill="#A855F7" />
+    <circle cx="25" cy="70" r="3.5" fill="#38BDF8" />
+    <circle cx="115" cy="70" r="3.5" fill="#38BDF8" />
+
+    <!-- Central Orchestrator Core (Glowing) -->
+    <circle cx="70" cy="70" r="23" fill="url(#coreGrad)" filter="url(#glow)" />
+    
+    <!-- Inner Pupil (Deep contrast for depth) -->
+    <circle cx="70" cy="70" r="16" fill="#020617" />
+    
+    <!-- Software Development Code Brackets (< >) inside the pupil -->
+    <path d="M 66 63 L 59 70 L 66 77 M 74 63 L 81 70 L 74 77" fill="none" stroke="#22D3EE" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+</svg>

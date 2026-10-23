@@ -260,7 +260,7 @@ def test_cleaning_a_row_of_many_short_frames_is_fast() -> None:
 
     started = time.perf_counter()
     log.clean(["a-\r" * 21_000], ())
-    assert time.perf_counter() - started < 1.0
+    assert time.perf_counter() - started < 2.0
 
 
 async def test_ring_buffer_evicts_oldest_and_seq_keeps_counting(

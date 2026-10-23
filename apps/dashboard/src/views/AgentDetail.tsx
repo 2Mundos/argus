@@ -1,16 +1,34 @@
-import { useEffect, useRef, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 import { api, call, fetchText } from "../api";
 import { relative, shortId } from "../format";
 import { useLiveData } from "../live";
 import { TaskLabel } from "../TaskLabel";
-import { Activity, useNow } from "./Activity";
+import { renderTerminalText } from "../terminalLog";
+import { useNow } from "./Activity";
+import { TaskLog } from "./TaskLog";
 
 const LOG_TAIL = 200;
-const LOG_EVERY_MS = 5000;
+const LOG_EVERY_MS = 2000;
+const META_PCT_MIN = 12;
+const META_PCT_MAX = 70;
+const META_PCT_DEFAULT = 28;
 
-/** An agent, the task it holds and its container output (live work spec 3.2). */
-export function AgentDetail({ agentId, onClose }: { agentId: string; onClose: () => void }) {
+/**
+ * An agent, the task it holds, and its live stream (live work spec 3.2).
+ * `panel` fills the main column (sidebar stays); `drawer` is the modal overlay.
+ */
+export function AgentDetail({
+  agentId,
+  onClose,
+  variant = "drawer",
+}: {
+  agentId: string;
+  onClose: () => void;
+  variant?: "drawer" | "panel";
+}) {
   const now = useNow();
+  const panelRef = useRef<HTMLElement>(null);
+  const [metaPct, setMetaPct] = useState(META_PCT_DEFAULT);
   const { data } = useLiveData(
     async (signal) => {
       const [agent, page] = await Promise.all([
@@ -24,98 +42,192 @@ export function AgentDetail({ agentId, onClose }: { agentId: string; onClose: ()
           }),
         ),
       ]);
-      const work = await Promise.all(
-        page.items.flatMap((task) =>
-          "progress_at" in task
-            ? [
-                call(
-                  api.GET("/api/events", {
-                    params: { query: { subject_id: task.id, limit: 50 } },
-                    signal,
-                  }),
-                ).then((events) => ({ task, events })),
-              ]
-            : [],
-        ),
-      );
-      return { agent, work };
+      return {
+        agent,
+        work: page.items.filter((task) => "progress_at" in task),
+      };
     },
     [agentId],
   );
   const agent = data?.agent;
 
+  useEffect(() => {
+    if (variant !== "panel") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [variant, onClose]);
+
+  function onSplitPointerDown(e: ReactPointerEvent<HTMLHRElement>) {
+    if (e.button !== 0) return;
+    const panel = panelRef.current;
+    const metaEl = panel?.querySelector(".worker-panel-meta");
+    if (!panel || !metaEl) return;
+    e.preventDefault();
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    const top = metaEl.getBoundingClientRect().top;
+    const total = panel.getBoundingClientRect().bottom - top;
+    const prevCursor = document.body.style.cursor;
+    const prevSelect = document.body.style.userSelect;
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+
+    const onMove = (ev: PointerEvent) => {
+      if (total <= 0) return;
+      const pct = ((ev.clientY - top) / total) * 100;
+      setMetaPct(Math.min(META_PCT_MAX, Math.max(META_PCT_MIN, pct)));
+    };
+    const onUp = (ev: PointerEvent) => {
+      handle.releasePointerCapture(ev.pointerId);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevSelect;
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+  }
+
+  const close = (
+    <button type="button" className="icon-close" aria-label="Close" onClick={onClose}>
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <path
+          d="M3.2 3.2a.75.75 0 0 1 1.06 0L8 6.94l3.74-3.74a.75.75 0 1 1 1.06 1.06L9.06 8l3.74 3.74a.75.75 0 1 1-1.06 1.06L8 9.06l-3.74 3.74a.75.75 0 1 1-1.06-1.06L6.94 8 3.2 4.26a.75.75 0 0 1 0-1.06Z"
+          fill="currentColor"
+        />
+      </svg>
+    </button>
+  );
+
+  const meta = agent && (
+    <>
+      <dl className="facts">
+        <dt>Name</dt>
+        <dd>{agent.name}</dd>
+        <dt>Role</dt>
+        <dd>{agent.role}</dd>
+        <dt>State</dt>
+        <dd>
+          <span className={`badge agent-${agent.state}`}>{agent.state}</span>
+          {agent.end_reason && <span className="muted small"> {agent.end_reason}</span>}
+        </dd>
+        <dt>Heartbeat</dt>
+        <dd>{relative(agent.last_heartbeat_at, now)}</dd>
+        {agent.runtime && (
+          <>
+            <dt>Runtime</dt>
+            <dd>
+              {[agent.runtime.worker_version, agent.runtime.engine, agent.runtime.executor]
+                .map((v) => v ?? "unknown")
+                .join(" · ")}
+            </dd>
+          </>
+        )}
+        <dt>Capabilities</dt>
+        <dd>{agent.capabilities.join(", ") || "—"}</dd>
+        <dt>Instance</dt>
+        <dd>{agent.instance_id ? shortId(agent.instance_id) : "none"}</dd>
+      </dl>
+      <table className="work-table">
+        <thead>
+          <tr>
+            <th>Task</th>
+            <th>Attempt</th>
+            <th>Progress</th>
+            <th>Note</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.work.length === 0 ? (
+            <tr>
+              <td colSpan={5} className="muted">
+                Holds no task.
+              </td>
+            </tr>
+          ) : (
+            data.work.map((task) => (
+              <tr key={task.id}>
+                <td>
+                  <TaskLabel title={task.title} project={task.project} />{" "}
+                  <span className="muted small">{shortId(task.id)}</span>
+                </td>
+                <td>{task.attempt}</td>
+                <td>{task.progress_percent != null ? `${task.progress_percent}%` : "—"}</td>
+                <td>{task.progress_message ?? "—"}</td>
+                <td className="muted small">
+                  {task.progress_at ? `updated ${relative(task.progress_at, now)}` : "silent"}
+                  {task.state === "claimed" && ` · lease ${relative(task.lease_expires_at, now)}`}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </>
+  );
+
+  // Prefer the task live log (NanoClaw/delegate stream). Container stdout is only
+  // the worker process lifecycle, and only when no claimed task is held.
+  const held = data?.work[0];
+  const output =
+    agent &&
+    (held && held.attempt > 0 ? (
+      <TaskLog taskId={held.id} attempt={held.attempt} />
+    ) : agent.instance_id ? (
+      <LogTail instanceId={agent.instance_id} tail={LOG_TAIL} />
+    ) : (
+      <p className="muted">
+        This agent was not started from a pool, so Argus cannot read its output.
+      </p>
+    ));
+
+  if (variant === "panel") {
+    return (
+      <section className="worker-panel" ref={panelRef}>
+        {close}
+        {meta && (
+          <>
+            <div className="worker-panel-meta" style={{ flex: `0 0 ${metaPct}%` }}>
+              {meta}
+            </div>
+            <hr
+              className="worker-split"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-valuenow={Math.round(metaPct)}
+              aria-valuemin={META_PCT_MIN}
+              aria-valuemax={META_PCT_MAX}
+              onPointerDown={onSplitPointerDown}
+            />
+          </>
+        )}
+        {output && <div className="worker-panel-output">{output}</div>}
+      </section>
+    );
+  }
+
   return (
     <div className="overlay" onClick={onClose} onKeyDown={(e) => e.key === "Escape" && onClose()}>
       <aside className="drawer" onClick={(e) => e.stopPropagation()} onKeyDown={() => {}}>
-        <div className="toolbar">
-          <h2>{agent?.name ?? "…"}</h2>
-          <button type="button" className="link" onClick={onClose}>
-            Close
-          </button>
-        </div>
-        {agent && (
-          <>
-            <dl className="facts">
-              <dt>Role</dt>
-              <dd>{agent.role}</dd>
-              <dt>State</dt>
-              <dd>
-                <span className={`badge agent-${agent.state}`}>{agent.state}</span>
-                {agent.end_reason && <span className="muted small"> {agent.end_reason}</span>}
-              </dd>
-              <dt>Heartbeat</dt>
-              <dd>{relative(agent.last_heartbeat_at, now)}</dd>
-              {agent.runtime && (
-                <>
-                  <dt>Runtime</dt>
-                  <dd>
-                    {[agent.runtime.worker_version, agent.runtime.engine, agent.runtime.executor]
-                      .map((v) => v ?? "unknown")
-                      .join(" · ")}
-                  </dd>
-                </>
-              )}
-              <dt>Capabilities</dt>
-              <dd>{agent.capabilities.join(", ") || "—"}</dd>
-              <dt>Instance</dt>
-              <dd>{agent.instance_id ? shortId(agent.instance_id) : "none"}</dd>
-            </dl>
-            <h3>Current work</h3>
-            {data.work.length === 0 && <p className="muted">Holds no task.</p>}
-            {data.work.map(({ task, events }) => (
-              <div key={task.id}>
-                <p>
-                  <strong>
-                    <TaskLabel title={task.title} project={task.project} />
-                  </strong>{" "}
-                  <span className="muted small">
-                    {shortId(task.id)} · attempt {task.attempt}
-                  </span>
-                </p>
-                <Activity task={task} events={events} />
-              </div>
-            ))}
-            <h3>Container output</h3>
-            {agent.instance_id ? (
-              <LogTail instanceId={agent.instance_id} tail={LOG_TAIL} />
-            ) : (
-              <p className="muted">
-                This agent was not started from a pool, so Argus cannot read its output.
-              </p>
-            )}
-          </>
-        )}
+        {close}
+        {meta}
+        {output}
       </aside>
     </div>
   );
 }
 
-/** The instance's last lines, re-read every 5 s until paused or unmounted. */
+/** The instance's last lines as a live terminal; re-read until paused or unmounted. */
 export function LogTail({ instanceId, tail }: { instanceId: string; tail: number }) {
   const [text, setText] = useState<string>();
   const [error, setError] = useState<string>();
   const [paused, setPaused] = useState(false);
-  const pre = useRef<HTMLPreElement>(null);
+  const [tick, setTick] = useState(0);
+  const body = useRef<HTMLPreElement>(null);
   const atEnd = useRef(true);
 
   useEffect(() => {
@@ -127,6 +239,7 @@ export function LogTail({ instanceId, tail }: { instanceId: string; tail: number
           if (cancelled) return;
           setText(value);
           setError(undefined);
+          setTick((n) => n + 1);
         },
         (err: Error) => {
           if (!cancelled) setError(err.message);
@@ -142,30 +255,39 @@ export function LogTail({ instanceId, tail }: { instanceId: string; tail: number
 
   useEffect(() => {
     // Keep following the end unless the reader scrolled up.
-    if (pre.current && atEnd.current) pre.current.scrollTop = pre.current.scrollHeight;
+    if (body.current && atEnd.current) body.current.scrollTop = body.current.scrollHeight;
   }, [text]);
 
   return (
-    <>
-      <div className="actions left">
-        <button type="button" onClick={() => setPaused((p) => !p)}>
+    <div className={`term${paused ? " term-paused" : ""}`}>
+      <div className="term-bar">
+        <span className="term-traffic" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="term-title">
+          container · {shortId(instanceId)} · last {tail}
+        </span>
+        <span className={`term-pulse${paused ? "" : " on"}`} title={paused ? "Paused" : "Live"}>
+          {paused ? "paused" : "live"}
+        </span>
+        <button type="button" className="term-action" onClick={() => setPaused((p) => !p)}>
           {paused ? "Resume" : "Pause"}
         </button>
-        <span className="muted small">
-          last {tail} lines{paused ? ", paused" : `, every ${LOG_EVERY_MS / 1000} s`}
-        </span>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="term-error">{error}</p>}
       <pre
-        ref={pre}
-        className="logs"
+        ref={body}
+        className="term-body logs"
+        data-tick={tick}
         onScroll={(e) => {
           const el = e.currentTarget;
           atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
         }}
       >
-        {text || (text === undefined ? "Loading…" : "No output.")}
+        {text === undefined ? "Connecting…" : text ? renderTerminalText(text) : "No output yet."}
       </pre>
-    </>
+    </div>
   );
 }
