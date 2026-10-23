@@ -14,3 +14,9 @@ paths = [
   '''apps/api/tests/test_task_log\.py''',
   '''integrations/nanoclaw/engines/livelog\.test\.mjs''',
 ]
+
+# npm SRI integrity of the pinned graft package: a public hash, not a credential.
+[[allowlists]]
+description = "Pinned npm integrity hash in the project runtime recipe"
+paths = ['''packages/core/src/argus_core/runtime\.py''']
+regexes = ['''sha512-[A-Za-z0-9+/=]{80,}''']

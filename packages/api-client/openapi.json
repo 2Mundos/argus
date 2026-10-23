@@ -2072,6 +2072,109 @@
         "title": "BootstrapTokenCreate",
         "type": "object"
       },
+      "BuildView": {
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "base_id": {
+            "title": "Base Id",
+            "type": "string"
+          },
+          "base_ref": {
+            "title": "Base Ref",
+            "type": "string"
+          },
+          "build_key": {
+            "title": "Build Key",
+            "type": "string"
+          },
+          "current": {
+            "title": "Current",
+            "type": "boolean"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/ToolEvidence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "host_id": {
+            "title": "Host Id",
+            "type": "string"
+          },
+          "image_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Id"
+          },
+          "image_ref": {
+            "title": "Image Ref",
+            "type": "string"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "run_as": {
+            "title": "Run As",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "preparing",
+              "building",
+              "verifying",
+              "failed",
+              "disabled"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "build_key",
+          "host_id",
+          "run_as",
+          "state",
+          "reason",
+          "image_ref",
+          "image_id",
+          "base_ref",
+          "base_id",
+          "platform",
+          "attempts",
+          "evidence",
+          "current",
+          "updated_at"
+        ],
+        "title": "BuildView",
+        "type": "object"
+      },
       "BulkArchiveRequest": {
         "description": "Which terminal tasks to archive: all of `states`, narrowed by project and\nby how long ago they last changed. `dry_run` only counts.",
         "properties": {
@@ -3025,6 +3128,74 @@
           "result"
         ],
         "title": "CompleteRequest",
+        "type": "object"
+      },
+      "ComponentRef": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ComponentRef",
+        "type": "object"
+      },
+      "ComponentView": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "provisioned": {
+            "title": "Provisioned",
+            "type": "boolean"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "provisioned",
+          "required"
+        ],
+        "title": "ComponentView",
         "type": "object"
       },
       "ContinuationArtifact": {
@@ -6354,6 +6525,24 @@
         "title": "FleetHealth",
         "type": "object"
       },
+      "GapView": {
+        "properties": {
+          "component": {
+            "title": "Component",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "component",
+          "reason"
+        ],
+        "title": "GapView",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -6447,6 +6636,36 @@
           "heartbeat_interval_s"
         ],
         "title": "HeartbeatResponse",
+        "type": "object"
+      },
+      "HoldRequest": {
+        "additionalProperties": false,
+        "description": "The worker could not establish the environment (its Docker host, the switch):\nhold the task durably instead of starting it or spending an attempt.",
+        "properties": {
+          "attempt": {
+            "minimum": 1.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "error": {
+            "maxLength": 1500,
+            "minLength": 1,
+            "title": "Error",
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempt",
+          "error"
+        ],
+        "title": "HoldRequest",
         "type": "object"
       },
       "ImageChoice": {
@@ -8419,7 +8638,7 @@
           },
           "timeline": {
             "items": {
-              "$ref": "#/components/schemas/Selection"
+              "$ref": "#/components/schemas/argus_core__model_trace__Selection"
             },
             "title": "Timeline",
             "type": "array"
@@ -9953,6 +10172,60 @@
         "title": "PoolsOverview",
         "type": "object"
       },
+      "PrepareRequest": {
+        "additionalProperties": false,
+        "description": "What the claiming worker knows about itself; the project comes from the task.",
+        "properties": {
+          "attempt": {
+            "minimum": 1.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "base_id": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Base Id",
+            "type": "string"
+          },
+          "base_ref": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,199}$",
+            "title": "Base Ref",
+            "type": "string"
+          },
+          "host_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Host Id",
+            "type": "string"
+          },
+          "platform": {
+            "pattern": "^[a-z0-9]+/[a-z0-9_]+$",
+            "title": "Platform",
+            "type": "string"
+          },
+          "run_as": {
+            "pattern": "^[0-9]{1,9}:[0-9]{1,9}$",
+            "title": "Run As",
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempt",
+          "host_id",
+          "run_as",
+          "base_ref",
+          "base_id",
+          "platform"
+        ],
+        "title": "PrepareRequest",
+        "type": "object"
+      },
       "PricingInfo": {
         "properties": {
           "as_of": {
@@ -11335,6 +11608,104 @@
         "title": "RuntimeKind",
         "type": "string"
       },
+      "RuntimeSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "codex_turn_timeout_s": {
+            "anyOf": [
+              {
+                "maximum": 14400.0,
+                "minimum": 600.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codex Turn Timeout S"
+          },
+          "components": {
+            "items": {
+              "$ref": "#/components/schemas/ComponentRef"
+            },
+            "maxItems": 24,
+            "title": "Components",
+            "type": "array"
+          },
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceRef"
+            },
+            "maxItems": 2,
+            "title": "Services",
+            "type": "array"
+          }
+        },
+        "title": "RuntimeSpec",
+        "type": "object"
+      },
+      "RuntimeView": {
+        "properties": {
+          "builds": {
+            "items": {
+              "$ref": "#/components/schemas/BuildView"
+            },
+            "title": "Builds",
+            "type": "array"
+          },
+          "declared": {
+            "title": "Declared",
+            "type": "boolean"
+          },
+          "gaps": {
+            "items": {
+              "$ref": "#/components/schemas/GapView"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "requirement": {
+            "items": {
+              "$ref": "#/components/schemas/ComponentView"
+            },
+            "title": "Requirement",
+            "type": "array"
+          },
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceRef"
+            },
+            "title": "Services",
+            "type": "array"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/RuntimeSpec"
+          }
+        },
+        "required": [
+          "project",
+          "declared",
+          "spec",
+          "problems",
+          "requirement",
+          "gaps",
+          "services",
+          "builds"
+        ],
+        "title": "RuntimeView",
+        "type": "object"
+      },
       "SaveToKnowledge": {
         "description": "When answering a question: keep the answer as knowledge too.",
         "properties": {
@@ -11468,256 +11839,37 @@
         "title": "SecretsReloaded",
         "type": "object"
       },
-      "Selection": {
+      "SelectedImage": {
         "properties": {
-          "agent_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Agent Id"
-          },
-          "alternatives": {
-            "items": {
-              "$ref": "#/components/schemas/Alternative"
-            },
-            "maxItems": 10,
-            "title": "Alternatives",
-            "type": "array"
-          },
-          "at": {
-            "format": "date-time",
-            "title": "At",
+          "base_id": {
+            "title": "Base Id",
             "type": "string"
           },
-          "attempt": {
-            "title": "Attempt",
-            "type": "integer"
-          },
-          "execution_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Execution Key"
-          },
-          "explanation": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Explanation"
-          },
-          "from_account_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "From Account Id"
-          },
-          "from_executor": {
-            "anyOf": [
-              {
-                "enum": [
-                  "claude",
-                  "codex",
-                  "opencode",
-                  "agent"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "From Executor"
-          },
-          "from_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "From Model"
-          },
-          "from_provider": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "From Provider"
+          "base_ref": {
+            "title": "Base Ref",
+            "type": "string"
           },
           "id": {
             "title": "Id",
             "type": "string"
           },
-          "key": {
-            "title": "Key",
+          "platform": {
+            "title": "Platform",
             "type": "string"
           },
-          "kind": {
-            "enum": [
-              "initial",
-              "account_switch",
-              "model_switch",
-              "provider_switch",
-              "executor_switch",
-              "retry_no_fallback"
-            ],
-            "title": "Kind",
+          "ref": {
+            "title": "Ref",
             "type": "string"
-          },
-          "layer": {
-            "enum": [
-              "harness",
-              "delegate"
-            ],
-            "title": "Layer",
-            "type": "string"
-          },
-          "occurred_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Occurred At"
-          },
-          "outcome": {
-            "default": "unknown",
-            "enum": [
-              "unknown",
-              "succeeded",
-              "failed",
-              "abandoned"
-            ],
-            "title": "Outcome",
-            "type": "string"
-          },
-          "policy_revision": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Policy Revision"
-          },
-          "reason_code": {
-            "enum": [
-              "priority",
-              "availability",
-              "compatibility",
-              "context",
-              "quota",
-              "error",
-              "policy"
-            ],
-            "title": "Reason Code",
-            "type": "string"
-          },
-          "recorded_at": {
-            "format": "date-time",
-            "title": "Recorded At",
-            "type": "string"
-          },
-          "task_id": {
-            "title": "Task Id",
-            "type": "string"
-          },
-          "to_account_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "To Account Id"
-          },
-          "to_executor": {
-            "anyOf": [
-              {
-                "enum": [
-                  "claude",
-                  "codex",
-                  "opencode",
-                  "agent"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "To Executor"
-          },
-          "to_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "To Model"
-          },
-          "to_provider": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "To Provider"
           }
         },
         "required": [
-          "key",
-          "layer",
-          "kind",
-          "reason_code",
+          "ref",
           "id",
-          "task_id",
-          "attempt",
-          "agent_id",
-          "at",
-          "recorded_at"
+          "base_ref",
+          "base_id",
+          "platform"
         ],
-        "title": "Selection",
+        "title": "SelectedImage",
         "type": "object"
       },
       "SelectionReport": {
@@ -11932,6 +12084,63 @@
           "reason_code"
         ],
         "title": "SelectionReport",
+        "type": "object"
+      },
+      "ServiceContract": {
+        "properties": {
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Env",
+            "type": "object"
+          },
+          "kind": {
+            "enum": [
+              "postgres",
+              "valkey"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "env",
+          "command"
+        ],
+        "title": "ServiceContract",
+        "type": "object"
+      },
+      "ServiceRef": {
+        "additionalProperties": false,
+        "description": "A disposable test service a task's QA contract may start. `env` maps\nvariable names to templates over the service's synthetic values.",
+        "properties": {
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "maxProperties": 8,
+            "title": "Env",
+            "type": "object"
+          },
+          "kind": {
+            "enum": [
+              "postgres",
+              "valkey"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ServiceRef",
         "type": "object"
       },
       "ServingAccount": {
@@ -14392,6 +14601,29 @@
         "title": "TerminateRequest",
         "type": "object"
       },
+      "ToolEvidence": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "output": {
+            "title": "Output",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "ok",
+          "output"
+        ],
+        "title": "ToolEvidence",
+        "type": "object"
+      },
       "Tri": {
         "enum": [
           "yes",
@@ -14778,6 +15010,64 @@
           "accounts"
         ],
         "title": "UsageSeries",
+        "type": "object"
+      },
+      "UsedRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "minimum": 1.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "container": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Container",
+            "type": "string"
+          },
+          "image_id": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Image Id",
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempt",
+          "container",
+          "image_id"
+        ],
+        "title": "UsedRequest",
+        "type": "object"
+      },
+      "UsedResult": {
+        "properties": {
+          "selected_image_id": {
+            "title": "Selected Image Id",
+            "type": "string"
+          },
+          "used_image_id": {
+            "title": "Used Image Id",
+            "type": "string"
+          },
+          "verified": {
+            "title": "Verified",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "verified",
+          "selected_image_id",
+          "used_image_id"
+        ],
+        "title": "UsedResult",
         "type": "object"
       },
       "ValidationError": {
@@ -15170,6 +15460,355 @@
           "images"
         ],
         "title": "Readiness",
+        "type": "object"
+      },
+      "argus_core__model_trace__Selection": {
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "alternatives": {
+            "items": {
+              "$ref": "#/components/schemas/Alternative"
+            },
+            "maxItems": 10,
+            "title": "Alternatives",
+            "type": "array"
+          },
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "execution_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Key"
+          },
+          "explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "from_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Account Id"
+          },
+          "from_executor": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "agent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Executor"
+          },
+          "from_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Model"
+          },
+          "from_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Provider"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "initial",
+              "account_switch",
+              "model_switch",
+              "provider_switch",
+              "executor_switch",
+              "retry_no_fallback"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "layer": {
+            "enum": [
+              "harness",
+              "delegate"
+            ],
+            "title": "Layer",
+            "type": "string"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "outcome": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "succeeded",
+              "failed",
+              "abandoned"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "policy_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Revision"
+          },
+          "reason_code": {
+            "enum": [
+              "priority",
+              "availability",
+              "compatibility",
+              "context",
+              "quota",
+              "error",
+              "policy"
+            ],
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "to_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Account Id"
+          },
+          "to_executor": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "agent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Executor"
+          },
+          "to_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Model"
+          },
+          "to_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Provider"
+          }
+        },
+        "required": [
+          "key",
+          "layer",
+          "kind",
+          "reason_code",
+          "id",
+          "task_id",
+          "attempt",
+          "agent_id",
+          "at",
+          "recorded_at"
+        ],
+        "title": "Selection",
+        "type": "object"
+      },
+      "argus_core__runtime__Selection": {
+        "description": "The project-runtime contract a worker (and the task-continuation front) consumes:\nrequirement, selected image, readiness and gaps. `state != ready` means the task\nwas held (`task_held`) and nothing was started.",
+        "properties": {
+          "build_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Build Key"
+          },
+          "declared": {
+            "title": "Declared",
+            "type": "boolean"
+          },
+          "gaps": {
+            "items": {
+              "$ref": "#/components/schemas/GapView"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "image": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelectedImage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "requirement": {
+            "items": {
+              "$ref": "#/components/schemas/ComponentView"
+            },
+            "title": "Requirement",
+            "type": "array"
+          },
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceContract"
+            },
+            "title": "Services",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "preparing",
+              "building",
+              "verifying",
+              "failed",
+              "disabled"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "task_held": {
+            "default": false,
+            "title": "Task Held",
+            "type": "boolean"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/ToolEvidence"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "state",
+          "project",
+          "declared"
+        ],
+        "title": "Selection",
         "type": "object"
       },
       "argus_core__tasks__Usage": {
@@ -19753,6 +20392,378 @@
         "summary": "Upsert Project",
         "tags": [
           "knowledge"
+        ]
+      }
+    },
+    "/api/projects/{slug}/runtime": {
+      "get": {
+        "operationId": "get_project_runtime_api_projects__slug__runtime_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Project Runtime",
+        "tags": [
+          "runtime"
+        ]
+      },
+      "put": {
+        "description": "Declare the project's runtime (admin only; versioned by the event log).",
+        "operationId": "put_project_runtime_api_projects__slug__runtime_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Project Runtime",
+        "tags": [
+          "runtime"
+        ]
+      }
+    },
+    "/api/projects/{slug}/runtime/rebuild": {
+      "post": {
+        "description": "Retry the failed builds of the project's current recipe.",
+        "operationId": "rebuild_project_runtime_api_projects__slug__runtime_rebuild_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rebuild Project Runtime",
+        "tags": [
+          "runtime"
+        ]
+      }
+    },
+    "/api/runtime/catalog": {
+      "get": {
+        "description": "The approved components and their pins: all a project may declare.",
+        "operationId": "catalog_api_runtime_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Catalog Api Runtime Catalog Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Catalog",
+        "tags": [
+          "runtime"
+        ]
+      }
+    },
+    "/api/runtime/hold": {
+      "post": {
+        "description": "The worker could not prepare its environment: hold the claimed task, durably\nand without spending an attempt (`runtime_failed`, with `error`).",
+        "operationId": "hold_api_runtime_hold_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HoldRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Hold",
+        "tags": [
+          "runtime"
+        ]
+      }
+    },
+    "/api/runtime/prepare": {
+      "post": {
+        "description": "The claiming worker asks for its task project's image before any model\nwork. Anything but `ready` has already held the task (no attempt spent).",
+        "operationId": "prepare_api_runtime_prepare_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/argus_core__runtime__Selection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Prepare",
+        "tags": [
+          "runtime"
+        ]
+      }
+    },
+    "/api/runtime/tasks/{task_id}": {
+      "get": {
+        "description": "Selected versus actually used image of each attempt of the task.",
+        "operationId": "task_runtime_api_runtime_tasks__task_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Task Runtime Api Runtime Tasks  Task Id  Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Task Runtime",
+        "tags": [
+          "runtime"
+        ]
+      }
+    },
+    "/api/runtime/used": {
+      "post": {
+        "operationId": "used_api_runtime_used_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsedResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Used",
+        "tags": [
+          "runtime"
         ]
       }
     },

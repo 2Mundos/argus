@@ -41,6 +41,8 @@ every new dependency is judged against it.
   and the System view
 - [Worker launch and node capabilities](specs/worker-launch.spec.md) —
   request a worker from the dashboard or MCP; Argus reports what the node can run
+- [Project runtime images](specs/project-runtime.spec.md) — per-project agent
+  images, build cache, probes, disposable PostgreSQL/Valkey, and worker contract
 - [Engines, executors and the local model](specs/engines.spec.md) —
   who runs the worker loop vs. who gets delegated work; real readiness; local routing
 - [Local Strata harness](specs/local-harness.spec.md) — NanoClaw failover to the

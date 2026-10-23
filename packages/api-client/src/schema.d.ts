@@ -1527,6 +1527,146 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{slug}/runtime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Runtime */
+        get: operations["get_project_runtime_api_projects__slug__runtime_get"];
+        /**
+         * Put Project Runtime
+         * @description Declare the project's runtime (admin only; versioned by the event log).
+         */
+        put: operations["put_project_runtime_api_projects__slug__runtime_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{slug}/runtime/rebuild": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rebuild Project Runtime
+         * @description Retry the failed builds of the project's current recipe.
+         */
+        post: operations["rebuild_project_runtime_api_projects__slug__runtime_rebuild_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runtime/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Catalog
+         * @description The approved components and their pins: all a project may declare.
+         */
+        get: operations["catalog_api_runtime_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runtime/hold": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hold
+         * @description The worker could not prepare its environment: hold the claimed task, durably
+         *     and without spending an attempt (`runtime_failed`, with `error`).
+         */
+        post: operations["hold_api_runtime_hold_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runtime/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare
+         * @description The claiming worker asks for its task project's image before any model
+         *     work. Anything but `ready` has already held the task (no attempt spent).
+         */
+        post: operations["prepare_api_runtime_prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runtime/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Runtime
+         * @description Selected versus actually used image of each attempt of the task.
+         */
+        get: operations["task_runtime_api_runtime_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runtime/used": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Used */
+        post: operations["used_api_runtime_used_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/system": {
         parameters: {
             query?: never;
@@ -2791,6 +2931,40 @@ export interface components {
              */
             ttl_s?: number;
         };
+        /** BuildView */
+        BuildView: {
+            /** Attempts */
+            attempts: number;
+            /** Base Id */
+            base_id: string;
+            /** Base Ref */
+            base_ref: string;
+            /** Build Key */
+            build_key: string;
+            /** Current */
+            current: boolean;
+            /** Evidence */
+            evidence: components["schemas"]["ToolEvidence"][];
+            /** Host Id */
+            host_id: string;
+            /** Image Id */
+            image_id: string | null;
+            /** Image Ref */
+            image_ref: string;
+            /** Platform */
+            platform: string;
+            /** Reason */
+            reason: string | null;
+            /** Run As */
+            run_as: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "preparing" | "building" | "verifying" | "failed" | "disabled";
+            /** Updated At */
+            updated_at: string;
+        };
         /**
          * BulkArchiveRequest
          * @description Which terminal tasks to archive: all of `states`, narrowed by project and
@@ -3088,6 +3262,29 @@ export interface components {
             /** Attempt */
             attempt: number;
             result: components["schemas"]["TaskResult-Input"];
+        };
+        /** ComponentRef */
+        ComponentRef: {
+            /** Id */
+            id: string;
+            /**
+             * Required
+             * @default true
+             */
+            required?: boolean;
+            /** Version */
+            version?: string | null;
+        };
+        /** ComponentView */
+        ComponentView: {
+            /** Id */
+            id: string;
+            /** Provisioned */
+            provisioned: boolean;
+            /** Required */
+            required: boolean;
+            /** Version */
+            version: string | null;
         };
         /** ContinuationArtifact */
         ContinuationArtifact: {
@@ -4189,6 +4386,13 @@ export interface components {
             /** Window Hours */
             window_hours: number;
         };
+        /** GapView */
+        GapView: {
+            /** Component */
+            component: string;
+            /** Reason */
+            reason: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -4225,6 +4429,19 @@ export interface components {
             /** Renewed */
             renewed: components["schemas"]["RenewedLease"][];
             state: components["schemas"]["AgentState"];
+        };
+        /**
+         * HoldRequest
+         * @description The worker could not establish the environment (its Docker host, the switch):
+         *     hold the task durably instead of starting it or spending an attempt.
+         */
+        HoldRequest: {
+            /** Attempt */
+            attempt: number;
+            /** Error */
+            error: string;
+            /** Task Id */
+            task_id: string;
         };
         /** ImageChoice */
         ImageChoice: {
@@ -4879,7 +5096,7 @@ export interface components {
             /** Task Id */
             task_id: string;
             /** Timeline */
-            timeline: components["schemas"]["Selection"][];
+            timeline: components["schemas"]["argus_core__model_trace__Selection"][];
         };
         /**
          * ModelTraceReport
@@ -5470,6 +5687,26 @@ export interface components {
             /** Total */
             total: number;
         };
+        /**
+         * PrepareRequest
+         * @description What the claiming worker knows about itself; the project comes from the task.
+         */
+        PrepareRequest: {
+            /** Attempt */
+            attempt: number;
+            /** Base Id */
+            base_id: string;
+            /** Base Ref */
+            base_ref: string;
+            /** Host Id */
+            host_id: string;
+            /** Platform */
+            platform: string;
+            /** Run As */
+            run_as: string;
+            /** Task Id */
+            task_id: string;
+        };
         /** PricingInfo */
         PricingInfo: {
             /** As Of */
@@ -5944,6 +6181,33 @@ export interface components {
          * @enum {string}
          */
         RuntimeKind: "plain" | "nanoclaw";
+        /** RuntimeSpec */
+        RuntimeSpec: {
+            /** Codex Turn Timeout S */
+            codex_turn_timeout_s?: number | null;
+            /** Components */
+            components?: components["schemas"]["ComponentRef"][];
+            /** Services */
+            services?: components["schemas"]["ServiceRef"][];
+        };
+        /** RuntimeView */
+        RuntimeView: {
+            /** Builds */
+            builds: components["schemas"]["BuildView"][];
+            /** Declared */
+            declared: boolean;
+            /** Gaps */
+            gaps: components["schemas"]["GapView"][];
+            /** Problems */
+            problems: string[];
+            /** Project */
+            project: string;
+            /** Requirement */
+            requirement: components["schemas"]["ComponentView"][];
+            /** Services */
+            services: components["schemas"]["ServiceRef"][];
+            spec: components["schemas"]["RuntimeSpec"];
+        };
         /**
          * SaveToKnowledge
          * @description When answering a question: keep the answer as knowledge too.
@@ -5989,75 +6253,18 @@ export interface components {
             /** Secrets */
             secrets: number;
         };
-        /** Selection */
-        Selection: {
-            /** Agent Id */
-            agent_id: string | null;
-            /** Alternatives */
-            alternatives?: components["schemas"]["Alternative"][];
-            /**
-             * At
-             * Format: date-time
-             */
-            at: string;
-            /** Attempt */
-            attempt: number;
-            /** Execution Key */
-            execution_key?: string | null;
-            /** Explanation */
-            explanation?: string | null;
-            /** From Account Id */
-            from_account_id?: string | null;
-            /** From Executor */
-            from_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
-            /** From Model */
-            from_model?: string | null;
-            /** From Provider */
-            from_provider?: string | null;
+        /** SelectedImage */
+        SelectedImage: {
+            /** Base Id */
+            base_id: string;
+            /** Base Ref */
+            base_ref: string;
             /** Id */
             id: string;
-            /** Key */
-            key: string;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "initial" | "account_switch" | "model_switch" | "provider_switch" | "executor_switch" | "retry_no_fallback";
-            /**
-             * Layer
-             * @enum {string}
-             */
-            layer: "harness" | "delegate";
-            /** Occurred At */
-            occurred_at?: string | null;
-            /**
-             * Outcome
-             * @default unknown
-             * @enum {string}
-             */
-            outcome?: "unknown" | "succeeded" | "failed" | "abandoned";
-            /** Policy Revision */
-            policy_revision?: string | null;
-            /**
-             * Reason Code
-             * @enum {string}
-             */
-            reason_code: "priority" | "availability" | "compatibility" | "context" | "quota" | "error" | "policy";
-            /**
-             * Recorded At
-             * Format: date-time
-             */
-            recorded_at: string;
-            /** Task Id */
-            task_id: string;
-            /** To Account Id */
-            to_account_id?: string | null;
-            /** To Executor */
-            to_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
-            /** To Model */
-            to_model?: string | null;
-            /** To Provider */
-            to_provider?: string | null;
+            /** Platform */
+            platform: string;
+            /** Ref */
+            ref: string;
         };
         /**
          * SelectionReport
@@ -6114,6 +6321,36 @@ export interface components {
             to_model?: string | null;
             /** To Provider */
             to_provider?: string | null;
+        };
+        /** ServiceContract */
+        ServiceContract: {
+            /** Command */
+            command: string;
+            /** Env */
+            env: {
+                [key: string]: string;
+            };
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "postgres" | "valkey";
+        };
+        /**
+         * ServiceRef
+         * @description A disposable test service a task's QA contract may start. `env` maps
+         *     variable names to templates over the service's synthetic values.
+         */
+        ServiceRef: {
+            /** Env */
+            env?: {
+                [key: string]: string;
+            };
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "postgres" | "valkey";
         };
         /** ServingAccount */
         ServingAccount: {
@@ -6865,6 +7102,15 @@ export interface components {
              */
             requeue?: boolean;
         };
+        /** ToolEvidence */
+        ToolEvidence: {
+            /** Name */
+            name: string;
+            /** Ok */
+            ok: boolean;
+            /** Output */
+            output: string;
+        };
         /**
          * Tri
          * @enum {string}
@@ -6990,6 +7236,26 @@ export interface components {
             start: string;
             /** Tz */
             tz: string;
+        };
+        /** UsedRequest */
+        UsedRequest: {
+            /** Attempt */
+            attempt: number;
+            /** Container */
+            container: string;
+            /** Image Id */
+            image_id: string;
+            /** Task Id */
+            task_id: string;
+        };
+        /** UsedResult */
+        UsedResult: {
+            /** Selected Image Id */
+            selected_image_id: string;
+            /** Used Image Id */
+            used_image_id: string;
+            /** Verified */
+            verified: boolean;
         };
         /** ValidationError */
         ValidationError: {
@@ -7149,6 +7415,111 @@ export interface components {
             node: string;
             /** Ready */
             ready: boolean;
+        };
+        /** Selection */
+        argus_core__model_trace__Selection: {
+            /** Agent Id */
+            agent_id: string | null;
+            /** Alternatives */
+            alternatives?: components["schemas"]["Alternative"][];
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Attempt */
+            attempt: number;
+            /** Execution Key */
+            execution_key?: string | null;
+            /** Explanation */
+            explanation?: string | null;
+            /** From Account Id */
+            from_account_id?: string | null;
+            /** From Executor */
+            from_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            /** From Model */
+            from_model?: string | null;
+            /** From Provider */
+            from_provider?: string | null;
+            /** Id */
+            id: string;
+            /** Key */
+            key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "initial" | "account_switch" | "model_switch" | "provider_switch" | "executor_switch" | "retry_no_fallback";
+            /**
+             * Layer
+             * @enum {string}
+             */
+            layer: "harness" | "delegate";
+            /** Occurred At */
+            occurred_at?: string | null;
+            /**
+             * Outcome
+             * @default unknown
+             * @enum {string}
+             */
+            outcome?: "unknown" | "succeeded" | "failed" | "abandoned";
+            /** Policy Revision */
+            policy_revision?: string | null;
+            /**
+             * Reason Code
+             * @enum {string}
+             */
+            reason_code: "priority" | "availability" | "compatibility" | "context" | "quota" | "error" | "policy";
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Task Id */
+            task_id: string;
+            /** To Account Id */
+            to_account_id?: string | null;
+            /** To Executor */
+            to_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            /** To Model */
+            to_model?: string | null;
+            /** To Provider */
+            to_provider?: string | null;
+        };
+        /**
+         * Selection
+         * @description The project-runtime contract a worker (and the task-continuation front) consumes:
+         *     requirement, selected image, readiness and gaps. `state != ready` means the task
+         *     was held (`task_held`) and nothing was started.
+         */
+        argus_core__runtime__Selection: {
+            /** Build Key */
+            build_key?: string | null;
+            /** Declared */
+            declared: boolean;
+            /** Gaps */
+            gaps?: components["schemas"]["GapView"][];
+            image?: components["schemas"]["SelectedImage"] | null;
+            /** Project */
+            project: string;
+            /** Reason */
+            reason?: string | null;
+            /** Requirement */
+            requirement?: components["schemas"]["ComponentView"][];
+            /** Services */
+            services?: components["schemas"]["ServiceContract"][];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "preparing" | "building" | "verifying" | "failed" | "disabled";
+            /**
+             * Task Held
+             * @default false
+             */
+            task_held?: boolean;
+            /** Tools */
+            tools?: components["schemas"]["ToolEvidence"][];
         };
         /**
          * Usage
@@ -9802,6 +10173,255 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Project"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_runtime_api_projects__slug__runtime_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_project_runtime_api_projects__slug__runtime_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuntimeSpec"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rebuild_project_runtime_api_projects__slug__runtime_rebuild_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    catalog_api_runtime_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
+    hold_api_runtime_hold_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HoldRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_api_runtime_prepare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["argus_core__runtime__Selection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    task_runtime_api_runtime_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    used_api_runtime_used_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsedRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsedResult"];
                 };
             };
             /** @description Validation Error */

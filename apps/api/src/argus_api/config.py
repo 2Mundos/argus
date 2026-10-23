@@ -49,6 +49,11 @@ class Settings:
     nanoclaw_onecli_url: str | None = None
     nanoclaw_network: str | None = None  # Docker network that reaches the gateway
     worker_images: tuple[str, ...] = ()  # trusted `argus-worker` images
+    # Project runtime images (project runtime spec): derived per project, built on
+    # this node's Docker daemon. Off: workers are told so and run on their base image.
+    project_runtime: bool = True
+    runtime_image_repo: str = "argus-project-runtime"
+    runtime_build_timeout_s: int = 1800
     docker_hosts: tuple[str, ...] = ()  # extra Docker nodes the guided flow may use
     # Local model (engines spec). Off unless a URL is set; one allowed model.
     local_model_url: str | None = None
@@ -149,6 +154,12 @@ class Settings:
             nanoclaw_onecli_url=os.environ.get("ARGUS_NANOCLAW_ONECLI_URL") or None,
             nanoclaw_network=os.environ.get("ARGUS_NANOCLAW_NETWORK") or None,
             worker_images=_csv("ARGUS_WORKER_IMAGES"),
+            project_runtime=os.environ.get("ARGUS_PROJECT_RUNTIME", "on") != "off",
+            runtime_image_repo=os.environ.get("ARGUS_RUNTIME_IMAGE_REPO")
+            or "argus-project-runtime",
+            runtime_build_timeout_s=int(
+                os.environ.get("ARGUS_RUNTIME_BUILD_TIMEOUT_S", 1800)
+            ),
             docker_hosts=_csv("ARGUS_FLEET_DOCKER_HOSTS"),
             local_model_url=os.environ.get("ARGUS_LOCAL_MODEL_URL") or None,
             local_model=os.environ.get("ARGUS_LOCAL_MODEL") or None,

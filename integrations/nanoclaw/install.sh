@@ -23,6 +23,7 @@ cp "$here/argus-usage-relay.ts" "$target/src/channels/argus-usage-relay.ts"
 cp "$here/argus-usage-relay.test.ts" "$target/src/channels/argus-usage-relay.test.ts"
 cp "$here/argus.test.ts" "$target/src/channels/argus.test.ts"
 cp "$here/argus-accounts.test.ts" "$target/src/channels/argus-accounts.test.ts"
+cp "$here/argus-runtime.test.ts" "$target/src/channels/argus-runtime.test.ts"
 # The quota patterns' shared fixture (Argus's packages/core), read by argus-accounts.test.ts.
 cp "$here/../../packages/core/tests/fixtures/quota-notices.json" "$target/src/channels/argus-quota-notices.json"
 cp "$here/argus-gitea-lease.test.ts" "$target/src/channels/argus-gitea-lease.test.ts"
