@@ -30,7 +30,12 @@ from argus_core.accounts import (
 from argus_core.custom_accounts import (
     PROVIDER as CUSTOM_PROVIDER,
 )
-from argus_core.custom_accounts import CustomConfig, LeaseSettings, lease_settings
+from argus_core.custom_accounts import (
+    CustomConfig,
+    LeaseSettings,
+    lease_settings,
+    serves_role,
+)
 from argus_core.quota import QuotaHit, classify_quota, sanitize_notice
 from argus_core.tasks import Task
 
@@ -647,14 +652,14 @@ async def earliest_reset(
     if role == "engine" and runtime_providers is None:
         return (await engine_pool(tx.conn, None)).next_reset
     async with tx.conn.execute(
-        "SELECT provider, exhausted_until FROM accounts WHERE state = 'exhausted'"
-        " AND exhausted_until IS NOT NULL"
+        "SELECT provider, config, exhausted_until FROM accounts"
+        " WHERE state = 'exhausted' AND exhausted_until IS NOT NULL"
     ) as cur:
         rows = await cur.fetchall()
     marks = [
         datetime.fromisoformat(r["exhausted_until"])
         for r in rows
-        if role_accepts(role, r["provider"], runtime_providers)
+        if role_accepts(role, r["provider"], runtime_providers) and _serves(r, role)
     ]
     return min(marks, default=None)
 
@@ -934,6 +939,12 @@ async def _try_lease(
     return None
 
 
+def _serves(row: aiosqlite.Row, role: LeaseRole) -> bool:
+    """A custom account with no model for `role` cannot serve it (only that role)."""
+    config = CustomConfig.model_validate_json(row["config"]) if row["config"] else None
+    return serves_role(row["provider"], config, role)
+
+
 def _settings(row: aiosqlite.Row, role: LeaseRole) -> LeaseSettings | None:
     """Where and how to call a custom account, for the role it is leased in."""
     if row["provider"] != CUSTOM_PROVIDER or not row["config"]:
@@ -968,6 +979,7 @@ async def _ranked(
             r
             for r in rows
             if role_accepts(role, r["provider"], runtime_providers)
+            and _serves(r, role)
             and (
                 (reuse and r["mine"] is not None)
                 or r["max_leases"] is None
