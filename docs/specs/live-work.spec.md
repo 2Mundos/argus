@@ -11,8 +11,9 @@ Argus already has:
    attempt as a feed. It updates from the live event stream.
 2. **Agent drawer.** Opened from the Agents tab or from a task's assignee, it shows
    the agent (state, heartbeat, runtime, capabilities, instance), the task it
-   holds with the same activity, and, when the agent runs on a pool instance, the
-   tail of that instance's container output, refreshed while the drawer is open.
+   holds with the same activity, and that task's live log (NanoClaw/delegate
+   stream). When it holds no task but runs on a pool instance, the container
+   output tail is shown instead.
 
 The sources are:
 
@@ -59,11 +60,16 @@ The sources are:
   The Drain action stays on the table.
 - Current work: `GET /api/tasks?assignee={id}&state=claimed`, each with its title
   and the activity of 3.1.
-- Container output: when the agent has an `instance_id`, the last 200 lines of
-  `GET /api/instances/{id}/logs`, re-read every 5 s while the drawer is open and
-  not paused, kept scrolled to the end unless the reader scrolled up. A failure
-  (target unreachable, not permitted) shows its message in place and keeps
-  retrying. Closing the drawer stops the reads.
+- Live stream: when the agent holds a claimed task, the same **Ao vivo** panel as
+  the task view ([task live log](task-live-log.spec.md) 3.6) for that attempt —
+  that is the NanoClaw/delegate output, not container stdout.
+- Container output (fallback): when the agent holds no task but has an
+  `instance_id`, the last 200 lines of `GET /api/instances/{id}/logs`, re-read
+  every few seconds while the drawer/panel is open and not paused, kept scrolled
+  to the end unless the reader scrolled up. A failure (target unreachable, not
+  permitted) shows its message in place and keeps retrying. Closing stops the
+  reads. At NanoClaw's default level this is lifecycle lines only (claims,
+  sessions, warnings), not the agent's own stream.
 
 ## 3.3 `assignee` filter
 

@@ -5,7 +5,7 @@ import logoUrl from "../../../assets/logo.svg";
 export function Brand({ as: Tag = "span" }: { as?: ElementType }) {
   return (
     <Tag className="brand" aria-label="Argus">
-      <img src={logoUrl} alt="" width={44} height={64} />
+      <img src={logoUrl} alt="" width={22} height={32} />
       <span className="brand-name">Argus</span>
     </Tag>
   );

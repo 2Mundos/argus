@@ -114,10 +114,11 @@ run. URL schemes are bounded to 16 characters; names, URL users and passwords ar
 
 ## 3.6 Dashboard
 
-- Panel **Ao vivo** in the task view: backfill with 3.5, then follow `task.log` through
-  the shared event stream for that task, de-duplicated by `seq`. It shows the attempt,
-  filters `todos` / `worker` / `delegate`, scrolls to the end while the reader is at the
-  end, and has pause/resume (paused lines are buffered and shown on resume). When the
+- Panel **Ao vivo** in the task view and in the agent drawer/panel while that agent
+  holds the attempt: backfill with 3.5, then follow `task.log` through the shared
+  event stream for that task, de-duplicated by `seq`. It shows the attempt, filters
+  `todos` / `worker` / `delegate`, scrolls to the end while the reader is at the end,
+  and has pause/resume (paused lines are buffered and shown on resume). When the
   stream reconnects, or a batch's `seq` skips past the newest line held (or past the
   empty tail's `last_seq` when none is held), it reads the missed lines with `after`.
 - **No signal** uses the later of `progress_at` and `output_at`; the threshold is

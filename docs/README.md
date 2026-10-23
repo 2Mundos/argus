@@ -72,6 +72,9 @@ every new dependency is judged against it.
   signals (commit, PR, CI, gate) on task cards and a no-signal indicator
 - [Task live log](specs/task-live-log.spec.md) — a redacted ring of an attempt's
   output, streamed as `task.log`; the "Ao vivo" panel and MCP `get_task_log`
+- [Task steering](specs/task-steering.spec.md) — a manager sends a message to the
+  attempt in flight; delivered on heartbeat, injected into the NanoClaw session as a
+  framed operator instruction; expires with the attempt
 - [Account usage](specs/account-usage.spec.md) — tokens spent and quota left per
   provider account: reported usage, Codex quota probe, Cursor pools, charts
 - [Cost view](specs/cost-view.spec.md) — the Custo tab: tokens and estimated cost

@@ -1,16 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 import { api, call, fetchText } from "../api";
 import { relative, shortId } from "../format";
 import { useLiveData } from "../live";
 import { TaskLabel } from "../TaskLabel";
 import { renderTerminalText } from "../terminalLog";
-import { Activity, useNow } from "./Activity";
+import { useNow } from "./Activity";
+import { TaskLog } from "./TaskLog";
 
 const LOG_TAIL = 200;
 const LOG_EVERY_MS = 2000;
+const META_PCT_MIN = 12;
+const META_PCT_MAX = 70;
+const META_PCT_DEFAULT = 28;
 
 /**
- * An agent, the task it holds and its container output (live work spec 3.2).
+ * An agent, the task it holds, and its live stream (live work spec 3.2).
  * `panel` fills the main column (sidebar stays); `drawer` is the modal overlay.
  */
 export function AgentDetail({
@@ -23,6 +27,8 @@ export function AgentDetail({
   variant?: "drawer" | "panel";
 }) {
   const now = useNow();
+  const panelRef = useRef<HTMLElement>(null);
+  const [metaPct, setMetaPct] = useState(META_PCT_DEFAULT);
   const { data } = useLiveData(
     async (signal) => {
       const [agent, page] = await Promise.all([
@@ -36,21 +42,10 @@ export function AgentDetail({
           }),
         ),
       ]);
-      const work = await Promise.all(
-        page.items.flatMap((task) =>
-          "progress_at" in task
-            ? [
-                call(
-                  api.GET("/api/events", {
-                    params: { query: { subject_id: task.id, limit: 50 } },
-                    signal,
-                  }),
-                ).then((events) => ({ task, events })),
-              ]
-            : [],
-        ),
-      );
-      return { agent, work };
+      return {
+        agent,
+        work: page.items.filter((task) => "progress_at" in task),
+      };
     },
     [agentId],
   );
@@ -65,18 +60,53 @@ export function AgentDetail({
     return () => window.removeEventListener("keydown", onKey);
   }, [variant, onClose]);
 
-  const toolbar = (
-    <div className="toolbar">
-      <h2>{agent?.name ?? "…"}</h2>
-      <button type="button" className="link" onClick={onClose}>
-        Close
-      </button>
-    </div>
+  function onSplitPointerDown(e: ReactPointerEvent<HTMLHRElement>) {
+    if (e.button !== 0) return;
+    const panel = panelRef.current;
+    const metaEl = panel?.querySelector(".worker-panel-meta");
+    if (!panel || !metaEl) return;
+    e.preventDefault();
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    const top = metaEl.getBoundingClientRect().top;
+    const total = panel.getBoundingClientRect().bottom - top;
+    const prevCursor = document.body.style.cursor;
+    const prevSelect = document.body.style.userSelect;
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+
+    const onMove = (ev: PointerEvent) => {
+      if (total <= 0) return;
+      const pct = ((ev.clientY - top) / total) * 100;
+      setMetaPct(Math.min(META_PCT_MAX, Math.max(META_PCT_MIN, pct)));
+    };
+    const onUp = (ev: PointerEvent) => {
+      handle.releasePointerCapture(ev.pointerId);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevSelect;
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+  }
+
+  const close = (
+    <button type="button" className="icon-close" aria-label="Close" onClick={onClose}>
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <path
+          d="M3.2 3.2a.75.75 0 0 1 1.06 0L8 6.94l3.74-3.74a.75.75 0 1 1 1.06 1.06L9.06 8l3.74 3.74a.75.75 0 1 1-1.06 1.06L8 9.06l-3.74 3.74a.75.75 0 1 1-1.06-1.06L6.94 8 3.2 4.26a.75.75 0 0 1 0-1.06Z"
+          fill="currentColor"
+        />
+      </svg>
+    </button>
   );
 
   const meta = agent && (
     <>
       <dl className="facts">
+        <dt>Name</dt>
+        <dd>{agent.name}</dd>
         <dt>Role</dt>
         <dd>{agent.role}</dd>
         <dt>State</dt>
@@ -101,43 +131,81 @@ export function AgentDetail({
         <dt>Instance</dt>
         <dd>{agent.instance_id ? shortId(agent.instance_id) : "none"}</dd>
       </dl>
-      <h3>Current work</h3>
-      {data.work.length === 0 && <p className="muted">Holds no task.</p>}
-      {data.work.map(({ task, events }) => (
-        <div key={task.id}>
-          <p>
-            <strong>
-              <TaskLabel title={task.title} project={task.project} />
-            </strong>{" "}
-            <span className="muted small">
-              {shortId(task.id)} · attempt {task.attempt}
-            </span>
-          </p>
-          <Activity task={task} events={events} />
-        </div>
-      ))}
+      <table className="work-table">
+        <thead>
+          <tr>
+            <th>Task</th>
+            <th>Attempt</th>
+            <th>Progress</th>
+            <th>Note</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.work.length === 0 ? (
+            <tr>
+              <td colSpan={5} className="muted">
+                Holds no task.
+              </td>
+            </tr>
+          ) : (
+            data.work.map((task) => (
+              <tr key={task.id}>
+                <td>
+                  <TaskLabel title={task.title} project={task.project} />{" "}
+                  <span className="muted small">{shortId(task.id)}</span>
+                </td>
+                <td>{task.attempt}</td>
+                <td>{task.progress_percent != null ? `${task.progress_percent}%` : "—"}</td>
+                <td>{task.progress_message ?? "—"}</td>
+                <td className="muted small">
+                  {task.progress_at ? `updated ${relative(task.progress_at, now)}` : "silent"}
+                  {task.state === "claimed" && ` · lease ${relative(task.lease_expires_at, now)}`}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
     </>
   );
 
-  const output = agent && (
-    <>
-      <h3>Container output</h3>
-      {agent.instance_id ? (
-        <LogTail instanceId={agent.instance_id} tail={LOG_TAIL} />
-      ) : (
-        <p className="muted">
-          This agent was not started from a pool, so Argus cannot read its output.
-        </p>
-      )}
-    </>
-  );
+  // Prefer the task live log (NanoClaw/delegate stream). Container stdout is only
+  // the worker process lifecycle, and only when no claimed task is held.
+  const held = data?.work[0];
+  const output =
+    agent &&
+    (held && held.attempt > 0 ? (
+      <TaskLog taskId={held.id} attempt={held.attempt} />
+    ) : agent.instance_id ? (
+      <LogTail instanceId={agent.instance_id} tail={LOG_TAIL} />
+    ) : (
+      <p className="muted">
+        This agent was not started from a pool, so Argus cannot read its output.
+      </p>
+    ));
 
   if (variant === "panel") {
     return (
-      <section className="worker-panel">
-        {toolbar}
-        {meta && <div className="worker-panel-meta">{meta}</div>}
-        {output}
+      <section className="worker-panel" ref={panelRef}>
+        {close}
+        {meta && (
+          <>
+            <div className="worker-panel-meta" style={{ flex: `0 0 ${metaPct}%` }}>
+              {meta}
+            </div>
+            <hr
+              className="worker-split"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-valuenow={Math.round(metaPct)}
+              aria-valuemin={META_PCT_MIN}
+              aria-valuemax={META_PCT_MAX}
+              onPointerDown={onSplitPointerDown}
+            />
+          </>
+        )}
+        {output && <div className="worker-panel-output">{output}</div>}
       </section>
     );
   }
@@ -145,7 +213,7 @@ export function AgentDetail({
   return (
     <div className="overlay" onClick={onClose} onKeyDown={(e) => e.key === "Escape" && onClose()}>
       <aside className="drawer" onClick={(e) => e.stopPropagation()} onKeyDown={() => {}}>
-        {toolbar}
+        {close}
         {meta}
         {output}
       </aside>

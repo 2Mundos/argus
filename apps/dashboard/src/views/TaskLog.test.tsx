@@ -61,7 +61,7 @@ describe("TaskLog", () => {
     render(<TaskLog taskId="t1" attempt={2} />);
     await screen.findByText("first");
     expect(mock.query).toEqual({ attempt: 2 });
-    expect(screen.getByText("tentativa 2")).toBeTruthy();
+    expect(screen.getByText(/tentativa 2/)).toBeTruthy();
     emit("t1", 2, 1, ["first", "second"]);
     expect(screen.getAllByText("first")).toHaveLength(1);
     expect(screen.getByText("second")).toBeTruthy();
