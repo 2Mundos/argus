@@ -1,5 +1,6 @@
 import itertools
 import json
+import re
 from collections.abc import Generator
 from pathlib import Path
 
@@ -539,3 +540,24 @@ def test_model_policy_tools_match_rest(
 
     reset = tool(client, ADMIN_TOKEN, "reset_model_policy")
     assert (reset["source"], reset["revision"]) == ("defaults", before["revision"])
+
+
+def test_orchestrator_skill_is_served(client: TestClient) -> None:
+    token = register(client, "orchestrator")
+    uri = "skill://argus-orchestrator/SKILL.md"
+    listed = rpc(client, token, "resources/list")["resources"]
+    assert [r["uri"] for r in listed] == [uri]
+    read = rpc(client, token, "resources/read", {"uri": uri})["contents"][0]
+    assert read["mimeType"] == "text/markdown"
+    assert read["text"].startswith("---\nname: argus-orchestrator\n")
+    prompt = rpc(client, token, "prompts/get", {"name": "argus-orchestrator"})
+    assert prompt["messages"][0]["content"]["text"] == read["text"]
+
+
+def test_orchestrator_skill_names_only_real_tools() -> None:
+    # A backticked name that starts like a tool (get_, list_, answer_, ...) must be one.
+    verbs = {name.split("_")[0] for name in mcp_server.audiences}
+    named = set(re.findall(r"`([a-z]+_[a-z_]+)", mcp_server.ORCHESTRATOR_SKILL))
+    tool_like = {n for n in named if n.split("_")[0] in verbs}
+    assert tool_like - set(mcp_server.audiences) == set()
+    assert {"get_inbox", "answer_decisions", "wait_for_events"} <= tool_like

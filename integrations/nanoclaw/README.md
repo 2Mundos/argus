@@ -309,6 +309,13 @@ never interrupt claimed work; admins change options with `update_pool`, passing
 the pool's `version`; `wait_for_events` waits for the effect instead of polling.
 If a tool is missing, say which and stop; do not script REST around it.
 
+The full orchestrator playbook (rules, decision kinds and their effects, how to
+review, unstick and route work, error codes) is the
+[`argus-orchestrator` skill](../../skills/argus-orchestrator/SKILL.md). Argus
+serves it over MCP as the resource `skill://argus-orchestrator/SKILL.md` and as
+the prompt `argus-orchestrator`; a client that installs skills can also copy
+the `skills/argus-orchestrator/` folder.
+
 The channel reports its `runtime` on every heartbeat: `nanoclaw/<version>` from
 the host's `package.json`, the engine the leased account selected, and the
 executor lease's provider. Parts it does not know are sent as null and shown as

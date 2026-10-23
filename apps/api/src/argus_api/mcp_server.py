@@ -10,6 +10,7 @@ orchestrator-style tools).
 
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import FunctionType
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
@@ -27,6 +28,7 @@ from fastapi import FastAPI
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.mcpserver.resources import TextResource
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_REQUEST
@@ -63,9 +65,38 @@ For the fleet: inspect_pool shows what each instance is proven to run (a fact's
 work (recycle_instance(requeue=true) and release_task requeue it without costing an
 attempt); admins change options with update_pool(expected_version=the pool's version).
 wait_for_events(subject_type, subject_id) waits for the change to happen instead
-of polling; then inspect_pool or get_tasks reads back the effect."""
+of polling; then inspect_pool or get_tasks reads back the effect.
+
+Orchestrators: read the skill at skill://argus-orchestrator/SKILL.md (also the
+prompt "argus-orchestrator") before acting: what you must and must not do."""
 
 server = MCPServer("argus", version="0.1.0", instructions=INSTRUCTIONS)
+
+# The orchestrator skill, in the Agent Skills format (SKILL.md), served as an MCP
+# resource and as a prompt so any connected client can load it (MCP operations 3.4).
+ORCHESTRATOR_SKILL = (
+    Path(__file__).parent / "skills" / "argus-orchestrator" / "SKILL.md"
+).read_text()
+server.add_resource(
+    TextResource(
+        uri="skill://argus-orchestrator/SKILL.md",
+        name="argus-orchestrator",
+        title="Argus orchestrator skill",
+        description="What an orchestrator can and must do with the Argus tools.",
+        mime_type="text/markdown",
+        text=ORCHESTRATOR_SKILL,
+    )
+)
+
+
+@server.prompt(
+    name="argus-orchestrator",
+    title="Argus orchestrator",
+    description="Load the Argus orchestrator skill before running the fleet.",
+)
+def orchestrator_skill() -> str:
+    return ORCHESTRATOR_SKILL
+
 
 _app: FastAPI | None = None
 
