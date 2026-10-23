@@ -19,7 +19,7 @@ hooks: ## Enable .githooks/pre-push.
 .PHONY: dev-api dev-dashboard
 dev-api: ## Run the API with reload on :8000.
 	$(UV) run uvicorn argus_api.main:app --reload
-dev-dashboard: ## Run the dashboard on :3000.
+dev-dashboard: ## Run the dashboard on :3000 (ARGUS_API_URL overrides the API proxy target).
 	$(PNPM) dev
 
 .PHONY: test-docker

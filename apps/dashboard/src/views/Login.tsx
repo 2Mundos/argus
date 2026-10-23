@@ -1,5 +1,6 @@
 import { type FormEvent, useState } from "react";
 import { api, call, setToken } from "../api";
+import { Brand } from "../Brand";
 
 export function Login({ onLogin }: { onLogin: () => void }) {
   const [value, setValue] = useState("");
@@ -25,7 +26,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
   return (
     <main className="login">
       <form onSubmit={submit} className="card">
-        <h1>Argus</h1>
+        <Brand as="h1" />
         <p className="muted">
           Paste an admin token. The first one is in <code>/data/admin-token</code>.
         </p>

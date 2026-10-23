@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { handleUnauthorized, setToken, token } from "./api";
+import { Brand } from "./Brand";
 import { LiveProvider, useLive } from "./live";
+import { WorkersSidebar } from "./WorkersSidebar";
 import { Accounts } from "./views/Accounts";
+import { AgentDetail } from "./views/AgentDetail";
 import { Agents } from "./views/Agents";
 import { Cost } from "./views/Cost";
 import { Engines } from "./views/Engines";
@@ -54,17 +57,21 @@ export function App() {
 
 function Shell({ onSignOut }: { onSignOut: () => void }) {
   const [tab, setTab] = useState<Tab>(currentTab);
+  const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
   const { status } = useLive();
   useEffect(() => {
-    const onHash = () => setTab(currentTab());
+    const onHash = () => {
+      setTab(currentTab());
+      setSelectedWorker(null);
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
   return (
-    <div className="shell">
+    <div className={`shell${selectedWorker ? " shell-worker" : ""}`}>
       <header>
-        <strong className="brand">Argus</strong>
+        <Brand as="strong" />
         <nav>
           {(Object.keys(TABS) as Tab[]).map((key) => (
             <a key={key} href={`#${key}`} aria-current={tab === key ? "page" : undefined}>
@@ -72,27 +79,41 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
             </a>
           ))}
         </nav>
-        <span className={`status status-${status}`} title={`Event stream: ${status}`}>
-          {status}
-        </span>
-        <button type="button" className="link" onClick={onSignOut}>
-          Sign out
-        </button>
+        <div className="header-end">
+          <span className={`status status-${status}`} title={`Event stream: ${status}`}>
+            {status}
+          </span>
+          <button type="button" className="link" onClick={onSignOut}>
+            Sign out
+          </button>
+        </div>
       </header>
       <main>
-        {tab === "home" && <Home />}
-        {tab === "tasks" && <Tasks />}
-        {tab === "agents" && <Agents />}
-        {tab === "pools" && <Pools />}
-        {tab === "frota" && <Frota />}
-        {tab === "inbox" && <Inbox />}
-        {tab === "knowledge" && <Knowledge />}
-        {tab === "accounts" && <Accounts />}
-        {tab === "cost" && <Cost />}
-        {tab === "engines" && <Engines />}
-        {tab === "events" && <Events />}
-        {tab === "system" && <System />}
+        {selectedWorker ? (
+          <AgentDetail
+            key={selectedWorker}
+            agentId={selectedWorker}
+            onClose={() => setSelectedWorker(null)}
+            variant="panel"
+          />
+        ) : (
+          <>
+            {tab === "home" && <Home />}
+            {tab === "tasks" && <Tasks />}
+            {tab === "agents" && <Agents />}
+            {tab === "pools" && <Pools />}
+            {tab === "frota" && <Frota />}
+            {tab === "inbox" && <Inbox />}
+            {tab === "knowledge" && <Knowledge />}
+            {tab === "accounts" && <Accounts />}
+            {tab === "cost" && <Cost />}
+            {tab === "engines" && <Engines />}
+            {tab === "events" && <Events />}
+            {tab === "system" && <System />}
+          </>
+        )}
       </main>
+      <WorkersSidebar selectedId={selectedWorker} onSelect={setSelectedWorker} />
     </div>
   );
 }

@@ -119,8 +119,8 @@ describe("AgentDetail", () => {
     expect(screen.getByText(/session started/)).toBeTruthy();
     expect(mock.fetchText).toHaveBeenCalledWith("/api/instances/inst-1/logs?tail=200");
 
-    await flush(10_000);
-    expect(mock.fetchText).toHaveBeenCalledTimes(3);
+    await flush(4_000);
+    expect(mock.fetchText).toHaveBeenCalledTimes(3); // t=0, 2s, 4s
     unmount();
     await flush(10_000);
     expect(mock.fetchText).toHaveBeenCalledTimes(3); // closing stops the reads
