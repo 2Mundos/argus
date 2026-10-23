@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -63,3 +63,8 @@ class Ask(BaseModel):
     question: str = Field(min_length=1, max_length=10_000)
     options: list[str] | None = Field(default=None, min_length=2)
     audience: Audience = Audience.ANY
+    # `assistance`: a technical blocker (a tool, credential or service is missing)
+    # asked of the orchestrator, never a decision about the goal. It cannot target a
+    # human audience; `resource` names what is missing.
+    category: Literal["decision", "assistance"] = "decision"
+    resource: str | None = Field(default=None, min_length=1, max_length=100)

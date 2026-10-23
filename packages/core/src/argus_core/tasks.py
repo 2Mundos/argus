@@ -22,6 +22,7 @@ from pydantic import (
 )
 
 from argus_core.accounts import ENGINE_PROVIDERS
+from argus_core.continuation import ChecklistReport, EffectiveContinuation
 from argus_core.difficulty import Difficulty, DifficultySource
 from argus_core.knowledge import KnowledgeRef
 from argus_core.model_trace import ModelsSummary
@@ -290,6 +291,8 @@ class TaskResult(BaseModel):
     data: dict[str, Any] | None = None
     artifacts: list[str] = []  # artifact ids uploaded for this task
     usage: Usage | None = None
+    # The worker's claim per checklist item; an item without proof is not done.
+    checklist: list[ChecklistReport] = []
 
 
 SPEC_MAX_LENGTH = 200_000
@@ -438,6 +441,8 @@ class Task(BaseModel):
     failover: Failover | None = None
     # Models per layer (model observability 3.6): derived, never stored here.
     models: ModelsSummary = ModelsSummary()
+    # The continuation contract (task continuation spec): stored facts + derived view.
+    continuation: EffectiveContinuation | None = None
 
     @computed_field  # deprecated: read `difficulty`
     @property

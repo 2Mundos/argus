@@ -58,6 +58,7 @@ import {
   releaseRepositoryLease,
   runtimeProviders,
 } from "./argus-accounts.js";
+import { defaultContinuationObserve } from "./argus-continuation-observe.js";
 import { syncCustomHarnessBridge } from "./argus-custom-bridge.js";
 import {
   customHarnessFromLease,
@@ -112,7 +113,32 @@ export interface HeldAccounts {
   executor_settings?: CustomLeaseSettings | null;
 }
 
+/** What a runtime saw of the live system for a task (preflight observation body, minus the attempt). */
+export interface Observation {
+  artifacts?: Array<{
+    kind: "branch" | "pr" | "commit";
+    ref: string;
+    url?: string;
+    head_sha?: string;
+    state: "unknown" | "open" | "merged" | "closed" | "local_only";
+  }>;
+  environment?: Array<{
+    resource: string;
+    installed?: string;
+    credential_usable?: string;
+    reachable?: string;
+    permitted?: string;
+    validated?: string;
+  }>;
+  wip?: { summary: string; ref?: string };
+}
+
 export interface ArgusConfig {
+  /**
+   * Override the default read-only Gitea preflight (after a repository lease). When
+   * omitted, the channel observes PR artifacts through the scoped allowlist + OneCLI proxy.
+   */
+  observe?: (task: ArgusTask) => Promise<Observation | null>;
   url: string;
   bootstrapToken?: string;
   agentToken?: string;
@@ -213,6 +239,61 @@ export interface ArgusTask {
   account_providers?: string[] | null;
   /** The one account its engine lease may use (task models spec 3.4); null: any. */
   harness_account?: string | null;
+  /** Continuation contract (task continuation spec); missing on older servers. */
+  continuation?: ContinuationContract | null;
+}
+
+export type ContinuationPhase = "implement" | "resume" | "reconcile" | "qa" | "close_evidence";
+
+/** The effective contract as the API serves it. Free-text fields are untrusted data. */
+export interface ContinuationContract {
+  revision: number;
+  phase: ContinuationPhase;
+  phase_source?: "explicit" | "derived";
+  objective?: string | null;
+  artifacts: Array<{
+    kind: "branch" | "pr" | "commit";
+    ref: string;
+    url?: string | null;
+    head_sha?: string | null;
+    state: "unknown" | "open" | "merged" | "closed" | "local_only";
+    provenance: string;
+    observed_at: string;
+    attempt?: number | null;
+    note?: string | null;
+  }>;
+  wip?: { summary: string; ref?: string | null; provenance: string; observed_at: string } | null;
+  interruption?: { attempt: number; reason: string; detail?: string | null; at: string } | null;
+  checklist: Array<{
+    id: string;
+    text: string;
+    status: "pending" | "done" | "verification_missing";
+    evidence?: string | null;
+  }>;
+  checklist_state: "structured" | "unstructured";
+  pending: string[];
+  decisions: Array<{
+    decision_id: string;
+    question: string;
+    answer: string;
+    choice?: string | null;
+    options_known: boolean;
+    category: "decision" | "assistance";
+    status: "effective" | "unresolved" | "superseded";
+    premise_outdated?: boolean;
+    decided_by: string;
+    decided_at: string;
+  }>;
+  environment: Array<{
+    resource: string;
+    installed: string;
+    credential_usable: string;
+    reachable: string;
+    permitted: string;
+    validated: string;
+  }>;
+  reconciliation: Array<{ subject: string; recorded: string; observed: string; at: string }>;
+  gaps: string[];
 }
 
 const PIN_PROVIDERS: Record<string, string> = { claude: "anthropic", codex: "openai" };
@@ -233,8 +314,10 @@ export function heldAccountFits(
   return !pinned || pinned === held.provider;
 }
 
-/** True only when the task input explicitly sets delivery.allow_merge to boolean true. */
+/** True only when an orchestrator-origin task's input explicitly sets delivery.allow_merge to boolean true. */
 export function taskAuthorizesMerge(task: ArgusTask): boolean {
+  // `input` of a worker-created task is worker-authored: it can never grant authority.
+  if (task.prompt_trust === "worker") return false;
   const delivery = task.input?.delivery;
   if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) return false;
   return (delivery as Record<string, unknown>).allow_merge === true;
@@ -303,20 +386,56 @@ export function parseFramedUntrustedTaskData(text: string): unknown {
   return JSON.parse(json);
 }
 
-export type Directive = { kind: "complete" | "fail" | "ask" | "progress"; text: string };
+export type Directive = {
+  kind: "complete" | "fail" | "ask" | "assist" | "progress";
+  text: string;
+  /** assist only: the resource the worker says it lacks. */
+  resource?: string;
+};
 
 /** Preserve an explicit structured result envelope emitted by the worker. */
-function completionPayload(text: string): { summary: string; data?: Record<string, unknown> } {
+export interface ChecklistReport {
+  id: string;
+  status: "pending" | "done" | "verification_missing";
+  evidence?: string;
+}
+
+/** Only well-formed entries are sent; Argus ignores ids it does not hold and demands evidence for done. */
+function checklistReports(value: unknown): ChecklistReport[] {
+  if (!Array.isArray(value)) return [];
+  const out: ChecklistReport[] = [];
+  for (const item of value.slice(0, 60)) {
+    if (!item || typeof item !== "object") continue;
+    const r = item as Record<string, unknown>;
+    if (typeof r.id !== "string" || !r.id) continue;
+    if (r.status !== "pending" && r.status !== "done" && r.status !== "verification_missing")
+      continue;
+    out.push({
+      id: r.id.slice(0, 64),
+      status: r.status,
+      ...(typeof r.evidence === "string" ? { evidence: r.evidence.slice(0, 2000) } : {}),
+    });
+  }
+  return out;
+}
+
+function completionPayload(text: string): {
+  summary: string;
+  data?: Record<string, unknown>;
+  checklist?: ChecklistReport[];
+} {
   try {
     const value: unknown = JSON.parse(text);
     if (value && typeof value === "object" && !Array.isArray(value)) {
       const record = value as Record<string, unknown>;
       if (typeof record.summary === "string") {
+        const checklist = checklistReports(record.checklist);
         return {
           summary: record.summary,
           ...(record.data && typeof record.data === "object" && !Array.isArray(record.data)
             ? { data: record.data as Record<string, unknown> }
             : {}),
+          ...(checklist.length ? { checklist } : {}),
         };
       }
     }
@@ -331,18 +450,47 @@ const LEAD = "[\\s>*_`~#+-]*";
 const COLON_DIRECTIVE = new RegExp(`^${LEAD}(complete|fail|ask)[*_\`~]*\\s*[:：][*_\`~]*\\s*`, "i");
 // "FAIL - why": only the upper-case keyword, so prose like "Ask - then" stays progress.
 const DASH_DIRECTIVE = new RegExp(`^${LEAD}(COMPLETE|FAIL|ASK)[*_\`~]*\\s+[-–—]\\s+`);
+// "ASSIST: resource: what is missing" — upper case only, a technical-assistance request.
+const ASSIST_DIRECTIVE = new RegExp(`^${LEAD}(ASSIST)[*_\`~]*\\s*[:：][*_\`~]*\\s*`);
+const ASSIST_RESOURCE = /^([A-Za-z0-9._-]{1,40})\s*:\s*([\s\S]+)$/;
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * "ASK on <task-id>: …" / "FAIL for task <task-id>: …": the keyword in upper case, then
+ * on|for, then exactly the id of the task in flight. Anything else (another id, lower
+ * case, prose that merely mentions a task) stays progress — a directive must be
+ * unambiguous about both its verb and the task it acts on.
+ */
+function scopedDirective(taskId: string): RegExp {
+  return new RegExp(
+    `^${LEAD}(COMPLETE|FAIL|ASK|ASSIST)[*_\`~]*\\s+(?:on|for)\\s+(?:task\\s+)?${escapeRegExp(taskId)}[*_\`~]*\\s*[:：][*_\`~]*\\s*`,
+  );
+}
 
 /**
  * Interpret an agent reply. A directive is read at the start of the first non-blank
  * line, case-insensitively, tolerating markdown around it (`**FAIL:**`, `> FAIL:`,
  * `- FAIL:`) and `KEYWORD - text`; the rest of the reply (further paragraphs
- * included) is its text.
+ * included) is its text. With `taskId`, the upper-case scoped form
+ * `ASK on <taskId>: …` is a directive too, for that id only.
  */
-export function parseReply(raw: string): Directive {
+export function parseReply(raw: string, taskId?: string): Directive {
   const text = raw.trim();
-  const m = COLON_DIRECTIVE.exec(text) ?? DASH_DIRECTIVE.exec(text);
-  if (!m) return { kind: "progress", text };
-  return { kind: m[1]!.toLowerCase() as Directive["kind"], text: text.slice(m[0].length).trim() };
+  const scoped = taskId ? scopedDirective(taskId).exec(text) : null;
+  const m = COLON_DIRECTIVE.exec(text) ?? DASH_DIRECTIVE.exec(text) ?? scoped;
+  if (m) {
+    return { kind: m[1]!.toLowerCase() as Directive["kind"], text: text.slice(m[0].length).trim() };
+  }
+  const a = ASSIST_DIRECTIVE.exec(text);
+  if (!a) return { kind: "progress", text };
+  const rest = text.slice(a[0].length).trim();
+  const r = ASSIST_RESOURCE.exec(rest);
+  return r
+    ? { kind: "assist", resource: r[1], text: r[2]!.trim() }
+    : { kind: "assist", text: rest };
 }
 
 /**
@@ -392,6 +540,171 @@ export const customHarnessRules = (cli: string | null): string[] => [
       ]),
 ];
 
+const SPEC_MAX_CHARS = 30_000; // the original spec; the full text stays in Argus (get_task)
+const HISTORY_MAX_CHARS = 3_000; // the newest part of the audit narrative
+const CONTRACT_TEXT_MAX = 600;
+const CONTRACT_LIST_MAX = 12;
+
+function clip(text: string | null | undefined, max: number): string | null {
+  if (!text) return null;
+  return text.length > max ? `${text.slice(0, max)}…[truncated]` : text;
+}
+
+/** Original spec versus the "## Clarifications" audit narrative appended by answered questions. */
+export function splitSpec(spec: string): { original: string; clarifications: string } {
+  const at = `\n${spec}`.indexOf("\n## Clarifications\n");
+  if (at < 0) return { original: spec, clarifications: "" };
+  return {
+    original: spec.slice(0, Math.max(at - 1, 0)).trimEnd(),
+    clarifications: spec.slice(at).trim(),
+  };
+}
+
+/**
+ * The effective contract as bounded DATA (it carries worker/orchestrator free text, so it
+ * lives inside the untrusted frame). Superseded decisions are counted, not repeated.
+ */
+export function contractView(c: ContinuationContract): Record<string, unknown> {
+  const decisions = c.decisions.filter((d) => d.status !== "superseded");
+  return {
+    revision: c.revision,
+    phase: c.phase,
+    objective: clip(c.objective, CONTRACT_TEXT_MAX),
+    artifacts: c.artifacts.slice(-CONTRACT_LIST_MAX).map((a) => ({
+      kind: a.kind,
+      ref: a.ref,
+      url: a.url ?? null,
+      head_sha: a.head_sha ?? null,
+      state: a.state,
+      provenance: a.provenance,
+      observed_at: a.observed_at,
+      note: clip(a.note, CONTRACT_TEXT_MAX),
+    })),
+    wip: c.wip
+      ? {
+          summary: clip(c.wip.summary, CONTRACT_TEXT_MAX),
+          ref: c.wip.ref ?? null,
+          observed_at: c.wip.observed_at,
+        }
+      : null,
+    interruption: c.interruption
+      ? {
+          attempt: c.interruption.attempt,
+          reason: c.interruption.reason,
+          detail: clip(c.interruption.detail, CONTRACT_TEXT_MAX),
+          at: c.interruption.at,
+        }
+      : null,
+    checklist_state: c.checklist_state,
+    checklist: c.checklist.slice(0, 40).map((i) => ({
+      id: i.id,
+      text: clip(i.text, CONTRACT_TEXT_MAX),
+      status: i.status,
+      evidence: clip(i.evidence, CONTRACT_TEXT_MAX),
+    })),
+    pending: c.pending,
+    decisions: decisions.slice(0, CONTRACT_LIST_MAX).map((d) => ({
+      id: d.decision_id,
+      category: d.category,
+      status: d.status,
+      premise_outdated: d.premise_outdated ?? false,
+      question: clip(d.question, CONTRACT_TEXT_MAX),
+      answer: clip(d.answer, CONTRACT_TEXT_MAX),
+      decided_by: d.decided_by,
+      decided_at: d.decided_at,
+      scope: "this task",
+    })),
+    superseded_decisions: c.decisions.length - decisions.length,
+    environment: c.environment.slice(0, CONTRACT_LIST_MAX),
+    reconciliation: c.reconciliation,
+    gaps: c.gaps,
+  };
+}
+
+/** Attempt objective per phase: a fixed sentence per enum, so no untrusted text steers it. */
+const PHASE_RULES: Record<ContinuationPhase, string[]> = {
+  implement: [
+    "Attempt objective (Argus-derived): IMPLEMENT. Argus knows of no existing branch or PR for this task, but unknown is not absent:",
+    "before creating anything, check the repository for a branch or PR that already carries this work and continue it if found.",
+  ],
+  resume: [
+    "Attempt objective (Argus-derived): RESUME existing work. effective_contract lists the known branch/PR/commit and preserved WIP.",
+    "Do NOT write a new implementation plan or open a parallel branch or duplicate PR. Preflight first: re-read the live state of each recorded",
+    "artifact, then continue the same branch/PR with normal pushes (never force-push) and keep preserved local WIP. Delegate only the remaining gaps.",
+    "The original spec's goal is history for this attempt; effective_contract and the checklist define what is left.",
+  ],
+  reconcile: [
+    "Attempt objective (Argus-derived): RECONCILE. Recorded and live evidence disagree on the items in effective_contract.reconciliation.",
+    "Settle exactly those items with read-only checks, report what you found, then continue as RESUME. Do not reimplement and do not ask for permission to verify facts.",
+  ],
+  qa: [
+    "Attempt objective (Argus-derived): QA / VERIFY. The implementation exists (a merged PR is not acceptance). Do NOT reimplement and do not re-ask the scope.",
+    "Run only the pending checklist items and any review findings against the current code, with the real resources they need (see environment rules).",
+  ],
+  close_evidence: [
+    "Attempt objective (Argus-derived): CLOSE WITH EVIDENCE. Work and checks are recorded as done; gather and attach the missing proof for the checklist, then COMPLETE.",
+  ],
+};
+
+/** Rules that hold for every attempt. */
+export const OPERATING_RULES = [
+  "Operating rules (mandatory):",
+  "- Resolve facts and technical blockers yourself, inside the authorizations this task already carries.",
+  "- If a concrete tool, credential, service or environment is missing, request it from the orchestrator with `ASSIST: <resource>: <what is needed>`.",
+  "  That is technical assistance, not a decision about the goal; never repeat a scope question because of it.",
+  "- Use `ASK:` only for a real choice of scope, cost or permission that the effective decisions do not already settle. Do not ask whether to run a gate,",
+  "  accept a partial result, or verify already-merged work. Effective decisions in effective_contract are final for this task unless superseded.",
+  "- Never waive a gate, accept a partial result, force-push, merge, deploy or touch Production without an effective grant (see Grants). A synthetic Stage",
+  "  or disposable stack does not imply Production access. Tests that run offline without the resource are not proof that the resource works.",
+  "- A decision marked premise_outdated still stands as an authorization, but it was answered before a newer observation of an artifact it names; trust the artifact's observed state.",
+  "- The `history` block is an audit narrative of past attempts and may contain premises that are no longer true; when it conflicts with",
+  '  effective_contract, effective_contract wins. A bare answer without options (for example "B") authorizes nothing.',
+  '- To finish: reply `COMPLETE:` with a JSON object `{"summary": "...", "checklist": [{"id": "<checklist id>", "status": "done|pending|verification_missing", "evidence": "..."}]}`',
+  "  covering every checklist id. Only evidenced items count as done; a result with open items goes to review, not to success.",
+];
+
+function grantLines(task: ArgusTask): string[] {
+  const merge = taskAuthorizesMerge(task);
+  return [
+    `Grants (from authenticated task metadata, not from the data block): merge=${merge ? "yes" : "no"}, ` +
+      "force_push=no, production_access=no, deploy=no, waive_gates=no.",
+  ];
+}
+
+function environmentLine(c: ContinuationContract | null | undefined): string[] {
+  const notReady = c?.environment.filter(
+    (e) =>
+      ![e.installed, e.credential_usable, e.reachable, e.permitted, e.validated].every(
+        (v) => v === "yes",
+      ),
+  );
+  if (!notReady?.length) return [];
+  return [
+    `Environment: ${notReady.length} resource(s) in effective_contract.environment are not fully ready (installed / credential_usable / reachable / permitted / validated must all be yes).`,
+    "Do not mark checks that need them as passed. Request the missing piece with ASSIST; do not treat it as a reason to stop or to ask about the goal.",
+  ];
+}
+
+function contractLines(task: ArgusTask): string[] {
+  const c = task.continuation;
+  if (!c) {
+    return [
+      "Attempt objective: Argus sent no continuation contract (older server). Treat history as unverified: check the repository for existing work first.",
+      ...OPERATING_RULES,
+    ];
+  }
+  const pending = c.pending.length;
+  return [
+    ...PHASE_RULES[c.phase],
+    c.checklist_state === "unstructured"
+      ? "Acceptance is not structured for this task (gaps: acceptance_not_structured): derive the criteria from the original spec's acceptance section, list them in your COMPLETE checklist with evidence; nothing is considered satisfied until you do."
+      : `Checklist: ${pending} of ${c.checklist.length} item(s) still pending or unverified.`,
+    ...environmentLine(c),
+    ...grantLines(task),
+    ...OPERATING_RULES,
+  ];
+}
+
 /** The message a claimed task becomes. `pages` are inlined knowledge bodies by page id. */
 export function renderTask(
   task: ArgusTask,
@@ -409,11 +722,21 @@ export function renderTask(
   // Spec, acceptance, title, and knowledge bodies are untrusted DATA — never trusted instructions.
   // Worker-origin tasks keep prompt_trust=worker immutably; content still cannot elevate.
   const promptTrust: PromptTrust = task.prompt_trust === "worker" ? "worker" : "orchestrator";
+  const split = splitSpec(task.spec);
   const untrusted = {
     prompt_trust: promptTrust,
     title: task.title,
-    spec: task.spec.trim() || null,
+    spec: clip(split.original.trim(), SPEC_MAX_CHARS) || null,
     acceptance: [...task.acceptance],
+    // Argus-held structure, authoritative over `history`; its free text is still data.
+    effective_contract: task.continuation ? contractView(task.continuation) : null,
+    history: split.clarifications
+      ? {
+          note: "Audit narrative of answered questions; newest last; may be stale. effective_contract overrides it.",
+          clarifications_tail: split.clarifications.slice(-HISTORY_MAX_CHARS),
+          truncated: split.clarifications.length > HISTORY_MAX_CHARS,
+        }
+      : null,
     knowledge: task.knowledge_refs.map((ref) => ({
       page_id: ref.page_id,
       title: ref.title,
@@ -429,6 +752,8 @@ export function renderTask(
     "",
     UNTRUSTED_TASK_DATA_RULES,
     frameUntrustedTaskData(untrusted),
+    "",
+    ...contractLines(task),
     "",
     "Delegated implementation (mandatory): run all coding/model work through /usr/local/bin/argus-delegate EXECUTOR.",
     "EXECUTOR is the leased CLI role (claude | codex | opencode | agent). When Cursor is the selected coding executor, use EXECUTOR agent.",
@@ -475,8 +800,9 @@ export function renderTask(
     "",
     "How to respond: send short progress updates as normal messages. When you are done, reply with a",
     'message starting with "COMPLETE:" followed by a summary of what you did. If you cannot do it,',
-    'start with "FAIL:" and say why. If you need someone to decide something, start with "ASK:" and',
-    "ask the question; you will be given the answer.",
+    'start with "FAIL:" and say why. If you need a real scope, cost or permission choice, start with "ASK:"',
+    'and ask the question; you will be given the answer. For a missing tool or environment start with "ASSIST:"',
+    "(see the operating rules). A directive must be the first thing in your reply.",
   ];
   return lines.join("\n");
 }
@@ -1120,6 +1446,41 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     return pages;
   }
 
+  /**
+   * Idempotent preflight before any delegation (continuation spec 3.3): when the runtime
+   * can observe the live system (`cfg.observe`), report what it saw so the contract the
+   * worker is handed reflects current evidence. The observation happens here, outside any
+   * Argus transaction; Argus only stores it. Best effort: no observer, no network or a
+   * failed report leaves the recorded contract as it was (unknown stays unknown).
+   */
+  async function defaultObserve(task: ArgusTask): Promise<Observation | null> {
+    return defaultContinuationObserve(task, {
+      repositoryUrl: activeRepositoryUrl,
+      allowlist: activeRepositoryAllowlist,
+    });
+  }
+
+  async function preflight(task: ArgusTask): Promise<void> {
+    const c = task.continuation;
+    if (!c || (c.phase === "implement" && c.artifacts.length === 0)) return;
+    const observeFn = cfg.observe ?? defaultObserve;
+    try {
+      const seen = await observeFn(task);
+      if (!seen) return;
+      const { data } = await client.call("POST", `/tasks/${task.id}/observations`, {
+        attempt: task.attempt,
+        ...seen,
+      });
+      const updated = (data as { continuation?: ContinuationContract } | null)?.continuation;
+      if (updated) task.continuation = updated;
+    } catch (err) {
+      log.warn("Argus preflight observation failed; continuing with the recorded contract", {
+        task: task.id,
+        err: String(err),
+      });
+    }
+  }
+
   async function injectTask(taskId: string, attempt: number, text: string): Promise<void> {
     await setupCfg!.onInbound(PLATFORM_ID, null, {
       id: `argus-${taskId}-${attempt}${resends ? `-r${resends}` : ""}`,
@@ -1350,6 +1711,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         );
         task.repository_url = normalizedRepository.cloneUrl;
       }
+      await preflight(task);
       const pages = await inlinePages(task);
       log.info("Argus task claimed", { task: task.id, attempt: task.attempt });
       if (!logRelay) await startLogRelay(task);
@@ -1734,6 +2096,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     t: { id: string; attempt: number },
     text: string,
     data?: Record<string, unknown>,
+    checklist?: ChecklistReport[],
   ): Promise<void> {
     const extra = [...attached.keys()];
     const missing = attachFailures.length ? `\n\n[Not stored: ${attachFailures.join("; ")}]` : "";
@@ -1743,6 +2106,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         result: {
           summary: text + missing,
           ...(data ? { data } : {}),
+          ...(checklist?.length ? { checklist } : {}),
           ...(extra.length ? { artifacts: extra } : {}),
         },
       });
@@ -1761,6 +2125,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       result: {
         summary,
         ...(data ? { data } : {}),
+        ...(checklist?.length ? { checklist } : {}),
         artifacts: [...new Set([artifactId, ...extra])],
       },
     });
@@ -1932,7 +2297,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       }
       const isFailureNotice =
         typeof content === "object" && content !== null && content.failureNotice === true;
-      const d = parseReply(text);
+      const d = parseReply(text, task.id);
       // The last lines of the run, before the attempt ends and Argus stops taking them.
       if (d.kind !== "progress" && !isFailureNotice) await logRelay?.drain();
       // Usage first, on every way out (a failure notice may rotate the leases it is billed to).
@@ -1942,7 +2307,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           await handleFailure(task, text, (content as Record<string, unknown>).providerFailure);
         } else if (d.kind === "complete") {
           const result = completionPayload(d.text);
-          await completeWithResult(task, result.summary || "(no summary)", result.data);
+          await completeWithResult(
+            task,
+            result.summary || "(no summary)",
+            result.data,
+            result.checklist,
+          );
           finishTask();
         } else if (d.kind === "fail") {
           await client.call("POST", `/tasks/${task.id}/fail`, {
@@ -1950,17 +2320,29 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             error: d.text || "failed",
           });
           finishTask();
-        } else if (d.kind === "ask") {
+        } else if (d.kind === "ask" || d.kind === "assist") {
           await client.call("POST", `/tasks/${task.id}/ask`, {
             attempt: task.attempt,
             question: d.text || "?",
+            // A missing tool/environment goes to the orchestrator, never to a human.
+            ...(d.kind === "assist"
+              ? { category: "assistance", ...(d.resource ? { resource: d.resource } : {}) }
+              : {}),
           });
           finishTask();
         } else {
           queueProgress(d.text);
         }
       } catch (err) {
-        if (err instanceof ArgusError && err.status === 409) {
+        if (err instanceof ArgusError && err.status === 409 && err.code === "already_answered") {
+          // The question has an effective answer: no new gate, the worker keeps going.
+          resends += 1;
+          await injectTask(
+            task.id,
+            task.attempt,
+            `[Argus] That question is already answered; do not ask it again. ${err.message}`,
+          );
+        } else if (err instanceof ArgusError && err.status === 409) {
           log.warn("Argus says this task is no longer ours; dropping the reply", {
             task: task.id,
             code: err.code,

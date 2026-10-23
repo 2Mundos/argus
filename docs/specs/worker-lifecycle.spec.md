@@ -753,6 +753,9 @@ Consequences for Argus:
      is read at the start of the first non-blank line, tolerating markdown
      decoration around it (`**FAIL:**`, `> FAIL:`, `- FAIL:`, `` `FAIL:` ``) and,
      for an upper-case keyword, ` - `/` – `/` — ` as the separator (`FAIL - why`).
+     Also `ASSIST: [resource:] text` (technical assistance) and the scoped
+     `ASK on <task-id>:` for the task in flight only ([task
+     continuation](task-continuation.spec.md) 3.8).
      The rest of the reply, including further paragraphs, is the text. A 409
      drops the reply and moves on (the task is no longer ours). A turn that ends
      with no directive at all is left to the server: the lease lapses or the
@@ -925,7 +928,8 @@ Uses:
 
 - **Questions from a worker** (`POST /tasks/{id}/ask`, lease required): the
   task goes `blocked` (lease released) until answered. The answer is appended to
-  the task spec under a **Clarifications** heading and the task returns to
+  the task spec under a **Clarifications** heading (audit history; the effective
+  decision lives in the [continuation contract](task-continuation.spec.md)) and the task returns to
   `ready`; the next claim sees it. Workers stay pull-only.
 - **Start gate**: a `requires_approval` task opens an `approval` decision
   (audience `human`, options `approve`/`reject`); reject cancels the task.

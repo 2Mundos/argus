@@ -89,6 +89,9 @@ every new dependency is judged against it.
   capabilities, pins and dependencies with one rule set for REST, MCP and the dashboard
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes
   that say whether an upgrade can be rolled back, the tagged image
+- [Task continuation](specs/task-continuation.spec.md) — one typed contract per task:
+  phase, artifacts with provenance, checklist evidence, effective decisions, gaps;
+  contract first, narrative as history
 - [Prompt-data isolation](specs/prompt-data-isolation.spec.md) — task spec,
   acceptance, and knowledge bodies as length-framed untrusted DATA; immutable
   `prompt_trust`; worker child tasks await approval

@@ -1826,6 +1826,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/continuation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Continuation
+         * @description The continuation contract: phase, known artifacts with provenance, preserved
+         *     WIP, last interruption, checklist with evidence, effective decisions and what
+         *     Argus does not know (`gaps`). Derived from stored facts; unknown is not absent.
+         */
+        get: operations["get_continuation_api_tasks__task_id__continuation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Continuation
+         * @description Settle continuation facts (orchestrator or admin): phase, artifacts, WIP,
+         *     checklist items and evidence, environment status, retire decisions. Written with
+         *     orchestrator provenance; stale `expected_revision` is 409 `stale_continuation`.
+         */
+        patch: operations["update_continuation_api_tasks__task_id__continuation_patch"];
+        trace?: never;
+    };
     "/api/tasks/{task_id}/dependencies": {
         parameters: {
             query?: never;
@@ -1922,6 +1950,28 @@ export interface paths {
          *     completes the stored one and never overwrites it (409 on a contradiction).
          */
         post: operations["report_models_api_tasks__task_id__models_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Observe Task
+         * @description The holder's runtime reports live observations (artifact state, environment
+         *     readiness, preserved WIP) made outside any transaction. Idempotent; fenced by
+         *     the attempt like every worker write.
+         */
+        post: operations["observe_task_api_tasks__task_id__observations_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2616,11 +2666,38 @@ export interface components {
             task_id: string;
         };
         /**
+         * ArtifactIn
+         * @description A caller's statement about an artifact. ContinuationProvenance and time are Argus's.
+         */
+        ArtifactIn: {
+            /** Head Sha */
+            head_sha?: string | null;
+            kind: components["schemas"]["ArtifactKind"];
+            /** Note */
+            note?: string | null;
+            /** Ref */
+            ref: string;
+            /** @default unknown */
+            state?: components["schemas"]["ArtifactState"];
+            /** Url */
+            url?: string | null;
+        };
+        /**
+         * ArtifactKind
+         * @enum {string}
+         */
+        ArtifactKind: "branch" | "pr" | "commit";
+        /**
          * ArtifactRole
          * @description What an artifact is for, declared by its uploader (MCP operations 3.2).
          * @enum {string}
          */
         ArtifactRole: "report" | "delegate_report" | "policy_snapshot" | "qa_receipt" | "other";
+        /**
+         * ArtifactState
+         * @enum {string}
+         */
+        ArtifactState: "unknown" | "open" | "merged" | "closed" | "local_only";
         /**
          * ArtifactText
          * @description A byte range of an artifact, decoded as UTF-8 when it is text.
@@ -2644,10 +2721,18 @@ export interface components {
             attempt: number;
             /** @default any */
             audience?: components["schemas"]["Audience"];
+            /**
+             * Category
+             * @default decision
+             * @enum {string}
+             */
+            category?: "decision" | "assistance";
             /** Options */
             options?: string[] | null;
             /** Question */
             question: string;
+            /** Resource */
+            resource?: string | null;
         };
         /**
          * Audience
@@ -2751,6 +2836,38 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** ChecklistItem */
+        ChecklistItem: {
+            /** Evidence */
+            evidence?: string | null;
+            /** Id */
+            id: string;
+            /** @default argus_event */
+            provenance?: components["schemas"]["ContinuationProvenance"];
+            /**
+             * Source
+             * @default acceptance
+             * @enum {string}
+             */
+            source?: "acceptance" | "orchestrator";
+            /** @default pending */
+            status?: components["schemas"]["ItemStatus"];
+            /** Text */
+            text: string;
+            /** Updated At */
+            updated_at?: string | null;
+        };
+        /**
+         * ChecklistReport
+         * @description A worker's claim about one item, sent with its result.
+         */
+        ChecklistReport: {
+            /** Evidence */
+            evidence?: string | null;
+            /** Id */
+            id: string;
+            status: components["schemas"]["ItemStatus"];
+        };
         /** ClaimRequest */
         ClaimRequest: {
             /**
@@ -2794,6 +2911,7 @@ export interface components {
              * @enum {string}
              */
             readonly complexity: "trivial" | "standard" | "hard";
+            continuation?: components["schemas"]["EffectiveContinuation"] | null;
             /**
              * Created At
              * Format: date-time
@@ -2970,6 +3088,124 @@ export interface components {
             /** Attempt */
             attempt: number;
             result: components["schemas"]["TaskResult-Input"];
+        };
+        /** ContinuationArtifact */
+        ContinuationArtifact: {
+            /** Attempt */
+            attempt?: number | null;
+            /** Head Sha */
+            head_sha?: string | null;
+            kind: components["schemas"]["ArtifactKind"];
+            /** Note */
+            note?: string | null;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            provenance: components["schemas"]["ContinuationProvenance"];
+            /** Ref */
+            ref: string;
+            /** @default unknown */
+            state?: components["schemas"]["ArtifactState"];
+            /** Url */
+            url?: string | null;
+        };
+        /** ContinuationInterruption */
+        ContinuationInterruption: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Attempt */
+            attempt: number;
+            /** Detail */
+            detail?: string | null;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * ContinuationPhase
+         * @description What this attempt is for.
+         * @enum {string}
+         */
+        ContinuationPhase: "implement" | "resume" | "reconcile" | "qa" | "close_evidence";
+        /**
+         * ContinuationProvenance
+         * @enum {string}
+         */
+        ContinuationProvenance: "orchestrator" | "worker_reported" | "argus_event" | "runtime_observed";
+        /**
+         * ContinuationReconciliation
+         * @description A bounded contradiction between recorded and live evidence.
+         */
+        ContinuationReconciliation: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Observed */
+            observed: string;
+            /** Recorded */
+            recorded: string;
+            /** Subject */
+            subject: string;
+        };
+        /**
+         * ContinuationUpdate
+         * @description An orchestrator/admin edit. Everything it writes carries `orchestrator`
+         *     provenance; `expected_revision` rejects a write based on a stale read.
+         */
+        ContinuationUpdate: {
+            /** Artifacts */
+            artifacts?: components["schemas"]["ArtifactIn"][];
+            /** Checklist */
+            checklist?: components["schemas"]["ItemIn"][];
+            /**
+             * Clear Phase
+             * @default false
+             */
+            clear_phase?: boolean;
+            /**
+             * Clear Reconciliation
+             * @default false
+             */
+            clear_reconciliation?: boolean;
+            /**
+             * Clear Wip
+             * @default false
+             */
+            clear_wip?: boolean;
+            /** Environment */
+            environment?: components["schemas"]["EnvIn"][];
+            /** Expected Revision */
+            expected_revision: number;
+            /** Objective */
+            objective?: string | null;
+            phase?: components["schemas"]["ContinuationPhase"] | null;
+            /** Reason */
+            reason: string;
+            /** Supersede Decisions */
+            supersede_decisions?: string[];
+            wip?: components["schemas"]["WipIn"] | null;
+        };
+        /**
+         * ContinuationWip
+         * @description Work kept outside Git (a local commit, a dirty checkout). Never credentials.
+         */
+        ContinuationWip: {
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            provenance: components["schemas"]["ContinuationProvenance"];
+            /** Ref */
+            ref?: string | null;
+            /** Summary */
+            summary: string;
         };
         /**
          * CostFigures
@@ -3398,6 +3634,95 @@ export interface components {
             /** Window Hours */
             window_hours: number;
         };
+        /**
+         * EffectiveContinuation
+         * @description What a claim and a read expose: stored facts plus everything derived.
+         */
+        EffectiveContinuation: {
+            /** Artifacts */
+            artifacts: components["schemas"]["ContinuationArtifact"][];
+            /** Checklist */
+            checklist: components["schemas"]["ChecklistItem"][];
+            /**
+             * Checklist State
+             * @enum {string}
+             */
+            checklist_state: "structured" | "unstructured";
+            /** Decisions */
+            decisions: components["schemas"]["EffectiveDecision"][];
+            /** Environment */
+            environment: components["schemas"]["EnvCheck"][];
+            /** Gaps */
+            gaps: string[];
+            interruption: components["schemas"]["ContinuationInterruption"] | null;
+            /** Objective */
+            objective: string | null;
+            /** Pending */
+            pending: string[];
+            phase: components["schemas"]["ContinuationPhase"];
+            /**
+             * Phase Source
+             * @enum {string}
+             */
+            phase_source: "explicit" | "derived";
+            /** Reconciliation */
+            reconciliation: components["schemas"]["ContinuationReconciliation"][];
+            /** Revision */
+            revision: number;
+            wip: components["schemas"]["ContinuationWip"] | null;
+        };
+        /**
+         * EffectiveDecision
+         * @description An answered question as it stands now. History keeps every answer; this is
+         *     the authoritative view: newest first, with what it does and does not settle.
+         */
+        EffectiveDecision: {
+            /** Answer */
+            answer: string;
+            /** Attempt */
+            attempt?: number | null;
+            /**
+             * Category
+             * @default decision
+             * @enum {string}
+             */
+            category?: "decision" | "assistance";
+            /** Choice */
+            choice?: string | null;
+            /**
+             * Decided At
+             * Format: date-time
+             */
+            decided_at: string;
+            /** Decided By */
+            decided_by: string;
+            /** Decision Id */
+            decision_id: string;
+            /**
+             * Options Known
+             * @default false
+             */
+            options_known?: boolean;
+            /**
+             * Premise Outdated
+             * @default false
+             */
+            premise_outdated?: boolean;
+            /** Question */
+            question: string;
+            /**
+             * Scope
+             * @default task
+             * @constant
+             */
+            scope?: "task";
+            /**
+             * Status
+             * @default effective
+             * @enum {string}
+             */
+            status?: "effective" | "unresolved" | "superseded";
+        };
         /** EngineCatalog */
         EngineCatalog: {
             /** Engines */
@@ -3479,6 +3804,45 @@ export interface components {
             reason?: "lease" | "exhausted";
             /** Task Id */
             task_id?: string | null;
+        };
+        /**
+         * EnvCheck
+         * @description One resource a verification needs, one dimension per question. `ready` only
+         *     when all five are `yes`: an installed tool without a usable credential, or an
+         *     offline test without the resource, is not readiness.
+         */
+        EnvCheck: {
+            /** @default unknown */
+            credential_usable?: components["schemas"]["Tri"];
+            /** @default unknown */
+            installed?: components["schemas"]["Tri"];
+            /** Observed At */
+            observed_at?: string | null;
+            /** @default unknown */
+            permitted?: components["schemas"]["Tri"];
+            /** @default runtime_observed */
+            provenance?: components["schemas"]["ContinuationProvenance"];
+            /** @default unknown */
+            reachable?: components["schemas"]["Tri"];
+            /** Resource */
+            resource: string;
+            /** @default unknown */
+            validated?: components["schemas"]["Tri"];
+        };
+        /** EnvIn */
+        EnvIn: {
+            /** @default unknown */
+            credential_usable?: components["schemas"]["Tri"];
+            /** @default unknown */
+            installed?: components["schemas"]["Tri"];
+            /** @default unknown */
+            permitted?: components["schemas"]["Tri"];
+            /** @default unknown */
+            reachable?: components["schemas"]["Tri"];
+            /** Resource */
+            resource: string;
+            /** @default unknown */
+            validated?: components["schemas"]["Tri"];
         };
         /** EventOut */
         EventOut: {
@@ -4057,6 +4421,21 @@ export interface components {
             /** Status */
             status: number;
         };
+        /** ItemIn */
+        ItemIn: {
+            /** Evidence */
+            evidence?: string | null;
+            /** Id */
+            id?: string | null;
+            status?: components["schemas"]["ItemStatus"] | null;
+            /** Text */
+            text?: string | null;
+        };
+        /**
+         * ItemStatus
+         * @enum {string}
+         */
+        ItemStatus: "pending" | "done" | "verification_missing";
         /** KnowledgeOverview */
         KnowledgeOverview: {
             /** Pages By State */
@@ -4632,6 +5011,19 @@ export interface components {
             shares_filesystem: boolean;
             /** Version */
             version: string | null;
+        };
+        /**
+         * ObservationRequest
+         * @description What a worker runtime saw (by itself, outside any transaction) at claim.
+         */
+        ObservationRequest: {
+            /** Artifacts */
+            artifacts?: components["schemas"]["ArtifactIn"][];
+            /** Attempt */
+            attempt: number;
+            /** Environment */
+            environment?: components["schemas"]["EnvIn"][];
+            wip?: components["schemas"]["WipIn"] | null;
         };
         /** Outcomes */
         Outcomes: {
@@ -5826,6 +6218,7 @@ export interface components {
              * @enum {string}
              */
             readonly complexity: "trivial" | "standard" | "hard";
+            continuation?: components["schemas"]["EffectiveContinuation"] | null;
             /**
              * Created At
              * Format: date-time
@@ -6109,6 +6502,7 @@ export interface components {
              * @enum {string}
              */
             readonly complexity: "trivial" | "standard" | "hard";
+            continuation?: components["schemas"]["EffectiveContinuation"] | null;
             /**
              * Created At
              * Format: date-time
@@ -6316,6 +6710,11 @@ export interface components {
              * @default []
              */
             artifacts?: string[];
+            /**
+             * Checklist
+             * @default []
+             */
+            checklist?: components["schemas"]["ChecklistReport"][];
             /** Data */
             data?: {
                 [key: string]: unknown;
@@ -6334,6 +6733,11 @@ export interface components {
              * @default []
              */
             artifacts?: string[];
+            /**
+             * Checklist
+             * @default []
+             */
+            checklist?: components["schemas"]["ChecklistReport"][];
             /** Data */
             data?: {
                 [key: string]: unknown;
@@ -6461,6 +6865,11 @@ export interface components {
              */
             requeue?: boolean;
         };
+        /**
+         * Tri
+         * @enum {string}
+         */
+        Tri: "yes" | "no" | "unknown";
         /**
          * Usage
          * @description What the work cost, as reported by the agent. Recorded, never enforced.
@@ -6611,6 +7020,13 @@ export interface components {
             sha256: string | null;
             /** Size */
             size: number | null;
+        };
+        /** WipIn */
+        WipIn: {
+            /** Ref */
+            ref?: string | null;
+            /** Summary */
+            summary: string;
         };
         /** WorkerTemplate */
         WorkerTemplate: {
@@ -9987,6 +10403,72 @@ export interface operations {
             };
         };
     };
+    get_continuation_api_tasks__task_id__continuation_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EffectiveContinuation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_continuation_api_tasks__task_id__continuation_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinuationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     set_dependencies_api_tasks__task_id__dependencies_put: {
         parameters: {
             query?: never;
@@ -10180,6 +10662,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelTrace"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    observe_task_api_tasks__task_id__observations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObservationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
                 };
             };
             /** @description Validation Error */

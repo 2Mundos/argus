@@ -31,6 +31,16 @@ from argus_api.tasks import service as tasks
 async def ask(tx: Tx, agent_id: str, task_id: str, body: Ask) -> Decision:
     """A worker asks a question about the task it holds. The task is blocked
     (its lease released) until the question is answered."""
+    await tasks.check_lease(tx, task_id, body.attempt, agent_id)
+    assistance = body.category == "assistance"
+    if not assistance and (
+        known := await tasks.answered_equivalent(tx, task_id, body.question)
+    ):
+        # Already decided: no new gate and no block. The worker is told the answer.
+        raise ConflictError(
+            f"already answered ({known.decided_at:%Y-%m-%d}): {known.answer}",
+            code="already_answered",
+        )
     decision_id = await store.open_decision(
         tx,
         subject_type="task",
@@ -38,8 +48,11 @@ async def ask(tx: Tx, agent_id: str, task_id: str, body: Ask) -> Decision:
         kind=DecisionKind.QUESTION,
         question=body.question,
         options=body.options,
-        audience=body.audience,
+        audience=Audience.ORCHESTRATOR if assistance else body.audience,
         requested_by=f"agent:{agent_id}",
+        payload={"category": body.category, "resource": body.resource}
+        if assistance
+        else None,
     )
     await tasks.block(
         tx, agent_id, task_id, body.attempt, f"waiting for decision {decision_id}"
@@ -182,7 +195,16 @@ async def _apply_answer(
         case DecisionKind.QUESTION:
             answer_text = " — ".join(x for x in (body.choice, body.text) if x)
             await tasks.add_clarification(
-                tx, task_id, decision.question, answer_text, caller.actor
+                tx,
+                task_id,
+                decision.question,
+                answer_text,
+                caller.actor,
+                decision_id=decision.id,
+                choice=body.choice,
+                text=body.text,
+                options=decision.options,
+                category=(decision.payload or {}).get("category", "decision"),
             )
             if body.save_to_knowledge is not None:
                 task = await tasks.get_task(tx.conn, task_id)
