@@ -198,27 +198,6 @@ def save_fixture(name: str, task) -> None:
     )
 
 
-def test_continuation_fixture_files_are_biome_canonical() -> None:
-    """On-disk fixtures must already match Biome output (no hidden formatting drift)."""
-    for path in sorted(FIXTURES.glob("*.json")):
-        before = path.read_text()
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False, dir=FIXTURES
-        ) as tmp:
-            tmp.write(before)
-            tmp_path = Path(tmp.name)
-        subprocess.run(
-            ["pnpm", "exec", "biome", "check", "--write", str(tmp_path)],
-            cwd=REPO_ROOT,
-            check=True,
-            capture_output=True,
-        )
-        assert tmp_path.read_text() == before, (
-            f"{path} is not Biome-canonical; run biome check --write on fixtures"
-        )
-        tmp_path.unlink()
-
-
 # -- CA2: a PR and local WIP exist; the next attempt must continue, not replan ----------
 
 

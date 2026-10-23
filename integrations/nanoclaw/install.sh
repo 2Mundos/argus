@@ -74,6 +74,7 @@ mkdir -p "$target/src/gateway-providers/fixtures"
 cp -r "$here/fixtures/cursor-gateway" "$target/src/gateway-providers/fixtures/"
 cp "$here/init-argus-agent.ts" "$target/scripts/init-argus-agent.ts"
 cp "$here/gitea-api.mjs" "$target/container/gitea-api.mjs"
+cp "$here/gitea-api.mjs" "$here/gitea-api.d.mts" "$target/src/channels/"
 
 # The helper runs inside the agent container, not on the NanoClaw host.
 python3 - "$target/container/Dockerfile" <<'PY'
