@@ -63,10 +63,51 @@ vi.mock("../container-runner.js", () => ({
 }));
 
 describe("assertOneCliUrl", () => {
+  const userNet = { dockerNetwork: "onecli-control" };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("accepts the default host.docker.internal URL", () => {
     expect(assertOneCliUrl("http://host.docker.internal:10254")).toBe(
       "http://host.docker.internal:10254",
     );
+  });
+
+  it("accepts http://onecli:10254 on a user-defined Docker network", () => {
+    expect(assertOneCliUrl("http://onecli:10254", userNet)).toBe("http://onecli:10254");
+    expect(assertOneCliUrl("http://onecli:10254/", userNet)).toBe("http://onecli:10254/");
+    vi.stubEnv("ARGUS_NANOCLAW_NETWORK", "onecli-control");
+    expect(assertOneCliUrl("http://onecli:10254")).toBe("http://onecli:10254");
+    expect(() => new OneCliClient("http://onecli:10254", fetch)).not.toThrow();
+  });
+
+  it.each(["", "bridge", "BRIDGE", "default", "host", "none"])(
+    "rejects http://onecli:10254 with reserved or missing docker network (%s)",
+    (network) => {
+      expect(() => assertOneCliUrl("http://onecli:10254", { dockerNetwork: network })).toThrow(
+        /user-defined Docker network/,
+      );
+    },
+  );
+
+  it("rejects http://onecli:10254 when ARGUS_NANOCLAW_NETWORK is unset", () => {
+    expect(() => assertOneCliUrl("http://onecli:10254")).toThrow(/user-defined Docker network/);
+  });
+
+  it.each([
+    "http://onecli.example:10254",
+    "http://onecli.evil:10254",
+    "http://evilonecli:10254",
+    "http://onecli:10255",
+    "http://onecli:10254/extra",
+    "http://onecli:10254?x=1",
+    "http://onecli:10254#frag",
+    "http://user@onecli:10254",
+    "http://onecli:abc",
+  ])("rejects private-docker lookalike or malformed URL %s", (url) => {
+    expect(() => assertOneCliUrl(url, userNet)).toThrow();
   });
 
   it("rejects http to a non-allowlisted host", () => {

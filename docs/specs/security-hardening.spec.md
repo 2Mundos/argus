@@ -69,9 +69,15 @@ Related: [single-node](single-node.spec.md), [worker lifecycle](worker-lifecycle
    `tcp://` only with TLS (`?tls=true` or equivalent). Plain `tcp://` is rejected.
    An `https://` form is accepted.
 9. **OneCLI URL.** `NanoclawOptions.onecli_url` and the NanoClaw `OneCliClient`
-   accept `https://`, or `http://` only for loopback / `host.docker.internal`
-   hosts. Userinfo in the URL is rejected. Default
-   `http://host.docker.internal:10254` remains valid.
+   (`assertOneCliUrl`) accept `https://`, or `http://` only for loopback /
+   `host.docker.internal` hosts, plus the private Docker service origin
+   `http://onecli:10254` (exact host, port, no path/query/userinfo; optional
+   trailing `/`). That HTTP exception is allowed only when the pool has
+   `target=docker` and a user-defined `docker.network` (not `bridge`, `default`,
+   `host`, or `none`) so NanoClaw shares the network where the `onecli` service
+   is published; the fleet sets `ARGUS_NANOCLAW_NETWORK` on the host container
+   from `pool.docker.network` for the channel guard. Userinfo in the URL is
+   rejected. Default `http://host.docker.internal:10254` remains valid.
 10. **OneCLI errors.** Client errors expose status and a short code only. Response
     body text is included only when `ARGUS_ONECLI_DEBUG_BODY=1`.
 11. **Task size caps.** `TaskCreate.spec` max 200_000 characters; `TaskCreate.input`

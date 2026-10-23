@@ -390,8 +390,36 @@ const ONECLI_HTTP_HOSTS = new Set([
   "host.docker.internal",
 ]);
 
+/** Private Docker DNS for the OneCLI admin service (e.g. on `onecli-control`). */
+const ONECLI_DOCKER_SERVICE_HOST = "onecli";
+const ONECLI_DOCKER_SERVICE_PORT = 10254;
+const DOCKER_BUILTIN_NETWORKS = new Set(["bridge", "default", "host", "none"]);
+
+export type OneCliUrlContext = {
+  /** User-defined Docker network name (mirrors pool `docker.network` / `ARGUS_NANOCLAW_NETWORK`). */
+  dockerNetwork?: string | null;
+};
+
+function dockerUserDefinedNetworkOk(network: string | null | undefined): boolean {
+  const name = (network ?? "").trim();
+  if (!name) return false;
+  return !DOCKER_BUILTIN_NETWORKS.has(name.toLowerCase());
+}
+
+function onecliPrivateDockerServiceHttpOk(parsed: URL): boolean {
+  if (parsed.protocol !== "http:") return false;
+  if (parsed.username || parsed.password) return false;
+  if (parsed.hostname.toLowerCase() !== ONECLI_DOCKER_SERVICE_HOST) return false;
+  const port = parsed.port === "" ? 80 : Number(parsed.port);
+  if (port !== ONECLI_DOCKER_SERVICE_PORT) return false;
+  const path = parsed.pathname;
+  if (path !== "/" && path !== "") return false;
+  if (parsed.search || parsed.hash) return false;
+  return true;
+}
+
 /** Mirror of Argus `NanoclawOptions.onecli_url` (security-hardening spec). */
-export function assertOneCliUrl(url: string): string {
+export function assertOneCliUrl(url: string, context?: OneCliUrlContext): string {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -409,8 +437,17 @@ export function assertOneCliUrl(url: string): string {
   if (parsed.protocol === "http:" && ONECLI_HTTP_HOSTS.has(host)) {
     return url;
   }
+  if (onecliPrivateDockerServiceHttpOk(parsed)) {
+    const network = context?.dockerNetwork ?? process.env.ARGUS_NANOCLAW_NETWORK;
+    if (!dockerUserDefinedNetworkOk(network)) {
+      throw new Error(
+        "http://onecli:10254 requires ARGUS_NANOCLAW_NETWORK to be a user-defined Docker network (not bridge, default, host, or none; e.g. onecli-control)",
+      );
+    }
+    return url;
+  }
   throw new Error(
-    "OneCLI URL must be https://, or http:// to localhost / 127.0.0.1 / host.docker.internal",
+    "OneCLI URL must be https://, or http:// to localhost / 127.0.0.1 / host.docker.internal / http://onecli:10254 on a private Docker network",
   );
 }
 
@@ -420,7 +457,7 @@ export class OneCliClient {
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly apiKey?: string,
   ) {
-    assertOneCliUrl(baseUrl);
+    assertOneCliUrl(baseUrl, { dockerNetwork: process.env.ARGUS_NANOCLAW_NETWORK });
   }
 
   async call(method: string, path: string, body?: unknown): Promise<any> {
