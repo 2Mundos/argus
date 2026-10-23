@@ -203,13 +203,17 @@ describe("heldAccountFits", () => {
 });
 
 describe("renderTask", () => {
-  it("tells the harness to prefer Cursor for a trivial task, and only then", () => {
+  it("names Cursor for a trivial task only when Cursor is the leased executor", () => {
     const standard = renderTask(task() as any, new Map(), "agent");
     expect(standard).toContain("Preferred EXECUTOR for this task: agent");
     expect(standard).not.toContain("This task is trivial");
     const trivial = renderTask({ ...task(), complexity: "trivial" } as any, new Map(), "agent");
     expect(trivial).toContain("This task is trivial: use EXECUTOR agent");
-    expect(trivial).toContain("only if Cursor is unavailable");
+    const fallback = renderTask({ ...task(), complexity: "trivial" } as any, new Map(), "claude");
+    expect(fallback).not.toContain("This task is trivial");
+    expect(fallback).toContain("Preferred EXECUTOR for this task: claude");
+    expect(fallback).toContain("argus-delegate claude");
+    expect(fallback).not.toContain("argus-delegate agent");
   });
   it("names a pinned executor over the trivial and lease preference", () => {
     const pinned = renderTask(
@@ -220,27 +224,91 @@ describe("renderTask", () => {
       } as any,
       new Map(),
       "agent",
+      { customHarness: true },
     );
     expect(pinned).toContain("This task pins EXECUTOR codex (model gpt-6.1-sol)");
     expect(pinned).not.toContain("This task is trivial");
     expect(pinned).not.toContain("Preferred EXECUTOR");
+    expect(pinned).toContain("argus-delegate codex");
+    expect(pinned).not.toContain("argus-delegate agent");
   });
-  it("tells a local-lease harness to orchestrate only and keep its context small", () => {
+  // Every rendered instruction names the leased executor, never a hardcoded Cursor.
+  it.each([
+    ["custom", "claude", "Custom harness (mandatory)"],
+    ["custom", "codex", "Custom harness (mandatory)"],
+    ["custom", "agent", "Custom harness (mandatory)"],
+    ["local", "codex", "Local harness (mandatory)"],
+    ["local", "agent", "Local harness (mandatory)"],
+  ] as const)("%s harness with leased %s is consistent", (kind, cli, marker) => {
+    for (const complexity of ["standard", "trivial"]) {
+      const text = renderTask({ ...task(), complexity } as any, new Map(), cli, {
+        localHarness: kind === "local",
+        customHarness: kind === "custom",
+      });
+      expect(text).toContain(marker);
+      expect(text).toContain(`argus-delegate ${cli}`);
+      for (const other of ["claude", "codex", "agent"].filter((c) => c !== cli))
+        expect(text).not.toContain(`argus-delegate ${other}`);
+      expect(text).not.toContain("Use EXECUTOR claude only when Cursor is unavailable");
+      // Each harness keeps its own Claude guard whatever executor is leased.
+      if (kind === "local") {
+        expect(text).toContain("Never use EXECUTOR claude here");
+        expect(text).not.toContain("custom_harness_engine_only");
+      } else {
+        expect(text).toContain("never serves a Claude executor");
+        expect(text).toContain("custom_harness_engine_only");
+        expect(text).not.toContain("Never use EXECUTOR claude here");
+      }
+    }
+  });
+  it("keeps local-model and custom-account guards", () => {
     const local = renderTask(task() as any, new Map(), "agent", { localHarness: true });
-    expect(local).toContain("Local harness (mandatory)");
     expect(local).toContain("Do not read the repository into your own context");
     expect(local).toContain("Never use EXECUTOR claude here");
-    const cloud = renderTask(task() as any, new Map(), "agent");
-    expect(cloud).not.toContain("Local harness (mandatory)");
-  });
-  it("tells a custom-lease harness to orchestrate and keep Claude Code off its account", () => {
-    const custom = renderTask(task() as any, new Map(), "agent", { customHarness: true });
-    expect(custom).toContain("Custom harness (mandatory)");
-    expect(custom).toContain("argus-delegate agent");
-    expect(custom).toContain("custom_harness_engine_only");
+    expect(local).not.toContain("Custom harness");
+    const custom = renderTask(task() as any, new Map(), "claude", { customHarness: true });
+    expect(custom).toContain("never on this harness's account");
     expect(custom).not.toContain("Local harness (mandatory)");
     expect(renderTask(task() as any, new Map(), "agent")).not.toContain("Custom harness");
   });
+  it("never offers a runnable claude command on the local harness, pinned or not", () => {
+    const unusable = renderTask(task() as any, new Map(), null, { localHarness: true });
+    expect(unusable).toContain("No usable executor is leased");
+    expect(unusable).not.toMatch(/argus-delegate claude/);
+    const pinned = renderTask(
+      { ...task(), executor_model: { executor: "claude", model: "claude-opus-5-5" } } as any,
+      new Map(),
+      null,
+      { localHarness: true },
+    );
+    expect(pinned).toContain("cannot run on the local harness (local_harness_engine_only)");
+    expect(pinned).toContain("report the task blocked");
+    expect(pinned).toContain("Never use EXECUTOR claude here");
+    expect(pinned).not.toMatch(/argus-delegate claude/);
+    expect(pinned).not.toContain("use it for all delegated work");
+    // The same pin is runnable on a custom harness (leased Anthropic through the gateway).
+    const custom = renderTask(
+      { ...task(), executor_model: { executor: "claude", model: "claude-opus-5-5" } } as any,
+      new Map(),
+      "claude",
+      { customHarness: true },
+    );
+    expect(custom).toContain("argus-delegate claude");
+  });
+  it.each([
+    ["local", { localHarness: true }],
+    ["custom", { customHarness: true }],
+  ] as const)(
+    "%s harness with no executor lease is blocked on capacity, not credentials",
+    (_k, opts) => {
+      const text = renderTask(task() as any, new Map(), null, opts);
+      expect(text).toContain("No usable executor is leased to this worker");
+      expect(text).toContain("not invalid credentials");
+      expect(text).toContain("argus-delegate EXECUTOR");
+      expect(text).not.toContain("argus-delegate agent");
+      expect(text).not.toContain("Preferred EXECUTOR");
+    },
+  );
   it("includes identity, framed untrusted data, and the reply protocol", () => {
     const text = renderTask(task() as any, new Map([["p1", "Step 1\nStep 2"]]));
     expect(text).toContain("[Argus task] Task: t1 · Project: web · Attempt: 1");
@@ -320,7 +388,7 @@ describe("renderTask", () => {
     expect(text).not.toContain("remains Codex");
     expect(text).not.toContain("When the engine is Cursor");
     expect(text).toContain(
-      "/usr/local/bin/argus-delegate agent \\\n    --cwd <task-checkout> --prompt-file <prompt.txt>",
+      "/usr/local/bin/argus-delegate EXECUTOR \\\n    --cwd <task-checkout> --prompt-file <prompt.txt>",
     );
     expect(text).toContain("Example (normal implementation, not --read-only):");
     expect(text).not.toMatch(/argus-delegate agent[^\n]*--read-only/);

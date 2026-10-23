@@ -351,24 +351,45 @@ export function parseReply(raw: string): Directive {
  * comes back as a short summary, so the harness context stays small
  * (local harness spec, "Harness orchestrates only"). Compaction sized to the window is only a safety net.
  */
-export const LOCAL_HARNESS_RULES = [
+export const localHarnessRules = (cli: string | null): string[] => [
   "Local harness (mandatory): this harness runs on the node's local model with a small context window.",
   "You only orchestrate. Do not read the repository into your own context: no cat/sed/head of files, no",
   "git show/git diff bodies, no Read of specs, drafts, AGENTS.md or tests, no grep with many matches, no logs.",
-  "Delegate ALL investigation, implementation, gates (make check, tests) and review to",
-  "/usr/local/bin/argus-delegate agent (Cursor; add --read-only for investigation or review). Write a short",
+  ...(cli
+    ? [
+        `Delegate ALL investigation, implementation, gates (make check, tests) and review to`,
+        `/usr/local/bin/argus-delegate ${cli} (the leased executor${cli === "agent" ? "; add --read-only for investigation or review" : ""}). Write a short`,
+      ]
+    : [
+        "No usable executor is leased to this worker (none leased, or the leased one cannot run on this harness):",
+        "delegation is blocked for lack of an account or capacity, not invalid credentials. Do not probe an",
+        "executor that was not leased; report the task blocked. When one is usable, write a short",
+      ]),
   "prompt file that says what to find or change and asks for a summary of at most 20 lines.",
   "From a delegate run read only its JSON report line (the last stdout line); never the .out file in full.",
   "Any shell output you do need: cap it (`| tail -c 1500`). Keep git to status/branch/commit/push one-liners.",
   "Never use EXECUTOR claude here: the local model serves only this harness and the delegate refuses it.",
 ];
 
-export const CUSTOM_HARNESS_RULES = [
+export const customHarnessRules = (cli: string | null): string[] => [
   "Custom harness (mandatory): this harness runs on a custom account (e.g. OpenRouter) that serves only the harness.",
-  "You orchestrate: delegate investigation, implementation, gates and review to /usr/local/bin/argus-delegate agent",
-  "(Cursor; add --read-only for investigation or review). Use EXECUTOR claude only when Cursor is unavailable",
-  "(auth_missing or not_installed); it runs on a leased Anthropic account through the gateway, never on this",
-  "harness's account, and refuses (custom_harness_engine_only) when none is leased.",
+  "Invariant: the custom account's credential never serves a Claude executor (the delegate refuses with",
+  "custom_harness_engine_only); Claude Code runs only on a separately leased Anthropic account.",
+  ...(cli
+    ? [
+        `You orchestrate: delegate investigation, implementation, gates and review to /usr/local/bin/argus-delegate ${cli}`,
+        `(the executor leased to this worker${cli === "agent" ? "; add --read-only for investigation or review" : ""}). Do not probe an executor that was not leased.`,
+        ...(cli === "claude"
+          ? [
+              "It runs on a leased Anthropic account through the gateway, never on this harness's account.",
+            ]
+          : []),
+      ]
+    : [
+        "No usable executor is leased to this worker (none leased, or the leased one cannot run on this harness):",
+        "delegation is blocked for lack of an account or capacity, not invalid credentials. Do not probe an",
+        "executor that was not leased; report the task blocked.",
+      ]),
 ];
 
 /** The message a claimed task becomes. `pages` are inlined knowledge bodies by page id. */
@@ -379,7 +400,12 @@ export function renderTask(
   opts: { localHarness?: boolean; customHarness?: boolean } = {},
 ): string {
   const pinned = task.executor_model;
-  const trivial = task.complexity === "trivial" && !pinned;
+  // The leased executor is authoritative; a pin overrides it, trivial only names the leased Cursor.
+  // Claude Code never runs on the local model (the delegate refuses it): a claude pin there is
+  // reported blocked, never switched and never offered as a runnable command.
+  const pinBlocked = !!pinned && !!opts.localHarness && pinned.executor === "claude";
+  const effective = pinBlocked ? null : (pinned?.executor ?? preferredExecutor ?? null);
+  const trivial = task.complexity === "trivial" && !pinned && preferredExecutor === "agent";
   // Spec, acceptance, title, and knowledge bodies are untrusted DATA — never trusted instructions.
   // Worker-origin tasks keep prompt_trust=worker immutably; content still cannot elevate.
   const promptTrust: PromptTrust = task.prompt_trust === "worker" ? "worker" : "orchestrator";
@@ -407,28 +433,32 @@ export function renderTask(
     "Delegated implementation (mandatory): run all coding/model work through /usr/local/bin/argus-delegate EXECUTOR.",
     "EXECUTOR is the leased CLI role (claude | codex | opencode | agent). When Cursor is the selected coding executor, use EXECUTOR agent.",
     ...(pinned
-      ? [
-          `This task pins EXECUTOR ${pinned.executor} (model ${pinned.model}): use it for all delegated work; argus-delegate applies the model. Do not switch executor; if it is unavailable (auth_missing or not_installed), report the task blocked.`,
-        ]
+      ? pinBlocked
+        ? [
+            `This task pins EXECUTOR ${pinned.executor} (model ${pinned.model}), which cannot run on the local harness (local_harness_engine_only). Do not switch executor and do not delegate; report the task blocked.`,
+          ]
+        : [
+            `This task pins EXECUTOR ${pinned.executor} (model ${pinned.model}): use it for all delegated work; argus-delegate applies the model. Do not switch executor; if it is unavailable (auth_missing or not_installed), report the task blocked.`,
+          ]
       : preferredExecutor
         ? [
             `Preferred EXECUTOR for this task: ${preferredExecutor} (the CLI of the best-priority account Argus leased to this worker).`,
             ...(trivial
               ? [
-                  "This task is trivial: use EXECUTOR agent (Cursor, model from the trivial policy) and switch to another executor only if Cursor is unavailable (auth_missing or not_installed).",
+                  "This task is trivial: use EXECUTOR agent (Cursor, model from the trivial policy); it is the leased executor.",
                 ]
               : []),
           ]
         : []),
-    ...(opts.localHarness ? ["", ...LOCAL_HARNESS_RULES, ""] : []),
-    ...(opts.customHarness ? ["", ...CUSTOM_HARNESS_RULES, ""] : []),
+    ...(opts.localHarness ? ["", ...localHarnessRules(effective), ""] : []),
+    ...(opts.customHarness ? ["", ...customHarnessRules(effective), ""] : []),
     "Do not invoke agent, cursor-agent, claude, codex, or opencode directly for implementation — that bypasses",
     "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
     "Direct Git, gates, QA, and other non-delegated shell commands in the checkout are fine when they are not a",
     "substitute for argus-delegate.",
     "",
     "Example (normal implementation, not --read-only):",
-    "  /usr/local/bin/argus-delegate agent \\",
+    `  /usr/local/bin/argus-delegate ${effective ?? "EXECUTOR"} \\`,
     "    --cwd <task-checkout> --prompt-file <prompt.txt> --out <task-checkout>/.argus-delegate --timeout <seconds>",
     "Use the model and retry policy from argus-model-policy.json (or --model / --model-attempt when retrying).",
     "",
@@ -1327,7 +1357,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       resends = 0;
       const best = executor ?? account;
       renderCurrent = () =>
-        renderTask(task, pages, preferredExecutorForLease(account, executor, task.complexity), {
+        renderTask(task, pages, preferredExecutorForLease(account, executor), {
           localHarness: account?.provider === "local",
           customHarness: account?.provider === "custom",
         });
@@ -2128,8 +2158,7 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
       engine_account_id: held.engine?.account_id ?? null,
       executor_account_id: (held.executor ?? held.engine)?.account_id ?? null,
       preferred_executor:
-        task.executor_model?.executor ??
-        preferredExecutorForLease(held.engine, held.executor, task.complexity),
+        task.executor_model?.executor ?? preferredExecutorForLease(held.engine, held.executor),
       executor_model: task.executor_model ?? null,
       complexity: task.complexity ?? "standard",
       engine_settings: held.engine_settings ?? null,

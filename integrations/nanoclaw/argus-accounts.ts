@@ -347,19 +347,21 @@ export function executorFor(provider: string): string | null {
 }
 
 /**
- * Preferred delegated CLI for a task: the executor lease when present, otherwise
- * the engine's. Local is engine-only; when the harness is local Strata or a custom
- * account, Cursor `agent` is preferred for implementation work, and so for a trivial task.
+ * Recommended delegated CLI: that of the executor lease actually held, otherwise the
+ * engine's own. A local or custom engine serves only the harness (no CLI of its own),
+ * so with no executor leased the answer is null: never an unleased Cursor. Claude Code
+ * never runs on the local model (the delegate refuses it), so it is not recommended there.
  */
 export function preferredExecutorForLease(
   engine: Pick<AccountLease, "provider"> | null,
   executor: Pick<AccountLease, "provider"> | null,
-  complexity?: string | null,
 ): string | null {
-  const best = executor ?? engine;
-  if (!best) return null;
-  if (executorFirst(engine?.provider) || complexity === "trivial") return "agent";
-  return executorFor(best.provider);
+  if (executor) {
+    return engine?.provider === "local" && executor.provider === "anthropic"
+      ? null
+      : executorFor(executor.provider);
+  }
+  return engine ? executorFor(engine.provider) : null;
 }
 
 /**

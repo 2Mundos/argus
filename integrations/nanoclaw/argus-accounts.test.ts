@@ -51,6 +51,9 @@ vi.mock("../db/agent-groups.js", () => ({
 vi.mock("../db/sessions.js", () => ({
   getSessionsByAgentGroup: async (id: string) => (id === "group-1" ? nanoclaw.sessions : []),
 }));
+// A local lease would bind the real Docker bridge (172.17.0.1:PORT), colliding with a host's own
+// forward; the forwarder has its own test (argus-local-forward.test.ts).
+vi.mock("./argus-local-forward.js", () => ({ syncLocalStrataForward: async () => undefined }));
 vi.mock("../container-runner.js", () => ({
   isContainerRunning: (id: string) => nanoclaw.running.has(id),
   killContainer: (id: string, _reason: string, onExit?: () => void) => {
@@ -782,23 +785,27 @@ const codexLease = (over: Partial<AccountLease> = {}) =>
   lease("codex-1", "", { provider: "openai", kind: "subscription", credential: chatgpt, ...over });
 
 describe("preferredExecutorForLease", () => {
-  it("names agent when the engine lease is local", () => {
-    const local = lease("loc", "", {
-      provider: "local",
-      credential: { base_url: "http://host.docker.internal:8080" },
-    });
-    expect(preferredExecutorForLease(local, null)).toBe("agent");
+  const eng = (provider: string) => lease("e", "", { provider, credential: {} });
+  const exe = (provider: string) => lease("x", "", { provider, role: "executor", credential: {} });
+  // The executor lease actually held decides; engine-only harnesses have no CLI of their own.
+  it.each([
+    ["custom", "anthropic", "claude"],
+    ["custom", "openai", "codex"],
+    ["custom", "cursor", "agent"],
+    ["custom", null, null],
+    ["local", "openai", "codex"],
+    ["local", "cursor", "agent"],
+    ["local", "anthropic", null], // the delegate refuses claude on the local model
+    ["local", null, null],
+    ["anthropic", null, "claude"], // native reuse: the engine's credential serves its CLI
+    ["openai", null, "codex"],
+    ["anthropic", "cursor", "agent"],
+    ["openai", "anthropic", "claude"],
+  ] as const)("engine %s + executor %s -> %s", (engine, executor, expected) => {
+    expect(preferredExecutorForLease(eng(engine), executor ? exe(executor) : null)).toBe(expected);
   });
-  it("uses the cursor executor mapping when leased", () => {
-    const engine = codexLease();
-    const cursor = lease("cur", "", { provider: "cursor", role: "executor", credential: {} });
-    expect(preferredExecutorForLease(engine, cursor)).toBe("agent");
-  });
-  it("names agent for a trivial task whatever the account", () => {
-    const engine = codexLease();
-    expect(preferredExecutorForLease(engine, null)).toBe("codex");
-    expect(preferredExecutorForLease(engine, null, "standard")).toBe("codex");
-    expect(preferredExecutorForLease(engine, null, "trivial")).toBe("agent");
+  it("is null without any lease", () => {
+    expect(preferredExecutorForLease(null, null)).toBeNull();
   });
 });
 
@@ -2397,10 +2404,10 @@ describe("Cursor first on a local or custom engine lease", () => {
     expect(executorFirst(null)).toBeNull();
   });
 
-  it("prefers agent on a custom engine lease even when an Anthropic executor is held", () => {
+  it("follows the leased executor on a custom engine lease, not Cursor", () => {
     const anthropic = lease("claude-1", "sk-ant", { role: "executor" });
-    expect(preferredExecutorForLease(custom(), anthropic)).toBe("agent");
-    expect(preferredExecutorForLease(custom(), null)).toBe("agent");
+    expect(preferredExecutorForLease(custom(), anthropic)).toBe("claude");
+    expect(preferredExecutorForLease(custom(), null)).toBeNull();
   });
 
   async function executorCalls(answers: Array<"no_account" | AccountLease>) {
