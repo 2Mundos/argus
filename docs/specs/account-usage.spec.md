@@ -408,7 +408,7 @@ usage row of the same run, `null` when none ([spec](model-observability.spec.md)
 - Migrations `0015_account_usage.sql`, `0019_account_usage_runs.sql`
   (`run_key` with a partial unique index, `measurement`, `token_limits`) and
   `0039_usage_telemetry.sql` (`unmeasured_reason`, `account_quota_probe`) and
-  `0040_quota_sources.sql` (probe `code`, `account_credit`). Core
+  `0042_quota_sources.sql` (probe `code`, `account_credit`). Core
   models in `argus_core.accounts`.
 - `accounts/service.py` (ingest, quota upsert, aggregation),
   `accounts/quota_probe.py` (the probe and its loop), `accounts/quota_readers.py`
