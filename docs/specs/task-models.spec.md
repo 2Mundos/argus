@@ -69,7 +69,7 @@ every attempt, failures and review rejections included.
 - **Harness.** At claim the channel configures `harness_model.model` instead of
   the policy chain; the attempt artifact reports `policy_map: task`.
 - **Executor.** The pinned snapshot carries `executor_model` and names its
-  `executor` as `preferred_executor` (over the trivial/local preference).
+  `executor` as `preferred_executor` (over the leased executor).
   `argus-delegate` precedence becomes `--model`, the task pin (only for the
   pinned executor), the account model, the policy chain, the native default;
   `model_source` is `task` when the pin is used.

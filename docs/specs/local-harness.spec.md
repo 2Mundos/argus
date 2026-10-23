@@ -96,7 +96,10 @@ for router delegations.
   - *Cursor first.* The executor lease on a local engine lease asks for
     `runtime_providers: ["cursor"]` first (falling back to any provider on
     `no_account`), so the preferred `agent` has its Cursor stub even when a cloud
-    Anthropic account outranks Cursor. Same rule on a custom engine lease
+    Anthropic account outranks Cursor. Only acquisition prefers Cursor: the prompt names
+    the CLI of the executor actually leased (`agent`, `codex`; `claude` is never
+    recommended on a local engine, the delegate refuses it), or states that delegation
+    is blocked for lack of an executor account. Same rule on a custom engine lease
     ([custom harness](custom-harness.spec.md)), whose `claude` executor runs only on a
     real Anthropic account through the gateway.
   - *Safety net: compaction sized to the window.* The local credential may name

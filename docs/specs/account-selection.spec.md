@@ -80,8 +80,12 @@ isolation or sandbox/TLS restrictions.
   100) never displaces the engine-backed CLI. Proven contract: capacity counts
   rows, a separate executor lease of the same account still takes its own slot
   (the default without `reuse_held`). The task text names the preferred
-  `EXECUTOR` (claude | codex | agent) of the best leased account and
-  `argus-delegate` reports `preferred_executor` and `matches_preferred`; it never
+  `EXECUTOR` (claude | codex | agent) of the executor lease actually held (the
+  engine's own account when none is: native reuse); the selected lease is
+  authoritative over engine kind or task complexity, a local/custom engine with no
+  executor lease has none (capacity or missing account, distinct from invalid
+  credentials), and a task pin still wins. `argus-delegate`
+  reports `preferred_executor` and `matches_preferred`; it never
   switches executor itself. The model-policy snapshot pinned for
   each task carries `engine`, `account_provider` and `executor_account_provider`
   (no account secret), `argus-delegate` reports them, and a policy without a

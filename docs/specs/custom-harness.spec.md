@@ -116,11 +116,16 @@ account's configured `base_url` with the leased API key held only in host memory
     it refuses (`auth_missing`, reason `custom_harness_engine_only`) and nothing runs.
   - *Cursor first.* On a custom or local engine lease the channel leases the executor
     with `runtime_providers: ["cursor"]` first, so the Cursor stub is mounted, and falls
-    back to the ordinary executor lease (any provider) only on `no_account`. The
-    preferred executor is `agent` (Cursor), as on a local lease.
+    back to the ordinary executor lease (any provider) only on `no_account`. Acquisition
+    order is unchanged; the *selected lease* then decides the CLI (below).
   - *Prompt.* The task message adds the custom harness rules: orchestrate, delegate
-    implementation, gates and review to `argus-delegate agent`; `claude` only as the
-    fallback, and it never runs on the harness's account.
+    implementation, gates and review to `argus-delegate EXECUTOR` of the executor
+    actually leased (Cursor `agent`, or the fallback `claude` or `codex`); `claude`
+    never runs on the harness's account. The preferred line, the harness rules, trivial
+    text and command example all name that one CLI, and a task pin overrides it. Cursor
+    is never named when it was not leased. With no executor leased the prompt says
+    delegation is blocked for lack of an account or capacity (not invalid
+    credentials) and tells the harness not to probe an unleased executor.
 - **Mutual exclusion.** At most one of local Strata harness or custom bridge harness is
   active per agent group; applying one removes the other's files and forwarder.
 

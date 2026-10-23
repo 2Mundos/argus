@@ -30,8 +30,10 @@ registerHooks({
         shortCircuit: true,
         url: "data:text/javascript,export function registerChannelAdapter(){}",
       };
-    if (specifier === "./argus-accounts.js")
-      return { shortCircuit: true, url: new URL("./argus-accounts.ts", import.meta.url).href };
+    // Sibling Argus channel modules are the real sources (accounts, custom/local harness, relays).
+    const sibling = /^\.\/(argus-[\w-]+)\.js$/.exec(specifier);
+    if (sibling)
+      return { shortCircuit: true, url: new URL(`./${sibling[1]}.ts`, import.meta.url).href };
     if (specifier === "./model-policy.mjs")
       return {
         shortCircuit: true,
@@ -181,7 +183,10 @@ test("actual harness hook applies config, stops stale containers and pins policy
     engine_account_id: "a-claude",
     executor_account_id: "a-codex",
     preferred_executor: "codex",
+    executor_model: null,
     complexity: "standard",
+    engine_settings: null,
+    executor_settings: null,
   });
   assert.equal(loadPolicy({}, file).policy.implementation.codex[0], "gpt-6.1-sol");
   // Without a separate executor lease the engine's account is the executor account too.
@@ -193,10 +198,10 @@ test("actual harness hook applies config, stops stale containers and pins policy
   assert.deepEqual([same.engine_account_id, same.executor_account_id], ["a-claude", "a-claude"]);
   await hook({ id: "task2", attempt: 1, failures: 1, spec: "" }, held);
   assert.equal(globalThis.argusModelTest.killed.length, 1, "unchanged model keeps warm sessions");
-  // A trivial task is pinned as such, and Cursor becomes its preferred executor.
+  // A trivial task is pinned as such; the leased executor (codex) stays preferred.
   await hook({ id: "task3", attempt: 1, failures: 1, spec: "", complexity: "trivial" }, held);
   const light = JSON.parse(readFileSync(file, "utf8")).context;
-  assert.deepEqual([light.complexity, light.preferred_executor], ["trivial", "agent"]);
+  assert.deepEqual([light.complexity, light.preferred_executor], ["trivial", "codex"]);
 });
 
 test("channel installer is idempotent and includes source and built policy assets", (t) => {
@@ -216,6 +221,58 @@ test("channel installer is idempotent and includes source and built policy asset
     path.join(target, "container/Dockerfile"),
     "FROM scratch\n# ---- ncl CLI wrapper\n",
   );
+  // The Claude provider's upstream anchors that the rate-limit and harness-usage patchers hook
+  // (patch-claude-rate-limit.py, patch-harness-usage.py); the other upstream files they touch are optional.
+  const providers = path.join(target, "container/agent-runner/src/providers");
+  mkdirSync(providers, { recursive: true });
+  writeFileSync(
+    path.join(providers, "claude.ts"),
+    [
+      "import { registerProvider } from './provider-registry.js';",
+      "async function run() {",
+      "      let messageCount = 0;",
+      "      let lastStreamActivityAt = 0;",
+      "      for await (const message of sdkResult) {",
+      "        if (message.type === 'system') {",
+      "        } else if (message.type === 'assistant') {",
+      "        } else if (message.type === 'result') {",
+      "          const resultAsError = hint ? `${candidate}\\n${hint}` : '';",
+      "          yield {",
+      "            type: 'result',",
+      "            text: resultAsError ? null : (m.result ?? null),",
+      "            isError,",
+      "            error: m.errors?.length ? m.errors.join('\\n') : resultAsError || undefined,",
+      "          };",
+      "        }",
+      "      }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  const runner = path.join(target, "container/agent-runner/src");
+  writeFileSync(
+    path.join(runner, "formatter.ts"),
+    [
+      "const PROVIDER_FAILURE_FIELD = 'providerFailure';",
+      "export type ProviderFailureKind = 'auth_expired';",
+      "",
+      "export interface ProviderFailure {",
+      "  provider: string;",
+      "  kind: ProviderFailureKind;",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    path.join(runner, "poll-loop.ts"),
+    [
+      "import { stripHarnessTagArtifacts } from './harness-tag-strip.js';",
+      "function classifyProviderFailure(providerName: string, error: string | undefined): ProviderFailure | undefined {",
+      "  return undefined;",
+      "}",
+      "",
+    ].join("\n"),
+  );
   for (let i = 0; i < 2; i++) {
     const result = spawnSync("bash", [new URL("./install.sh", import.meta.url).pathname, target], {
       encoding: "utf8",
@@ -231,6 +288,11 @@ test("channel installer is idempotent and includes source and built policy asset
       readFileSync(path.join(target, dir, "model-policy.mjs"), "utf8").includes("selectModel"),
     );
   }
+  const claude = readFileSync(path.join(providers, "claude.ts"), "utf8");
+  for (const hook of ["claudeRateLimitError(m.result, rateLimited)", "recordHarnessUsage('claude'"])
+    assert.equal(claude.split(hook).length - 1, 1, `${hook} patched once after two installs`);
+  const poll = readFileSync(path.join(runner, "poll-loop.ts"), "utf8");
+  assert.equal(poll.split("claudeRateLimitFailure(error)").length - 1, 1, "poll-loop hooked once");
   assert.equal(
     readFileSync(path.join(target, "src/channels/index.ts"), "utf8")
       .split("import './argus.js'")
