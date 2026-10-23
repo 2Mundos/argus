@@ -4,10 +4,9 @@ from collections.abc import Generator
 from datetime import timedelta
 from pathlib import Path
 
-import anyio
 import pytest
 from argus_api.agents.tokens import hash_token
-from argus_api.db import ts
+from argus_api.db import Database, ts
 from argus_api.main import app
 from fastapi.testclient import TestClient
 
@@ -33,7 +32,8 @@ def _register(client: TestClient) -> tuple[str, dict[str, str]]:
 
 
 async def _set_expires(client: TestClient, token: str, delta: timedelta) -> str:
-    async with client.app.state.db.write() as tx:
+    db: Database = client.app.state.db  # type: ignore[attr-defined]
+    async with db.write() as tx:
         expires = ts(tx.now + delta)
         await tx.conn.execute(
             "UPDATE tokens SET expires_at = ? WHERE token_hash = ?",
@@ -43,8 +43,9 @@ async def _set_expires(client: TestClient, token: str, delta: timedelta) -> str:
 
 
 async def _read_expires(client: TestClient, token: str) -> str | None:
+    db: Database = client.app.state.db  # type: ignore[attr-defined]
     async with (
-        client.app.state.db.read() as conn,
+        db.read() as conn,
         conn.execute(
             "SELECT expires_at FROM tokens WHERE token_hash = ?",
             (hash_token(token),),
@@ -55,10 +56,16 @@ async def _read_expires(client: TestClient, token: str) -> str | None:
     return row["expires_at"]
 
 
+def _on_app_loop(client: TestClient, coro, *args):
+    """Run DB coroutines on the TestClient lifespan loop (same loop as Database locks)."""
+    assert client.portal is not None
+    return client.portal.call(coro, *args)
+
+
 def test_expired_agent_token_is_rejected(client: TestClient) -> None:
     token, headers = _register(client)
     assert client.get("/api/tasks", headers=headers).status_code == 200
-    anyio.run(_set_expires, client, token, timedelta(seconds=-1))
+    _on_app_loop(client, _set_expires, client, token, timedelta(seconds=-1))
     res = client.get("/api/tasks", headers=headers)
     assert res.status_code == 401
     assert res.json()["detail"]["code"] == "token_expired"
@@ -66,12 +73,12 @@ def test_expired_agent_token_is_rejected(client: TestClient) -> None:
 
 def test_heartbeat_extends_near_expiry(client: TestClient) -> None:
     token, headers = _register(client)
-    before = anyio.run(_set_expires, client, token, timedelta(seconds=100))
+    before = _on_app_loop(client, _set_expires, client, token, timedelta(seconds=100))
     assert (
         client.post("/api/agents/me/heartbeat", json={}, headers=headers).status_code
         == 200
     )
-    after = anyio.run(_read_expires, client, token)
+    after = _on_app_loop(client, _read_expires, client, token)
     assert after is not None and after > before
 
 
