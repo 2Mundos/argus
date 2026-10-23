@@ -7,6 +7,8 @@ COPY apps/dashboard/package.json apps/dashboard/
 RUN pnpm install --frozen-lockfile --filter "@argus/dashboard..."
 COPY packages/api-client packages/api-client
 COPY apps/dashboard apps/dashboard
+# Brand.tsx imports ../../../assets/logo.svg (repo-root assets/).
+COPY assets/logo.svg assets/logo.svg
 RUN pnpm --filter @argus/dashboard build
 
 FROM ghcr.io/astral-sh/uv:0.11.7-python3.12-trixie-slim AS build
