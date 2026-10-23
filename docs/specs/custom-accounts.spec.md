@@ -17,6 +17,12 @@ Make an OpenAI-compatible endpoint (first case OpenRouter,
 - **Per account and per role**: `engine` (the NanoClaw harness) and `executor` (the
   code executor) each carry a free-text `model` and, for `label = openrouter`,
   `routing_options` (`order`, `only`, `quantizations`, `allow_fallbacks`).
+- **Role availability**: a role with no `model` is unavailable on that account, and
+  only that role: an account with an `engine` model and no `executor` model serves
+  the harness, never a delegated CLI, in the ranking, the lease, executor reuse of
+  the held engine lease, `earliest_reset` and the engine pool alike. An account with
+  no model in either role, or without a config, serves neither. Native providers
+  carry no config and are not restricted.
 - **Readiness**: `POST /accounts/{id}/probe` calls `GET {base_url}/models` with the key
   as bearer and returns the model ids as suggestions for the `model` field.
 - **Routing choices**: `GET /accounts/{id}/models/{author}/{slug}/endpoints` proxies

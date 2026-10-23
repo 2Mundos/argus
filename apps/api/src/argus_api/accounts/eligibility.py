@@ -13,6 +13,7 @@ from datetime import datetime
 
 import aiosqlite
 from argus_core.accounts import ENGINE_PROVIDERS, LOCAL_PROVIDER
+from argus_core.custom_accounts import CustomConfig, serves_role
 
 
 @dataclass(frozen=True)
@@ -31,7 +32,7 @@ async def engine_pool(conn: aiosqlite.Connection, now: datetime | None) -> Engin
     """`now` None: judge by state alone (an exhausted account stays held back until
     the recovery loop frees it), for readers that have no clock."""
     async with conn.execute(
-        "SELECT provider, state, exhausted_until FROM accounts"
+        "SELECT provider, config, state, exhausted_until FROM accounts"
         " WHERE state IN ('available', 'exhausted')"
     ) as cur:
         rows = await cur.fetchall()
@@ -39,6 +40,9 @@ async def engine_pool(conn: aiosqlite.Connection, now: datetime | None) -> Engin
     marks: list[datetime] = []
     for r in rows:
         if r["provider"] not in ENGINE_PROVIDERS:
+            continue
+        config = CustomConfig.model_validate_json(r["config"]) if r["config"] else None
+        if not serves_role(r["provider"], config, "engine"):
             continue
         if r["provider"] == LOCAL_PROVIDER:
             usable += 1

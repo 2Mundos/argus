@@ -171,6 +171,17 @@ class CustomConfig(BaseModel):
         return self.executor if role == "executor" else self.engine
 
 
+def serves_role(provider: str, config: CustomConfig | None, role: str) -> bool:
+    """May an account be leased for `role`? A native provider carries no config and
+    is not restricted. A custom account serves a role only when that role has a
+    model: `engine` configured and `executor` empty serves the harness, never a
+    delegated CLI. One with no model in either role, or no config, serves neither
+    (a request without a model cannot be made)."""
+    if provider != PROVIDER:
+        return True
+    return config is not None and config.role(role).model is not None
+
+
 class LeaseSettings(BaseModel):
     """What a lease of a custom account adds to the credential: where to call,
     which model, and the request-body `provider` block. No secret."""
