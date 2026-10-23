@@ -3,6 +3,11 @@ from datetime import timedelta
 from typing import Annotated, Any, Literal
 
 from argus_core.auth import Scope
+from argus_core.continuation import (
+    ContinuationUpdate,
+    EffectiveContinuation,
+    ObservationRequest,
+)
 from argus_core.task_edit import TaskAttempt, TaskEdit
 from argus_core.tasks import (
     ClaimedTask,
@@ -373,6 +378,40 @@ async def edit_task(
         return await service.edit_task(
             tx, task_id, body.changes, body.expected_version, caller.actor
         )
+
+
+@router.get("/{task_id}/continuation")
+async def get_continuation(
+    task_id: str, db: DbDep, caller: CallerDep
+) -> EffectiveContinuation:
+    """The continuation contract: phase, known artifacts with provenance, preserved
+    WIP, last interruption, checklist with evidence, effective decisions and what
+    Argus does not know (`gaps`). Derived from stored facts; unknown is not absent."""
+    async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
+        return await service.continuation_of(conn, task_id)
+
+
+@router.patch("/{task_id}/continuation")
+async def update_continuation(
+    task_id: str, body: ContinuationUpdate, db: DbDep, caller: ManagerDep
+) -> Task:
+    """Settle continuation facts (orchestrator or admin): phase, artifacts, WIP,
+    checklist items and evidence, environment status, retire decisions. Written with
+    orchestrator provenance; stale `expected_revision` is 409 `stale_continuation`."""
+    async with db.write() as tx:
+        return await service.update_continuation(tx, task_id, body, caller.actor)
+
+
+@router.post("/{task_id}/observations")
+async def observe_task(
+    task_id: str, body: ObservationRequest, db: DbDep, agent_id: AgentDep
+) -> Task:
+    """The holder's runtime reports live observations (artifact state, environment
+    readiness, preserved WIP) made outside any transaction. Idempotent; fenced by
+    the attempt like every worker write."""
+    async with db.write() as tx:
+        return await service.observe(tx, agent_id, task_id, body)
 
 
 @router.get("/{task_id}/attempts")

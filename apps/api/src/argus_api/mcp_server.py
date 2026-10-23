@@ -16,6 +16,11 @@ from urllib.parse import urlsplit
 
 import httpx2 as httpx
 from argus_core.auth import Scope
+from argus_core.continuation import (
+    ChecklistReport,
+    ContinuationUpdate,
+    ObservationRequest,
+)
 from argus_core.task_edit import TaskChanges
 from argus_core.tasks import ExecutorModel, HarnessModel
 from fastapi import FastAPI
@@ -504,10 +509,14 @@ async def complete_task(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     cost_usd: float | None = None,
+    checklist: list[ChecklistReport] | None = None,
 ) -> dict:
     """Finish the task. `summary` says what you did (Markdown); `data` must match the
     task kind's result schema if it has one; `artifacts` are ids from
-    upload_text_artifact. Report token usage and the account you used, if known."""
+    upload_text_artifact. Report token usage and the account you used, if known.
+    `checklist` reports each acceptance item of the task's continuation contract by id
+    (status done needs evidence); any item not done sends the result to review instead
+    of success."""
     usage = {
         "account_id": account_id,
         "input_tokens": input_tokens,
@@ -518,6 +527,7 @@ async def complete_task(
         "summary": summary,
         "data": data,
         "artifacts": artifacts or [],
+        "checklist": [c.model_dump(mode="json") for c in checklist or []],
     }
     if any(v is not None for v in usage.values()):
         result["usage"] = usage
@@ -546,10 +556,17 @@ async def ask_question(
     question: str,
     options: list[str] | None = None,
     audience: Literal["any", "orchestrator", "human"] = "any",
+    category: Literal["decision", "assistance"] = "decision",
+    resource: str | None = None,
 ) -> dict:
-    """Ask for a decision you cannot make yourself. Your task is paused (its lease is
-    released) until someone answers; the answer is added to the task spec under
-    "Clarifications" and the task becomes claimable again."""
+    """Ask for a real choice of scope, cost or permission that you cannot make yourself.
+    Your task is paused (its lease is released) until someone answers; the answer is
+    recorded as an effective decision and in the spec's "Clarifications" history, and
+    the task becomes claimable again. Never ask whether to run a gate, accept a partial
+    result or verify merged work: resolve facts within your authorization.
+    A missing tool, credential or service is `category="assistance"` with the `resource`
+    name: it goes to the orchestrator (never a human) and is not a decision about the
+    goal. 409 already_answered: the question has an effective answer (in the message)."""
     return await _call(
         ctx,
         "POST",
@@ -559,7 +576,48 @@ async def ask_question(
             "question": question,
             "options": options,
             "audience": audience,
+            "category": category,
+            "resource": resource,
         },
+    )
+
+
+@tool(ANYONE)
+async def get_task_continuation(ctx: Context, task_id: str) -> dict:
+    """The continuation contract of a task: phase (implement | resume | reconcile | qa |
+    close_evidence), known branch/PR/commit artifacts with provenance and observation
+    time, preserved WIP, the last interruption, the checklist with evidence, effective
+    decisions (newest first) and `gaps` (what Argus does not know: unknown is not
+    absent). Merged is not accepted: pending items stay pending."""
+    return await _call(ctx, "GET", f"/tasks/{task_id}/continuation")
+
+
+@tool(AGENTS)
+async def report_observations(
+    ctx: Context, task_id: str, attempt: int, observations: ObservationRequest
+) -> dict:
+    """Report what you saw of the live system for the task you hold: artifact state
+    (PR open/merged/closed, head sha), environment readiness per resource
+    (installed, credential_usable, reachable, permitted, validated) and preserved WIP.
+    Idempotent; Argus stores it with runtime provenance and flags contradictions."""
+    body = observations.model_dump(mode="json", exclude_none=True)
+    body["attempt"] = attempt
+    return await _call(ctx, "POST", f"/tasks/{task_id}/observations", json=body)
+
+
+@tool(MANAGERS)
+async def update_task_continuation(
+    ctx: Context, task_id: str, update: ContinuationUpdate
+) -> dict:
+    """Settle continuation facts the runtime cannot: phase, artifacts, WIP, checklist
+    items and evidence, environment status, decisions to retire. Pass the contract's
+    `revision` as expected_revision (409 stale_continuation otherwise). Recorded with
+    orchestrator provenance and audited."""
+    return await _call(
+        ctx,
+        "PATCH",
+        f"/tasks/{task_id}/continuation",
+        json=update.model_dump(mode="json", exclude_none=True),
     )
 
 

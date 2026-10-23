@@ -26,6 +26,13 @@ cp "$here/argus-accounts.test.ts" "$target/src/channels/argus-accounts.test.ts"
 # The quota patterns' shared fixture (Argus's packages/core), read by argus-accounts.test.ts.
 cp "$here/../../packages/core/tests/fixtures/quota-notices.json" "$target/src/channels/argus-quota-notices.json"
 cp "$here/argus-gitea-lease.test.ts" "$target/src/channels/argus-gitea-lease.test.ts"
+# The continuation contract tests and the real-API claims they render (task continuation spec).
+cp "$here/argus-continuation.test.ts" "$target/src/channels/argus-continuation.test.ts"
+cp "$here/argus-continuation-observe.ts" "$target/src/channels/argus-continuation-observe.ts"
+cp "$here/argus-continuation-observe.test.ts" "$target/src/channels/argus-continuation-observe.test.ts"
+mkdir -p "$target/src/channels/fixtures"
+rm -rf "$target/src/channels/fixtures/continuation"
+cp -r "$here/fixtures/continuation" "$target/src/channels/fixtures/continuation"
 cp "$here/argus-codex-stub.ts" "$target/src/gateway-providers/argus-codex-stub.ts"
 cp "$here/argus-codex-stub.test.ts" "$target/src/gateway-providers/argus-codex-stub.test.ts"
 cp "$here/argus-cursor-stub.ts" "$target/src/gateway-providers/argus-cursor-stub.ts"

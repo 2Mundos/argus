@@ -1577,6 +1577,76 @@
         "title": "Artifact",
         "type": "object"
       },
+      "ArtifactIn": {
+        "additionalProperties": false,
+        "description": "A caller's statement about an artifact. ContinuationProvenance and time are Argus's.",
+        "properties": {
+          "head_sha": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{7,40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ArtifactKind"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "ref": {
+            "maxLength": 250,
+            "minLength": 1,
+            "title": "Ref",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ArtifactState",
+            "default": "unknown"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "kind",
+          "ref"
+        ],
+        "title": "ArtifactIn",
+        "type": "object"
+      },
+      "ArtifactKind": {
+        "enum": [
+          "branch",
+          "pr",
+          "commit"
+        ],
+        "title": "ArtifactKind",
+        "type": "string"
+      },
       "ArtifactRole": {
         "description": "What an artifact is for, declared by its uploader (MCP operations 3.2).",
         "enum": [
@@ -1587,6 +1657,17 @@
           "other"
         ],
         "title": "ArtifactRole",
+        "type": "string"
+      },
+      "ArtifactState": {
+        "enum": [
+          "unknown",
+          "open",
+          "merged",
+          "closed",
+          "local_only"
+        ],
+        "title": "ArtifactState",
         "type": "string"
       },
       "ArtifactText": {
@@ -1651,6 +1732,15 @@
             "$ref": "#/components/schemas/Audience",
             "default": "any"
           },
+          "category": {
+            "default": "decision",
+            "enum": [
+              "decision",
+              "assistance"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
           "options": {
             "anyOf": [
               {
@@ -1671,6 +1761,19 @@
             "minLength": 1,
             "title": "Question",
             "type": "string"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource"
           }
         },
         "required": [
@@ -1963,6 +2066,103 @@
         "title": "CheckOut",
         "type": "object"
       },
+      "ChecklistItem": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/ContinuationProvenance",
+            "default": "argus_event"
+          },
+          "source": {
+            "default": "acceptance",
+            "enum": [
+              "acceptance",
+              "orchestrator"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ItemStatus",
+            "default": "pending"
+          },
+          "text": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "title": "ChecklistItem",
+        "type": "object"
+      },
+      "ChecklistReport": {
+        "additionalProperties": false,
+        "description": "A worker's claim about one item, sent with its result.",
+        "properties": {
+          "evidence": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ItemStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "ChecklistReport",
+        "type": "object"
+      },
       "ClaimRequest": {
         "properties": {
           "capabilities": {
@@ -2064,6 +2264,16 @@
             "readOnly": true,
             "title": "Complexity",
             "type": "string"
+          },
+          "continuation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EffectiveContinuation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "created_at": {
             "format": "date-time",
@@ -2690,6 +2900,320 @@
           "result"
         ],
         "title": "CompleteRequest",
+        "type": "object"
+      },
+      "ContinuationArtifact": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{7,40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ArtifactKind"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/ContinuationProvenance"
+          },
+          "ref": {
+            "maxLength": 250,
+            "minLength": 1,
+            "title": "Ref",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ArtifactState",
+            "default": "unknown"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "kind",
+          "ref",
+          "provenance",
+          "observed_at"
+        ],
+        "title": "ContinuationArtifact",
+        "type": "object"
+      },
+      "ContinuationInterruption": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "reason": {
+            "maxLength": 100,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "reason",
+          "at"
+        ],
+        "title": "ContinuationInterruption",
+        "type": "object"
+      },
+      "ContinuationPhase": {
+        "description": "What this attempt is for.",
+        "enum": [
+          "implement",
+          "resume",
+          "reconcile",
+          "qa",
+          "close_evidence"
+        ],
+        "title": "ContinuationPhase",
+        "type": "string"
+      },
+      "ContinuationProvenance": {
+        "enum": [
+          "orchestrator",
+          "worker_reported",
+          "argus_event",
+          "runtime_observed"
+        ],
+        "title": "ContinuationProvenance",
+        "type": "string"
+      },
+      "ContinuationReconciliation": {
+        "additionalProperties": false,
+        "description": "A bounded contradiction between recorded and live evidence.",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "observed": {
+            "maxLength": 300,
+            "title": "Observed",
+            "type": "string"
+          },
+          "recorded": {
+            "maxLength": 300,
+            "title": "Recorded",
+            "type": "string"
+          },
+          "subject": {
+            "maxLength": 300,
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "recorded",
+          "observed",
+          "at"
+        ],
+        "title": "ContinuationReconciliation",
+        "type": "object"
+      },
+      "ContinuationUpdate": {
+        "additionalProperties": false,
+        "description": "An orchestrator/admin edit. Everything it writes carries `orchestrator`\nprovenance; `expected_revision` rejects a write based on a stale read.",
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactIn"
+            },
+            "maxItems": 20,
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "checklist": {
+            "items": {
+              "$ref": "#/components/schemas/ItemIn"
+            },
+            "maxItems": 60,
+            "title": "Checklist",
+            "type": "array"
+          },
+          "clear_phase": {
+            "default": false,
+            "title": "Clear Phase",
+            "type": "boolean"
+          },
+          "clear_reconciliation": {
+            "default": false,
+            "title": "Clear Reconciliation",
+            "type": "boolean"
+          },
+          "clear_wip": {
+            "default": false,
+            "title": "Clear Wip",
+            "type": "boolean"
+          },
+          "environment": {
+            "items": {
+              "$ref": "#/components/schemas/EnvIn"
+            },
+            "maxItems": 20,
+            "title": "Environment",
+            "type": "array"
+          },
+          "expected_revision": {
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "objective": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContinuationPhase"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "supersede_decisions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Supersede Decisions",
+            "type": "array"
+          },
+          "wip": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WipIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "expected_revision",
+          "reason"
+        ],
+        "title": "ContinuationUpdate",
+        "type": "object"
+      },
+      "ContinuationWip": {
+        "additionalProperties": false,
+        "description": "Work kept outside Git (a local commit, a dirty checkout). Never credentials.",
+        "properties": {
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/ContinuationProvenance"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "maxLength": 250,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "summary": {
+            "maxLength": 1000,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary",
+          "provenance",
+          "observed_at"
+        ],
+        "title": "ContinuationWip",
         "type": "object"
       },
       "CostFigures": {
@@ -4035,6 +4559,226 @@
         "title": "Durations",
         "type": "object"
       },
+      "EffectiveContinuation": {
+        "additionalProperties": false,
+        "description": "What a claim and a read expose: stored facts plus everything derived.",
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ContinuationArtifact"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "checklist": {
+            "items": {
+              "$ref": "#/components/schemas/ChecklistItem"
+            },
+            "title": "Checklist",
+            "type": "array"
+          },
+          "checklist_state": {
+            "enum": [
+              "structured",
+              "unstructured"
+            ],
+            "title": "Checklist State",
+            "type": "string"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/EffectiveDecision"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "environment": {
+            "items": {
+              "$ref": "#/components/schemas/EnvCheck"
+            },
+            "title": "Environment",
+            "type": "array"
+          },
+          "gaps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "interruption": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContinuationInterruption"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "objective": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective"
+          },
+          "pending": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pending",
+            "type": "array"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/ContinuationPhase"
+          },
+          "phase_source": {
+            "enum": [
+              "explicit",
+              "derived"
+            ],
+            "title": "Phase Source",
+            "type": "string"
+          },
+          "reconciliation": {
+            "items": {
+              "$ref": "#/components/schemas/ContinuationReconciliation"
+            },
+            "title": "Reconciliation",
+            "type": "array"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "wip": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContinuationWip"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "revision",
+          "phase",
+          "phase_source",
+          "objective",
+          "artifacts",
+          "wip",
+          "interruption",
+          "checklist",
+          "checklist_state",
+          "pending",
+          "decisions",
+          "environment",
+          "reconciliation",
+          "gaps"
+        ],
+        "title": "EffectiveContinuation",
+        "type": "object"
+      },
+      "EffectiveDecision": {
+        "additionalProperties": false,
+        "description": "An answered question as it stands now. History keeps every answer; this is\nthe authoritative view: newest first, with what it does and does not settle.",
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
+          },
+          "category": {
+            "default": "decision",
+            "enum": [
+              "decision",
+              "assistance"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "choice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Choice"
+          },
+          "decided_at": {
+            "format": "date-time",
+            "title": "Decided At",
+            "type": "string"
+          },
+          "decided_by": {
+            "title": "Decided By",
+            "type": "string"
+          },
+          "decision_id": {
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "options_known": {
+            "default": false,
+            "title": "Options Known",
+            "type": "boolean"
+          },
+          "premise_outdated": {
+            "default": false,
+            "title": "Premise Outdated",
+            "type": "boolean"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "scope": {
+            "const": "task",
+            "default": "task",
+            "title": "Scope",
+            "type": "string"
+          },
+          "status": {
+            "default": "effective",
+            "enum": [
+              "effective",
+              "unresolved",
+              "superseded"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision_id",
+          "question",
+          "answer",
+          "decided_by",
+          "decided_at"
+        ],
+        "title": "EffectiveDecision",
+        "type": "object"
+      },
       "EngineCatalog": {
         "properties": {
           "engines": {
@@ -4235,6 +4979,95 @@
           "account_id"
         ],
         "title": "EngineSelected",
+        "type": "object"
+      },
+      "EnvCheck": {
+        "additionalProperties": false,
+        "description": "One resource a verification needs, one dimension per question. `ready` only\nwhen all five are `yes`: an installed tool without a usable credential, or an\noffline test without the resource, is not readiness.",
+        "properties": {
+          "credential_usable": {
+            "$ref": "#/components/schemas/Tri",
+            "default": "unknown"
+          },
+          "installed": {
+            "$ref": "#/components/schemas/Tri",
+            "default": "unknown"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "permitted": {
+            "$ref": "#/components/schemas/Tri",
+            "default": "unknown"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/ContinuationProvenance",
+            "default": "runtime_observed"
+          },
+          "reachable": {
+            "$ref": "#/components/schemas/Tri",
+            "default": "unknown"
+          },
+          "resource": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Resource",
+            "type": "string"
+          },
+          "validated": {
+            "$ref": "#/components/schemas/Tri",
+            "default": "unknown"
+          }
+        },
+        "required": [
+          "resource"
+        ],
+        "title": "EnvCheck",
+        "type": "object"
+      },
+      "EnvIn": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_usable": {
+            "$ref": "#/components/schemas/Tri",
+            "default": "unknown"
+          },
+          "installed": {
+            "$ref": "#/components/schemas/Tri",
+            "default": "unknown"
+          },
+          "permitted": {
+            "$ref": "#/components/schemas/Tri",
+            "default": "unknown"
+          },
+          "reachable": {
+            "$ref": "#/components/schemas/Tri",
+            "default": "unknown"
+          },
+          "resource": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Resource",
+            "type": "string"
+          },
+          "validated": {
+            "$ref": "#/components/schemas/Tri",
+            "default": "unknown"
+          }
+        },
+        "required": [
+          "resource"
+        ],
+        "title": "EnvIn",
         "type": "object"
       },
       "EventOut": {
@@ -6193,6 +7026,69 @@
         "title": "ItemError",
         "type": "object"
       },
+      "ItemIn": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ItemStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "title": "ItemIn",
+        "type": "object"
+      },
+      "ItemStatus": {
+        "enum": [
+          "pending",
+          "done",
+          "verification_missing"
+        ],
+        "title": "ItemStatus",
+        "type": "string"
+      },
       "KnowledgeOverview": {
         "properties": {
           "pages_by_state": {
@@ -7742,6 +8638,47 @@
           "shares_filesystem"
         ],
         "title": "NodeOption",
+        "type": "object"
+      },
+      "ObservationRequest": {
+        "additionalProperties": false,
+        "description": "What a worker runtime saw (by itself, outside any transaction) at claim.",
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactIn"
+            },
+            "maxItems": 20,
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "environment": {
+            "items": {
+              "$ref": "#/components/schemas/EnvIn"
+            },
+            "maxItems": 20,
+            "title": "Environment",
+            "type": "array"
+          },
+          "wip": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WipIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "attempt"
+        ],
+        "title": "ObservationRequest",
         "type": "object"
       },
       "Outcomes": {
@@ -11073,6 +12010,16 @@
             "title": "Complexity",
             "type": "string"
           },
+          "continuation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EffectiveContinuation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -12002,6 +12949,16 @@
             "title": "Complexity",
             "type": "string"
           },
+          "continuation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EffectiveContinuation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -12727,6 +13684,14 @@
             "title": "Artifacts",
             "type": "array"
           },
+          "checklist": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ChecklistReport"
+            },
+            "title": "Checklist",
+            "type": "array"
+          },
           "data": {
             "anyOf": [
               {
@@ -12771,6 +13736,14 @@
               "type": "string"
             },
             "title": "Artifacts",
+            "type": "array"
+          },
+          "checklist": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ChecklistReport"
+            },
+            "title": "Checklist",
             "type": "array"
           },
           "data": {
@@ -13171,6 +14144,15 @@
         },
         "title": "TerminateRequest",
         "type": "object"
+      },
+      "Tri": {
+        "enum": [
+          "yes",
+          "no",
+          "unknown"
+        ],
+        "title": "Tri",
+        "type": "string"
       },
       "Usage-Input": {
         "description": "What the work cost, as reported by the agent. Recorded, never enforced.",
@@ -13637,6 +14619,34 @@
           "expected_sha256"
         ],
         "title": "Verification",
+        "type": "object"
+      },
+      "WipIn": {
+        "additionalProperties": false,
+        "properties": {
+          "ref": {
+            "anyOf": [
+              {
+                "maxLength": 250,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "summary": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "title": "WipIn",
         "type": "object"
       },
       "WorkerTemplate": {
@@ -19567,6 +20577,110 @@
         ]
       }
     },
+    "/api/tasks/{task_id}/continuation": {
+      "get": {
+        "description": "The continuation contract: phase, known artifacts with provenance, preserved\nWIP, last interruption, checklist with evidence, effective decisions and what\nArgus does not know (`gaps`). Derived from stored facts; unknown is not absent.",
+        "operationId": "get_continuation_api_tasks__task_id__continuation_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EffectiveContinuation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Continuation",
+        "tags": [
+          "tasks"
+        ]
+      },
+      "patch": {
+        "description": "Settle continuation facts (orchestrator or admin): phase, artifacts, WIP,\nchecklist items and evidence, environment status, retire decisions. Written with\norchestrator provenance; stale `expected_revision` is 409 `stale_continuation`.",
+        "operationId": "update_continuation_api_tasks__task_id__continuation_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContinuationUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Continuation",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
     "/api/tasks/{task_id}/dependencies": {
       "put": {
         "description": "Replace the dependencies of a task that is still waiting (pending,\nawaiting_approval or ready). A ready task with an unfinished new dependency\ngoes back to pending; a pending one whose dependencies all succeeded becomes\nready. Refuses cycles (422 dependency_cycle) and stale versions (409).",
@@ -19936,6 +21050,64 @@
         "summary": "Report Models",
         "tags": [
           "models"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/observations": {
+      "post": {
+        "description": "The holder's runtime reports live observations (artifact state, environment\nreadiness, preserved WIP) made outside any transaction. Idempotent; fenced by\nthe attempt like every worker write.",
+        "operationId": "observe_task_api_tasks__task_id__observations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObservationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Observe Task",
+        "tags": [
+          "tasks"
         ]
       }
     },

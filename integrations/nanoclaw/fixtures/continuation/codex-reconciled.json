@@ -1,0 +1,123 @@
+{
+  "acceptance": [],
+  "account_providers": null,
+  "archived_at": null,
+  "assignee_agent_id": null,
+  "attempt": 2,
+  "block_reason": null,
+  "complexity": "standard",
+  "continuation": {
+    "artifacts": [
+      {
+        "attempt": 2,
+        "head_sha": "abcdef1",
+        "kind": "pr",
+        "note": null,
+        "observed_at": "2026-01-01T00:00:00Z",
+        "provenance": "runtime_observed",
+        "ref": "74",
+        "state": "merged",
+        "url": null
+      }
+    ],
+    "checklist": [
+      {
+        "evidence": null,
+        "id": "or-2775c6e51c",
+        "provenance": "orchestrator",
+        "source": "orchestrator",
+        "status": "pending",
+        "text": "review findings of #74 followups fixed",
+        "updated_at": "2026-01-01T00:00:00Z"
+      }
+    ],
+    "checklist_state": "structured",
+    "decisions": [
+      {
+        "answer": "B",
+        "attempt": 1,
+        "category": "decision",
+        "choice": null,
+        "decided_at": "2026-01-01T00:00:00Z",
+        "decided_by": "agent:orch",
+        "decision_id": "00000000-0000-0000-0000-000000000001",
+        "options_known": false,
+        "premise_outdated": false,
+        "question": "Which option for #74?",
+        "scope": "task",
+        "status": "unresolved"
+      }
+    ],
+    "environment": [],
+    "gaps": ["decision_unresolved:00000000-0000-0000-0000-000000000001"],
+    "interruption": {
+      "at": "2026-01-01T00:00:00Z",
+      "attempt": 1,
+      "detail": "waiting for decision 00000000-0000-0000-0000-000000000001",
+      "reason": "asked"
+    },
+    "objective": null,
+    "pending": ["or-2775c6e51c"],
+    "phase": "qa",
+    "phase_source": "derived",
+    "reconciliation": [],
+    "revision": 4,
+    "wip": null
+  },
+  "created_at": "<volatile>",
+  "created_by": "admin:test",
+  "depends_on": [],
+  "difficulty": "standard",
+  "difficulty_source": "inferred",
+  "editable_fields": ["priority"],
+  "error": null,
+  "executor_model": null,
+  "failover": null,
+  "failure_class": null,
+  "failures": 0,
+  "harness_account": null,
+  "harness_model": null,
+  "id": "codex-reconciled",
+  "input": {},
+  "kind": "generic",
+  "knowledge": [],
+  "knowledge_refs": [],
+  "lease_expires_at": null,
+  "lease_ttl_s": 120,
+  "max_attempts": 3,
+  "models": {
+    "delegate": null,
+    "executions": 0,
+    "harness": null,
+    "switches": 0
+  },
+  "output_at": null,
+  "parent_id": null,
+  "priority": 0,
+  "progress_at": null,
+  "progress_data": null,
+  "progress_kind": null,
+  "progress_message": null,
+  "progress_percent": null,
+  "project": "global",
+  "prompt_trust": "orchestrator",
+  "refill_at": null,
+  "required_capabilities": [],
+  "requires_approval": false,
+  "result": {
+    "artifacts": [],
+    "checklist": [],
+    "data": null,
+    "summary": "all good",
+    "usage": null
+  },
+  "review": "none",
+  "serving_account": null,
+  "spec": "Reimplementar #51.\n\n## Aceite\n- tudo verde\n\n## Clarifications\n\n- **Asked (attempt 1):** #74 aberto?\n  **Answered by admin:x:** B\n\n- **Asked (attempt 1):** Which option for #74?\n  **Answered by agent:orch (2026-01-01T00:00:00.000000Z):** B\n",
+  "state": "in_review",
+  "timeout_at": null,
+  "timeout_s": null,
+  "title": "Reimplement #51",
+  "updated_at": "<volatile>",
+  "version": "<volatile>"
+}
