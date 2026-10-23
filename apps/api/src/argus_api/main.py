@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import hashlib
 import logging
 import os
 import time
@@ -46,6 +47,9 @@ from argus_api.modeltrace.routes import router as model_trace_router
 from argus_api.ops import LoopStats, ReadinessCache
 from argus_api.ops_routes import probes as probes_router
 from argus_api.ops_routes import router as ops_router
+from argus_api.runtime.docker import CliDocker
+from argus_api.runtime.routes import router as runtime_router
+from argus_api.runtime.service import RuntimeManager
 from argus_api.secrets import open_store
 from argus_api.tasks.routes import router as tasks_router
 
@@ -131,6 +135,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.started_at = time.monotonic()
         app.state.readiness = ReadinessCache()
         app.state.quota = QuotaProber(db, secrets, settings)
+        app.state.runtime = RuntimeManager(
+            db,
+            CliDocker(
+                hashlib.sha256(str(settings.data_dir.resolve()).encode()).hexdigest()[
+                    :12
+                ]
+            ),
+            settings,
+        )
         app.state.loops = {
             "reaper": LoopStats("reaper", reaper.REAP_INTERVAL_S),
             "reconciler": LoopStats("reconciler", settings.reconcile_interval_s),
@@ -155,6 +168,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 )
             ),
             asyncio.create_task(app.state.quota.run()),
+            *(
+                [asyncio.create_task(app.state.runtime.run())]
+                if settings.project_runtime
+                else []
+            ),
             asyncio.create_task(
                 reconciler.run(
                     db,
@@ -206,6 +224,7 @@ for router in (
     engines_router,
     models_router,
     ops_router,
+    runtime_router,
 ):
     api.include_router(router)
 app.include_router(api)

@@ -71,6 +71,7 @@ from argus_api.errors import (
 from argus_api.events import record
 from argus_api.kinds import service as kinds
 from argus_api.modeltrace import service as modeltrace
+from argus_api.runtime.gate import claim_gate
 from argus_api.tasks import continuation as cont
 
 log = logging.getLogger(__name__)
@@ -81,6 +82,11 @@ _JSON_FIELDS = ("acceptance", "input", "required_capabilities")
 # before the rename carry `no_account`; both are read and released alike.
 AWAITING_QUOTA = "awaiting_quota"
 QUOTA_WAIT_REASONS = (AWAITING_QUOTA, "no_account")
+
+# `blocked` while the project's image is prepared / after its preparation failed
+# (project runtime spec 3.4): neither spends `failures` or `max_attempts`.
+RUNTIME_PREPARING = "runtime_preparing"
+RUNTIME_FAILED = "runtime_failed"
 
 
 # -- reads -------------------------------------------------------------------
@@ -293,7 +299,28 @@ async def claim(
         candidates = await cur.fetchall()
     gated = bool(runtime_providers) and await _manages_accounts(tx.conn)
     row = None
+    runtime_gates: dict[str, Any] = {}
     for candidate in candidates:
+        project = candidate["project"]
+        if project not in runtime_gates:
+            runtime_gates[project] = await claim_gate(tx.conn, agent_id, project)
+        if (blocked := runtime_gates[project]) is not None:
+            # Not claimable on this host now. A failed preparation is durable and
+            # visible on the task; a build in progress just leaves it ready.
+            if blocked.failed:
+                await _apply(
+                    tx,
+                    candidate,
+                    Action.BLOCK,
+                    f"agent:{agent_id}",
+                    set_={
+                        "block_reason": RUNTIME_FAILED,
+                        "error": blocked.reason,
+                        "progress_message": "project runtime unavailable",
+                    },
+                    data={"reason": RUNTIME_FAILED, "error": blocked.reason},
+                )
+            continue
         restriction = engine_restriction(candidate)
         pinned = candidate["harness_account"]
         if restriction is None and pinned is None and not gated:
@@ -896,6 +923,86 @@ async def pause_for_quota(
         data={"reason": "quota_exhausted", "error": note[:500]},
     )
     return await get_task(tx.conn, task_id)
+
+
+async def hold_for_runtime(
+    tx: Tx,
+    agent_id: str,
+    task_id: str,
+    attempt: int,
+    reason: str,
+    error: str | None,
+) -> Task:
+    """The project's image is not usable for this claim: block the task before any
+    model work, `attempt` and `failures` as they were. `runtime_preparing` is woken
+    by the build; `runtime_failed` carries the durable `error` and waits for a
+    changed recipe or an operator rebuild."""
+    row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
+    note = (
+        "waiting for the project runtime image"
+        if reason == RUNTIME_PREPARING
+        else f"project runtime unavailable: {error}"
+    )
+    await _apply(
+        tx,
+        row,
+        Action.BLOCK,
+        f"agent:{agent_id}",
+        set_={
+            "block_reason": reason,
+            **({"error": error} if error else {}),
+            "progress_message": note[:500],
+            "progress_percent": None,
+            "progress_at": ts(tx.now),
+        },
+        data={"reason": reason, **({"error": error} if error else {})},
+    )
+    return await get_task(tx.conn, task_id)
+
+
+async def runtime_holds(
+    tx: Tx, project: str, reasons: tuple[str, ...]
+) -> list[aiosqlite.Row]:
+    marks = ", ".join("?" for _ in reasons)
+    async with tx.conn.execute(
+        "SELECT * FROM tasks WHERE state = 'blocked' AND project = ?"  # noqa: S608 - placeholders only
+        f" AND block_reason IN ({marks}) ORDER BY priority DESC, created_at, id",
+        (project, *reasons),
+    ) as cur:
+        return list(await cur.fetchall())
+
+
+async def release_runtime_holds(
+    tx: Tx, project: str, reasons: tuple[str, ...], actor: str = "system"
+) -> list[str]:
+    """Return the project's runtime-held tasks to `ready`; the claim gate decides
+    again. Nothing is claimed here, so no storm."""
+    rows = await runtime_holds(tx, project, reasons)
+    for r in rows:
+        await unblock(tx, r["id"], actor)
+    return [r["id"] for r in rows]
+
+
+async def fail_runtime_holds(tx: Tx, project: str, error: str) -> list[str]:
+    """The preparation the tasks waited for failed: keep them blocked, now durably
+    and with the reason (no state change, so no attempt or failure is spent)."""
+    rows = await runtime_holds(tx, project, (RUNTIME_PREPARING,))
+    for r in rows:
+        await tx.conn.execute(
+            "UPDATE tasks SET block_reason = ?, error = ?, progress_message = ?,"
+            " updated_at = ? WHERE id = ?",
+            (
+                RUNTIME_FAILED,
+                error,
+                "project runtime unavailable",
+                ts(max(tx.now, datetime.fromisoformat(r["updated_at"]) + _TICK)),
+                r["id"],
+            ),
+        )
+        await record(
+            tx, "system", "task", r["id"], "task.runtime_failed", {"error": error[:500]}
+        )
+    return [r["id"] for r in rows]
 
 
 async def await_quota_ready(

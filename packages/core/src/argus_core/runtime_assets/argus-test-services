@@ -1,0 +1,546 @@
+#!/usr/bin/env python3
+"""argus-test-services: disposable PostgreSQL and Valkey for exactly one task.
+
+Installed in project runtime images by Argus (docs/specs/project-runtime.spec.md).
+Standard library only; runs as the task's unprivileged uid, never needs root.
+
+    argus-test-services up        start the declared services, print `export` lines
+    argus-test-services run -- C  up, run C with the variables, always down
+    argus-test-services down      stop and delete this task's services and data
+    argus-test-services status    JSON about this task's services
+    argus-test-services selftest  exercise PostgreSQL and Valkey end to end
+
+Everything a task gets lives in one directory named after its task id: data,
+unix sockets, logs, a loopback-only port chosen free at start and synthetic
+credentials generated per start. `down` removes that directory and only that
+one, and signals a process only after /proc proves it belongs to it.
+
+The declared services come from a JSON file written by the worker for the claimed
+task ($ARGUS_TEST_SERVICES_SPEC_FILE, default /workspace/agent/.argus/test-services.json):
+{"task_id": "...", "services": [{"kind": "postgres", "env": {"NAME": "{url_asyncpg}"}}]}
+"""
+
+import argparse
+import contextlib
+import glob
+import hashlib
+import json
+import os
+import re
+import secrets
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+DEFAULT_SPEC = "/workspace/agent/.argus/test-services.json"
+TASK_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
+PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
+FIELDS = {
+    "postgres": {
+        "host", "port", "user", "password", "database",
+        "url", "url_asyncpg", "url_psycopg",
+    },
+    "valkey": {"host", "port", "password", "url"},
+}  # fmt: skip
+DEFAULT_ENV = {
+    "postgres": {"ARGUS_TEST_POSTGRES_URL": "{url}"},
+    "valkey": {"ARGUS_TEST_VALKEY_URL": "{url}"},
+}
+HOST = "127.0.0.1"
+WAIT_S = 30
+
+
+class Fail(Exception):
+    pass
+
+
+def root() -> Path:
+    return Path(os.environ.get("ARGUS_TEST_SERVICES_ROOT", "/tmp/argus-test-services"))
+
+
+def task_dir(task: str) -> Path:
+    if not TASK_RE.match(task):
+        raise Fail(f"invalid task id: {task!r}")
+    return root() / task
+
+
+def load_spec(path: str | None = None) -> dict:
+    file = Path(path or os.environ.get("ARGUS_TEST_SERVICES_SPEC_FILE", DEFAULT_SPEC))
+    try:
+        spec = json.loads(file.read_text())
+    except OSError:
+        raise Fail(f"no test-services declaration at {file}: this task has none") from None
+    except ValueError as e:
+        raise Fail(f"{file} is not valid JSON: {e}") from None
+    return check_spec(spec)
+
+
+def check_spec(spec: object) -> dict:
+    if not isinstance(spec, dict) or not isinstance(spec.get("services"), list):
+        raise Fail("declaration must be an object with a services list")
+    task = spec.get("task_id") or os.environ.get("ARGUS_TASK_ID")
+    if not isinstance(task, str) or not TASK_RE.match(task):
+        raise Fail("declaration needs a valid task_id")
+    seen = set()
+    for svc in spec["services"]:
+        kind = svc.get("kind") if isinstance(svc, dict) else None
+        if kind not in FIELDS or kind in seen:
+            raise Fail(f"unknown or repeated service kind: {kind!r}")
+        seen.add(kind)
+        for name, template in (svc.get("env") or {}).items():
+            if not ENV_NAME_RE.match(name) or not isinstance(template, str):
+                raise Fail(f"invalid variable name: {name!r}")
+            unknown = set(PLACEHOLDER_RE.findall(template)) - FIELDS[kind]
+            if unknown:
+                raise Fail(f"{name}: unknown placeholders {sorted(unknown)} for {kind}")
+    return {"task_id": task, "services": spec["services"]}
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind((HOST, 0))
+        return s.getsockname()[1]
+
+
+def pg_bin(name: str) -> str:
+    found = sorted(glob.glob(f"/usr/lib/postgresql/*/bin/{name}"))
+    if not found:
+        raise Fail(f"PostgreSQL server binary {name} is not in this image")
+    return found[-1]
+
+
+def tool(name: str) -> str:
+    path = shutil.which(name)
+    if not path:
+        raise Fail(f"{name} is not in this image")
+    return path
+
+
+def run(argv: list[str], **kw) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True, timeout=120, **kw)
+
+
+def inside(path: str, marker: Path) -> bool:
+    return path == str(marker) or path.startswith(f"{marker}/")
+
+
+def owned(pid: int, marker: Path) -> bool:
+    """True when /proc proves `pid` belongs to `marker`: its command line names it, or
+    its working directory is inside it (servers rewrite their process title, but
+    PostgreSQL and Valkey both run from their own data directory)."""
+    try:
+        if str(marker) in Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace"):
+            return True
+        return inside(os.readlink(f"/proc/{pid}/cwd"), marker)
+    except OSError:
+        return False
+
+
+def processes_in(directory: Path) -> list[int]:
+    """Every process of ours whose working directory is inside `directory`."""
+    found = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if inside(os.readlink(entry / "cwd"), directory):
+                found.append(int(entry.name))
+        except OSError:
+            continue
+    return found
+
+
+def wait_until(check, what: str) -> None:
+    end = time.monotonic() + WAIT_S
+    while time.monotonic() < end:
+        if check():
+            return
+        time.sleep(0.1)
+    raise Fail(f"timed out waiting for {what}")
+
+
+# -- PostgreSQL ------------------------------------------------------------------
+
+
+def database_name(task: str) -> str:
+    return "t_" + hashlib.sha256(task.encode()).hexdigest()[:12]
+
+
+def psql(state: dict, sql: str, database: str | None = None) -> str:
+    url = f"postgresql://{state['user']}@{HOST}:{state['port']}/{database or state['database']}"
+    done = run(
+        [tool("psql"), url, "-v", "ON_ERROR_STOP=1", "-tA", "-c", sql],
+        env={**os.environ, "PGPASSWORD": state["password"], "PGCONNECT_TIMEOUT": "10"},
+    )
+    if done.returncode != 0:
+        raise Fail(f"psql failed: {done.stderr.strip()[:300]}")
+    return done.stdout.strip()
+
+
+def start_postgres(td: Path, task: str) -> dict:
+    base = td / "postgres"
+    data = base / "data"
+    base.mkdir(parents=True, exist_ok=True)
+    password = secrets.token_urlsafe(18)
+    (base / "pw").write_text(password)
+    (base / "pw").chmod(0o600)
+    init = run(
+        [pg_bin("initdb"), "-D", str(data), "-U", "argus_test", "-E", "UTF8",
+         "--locale=C.UTF-8", "--auth=scram-sha-256", f"--pwfile={base / 'pw'}"],
+    )  # fmt: skip
+    if init.returncode != 0:
+        raise Fail(f"initdb failed: {init.stderr.strip()[:300]}")
+    (base / "pw").unlink()
+    sock = base / "sock"
+    sock.mkdir()
+    state: dict = {}
+    for _ in range(5):  # another process may take the port between pick and bind
+        port = free_port()
+        opts = (
+            f"-c listen_addresses={HOST} -c port={port} "
+            f"-c unix_socket_directories={sock} -c fsync=off "
+            "-c synchronous_commit=off -c full_page_writes=off "
+            "-c shared_buffers=64MB -c max_connections=100 -c max_wal_size=256MB"
+        )
+        started = run(
+            [pg_bin("pg_ctl"), "-D", str(data), "-l", str(base / "log"), "-o", opts, "-w", "start"]
+        )  # fmt: skip
+        if started.returncode == 0:
+            pid = int((data / "postmaster.pid").read_text().splitlines()[0])
+            state = {
+                "kind": "postgres", "host": HOST, "port": port, "user": "argus_test",
+                "password": password, "database": database_name(task), "pid": pid,
+                "marker": str(data),
+            }  # fmt: skip
+            break
+    if not state:
+        raise Fail(f"PostgreSQL did not start: {(base / 'log').read_text()[-300:]}")
+    psql(state, f'CREATE DATABASE "{state["database"]}"', database="postgres")
+    return state
+
+
+def stop_postgres(state: dict) -> None:
+    data = Path(state["marker"])
+    if owned(state["pid"], data):
+        run([pg_bin("pg_ctl"), "-D", str(data), "-m", "immediate", "-w", "stop"])
+        if owned(state["pid"], data):
+            os.kill(state["pid"], signal.SIGKILL)
+
+
+# -- Valkey ----------------------------------------------------------------------
+
+
+def valkey_cli(state: dict, *args: str) -> subprocess.CompletedProcess:
+    return run(
+        [tool("valkey-cli"), "-h", HOST, "-p", str(state["port"]),
+         "--no-auth-warning", *args],
+        env={**os.environ, "REDISCLI_AUTH": state["password"]},
+    )  # fmt: skip
+
+
+def start_valkey(td: Path) -> dict:
+    base = td / "valkey"
+    base.mkdir(parents=True, exist_ok=True)
+    password = secrets.token_urlsafe(18)
+    for _ in range(5):
+        port = free_port()
+        cfg = base / "valkey.conf"
+        cfg.write_text(
+            f"bind {HOST}\nport {port}\nunixsocket {base / 'sock'}\nunixsocketperm 700\n"
+            f'dir {base}\nsave ""\nappendonly no\nrequirepass {password}\n'
+            "protected-mode yes\n"
+        )
+        cfg.chmod(0o600)
+        log = open(base / "log", "ab")  # noqa: SIM115 - the child owns it
+        proc = subprocess.Popen(
+            [tool("valkey-server"), str(cfg)], stdout=log, stderr=log, start_new_session=True
+        )
+        state = {
+            "kind": "valkey", "host": HOST, "port": port, "password": password,
+            "pid": proc.pid, "marker": str(base),
+        }  # fmt: skip
+        try:
+            wait_until(lambda: valkey_cli(state, "ping").stdout.strip() == "PONG", "valkey")
+            return state
+        except Fail:
+            proc.kill()
+    raise Fail(f"Valkey did not start: {(base / 'log').read_text()[-300:]}")
+
+
+def stop_valkey(state: dict) -> None:
+    base = Path(state["marker"])
+    if not owned(state["pid"], base):
+        return
+    valkey_cli(state, "shutdown", "nosave")
+    try:
+        wait_until(lambda: not owned(state["pid"], base), "valkey exit")
+    except Fail:
+        os.kill(state["pid"], signal.SIGKILL)
+
+
+# -- lifecycle --------------------------------------------------------------------
+
+STOP = {"postgres": stop_postgres, "valkey": stop_valkey}
+
+
+def render(state: dict, template: str) -> str:
+    pw, port, host = state["password"], state["port"], state["host"]
+    if state["kind"] == "postgres":
+        auth = f"{state['user']}:{pw}@{host}:{port}/{state['database']}"
+        values = {
+            "url": f"postgresql://{auth}", "url_asyncpg": f"postgresql+asyncpg://{auth}",
+            "url_psycopg": f"postgresql+psycopg://{auth}", "user": state["user"],
+            "database": state["database"],
+        }  # fmt: skip
+    else:
+        values = {"url": f"redis://default:{pw}@{host}:{port}/0"}
+    values |= {"host": host, "port": str(port), "password": pw}
+    return PLACEHOLDER_RE.sub(lambda m: str(values[m.group(1)]), template)
+
+
+def environment(spec: dict, states: dict) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for svc in spec["services"]:
+        mapping = svc.get("env") or DEFAULT_ENV[svc["kind"]]
+        for name, template in mapping.items():
+            env[name] = render(states[svc["kind"]], template)
+    return env
+
+
+def read_states(td: Path) -> dict:
+    try:
+        return json.loads((td / "state.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def alive(states: dict) -> bool:
+    return bool(states) and all(owned(s["pid"], Path(s["marker"])) for s in states.values())
+
+
+def up(spec: dict) -> dict:
+    task = spec["task_id"]
+    td = task_dir(task)
+    states = read_states(td)
+    if alive(states) and set(states) == {s["kind"] for s in spec["services"]}:
+        return states
+    down(task)  # whatever half-state this task left; never another task's
+    td.mkdir(parents=True, mode=0o700, exist_ok=True)
+    states = {}
+    try:
+        for svc in spec["services"]:
+            kind = svc["kind"]
+            states[kind] = start_postgres(td, task) if kind == "postgres" else start_valkey(td)
+        (td / "state.json").write_text(json.dumps(states))
+        (td / "state.json").chmod(0o600)
+    except BaseException:
+        for kind, state in states.items():
+            STOP[kind](state)
+        shutil.rmtree(td, ignore_errors=True)
+        raise
+    return states
+
+
+def down(task: str) -> None:
+    td = task_dir(task)
+    for kind, state in read_states(td).items():
+        STOP[kind](state)
+    for pid in processes_in(td):  # whatever still runs from this task's directory
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+    shutil.rmtree(td, ignore_errors=True)
+    if td.exists():
+        raise Fail(f"could not remove {td}")
+
+
+# -- commands -----------------------------------------------------------------------
+
+
+def cmd_up(args: argparse.Namespace) -> int:
+    spec = load_spec(args.spec)
+    env = environment(spec, up(spec))
+    for name, value in env.items():
+        print(f"export {name}={json.dumps(value)}")
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    if not args.command:
+        raise Fail("run needs a command after --")
+    spec = load_spec(args.spec)
+    states = up(spec)
+    try:
+        env = {**os.environ, **environment(spec, states)}
+        return subprocess.run(args.command, env=env).returncode
+    finally:
+        down(spec["task_id"])
+
+
+def cmd_down(args: argparse.Namespace) -> int:
+    down(args.task or load_spec(args.spec)["task_id"])
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    task = args.task or load_spec(args.spec)["task_id"]
+    states = read_states(task_dir(task))
+    shown = {k: {"port": s["port"], "pid": s["pid"], "alive": owned(s["pid"], Path(s["marker"]))}
+             for k, s in states.items()}  # fmt: skip
+    print(json.dumps({"task": task, "services": shown}))
+    return 0
+
+
+def alive_pid(pid: int) -> bool:
+    """Any live (non-zombie) process with this pid, whoever it is."""
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return False
+
+
+def ensure(condition: bool, message: str) -> str:
+    if not condition:
+        raise Fail(message)
+    return "ok"
+
+
+def probe(name: str, check) -> bool:
+    try:
+        detail = check()
+        ok = True
+    except (Fail, OSError, subprocess.SubprocessError, KeyError) as e:
+        detail, ok = str(e), False
+    print(json.dumps({"probe": name, "ok": ok, "detail": str(detail)[:300]}), flush=True)
+    return ok
+
+
+def selftest_postgres(task_a: str, task_b: str) -> list[bool]:
+    sa = {"task_id": task_a, "services": [{"kind": "postgres"}]}
+    sb = {"task_id": task_b, "services": [{"kind": "postgres"}]}
+    pa, pb = up(sa)["postgres"], up(sb)["postgres"]
+    res = [
+        probe("postgres.version", lambda: psql(pa, "SHOW server_version")),
+        probe("postgres.distinct-instances", lambda: ensure(pa["port"] != pb["port"], "same port")),
+    ]
+
+    def roundtrip() -> str:
+        psql(pa, "CREATE TABLE fx (id int PRIMARY KEY, v text)")
+        psql(pa, "INSERT INTO fx VALUES (1, 'a')")
+        got = psql(pa, "SELECT v FROM fx WHERE id = 1")
+        if got != "a":
+            raise Fail(f"query returned {got!r}")
+        return "create/insert/select ok"
+
+    def rollback() -> str:
+        script = "BEGIN; INSERT INTO fx VALUES (2, 'b'); ROLLBACK; SELECT count(*) FROM fx"
+        done = run(
+            [tool("psql"), f"postgresql://{pa['user']}@{HOST}:{pa['port']}/{pa['database']}",
+             "-v", "ON_ERROR_STOP=1", "-tA", "-c", script],
+            env={**os.environ, "PGPASSWORD": pa["password"]},
+        )  # fmt: skip
+        if done.returncode != 0 or done.stdout.strip().splitlines()[-1] != "1":
+            raise Fail(f"rollback kept rows: {done.stdout!r} {done.stderr!r}")
+        return "rollback discarded the row"
+
+    res += [probe("postgres.roundtrip", roundtrip), probe("postgres.rollback", rollback)]
+    down(task_a)
+
+    def other_survives() -> str:
+        psql(pb, "CREATE TABLE other (id int)")  # a still-working instance
+        return "second task's database unaffected by the first one's cleanup"
+
+    res.append(probe("postgres.isolation", other_survives))
+    down(task_b)
+    gone = not (task_dir(task_a).exists() or task_dir(task_b).exists())
+    gone = gone and not processes_in(root()) and not alive_pid(pa["pid"])
+    res.append(probe("postgres.cleanup", lambda: ensure(gone, "data or process left behind")))
+    return res
+
+
+def selftest_valkey(task_a: str, task_b: str) -> list[bool]:
+    va = up({"task_id": task_a, "services": [{"kind": "valkey"}]})["valkey"]
+    vb = up({"task_id": task_b, "services": [{"kind": "valkey"}]})["valkey"]
+
+    def ping() -> str:
+        out = valkey_cli(va, "ping").stdout.strip()
+        if out != "PONG":
+            raise Fail(f"ping returned {out!r}")
+        return "PONG"
+
+    def setget() -> str:
+        valkey_cli(va, "set", "k", "v")
+        got = valkey_cli(va, "get", "k").stdout.strip()
+        if got != "v":
+            raise Fail(f"get returned {got!r}")
+        return "set/get ok"
+
+    def isolated() -> str:
+        if valkey_cli(vb, "get", "k").stdout.strip() != "":
+            raise Fail("second task saw the first task's key")
+        down(task_a)
+        if valkey_cli(vb, "ping").stdout.strip() != "PONG":
+            raise Fail("cleanup of the first task stopped the second")
+        return "second task unaffected by the first one's cleanup"
+
+    res = [
+        probe("valkey.ping", ping),
+        probe("valkey.setget", setget),
+        probe("valkey.isolation", isolated),
+    ]
+    down(task_b)
+    gone = not task_dir(task_b).exists() and not processes_in(root()) and not alive_pid(vb["pid"])
+    res.append(probe("valkey.cleanup", lambda: ensure(gone, "data or process left behind")))
+    return res
+
+
+def cmd_selftest(args: argparse.Namespace) -> int:
+    tag = secrets.token_hex(4)
+    results: list[bool] = []
+    try:
+        for kind in args.service:
+            fn = selftest_postgres if kind == "postgres" else selftest_valkey
+            results += fn(f"selftest-{tag}-a", f"selftest-{tag}-b")
+    except Fail as e:
+        print(json.dumps({"probe": "selftest", "ok": False, "detail": str(e)[:300]}))
+        results.append(False)
+    finally:
+        for suffix in ("a", "b"):
+            try:
+                down(f"selftest-{tag}-{suffix}")
+            except Fail:
+                pass
+    return 0 if results and all(results) else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="argus-test-services", description=__doc__)
+    parser.add_argument("--spec", help="declaration file (default: see ARGUS_TEST_SERVICES_SPEC_FILE)")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("up").set_defaults(fn=cmd_up)
+    p = sub.add_parser("run")
+    p.add_argument("command", nargs=argparse.REMAINDER)
+    p.set_defaults(fn=cmd_run)
+    for name, fn in (("down", cmd_down), ("status", cmd_status)):
+        p = sub.add_parser(name)
+        p.add_argument("--task", help="task id (default: from the declaration)")
+        p.set_defaults(fn=fn)
+    p = sub.add_parser("selftest")
+    p.add_argument("--service", action="append", choices=sorted(FIELDS), required=True)
+    p.set_defaults(fn=cmd_selftest)
+    args = parser.parse_args(argv)
+    if getattr(args, "command", None) and args.command[:1] == ["--"]:
+        args.command = args.command[1:]
+    try:
+        return args.fn(args)
+    except Fail as e:
+        print(f"argus-test-services: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

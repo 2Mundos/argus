@@ -1368,3 +1368,45 @@ async def run_local(
             "max_attempts": max_attempts,
         },
     )
+
+
+@tool(ANYONE)
+async def get_project_runtime(ctx: Context, project: str) -> dict:
+    """A project's declared runtime (approved components, test services), the gaps
+    it records, and every derived image: state (preparing, building, verifying,
+    ready, failed), the reason, probe evidence, the base image and the digest.
+    `ready` always means every probe passed; read `failed` reasons, never infer."""
+    return await _call(ctx, "GET", f"/projects/{project}/runtime")
+
+
+@tool(ADMINS)
+async def set_project_runtime(
+    ctx: Context,
+    project: str,
+    components: list[dict],
+    services: list[dict] | None = None,
+    codex_turn_timeout_s: int | None = None,
+) -> dict:
+    """Declare what a project's tasks need in their image. `components` are
+    {id, version?, required?} from GET /runtime/catalog (python, pango, graft, psql,
+    postgres-server, valkey, node, git, chromium; pnpm, sops-age, minio, elasticsearch
+    are recorded as gaps with required=false). `services` are disposable test services
+    {kind: postgres|valkey, env: {VARIABLE: "{url}"}}. Never Dockerfile text: an
+    unapproved declaration is refused with every problem (422 runtime_invalid)."""
+    return await _call(
+        ctx,
+        "PUT",
+        f"/projects/{project}/runtime",
+        json={
+            "components": components,
+            "services": services or [],
+            "codex_turn_timeout_s": codex_turn_timeout_s,
+        },
+    )
+
+
+@tool(ADMINS)
+async def rebuild_project_runtime(ctx: Context, project: str) -> dict:
+    """Retry the failed derived-image builds of the project's current recipe and
+    return its runtime-held tasks to ready. A changed declaration does this itself."""
+    return await _call(ctx, "POST", f"/projects/{project}/runtime/rebuild")

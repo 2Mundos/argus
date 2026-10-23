@@ -32,10 +32,12 @@
  *                             drained this agent (default: exit, so the
  *                             instance ends; only when ARGUS_INSTANCE_ID is set)
  */
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsc, readFileSync } from "node:fs";
 import { lstat, mkdir, open, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { log } from "../log.js";
 import type { ChannelAdapter, ChannelDefaults, ChannelSetup, OutboundMessage } from "./adapter.js";
 import {
@@ -103,6 +105,7 @@ const MAX_PAGE_CHARS = 4000;
 const MAX_PAGES_INLINED = 3;
 const MAX_RESENDS = 3; // account switches for one attempt before giving up
 const REBALANCE_MS = 60_000; // task-bound re-evaluation for priority recovery
+const RUNTIME_VERIFY_MS = 120_000; // how long to look for the session container after injecting a task
 const RECYCLE_TIMEOUT_MS = 30_000; // wait for the old container to exit after an account rotation
 
 /** The accounts held when a task's models are chosen (null: not leased). */
@@ -131,6 +134,46 @@ export interface Observation {
     validated?: string;
   }>;
   wip?: { summary: string; ref?: string };
+}
+
+/** This worker's Docker host, as Argus needs it to build for and gate on the right daemon. */
+export interface RuntimeHost {
+  host_id: string;
+  run_as: string;
+  base_ref: string;
+  base_id: string;
+  platform: string;
+}
+
+/** The project-runtime contract (docs/specs/project-runtime.spec.md 3.7): requirement, image, readiness, gaps. */
+export interface RuntimeSelection {
+  state: "ready" | "preparing" | "building" | "verifying" | "failed" | "disabled";
+  project: string;
+  declared: boolean;
+  reason?: string | null;
+  build_key?: string | null;
+  requirement: { id: string; version: string | null; provisioned: boolean; required: boolean }[];
+  image: { ref: string; id: string; base_ref: string; base_id: string; platform: string } | null;
+  tools: { name: string; ok: boolean; output: string }[];
+  services: { kind: string; env: Record<string, string>; command: string }[];
+  gaps: { component: string; reason: string }[];
+  task_held: boolean;
+}
+
+/** What the NanoClaw host does for the project runtime; absent in test adapters. */
+export interface RuntimeHooks {
+  host(): Promise<RuntimeHost>;
+  /**
+   * Make the selected image the agent group's and write (or remove) the task's
+   * test-services declaration. Called only at the start of a claimed task, before
+   * its session exists; an idle session on another image is stopped and confirmed
+   * gone first, never an active one.
+   */
+  apply(taskId: string, selection: RuntimeSelection): Promise<void>;
+  /** The container the group's session runs in and the image id it reports, or null while none runs. */
+  usedImage(): Promise<{ container: string; imageId: string } | null>;
+  /** Stop the test services of exactly this task (if given) and remove the declaration. */
+  cleanup(taskId?: string): Promise<void>;
 }
 
 export interface ArgusConfig {
@@ -182,6 +225,8 @@ export interface ArgusConfig {
    * Absent: the delegate log is not relayed.
    */
   delegateLogFile?: () => Promise<string | null>;
+  /** Per-project image and test services; absent: the base image runs every project (older hosts, test adapters). */
+  runtime?: RuntimeHooks;
   /** Apply a pinned policy before starting a task; absent only in test adapters. */
   selectModels?: (task: ArgusTask, held: HeldAccounts) => Promise<ModelSelection>;
   /**
@@ -705,12 +750,33 @@ function contractLines(task: ArgusTask): string[] {
   ];
 }
 
+/** What the worker's environment holds, from the readiness Argus verified; never a guess. */
+export function runtimeTaskLines(rt: RuntimeSelection): string[] {
+  if (rt.state !== "ready" || !rt.image) return [];
+  const verified = rt.tools.filter((t) => t.ok).map((t) => t.name);
+  const lines = [
+    `Project runtime (${rt.project}): this task runs in an image Argus prepared and probed for the project (${rt.image.ref}, build ${(rt.build_key ?? "").slice(0, 12)}). Verified present: ${verified.join(", ") || "none"}. Do not install packages with apt, pip or npm to get tools this list says are present.`,
+  ];
+  if (rt.services.length > 0) {
+    const vars = rt.services.flatMap((s) => Object.keys(s.env));
+    lines.push(
+      `Disposable test services (${rt.services.map((s) => s.kind).join(", ")}): run your gates as \`argus-test-services run -- <command>\`. It starts a private instance for this task only, exports ${vars.join(", ")} with synthetic credentials, and removes everything afterwards. Do not ask for database or cache URLs, and never point tests at Stage, Production, OneCLI or Argus databases.`,
+    );
+  }
+  if (rt.gaps.length > 0) {
+    lines.push(
+      `Not provisioned (do not assume they exist): ${rt.gaps.map((g) => `${g.component} (${g.reason})`).join("; ")}. If a gate needs one of these, say exactly which and stop with ASK or FAIL.`,
+    );
+  }
+  return lines;
+}
+
 /** The message a claimed task becomes. `pages` are inlined knowledge bodies by page id. */
 export function renderTask(
   task: ArgusTask,
   pages: Map<string, string>,
   preferredExecutor?: string | null,
-  opts: { localHarness?: boolean; customHarness?: boolean } = {},
+  opts: { localHarness?: boolean; customHarness?: boolean; runtime?: RuntimeSelection | null } = {},
 ): string {
   const pinned = task.executor_model;
   // The leased executor is authoritative; a pin overrides it, trivial only names the leased Cursor.
@@ -749,6 +815,7 @@ export function renderTask(
   const lines = [
     `[Argus task] Task: ${task.id} · Project: ${task.project} · Attempt: ${task.attempt}`,
     ...(task.repository_url ? repositoryTaskLines(task) : []),
+    ...(opts.runtime ? runtimeTaskLines(opts.runtime) : []),
     "",
     UNTRUSTED_TASK_DATA_RULES,
     frameUntrustedTaskData(untrusted),
@@ -1242,6 +1309,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let switchFailure: string | null = null; // the runtime did not stop for the last switch
   let recycleOnLease = false; // the runtime must stop before the next claim/lease writes another account
   let engineInUse: string | null = null; // the harness the leased account selected
+  let runtimeSelection: RuntimeSelection | null = null; // the project image selected for the task in flight
   let activeAccountLeases: AccountLease[] = [];
   let repositoryTarget: ApplyTarget | null = null;
   let repositoryLeaseHeld = false;
@@ -1320,6 +1388,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     if (!task) return;
     log.warn("Argus ended our claim on the task; stopping the run", { task: task.id, code });
     current = null;
+    void cfg.runtime?.cleanup(task.id).catch(() => undefined);
     account = null;
     try {
       await cfg.accounts?.recycleRuntime?.();
@@ -1403,6 +1472,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   }
 
   function finishTask(): void {
+    const ended = current?.id;
+    if (cfg.runtime) {
+      // Exactly this task's test services and declaration; a failure is logged, never fatal.
+      void cfg.runtime.cleanup(ended).catch((err) => {
+        log.warn("Could not clean the task's test services", { task: ended, err });
+      });
+    }
+    runtimeSelection = null;
     usageRelay?.stop();
     usageRelay = null;
     if (usageTimer) clearInterval(usageTimer);
@@ -1618,6 +1695,124 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     finishTask();
   }
 
+  async function holdRuntime(task: ArgusTask, error: string): Promise<void> {
+    await client
+      .call("POST", "/runtime/hold", {
+        task_id: task.id,
+        attempt: task.attempt,
+        error: error.slice(0, 1500),
+      })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Resolve the project's image before any model or account work (project runtime
+   * spec 3.6). False: the task is held (no attempt spent) or the claim is gone, and
+   * the run is finished. `runtimeSelection` is the contract for the rest of the run.
+   */
+  async function ensureRuntime(task: ArgusTask): Promise<boolean> {
+    const rt = cfg.runtime;
+    runtimeSelection = null;
+    if (!rt) return true;
+    let selection: RuntimeSelection;
+    try {
+      const host = await rt.host();
+      const { data } = await client.call("POST", "/runtime/prepare", {
+        task_id: task.id,
+        attempt: task.attempt,
+        ...host,
+      });
+      selection = data as RuntimeSelection;
+    } catch (err) {
+      if (err instanceof ArgusError && CLAIM_LOST.includes(err.code)) {
+        finishTask();
+        return false;
+      }
+      if (err instanceof ArgusError && err.status === 404) {
+        log.warn("This Argus has no project runtime API; running on the base image", {
+          task: task.id,
+        });
+        return true;
+      }
+      log.error("Could not prepare the project runtime; holding the task", { task: task.id, err });
+      await holdRuntime(task, `project runtime could not be prepared: ${String(err)}`);
+      finishTask();
+      return false;
+    }
+    if (selection.state === "disabled") {
+      log.warn("Project runtime images are off on Argus; running on the base image", {
+        task: task.id,
+        reason: selection.reason,
+      });
+      await rt.cleanup().catch(() => undefined); // no declaration of a previous project may linger
+      return true;
+    }
+    if (selection.state !== "ready" || !selection.image) {
+      log.info("Argus holds the task until its project runtime is ready", {
+        task: task.id,
+        state: selection.state,
+        reason: selection.reason,
+      });
+      finishTask();
+      return false;
+    }
+    try {
+      await rt.apply(task.id, selection);
+    } catch (err) {
+      log.error("Could not apply the project image; holding the task", { task: task.id, err });
+      await holdRuntime(task, `project image could not be applied: ${String(err)}`);
+      finishTask();
+      return false;
+    }
+    runtimeSelection = selection;
+    log.info("Project runtime ready", {
+      task: task.id,
+      project: selection.project,
+      image: selection.image.ref,
+    });
+    return true;
+  }
+
+  /**
+   * After the task is injected the session container starts (or already runs):
+   * report the image it really uses. A mismatch is held by Argus; the session is
+   * stopped and the run ends. Labels, mounts and config prove nothing.
+   */
+  async function verifyRuntimeUsed(task: ArgusTask): Promise<void> {
+    const rt = cfg.runtime;
+    const selected = runtimeSelection?.image;
+    if (!rt || !selected) return;
+    const deadline = (cfg.now ?? Date.now)() + RUNTIME_VERIFY_MS;
+    while (current?.id === task.id && (cfg.now ?? Date.now)() < deadline) {
+      const used = await rt.usedImage().catch(() => null);
+      if (used) {
+        try {
+          await client.call("POST", "/runtime/used", {
+            task_id: task.id,
+            attempt: task.attempt,
+            container: used.container,
+            image_id: used.imageId,
+          });
+        } catch (err) {
+          if (err instanceof ArgusError && err.code === "runtime_image_mismatch") {
+            log.error("The session runs another image than the selected one; stopping", {
+              task: task.id,
+              selected: selected.id,
+              used: used.imageId,
+            });
+            await cfg.accounts?.recycleRuntime?.().catch(() => undefined);
+            finishTask();
+          } else {
+            log.warn("Could not report the image in use", { task: task.id, err });
+          }
+        }
+        return;
+      }
+      await sleep(cfg.progressIntervalMs ? Math.min(2000, cfg.progressIntervalMs) : 2000);
+    }
+    log.warn("No session container observed to verify the project image", { task: task.id });
+  }
+
   async function prepareModels(task: ArgusTask): Promise<void> {
     if (!cfg.selectModels) return;
     const engineLease = activeAccountLeases.find(
@@ -1645,6 +1840,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     });
     currentClaim = task;
     switchFailure = null;
+    if (!(await ensureRuntime(task))) return;
     if (!(await ensureAccount(task))) {
       const stale = switchFailure !== null;
       await client
@@ -1722,9 +1918,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         renderTask(task, pages, preferredExecutorForLease(account, executor), {
           localHarness: account?.provider === "local",
           customHarness: account?.provider === "custom",
+          runtime: runtimeSelection,
         });
       currentText = renderCurrent();
       await injectTask(task.id, task.attempt, currentText);
+      void verifyRuntimeUsed(task);
       await finished;
     } catch {
       await client
@@ -2244,6 +2442,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
     async setup(config: ChannelSetup): Promise<void> {
       setupCfg = config;
+      // A restart reconciles: no declaration of a task that no longer runs may linger.
+      await cfg.runtime?.cleanup().catch((err) => {
+        log.warn("Could not reset the test-services declaration", { err });
+      });
       const interval = await register();
       registered = true;
       stopped = false;
@@ -2463,26 +2665,227 @@ export function accountsFromEnv(): ArgusConfig["accounts"] {
     },
     async recycleRuntime(): Promise<void> {
       const { identifier: groupId } = await resolveTarget();
-      const { getSessionsByAgentGroup } = await import("../db/sessions.js");
-      const { isContainerRunning, killContainer } = await import("../container-runner.js");
-      const stopped = (await getSessionsByAgentGroup(groupId))
-        .filter((session) => isContainerRunning(session.id))
-        .map(
-          (session) =>
-            new Promise<void>((resolve, reject) => {
-              // onExit fires only after a complete teardown, so a failed stop
-              // never resolves and the timeout turns it into a rejection.
-              const timer = setTimeout(
-                () => reject(new Error(`session ${session.id} did not stop`)),
-                RECYCLE_TIMEOUT_MS,
-              );
-              killContainer(session.id, "argus: account rotated", () => {
-                clearTimeout(timer);
-                resolve();
-              });
-            }),
-        );
-      await Promise.all(stopped);
+      await stopGroupSessions(groupId);
+    },
+  };
+}
+
+/**
+ * Stop the group's running session containers and resolve only once each has exited
+ * (rejects when one could not be stopped). onExit fires only after a complete
+ * teardown, so a failed stop never resolves and the timeout turns it into a rejection.
+ */
+async function stopGroupSessions(groupId: string): Promise<void> {
+  const { getSessionsByAgentGroup } = await import("../db/sessions.js");
+  const { isContainerRunning, killContainer } = await import("../container-runner.js");
+  const stopped = (await getSessionsByAgentGroup(groupId))
+    .filter((session) => isContainerRunning(session.id))
+    .map(
+      (session) =>
+        new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error(`session ${session.id} did not stop`)),
+            RECYCLE_TIMEOUT_MS,
+          );
+          killContainer(session.id, "argus: account rotated", () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        }),
+    );
+  await Promise.all(stopped);
+}
+
+const execFileP = promisify(execFile);
+export const TEST_SERVICES_DECLARATION = path.join(".argus", "test-services.json");
+
+/** Docker adoption labels (NanoClaw drivers/types.ts); used for session discovery only. */
+const NC_LABEL_GROUP = "nanoclaw-group";
+const NC_LABEL_ROLE = "nanoclaw-role";
+const NC_LABEL_FOLDER = "nanoclaw-group-folder";
+const NC_ROLE_AGENT = "agent";
+
+type GroupRef = { id: string; folder: string; dir: string };
+
+/**
+ * True when inspect proves this running container belongs to the Argus agent group:
+ * labels (when present) match the group id/folder/agent role, and a bind mount covers
+ * the group's workspace directory (legacy `nanoclaw-v2-<folder>-*` or current `ncl-*-sess-*`).
+ */
+export function sessionMountProvesGroup(
+  mounts: unknown,
+  group: GroupRef,
+  labels: Record<string, string> | undefined,
+): boolean {
+  if (labels?.[NC_LABEL_GROUP] && labels[NC_LABEL_GROUP] !== group.id) return false;
+  if (labels?.[NC_LABEL_FOLDER] && labels[NC_LABEL_FOLDER] !== group.folder) return false;
+  if (labels?.[NC_LABEL_ROLE] && labels[NC_LABEL_ROLE] !== NC_ROLE_AGENT) return false;
+  if (!Array.isArray(mounts)) return false;
+  const resolvedDir = path.resolve(group.dir);
+  const folderSuffix = `${path.sep}groups${path.sep}${group.folder}`;
+  const folderSuffixPosix = `/groups/${group.folder}`;
+  return mounts.some((m) => {
+    const src = (m as { Source?: string; Destination?: string }).Source;
+    const dest = (m as { Source?: string; Destination?: string }).Destination;
+    if (typeof src !== "string" || !src) return false;
+    const resolved = path.resolve(src);
+    if (resolved === resolvedDir) return true;
+    const normalized = resolved.replace(/\\/g, "/");
+    if (
+      (resolved.endsWith(folderSuffix) || normalized.endsWith(folderSuffixPosix)) &&
+      (dest === "/workspace" || dest === "/workspace/")
+    ) {
+      return true;
+    }
+    return false;
+  });
+}
+
+/** List this group's session agent containers; never trust names without inspect. */
+export async function discoverSessionContainersForGroup(
+  docker: (args: string[]) => Promise<string>,
+  group: GroupRef,
+): Promise<string[]> {
+  const names = new Set<string>();
+  const addLines = (out: string) => {
+    for (const line of out.split("\n")) {
+      const name = line.trim().replace(/^\//, "");
+      if (name) names.add(name);
+    }
+  };
+  addLines(
+    await docker([
+      "ps",
+      "--filter",
+      `label=${NC_LABEL_GROUP}=${group.id}`,
+      "--filter",
+      `label=${NC_LABEL_ROLE}=${NC_ROLE_AGENT}`,
+      "--format",
+      "{{.Names}}",
+    ]),
+  );
+  addLines(
+    await docker([
+      "ps",
+      "--filter",
+      `name=^nanoclaw-v2-${group.folder}-`,
+      "--format",
+      "{{.Names}}",
+    ]),
+  );
+
+  const verified: string[] = [];
+  for (const name of names) {
+    try {
+      const mounts = JSON.parse(
+        await docker(["inspect", "--format", "{{json .Mounts}}", name]),
+      ) as unknown;
+      const labels = JSON.parse(
+        await docker(["inspect", "--format", "{{json .Config.Labels}}", name]),
+      ) as Record<string, string>;
+      if (sessionMountProvesGroup(mounts, group, labels)) verified.push(name);
+    } catch {
+      // Daemon or stale name: skip rather than accept an uninspected container.
+    }
+  }
+  return verified;
+}
+
+/**
+ * The project runtime on a NanoClaw host (project runtime spec 3.6): the group's
+ * `image_tag` is the only switch, set before a task's session exists. NanoClaw's own
+ * `CONTAINER_IMAGE` stays the pool's agent image and is what Argus derives from; the
+ * host image (argus-nanoclaw-host) is a different layer and is never touched.
+ */
+export function runtimeFromEnv(): RuntimeHooks | undefined {
+  const baseRef = process.env.CONTAINER_IMAGE?.trim();
+  if (!baseRef || process.env.ARGUS_PROJECT_RUNTIME === "off") return undefined;
+  const bin = process.env.CONTAINER_RUNTIME_BIN?.trim() || "docker";
+  const docker = async (args: string[]): Promise<string> =>
+    (await execFileP(bin, args, { timeout: 30_000 })).stdout.trim();
+  async function group(): Promise<{ id: string; folder: string; dir: string }> {
+    const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
+      "../db/messaging-groups.js"
+    );
+    const { getAgentGroup } = await import("../db/agent-groups.js");
+    const mg = await getMessagingGroupByPlatform(CHANNEL_TYPE, PLATFORM_ID);
+    const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
+    const g = wiring ? await getAgentGroup(wiring.agent_group_id) : undefined;
+    if (!g)
+      throw new Error("no agent group is wired to the argus channel (run init-argus-agent.ts)");
+    return { id: g.id, folder: g.folder, dir: path.resolve("groups", g.folder) };
+  }
+  async function sessionContainers(): Promise<string[]> {
+    const g = await group();
+    return discoverSessionContainersForGroup(docker, g);
+  }
+  return {
+    async host(): Promise<RuntimeHost> {
+      const info = (
+        await docker(["info", "--format", "{{.ID}}|{{.OSType}}/{{.Architecture}}"])
+      ).split("|");
+      const arch: Record<string, string> = { x86_64: "amd64", aarch64: "arm64" };
+      const [os, machine = ""] = (info[1] ?? "").split("/");
+      const baseId = await docker(["image", "inspect", "--format", "{{.Id}}", baseRef]);
+      const uid = process.getuid?.();
+      const gid = process.getgid?.();
+      if (!info[0] || uid === undefined || gid === undefined || uid === 0)
+        throw new Error("the docker daemon id or a non-root uid is not available on this host");
+      return {
+        host_id: info[0],
+        run_as: `${uid}:${gid}`,
+        base_ref: baseRef,
+        base_id: baseId,
+        platform: `${os}/${arch[machine] ?? machine}`,
+      };
+    },
+    async apply(taskId: string, selection: RuntimeSelection): Promise<void> {
+      if (!selection.image) throw new Error("no image selected");
+      const { id: groupId, dir } = await group();
+      const { getContainerConfig, updateContainerConfigScalars } = await import(
+        "../db/container-configs.js"
+      );
+      const config = await getContainerConfig(groupId);
+      if (!config) throw new Error(`agent group ${groupId} has no container config`);
+      if ((config.image_tag ?? null) !== selection.image.ref) {
+        // Safe boundary: no task is running here, so any session is idle. Confirm it
+        // exited before the group points at another image; the group dir (WIP) stays.
+        await stopGroupSessions(groupId);
+        await updateContainerConfigScalars(groupId, { image_tag: selection.image.ref });
+      }
+      const file = path.join(dir, TEST_SERVICES_DECLARATION);
+      if (selection.services.length === 0) {
+        await unlink(file).catch(() => undefined);
+        return;
+      }
+      await mkdir(path.dirname(file), { recursive: true });
+      const tmp = `${file}.${process.pid}.tmp`;
+      await writeFile(
+        tmp,
+        JSON.stringify({
+          task_id: taskId,
+          services: selection.services.map((s) => ({ kind: s.kind, env: s.env })),
+        }),
+        { mode: 0o600 },
+      );
+      await rename(tmp, file);
+    },
+    async usedImage() {
+      const [container] = await sessionContainers();
+      if (!container) return null;
+      return { container, imageId: await docker(["inspect", "--format", "{{.Image}}", container]) };
+    },
+    async cleanup(taskId?: string): Promise<void> {
+      const { dir } = await group();
+      if (taskId) {
+        for (const container of await sessionContainers()) {
+          // Exact task only; a container without the helper (another project) has nothing to stop.
+          await docker(["exec", container, "argus-test-services", "down", "--task", taskId]).catch(
+            () => undefined,
+          );
+        }
+      }
+      await unlink(path.join(dir, TEST_SERVICES_DECLARATION)).catch(() => undefined);
     },
   };
 }
@@ -2591,6 +2994,7 @@ export function fromEnv(): ChannelAdapter | null {
     name: process.env.ARGUS_AGENT_NAME?.trim() || "nanoclaw",
     workerVersion: nanoclawVersion(),
     accounts: accountsFromEnv(),
+    runtime: runtimeFromEnv(),
     selectModels: modelsFromEnv(),
     delegateLogFile: async () => {
       const dir = await argusGroupDir();
