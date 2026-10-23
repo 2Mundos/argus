@@ -56,7 +56,7 @@ const ACCOUNTS: Account[] = [
     id: "u1",
     name: "cursor-team",
     provider: "cursor",
-    quota_status: { state: "unknown", reason: "provider_does_not_expose", windows: [] },
+    quota_status: { state: "unknown", reason: "admin_key_required", windows: [] },
   }),
   account({
     id: "k1",
@@ -111,10 +111,108 @@ const ACCOUNTS: Account[] = [
     },
   }),
   account({
-    id: "u1",
+    id: "u2",
     name: "claude-sub",
     provider: "anthropic",
-    quota_status: { state: "unknown", reason: "unsupported_provider", windows: [] },
+    quota_status: {
+      state: "unknown",
+      reason: "oauth_scope_missing",
+      windows: [],
+      last_probe: {
+        status: "failed",
+        code: "oauth_scope_missing",
+        reason: "the token lacks the scope",
+        at: "2026-10-20T00:00:00Z",
+      },
+    },
+  }),
+  account({
+    id: "cl1",
+    name: "claude-login",
+    provider: "anthropic",
+    quota: [
+      {
+        window: "300m",
+        window_minutes: 300,
+        used_percent: 0,
+        resets_at: null,
+        exhausted_until: null,
+        observed_at: new Date().toISOString(),
+        source: "polled",
+      },
+      {
+        window: "weekly_opus",
+        window_minutes: null,
+        used_percent: 100,
+        resets_at: null,
+        exhausted_until: null,
+        observed_at: new Date().toISOString(),
+        source: "polled",
+      },
+    ],
+    quota_status: {
+      state: "known",
+      reason: null,
+      windows: [],
+      collector: "claude_oauth_usage",
+    },
+  }),
+  account({
+    id: "or1",
+    name: "openrouter-key",
+    provider: "custom",
+    kind: "api_key",
+    quota_status: {
+      state: "known",
+      reason: null,
+      windows: [],
+      collector: "openrouter_key",
+      credit: {
+        unit: "usd",
+        limit: 20,
+        remaining: 0,
+        used: 20,
+        limit_reset: "monthly",
+        observed_at: new Date().toISOString(),
+        source: "polled",
+        collector: "openrouter_key",
+      },
+    },
+  }),
+  account({
+    id: "cu2",
+    name: "cursor-login",
+    provider: "cursor",
+    quota_status: {
+      state: "unknown",
+      reason: "no_usage_window_for_login",
+      windows: [],
+      last_probe: {
+        status: "skipped",
+        code: "no_usage_window_for_login",
+        reason: "the login answered but states no numeric usage or credit",
+        at: "2026-10-20T00:00:00Z",
+      },
+    },
+  }),
+  account({
+    id: "or2",
+    name: "openrouter-uncapped",
+    provider: "custom",
+    kind: "api_key",
+    quota_status: {
+      state: "known",
+      reason: null,
+      windows: [],
+      credit: {
+        unit: "usd",
+        limit: null,
+        remaining: null,
+        used: 3.25,
+        observed_at: new Date().toISOString(),
+        source: "polled",
+      },
+    },
   }),
   account({
     id: "p1",
@@ -138,7 +236,11 @@ const bucket = (start: string, input: number) => ({
   runs: 1,
 });
 
-const mock = vi.hoisted(() => ({ queries: [] as Record<string, string>[], refreshed: 0 }));
+const mock = vi.hoisted(() => ({
+  queries: [] as Record<string, string>[],
+  refreshed: 0,
+  outcome: "rate_limited",
+}));
 
 vi.mock("../live", async () => {
   const { useEffect, useState } = await import("react");
@@ -195,7 +297,7 @@ vi.mock("../api", () => ({
     }
     if (req.path === "/api/accounts/{account_id}/quota/refresh") {
       mock.refreshed += 1;
-      return { status: "rate_limited", reason: null, quota: [] };
+      return { status: mock.outcome, code: null, reason: null, quota: [] };
     }
     return [];
   },
@@ -205,6 +307,7 @@ afterEach(() => {
   cleanup();
   mock.queries = [];
   mock.refreshed = 0;
+  mock.outcome = "rate_limited";
 });
 
 describe("accounts usage", () => {
@@ -215,7 +318,8 @@ describe("accounts usage", () => {
     expect(within(codex).getByText("19% left")).toBeTruthy();
     expect(within(codex).getByRole("img", { name: /tokens per day/ })).toBeTruthy();
     const cursor = screen.getByText("cursor-team").closest("tr") as HTMLElement;
-    expect(within(cursor).getByText("Provider does not expose quota")).toBeTruthy();
+    expect(within(cursor).getByText(/team Admin API/)).toBeTruthy();
+    expect(within(cursor).queryByText(/does not expose/)).toBeNull();
     expect(within(cursor).queryByText("unknown")).toBeNull();
     expect(within(cursor).getByText("not reported")).toBeTruthy();
     const gitea = screen.getByText("gitea-bot").closest("tr") as HTMLElement;
@@ -247,10 +351,28 @@ describe("accounts usage", () => {
     expect(within(stale).getByText("60% left")).toBeTruthy();
     expect(within(stale).getByText(/stale, observed/)).toBeTruthy();
     const claude = screen.getByText("claude-sub").closest("tr") as HTMLElement;
-    expect(within(claude).getByText("Claude does not expose a quota Argus can read")).toBeTruthy();
+    expect(within(claude).getByText(/not setup-token/)).toBeTruthy();
+    expect(within(claude).queryByText(/does not expose/)).toBeNull();
     const failed = screen.getByText("codex-failed").closest("tr") as HTMLElement;
     const why = within(failed).getByText("The last quota read failed");
     expect(why.getAttribute("title")).toMatch(/Last read failed \(TimeoutError\)/);
+  });
+
+  it("shows Claude windows (zero and full as they are) and provider credit as money", async () => {
+    render(<Accounts />);
+    const login = (await screen.findByText("claude-login")).closest("tr") as HTMLElement;
+    expect(within(login).getByText("100% left")).toBeTruthy(); // 0% used
+    expect(within(login).getByText("0% left")).toBeTruthy(); // 100% used
+    expect(within(login).getByText(/Weekly · Opus/)).toBeTruthy();
+    const capped = screen.getByText("openrouter-key").closest("tr") as HTMLElement;
+    expect(within(capped).getByText("$0.00 left of $20.00 · resets monthly")).toBeTruthy();
+    const cursorLogin = screen.getByText("cursor-login").closest("tr") as HTMLElement;
+    expect(within(cursorLogin).getByText(/states no numeric usage or credit/)).toBeTruthy();
+    expect(within(cursorLogin).queryByText(/0% left/)).toBeNull();
+    expect(within(cursorLogin).queryByText(/\$0\.00/)).toBeNull();
+    const open = screen.getByText("openrouter-uncapped").closest("tr") as HTMLElement;
+    expect(within(open).getByText("No spending cap on this key · $3.25 used")).toBeTruthy();
+    expect(within(open).queryByText(/\$0\.00/)).toBeNull(); // unknown remaining is not zero
   });
 
   it("shows the detail of a not-measured account with dashes and reasons", async () => {
@@ -277,5 +399,15 @@ describe("accounts usage", () => {
     fireEvent.click(within(detail).getByRole("button", { name: "Refresh quota" }));
     expect(await within(detail).findByText(/less than 5 minutes ago/)).toBeTruthy();
     expect(mock.refreshed).toBe(1);
+  });
+
+  it("offers a refresh on a Claude account and never reports a skip as an update", async () => {
+    mock.outcome = "skipped";
+    render(<Accounts />);
+    fireEvent.click(await screen.findByText("claude-sub"));
+    const detail = await screen.findByRole("complementary", { name: "Account claude-sub" });
+    fireEvent.click(within(detail).getByRole("button", { name: "Refresh quota" }));
+    expect(await within(detail).findByText(/^Not read:/)).toBeTruthy();
+    expect(within(detail).queryByText("Quota updated.")).toBeNull();
   });
 });

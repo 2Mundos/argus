@@ -5,14 +5,16 @@ A leaf module: both the account and the task services write usage through it.
 
 import json
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 import aiosqlite
-from argus_core import codex_auth
+from argus_core import claude_auth, codex_auth, cursor_auth
 from argus_core.accounts import (
     PERIOD_HOURS,
+    AccountCredit,
     AccountUsage,
     QuotaCollector,
     QuotaProbe,
@@ -25,12 +27,29 @@ from argus_core.accounts import (
     Usage,
     UsageBucket,
 )
+from argus_core.custom_accounts import OPENROUTER
+from argus_core.custom_accounts import PROVIDER as CUSTOM_PROVIDER
 
 from argus_api.db import Tx, ts
 from argus_api.errors import ValidationFailedError
 from argus_api.events import record
 
 MAX_BUCKETS = 1000
+
+
+@dataclass
+class CreditReading:
+    """A provider's credit figure for one key, in USD. `limit`/`remaining` are None
+    for a key with no cap; `used` is the provider's own total, never inferred."""
+
+    limit: float | None
+    remaining: float | None
+    used: float | None
+    limit_reset: str | None = None
+    free_tier: bool | None = None
+    resets_at: datetime | None = None
+
+
 Bucket = Literal["hour", "day"]
 
 
@@ -268,15 +287,50 @@ async def series(
 
 STALE_AFTER = timedelta(hours=1)  # a provider snapshot older than this is stale
 
-_COLLECTORS: dict[str, QuotaCollector] = {
-    "polled": "codex_rate_limits",
-    "reported": "worker_report",
+_POLLED_BY: dict[str, QuotaCollector] = {
+    codex_auth.PROVIDER: "codex_rate_limits",
+    claude_auth.PROVIDER: "claude_oauth_usage",
+    cursor_auth.PROVIDER: "cursor_dashboard",
+    CUSTOM_PROVIDER: "openrouter_key",
 }
 _PROBE_REASONS: dict[str, QuotaStatusReason] = {
     "failed": "probe_failed",
     "skipped": "probe_skipped",
     "rate_limited": "probe_rate_limited",
 }
+_LOGIN_PROVIDERS = frozenset({codex_auth.PROVIDER, claude_auth.PROVIDER})
+Source = Literal["codex", "claude", "cursor", "openrouter"]
+
+
+def collector(provider: str, source: str) -> QuotaCollector | None:
+    """Who produced a snapshot: a worker's report, or the provider's own readout."""
+    return "worker_report" if source == "reported" else _POLLED_BY.get(provider)
+
+
+def quota_source(provider: str, kind: str, config: dict | None = None) -> Source | None:
+    """The read-only source Argus can poll for this account, or None when there is
+    none (an admin-only API, a local model). Whether an API key can be read is
+    the credential's to say (`api_key_account` when it holds no login)."""
+    if provider == codex_auth.PROVIDER:
+        return "codex"
+    if provider == claude_auth.PROVIDER:
+        return "claude"
+    if provider == cursor_auth.PROVIDER and kind == "subscription":
+        return "cursor"  # an imported login; an API key is the Admin API's business
+    if provider == CUSTOM_PROVIDER and (config or {}).get("label") == OPENROUTER:
+        return "openrouter"
+    return None
+
+
+def no_source_reason(provider: str, kind: str) -> QuotaStatusReason:
+    """Why an account with no pollable source has no provider figure."""
+    if provider == "cursor":
+        return "admin_key_required"
+    if provider == "local":
+        return "local_no_quota"
+    if kind == "api_key" and provider in _LOGIN_PROVIDERS:
+        return "api_key_account"
+    return "no_provider_source"
 
 
 def snapshot_is_fresh(q: QuotaWindow, now: datetime) -> bool:
@@ -287,30 +341,120 @@ def snapshot_is_fresh(q: QuotaWindow, now: datetime) -> bool:
 
 
 async def record_probe(
-    tx: Tx, account_id: str, status: str, reason: str | None, *, keep: bool = False
+    tx: Tx,
+    account_id: str,
+    status: str,
+    reason: str | None,
+    *,
+    code: str | None = None,
+    keep: bool = False,
 ) -> None:
     """The account's latest probe outcome (one row; `keep`: never replace one)."""
     on_conflict = (
         "NOTHING"
         if keep
         else "UPDATE SET status = excluded.status, reason = excluded.reason,"
-        " at = excluded.at"
+        " code = excluded.code, at = excluded.at"
     )
     await tx.conn.execute(
-        "INSERT INTO account_quota_probe (account_id, status, reason, at)"  # noqa: S608
-        " SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?)"
+        "INSERT INTO account_quota_probe (account_id, status, reason, code, at)"  # noqa: S608
+        " SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?)"
         f" ON CONFLICT (account_id) DO {on_conflict}",
-        (account_id, status, reason[:200] if reason else None, ts(tx.now), account_id),
+        (
+            account_id,
+            status,
+            reason[:200] if reason else None,
+            code,
+            ts(tx.now),
+            account_id,
+        ),
     )
 
 
 async def last_probe(conn: aiosqlite.Connection, account_id: str) -> QuotaProbe | None:
     async with conn.execute(
-        "SELECT status, reason, at FROM account_quota_probe WHERE account_id = ?",
+        "SELECT status, code, reason, at FROM account_quota_probe WHERE account_id = ?",
         (account_id,),
     ) as cur:
         row = await cur.fetchone()
     return QuotaProbe.model_validate(dict(row)) if row else None
+
+
+async def upsert_credit(
+    tx: Tx, account_id: str, credit: "CreditReading", actor: str
+) -> bool:
+    """Replace the account's credit reading. One `account.quota` event when a
+    figure changed (the observation time alone is not a change)."""
+    before = await get_credit(tx.conn, account_id, "")
+    new = (
+        credit.limit,
+        credit.remaining,
+        credit.used,
+        credit.limit_reset,
+        credit.resets_at,
+    )
+    await tx.conn.execute(
+        "INSERT INTO account_credit (account_id, unit, limit_amount,"
+        " remaining_amount, used_amount, limit_reset, resets_at, free_tier,"
+        " observed_at, source)"
+        " VALUES (?, 'usd', ?, ?, ?, ?, ?, ?, ?, 'polled')"
+        " ON CONFLICT (account_id) DO UPDATE SET limit_amount = excluded.limit_amount,"
+        " remaining_amount = excluded.remaining_amount,"
+        " used_amount = excluded.used_amount, limit_reset = excluded.limit_reset,"
+        " resets_at = excluded.resets_at,"
+        " free_tier = excluded.free_tier, observed_at = excluded.observed_at",
+        (
+            account_id,
+            credit.limit,
+            credit.remaining,
+            credit.used,
+            credit.limit_reset,
+            ts(credit.resets_at) if credit.resets_at else None,
+            None if credit.free_tier is None else int(credit.free_tier),
+            ts(tx.now),
+        ),
+    )
+    changed = (
+        before is None
+        or (
+            before.limit,
+            before.remaining,
+            before.used,
+            before.limit_reset,
+            before.resets_at,
+        )
+        != new
+    )
+    if changed:
+        await record(
+            tx, actor, "account", account_id, "account.quota", {"windows": ["credit"]}
+        )
+    return changed
+
+
+async def get_credit(
+    conn: aiosqlite.Connection, account_id: str, provider: str
+) -> AccountCredit | None:
+    async with conn.execute(
+        "SELECT unit, limit_amount, remaining_amount, used_amount, limit_reset,"
+        " resets_at, free_tier, observed_at, source FROM account_credit WHERE account_id = ?",
+        (account_id,),
+    ) as cur:
+        r = await cur.fetchone()
+    if r is None:
+        return None
+    return AccountCredit(
+        unit=r["unit"],
+        limit=r["limit_amount"],
+        remaining=r["remaining_amount"],
+        used=r["used_amount"],
+        limit_reset=r["limit_reset"],
+        resets_at=r["resets_at"],
+        free_tier=None if r["free_tier"] is None else bool(r["free_tier"]),
+        observed_at=r["observed_at"],
+        source=r["source"],
+        collector=_POLLED_BY.get(provider),
+    )
 
 
 async def quota_status(
@@ -325,6 +469,7 @@ async def quota_status(
     kind exposes none, the last probe's outcome, not probed yet. Having no usage
     rows says nothing about quota."""
     probe = await last_probe(conn, account["id"])
+    credit = await get_credit(conn, account["id"], account["provider"])
     newest = max(snapshots, key=lambda q: q.observed_at) if snapshots else None
 
     def status(
@@ -332,16 +477,29 @@ async def quota_status(
         reason: QuotaStatusReason | None = None,
         windows: list[QuotaStatusWindow] | None = None,
     ) -> QuotaStatus:
+        seen = [q.observed_at for q in snapshots] + (
+            [credit.observed_at] if credit else []
+        )
         return QuotaStatus(
             state=state,
             reason=reason,
             windows=windows or [],
-            observed_at=newest.observed_at if newest else None,
-            collector=_COLLECTORS.get(newest.source) if newest else None,
+            observed_at=max(seen) if seen else None,
+            collector=collector(account["provider"], newest.source)
+            if newest
+            else credit.collector
+            if credit
+            else None,
             last_probe=probe,
+            credit=credit,
         )
 
-    if snapshots and all(snapshot_is_fresh(q, now) for q in snapshots):
+    credit_fresh = credit is None or now - credit.observed_at <= STALE_AFTER
+    if (
+        (snapshots or credit)
+        and credit_fresh
+        and all(snapshot_is_fresh(q, now) for q in snapshots)
+    ):
         return status("known")
     limits = json.loads(account["token_limits"]) if account["token_limits"] else {}
     if limits:
@@ -368,12 +526,13 @@ async def quota_status(
                 )
             )
         return status("known", windows=windows)
-    if snapshots:
+    if snapshots or credit:
         return status("stale")
-    if account["kind"] == "api_key":
+    config = json.loads(account["config"]) if account.get("config") else None
+    if account["kind"] == "api_key" and account["provider"] in _LOGIN_PROVIDERS:
         return status("unknown", "api_key_account")
-    if account["provider"] != codex_auth.PROVIDER:
-        return status("unknown", "unsupported_provider")
+    if quota_source(account["provider"], account["kind"], config) is None:
+        return status("unknown", no_source_reason(account["provider"], account["kind"]))
     if probe is not None and probe.status in _PROBE_REASONS:
-        return status("unknown", _PROBE_REASONS[probe.status])
+        return status("unknown", probe.code or _PROBE_REASONS[probe.status])
     return status("unknown", "not_yet_probed")

@@ -1444,7 +1444,7 @@ def test_usage_reports_over_http_reason_idempotency_and_lease(
     )
     assert total["unmeasured_reasons"] == {"no_usage_in_output": 1}
     assert total["runs_by_role"] == {"executor": 1}
-    assert got["quota_status"]["reason"] == "api_key_account"
+    assert got["quota_status"]["reason"] == "no_provider_source"
     now = datetime.now(UTC)
     series = client.get(
         "/api/accounts/usage",

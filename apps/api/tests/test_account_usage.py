@@ -329,7 +329,7 @@ async def test_probe_stores_polled_windows(
 @pytest.mark.parametrize(
     ("credential", "reason"),
     [
-        ({"auth_mode": "apikey", "OPENAI_API_KEY": "sk"}, "API-key"),
+        ({"auth_mode": "apikey", "OPENAI_API_KEY": "sk"}, "API key"),
         (chatgpt_login(expires_in=timedelta(minutes=5)), "expires soon"),
     ],
 )
@@ -373,7 +373,7 @@ async def test_a_rotated_login_is_written_back(
 async def test_a_finished_run_queues_its_codex_accounts(
     db: Database, store: MemorySecretStore, tmp_path: Path, clock: FakeClock
 ) -> None:
-    c = await add(db, store, "codex-1", "openai", chatgpt_login())
+    c = await add(db, store, "codex-1", "openai", chatgpt_login(), "subscription")
     await add(db, store, "claude-1", "anthropic", {"api_key": "k"})
     await lease(db, store, ["openai"])
     p = prober(db, store, tmp_path, None)
@@ -539,10 +539,14 @@ async def test_quota_status_reasons(
     claude = await add(db, store, "claude", "anthropic", {"x": 1}, "subscription")
     cursor = await add(db, store, "cursor", "cursor", {"api_key": "k"}, "subscription")
     apikey = await add(db, store, "oai-key", "openai", {"x": 1}, "api_key")
+    cursor_key = await add(
+        db, store, "cursor-key", "cursor", {"api_key": "k"}, "api_key"
+    )
     expected = {
         codex: "not_yet_probed",
-        claude: "unsupported_provider",
-        cursor: "unsupported_provider",
+        claude: "not_yet_probed",
+        cursor: "not_yet_probed",  # an imported login has a source
+        cursor_key: "admin_key_required",
         apikey: "api_key_account",
     }
 
@@ -619,7 +623,7 @@ async def test_quota_status_follows_the_last_probe(
     p = prober(db, store, tmp_path, None)
     assert (await p.probe(c)).status == "skipped"
     s = (await usage_of(db, clock, c)).quota_status
-    assert (s.state, s.reason) == ("unknown", "probe_skipped")
+    assert (s.state, s.reason) == ("unknown", "probe_disabled")
     assert s.last_probe is not None
     assert (s.last_probe.status, s.last_probe.at) == (
         "skipped",
@@ -653,12 +657,20 @@ async def test_quota_status_follows_the_last_probe(
 async def test_probe_of_other_providers_is_skipped_and_recorded(
     db: Database, store: MemorySecretStore, tmp_path: Path, clock: FakeClock
 ) -> None:
-    c = await add(db, store, "claude", "anthropic", {"x": 1}, "subscription")
+    c = await add(db, store, "cursor", "cursor", {"api_key": "k"}, "subscription")
     p = prober(db, store, tmp_path, fake_codex(tmp_path))
     result = await p.refresh(c)
-    assert (result.status, result.quota) == ("skipped", [])
+    assert (result.status, result.code, result.quota) == (
+        "skipped",
+        "admin_key_required",
+        [],
+    )
+    assert result.quota_status.reason == "admin_key_required"
     s = (await usage_of(db, clock, c)).quota_status
-    assert (s.reason, s.last_probe.status) == ("unsupported_provider", "skipped")
+    assert (s.reason, s.last_probe.status) == ("admin_key_required", "skipped")
+    # a Claude account whose document is not a Claude credential is named as such
+    bad = await add(db, store, "claude", "anthropic", {"x": 1}, "subscription")
+    assert (await p.probe(bad)).code == "credential_invalid"
     ghost = await p.probe("no-such-account")  # nothing to attach the outcome to
     assert ghost.status == "skipped"
 
@@ -754,7 +766,7 @@ async def observe(db: Database, account_id: str) -> None:
         )
 
 
-async def test_sweep_queues_only_stale_or_missing_codex_chatgpt_accounts(
+async def test_sweep_queues_only_stale_or_missing_pollable_accounts(
     db: Database, store: MemorySecretStore, tmp_path: Path, clock: FakeClock
 ) -> None:
     fresh = await add(db, store, "fresh", "openai", chatgpt_login(), "subscription")
@@ -762,7 +774,7 @@ async def test_sweep_queues_only_stale_or_missing_codex_chatgpt_accounts(
     never = await add(db, store, "never", "openai", chatgpt_login(), "subscription")
     off = await add(db, store, "off", "openai", chatgpt_login(), "subscription")
     await add(db, store, "key", "openai", {"x": 1}, "api_key")
-    await add(db, store, "claude", "anthropic", {"x": 1}, "subscription")
+    claude = await add(db, store, "claude", "anthropic", {"x": 1}, "subscription")
     await observe(db, stale)
     clock.advance(31 * 60)
     await observe(db, fresh)
@@ -774,7 +786,7 @@ async def test_sweep_queues_only_stale_or_missing_codex_chatgpt_accounts(
         )
     fake = Clocks(clock)
     p = timed_prober(db, store, tmp_path, None, fake)
-    assert sorted(await p.sweep()) == sorted([stale, never])
+    assert sorted(await p.sweep()) == sorted([stale, never, claude])
     assert await p.sweep() == []  # already queued: no duplicates
 
 

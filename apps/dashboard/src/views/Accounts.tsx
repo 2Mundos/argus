@@ -299,7 +299,11 @@ export function Accounts() {
         />
       )}
       {selectedAccount && (
-        <AccountDetail account={selectedAccount} onClose={() => setSelected(undefined)} />
+        <AccountDetail
+          account={selectedAccount}
+          onClose={() => setSelected(undefined)}
+          onRefreshed={reloadList}
+        />
       )}
       {claude && (
         <ClaudeAccount

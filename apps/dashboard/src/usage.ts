@@ -7,6 +7,8 @@ export type AccountUsage = components["schemas"]["AccountUsage"];
 export type UsageBucket = components["schemas"]["UsageBucket"];
 export type QuotaStatus = components["schemas"]["QuotaStatus"];
 export type QuotaStatusWindow = components["schemas"]["QuotaStatusWindow"];
+export type AccountCredit = components["schemas"]["AccountCredit"];
+export type QuotaRefresh = components["schemas"]["QuotaRefresh"];
 
 /** Accounts that hold repository leases, not model quota. */
 export function hasModelUsage(provider: string): boolean {
@@ -75,6 +77,9 @@ export function windowLabel(q: Pick<QuotaWindow, "window" | "window_minutes">): 
 const POOL_LABELS: Record<string, string> = {
   cursor: "Cursor models",
   third_party: "Third-party models",
+  session: "Session",
+  weekly_opus: "Weekly · Opus",
+  weekly_sonnet: "Weekly · Sonnet",
 };
 
 /** 1234 → "1.2k", 3_400_000 → "3.4M". */
@@ -122,27 +127,79 @@ const PROVIDER_NAMES: Record<string, string> = {
   local: "The local model",
 };
 
-/** Why Argus has no quota figure; never a mute "unknown". */
+/** Why Argus has no quota figure. Each is a different fact: no source exists,
+ * the source needs something Argus lacks, or the read failed this time. */
 export const QUOTA_REASON_LABELS: Record<string, string> = {
   no_usage_records: "No usage reported yet",
   provider_does_not_expose: "Provider does not expose quota",
   window_not_configured: "No quota window configured",
-  api_key_account: "API-key account: the provider reports no quota window",
+  unsupported_provider: "No quota source is known for this provider",
+  api_key_account: "API key: the provider shows usage windows for a login, not for a key",
   not_yet_probed: "Quota not read yet",
   probe_failed: "The last quota read failed",
   probe_skipped: "The last quota read was skipped",
   probe_rate_limited: "Quota read postponed (read recently)",
+  probe_disabled: "Quota reader not enabled on this node (ARGUS_CODEX_BIN)",
+  credential_missing: "Credential not found: register it again",
+  credential_invalid: "The stored credential is not a login this reader understands",
+  credential_expired: "Login expired: its holder refreshes it, Argus does not",
+  credential_rejected: "The provider rejected the credential",
+  oauth_scope_missing:
+    "This token cannot read usage: sign in with a full Claude login, not setup-token",
+  admin_key_required:
+    "A Cursor API key reads usage only through the team Admin API; import a Cursor login to read it from the account",
+  no_usage_window_for_login: "The login answered, but states no numeric usage or credit to show",
+  window_locked: "The provider locked this window: it has no usage figure",
+  no_provider_source: "No read-only quota source exists for this account",
+  local_no_quota: "The local model has no provider quota",
+  provider_rate_limited: "The provider rate-limited the read; it will be retried",
+  fetch_failed: "Could not reach the provider; it will be retried",
+  bad_response: "The provider's answer was not understood",
+  no_windows: "The provider reported no quota window",
 };
 
-/** A human sentence per reason code. `provider` names the account's provider. */
-export function quotaUnknownLabel(status: Pick<QuotaStatus, "reason">, provider?: string): string {
-  if (status.reason === "unsupported_provider") {
-    const who = provider ? (PROVIDER_NAMES[provider] ?? provider) : undefined;
-    return who
-      ? `${who} does not expose a quota Argus can read`
-      : "This provider does not expose a quota Argus can read";
-  }
+/** A human sentence per reason code. Never a blanket claim about a provider: the
+ * code says what is missing for this account. `provider` is kept for callers. */
+export function quotaUnknownLabel(status: Pick<QuotaStatus, "reason">, _provider?: string): string {
   return (status.reason && QUOTA_REASON_LABELS[status.reason]) || "Quota unknown";
+}
+
+/** USD with cents; credit is money, never tokens. */
+export function usd(n: number): string {
+  return `$${n.toFixed(2)}`;
+}
+
+/** A key's credit in words: what is left of the limit, or that it has no cap. */
+export function creditSummary(c: AccountCredit): string {
+  const reset = c.limit_reset
+    ? ` · resets ${c.limit_reset}`
+    : c.resets_at
+      ? ` · resets ${c.resets_at.slice(0, 10)}`
+      : "";
+  if (c.limit == null && c.remaining != null) return `${usd(c.remaining)} left${reset}`;
+  if (c.limit == null)
+    return `No spending cap on this key${c.used != null ? ` · ${usd(c.used)} used` : ""}`;
+  return `${usd(c.remaining ?? 0)} left of ${usd(c.limit)}${reset}`;
+}
+
+/** Credit read over an hour ago is shown as stale, like a window. */
+export function creditStale(c: AccountCredit, now: number = Date.now()): boolean {
+  return now - new Date(c.observed_at).getTime() > HOUR;
+}
+
+/** The refresh button's sentence, from the outcome and its code. */
+export function refreshText(r: Pick<QuotaRefresh, "status" | "code" | "reason">): string {
+  const why = r.code ? (QUOTA_REASON_LABELS[r.code] ?? r.reason) : r.reason;
+  switch (r.status) {
+    case "updated":
+      return "Quota updated.";
+    case "skipped":
+      return `Not read: ${why ?? "skipped"}.`;
+    case "rate_limited":
+      return "Read less than 5 minutes ago; showing the last result.";
+    case "failed":
+      return `The read failed: ${why ?? "unknown error"}. The last good figures are kept.`;
+  }
 }
 
 type Probe = NonNullable<QuotaStatus["last_probe"]>;

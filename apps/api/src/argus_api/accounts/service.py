@@ -1098,6 +1098,7 @@ async def _to_account(
     data["usage_24h"] = _usage(data["usage_24h"])
     data["usage_total"] = _usage(data["usage_total"])
     data["quota"] = json.loads(data["quota"])
+    data["credit"] = await usage.get_credit(conn, data["id"], data["provider"])
     data["quota_status"] = await usage.quota_status(
         conn, data, [QuotaWindow.model_validate(q) for q in data["quota"]], now
     )

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   allUnmeasured,
   bucketTokens,
+  creditStale,
+  creditSummary,
   hasModelUsage,
   measuredRuns,
   notMeasured,
@@ -12,6 +14,7 @@ import {
   quotaFull,
   quotaUnknownLabel,
   reasonsNote,
+  refreshText,
   roleSplit,
   snapshotStale,
   tokens,
@@ -123,25 +126,69 @@ describe("quota status and measurement helpers", () => {
 });
 
 describe("telemetry honesty helpers", () => {
-  it("names a sentence per reason code, with the provider", () => {
-    expect(quotaUnknownLabel({ reason: "unsupported_provider" }, "anthropic")).toBe(
-      "Claude does not expose a quota Argus can read",
-    );
-    expect(quotaUnknownLabel({ reason: "unsupported_provider" }, "acme")).toBe(
-      "acme does not expose a quota Argus can read",
-    );
-    expect(quotaUnknownLabel({ reason: "unsupported_provider" })).toBe(
-      "This provider does not expose a quota Argus can read",
-    );
-    for (const reason of [
+  it("names a distinct sentence per reason code, never a provider-wide claim", () => {
+    const reasons = [
       "api_key_account",
       "not_yet_probed",
       "probe_failed",
       "probe_skipped",
       "probe_rate_limited",
-    ] as const) {
-      expect(quotaUnknownLabel({ reason })).not.toBe("Quota unknown");
+      "probe_disabled",
+      "credential_missing",
+      "credential_invalid",
+      "credential_expired",
+      "credential_rejected",
+      "oauth_scope_missing",
+      "admin_key_required",
+      "no_provider_source",
+      "local_no_quota",
+      "provider_rate_limited",
+      "fetch_failed",
+      "bad_response",
+      "no_windows",
+      "no_usage_window_for_login",
+      "window_locked",
+      "unsupported_provider",
+    ] as const;
+    const labels = reasons.map((reason) => quotaUnknownLabel({ reason }));
+    expect(new Set(labels).size).toBe(reasons.length);
+    for (const l of labels) {
+      expect(l).not.toBe("Quota unknown");
+      expect(l).not.toMatch(/does not expose a quota/);
     }
+  });
+
+  it("writes credit as money and an uncapped key without inventing a remainder", () => {
+    const base = { unit: "usd", observed_at: "2026-10-23T00:00:00Z", source: "polled" } as const;
+    expect(
+      creditSummary({ ...base, limit: 20, remaining: 0, used: 20, limit_reset: "monthly" }),
+    ).toBe("$0.00 left of $20.00 · resets monthly");
+    expect(
+      creditSummary({
+        ...base,
+        limit: 25,
+        remaining: 3.5,
+        used: 21.5,
+        resets_at: "2026-11-01T00:00:00Z",
+      }),
+    ).toBe("$3.50 left of $25.00 · resets 2026-11-01");
+    expect(creditSummary({ ...base, limit: null, remaining: null, used: 3.25 })).toBe(
+      "No spending cap on this key · $3.25 used",
+    );
+    expect(
+      creditStale({ ...base, limit: 1, remaining: 1, used: 0 }, Date.parse("2026-10-23T02:00:00Z")),
+    ).toBe(true);
+  });
+
+  it("words a refresh by outcome and code", () => {
+    expect(refreshText({ status: "updated" })).toBe("Quota updated.");
+    expect(refreshText({ status: "skipped", code: "admin_key_required" })).toMatch(
+      /^Not read: A Cursor API key/,
+    );
+    expect(refreshText({ status: "failed", code: "fetch_failed" })).toMatch(
+      /last good figures are kept/,
+    );
+    expect(refreshText({ status: "rate_limited" })).toMatch(/last result/);
   });
 
   it("tells a measured zero from not measured", () => {

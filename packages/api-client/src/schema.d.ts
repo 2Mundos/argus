@@ -366,8 +366,10 @@ export interface paths {
         put?: never;
         /**
          * Refresh Quota
-         * @description Read the provider's quota now (Codex only; account usage 3.3). At most once
-         *     per account per 5 minutes; never refreshes the credential.
+         * @description Read the provider's quota now (account usage 3.3), for any account that has a
+         *     read-only source. At most once per account per 5 minutes; never refreshes the
+         *     credential. The answer carries the outcome (with a `code` when not updated) and
+         *     the figures now stored; an account with no source answers `skipped` and why.
          */
         post: operations["refresh_quota_api_accounts__account_id__quota_refresh_post"];
         delete?: never;
@@ -2062,6 +2064,7 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            credit?: components["schemas"]["AccountCredit"] | null;
             /** Disabled Reason */
             disabled_reason: string | null;
             /** Exhausted Until */
@@ -2174,6 +2177,43 @@ export interface components {
             token_limits?: {
                 [key: string]: number;
             } | null;
+        };
+        /**
+         * AccountCredit
+         * @description What a provider says is left to spend on an account or key (money, not a
+         *     window). `limit`/`remaining` are null when the key has no cap; the figure is the
+         *     key's, not the provider account's balance. `unit` is never tokens.
+         */
+        AccountCredit: {
+            /** Collector */
+            collector?: ("codex_rate_limits" | "claude_oauth_usage" | "cursor_dashboard" | "openrouter_key" | "worker_report") | null;
+            /** Free Tier */
+            free_tier?: boolean | null;
+            /** Limit */
+            limit: number | null;
+            /** Limit Reset */
+            limit_reset?: string | null;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Remaining */
+            remaining: number | null;
+            /** Resets At */
+            resets_at?: string | null;
+            /**
+             * Source
+             * @constant
+             */
+            source: "polled";
+            /**
+             * Unit
+             * @constant
+             */
+            unit: "usd";
+            /** Used */
+            used: number | null;
         };
         /**
          * AccountKind
@@ -5191,6 +5231,8 @@ export interface components {
              * Format: date-time
              */
             at: string;
+            /** Code */
+            code?: ("no_usage_records" | "provider_does_not_expose" | "window_not_configured" | "unsupported_provider" | "api_key_account" | "not_yet_probed" | "probe_failed" | "probe_skipped" | "probe_rate_limited" | "probe_disabled" | "credential_missing" | "credential_invalid" | "credential_expired" | "credential_rejected" | "oauth_scope_missing" | "admin_key_required" | "no_provider_source" | "local_no_quota" | "provider_rate_limited" | "fetch_failed" | "bad_response" | "no_windows" | "no_usage_window_for_login" | "window_locked") | null;
             /** Reason */
             reason?: string | null;
             /**
@@ -5201,8 +5243,12 @@ export interface components {
         };
         /** QuotaRefresh */
         QuotaRefresh: {
+            /** Code */
+            code?: ("no_usage_records" | "provider_does_not_expose" | "window_not_configured" | "unsupported_provider" | "api_key_account" | "not_yet_probed" | "probe_failed" | "probe_skipped" | "probe_rate_limited" | "probe_disabled" | "credential_missing" | "credential_invalid" | "credential_expired" | "credential_rejected" | "oauth_scope_missing" | "admin_key_required" | "no_provider_source" | "local_no_quota" | "provider_rate_limited" | "fetch_failed" | "bad_response" | "no_windows" | "no_usage_window_for_login" | "window_locked") | null;
+            credit?: components["schemas"]["AccountCredit"] | null;
             /** Quota */
             quota: components["schemas"]["QuotaWindow"][];
+            quota_status?: components["schemas"]["QuotaStatus"] | null;
             /** Reason */
             reason?: string | null;
             /**
@@ -5239,12 +5285,13 @@ export interface components {
          */
         QuotaStatus: {
             /** Collector */
-            collector?: ("codex_rate_limits" | "worker_report") | null;
+            collector?: ("codex_rate_limits" | "claude_oauth_usage" | "cursor_dashboard" | "openrouter_key" | "worker_report") | null;
+            credit?: components["schemas"]["AccountCredit"] | null;
             last_probe?: components["schemas"]["QuotaProbe"] | null;
             /** Observed At */
             observed_at?: string | null;
             /** Reason */
-            reason?: ("no_usage_records" | "provider_does_not_expose" | "window_not_configured" | "unsupported_provider" | "api_key_account" | "not_yet_probed" | "probe_failed" | "probe_skipped" | "probe_rate_limited") | null;
+            reason?: ("no_usage_records" | "provider_does_not_expose" | "window_not_configured" | "unsupported_provider" | "api_key_account" | "not_yet_probed" | "probe_failed" | "probe_skipped" | "probe_rate_limited" | "probe_disabled" | "credential_missing" | "credential_invalid" | "credential_expired" | "credential_rejected" | "oauth_scope_missing" | "admin_key_required" | "no_provider_source" | "local_no_quota" | "provider_rate_limited" | "fetch_failed" | "bad_response" | "no_windows" | "no_usage_window_for_login" | "window_locked") | null;
             /**
              * State
              * @enum {string}

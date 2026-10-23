@@ -3,8 +3,11 @@
 
 import { relative } from "../format";
 import {
+  type AccountCredit,
   bucketLabel,
   bucketTokens,
+  creditStale,
+  creditSummary,
   NOT_MEASURED,
   notMeasured,
   probeNote,
@@ -213,6 +216,33 @@ export function QuotaMeter(props: { q: QuotaWindow; compact?: boolean }) {
   );
 }
 
+/** An account's credit (money left on a key), with where it came from and its age. */
+export function CreditMeter(props: { credit: AccountCredit; compact?: boolean }) {
+  const { credit: c, compact } = props;
+  const stale = creditStale(c);
+  const seen = `${stale ? "stale, " : ""}read from the provider ${relative(c.observed_at)}`;
+  const capped = c.limit != null && c.limit > 0;
+  const left = capped ? Math.min(Math.max(((c.remaining ?? 0) / (c.limit ?? 1)) * 100, 0), 100) : 0;
+  return (
+    <div
+      className={`meter ${capped && left <= 0 ? "meter-full" : ""} ${stale ? "stale" : ""}`}
+      title={seen}
+    >
+      <span className="meter-label">
+        Credit <strong>{creditSummary(c)}</strong>
+        {stale && <span className="muted small"> (stale)</span>}
+      </span>
+      {capped && (
+        <svg viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true">
+          <rect className="meter-track" width="100" height="6" rx="3" />
+          <rect className="meter-fill" width={left} height="6" rx="3" />
+        </svg>
+      )}
+      {!compact && <span className="small muted">credit, in USD · {seen}</span>}
+    </div>
+  );
+}
+
 /** One locally estimated window (account.quota_status): used of limit, from measured runs only. */
 export function EstimatedWindow(props: { w: QuotaStatusWindow; compact?: boolean }) {
   const { w, compact } = props;
@@ -269,13 +299,15 @@ export function AccountQuota(props: {
   provider?: string;
 }) {
   const quota = props.quota ?? [];
-  if (quota.length === 0)
+  const credit = props.status.credit;
+  if (quota.length === 0 && !credit)
     return <QuotaStatusView status={props.status} provider={props.provider} compact />;
   return (
     <div className="quota-cell">
       {quota.map((q) => (
         <QuotaMeter key={q.window} q={q} compact />
       ))}
+      {credit && <CreditMeter credit={credit} compact />}
       {(props.status.windows ?? []).length > 0 && (
         <QuotaStatusView status={props.status} provider={props.provider} compact />
       )}
