@@ -97,6 +97,8 @@ def container_spec(
             "ARGUS_REPOSITORIES_JSON": json.dumps(nc.repositories, sort_keys=True),
             "NO_PROXY": "host.docker.internal,127.0.0.1,localhost",
         }
+        if pool.docker.network:
+            env["ARGUS_NANOCLAW_NETWORK"] = pool.docker.network
         if model_policy is not None:
             env["ARGUS_MODEL_POLICY"] = model_policy
         workdir = f"{nc.instances_root.rstrip('/')}/{instance_id}"

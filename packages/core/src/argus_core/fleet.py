@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import SplitResult, parse_qs, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -87,9 +87,52 @@ _ONECLI_HTTP_HOSTS = frozenset(
     {"localhost", "127.0.0.1", "::1", "[::1]", "host.docker.internal"}
 )
 
+# Private Docker DNS for the OneCLI admin service on a user-defined network
+# (e.g. `onecli-control`). Not reachable from the public internet; HTTP is
+# confined to this exact origin (host `onecli`, port 10254).
+_ONECLI_DOCKER_SERVICE_HOST = "onecli"
+_ONECLI_DOCKER_SERVICE_PORT = 10254
+
+_DOCKER_BUILTIN_NETWORKS = frozenset({"bridge", "default", "host", "none"})
+
+
+def _parsed_port(parsed: SplitResult) -> int | None:
+    try:
+        return parsed.port
+    except ValueError:
+        return None
+
+
+def _docker_user_defined_network_ok(network: str | None) -> bool:
+    name = (network or "").strip()
+    if not name:
+        return False
+    return name.casefold() not in _DOCKER_BUILTIN_NETWORKS
+
+
+def _onecli_private_docker_service_http_ok(parsed: SplitResult) -> bool:
+    """``http://onecli:10254`` (optional trailing ``/``) on the pool Docker network."""
+    if parsed.scheme != "http":
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    host = (parsed.hostname or "").lower()
+    if host != _ONECLI_DOCKER_SERVICE_HOST:
+        return False
+    if _parsed_port(parsed) != _ONECLI_DOCKER_SERVICE_PORT:
+        return False
+    path = parsed.path or ""
+    if path not in ("", "/"):
+        return False
+    return not (parsed.query or parsed.fragment)
+
+
+def onecli_is_private_docker_service_url(url: str) -> bool:
+    return _onecli_private_docker_service_http_ok(urlsplit(url))
+
 
 def onecli_url_ok(url: str) -> bool:
-    """https anywhere, or http only to loopback / host.docker.internal; no userinfo."""
+    """https anywhere, or http to loopback / host.docker.internal / private Docker OneCLI."""
     parsed = urlsplit(url)
     if parsed.username is not None or parsed.password is not None:
         return False
@@ -97,7 +140,9 @@ def onecli_url_ok(url: str) -> bool:
     if parsed.scheme == "https":
         return bool(host)
     if parsed.scheme == "http":
-        return host in _ONECLI_HTTP_HOSTS
+        if host in _ONECLI_HTTP_HOSTS:
+            return True
+        return _onecli_private_docker_service_http_ok(parsed)
     return False
 
 
@@ -138,7 +183,8 @@ class NanoclawOptions(BaseModel):
         if not onecli_url_ok(value):
             raise ValueError(
                 "onecli_url must be https://, or http:// to localhost /"
-                " 127.0.0.1 / host.docker.internal, without embedded credentials"
+                " 127.0.0.1 / host.docker.internal / http://onecli:10254 on a"
+                " private Docker network, without embedded credentials"
             )
         return value
 
@@ -200,6 +246,21 @@ class PoolUpsert(BaseModel):
     def consistent(self) -> "PoolUpsert":
         if self.desired_replicas > self.max_replicas:
             raise ValueError("desired_replicas cannot exceed max_replicas")
+        if (
+            self.runtime == RuntimeKind.NANOCLAW
+            and self.nanoclaw is not None
+            and onecli_is_private_docker_service_url(self.nanoclaw.onecli_url)
+        ):
+            if self.target != TargetKind.DOCKER:
+                raise ValueError(
+                    "http://onecli:10254 requires target=docker with a user-defined"
+                    " docker.network (e.g. onecli-control)"
+                )
+            if not _docker_user_defined_network_ok(self.docker.network):
+                raise ValueError(
+                    "http://onecli:10254 requires a user-defined docker.network"
+                    " (not bridge, default, host, or none; e.g. onecli-control)"
+                )
         if self.target == TargetKind.KUBERNETES:
             if self.kubernetes is None:
                 raise ValueError("the kubernetes target needs the `kubernetes` options")
