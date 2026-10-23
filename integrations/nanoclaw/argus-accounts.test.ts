@@ -6,7 +6,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +32,6 @@ import {
   runtimeProviders,
   sanitizeNotice,
 } from "./argus-accounts.js";
-import { stopLocalStrataForward } from "./argus-local-forward.js";
 
 // NanoClaw's own modules are replaced, so the real `recycleRuntime` runs against a
 // fake registry of containers, not NanoClaw's database or a real container runtime.
@@ -431,32 +429,9 @@ const until = async (cond: () => boolean, ms = 3000) => {
   }
 };
 
-/** Reserve loopback port + matching host.docker.internal URL (avoids fixed :8080 EADDRINUSE). */
-async function ephemeralLocalCredential(): Promise<{
-  credential: { base_url: string };
-  release: () => Promise<void>;
-}> {
-  const backend = await new Promise<net.Server>((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve(server));
-  });
-  const port = (backend.address() as net.AddressInfo).port;
-  return {
-    credential: { base_url: `http://host.docker.internal:${port}` },
-    release: async () => {
-      await new Promise<void>((resolve, reject) =>
-        backend.close((err) => (err ? reject(err) : resolve())),
-      );
-      await stopLocalStrataForward();
-    },
-  };
-}
-
 const live: Array<{ teardown: () => Promise<void> }> = [];
 afterEach(async () => {
   for (const a of live.splice(0)) await a.teardown();
-  await stopLocalStrataForward();
 });
 
 const failure = (text: string) => ({ kind: "chat", content: { text, failureNotice: true } });
@@ -1928,34 +1903,29 @@ describe("global account selection in the channel", () => {
   });
 
   it("leases afresh at once when the held account does not fit the next task's pin", async () => {
-    const local = await ephemeralLocalCredential();
-    try {
-      const strata = lease("strata", "", {
-        provider: "local",
-        credential: local.credential,
-      });
-      const w = world({
-        leases: [codexLease(), strata],
-        tasks: [task(), { ...task(), id: "t2", harness_account: "a-strata" }],
-      });
-      const recycleRuntime = vi.fn(async () => undefined);
-      // An hour between re-evaluations: only the pin makes the second claim lease.
-      const h = harness(w, true, { rebalanceMs: 3_600_000, recycleRuntime });
-      live.push(h.adapter);
-      await h.adapter.setup(h.setup);
-      await until(() => h.inbound.length === 1);
-      await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
-      await until(() => h.inbound.length === 2, 5000);
-      const engineLeases = w.calls.filter(
-        (c) => c.path === "/accounts/lease" && (c.body?.role ?? "engine") === "engine",
-      );
-      expect(engineLeases).toHaveLength(2);
-      expect(recycleRuntime).toHaveBeenCalledTimes(1); // the Codex runtime stops first
-      const selected = w.calls.filter((c) => c.path === "/engines/selected").map((c) => c.body);
-      expect(selected.map((b) => b.account_id)).toEqual(["a-codex-1", "a-strata"]);
-    } finally {
-      await local.release();
-    }
+    const strata = lease("strata", "", {
+      provider: "local",
+      credential: { base_url: "http://host.docker.internal:8080" },
+    });
+    const w = world({
+      leases: [codexLease(), strata],
+      tasks: [task(), { ...task(), id: "t2", harness_account: "a-strata" }],
+    });
+    const recycleRuntime = vi.fn(async () => undefined);
+    // An hour between re-evaluations: only the pin makes the second claim lease.
+    const h = harness(w, true, { rebalanceMs: 3_600_000, recycleRuntime });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await until(() => h.inbound.length === 2, 5000);
+    const engineLeases = w.calls.filter(
+      (c) => c.path === "/accounts/lease" && (c.body?.role ?? "engine") === "engine",
+    );
+    expect(engineLeases).toHaveLength(2);
+    expect(recycleRuntime).toHaveBeenCalledTimes(1); // the Codex runtime stops first
+    const selected = w.calls.filter((c) => c.path === "/engines/selected").map((c) => c.body);
+    expect(selected.map((b) => b.account_id)).toEqual(["a-codex-1", "a-strata"]);
   });
 
   it("never rotates while a task is in flight", async () => {
