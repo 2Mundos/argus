@@ -248,6 +248,14 @@ token) wrap the model trace endpoints ([spec](model-observability.spec.md)).
   also give the fallback when a tool is missing: say which tool is missing and
   stop; do not script REST around it. The same text goes to
   `integrations/nanoclaw/README.md` for orchestrator setup.
+- **Orchestrator skill.** The orchestrator's playbook (what it can, must and
+  must not do with these tools) is one file in the open Agent Skills format,
+  `apps/api/src/argus_api/skills/argus-orchestrator/SKILL.md`, linked from
+  `skills/argus-orchestrator/` at the repo root for skill installers. The server
+  serves it, unchanged, as the resource `skill://argus-orchestrator/SKILL.md`
+  (`text/markdown`) and as the prompt `argus-orchestrator`, and the
+  `instructions` point to it. It holds no rule REST does not enforce. A test
+  fails if it names a tool that does not exist.
 
 ## 3.5 Benchmark
 
