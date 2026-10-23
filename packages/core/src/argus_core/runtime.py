@@ -64,7 +64,8 @@ CATALOG: dict[str, Component] = {
 VALKEY_VERSION = "8.0.11"
 VALKEY_SHA256 = "e4ee4ad51c2e9cb75c5fac8865d34792482a597bf3b136b42b296c9933bd31f8"
 PGDG_KEY_FPR = "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
-GRAFT_INTEGRITY = "sha512-0CSgoGx+FyzgCkFDhM94pvPnYaTU9jL19BixqMmZ0eyQK618GINPHhQ5Xtto7LcHdNiBGl5RFQcwJob6Mxq4nA=="
+# npm SRI hash of the pinned graft package: a public integrity value, not a credential.
+GRAFT_INTEGRITY = "sha512-0CSgoGx+FyzgCkFDhM94pvPnYaTU9jL19BixqMmZ0eyQK618GINPHhQ5Xtto7LcHdNiBGl5RFQcwJob6Mxq4nA=="  # gitleaks:allow
 APT_PANGO = (
     "libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b fonts-dejavu-core shared-mime-info"
 )
