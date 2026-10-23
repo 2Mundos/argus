@@ -279,17 +279,40 @@ class QuotaStatusWindow(BaseModel):
 
 
 ProbeStatus = Literal["updated", "skipped", "rate_limited", "failed"]
-QuotaCollector = Literal["codex_rate_limits", "worker_report"]
+QuotaCollector = Literal[
+    "codex_rate_limits",
+    "claude_oauth_usage",
+    "cursor_dashboard",
+    "openrouter_key",
+    "worker_report",
+]
+# Why there is no (fresh) figure. Each is a different fact: a source that does not
+# exist, one that needs something Argus does not hold, one that failed this time.
 QuotaStatusReason = Literal[
     "no_usage_records",
-    "provider_does_not_expose",  # kept valid; new code prefers the two below
+    "provider_does_not_expose",  # kept valid; new code prefers the codes below
     "window_not_configured",
     "unsupported_provider",
-    "api_key_account",
-    "not_yet_probed",
+    "api_key_account",  # an API key: the provider offers no window to read with it
+    "not_yet_probed",  # nothing has tried to read it yet
     "probe_failed",
     "probe_skipped",
     "probe_rate_limited",
+    "probe_disabled",  # the reader is not installed/configured on this node
+    "credential_missing",
+    "credential_invalid",
+    "credential_expired",  # Argus never refreshes a login to read quota
+    "credential_rejected",  # the provider answered 401
+    "oauth_scope_missing",  # the token lacks the scope the usage source needs
+    "admin_key_required",  # an API key reads usage only through the team Admin API
+    "no_provider_source",  # no read-only quota source exists for this account
+    "local_no_quota",  # the node's own model has no provider quota
+    "provider_rate_limited",  # the provider answered 429
+    "fetch_failed",  # network error or a 5xx
+    "bad_response",  # the provider answered something we do not understand
+    "no_windows",  # understood, but it carried no window
+    "no_usage_window_for_login",  # the login answered; no numeric usage or grant
+    "window_locked",  # the provider locked the window: no usage figure to show
 ]
 
 
@@ -297,8 +320,26 @@ class QuotaProbe(BaseModel):
     """The latest quota probe of an account (one per account), whatever came of it."""
 
     status: ProbeStatus
+    code: QuotaStatusReason | None = None  # machine-readable cause when not updated
     reason: str | None = None  # short, never a credential value
     at: datetime
+
+
+class AccountCredit(BaseModel):
+    """What a provider says is left to spend on an account or key (money, not a
+    window). `limit`/`remaining` are null when the key has no cap; the figure is the
+    key's, not the provider account's balance. `unit` is never tokens."""
+
+    unit: Literal["usd"]
+    limit: float | None
+    remaining: float | None
+    used: float | None
+    limit_reset: str | None = None  # "daily" | "weekly" | "monthly" | null: never
+    resets_at: datetime | None = None  # a stated reset instant (billing cycle)
+    free_tier: bool | None = None
+    observed_at: datetime
+    source: Literal["polled"]
+    collector: QuotaCollector | None = None
 
 
 class QuotaStatus(BaseModel):
@@ -315,6 +356,7 @@ class QuotaStatus(BaseModel):
     observed_at: datetime | None = None  # newest provider snapshot
     collector: QuotaCollector | None = None  # who produced that snapshot
     last_probe: QuotaProbe | None = None
+    credit: AccountCredit | None = None
 
 
 class Account(BaseModel):
@@ -336,6 +378,7 @@ class Account(BaseModel):
     usage_total: Usage
     quota: list[QuotaWindow] = []
     quota_status: QuotaStatus
+    credit: AccountCredit | None = None
     token_limits: dict[str, int] | None = None
     billing_day: int | None = None
     # `custom` accounts: where and how to call. Never contains the key.
@@ -500,8 +543,11 @@ class UsageSeries(BaseModel):
 
 class QuotaRefresh(BaseModel):
     status: ProbeStatus
+    code: QuotaStatusReason | None = None
     reason: str | None = None
     quota: list[QuotaWindow]
+    credit: AccountCredit | None = None
+    quota_status: QuotaStatus | None = None  # what the account now reads as
 
 
 class CredentialUpdate(BaseModel):

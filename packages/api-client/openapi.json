@@ -34,6 +34,16 @@
             "title": "Created At",
             "type": "string"
           },
+          "credit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountCredit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "disabled_reason": {
             "anyOf": [
               {
@@ -396,6 +406,121 @@
           "provider"
         ],
         "title": "AccountCreate",
+        "type": "object"
+      },
+      "AccountCredit": {
+        "description": "What a provider says is left to spend on an account or key (money, not a\nwindow). `limit`/`remaining` are null when the key has no cap; the figure is the\nkey's, not the provider account's balance. `unit` is never tokens.",
+        "properties": {
+          "collector": {
+            "anyOf": [
+              {
+                "enum": [
+                  "codex_rate_limits",
+                  "claude_oauth_usage",
+                  "cursor_dashboard",
+                  "openrouter_key",
+                  "worker_report"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collector"
+          },
+          "free_tier": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Tier"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          },
+          "limit_reset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Reset"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "remaining": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining"
+          },
+          "resets_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resets At"
+          },
+          "source": {
+            "const": "polled",
+            "title": "Source",
+            "type": "string"
+          },
+          "unit": {
+            "const": "usd",
+            "title": "Unit",
+            "type": "string"
+          },
+          "used": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used"
+          }
+        },
+        "required": [
+          "unit",
+          "limit",
+          "remaining",
+          "used",
+          "observed_at",
+          "source"
+        ],
+        "title": "AccountCredit",
         "type": "object"
       },
       "AccountKind": {
@@ -9285,6 +9410,43 @@
             "title": "At",
             "type": "string"
           },
+          "code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "no_usage_records",
+                  "provider_does_not_expose",
+                  "window_not_configured",
+                  "unsupported_provider",
+                  "api_key_account",
+                  "not_yet_probed",
+                  "probe_failed",
+                  "probe_skipped",
+                  "probe_rate_limited",
+                  "probe_disabled",
+                  "credential_missing",
+                  "credential_invalid",
+                  "credential_expired",
+                  "credential_rejected",
+                  "oauth_scope_missing",
+                  "admin_key_required",
+                  "no_provider_source",
+                  "local_no_quota",
+                  "provider_rate_limited",
+                  "fetch_failed",
+                  "bad_response",
+                  "no_windows",
+                  "no_usage_window_for_login",
+                  "window_locked"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
           "reason": {
             "anyOf": [
               {
@@ -9316,12 +9478,69 @@
       },
       "QuotaRefresh": {
         "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "no_usage_records",
+                  "provider_does_not_expose",
+                  "window_not_configured",
+                  "unsupported_provider",
+                  "api_key_account",
+                  "not_yet_probed",
+                  "probe_failed",
+                  "probe_skipped",
+                  "probe_rate_limited",
+                  "probe_disabled",
+                  "credential_missing",
+                  "credential_invalid",
+                  "credential_expired",
+                  "credential_rejected",
+                  "oauth_scope_missing",
+                  "admin_key_required",
+                  "no_provider_source",
+                  "local_no_quota",
+                  "provider_rate_limited",
+                  "fetch_failed",
+                  "bad_response",
+                  "no_windows",
+                  "no_usage_window_for_login",
+                  "window_locked"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "credit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountCredit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "quota": {
             "items": {
               "$ref": "#/components/schemas/QuotaWindow"
             },
             "title": "Quota",
             "type": "array"
+          },
+          "quota_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuotaStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "reason": {
             "anyOf": [
@@ -9428,6 +9647,9 @@
               {
                 "enum": [
                   "codex_rate_limits",
+                  "claude_oauth_usage",
+                  "cursor_dashboard",
+                  "openrouter_key",
                   "worker_report"
                 ],
                 "type": "string"
@@ -9437,6 +9659,16 @@
               }
             ],
             "title": "Collector"
+          },
+          "credit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountCredit"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "last_probe": {
             "anyOf": [
@@ -9472,7 +9704,22 @@
                   "not_yet_probed",
                   "probe_failed",
                   "probe_skipped",
-                  "probe_rate_limited"
+                  "probe_rate_limited",
+                  "probe_disabled",
+                  "credential_missing",
+                  "credential_invalid",
+                  "credential_expired",
+                  "credential_rejected",
+                  "oauth_scope_missing",
+                  "admin_key_required",
+                  "no_provider_source",
+                  "local_no_quota",
+                  "provider_rate_limited",
+                  "fetch_failed",
+                  "bad_response",
+                  "no_windows",
+                  "no_usage_window_for_login",
+                  "window_locked"
                 ],
                 "type": "string"
               },
@@ -15110,7 +15357,7 @@
     },
     "/api/accounts/{account_id}/quota/refresh": {
       "post": {
-        "description": "Read the provider's quota now (Codex only; account usage 3.3). At most once\nper account per 5 minutes; never refreshes the credential.",
+        "description": "Read the provider's quota now (account usage 3.3), for any account that has a\nread-only source. At most once per account per 5 minutes; never refreshes the\ncredential. The answer carries the outcome (with a `code` when not updated) and\nthe figures now stored; an account with no source answers `skipped` and why.",
         "operationId": "refresh_quota_api_accounts__account_id__quota_refresh_post",
         "parameters": [
           {

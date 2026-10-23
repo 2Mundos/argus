@@ -54,6 +54,15 @@ on create and replace, and deliver it to the **delegated** Cursor CLI
 - **Account shape** (`packages/core/src/argus_core/cursor_auth.py`): two shapes,
   never mixed; validation on REST create/replace and in the channel before
   OneCLI apply. Responses never echo token values.
+- **Quota** ([account usage](account-usage.spec.md) 3.3): an imported login
+  (`kind=subscription`) is read by Argus from `api2.cursor.sh`
+  `aiserver.v1.DashboardService` (`GetCreditGrantsBalance`,
+  `GetUsageLimitStatusAndActiveGrants`, `GetPlanInfo`; Connect JSON, int64 as
+  strings) with the stored `accessToken` only, read-only, never refreshed, never
+  logged. A numeric credit grant becomes credit in USD; a login that states none
+  reads `no_usage_window_for_login`, not 0. An **API key** (`kind=api_key`) is a
+  different case: its usage is the team Admin API's (an admin key), so it reads
+  `admin_key_required`, and the login path does not apply to it.
 - **Executor-only provider**: `cursor` is listed in `EXECUTOR_ONLY`; the `engine`
   lease role never returns it, the `executor` role may.
 - **OneCLI mapping** (`integrations/nanoclaw/argus-accounts.ts`): two generic

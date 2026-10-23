@@ -732,6 +732,26 @@ async def write_knowledge(
 # -- provider accounts --------------------------------------------------------------------
 
 
+@tool(MANAGERS)
+async def list_accounts(ctx: Context) -> dict:
+    """Provider accounts with what each reports about its quota. Per account:
+    `quota` (provider windows: used_percent is the share USED, with reset and
+    observed_at), `credit` (money left on a key, in USD, never tokens),
+    `quota_status` (state known|stale|unknown, a `reason` code saying why a figure
+    is missing, the last probe's outcome and code) and token usage. A missing figure
+    is unknown, never zero. Read-only; no credentials."""
+    return {"accounts": await _call(ctx, "GET", "/accounts")}
+
+
+@tool(MANAGERS)
+async def refresh_account_quota(ctx: Context, account_id: str) -> dict:
+    """Read one account's quota from its provider now (a read-only request; at most
+    once per account per 5 minutes; never refreshes the login). Returns the outcome
+    (updated|skipped|rate_limited|failed, with a `code`), the stored windows and
+    credit, and the account's resulting `quota_status`."""
+    return await _call(ctx, "POST", f"/accounts/{account_id}/quota/refresh")
+
+
 @tool(AGENTS)
 async def lease_account(
     ctx: Context,

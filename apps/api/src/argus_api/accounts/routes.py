@@ -156,7 +156,11 @@ async def account_cost(
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_account(
-    body: AccountCreate, db: DbDep, caller: AdminDep, secrets: SecretsDep
+    body: AccountCreate,
+    request: Request,
+    db: DbDep,
+    caller: AdminDep,
+    secrets: SecretsDep,
 ) -> Account:
     """Register an account. A `credential` is written to the SOPS file first
     (as `account-<id>`); the registry row only ever holds the reference."""
@@ -178,9 +182,11 @@ async def create_account(
         secret_ref = f"sops:{name}"
     assert secret_ref is not None
     async with db.write() as tx:
-        return await service.create_account(
+        account = await service.create_account(
             tx, account_id, body, secret_ref, caller.actor, secrets
         )
+    request.app.state.quota.request(account_id)  # the first reading, in the background
+    return account
 
 
 class CodexLoginStart(BaseModel):
@@ -305,8 +311,10 @@ async def get_account(account_id: str, db: DbDep, _: ManagerDep) -> Account:
 async def refresh_quota(
     account_id: str, request: Request, db: DbDep, _: ManagerDep
 ) -> QuotaRefresh:
-    """Read the provider's quota now (Codex only; account usage 3.3). At most once
-    per account per 5 minutes; never refreshes the credential."""
+    """Read the provider's quota now (account usage 3.3), for any account that has a
+    read-only source. At most once per account per 5 minutes; never refreshes the
+    credential. The answer carries the outcome (with a `code` when not updated) and
+    the figures now stored; an account with no source answers `skipped` and why."""
     async with db.read() as conn:
         await service.get_account(conn, account_id, utcnow())
     return await request.app.state.quota.refresh(account_id)
@@ -520,6 +528,7 @@ async def report_usage(
 @router.put("/{account_id}/credential", status_code=status.HTTP_204_NO_CONTENT)
 async def update_credential(
     account_id: str,
+    request: Request,
     body: CredentialUpdate,
     db: DbDep,
     caller: CallerDep,
@@ -568,6 +577,7 @@ async def update_credential(
         # An admin renewal: the kind follows the credential, nothing else changes.
         async with db.write() as tx:
             await service.credential_renewed(tx, account_id, *checked, caller.actor)
+        request.app.state.quota.request(account_id)  # read the renewed login's quota
 
 
 def _credential_shape(value: object) -> object:

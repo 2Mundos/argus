@@ -8,6 +8,7 @@ import {
   notMeasured,
   probeNote,
   reasonsNote,
+  refreshText,
   roleSplit,
   tokensOrDash,
   totalTokens,
@@ -17,13 +18,17 @@ import {
   type WindowId,
   windowQuery,
 } from "../usage";
-import { QuotaMeter, QuotaStatusView, StackedBars } from "./charts";
+import { CreditMeter, QuotaMeter, QuotaStatusView, StackedBars } from "./charts";
 import { ProviderMark, StateIcon } from "./providerIcons";
 
 /** One account: quota per window and tokens over a chosen time window
  * (account usage spec 3.6). */
-export function AccountDetail(props: { account: Account; onClose: () => void }) {
-  const { account: a, onClose } = props;
+export function AccountDetail(props: {
+  account: Account;
+  onClose: () => void;
+  onRefreshed?: () => void;
+}) {
+  const { account: a, onClose, onRefreshed } = props;
   const [win, setWin] = useState<WindowId>("7d");
   const [refresh, setRefresh] = useState<{ busy: boolean; text?: string }>({ busy: false });
   const tz = viewerTimeZone();
@@ -50,13 +55,8 @@ export function AccountDetail(props: { account: Account; onClose: () => void }) 
           params: { path: { account_id: a.id } },
         }),
       );
-      const text = {
-        updated: "Quota updated.",
-        skipped: `Not read: ${r.reason}.`,
-        rate_limited: "Read less than 5 minutes ago; try later.",
-        failed: `The read failed (${r.reason}).`,
-      }[r.status];
-      setRefresh({ busy: false, text });
+      setRefresh({ busy: false, text: refreshText(r) });
+      onRefreshed?.(); // the probe outcome may change without a figure changing
     } catch (err) {
       setRefresh({ busy: false, text: (err as Error).message });
     }
@@ -101,6 +101,7 @@ export function AccountDetail(props: { account: Account; onClose: () => void }) 
                 ))}
               </div>
             )}
+            {a.quota_status.credit && <CreditMeter credit={a.quota_status.credit} />}
             {a.quota_status.state === "stale" && (
               <p className="small stale">
                 Stale: the figures above are older than an hour or their window has reset. They are
@@ -115,14 +116,12 @@ export function AccountDetail(props: { account: Account; onClose: () => void }) 
                 {probeNote(a.quota_status.last_probe, relative(a.quota_status.last_probe?.at))}
               </p>
             )}
-            {a.provider === "openai" && (
-              <p className="small">
-                <button type="button" onClick={refreshQuota} disabled={refresh.busy}>
-                  {refresh.busy ? "Reading…" : "Refresh quota"}
-                </button>{" "}
-                {refresh.text && <span className="muted">{refresh.text}</span>}
-              </p>
-            )}
+            <p className="small">
+              <button type="button" onClick={refreshQuota} disabled={refresh.busy}>
+                {refresh.busy ? "Reading…" : "Refresh quota"}
+              </button>{" "}
+              {refresh.text && <span className="muted">{refresh.text}</span>}
+            </p>
 
             <div className="toolbar">
               <h3>Tokens</h3>
