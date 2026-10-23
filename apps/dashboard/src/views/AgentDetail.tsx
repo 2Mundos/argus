@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { api, call, fetchText } from "../api";
 import { relative, shortId } from "../format";
 import { useLiveData } from "../live";
-import { renderTerminalText } from "../terminalLog";
 import { TaskLabel } from "../TaskLabel";
+import { renderTerminalText } from "../terminalLog";
 import { Activity, useNow } from "./Activity";
 
 const LOG_TAIL = 200;
@@ -218,11 +218,7 @@ export function LogTail({ instanceId, tail }: { instanceId: string; tail: number
           atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
         }}
       >
-        {text === undefined
-          ? "Connecting…"
-          : text
-            ? renderTerminalText(text)
-            : "No output yet."}
+        {text === undefined ? "Connecting…" : text ? renderTerminalText(text) : "No output yet."}
       </pre>
     </div>
   );

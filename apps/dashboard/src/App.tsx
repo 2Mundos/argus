@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { handleUnauthorized, setToken, token } from "./api";
 import { Brand } from "./Brand";
 import { LiveProvider, useLive } from "./live";
-import { WorkersSidebar } from "./WorkersSidebar";
 import { Accounts } from "./views/Accounts";
 import { AgentDetail } from "./views/AgentDetail";
 import { Agents } from "./views/Agents";
@@ -17,6 +16,7 @@ import { Login } from "./views/Login";
 import { Pools } from "./views/Pools";
 import { System } from "./views/System";
 import { Tasks } from "./views/Tasks";
+import { WorkersSidebar } from "./WorkersSidebar";
 
 const TABS = {
   home: "Home",
