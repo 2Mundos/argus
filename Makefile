@@ -50,6 +50,42 @@ test: ## Run Python and Node tests.
 build: ## Build the dashboard.
 	$(PNPM) build
 
+.PHONY: reload-preview
+reload-preview: ## Safely fast-forward clean main, preflight migrations, back up SQLite, and restart preview API.
+	@set -Eeuo pipefail; \
+	root=$$(git rev-parse --show-toplevel); expected="$(HOME)/work/argus"; \
+	test "$$root" = "$$expected" || { echo "Run this target from $$expected" >&2; exit 2; }; \
+	test "$$(git branch --show-current)" = main || { echo "Refusing: checkout is not on main" >&2; exit 2; }; \
+	test -z "$$(git status --porcelain --untracked-files=all)" || { echo "Refusing: checkout has local changes; preserve/reconcile WIP first" >&2; exit 2; }; \
+	mkdir -p "$(HOME)/.cache"; exec 9>"$(HOME)/.cache/argus-preview-reload.lock"; \
+	flock -n 9 || { echo "Refusing: another preview reload is running" >&2; exit 2; }; \
+	for proc in /proc/[0-9]*; do \
+	  cwd=$$(readlink -f "$$proc/cwd" 2>/dev/null || true); \
+	  case "$$cwd" in "$$root"|"$$root"/*) ;; *) continue ;; esac; \
+	  name=$$(cat "$$proc/comm" 2>/dev/null || true); \
+	  case "$$name" in claude*|codex*|opencode*|argus-delegate*|cursor-agent|agent) echo "Refusing: possible active writer $$name (pid $${proc##*/}) in checkout" >&2; exit 2 ;; esac; \
+	done; \
+	old=$$(git rev-parse HEAD); \
+	git fetch origin main; \
+	git merge-base --is-ancestor "$$old" origin/main || { echo "Refusing: main diverged; fast-forward only" >&2; exit 2; }; \
+	git pull --ff-only origin main; \
+	new=$$(git rev-parse HEAD); \
+	if [[ "$$old" != "$$new" ]] && git diff --name-only "$$old" "$$new" | grep -qE '^(apps/dashboard/|packages/.*|pnpm-lock.yaml|pnpm-workspace.yaml|package.json|turbo.json)'; then \
+	  echo "Dashboard inputs changed; building dashboard"; $(MAKE) build; \
+	fi; \
+	.venv/bin/python -c 'from argus_api.db.migrate import load_migrations; migrations=load_migrations(); print(f"Migration preflight OK: {len(migrations)} migrations, latest={migrations[-1].version}")'; \
+	db="$$root/data/argus.db"; test -f "$$db" || { echo "Refusing: service SQLite DB not found at $$db" >&2; exit 2; }; \
+	backup_dir="$(HOME)/.local/state/argus/backups"; mkdir -p "$$backup_dir"; chmod 700 "$$backup_dir"; \
+	backup="$$backup_dir/argus-$$(date -u +%Y%m%dT%H%M%SZ).db"; \
+	python3 -c 'import sqlite3,sys; src,dst=sys.argv[1:]; a=sqlite3.connect(f"file:{src}?mode=ro",uri=True); b=sqlite3.connect(dst); a.backup(b); result=b.execute("PRAGMA quick_check").fetchone()[0]; b.close(); a.close(); assert result=="ok",result; print("Verified SQLite backup:",dst)' "$$db" "$$backup"; \
+	chmod 600 "$$backup"; \
+	wd=$$(systemctl --user show argus-preview.service -p WorkingDirectory --value); \
+	test "$$wd" = "$$root" || { echo "Refusing: preview service points to $$wd, not $$root" >&2; exit 2; }; \
+	systemctl --user restart argus-preview.service; \
+	test "$$(systemctl --user show argus-preview.service -p ActiveState --value)" = active || { echo "Preview service is not active after restart" >&2; exit 1; }; \
+	curl -fsS --retry 12 --retry-connrefused --retry-delay 2 --max-time 5 http://127.0.0.1:8000/healthz | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("status")=="ok",d; print("Preview health:",d.get("status"))'; \
+	echo "Preview reload complete at $$new (SQLite backup: $$backup). Verify authenticated task/fleet/pool reads via Argus MCP."
+
 .PHONY: bench
 bench: ## MCP inbox journey benchmark (docs/specs/mcp-operations.spec.md 3.5).
 	$(UV) run python apps/api/bench/mcp_inbox.py
