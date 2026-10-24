@@ -43,6 +43,7 @@ async def reap(
     local: tuple[bool | None, str] = (None, ""),
     *,
     quiet_claim_s: int = tasks.QUIET_CLAIM_S,
+    stall_fail_s: int = 0,
 ) -> ReapResult:
     """One pass (3.4). The stages share the transaction but not their fate: each
     runs in a savepoint, and so does every task or agent inside lease/timeout
@@ -50,7 +51,8 @@ async def reap(
 
     `local` is the local model's probe, taken before the transaction opened:
     reachable (or not), with the detail. `(None, "")` means it was not probed.
-    `quiet_claim_s` flags silent claims without expiring them (stall visibility)."""
+    `quiet_claim_s` flags silent claims; `stall_fail_s` (0: off) then expires a flagged
+    claim that stays silent that long (stall visibility 3.6)."""
     failed_tasks: list[str] = []
     failed_agents: list[str] = []
     failed_stages: list[str] = []
@@ -72,6 +74,9 @@ async def reap(
     )
     expired += await stage(
         "expire_timeouts", lambda: tasks.expire_timeouts(tx, failed_tasks)
+    )
+    expired += await stage(
+        "expire_stalled", lambda: tasks.expire_stalled(tx, stall_fail_s, failed_tasks)
     )
     lost = await stage("mark_lost", lambda: agents.mark_lost(tx, failed_agents))
     quieted = await stage(
@@ -100,6 +105,7 @@ async def run(
     stats: LoopStats | None = None,
     local_probe: Callable[[], Awaitable[tuple[bool | None, str]]] | None = None,
     quiet_claim_s: int = tasks.QUIET_CLAIM_S,
+    stall_fail_s: int = 0,
 ) -> None:
     while True:
         started = time.monotonic()
@@ -114,7 +120,9 @@ async def run(
                         "local model probe failed; leaving accounts as they are"
                     )
             async with db.write() as tx:
-                result = await reap(tx, local, quiet_claim_s=quiet_claim_s)
+                result = await reap(
+                    tx, local, quiet_claim_s=quiet_claim_s, stall_fail_s=stall_fail_s
+                )
             if stats:
                 stats.record(time.monotonic() - started)
             if not result.clean:

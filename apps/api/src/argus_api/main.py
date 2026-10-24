@@ -168,6 +168,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                     stats=app.state.loops["reaper"],
                     local_probe=local_probe if local_model else None,
                     quiet_claim_s=settings.quiet_claim_s,
+                    stall_fail_s=settings.stall_fail_s,
                 )
             ),
             asyncio.create_task(app.state.quota.run()),

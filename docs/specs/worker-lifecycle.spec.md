@@ -573,8 +573,20 @@ pluggable provider interface (Claude Code by default), supports user-added MCP
 servers, and is administered locally by the `ncl` CLI over a Unix socket (no
 HTTP admin API). See https://docs.nanoclaw.dev/concepts/architecture.
 
+**One task per session.** Before a claimed task is injected, the channel sends
+NanoClaw's `/clear` (an admin command the channel grants to its own `argus:local`
+sender on the worker's agent group) and waits for the runner's `Session cleared.`
+reply, which it consumes and never reports. The task then starts from an empty
+context, so earlier tasks neither inflate its cost nor contaminate its replies.
+Without an acknowledgement within 60 s, or if the grant fails, the session stays
+shared and every reply is task-scoped, as before. `ARGUS_FRESH_SESSION=off`
+disables the clear.
+
 The Argus-installed NanoClaw overlay imposes no wall-clock or heartbeat-age
-ceiling on a running container: a quiet or long-running session remains valid.
+ceiling on a running container: a quiet or long-running session remains valid
+to NanoClaw. Argus alone ends an attempt, and only after the task has shown no
+progress, output or activity for `ARGUS_STALL_FAIL_S` ([stall
+visibility](stall-visibility.spec.md) 3.6).
 The reconciliation sweep kills only for a stale message-scoped processing
 claim whose heartbeat has not advanced beyond that claim; a declared Bash
 timeout widens only that claim's tolerance. This is separate from Argus's

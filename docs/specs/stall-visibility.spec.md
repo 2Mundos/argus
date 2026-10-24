@@ -13,11 +13,15 @@ visible and explainable:
    (inbox row, worker rail, `task.quiet` event). Quiet never expires the task.
 3. Lease expiry and agent loss record the last signal and how late they were
    detected when Argus was not running.
+4. A claim that was flagged quiet and then stays silent for `ARGUS_STALL_FAIL_S`
+   (default 3600 s) is expired as `stalled` and retried, instead of holding the
+   task until the wall-clock timeout.
 
 # 2. Non-Goals
 
-- No automatic kill of a quiet-but-alive session (NanoClaw's absolute ceiling
-  stays removed; [worker lifecycle](worker-lifecycle.spec.md) 3.8).
+- No absolute session ceiling: NanoClaw's stays removed
+  ([worker lifecycle](worker-lifecycle.spec.md) 3.8). Only silence ends an attempt
+  (3.6), never how long it has run.
 - No change to lease TTL, heartbeat interval, attempt timeout, or `lost` rules.
 - Final `failed` tasks stay out of the inbox; Fleet owns failure totals.
 - No new service, broker, or table beyond two nullable columns on `tasks`.
@@ -79,6 +83,25 @@ A quiet container that is still running is never failed this way.
   with the existing release and steer actions.
 - Worker rail: a busy chip with `quiet_since` shows state `quiet` and its age;
   workers that ended in the last hour stay listed (dimmed) with `end_reason`.
+
+## 3.6 Stalled claims
+
+Production data (2026-10-16 to 2026-10-24): 13 of 15 attempts that hit the 6 h
+timeout had their last progress or log line within minutes of the claim and then
+nothing for hours, while heartbeats kept the lease alive.
+
+- Reaper stage `expire_stalled`, after `expire_timeouts`: a `claimed` task with
+  `quiet_at` set whose last signal (3.2) is older than `ARGUS_STALL_FAIL_S` is
+  expired with reason `stalled`, like a timeout: `failures` +1, requeued until
+  `max_attempts`. `task.expire` carries `last_signal_at` and `last_signal_source`.
+  The worker learns of it on its next heartbeat and stops the session, as for any
+  expiry. Requiring `quiet_at` means the inbox warned first.
+- `ARGUS_STALL_FAIL_S` defaults to 3600 and must exceed `ARGUS_QUIET_CLAIM_S`
+  to ever fire; `0` disables. Any progress post, live-log line or `activity_at`
+  (delegate log relay, session heartbeat file) resets the clock, so a long
+  executor run that prints is never stalled.
+- Fleet `classify_failure` keeps `stalled` as a first-class reason, with its time
+  held, so the effect shows in Fleet.
 
 # 4. Open Questions
 

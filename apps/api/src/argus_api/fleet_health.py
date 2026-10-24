@@ -31,6 +31,7 @@ REASONS = (
     "lease_expired",
     "gate_failed",
     "timeout",
+    "stalled",
     "worker_fail",
     "channel_error",
     "provider_failure",

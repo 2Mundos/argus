@@ -39,9 +39,13 @@ async def claim_one(db: Database, agent_id: str):
     return task
 
 
-async def reap(db: Database, *, quiet_claim_s: int = 1200) -> reaper.ReapResult:
+async def reap(
+    db: Database, *, quiet_claim_s: int = 1200, stall_fail_s: int = 0
+) -> reaper.ReapResult:
     async with db.write() as tx:
-        return await reaper.reap(tx, quiet_claim_s=quiet_claim_s)
+        return await reaper.reap(
+            tx, quiet_claim_s=quiet_claim_s, stall_fail_s=stall_fail_s
+        )
 
 
 async def hold_alive(
@@ -81,6 +85,45 @@ async def test_flag_quiet_after_threshold(db: Database, clock: FakeClock) -> Non
         ) as cur:
             assert await cur.fetchone() is not None
     assert (await reap(db, quiet_claim_s=1200)).quieted_tasks == []
+
+
+async def test_stalled_claim_is_expired_after_it_stays_silent(
+    db: Database, clock: FakeClock
+) -> None:
+    reg = await register(db)
+    task = await claim_one(db, reg.agent.id)
+    leases = [(task.id, task.attempt)]
+    await hold_alive(db, clock, reg.agent.id, leases, 1300)
+    assert (await reap(db, stall_fail_s=3600)).quieted_tasks == [task.id]
+    await hold_alive(db, clock, reg.agent.id, leases, 2000)  # 3300 s silent
+    assert (await reap(db, stall_fail_s=3600)).expired_tasks == []
+    await hold_alive(db, clock, reg.agent.id, leases, 400)  # 3700 s silent
+    assert (await reap(db, stall_fail_s=3600)).expired_tasks == [task.id]
+    async with db.read() as conn:
+        after = await tasks.get_task(conn, task.id)
+        async with conn.execute(
+            "SELECT data FROM events WHERE subject_id = ? AND kind = 'task.expire'",
+            (task.id,),
+        ) as cur:
+            data = json.loads((await cur.fetchone())["data"])
+    assert (after.state, after.failures) == ("ready", 1)
+    assert data["reason"] == "stalled" and "stalled" in data["error"]
+    assert data["last_signal_source"] == "claim"
+
+
+async def test_a_signal_or_a_zero_setting_keeps_a_silent_claim(
+    db: Database, clock: FakeClock
+) -> None:
+    reg = await register(db)
+    task = await claim_one(db, reg.agent.id)
+    leases = [(task.id, task.attempt)]
+    await hold_alive(db, clock, reg.agent.id, leases, 1300)
+    await reap(db, stall_fail_s=3600)  # flags it quiet
+    await hold_alive(db, clock, reg.agent.id, leases, 4000)
+    assert (await reap(db, stall_fail_s=0)).expired_tasks == []  # disabled
+    async with db.write() as tx:  # a fresh signal arrives just before the reap
+        await agents.heartbeat(tx, reg.agent.id, [(task.id, task.attempt, clock.now)])
+    assert (await reap(db, stall_fail_s=3600)).expired_tasks == []
 
 
 async def test_activity_at_clears_quiet(db: Database, clock: FakeClock) -> None:

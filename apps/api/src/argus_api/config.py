@@ -92,6 +92,9 @@ class Settings:
     # Claimed task with no progress / live log / activity_at for this long is
     # flagged quiet (inbox + rail); never expires the lease (stall-visibility).
     quiet_claim_s: int = 1200
+    # A claim already flagged quiet that stays silent this long is expired as
+    # `stalled` and retried. 0 disables (stall-visibility 3.6).
+    stall_fail_s: int = 3600
 
     @property
     def db_path(self) -> Path:
@@ -223,6 +226,7 @@ class Settings:
                 os.environ.get("ARGUS_LOST_SPIKE_FACTOR", DEFAULT_LOST_SPIKE_FACTOR)
             ),
             quiet_claim_s=int(os.environ.get("ARGUS_QUIET_CLAIM_S", 1200)),
+            stall_fail_s=int(os.environ.get("ARGUS_STALL_FAIL_S", 3600)),
         )
 
 

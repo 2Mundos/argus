@@ -258,6 +258,13 @@ export interface ArgusConfig {
    * structured providerFailure can show an exhausted account.
    */
   agentLogTail?: () => Promise<string>;
+  /**
+   * One task per session: before a task is injected, send NanoClaw's `/clear` so the
+   * session starts from an empty context. `ensureAuthority` makes sure the Argus
+   * sender may run it (an admin command). Absent, or no acknowledgement within
+   * `ackTimeoutMs`: the session is shared with the earlier tasks, as before.
+   */
+  freshSession?: { ensureAuthority(): Promise<void>; ackTimeoutMs?: number };
   /** Called once, after Argus drained this agent, its work is done, and it left. */
   onDrained?: () => void;
   /** Reported on heartbeat as `runtime.worker_version`, e.g. "nanoclaw/1.2.3". */
@@ -787,6 +794,10 @@ const PHASE_RULES: Record<ContinuationPhase, string[]> = {
     "Attempt objective (Argus-derived): CLOSE WITH EVIDENCE. Work and checks are recorded as done; gather and attach the missing proof for the checklist, then COMPLETE.",
   ],
 };
+
+/** The runner's reply to `/clear`; the only text the channel treats as a command ack. */
+export const SESSION_CLEARED_NOTICE = "Session cleared.";
+const CLEAR_ACK_TIMEOUT_MS = 60_000;
 
 /** Appended to a task given to a session that already carried another one (see fenceReply). */
 export const replyScopeNotice = (taskId: string): string =>
@@ -1782,6 +1793,38 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
+  let clearWaiter: (() => void) | null = null;
+
+  /** True once the session confirmed it holds no earlier context (one task per session). */
+  async function clearSession(task: ArgusTask): Promise<boolean> {
+    const fresh = cfg.freshSession;
+    if (!fresh) return false;
+    try {
+      await fresh.ensureAuthority();
+      const acked = new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), fresh.ackTimeoutMs ?? CLEAR_ACK_TIMEOUT_MS);
+        clearWaiter = () => {
+          clearTimeout(timer);
+          resolve(true);
+        };
+      });
+      await setupCfg!.onInbound(PLATFORM_ID, null, {
+        id: `argus-clear-${task.id}-${task.attempt}`,
+        kind: "chat",
+        timestamp: new Date().toISOString(),
+        content: { text: "/clear", sender: "argus", senderId: `argus:${PLATFORM_ID}` },
+      });
+      const ok = await acked;
+      if (!ok) log.warn("The session did not confirm /clear; it stays shared", { task: task.id });
+      return ok;
+    } catch (err) {
+      log.warn("Could not clear the session; it stays shared", { task: task.id, err });
+      return false;
+    } finally {
+      clearWaiter = null;
+    }
+  }
+
   async function injectTask(taskId: string, attempt: number, text: string): Promise<void> {
     resending = true;
     try {
@@ -2227,6 +2270,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           customHarness: account?.provider === "custom",
           runtime: runtimeSelection,
         });
+      if (await clearSession(task)) {
+        sessionCarriesTask = false;
+        if (current) current = Object.freeze({ ...current, scopeRequired: false });
+      }
       const scopeRequired = current?.scopeRequired === true;
       const render = renderCurrent;
       renderCurrent = () => render() + (scopeRequired ? `\n\n${replyScopeNotice(task.id)}` : "");
@@ -2819,6 +2866,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           await attachFiles(task, message.files);
         return undefined;
       }
+      if (clearWaiter && text.trim() === SESSION_CLEARED_NOTICE) {
+        clearWaiter();
+        return undefined;
+      }
       if (!task) {
         log.warn("Argus channel got a reply with no task in flight; dropped", {
           text: text.slice(0, 80),
@@ -3397,6 +3448,32 @@ function nanoclawVersion(): string | undefined {
   }
 }
 
+/** Lets the Argus sender run `/clear` in the worker group (an admin command); idempotent. */
+function freshSessionFromEnv(): NonNullable<ArgusConfig["freshSession"]> {
+  return {
+    async ensureAuthority(): Promise<void> {
+      const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
+        "../db/messaging-groups.js"
+      );
+      const { getUserRoles, grantRole } = await import("../modules/permissions/db/user-roles.js");
+      const mg = await getMessagingGroupByPlatform(CHANNEL_TYPE, PLATFORM_ID);
+      const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
+      if (!wiring) throw new Error("no agent group is wired to the argus channel");
+      const userId = `${CHANNEL_TYPE}:${PLATFORM_ID}`;
+      const held = await getUserRoles(userId);
+      if (held.some((r) => r.role === "admin" && r.agent_group_id === wiring.agent_group_id))
+        return;
+      await grantRole({
+        user_id: userId,
+        role: "admin",
+        agent_group_id: wiring.agent_group_id,
+        granted_by: null,
+        granted_at: new Date().toISOString(),
+      });
+    },
+  };
+}
+
 /** The redacted log tails of the group's session containers, from the runtime hooks. */
 function sessionLogTail(runtime: RuntimeHooks): () => Promise<string> {
   return async () => {
@@ -3432,6 +3509,7 @@ export function fromEnv(): ChannelAdapter | null {
     workerVersion: nanoclawVersion(),
     accounts: accountsFromEnv(),
     runtime,
+    freshSession: process.env.ARGUS_FRESH_SESSION === "off" ? undefined : freshSessionFromEnv(),
     agentLogTail:
       runtime?.sessionEvidence && runtime.sessions ? sessionLogTail(runtime) : undefined,
     selectModels: modelsFromEnv(),

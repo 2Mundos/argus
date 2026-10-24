@@ -2242,6 +2242,62 @@ describe("a Claude rate limit that only the structured field or the log shows", 
   });
 });
 
+describe("one task per session", () => {
+  it("clears the session, waits for the ack, then injects the task", async () => {
+    const w = world({ leases: [lease("a", "sk-ant-AAAA")], tasks: [task()] });
+    const ensureAuthority = vi.fn(async () => undefined);
+    const h = harness(w, true, {}, { freshSession: { ensureAuthority } });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    expect(h.inbound[0].content.text).toBe("/clear");
+    expect(h.inbound[0].id).toBe("argus-clear-t1-1");
+    expect(ensureAuthority).toHaveBeenCalledTimes(1);
+    await h.adapter.deliver("local", null, { kind: "chat", content: { text: "Session cleared." } });
+    await until(() => h.inbound.length === 2);
+    expect(h.inbound[1].content.text).toContain("t1");
+    // the ack is not a task reply: nothing was reported to Argus
+    expect(w.calls.some((c) => c.path.startsWith("/tasks/t1/") && c.path !== "/tasks/t1/log")).toBe(
+      false,
+    );
+  });
+
+  it("falls back to the shared session when the clear is not acknowledged", async () => {
+    const w = world({ leases: [lease("a", "sk-ant-AAAA")], tasks: [task()] });
+    const h = harness(
+      w,
+      true,
+      {},
+      { freshSession: { ensureAuthority: async () => undefined, ackTimeoutMs: 100 } },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 2, 3000);
+    expect(h.inbound[0].content.text).toBe("/clear");
+    expect(h.inbound[1].content.text).toContain("t1");
+  });
+
+  it("falls back when the sender cannot be authorised", async () => {
+    const w = world({ leases: [lease("a", "sk-ant-AAAA")], tasks: [task()] });
+    const h = harness(
+      w,
+      true,
+      {},
+      {
+        freshSession: {
+          ensureAuthority: async () => {
+            throw new Error("no wiring");
+          },
+        },
+      },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    expect(h.inbound[0].content.text).toContain("t1"); // no /clear was sent
+  });
+});
+
 describe("no usable account at claim time", () => {
   it("tells Argus so its ready tasks show as awaiting quota", async () => {
     const w = world({ leases: ["no_account"], tasks: [task()] });

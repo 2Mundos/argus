@@ -2029,6 +2029,27 @@ async def expire_timeouts(tx: Tx, failed: list[str] | None = None) -> list[str]:
     return await _expire_where(tx, "timeout_at <= ?", ts(tx.now), "timeout", failed)
 
 
+async def expire_stalled(
+    tx: Tx, stall_after_s: int, failed: list[str] | None = None
+) -> list[str]:
+    """Expire flagged-quiet attempts whose last signal (progress, live log,
+    activity, claim) is older than `stall_after_s`, however healthy their
+    heartbeats. A session that stopped working but still answers its lease would
+    otherwise hold the task until the wall-clock timeout. Counts as a failure.
+    0 disables; the attempt must already be flagged quiet, so the inbox warned first."""
+    if stall_after_s <= 0:
+        return []
+    cutoff = tx.now - timedelta(seconds=stall_after_s)
+    return await _expire_where(
+        tx,
+        "quiet_at IS NOT NULL AND ? IS NOT NULL",
+        ts(tx.now),
+        "stalled",
+        failed,
+        silent_before=cutoff,
+    )
+
+
 async def expire_agent_leases(tx: Tx, agent_id: str) -> list[str]:
     """Expire every lease an agent holds, e.g. because it was lost or left.
 
@@ -2090,6 +2111,8 @@ def _expiry_error(
             base = f"lease expired at {row['lease_expires_at']} (holder {holder})"
         case "timeout":
             base = f"attempt timed out at {row['timeout_at']} (holder {holder})"
+        case "stalled":
+            base = f"attempt stalled: no progress, output or activity (holder {holder})"
         case _:
             base = f"holder {holder} ended; its lease was released"
     if last_signal_at is not None and last_signal_source is not None:
@@ -2160,7 +2183,11 @@ async def _expire_where(
     param: str,
     reason: str,
     failed: list[str] | None = None,
+    *,
+    silent_before: datetime | None = None,
 ) -> list[str]:
+    """Expire the claimed tasks matching `condition`; with `silent_before` only
+    those whose last signal is older than it."""
     async with tx.conn.execute(
         f"SELECT t.*, a.claimed_at FROM tasks t"  # noqa: S608
         f" LEFT JOIN task_attempts a ON a.task_id = t.id AND a.attempt = t.attempt"
@@ -2171,6 +2198,8 @@ async def _expire_where(
     expired: list[str] = []
     for row in rows:
         last_at, source = _last_signal(row, claimed_at=row["claimed_at"])
+        if silent_before is not None and (last_at is None or last_at > silent_before):
+            continue
         deadline = {
             "lease_expired": row["lease_expires_at"],
             "timeout": row["timeout_at"],
