@@ -604,7 +604,8 @@ async def test_every_cleanup_caller_waits_for_the_one_container_removal(
         f"    open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
         "    home = sys.argv[sys.argv.index('-v') + 1].split(':')[0]\n"
         f"    os.execve({codex!r}, [{codex!r}], {{'CODEX_HOME': home}})\n"
-        "time.sleep(0.6)\n"
+        f"open({str(tmp_path / 'rm.started')!r}, 'w').write('1')\n"
+        "time.sleep(0.2)\n"
         f"open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
     )
     docker.chmod(0o755)
@@ -623,7 +624,11 @@ async def test_every_cleanup_caller_waits_for_the_one_container_removal(
 
     try:
         first = asyncio.create_task(mgr.cancel(started["login_id"], "tok-1"))
-        await asyncio.sleep(0.05)  # the first teardown is now waiting on `docker rm`
+        for _ in range(500):  # the first teardown is now waiting on `docker rm`
+            if (tmp_path / "rm.started").exists():
+                break
+            await asyncio.sleep(0.01)
+        assert (tmp_path / "rm.started").exists()
         second = asyncio.create_task(mgr._kill(session))
         await asyncio.wait_for(second, 10)
         assert removals() == [["rm", "-f", name]]  # the late caller waited for it

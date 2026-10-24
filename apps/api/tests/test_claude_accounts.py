@@ -115,6 +115,7 @@ if mode == "paste":
     # Measured on the shipped client: a long chunk is a paste and its Enter is eaten.
     import tty
     tty.setraw(0)
+    open({ready!r}, "w").write("1")
     buf = b""
     while True:
         chunk = os.read(0, 4096)
@@ -166,6 +167,20 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestCli
     with TestClient(app) as c:
         app.state.secrets = MemorySecretStore()
         yield c
+
+
+@pytest.fixture
+def short_enter_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the code and its Enter two writes, but not a quarter second apart."""
+    monkeypatch.setattr("argus_api.accounts.claude_login._ENTER_DELAY_S", 0.02)
+
+
+async def until_exists(path: Path) -> None:
+    for _ in range(500):
+        if path.exists():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"{path} never appeared")
 
 
 @pytest.fixture
@@ -761,6 +776,7 @@ async def test_a_client_that_leaves_silently_after_a_code_is_login_rejected(
     assert secrets.names() == set() and await account_count(db) == 0
 
 
+@pytest.mark.usefixtures("short_enter_delay")
 async def test_a_refused_code_can_be_followed_by_another(
     db: Database, secrets, tmp_path: Path
 ) -> None:
@@ -802,6 +818,7 @@ async def test_success_without_a_recognisable_token_is_token_not_found(
     assert secrets.names() == set() and await account_count(db) == 0
 
 
+@pytest.mark.usefixtures("short_enter_delay")
 async def test_the_number_of_codes_is_limited(
     db: Database, secrets, tmp_path: Path
 ) -> None:
@@ -842,6 +859,7 @@ async def test_the_code_and_enter_arrive_as_two_writes(
     await mgr.shutdown()
 
 
+@pytest.mark.usefixtures("short_enter_delay")
 async def test_a_long_code_is_submitted_despite_the_clients_paste_handling(
     db: Database, secrets, tmp_path: Path
 ) -> None:
@@ -849,7 +867,7 @@ async def test_a_long_code_is_submitted_despite_the_clients_paste_handling(
     Enter for a code of real length, and the login sat in `finishing` for good."""
     mgr, _ = manager(db, secrets, tmp_path, mode="paste")
     started = await mgr.start("tok-1", "admin:one", None)
-    await asyncio.sleep(0.3)  # let the fake arm raw mode
+    await until_exists(tmp_path / "ready")  # the fake has armed raw mode
     await mgr.submit_code(started["login_id"], "tok-1", LONG)
     view = await settle(mgr, started["login_id"])
     assert view["state"] == "completed", view
@@ -895,6 +913,7 @@ async def test_cancel_kills_the_client_and_removes_its_home(
     await mgr.shutdown()
 
 
+@pytest.mark.usefixtures("short_enter_delay")
 async def test_login_expires_and_a_late_token_creates_nothing(
     db: Database, secrets, tmp_path: Path
 ) -> None:
@@ -907,7 +926,9 @@ async def test_login_expires_and_a_late_token_creates_nothing(
     now[0] = 901
     assert mgr.get(started["login_id"], "tok-1")["state"] == "expired"
     go.write_text("")  # the client would now print its token
-    await asyncio.sleep(0.4)
+    task = mgr._sessions[started["login_id"]].task
+    assert task is not None
+    await asyncio.wait({task}, timeout=5)  # the client printed its token and is gone
     view = mgr.get(started["login_id"], "tok-1")
     assert view["state"] == "expired" and view["account_id"] is None
     assert secrets.names() == set() and await account_count(db) == 0
