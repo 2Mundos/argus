@@ -20,6 +20,42 @@ SECTIONS = [
     "6. Implementation Consequences",
 ]
 LINK = re.compile(r"\]\(([^)]+)\)")
+HEADING = re.compile(r"^#{1,6}\s+(.+)$", re.M)
+SKIP_URL = re.compile(r"^(?:https?:|mailto:|#)")
+
+
+def _heading_slugs(text: str) -> set[str]:
+    slugs: set[str] = set()
+    counts: dict[str, int] = {}
+    for m in HEADING.finditer(text):
+        base = re.sub(r"[^\w\s-]", "", m.group(1).strip().lower())
+        base = re.sub(r"\s+", "-", base).strip("-")
+        if not base:
+            continue
+        n = counts.get(base, 0)
+        counts[base] = n + 1
+        slugs.add(base if n == 0 else f"{base}-{n}")
+    return slugs
+
+
+def _check_doc_links(path: Path, errors: list[str]) -> None:
+    rel_doc = path.relative_to(ROOT)
+    for raw in LINK.findall(path.read_text()):
+        url = raw.strip()
+        if not url or SKIP_URL.match(url):
+            continue
+        parts = url.split("#", 1)
+        target_s, anchor = parts[0], parts[1] if len(parts) > 1 else ""
+        if not target_s:
+            continue
+        resolved = (path.parent / target_s).resolve()
+        if not resolved.is_file() and not resolved.is_dir():
+            errors.append(f"{rel_doc}: broken link target {url}")
+            continue
+        if anchor and resolved.suffix.lower() == ".md":
+            slugs = _heading_slugs(resolved.read_text())
+            if anchor.lower() not in slugs:
+                errors.append(f"{rel_doc}: unknown anchor #{anchor} in {url}")
 
 
 def main() -> int:
@@ -54,6 +90,12 @@ def main() -> int:
     releases = DOCS / "releases"
     if any(releases.glob("*.md")) and releases.resolve() not in linked:
         errors.append("docs/releases: not linked from docs/README.md")
+    for doc in [INDEX, ROOT / "README.md", ROOT / "AGENTS.md"]:
+        if doc.is_file():
+            _check_doc_links(doc, errors)
+    for doc in sorted(DOCS.rglob("*.md")):
+        if doc != INDEX:
+            _check_doc_links(doc, errors)
     for e in errors:
         print(f"error: {e}")
     return 1 if errors else 0
