@@ -319,6 +319,84 @@ async def lease(
     return result
 
 
+async def _holds_engine(tx: Tx, agent_id: str) -> bool:
+    async with tx.conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM account_leases WHERE agent_id = ?"
+        " AND role = 'engine' AND released_at IS NULL)",
+        (agent_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return bool(row and row[0])
+
+
+async def _lease_available(
+    tx: Tx,
+    agent_id: str,
+    task: aiosqlite.Row,
+    runtime_providers: list[str],
+    store: SecretStore,
+) -> bool:
+    """Would `lease` give this task an engine account now? The same narrowing,
+    ranking and credential test, without writing."""
+    allowed = await _narrowed(tx, task["id"], "engine", runtime_providers)
+    ranked = _only(
+        await _ranked(
+            tx,
+            agent_id,
+            "engine",
+            allowed,
+            prefer_local=await _prefer_local(tx, task["id"], "engine"),
+        ),
+        await _pinned_account(tx, task["id"], "engine"),
+    )
+    return any((name := ref_name(r["secret_ref"])) and store.get(name) for r in ranked)
+
+
+async def claim(
+    tx: Tx,
+    agent_id: str,
+    capabilities: list[str],
+    runtime_providers: list[str] | None,
+    store: SecretStore,
+    *,
+    default_timeout_s: int = 0,
+) -> tuple[Task | None, AccountLease | None]:
+    """Claim a task and, when the agent holds no engine lease, reserve its account
+    in the same transaction: a task is only claimed when an account leases for it
+    now, so a claim never ends in a lease failure. An agent that already holds an
+    engine lease keeps it (the worker re-checks the fit)."""
+    reserve = (
+        bool(runtime_providers)
+        and await tasks.manages_accounts(tx.conn)
+        and not await _holds_engine(tx, agent_id)
+    )
+
+    async def can_lease(tx: Tx, task: aiosqlite.Row) -> bool:
+        return await _lease_available(
+            tx, agent_id, task, runtime_providers or [], store
+        )
+
+    task = await tasks.claim(
+        tx,
+        agent_id,
+        capabilities,
+        default_timeout_s=default_timeout_s,
+        runtime_providers=runtime_providers,
+        can_lease=can_lease if reserve else None,
+    )
+    if task is None or not reserve:
+        return task, None
+    leased = await lease(
+        tx,
+        agent_id,
+        runtime_providers or [],
+        store,
+        task_id=task.id,
+        attempt=task.attempt,
+    )
+    return task, leased
+
+
 async def exhausted(
     tx: Tx,
     agent_id: str,

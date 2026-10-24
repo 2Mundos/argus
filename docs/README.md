@@ -123,6 +123,10 @@ every new dependency is judged against it.
   above; kept as a record
 - [Worker lifecycle and task coordination](drafts/2026-10-14.worker-lifecycle.draft.md) —
   superseded by the spec above; kept as a record
+- [Worker efficiency](drafts/2026-10-24.worker-efficiency.draft.md) — why tasks are
+  interrupted and tokens wasted (baseline numbers, root causes), and eight ordered
+  proposals: claim reserves the account, owned workspace, one task per session,
+  resumable attempts, progress-based liveness, failure classes, single-layer run
 
 ### Runbooks
 

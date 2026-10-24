@@ -21,7 +21,7 @@ from pydantic import (
     model_validator,
 )
 
-from argus_core.accounts import ENGINE_PROVIDERS
+from argus_core.accounts import ENGINE_PROVIDERS, AccountLease
 from argus_core.continuation import ChecklistReport, EffectiveContinuation
 from argus_core.difficulty import Difficulty, DifficultySource
 from argus_core.knowledge import KnowledgeRef
@@ -459,3 +459,6 @@ class ClaimedTask(Task):
     best matches for the task in its project (references only)."""
 
     knowledge_refs: list[KnowledgeRef] = []
+    # The engine account reserved in the claim's own transaction, when the claimer
+    # held none: the worker applies it instead of leasing again.
+    engine_lease: AccountLease | None = None

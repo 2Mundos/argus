@@ -82,6 +82,19 @@ function health(over: Record<string, unknown> = {}) {
         },
       ],
     },
+    yield: {
+      window_hours: 24,
+      source: "events; tasks; account_usage",
+      attempts: 6,
+      completions: 2,
+      attempt_success_rate: 0.33,
+      finished_tasks: 2,
+      attempts_per_finished_task: null,
+      usage_tasks: 0,
+      tokens_per_succeeded: null,
+      tokens_per_failed: null,
+      cost_per_succeeded: null,
+    },
     ...over,
   };
 }
@@ -114,6 +127,17 @@ describe("Fleet", () => {
     const link = screen.getByRole("link", { name: "Build it" });
     expect(link.getAttribute("href")).toBe("#tasks/t-9");
     expect(screen.getByText("auth_missing: login")).toBeTruthy();
+  });
+
+  it("shows yield with its usage coverage, no data when unknown", async () => {
+    mock.health = health();
+    render(<Fleet />);
+    const tokens = (await screen.findByRole("heading", { name: "Tokens per task" })).parentElement;
+    expect(tokens?.textContent).toContain("succeeded no data");
+    expect(tokens?.textContent).toContain("usage reported for 0 of 2 finished tasks");
+    const attempts = screen.getByRole("heading", { name: "Attempts" }).parentElement;
+    expect(attempts?.textContent).toContain("6 claimed");
+    expect(attempts?.textContent).toContain("success per attempt 33%");
   });
 
   it("shows rates when known", async () => {

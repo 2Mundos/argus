@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from argus_api.access import require_task_readable, worker_task_filter
 from argus_api.accounts import service as accounts
+from argus_api.accounts.routes import with_local_context
 from argus_api.db import utcnow
 from argus_api.deps import (
     AdminDep,
@@ -84,13 +85,16 @@ class FailRequest(BaseModel):
         "channel_error",
         "provider_failure",
         "quota",
+        "account_unavailable",
         "runtime_switch_failed",
         "context_overflow",
         "verification_failed",
         "session_lost",
     ] = "worker_fail"
     """Why the attempt failed: the worker said so, or the channel detected it.
-    `session_lost` is a vanished session container (stall visibility). The
+    `session_lost` is a vanished session container (stall visibility).
+    `account_unavailable` is a lease or apply error: admission, like `quota`, so it
+    spends no attempt. The
     difficulty raisers are `context_overflow` and `verification_failed`."""
 
 
@@ -195,7 +199,12 @@ async def list_tasks(
     responses={204: {"description": "No matching task became ready within wait_s"}},
 )
 async def claim_task(
-    body: ClaimRequest, db: DbDep, agent_id: AgentDep, settings: SettingsDep
+    request: Request,
+    body: ClaimRequest,
+    db: DbDep,
+    agent_id: AgentDep,
+    settings: SettingsDep,
+    secrets: SecretsDep,
 ) -> ClaimedTask | Response:
     """Claim a ready task, long-polling up to `wait_s` seconds for one."""
     loop = asyncio.get_running_loop()
@@ -203,12 +212,13 @@ async def claim_task(
     with db.bus.subscribe() as sub:
         while True:
             async with db.write() as tx:
-                task = await service.claim(
+                task, engine_lease = await accounts.claim(
                     tx,
                     agent_id,
                     body.capabilities,
+                    body.runtime_providers,
+                    secrets,
                     default_timeout_s=settings.task_timeout_s,
-                    runtime_providers=body.runtime_providers,
                 )
             if task is not None:
                 async with db.read() as conn:
@@ -218,7 +228,11 @@ async def claim_task(
                         now=utcnow(),
                         stale_after=timedelta(days=settings.knowledge_stale_days),
                     )
-                return ClaimedTask(**task.model_dump(), knowledge_refs=refs)
+                if engine_lease is not None:
+                    engine_lease = await with_local_context(request, engine_lease)
+                return ClaimedTask(
+                    **task.model_dump(), knowledge_refs=refs, engine_lease=engine_lease
+                )
             remaining = deadline - loop.time()
             try:
                 if remaining <= 0:

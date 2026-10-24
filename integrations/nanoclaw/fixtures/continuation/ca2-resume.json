@@ -102,6 +102,7 @@
   "difficulty": "standard",
   "difficulty_source": "inferred",
   "editable_fields": ["priority"],
+  "engine_lease": null,
   "error": null,
   "executor_model": null,
   "failover": null,

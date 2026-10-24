@@ -440,10 +440,10 @@ async def lease_account(
             task_id=body.task_id,
             attempt=body.attempt,
         )
-    return await _with_local_context(request, leased)
+    return await with_local_context(request, leased)
 
 
-async def _with_local_context(request: Request, leased: AccountLease) -> AccountLease:
+async def with_local_context(request: Request, leased: AccountLease) -> AccountLease:
     """Fill a local lease's `context_tokens` from the probe (cached; outside the
     transaction). Unknown stays absent: the harness then assumes a small window."""
     if leased.provider != LOCAL_PROVIDER or "context_tokens" in leased.credential:

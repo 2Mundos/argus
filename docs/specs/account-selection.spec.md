@@ -139,6 +139,14 @@ isolation or sandbox/TLS restrictions.
   one transaction (the store does I/O), so a claim that ends in that short
   window can still land one write for the credential the agent already held. Admin renewal remains the
   operator path for changing kind or identity and needs neither.
+- **Claim reserves the account.** `POST /tasks/claim` from an agent that holds no
+  engine lease and declares `runtime_providers` takes a task only when the account
+  selection can lease it now (same narrowing, pin, ranking and credential test as
+  `/accounts/lease`), and leases it in the claim's own transaction. The response
+  carries the lease as `engine_lease`, which the worker applies instead of calling
+  `/accounts/lease`. An agent that already holds an engine lease keeps it and
+  claims as before; a task nobody can lease stays `ready` or waits as
+  `awaiting_quota`, and no attempt is spent.
 - **Quota failover (3.6).** A provider quota never costs an attempt.
   - *Server path.* A task `FAIL` with reason `provider_failure` whose error is a
     quota notice for the engine lease's provider (the one pattern set in

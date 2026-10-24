@@ -2630,6 +2630,16 @@
             "title": "Editable Fields",
             "type": "array"
           },
+          "engine_lease": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountLease"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "error": {
             "anyOf": [
               {
@@ -6267,6 +6277,7 @@
               "channel_error",
               "provider_failure",
               "quota",
+              "account_unavailable",
               "runtime_switch_failed",
               "context_overflow",
               "verification_failed",
@@ -6500,6 +6511,17 @@
             "title": "Examples",
             "type": "array"
           },
+          "lost_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lost Seconds"
+          },
           "reason": {
             "title": "Reason",
             "type": "string"
@@ -6680,6 +6702,9 @@
           "window_hours": {
             "title": "Window Hours",
             "type": "integer"
+          },
+          "yield": {
+            "$ref": "#/components/schemas/Yield"
           }
         },
         "required": [
@@ -6691,6 +6716,7 @@
           "run_time",
           "outcomes",
           "failures",
+          "yield",
           "truncated"
         ],
         "title": "FleetHealth",
@@ -15838,6 +15864,105 @@
           "ready"
         ],
         "title": "WorkerTemplate",
+        "type": "object"
+      },
+      "Yield": {
+        "description": "What the fleet got for what it spent (worker efficiency draft, P8).",
+        "properties": {
+          "attempt_success_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt Success Rate"
+          },
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "attempts_per_finished_task": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempts Per Finished Task"
+          },
+          "completions": {
+            "title": "Completions",
+            "type": "integer"
+          },
+          "cost_per_succeeded": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Per Succeeded"
+          },
+          "finished_tasks": {
+            "title": "Finished Tasks",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "tokens_per_failed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Failed"
+          },
+          "tokens_per_succeeded": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Succeeded"
+          },
+          "usage_tasks": {
+            "title": "Usage Tasks",
+            "type": "integer"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "source",
+          "attempts",
+          "completions",
+          "attempt_success_rate",
+          "finished_tasks",
+          "attempts_per_finished_task",
+          "usage_tasks",
+          "tokens_per_succeeded",
+          "tokens_per_failed",
+          "cost_per_succeeded"
+        ],
+        "title": "Yield",
         "type": "object"
       },
       "argus_api__agents__routes__BulkArchiveRequest": {

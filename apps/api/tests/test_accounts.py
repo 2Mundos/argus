@@ -1256,6 +1256,70 @@ async def test_quota_fail_keeps_failures_and_requeues_even_on_the_last_attempt(
     )
 
 
+async def test_account_unavailable_fail_is_admission_not_a_failure(
+    db: Database,
+) -> None:
+    task_id = await _make_ready(db)
+    task = await _claim(db)
+    assert task is not None
+    async with db.write() as tx:
+        await tasks.fail(
+            tx, A, task.id, task.attempt, "apply failed", "account_unavailable"
+        )
+    after = await _task(db, task_id)
+    assert (after.state, after.failures) == (S.READY, 0)
+    assert (
+        after.progress_message is not None and "apply failed" in after.progress_message
+    )
+
+
+async def test_claim_reserves_the_engine_account_in_the_same_transaction(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "main", "anthropic")
+    task_id = await _make_ready(db)
+    async with db.write() as tx:
+        task, held = await accounts.claim(tx, A, [], ["anthropic"], store)
+    assert task is not None and task.id == task_id
+    assert held is not None and held.name == "main" and held.role == "engine"
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT count(*) FROM account_leases WHERE agent_id = ? AND released_at IS NULL",
+            (A,),
+        ) as cur,
+    ):
+        assert (await cur.fetchone())[0] == 1
+
+
+async def test_claim_does_not_take_a_task_no_account_can_lease(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "main", "anthropic")
+    # The account exists but its credential is gone: the old claim test passed it.
+    await store.delete("main")
+    task_id = await _make_ready(db)
+    async with db.write() as tx:
+        task, held = await accounts.claim(tx, A, [], ["anthropic"], store)
+    assert task is None and held is None
+    after = await _task(db, task_id)
+    assert (after.state, after.attempt, after.failures) == (S.READY, 0, 0)
+
+
+async def test_claim_keeps_the_engine_lease_an_agent_already_holds(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "main", "anthropic")
+    await _make_ready(db)
+    async with db.write() as tx:
+        _, first = await accounts.claim(tx, A, [], ["anthropic"], store)
+    assert first is not None
+    await _make_ready(db)
+    async with db.write() as tx:
+        task, second = await accounts.claim(tx, A, [], ["anthropic"], store)
+    assert task is not None and second is None
+
+
 # -- credential write is bound to the live claim and the same document --------------------
 
 

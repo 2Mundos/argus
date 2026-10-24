@@ -51,6 +51,7 @@ import {
   classifyFailure,
   classifyLogTail,
   classifyProviderFailure,
+  describeLogTail,
   executorFirst,
   type FailureKind,
   isGenericFailureNotice,
@@ -252,9 +253,9 @@ export interface ArgusConfig {
   /**
    * The tail of the agent's log (host-provided). A run that ends with only the
    * generic failure notice is checked for Claude Code's `Rate limit [..] (resets
-   * ..)` or `You've hit your session limit · resets ..` line. Absent (the NanoClaw
-   * host): only the notice text and the structured providerFailure can show an
-   * exhausted account.
+   * ..)` or `You've hit your session limit · resets ..` line; otherwise its last
+   * lines are appended to the failure reason. Absent: only the notice text and the
+   * structured providerFailure can show an exhausted account.
    */
   agentLogTail?: () => Promise<string>;
   /** Called once, after Argus drained this agent, its work is done, and it left. */
@@ -289,6 +290,8 @@ export interface ArgusTask {
   repository_url?: string;
   input?: Record<string, unknown>;
   attempt: number;
+  /** The engine account Argus reserved in the claim itself; consumed by `ensureAccount`. */
+  engine_lease?: AccountLease | null;
   failures?: number;
   error?: string | null;
   acceptance: string[];
@@ -1421,6 +1424,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let executor: { id: string; name: string; provider: string } | null = null;
   let leasedAt = 0; // when the engine lease was last confirmed for a claimed task
   let switchFailure: string | null = null; // the runtime did not stop for the last switch
+  // Why `ensureAccount` returned false: `quota` when no account is usable, else a
+  // lease/apply error that is not a provider limit (both leave the attempt unspent).
+  let admissionFailure: "quota" | "account_unavailable" = "quota";
   let recycleOnLease = false; // the runtime must stop before the next claim/lease writes another account
   let engineInUse: string | null = null; // the harness the leased account selected
   let runtimeSelection: RuntimeSelection | null = null; // the project image selected for the task in flight
@@ -1858,7 +1864,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         : textual;
     if (f.kind === "failed" && isGenericFailureNotice(noticeText) && cfg.agentLogTail) {
       try {
-        f = classifyLogTail(await cfg.agentLogTail(), account?.provider) ?? f;
+        const tail = await cfg.agentLogTail();
+        const quota = classifyLogTail(tail, account?.provider);
+        if (quota) f = quota;
+        else {
+          // Not a limit: say what the log last said instead of the bare placeholder.
+          const cause = describeLogTail(tail);
+          if (cause) f = { ...f, reason: `${f.reason} (log: ${cause})`.slice(0, 1000) };
+        }
       } catch (err) {
         log.warn("Could not read the agent log tail", { err });
       }
@@ -2126,8 +2139,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           attempt: task.attempt,
           error: stale
             ? `the previous worker runtime could not be stopped: ${switchFailure}`
-            : "no usable provider account for claimed task",
-          reason: stale ? "runtime_switch_failed" : "quota",
+            : admissionFailure === "quota"
+              ? "no usable provider account for claimed task"
+              : "could not lease or apply a provider account for the claimed task",
+          reason: stale ? "runtime_switch_failed" : admissionFailure,
         })
         .catch(() => undefined);
       if (stale) {
@@ -2155,35 +2170,49 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       return;
     }
     try {
-      if (task.required_capabilities?.includes("repository:write")) {
-        const acc = cfg.accounts;
-        const repositoryUrl = acc?.repositories?.[task.project];
-        if (!acc || !repositoryUrl)
-          throw new Error("repository is not configured for this task project");
-        if (activeAccountLeases.length === 0)
-          throw new Error("cannot safely reconcile repository access without active base leases");
-        const normalizedRepository = normalizeRepositoryUrl(repositoryUrl);
-        const { data } = await client.call("POST", "/accounts/lease", {
-          role: "repository",
-          runtime_providers: ["gitea"],
-          task_id: task.id,
-          attempt: task.attempt,
-        });
-        const lease = data as AccountLease;
-        repositoryLeaseHeld = true;
-        activeRepositoryLease = lease;
-        activeRepositoryUrl = normalizedRepository.cloneUrl;
-        activeRepositoryAllowlist = Object.values(acc.repositories ?? {});
-        repositoryTarget = await acc.resolveTarget();
-        await applyRepositoryLease(
-          acc.onecli,
-          repositoryTarget,
-          lease,
-          normalizedRepository.cloneUrl,
-          activeRepositoryAllowlist,
-          activeAccountLeases,
-        );
-        task.repository_url = normalizedRepository.cloneUrl;
+      try {
+        if (task.required_capabilities?.includes("repository:write")) {
+          const acc = cfg.accounts;
+          const repositoryUrl = acc?.repositories?.[task.project];
+          if (!acc || !repositoryUrl)
+            throw new Error("repository is not configured for this task project");
+          if (activeAccountLeases.length === 0)
+            throw new Error("cannot safely reconcile repository access without active base leases");
+          const normalizedRepository = normalizeRepositoryUrl(repositoryUrl);
+          const { data } = await client.call("POST", "/accounts/lease", {
+            role: "repository",
+            runtime_providers: ["gitea"],
+            task_id: task.id,
+            attempt: task.attempt,
+          });
+          const lease = data as AccountLease;
+          repositoryLeaseHeld = true;
+          activeRepositoryLease = lease;
+          activeRepositoryUrl = normalizedRepository.cloneUrl;
+          activeRepositoryAllowlist = Object.values(acc.repositories ?? {});
+          repositoryTarget = await acc.resolveTarget();
+          await applyRepositoryLease(
+            acc.onecli,
+            repositoryTarget,
+            lease,
+            normalizedRepository.cloneUrl,
+            activeRepositoryAllowlist,
+            activeAccountLeases,
+          );
+          task.repository_url = normalizedRepository.cloneUrl;
+        }
+      } catch (err) {
+        // The environment is broken, not the task: a retry would hit the same
+        // wall, so block it with a typed reason instead of spending an attempt.
+        log.warn("Repository access could not be prepared; blocking the task", { err });
+        await client
+          .call("POST", `/tasks/${task.id}/block`, {
+            attempt: task.attempt,
+            reason: "env_repository_unavailable",
+          })
+          .catch(() => undefined);
+        finishTask();
+        return;
       }
       await preflight(task);
       const pages = await inlinePages(task);
@@ -2436,24 +2465,32 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         repositoryAssignmentReconciled = true;
       } catch {
         log.warn("Could not reconcile a stale repository credential assignment");
+        admissionFailure = "account_unavailable";
         await sleep(5000);
         return false;
       }
     }
+    // Take the reserved lease off the task so the credential is not carried with it.
+    const reserved = task.engine_lease ?? null;
+    delete task.engine_lease;
     if (!acc.models) return true;
     const rebalancing = account !== null;
-    if (rebalancing && account && heldAccountFits(account, task)) {
+    if (!reserved && rebalancing && account && heldAccountFits(account, task)) {
       const every = acc.rebalanceMs ?? REBALANCE_MS;
       if (every <= 0 || (cfg.now?.() ?? Date.now()) - leasedAt < every) return true;
       leasedAt = cfg.now?.() ?? Date.now();
     }
+    admissionFailure = "quota";
     try {
-      const { data } = await client.call("POST", "/accounts/lease", {
-        runtime_providers: runtimeProviders("engine"),
-        task_id: task.id,
-        attempt: task.attempt,
-      });
-      const lease = data as AccountLease;
+      const lease = reserved
+        ? reserved
+        : ((
+            await client.call("POST", "/accounts/lease", {
+              runtime_providers: runtimeProviders("engine"),
+              task_id: task.id,
+              attempt: task.attempt,
+            })
+          ).data as AccountLease);
       if (rebalancing && lease.account_id === account?.id) return true; // still the best
       try {
         // The old runtime stops before the new account is written.
@@ -2499,6 +2536,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           message: err.message,
         });
       } else {
+        admissionFailure = "account_unavailable";
         log.warn("Could not lease/apply an account (will retry)", { err });
       }
       // A runtime that did not stop blocks the task now (runtime_switch_failed);
@@ -3359,6 +3397,17 @@ function nanoclawVersion(): string | undefined {
   }
 }
 
+/** The redacted log tails of the group's session containers, from the runtime hooks. */
+function sessionLogTail(runtime: RuntimeHooks): () => Promise<string> {
+  return async () => {
+    const ids = (await runtime.sessions?.()) ?? [];
+    const tails = await Promise.all(
+      ids.map(async (id) => (await runtime.sessionEvidence?.(id))?.logTail ?? ""),
+    );
+    return tails.join("\n");
+  };
+}
+
 export function fromEnv(): ChannelAdapter | null {
   const url = process.env.ARGUS_URL?.trim();
   if (!url) return null;
@@ -3370,6 +3419,7 @@ export function fromEnv(): ChannelAdapter | null {
     );
     return null;
   }
+  const runtime = runtimeFromEnv();
   return createArgusAdapter({
     url,
     bootstrapToken: bootstrap || undefined,
@@ -3381,7 +3431,9 @@ export function fromEnv(): ChannelAdapter | null {
     name: process.env.ARGUS_AGENT_NAME?.trim() || "nanoclaw",
     workerVersion: nanoclawVersion(),
     accounts: accountsFromEnv(),
-    runtime: runtimeFromEnv(),
+    runtime,
+    agentLogTail:
+      runtime?.sessionEvidence && runtime.sessions ? sessionLogTail(runtime) : undefined,
     selectModels: modelsFromEnv(),
     delegateLogFile: async () => {
       const dir = await argusGroupDir();

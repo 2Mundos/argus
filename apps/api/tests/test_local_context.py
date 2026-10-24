@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
-from argus_api.accounts.routes import _with_local_context
+from argus_api.accounts.routes import with_local_context
 from argus_core.accounts import AccountLease, local_credential_problem
 from argus_core.engines import LocalModelInfo
 
@@ -42,25 +42,25 @@ def _lease(provider: str = "local", **cred) -> AccountLease:
 
 
 async def test_probe_fills_the_window_when_the_account_names_none() -> None:
-    got = await _with_local_context(_request(FakeLocal(65536)), _lease())
+    got = await with_local_context(_request(FakeLocal(65536)), _lease())
     assert got.credential["context_tokens"] == 65536
 
 
 async def test_the_account_setting_wins_over_the_probe() -> None:
     local = FakeLocal(65536)
-    got = await _with_local_context(_request(local), _lease(context_tokens=32768))
+    got = await with_local_context(_request(local), _lease(context_tokens=32768))
     assert got.credential["context_tokens"] == 32768 and local.calls == 0
 
 
 @pytest.mark.parametrize("local", [None, FakeLocal(None), FakeLocal(1, fail=True)])
 async def test_unknown_window_stays_absent(local) -> None:
-    got = await _with_local_context(_request(local), _lease())
+    got = await with_local_context(_request(local), _lease())
     assert "context_tokens" not in got.credential
 
 
 async def test_cloud_leases_are_untouched() -> None:
     local = FakeLocal(65536)
-    got = await _with_local_context(_request(local), _lease("anthropic"))
+    got = await with_local_context(_request(local), _lease("anthropic"))
     assert got.credential == {"api_key": "x"} and local.calls == 0
 
 

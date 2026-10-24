@@ -9,10 +9,12 @@ import pytest
 from argus_api import fleet_health
 from argus_api.db import Database, ts
 from argus_api.fleet_health import (
+    ATTEMPTS_SQL,
     FAILURES_SQL,
     FINISHED_SQL,
     HEARTBEAT_SQL,
     MIN_SAMPLES,
+    USAGE_SQL,
 )
 from argus_api.main import app
 from argus_core.tasks import TaskState
@@ -266,6 +268,8 @@ async def test_main_queries_use_indexes(db: Database) -> None:
         "finished": (FINISHED_SQL, (since, until, 10)),
         "failures": (FAILURES_SQL, (since, until, 10)),
         "heartbeat": (HEARTBEAT_SQL, ()),
+        "attempts": (ATTEMPTS_SQL, (since, until)),
+        "usage": (USAGE_SQL, ("[]",)),
     }
     async with db.read() as conn:
         for name, (sql, params) in queries.items():
@@ -273,7 +277,8 @@ async def test_main_queries_use_indexes(db: Database) -> None:
                 plan = [r["detail"] for r in await cur.fetchall()]
             for line in plan:
                 assert not (
-                    line.startswith("SCAN") and ("tasks" in line or "events" in line)
+                    line.startswith("SCAN")
+                    and ("tasks" in line or "events" in line or "account_usage" in line)
                 ), (
                     name,
                     plan,
@@ -312,6 +317,45 @@ def test_scopes_window_validation_and_cap(client: TestClient) -> None:
     for bad in ("721", "0", "-1", "abc"):
         r = client.get(f"/api/fleet/health?window={bad}", headers=ADMIN)
         assert r.status_code == 422, bad
+
+
+async def add_usage(db: Database, task: str, tokens: int, cost: float) -> None:
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "INSERT INTO accounts (id, name, provider, kind, secret_ref, priority,"
+            " state, created_at, updated_at) SELECT 'acc', 'acc', 'anthropic',"
+            " 'api_key', 'sops:acc', 0, 'available', ?, ? WHERE NOT EXISTS"
+            " (SELECT 1 FROM accounts WHERE id = 'acc')",
+            (ts(NOW), ts(NOW)),
+        )
+        await tx.conn.execute(
+            "INSERT INTO account_usage (account_id, task_id, input_tokens,"
+            " output_tokens, cost_usd, at) VALUES ('acc', ?, ?, 0, ?, ?)",
+            (task, tokens, cost, ts(NOW)),
+        )
+
+
+async def test_yield_counts_attempts_tokens_per_outcome_and_lost_time(
+    db: Database,
+) -> None:
+    for i in range(MIN_SAMPLES):
+        await add_finished(db, f"ok{i}", "succeeded")
+        await add_usage(db, f"ok{i}", 1000 * (i + 1), 0.5)
+    for i in range(MIN_SAMPLES):
+        await add_failure(db, f"bad{i}", "task.expire", 1, reason="lease_expired")
+    await add_usage(db, "bad0", 7, 0.1)  # one covered failure: below MIN_SAMPLES
+    async with db.write() as tx:
+        await event(tx.conn, "ok0", "task.complete", NOW - timedelta(hours=1))
+    h = await health(db)
+    y = h.yield_
+    assert (y.attempts, y.completions) == (2 * MIN_SAMPLES, 1)
+    assert y.finished_tasks == 2 * MIN_SAMPLES
+    assert y.usage_tasks == MIN_SAMPLES + 1
+    assert y.tokens_per_succeeded == 3000.0 and y.cost_per_succeeded == 0.5
+    assert y.tokens_per_failed is None  # never a mean of one task
+    (group,) = [g for g in h.failures.groups if g.reason == "lease_expired"]
+    assert group.lost_seconds == 20.0 * MIN_SAMPLES
+    assert h.model_dump(by_alias=True)["yield"]["attempts"] == 2 * MIN_SAMPLES
 
 
 def test_classify_failure_tolerates_spaces_and_hyphens() -> None:

@@ -661,6 +661,20 @@ describe("channel with accounts", () => {
     });
   });
 
+  it("applies the engine lease reserved by the claim instead of leasing again", async () => {
+    const reserved = { ...lease("a", "sk-ant-AAAA"), role: "engine" };
+    const w = world({ leases: [], tasks: [{ ...task(), engine_lease: reserved }] });
+    const h = harness(w);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    const engineLeases = w.calls.filter(
+      (c) => c.path === "/accounts/lease" && ((c.body as any)?.role ?? "engine") === "engine",
+    );
+    expect(engineLeases).toHaveLength(0);
+    expect(w.onecli.secrets[0]!.value).toBe("sk-ant-AAAA");
+  });
+
   it("gives a claimed task back as quota while no account is usable, and starts once one is", async () => {
     // Leases are bound to a claim, so the channel claims first; Argus only hands it a
     // task some agent can serve and parks the returned one until an account frees up.
@@ -773,10 +787,11 @@ describe("channel with accounts", () => {
       onAction: () => {},
     } as unknown as ChannelSetup);
     await until(() => w.calls.some((c) => c.path === "/accounts/release"));
-    // the claimed task goes back to Argus as quota, never to the agent
+    // a lease or apply error (not a provider limit) goes back to Argus as an
+    // unspent admission failure, never to the agent
     await until(() => w.calls.some((c) => c.path === "/tasks/t1/fail"), 7000);
     expect(w.calls.find((c) => c.path === "/tasks/t1/fail")!.body).toMatchObject({
-      reason: "quota",
+      reason: "account_unavailable",
     });
     expect(inbound).toHaveLength(0);
   }, 10_000);
@@ -1521,7 +1536,11 @@ describe("task-scoped repository auth", () => {
     });
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
-    await until(() => w.calls.some((call) => call.path === "/tasks/t1/fail"));
+    await until(() => w.calls.some((call) => call.path === "/tasks/t1/block"));
+    expect(w.calls.find((call) => call.path === "/tasks/t1/block")!.body).toMatchObject({
+      reason: "env_repository_unavailable",
+    });
+    expect(w.calls.some((call) => call.path === "/tasks/t1/fail")).toBe(false);
     expect(w.calls.some((call) => call.path === "/accounts/lease")).toBe(false);
     expect(h.inbound).toHaveLength(0);
   });
@@ -2205,6 +2224,20 @@ describe("a Claude rate limit that only the structured field or the log shows", 
     await until(() => h.inbound.length === 1);
     await h.adapter.deliver("local", null, failure(GENERIC));
     await until(() => w.calls.some((c) => c.path === "/tasks/t1/fail"));
+    expect(w.calls.some((c) => c.path.endsWith("/exhausted"))).toBe(false);
+  });
+
+  it("a generic notice carries the last lines of the agent log as its cause", async () => {
+    const w = world({ leases: [A, B], tasks: [task()] });
+    const log = "starting\nfatal: no checkout in /workspace\nexit 1\n";
+    const h = harness(w, true, {}, { agentLogTail: async () => log });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", null, failure(GENERIC));
+    await until(() => w.calls.some((c) => c.path === "/tasks/t1/fail"));
+    const body = w.calls.find((c) => c.path === "/tasks/t1/fail")!.body as { error: string };
+    expect(body.error).toContain("fatal: no checkout in /workspace");
     expect(w.calls.some((c) => c.path.endsWith("/exhausted"))).toBe(false);
   });
 });

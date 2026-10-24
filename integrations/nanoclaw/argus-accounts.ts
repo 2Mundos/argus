@@ -966,6 +966,22 @@ export function classifyFailure(
   return { kind: "failed", reason: sanitizeNotice(noticeText, 1000) || "the agent run failed" };
 }
 
+/**
+ * What a run that ended with only the generic placeholder said last: the final
+ * non-empty lines of the (already redacted) agent log, sanitized and bounded, or
+ * null when the log holds nothing.
+ */
+export function describeLogTail(logTail: string, lines = 3, limit = 300): string | null {
+  const last = logTail
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-lines)
+    .join(" | ");
+  const text = sanitizeNotice(last, limit);
+  return text || null;
+}
+
 /** Fixed, non-sensitive reason for a structured auth expiry; never the notice or log text. */
 const STRUCTURED_AUTH_EXPIRED_REASON = "OpenAI/Codex authentication expired";
 const STRUCTURED_CODEX_LIMIT_REASON = "Codex usage limit reached";

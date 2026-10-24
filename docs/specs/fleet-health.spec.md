@@ -14,7 +14,8 @@ failures grouped by reason with up to 5 recent examples each.
 
 # 2. Non-Goals
 
-- No cost, token or quota data ([account usage](account-usage.spec.md) owns it).
+- No quota data and no per-account cost ([account usage](account-usage.spec.md) and
+  [cost view](cost-view.spec.md) own them); only the per-task yield below.
 - No write actions, no new tables, no time-series or history charts.
 - No model availability verdict: a heartbeat proves a process is alive only.
 
@@ -43,6 +44,15 @@ failures grouped by reason with up to 5 recent examples each.
   code in the list is kept; a generic `worker_fail` is refined to `auth_missing`,
   `not_installed` or `gate_failed` when the error text contains that keyword;
   unknown reasons become `other`. Groups sort by count; excerpts are 200 chars.
+- **Yield.** `yield` answers what the fleet got for what it spent. `attempts` and
+  `completions` count `task.claim` and `task.complete` events in the window;
+  `attempt_success_rate` is their ratio. Each failure group carries `lost_seconds`:
+  the time its failed or expired attempts held a claim (last `task.claim` before
+  the event), `null` when none has one. Tokens (input plus output) and cost come
+  from `account_usage` rows of the tasks in the finished cohort, split by outcome;
+  `usage_tasks` of `finished_tasks` is the coverage, a task without a row is never
+  counted as zero, and a mean needs `MIN_SAMPLES` covered tasks (else `null`).
+  Migration `0046` indexes `account_usage.task_id`.
 - **Bounded reads.** No full scan of `tasks` or `events`: migration
   `0020_fleet_health_indexes.sql` adds `tasks_finished` and `events_kind_at`; per-task
   claim lookups use `events_subject`. Each fetch keeps at most 5000 newest rows and

@@ -273,10 +273,11 @@ worker provider list (the retired `account_providers` / `executor_providers` /
    `providerFailure` field gets only the `claude.ts` hook and the line itself is
    the notice.) A generic notice also counts when the agent log tail (optional
    `agentLogTail` hook of the channel config) holds `Rate limit [..] (resets ..)`
-   or that line. This host does not wire the hook: the channel has no handle on
-   the agent container's log or transcript, and the runner hook already turns the
-   provider's own signal into the structured field, which is all the log would
-   be read for. The task is resent on the same attempt and no failure is
+   or that line. This host wires the hook to the redacted `docker logs` tail of the
+   group's session containers (the runtime hooks `sessions` and
+   `sessionEvidence`), when the project runtime is on. A generic notice that is
+   not a limit keeps its place as a plain failure, with the last log lines
+   appended to its reason so the cause is visible. The task is resent on the same attempt and no failure is
    reported. The channel logs `account_failover`.
 3. With no replacement, Argus blocks the task as `awaiting_quota` (with
    `refill_at`) and the channel lets go of it; it leases again (and claims) once

@@ -6,6 +6,7 @@ See docs/specs/worker-lifecycle.spec.md 3.2 and 3.3.
 import hashlib
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -82,6 +83,9 @@ _JSON_FIELDS = ("acceptance", "input", "required_capabilities")
 # `blocked` for want of a usable model account (account selection 3.6). Rows written
 # before the rename carry `no_account`; both are read and released alike.
 AWAITING_QUOTA = "awaiting_quota"
+# Admission failures end an attempt without spending it: the task never ran.
+# `account_unavailable` is a lease or apply error that is not a provider limit.
+ADMISSION_REASONS = frozenset({"quota", "account_unavailable"})
 QUOTA_WAIT_REASONS = (AWAITING_QUOTA, "no_account")
 
 # `blocked` while the project's image is prepared / after its preparation failed
@@ -259,6 +263,7 @@ async def claim(
     *,
     default_timeout_s: int = 0,
     runtime_providers: list[str] | None = None,
+    can_lease: Callable[[Tx, aiosqlite.Row], Awaitable[bool]] | None = None,
 ) -> Task | None:
     """Claim the highest-priority, oldest ready task the agent is capable of.
 
@@ -269,7 +274,9 @@ async def claim(
     task nobody can serve (no free slot and no idle holder) is parked as
     `awaiting_quota` instead, without spending an attempt, and is woken when an
     account frees up (account selection 3.6); one an idle holder elsewhere can serve
-    stays ready for it. Without `runtime_providers` (or with an empty list) only
+    stays ready for it. `can_lease` replaces the first test with the account
+    selection's own answer (the caller leases right after, in the same transaction).
+    Without `runtime_providers` (or with an empty list) only
     restricted tasks are gated.
 
     The attempt's wall-clock deadline is the task's `timeout_s` (which creation
@@ -298,7 +305,7 @@ async def claim(
         (json.dumps(capabilities),),
     ) as cur:
         candidates = await cur.fetchall()
-    gated = bool(runtime_providers) and await _manages_accounts(tx.conn)
+    gated = bool(runtime_providers) and await manages_accounts(tx.conn)
     row = None
     runtime_gates: dict[str, Any] = {}
     for candidate in candidates:
@@ -332,7 +339,13 @@ async def claim(
             if restriction is not None
             else sorted(ENGINE_PROVIDERS)
         )
-        if await _restriction_met(tx, providers, runtime_providers, agent_id, pinned):
+        if (
+            await can_lease(tx, candidate)
+            if can_lease is not None
+            else await _restriction_met(
+                tx, providers, runtime_providers, agent_id, pinned
+            )
+        ):
             row = candidate
             break
         if (gated or pinned is not None) and not await can_serve(
@@ -460,7 +473,7 @@ async def _restriction_met(
     return bool(row and row[0])
 
 
-async def _manages_accounts(conn: aiosqlite.Connection) -> bool:
+async def manages_accounts(conn: aiosqlite.Connection) -> bool:
     """Does the fleet manage model accounts at all (else claims are never gated)?"""
     async with conn.execute(
         "SELECT EXISTS (SELECT 1 FROM accounts"
@@ -859,16 +872,17 @@ async def fail(
     the fail is exactly the expiry the reaper is about to apply, with a better
     `error`. Without this a FAIL sent just after a lapse would be lost.
 
-    Reason `quota` (the provider's limit, not the task's fault) is not a failure:
+    Reasons `quota` (the provider's limit) and `account_unavailable` (no account
+    could be leased or applied) are not the task's fault and not a failure:
     `failures` stays. The task returns to ready when some agent can run it now (a
     free account slot, or an idle agent holding a fitting lease); otherwise it waits
     as `awaiting_quota` until `wake_waiting` frees it, instead of bouncing between
     agents that cannot lease an account (account selection 3.6)."""
     row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
-    quota = reason == "quota"
+    quota = reason in ADMISSION_REASONS
     if (
         quota
-        and await _manages_accounts(tx.conn)
+        and await manages_accounts(tx.conn)
         and not await can_serve(tx, engine_restriction(row), row["harness_account"])
     ):
         await _apply(
@@ -879,7 +893,7 @@ async def fail(
             set_={
                 "error": error,
                 "block_reason": AWAITING_QUOTA,
-                "progress_message": f"provider quota; waiting for an account: {error}",
+                "progress_message": f"waiting for an account: {error}",
             },
             data={"error": error, "reason": reason},
         )
@@ -892,7 +906,7 @@ async def fail(
         f"agent:{agent_id}",
         set_={"error": error}
         | (
-            {"progress_message": f"provider quota; requeued: {error}"}
+            {"progress_message": f"no account for the attempt; requeued: {error}"}
             if quota
             else {"failures": row["failures"] + 1}
         )

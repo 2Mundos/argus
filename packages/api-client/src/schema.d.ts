@@ -3249,6 +3249,7 @@ export interface components {
              * @default []
              */
             editable_fields?: string[];
+            engine_lease?: components["schemas"]["AccountLease"] | null;
             /** Error */
             error: string | null;
             executor_model?: components["schemas"]["ExecutorModel"] | null;
@@ -4434,7 +4435,7 @@ export interface components {
              * @default worker_fail
              * @enum {string}
              */
-            reason?: "worker_fail" | "channel_error" | "provider_failure" | "quota" | "runtime_switch_failed" | "context_overflow" | "verification_failed" | "session_lost";
+            reason?: "worker_fail" | "channel_error" | "provider_failure" | "quota" | "account_unavailable" | "runtime_switch_failed" | "context_overflow" | "verification_failed" | "session_lost";
         };
         /**
          * Failover
@@ -4493,6 +4494,8 @@ export interface components {
             count: number;
             /** Examples */
             examples: components["schemas"]["FailureExample"][];
+            /** Lost Seconds */
+            lost_seconds?: number | null;
             /** Reason */
             reason: string;
         };
@@ -4553,6 +4556,7 @@ export interface components {
             truncated: boolean;
             /** Window Hours */
             window_hours: number;
+            yield: components["schemas"]["Yield"];
         };
         /** GapView */
         GapView: {
@@ -7636,6 +7640,34 @@ export interface components {
             setup: string[];
             /** Warning */
             warning: string | null;
+        };
+        /**
+         * Yield
+         * @description What the fleet got for what it spent (worker efficiency draft, P8).
+         */
+        Yield: {
+            /** Attempt Success Rate */
+            attempt_success_rate: number | null;
+            /** Attempts */
+            attempts: number;
+            /** Attempts Per Finished Task */
+            attempts_per_finished_task: number | null;
+            /** Completions */
+            completions: number;
+            /** Cost Per Succeeded */
+            cost_per_succeeded: number | null;
+            /** Finished Tasks */
+            finished_tasks: number;
+            /** Source */
+            source: string;
+            /** Tokens Per Failed */
+            tokens_per_failed: number | null;
+            /** Tokens Per Succeeded */
+            tokens_per_succeeded: number | null;
+            /** Usage Tasks */
+            usage_tasks: number;
+            /** Window Hours */
+            window_hours: number;
         };
         /**
          * BulkArchiveRequest

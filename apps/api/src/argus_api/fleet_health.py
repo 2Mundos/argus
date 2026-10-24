@@ -13,7 +13,7 @@ from typing import Any
 
 from argus_core.fleet import InstanceState
 from argus_core.tasks import TaskState
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from argus_api.db import Database, ts, utcnow
 from argus_api.overview import Counts, _filled
@@ -34,6 +34,8 @@ REASONS = (
     "worker_fail",
     "channel_error",
     "provider_failure",
+    "quota",
+    "account_unavailable",
     "agent_ended",
     "session_lost",
     "other",
@@ -42,7 +44,7 @@ REASONS = (
 # Finished tasks in the window with their first and last claim. `updated_at` is
 # when the task reached `succeeded`/`failed` (nothing edits a finished task).
 FINISHED_SQL = (
-    "SELECT t.state, t.created_at, t.updated_at,"
+    "SELECT t.id, t.state, t.created_at, t.updated_at,"
     " (SELECT min(e.at) FROM events e WHERE e.subject_type = 'task'"
     "   AND e.subject_id = t.id AND e.kind = 'task.claim') AS first_claim,"
     " (SELECT max(e.at) FROM events e WHERE e.subject_type = 'task'"
@@ -52,10 +54,23 @@ FINISHED_SQL = (
     " ORDER BY t.updated_at DESC LIMIT ?"
 )
 FAILURES_SQL = (
-    "SELECT e.id, e.at, e.subject_id, e.data, t.title FROM events e"
+    "SELECT e.id, e.at, e.subject_id, e.data, t.title,"
+    " (SELECT max(c.at) FROM events c WHERE c.subject_type = 'task'"
+    "   AND c.subject_id = e.subject_id AND c.kind = 'task.claim'"
+    "   AND c.at <= e.at) AS claim_at FROM events e"
     " JOIN tasks t ON t.id = e.subject_id"
     " WHERE e.kind IN ('task.fail', 'task.expire') AND e.at >= ? AND e.at <= ?"
     " ORDER BY e.at DESC, e.id DESC LIMIT ?"
+)
+ATTEMPTS_SQL = (
+    "SELECT kind, count(*) FROM events WHERE kind IN ('task.claim', 'task.complete')"
+    " AND at >= ? AND at <= ? GROUP BY kind"
+)
+# Tokens and cost reported for a set of tasks (JSON array of ids), per task.
+USAGE_SQL = (
+    "SELECT task_id, coalesce(sum(input_tokens), 0) + coalesce(sum(output_tokens), 0)"
+    " AS tokens, coalesce(sum(cost_usd), 0.0) AS cost FROM account_usage"
+    " WHERE task_id IN (SELECT value FROM json_each(?)) GROUP BY task_id"
 )
 HEARTBEAT_SQL = (
     "SELECT i.pool, max(a.last_heartbeat_at) FROM agents a"
@@ -104,6 +119,9 @@ class FailureExample(BaseModel):
 class FailureGroup(BaseModel):
     reason: str
     count: int
+    # Time the failed attempts held a claim (claim to failure or expiry); None when
+    # no event in the group has a claim before it.
+    lost_seconds: float | None = None
     examples: list[FailureExample]
 
 
@@ -113,12 +131,32 @@ class Failures(Provenance):
     truncated: bool
 
 
+class Yield(Provenance):
+    """What the fleet got for what it spent (worker efficiency draft, P8)."""
+
+    attempts: int  # claims in the window
+    completions: int  # attempts that handed in a result
+    attempt_success_rate: float | None
+    finished_tasks: int
+    attempts_per_finished_task: float | None
+    # Tokens (input + output) and cost reported by the tasks that finished in the
+    # window, split by outcome. `usage_tasks` of `finished_tasks` had any row; the
+    # means are `None` under MIN_SAMPLES covered tasks and never count a task
+    # without usage as zero.
+    usage_tasks: int
+    tokens_per_succeeded: float | None
+    tokens_per_failed: float | None
+    cost_per_succeeded: float | None
+
+
 class TasksByState(BaseModel):
     source: str
     counts: Counts
 
 
 class FleetHealth(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     as_of: datetime
     window_hours: int
     pools: list[PoolHealth]
@@ -127,6 +165,7 @@ class FleetHealth(BaseModel):
     run_time: Durations
     outcomes: Outcomes
     failures: Failures
+    yield_: Yield = Field(alias="yield")
     truncated: bool  # the finished-task fetch hit MAX_ROWS (samples are the newest)
 
 
@@ -210,6 +249,11 @@ async def fleet_health(
             heartbeats = dict(await rows(HEARTBEAT_SQL))
             finished = await rows(FINISHED_SQL, since, until, MAX_ROWS)
             failures = await rows(FAILURES_SQL, since, until, MAX_ROWS)
+            attempt_counts = dict(await rows(ATTEMPTS_SQL, since, until))
+            usage = {
+                r[0]: (r[1], r[2])
+                for r in await rows(USAGE_SQL, json.dumps([r["id"] for r in finished]))
+            }
         finally:
             await conn.execute("COMMIT")
 
@@ -260,7 +304,46 @@ async def fleet_health(
             failure_rate=_rate(total - succeeded, total),
         ),
         failures=_group_failures(failures, window),
+        yield_=_yield(window, attempt_counts, finished, usage),
         truncated=total >= MAX_ROWS,
+    )
+
+
+def _mean(values: list[float]) -> float | None:
+    return sum(values) / len(values) if len(values) >= MIN_SAMPLES else None
+
+
+def _yield(
+    window: int,
+    counts: dict[str, int],
+    finished: list[Any],
+    usage: dict[str, tuple[int, float]],
+) -> Yield:
+    attempts, completions = counts.get("task.claim", 0), counts.get("task.complete", 0)
+    ok = [
+        usage[r["id"]]
+        for r in finished
+        if r["state"] == "succeeded" and r["id"] in usage
+    ]
+    bad = [
+        usage[r["id"]]
+        for r in finished
+        if r["state"] != "succeeded" and r["id"] in usage
+    ]
+    return Yield(
+        window_hours=window,
+        source="events task.claim, task.complete; tasks; account_usage",
+        attempts=attempts,
+        completions=completions,
+        attempt_success_rate=_rate(completions, attempts),
+        finished_tasks=len(finished),
+        attempts_per_finished_task=(
+            attempts / len(finished) if len(finished) >= MIN_SAMPLES else None
+        ),
+        usage_tasks=len(ok) + len(bad),
+        tokens_per_succeeded=_mean([float(t) for t, _ in ok]),
+        tokens_per_failed=_mean([float(t) for t, _ in bad]),
+        cost_per_succeeded=_mean([c for _, c in ok]),
     )
 
 
@@ -273,6 +356,10 @@ def _group_failures(rows: list[Any], window: int) -> Failures:
             reason, FailureGroup(reason=reason, count=0, examples=[])
         )
         group.count += 1
+        if row["claim_at"]:
+            group.lost_seconds = (group.lost_seconds or 0.0) + _seconds(
+                row["claim_at"], row["at"]
+            )
         if len(group.examples) < EXAMPLES:
             group.examples.append(
                 FailureExample(

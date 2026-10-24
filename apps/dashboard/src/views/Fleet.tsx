@@ -17,6 +17,11 @@ export function percent(value: number | null | undefined): string {
   return value === null || value === undefined ? NO_DATA : `${Math.round(value * 100)}%`;
 }
 
+export function tokens(value: number | null | undefined): string {
+  if (value === null || value === undefined) return NO_DATA;
+  return value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(Math.round(value));
+}
+
 function Caption({ window, source }: { window?: number; source: string }) {
   return (
     <span className="muted small">
@@ -74,7 +79,7 @@ export function Fleet() {
 }
 
 function Body({ h }: { h: FleetHealth }) {
-  const { queue_time: q, run_time: r, outcomes: o, failures: f } = h;
+  const { queue_time: q, run_time: r, outcomes: o, failures: f, yield: y } = h;
   return (
     <>
       <h3>Pools</h3>
@@ -152,6 +157,35 @@ function Body({ h }: { h: FleetHealth }) {
         </Card>
       </div>
 
+      <h3>Yield</h3>
+      <div className="home-groups">
+        <Card title="Attempts">
+          <p>
+            <strong>{y.attempts}</strong> claimed · <strong>{y.completions}</strong> handed in a
+            result
+          </p>
+          <p className="muted small">
+            success per attempt {percent(y.attempt_success_rate)} · attempts per finished task{" "}
+            {y.attempts_per_finished_task === null
+              ? NO_DATA
+              : y.attempts_per_finished_task.toFixed(1)}
+          </p>
+          <Caption window={y.window_hours} source={y.source} />
+        </Card>
+        <Card title="Tokens per task">
+          <p>
+            succeeded <strong>{tokens(y.tokens_per_succeeded)}</strong> · failed{" "}
+            <strong>{tokens(y.tokens_per_failed)}</strong>
+          </p>
+          <p className="muted small">
+            cost per succeeded{" "}
+            {y.cost_per_succeeded === null ? NO_DATA : `$${y.cost_per_succeeded.toFixed(2)}`} ·
+            usage reported for {y.usage_tasks} of {y.finished_tasks} finished tasks
+          </p>
+          <Caption window={y.window_hours} source={y.source} />
+        </Card>
+      </div>
+
       <h3>Failures by reason</h3>
       {f.groups.length === 0 ? (
         <p className="muted">No failures in the window.</p>
@@ -161,6 +195,7 @@ function Body({ h }: { h: FleetHealth }) {
             <tr>
               <th>Reason</th>
               <th>Count</th>
+              <th>Time held</th>
               <th>Recent examples</th>
             </tr>
           </thead>
@@ -169,6 +204,7 @@ function Body({ h }: { h: FleetHealth }) {
               <tr key={g.reason}>
                 <td>{g.reason}</td>
                 <td>{g.count}</td>
+                <td>{seconds(g.lost_seconds)}</td>
                 <td>
                   <ul className="plain">
                     {g.examples.map((e) => (

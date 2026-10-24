@@ -208,8 +208,12 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   the usual `409` (`not_claimed`, `not_assignee`, `stale_attempt`). The fail
   event carries `reason` (`worker_fail` by default; the channel also sends
   `channel_error` or `provider_failure` for failures it detects itself, and
-  `quota` for a provider limit with no account left, which does not count as a
-  failure: see [account selection](account-selection.spec.md)).
+  `quota` for a provider limit with no account left and `account_unavailable` for
+  a lease or apply error that is not a limit; neither counts as a failure: see
+  [account selection](account-selection.spec.md)). A worker that cannot prepare
+  the repository credential for a claimed task does not fail it: it blocks the
+  task with `block_reason` `env_repository_unavailable`, spending no attempt, and
+  a manager unblocks it once the environment is fixed.
 - **Operator release never burns an attempt.** `POST /tasks/{id}/release
   {reason, attempt?}` (orchestrator and admin, like cancel; workers get `403`)
   takes a claimed task off its holder and puts it back in the queue, for an
