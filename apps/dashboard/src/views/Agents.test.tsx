@@ -130,8 +130,9 @@ describe("Agents hygiene", () => {
       },
     };
     render(<Agents />);
-    expect(await screen.findByText("Lost and gone")).toBeTruthy();
-    expect(screen.getByText(/2 lost · 1 gone · 0 archived/)).toBeTruthy();
+    // The heading renders while the totals load; wait for the data itself.
+    expect(await screen.findByText(/2 lost · 1 gone · 0 archived/)).toBeTruthy();
+    expect(screen.getByText("Lost and gone")).toBeTruthy();
     expect(screen.getByText(/6 agents lost in the last 24h/)).toBeTruthy();
     expect(screen.getByText("workers")).toBeTruthy();
     expect(screen.getByText(/Lost agents holding a claimed task/)).toBeTruthy();
