@@ -1,3 +1,4 @@
+import asyncio
 from typing import Annotated
 
 from argus_core.auth import Scope
@@ -17,6 +18,10 @@ from argus_core.fleet import (
     ScaleRequest,
     ScaleResult,
     TemplateCatalog,
+    WorkspaceCleanupPage,
+    WorkspaceCleanupRunRequest,
+    WorkspaceCleanupStatus,
+    WorkspaceCleanupSummary,
 )
 from fastapi import APIRouter, Path, Query, Request
 from fastapi.responses import PlainTextResponse
@@ -24,8 +29,16 @@ from pydantic import BaseModel
 
 from argus_api.deps import AdminDep, DbDep, ManagerDep, SettingsDep
 from argus_api.errors import DomainError, ForbiddenError
-from argus_api.fleet import capabilities, policy, runtimes, service, templates
+from argus_api.fleet import (
+    capabilities,
+    policy,
+    runtimes,
+    service,
+    templates,
+    workspace_cleanup,
+)
 from argus_api.fleet.targets import TargetError, TargetRegistry
+from argus_api.fleet.workspace_cleanup import WorkspaceCleaner
 
 router = APIRouter(tags=["fleet"])
 
@@ -294,3 +307,73 @@ async def instance_logs(
     except TargetError as exc:
         raise TargetUnavailableError(str(exc)) from exc
     return PlainTextResponse(text)
+
+
+class WorkspaceCleanupDisabledError(DomainError):
+    status = 409
+    code = "workspace_cleanup_disabled"
+
+
+class ArchiveRootInvalidError(DomainError):
+    status = 409
+    code = "archive_root_invalid"
+
+
+@router.get("/fleet/workspace-cleanup")
+async def workspace_cleanup_summary(
+    request: Request, db: DbDep, settings: SettingsDep, _: ManagerDep
+) -> WorkspaceCleanupSummary:
+    """Settings, last run, per-status counts, estimated vs freed bytes, and the
+    latest blocked or failed directories of the workspace cleanup."""
+    cleaner: WorkspaceCleaner = request.app.state.workspace_cleanup
+    async with db.read() as conn:
+        return await workspace_cleanup.summary(conn, settings, cleaner.busy)
+
+
+@router.get("/fleet/workspace-cleanup/instances")
+async def workspace_cleanup_entries(
+    db: DbDep,
+    _: ManagerDep,
+    status: WorkspaceCleanupStatus | None = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> WorkspaceCleanupPage:
+    """Per-directory audit rows, most recently updated first."""
+    async with db.read() as conn:
+        return await workspace_cleanup.list_entries(conn, status, limit, offset)
+
+
+@router.post("/fleet/workspace-cleanup/run")
+async def run_workspace_cleanup(
+    request: Request,
+    db: DbDep,
+    settings: SettingsDep,
+    caller: ManagerDep,
+    body: WorkspaceCleanupRunRequest | None = None,
+) -> WorkspaceCleanupSummary:
+    """Start a cleanup run now and wait up to `wait_s` for it; the summary shows
+    its progress. A dry run (the default) deletes nothing and works while cleanup
+    is disabled; `dry_run: false` needs an admin token, cleanup enabled and a
+    valid archive root."""
+    body = body or WorkspaceCleanupRunRequest()
+    if not body.dry_run:
+        if caller.scope is not Scope.ADMIN:
+            raise ForbiddenError("a real workspace cleanup needs an admin token")
+        if not settings.workspace_cleanup_enabled:
+            raise WorkspaceCleanupDisabledError("workspace cleanup is disabled")
+        async with db.read() as conn:
+            pools = await service.list_pools(conn)
+        roots = [p.nanoclaw.instances_root for p in pools if p.nanoclaw]
+        problem = workspace_cleanup.check_archive_root(
+            settings.workspace_cleanup_archive_root, roots
+        )
+        if problem:
+            raise ArchiveRootInvalidError(
+                "the archive root is unset or invalid", code=problem
+            )
+    cleaner: WorkspaceCleaner = request.app.state.workspace_cleanup
+    task = cleaner.start("manual", caller.actor, body.dry_run)
+    if body.wait_s:
+        await asyncio.wait({task}, timeout=body.wait_s)
+    async with db.read() as conn:
+        return await workspace_cleanup.summary(conn, settings, cleaner.busy)

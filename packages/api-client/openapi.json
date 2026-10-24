@@ -15905,6 +15905,454 @@
         "title": "WorkerTemplate",
         "type": "object"
       },
+      "WorkspaceCleanupEntry": {
+        "properties": {
+          "archive_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive Path"
+          },
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "bytes_estimated": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes Estimated"
+          },
+          "bytes_freed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes Freed"
+          },
+          "cleaned_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cleaned At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "first_seen_at": {
+            "format": "date-time",
+            "title": "First Seen At",
+            "type": "string"
+          },
+          "instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instance Id"
+          },
+          "last_run_id": {
+            "title": "Last Run Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pool"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "root": {
+            "title": "Root",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkspaceCleanupStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "name",
+          "instance_id",
+          "pool",
+          "status",
+          "reason",
+          "attempts",
+          "bytes_estimated",
+          "bytes_freed",
+          "archive_path",
+          "error",
+          "last_run_id",
+          "first_seen_at",
+          "updated_at",
+          "cleaned_at"
+        ],
+        "title": "WorkspaceCleanupEntry",
+        "type": "object"
+      },
+      "WorkspaceCleanupPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceCleanupEntry"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "WorkspaceCleanupPage",
+        "type": "object"
+      },
+      "WorkspaceCleanupRun": {
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "blocked": {
+            "title": "Blocked",
+            "type": "integer"
+          },
+          "bytes_estimated": {
+            "title": "Bytes Estimated",
+            "type": "integer"
+          },
+          "bytes_freed": {
+            "title": "Bytes Freed",
+            "type": "integer"
+          },
+          "cleaned": {
+            "title": "Cleaned",
+            "type": "integer"
+          },
+          "dry_run": {
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "eligible": {
+            "title": "Eligible",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "free_after": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free After"
+          },
+          "free_before": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Before"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "low_disk": {
+            "title": "Low Disk",
+            "type": "boolean"
+          },
+          "preserved": {
+            "title": "Preserved",
+            "type": "integer"
+          },
+          "scanned": {
+            "title": "Scanned",
+            "type": "integer"
+          },
+          "skipped": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped",
+            "type": "array"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "trigger": {
+            "title": "Trigger",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "trigger",
+          "actor",
+          "dry_run",
+          "low_disk",
+          "status",
+          "started_at",
+          "finished_at",
+          "scanned",
+          "eligible",
+          "preserved",
+          "blocked",
+          "cleaned",
+          "failed",
+          "bytes_estimated",
+          "bytes_freed",
+          "free_before",
+          "free_after",
+          "skipped",
+          "error"
+        ],
+        "title": "WorkspaceCleanupRun",
+        "type": "object"
+      },
+      "WorkspaceCleanupRunRequest": {
+        "properties": {
+          "dry_run": {
+            "default": true,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "wait_s": {
+            "default": 5.0,
+            "maximum": 30.0,
+            "minimum": 0.0,
+            "title": "Wait S",
+            "type": "number"
+          }
+        },
+        "title": "WorkspaceCleanupRunRequest",
+        "type": "object"
+      },
+      "WorkspaceCleanupSettings": {
+        "properties": {
+          "archive_root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive Root"
+          },
+          "dry_run": {
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "interval_s": {
+            "title": "Interval S",
+            "type": "number"
+          },
+          "low_disk_bytes": {
+            "title": "Low Disk Bytes",
+            "type": "integer"
+          },
+          "max_archive_bytes": {
+            "title": "Max Archive Bytes",
+            "type": "integer"
+          },
+          "max_attempts": {
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "max_instances": {
+            "title": "Max Instances",
+            "type": "integer"
+          },
+          "min_age_hours": {
+            "title": "Min Age Hours",
+            "type": "integer"
+          },
+          "run_timeout_s": {
+            "title": "Run Timeout S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "enabled",
+          "dry_run",
+          "archive_root",
+          "min_age_hours",
+          "interval_s",
+          "run_timeout_s",
+          "max_instances",
+          "max_archive_bytes",
+          "max_attempts",
+          "low_disk_bytes"
+        ],
+        "title": "WorkspaceCleanupSettings",
+        "type": "object"
+      },
+      "WorkspaceCleanupStatus": {
+        "description": "Audit status of one instances-root entry (workspace-cleanup.spec.md 3.2).",
+        "enum": [
+          "eligible",
+          "preserved",
+          "blocked",
+          "cleaned",
+          "failed"
+        ],
+        "title": "WorkspaceCleanupStatus",
+        "type": "string"
+      },
+      "WorkspaceCleanupSummary": {
+        "properties": {
+          "bytes_estimated": {
+            "title": "Bytes Estimated",
+            "type": "integer"
+          },
+          "bytes_freed": {
+            "title": "Bytes Freed",
+            "type": "integer"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/WorkspaceCleanupStatus"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "last_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkspaceCleanupRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceCleanupEntry"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/WorkspaceCleanupSettings"
+          }
+        },
+        "required": [
+          "settings",
+          "running",
+          "last_run",
+          "counts",
+          "bytes_estimated",
+          "bytes_freed",
+          "problems"
+        ],
+        "title": "WorkspaceCleanupSummary",
+        "type": "object"
+      },
       "Yield": {
         "description": "What the fleet got for what it spent (worker efficiency draft, P8).",
         "properties": {
@@ -19599,6 +20047,165 @@
           }
         ],
         "summary": "Create Worker",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/fleet/workspace-cleanup": {
+      "get": {
+        "description": "Settings, last run, per-status counts, estimated vs freed bytes, and the\nlatest blocked or failed directories of the workspace cleanup.",
+        "operationId": "workspace_cleanup_summary_api_fleet_workspace_cleanup_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceCleanupSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Workspace Cleanup Summary",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/fleet/workspace-cleanup/instances": {
+      "get": {
+        "description": "Per-directory audit rows, most recently updated first.",
+        "operationId": "workspace_cleanup_entries_api_fleet_workspace_cleanup_instances_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/WorkspaceCleanupStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceCleanupPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Workspace Cleanup Entries",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/fleet/workspace-cleanup/run": {
+      "post": {
+        "description": "Start a cleanup run now and wait up to `wait_s` for it; the summary shows\nits progress. A dry run (the default) deletes nothing and works while cleanup\nis disabled; `dry_run: false` needs an admin token, cleanup enabled and a\nvalid archive root.",
+        "operationId": "run_workspace_cleanup_api_fleet_workspace_cleanup_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/WorkspaceCleanupRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceCleanupSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Run Workspace Cleanup",
         "tags": [
           "fleet"
         ]

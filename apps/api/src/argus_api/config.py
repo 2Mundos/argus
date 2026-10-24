@@ -95,6 +95,18 @@ class Settings:
     # A claim already flagged quiet that stays silent this long is expired as
     # `stalled` and retried. 0 disables (stall-visibility 3.6).
     stall_fail_s: int = 3600
+    # Workspace cleanup (workspace-cleanup.spec.md 3.1): off, and dry-run when on.
+    workspace_cleanup_enabled: bool = False
+    workspace_cleanup_dry_run: bool = True
+    workspace_cleanup_archive_root: str | None = None
+    workspace_cleanup_min_age_hours: int = 168
+    workspace_cleanup_interval_s: float = 3600.0
+    workspace_cleanup_run_timeout_s: float = 1800.0
+    workspace_cleanup_max_instances: int = 20
+    workspace_cleanup_max_archive_bytes: int = 2 * 1024 * 1024 * 1024
+    workspace_cleanup_max_attempts: int = 3
+    workspace_cleanup_low_disk_bytes: int = 10 * 1024 * 1024 * 1024
+    workspace_cleanup_git_timeout_s: float = 300.0
 
     @property
     def db_path(self) -> Path:
@@ -227,6 +239,42 @@ class Settings:
             ),
             quiet_claim_s=int(os.environ.get("ARGUS_QUIET_CLAIM_S", 1200)),
             stall_fail_s=int(os.environ.get("ARGUS_STALL_FAIL_S", 3600)),
+            workspace_cleanup_enabled=os.environ.get("ARGUS_WORKSPACE_CLEANUP_ENABLED")
+            == "true",
+            workspace_cleanup_dry_run=os.environ.get("ARGUS_WORKSPACE_CLEANUP_DRY_RUN")
+            != "false",
+            workspace_cleanup_archive_root=os.environ.get(
+                "ARGUS_WORKSPACE_CLEANUP_ARCHIVE_ROOT"
+            )
+            or None,
+            workspace_cleanup_min_age_hours=int(
+                os.environ.get("ARGUS_WORKSPACE_CLEANUP_MIN_AGE_HOURS", 168)
+            ),
+            workspace_cleanup_interval_s=float(
+                os.environ.get("ARGUS_WORKSPACE_CLEANUP_INTERVAL_S", 3600)
+            ),
+            workspace_cleanup_run_timeout_s=float(
+                os.environ.get("ARGUS_WORKSPACE_CLEANUP_RUN_TIMEOUT_S", 1800)
+            ),
+            workspace_cleanup_max_instances=int(
+                os.environ.get("ARGUS_WORKSPACE_CLEANUP_MAX_INSTANCES", 20)
+            ),
+            workspace_cleanup_max_archive_bytes=int(
+                os.environ.get(
+                    "ARGUS_WORKSPACE_CLEANUP_MAX_ARCHIVE_BYTES", 2 * 1024 * 1024 * 1024
+                )
+            ),
+            workspace_cleanup_max_attempts=int(
+                os.environ.get("ARGUS_WORKSPACE_CLEANUP_MAX_ATTEMPTS", 3)
+            ),
+            workspace_cleanup_low_disk_bytes=int(
+                os.environ.get(
+                    "ARGUS_WORKSPACE_CLEANUP_LOW_DISK_BYTES", 10 * 1024 * 1024 * 1024
+                )
+            ),
+            workspace_cleanup_git_timeout_s=float(
+                os.environ.get("ARGUS_WORKSPACE_CLEANUP_GIT_TIMEOUT_S", 300)
+            ),
         )
 
 

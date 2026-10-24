@@ -1,13 +1,27 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Fleet, percent, seconds } from "./Fleet";
 
-const mock = vi.hoisted(() => ({ health: undefined as unknown }));
+const mock = vi.hoisted(() => ({
+  health: undefined as unknown,
+  cleanup: undefined as unknown,
+  posts: [] as { path: string; body: unknown }[],
+}));
 
 vi.mock("../api", () => ({
-  api: { GET: (path: string) => path },
-  call: async () => mock.health,
+  api: {
+    GET: (path: string) => path,
+    POST: (path: string, init?: { body?: unknown }) => {
+      mock.posts.push({ path, body: init?.body });
+      return path;
+    },
+  },
+  call: async (path: string) => {
+    if (!path.startsWith("/api/fleet/workspace-cleanup")) return mock.health;
+    if (mock.cleanup === undefined) throw new Error("403 forbidden");
+    return mock.cleanup;
+  },
 }));
 
 vi.mock("../live", async () => {
@@ -23,7 +37,11 @@ vi.mock("../live", async () => {
   };
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  mock.cleanup = undefined;
+  mock.posts = [];
+});
 
 const durations = (n: number, p: number | null) => ({
   window_hours: 24,
@@ -101,6 +119,29 @@ function health(over: Record<string, unknown> = {}) {
   };
 }
 
+function cleanupSummary() {
+  return {
+    settings: {
+      enabled: true,
+      dry_run: true,
+      archive_root: null,
+      min_age_hours: 72,
+      interval_s: 3600,
+      low_disk_bytes: 0,
+      max_archive_bytes: 0,
+      max_attempts: 3,
+      max_instances: 100,
+      run_timeout_s: 600,
+    },
+    running: false,
+    last_run: null,
+    counts: { eligible: 2, preserved: 5 },
+    bytes_estimated: 2048,
+    bytes_freed: 0,
+    problems: [],
+  };
+}
+
 describe("Fleet", () => {
   it("renders no data for unknown values, never 0", async () => {
     mock.health = health();
@@ -157,6 +198,31 @@ describe("Fleet", () => {
     render(<Fleet />);
     const o = (await screen.findByRole("heading", { name: "Outcomes" })).parentElement;
     expect(o?.textContent).toContain("success 80%");
+  });
+
+  it("shows the workspace cleanup card and starts a dry run", async () => {
+    mock.health = health();
+    mock.cleanup = cleanupSummary();
+    render(<Fleet />);
+    const card = (await screen.findByRole("heading", { name: "Workspace cleanup" })).parentElement;
+    expect(card?.textContent).toContain("enabled · dry-run mode");
+    expect(card?.textContent).toContain("archive root not set");
+    expect(card?.textContent).toContain("last run no data");
+    expect(card?.textContent).toContain("2 eligible · 5 preserved");
+    expect(card?.textContent).toContain("approx. 2.0 KB estimated · 0 B freed");
+    fireEvent.click(screen.getByRole("button", { name: "Dry run now" }));
+    await waitFor(() =>
+      expect(mock.posts).toEqual([
+        { path: "/api/fleet/workspace-cleanup/run", body: { dry_run: true } },
+      ]),
+    );
+  });
+
+  it("hides the workspace cleanup card when the summary is unavailable", async () => {
+    mock.health = health();
+    render(<Fleet />);
+    await screen.findByText("alpha");
+    expect(screen.queryByRole("heading", { name: "Workspace cleanup" })).toBeNull();
   });
 
   it("formats helpers", () => {
