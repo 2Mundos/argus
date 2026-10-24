@@ -12,6 +12,7 @@ export class GiteaApi {
     allowedRepositories: readonly string[],
     fetchImpl?: typeof fetch,
   );
+  getRepository(): Promise<unknown>;
   getPullRequest(number: number): Promise<{
     number: number;
     state?: string;

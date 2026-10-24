@@ -164,6 +164,17 @@ describe("parseReply", () => {
       expect(parseReply(raw), raw).toEqual({ kind: "fail", text: "no PR tool" });
     expect(parseReply("**COMPLETE:** shipped")).toEqual({ kind: "complete", text: "shipped" });
   });
+  it("marks a FAIL about the environment", () => {
+    const env = { kind: "fail", environment: true, text: "no checkout" };
+    expect(parseReply("FAIL (environment): no checkout")).toEqual(env);
+    expect(parseReply("**FAIL (environment):** no checkout")).toEqual(env);
+    expect(parseReply("FAIL: (environment) no checkout")).toEqual(env);
+    expect(parseReply("FAIL on t1: (environment) no checkout", "t1")).toEqual(env);
+    expect(parseReply("FAIL: the environment is fine, the tests are not")).toEqual({
+      kind: "fail",
+      text: "the environment is fine, the tests are not",
+    });
+  });
   it("keeps the whole multi-paragraph text of a directive", () => {
     expect(parseReply("FAIL: gates red\n\nDetails:\n- lint\n- tests")).toEqual({
       kind: "fail",

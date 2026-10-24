@@ -405,6 +405,7 @@ function harness(
     name: "w",
     fetch: w.fetchImpl,
     claimWaitS: 1,
+    probeRepository: async () => {}, // offline: no OneCLI gateway
     ...top,
     accounts: withAccounts
       ? {
@@ -1543,6 +1544,75 @@ describe("task-scoped repository auth", () => {
     expect(w.calls.some((call) => call.path === "/tasks/t1/fail")).toBe(false);
     expect(w.calls.some((call) => call.path === "/accounts/lease")).toBe(false);
     expect(h.inbound).toHaveLength(0);
+  });
+
+  const repoWorld = () =>
+    world({
+      leases: [
+        lease("engine", "dummy-engine-key"),
+        lease("repo", "dummy-gitea-token", {
+          provider: "gitea",
+          role: "repository",
+          credential: { username: "service-user", token: "dummy-gitea-token" },
+        }),
+      ],
+      tasks: [{ ...task(), required_capabilities: ["repository:write"] }],
+    });
+
+  it("blocks a task whose project has no repository before any model work", async () => {
+    const w = repoWorld();
+    const h = harness(w, true, { repositories: {} });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((call) => call.path === "/tasks/t1/block"));
+    expect(w.calls.find((call) => call.path === "/tasks/t1/block")!.body).toMatchObject({
+      reason: "env_repository_unconfigured",
+      error: "no repository is configured for project global",
+    });
+    expect(h.inbound).toHaveLength(0);
+  });
+
+  it("blocks a task whose repository does not answer, and releases its access", async () => {
+    const w = repoWorld();
+    const h = harness(
+      w,
+      true,
+      { repositories: { global: "https://git.example.test/org/repo" } },
+      {
+        probeRepository: async () => {
+          throw new Error("Gitea API GET failed with HTTP 502");
+        },
+      },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((call) => call.path === "/tasks/t1/block"));
+    expect(w.calls.find((call) => call.path === "/tasks/t1/block")!.body).toMatchObject({
+      reason: "env_repository_unreachable",
+      error: "Error: Gitea API GET failed with HTTP 502",
+    });
+    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    expect(w.calls.some((call) => call.path === "/tasks/t1/fail")).toBe(false);
+    expect(h.inbound).toHaveLength(0);
+  });
+
+  it("blocks instead of failing when the worker reports a broken environment", async () => {
+    const w = repoWorld();
+    const h = harness(w, true, { repositories: { global: "https://git.example.test/org/repo" } });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    expect(h.inbound[0].content.text).toContain('"FAIL (environment):"');
+    await h.adapter.deliver("local", null, {
+      kind: "chat",
+      content: { text: "FAIL (environment): no checkout in /workspace" },
+    });
+    await until(() => w.calls.some((call) => call.path === "/tasks/t1/block"));
+    expect(w.calls.find((call) => call.path === "/tasks/t1/block")!.body).toMatchObject({
+      reason: "worker_env",
+      error: "no checkout in /workspace",
+    });
+    expect(w.calls.some((call) => call.path === "/tasks/t1/fail")).toBe(false);
   });
 });
 
