@@ -369,6 +369,11 @@ the file for the claimed task:
   ends.
 - Posts `POST /api/accounts/{id}/usage` with the host's agent token.
 
+- At the end of an attempt for which it posted no usage at all, it posts one
+  `not_reported` row for the engine account with `reason: "no_usage_seen"` and
+  `run_key` `h0:<task>:<attempt>`, so every attempt has at least one row
+  ([worker efficiency](../drafts/2026-10-24.worker-efficiency.draft.md) P8).
+
 Idempotency is unchanged: `run_key` on the API deduplicates executor runs;
 harness keys deduplicate per turn. Measured stream totals use deltas so resume
 and cache accounting do not double-count.

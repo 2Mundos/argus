@@ -577,14 +577,30 @@ pluggable provider interface (Claude Code by default), supports user-added MCP
 servers, and is administered locally by the `ncl` CLI over a Unix socket (no
 HTTP admin API). See https://docs.nanoclaw.dev/concepts/architecture.
 
-**One task per session.** Before a claimed task is injected, the channel sends
-NanoClaw's `/clear` (an admin command the channel grants to its own `argus:local`
-sender on the worker's agent group) and waits for the runner's `Session cleared.`
-reply, which it consumes and never reports. The task then starts from an empty
-context, so earlier tasks neither inflate its cost nor contaminate its replies.
-Without an acknowledgement within 60 s, or if the grant fails, the session stays
-shared and every reply is task-scoped, as before. `ARGUS_FRESH_SESSION=off`
-disables the clear.
+**One session per attempt.** Each attempt runs in its own NanoClaw session, so
+earlier tasks neither inflate its cost nor contaminate its replies
+([worker efficiency](../drafts/2026-10-24.worker-efficiency.draft.md) P3).
+
+- The Argus wiring uses `session_mode: "per-thread"`, and the channel declares
+  threads on its DM defaults and supports them. `init-argus-agent` sets the mode
+  on an existing wiring too, so every host start converges.
+- Every inbound message for an attempt (the task, a resend, a steer, an answer)
+  carries the thread id `argus:<task-id>:<attempt>`. NanoClaw therefore resolves
+  a new session, and a new container, for each attempt.
+- A reply belongs to the attempt only when it arrives on that attempt's thread. A
+  reply on any other thread is dropped and logged. This replaces the reply fence,
+  the scope notice and `/clear`; `ARGUS_FRESH_SESSION` goes away.
+- When the attempt ends, whatever the outcome, the channel stops the session's
+  container and marks the session `closed`. NanoClaw never resolves a closed
+  session again. Its directory stays on disk until the instance's workspace is
+  cleaned up.
+- Every claim is a new attempt, including the one after an answered `ASK`. That
+  attempt starts in a fresh session and learns the answer from the task's
+  decisions and continuation, not from the earlier conversation. Resuming the
+  task's own session across attempts is P4.
+- The worker's agent group runs with `cli_scope: "disabled"`. The worker never
+  uses `ncl`, and NanoClaw then leaves the `cli` and `scheduling` module
+  instructions (about 7.7 KB) out of the composed `CLAUDE.md`.
 
 The Argus-installed NanoClaw overlay imposes no wall-clock or heartbeat-age
 ceiling on a running container: a quiet or long-running session remains valid
