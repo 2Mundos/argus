@@ -51,6 +51,7 @@ from argus_api.runtime.docker import CliDocker
 from argus_api.runtime.routes import router as runtime_router
 from argus_api.runtime.service import RuntimeManager
 from argus_api.secrets import open_store
+from argus_api.tasks.delivery import PrChecker
 from argus_api.tasks.routes import router as tasks_router
 
 log = logging.getLogger("argus")
@@ -135,6 +136,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.started_at = time.monotonic()
         app.state.readiness = ReadinessCache()
         app.state.quota = QuotaProber(db, secrets, settings)
+        app.state.pr_checker = PrChecker(secrets)
         app.state.runtime = RuntimeManager(
             db,
             CliDocker(

@@ -8,6 +8,7 @@ from argus_core.continuation import (
     EffectiveContinuation,
     ObservationRequest,
 )
+from argus_core.delivery import Delivery
 from argus_core.task_edit import TaskAttempt, TaskEdit
 from argus_core.tasks import (
     ClaimedTask,
@@ -17,7 +18,7 @@ from argus_core.tasks import (
     TaskState,
     validate_milestone,
 )
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Query, Request, Response, status
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from argus_api.access import require_task_readable, worker_task_filter
@@ -37,7 +38,7 @@ from argus_api.errors import ValidationFailedError
 from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
 from argus_api.paging import DEFAULT_LIMIT, View
-from argus_api.tasks import log, service, steers, views
+from argus_api.tasks import delivery, log, service, steers, views
 from argus_api.tasks.views import TaskPage
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -237,6 +238,19 @@ async def get_task(task_id: str, db: DbDep, caller: CallerDep) -> Task:
     async with db.read() as conn:
         await require_task_readable(conn, caller, task_id)
         return await service.get_task(conn, task_id)
+
+
+@router.get("/{task_id}/delivery")
+async def get_delivery(
+    task_id: str, request: Request, db: DbDep, caller: CallerDep
+) -> Delivery | None:
+    """The state of the task's pull request as the forge shows it (open | merged |
+    closed | unknown), when the task names one unambiguously, else null. Read-only:
+    a merge flags the task for review and never closes or accepts it."""
+    async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
+        task = await service.get_task(conn, task_id)
+        return await delivery.delivery_of(conn, request.app.state.pr_checker, task)
 
 
 @router.post("/{task_id}/complete")

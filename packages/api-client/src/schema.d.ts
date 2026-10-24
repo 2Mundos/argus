@@ -1997,6 +1997,28 @@ export interface paths {
         patch: operations["update_continuation_api_tasks__task_id__continuation_patch"];
         trace?: never;
     };
+    "/api/tasks/{task_id}/delivery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Delivery
+         * @description The state of the task's pull request as the forge shows it (open | merged |
+         *     closed | unknown), when the task names one unambiguously, else null. Read-only:
+         *     a merge flags the task for review and never closes or accepts it.
+         */
+        get: operations["get_delivery_api_tasks__task_id__delivery_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/dependencies": {
         parameters: {
             query?: never;
@@ -3828,6 +3850,29 @@ export interface components {
             open_by_kind: {
                 [key: string]: number;
             };
+        };
+        /**
+         * Delivery
+         * @description What Argus read of the task's pull request. Observed only: a merge neither
+         *     closes the task nor counts as acceptance.
+         */
+        Delivery: {
+            /** Accept Blocked */
+            accept_blocked: ("not_in_review" | "checklist_pending" | "no_review") | null;
+            /** Accept Decision Id */
+            accept_decision_id: string | null;
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /** Flags */
+            flags: "delivery_merged_pending_review"[];
+            /** Merged At */
+            merged_at: string | null;
+            /** Pr */
+            pr: string;
+            pr_state: components["schemas"]["PrState"];
         };
         /** DependenciesRequest */
         DependenciesRequest: {
@@ -5779,6 +5824,11 @@ export interface components {
             /** Total */
             total: number;
         };
+        /**
+         * PrState
+         * @enum {string}
+         */
+        PrState: "open" | "merged" | "closed" | "unknown";
         /**
          * PrepareRequest
          * @description What the claiming worker knows about itself; the project comes from the task.
@@ -11229,6 +11279,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_delivery_api_tasks__task_id__delivery_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Delivery"] | null;
                 };
             };
             /** @description Validation Error */

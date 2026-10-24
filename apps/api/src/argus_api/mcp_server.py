@@ -634,6 +634,16 @@ async def get_task_continuation(ctx: Context, task_id: str) -> dict:
     return await _call(ctx, "GET", f"/tasks/{task_id}/continuation")
 
 
+@tool(ANYONE)
+async def get_task_delivery(ctx: Context, task_id: str) -> dict | None:
+    """The state of the task's pull request as the forge shows it: pr, pr_state
+    (open | merged | closed | unknown; unknown means it could not be read, not open),
+    merged_at, checked_at. A merged PR carries the flag delivery_merged_pending_review
+    and, only when the task awaits review with its checklist done, accept_decision_id
+    (answer it with choice accept). Merged is not accepted. null: no unambiguous PR."""
+    return await _call(ctx, "GET", f"/tasks/{task_id}/delivery")
+
+
 @tool(AGENTS)
 async def report_observations(
     ctx: Context, task_id: str, attempt: int, observations: ObservationRequest

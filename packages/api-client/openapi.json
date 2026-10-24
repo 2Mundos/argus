@@ -4683,6 +4683,81 @@
         "title": "DecisionsOverview",
         "type": "object"
       },
+      "Delivery": {
+        "description": "What Argus read of the task's pull request. Observed only: a merge neither\ncloses the task nor counts as acceptance.",
+        "properties": {
+          "accept_blocked": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_in_review",
+                  "checklist_pending",
+                  "no_review"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept Blocked"
+          },
+          "accept_decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept Decision Id"
+          },
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "flags": {
+            "items": {
+              "const": "delivery_merged_pending_review",
+              "type": "string"
+            },
+            "title": "Flags",
+            "type": "array"
+          },
+          "merged_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged At"
+          },
+          "pr": {
+            "title": "Pr",
+            "type": "string"
+          },
+          "pr_state": {
+            "$ref": "#/components/schemas/PrState"
+          }
+        },
+        "required": [
+          "pr",
+          "pr_state",
+          "merged_at",
+          "checked_at",
+          "flags",
+          "accept_decision_id",
+          "accept_blocked"
+        ],
+        "title": "Delivery",
+        "type": "object"
+      },
       "DependenciesRequest": {
         "properties": {
           "depends_on": {
@@ -10314,6 +10389,16 @@
         ],
         "title": "PoolsOverview",
         "type": "object"
+      },
+      "PrState": {
+        "enum": [
+          "open",
+          "merged",
+          "closed",
+          "unknown"
+        ],
+        "title": "PrState",
+        "type": "string"
       },
       "PrepareRequest": {
         "additionalProperties": false,
@@ -22253,6 +22338,62 @@
           }
         ],
         "summary": "Update Continuation",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/delivery": {
+      "get": {
+        "description": "The state of the task's pull request as the forge shows it (open | merged |\nclosed | unknown), when the task names one unambiguously, else null. Read-only:\na merge flags the task for review and never closes or accepts it.",
+        "operationId": "get_delivery_api_tasks__task_id__delivery_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Delivery"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Delivery Api Tasks  Task Id  Delivery Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Delivery",
         "tags": [
           "tasks"
         ]
