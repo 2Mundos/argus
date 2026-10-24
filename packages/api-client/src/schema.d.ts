@@ -1006,10 +1006,12 @@ export interface paths {
         };
         /**
          * Inbox
-         * @description What waits on a manager, oldest first: blocked, in-review and
+         * @description What waits on a manager, oldest first (`order=impact`: most blocked tasks
+         *     first) and grouped by project and task (`groups`): blocked, in-review and
          *     awaiting-approval tasks with their open decision, pending tasks stuck behind a
          *     failed or cancelled dependency (`failed_dependencies`), plus open decisions
-         *     about pools and knowledge. `state` keeps only task rows in those states.
+         *     about pools and knowledge. `state` keeps only task rows in those states;
+         *     `blocking_only` keeps rows that block at least one task (`blocks`, `impact`).
          */
         get: operations["inbox_api_inbox_get"];
         put?: never;
@@ -2967,6 +2969,14 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** BlockedTask */
+        BlockedTask: {
+            /** Id */
+            id: string;
+            state: components["schemas"]["TaskState"];
+            /** Title */
+            title: string;
+        };
         /** BootstrapTokenCreate */
         BootstrapTokenCreate: {
             /** Instance Id */
@@ -4507,6 +4517,25 @@ export interface components {
             /** Source */
             source: string;
         };
+        /** InboxGroup */
+        InboxGroup: {
+            /** Key */
+            key: string;
+            /** Oldest Age S */
+            oldest_age_s: number;
+            /** Open Decisions */
+            open_decisions: number;
+            /** Project */
+            project: string | null;
+            /** Stalled Tasks */
+            stalled_tasks: number;
+            /** Subject Id */
+            subject_id: string | null;
+            /** Subject Type */
+            subject_type: string;
+            /** Title */
+            title: string | null;
+        };
         /** InboxItem */
         InboxItem: {
             /** Age S */
@@ -4516,12 +4545,18 @@ export interface components {
             /** Attempt */
             attempt: number | null;
             audience: components["schemas"]["Audience"] | null;
+            /** Blocks */
+            blocks: components["schemas"]["BlockedTask"][];
             decision?: components["schemas"]["DecisionDetail"] | null;
             /** Decision Id */
             decision_id: string | null;
             decision_kind: components["schemas"]["DecisionKind"] | null;
             /** Failed Dependencies */
             failed_dependencies: string[];
+            /** Group */
+            group: string;
+            /** Impact */
+            impact: number;
             /** Kind */
             kind: string | null;
             /** Project */
@@ -4539,6 +4574,8 @@ export interface components {
         };
         /** InboxPage */
         InboxPage: {
+            /** Groups */
+            groups: components["schemas"]["InboxGroup"][];
             /** Has More */
             has_more: boolean;
             /** Items */
@@ -9325,6 +9362,8 @@ export interface operations {
                 project?: string | null;
                 state?: components["schemas"]["TaskState"][] | null;
                 decision_kind?: components["schemas"]["DecisionKind"][] | null;
+                blocking_only?: boolean;
+                order?: "age" | "impact";
                 view?: "summary" | "detail";
                 limit?: number;
                 cursor?: string | null;

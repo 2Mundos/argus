@@ -30,20 +30,26 @@ async def inbox(
     project: str | None = None,
     state: Annotated[list[TaskState] | None, Query()] = None,
     decision_kind: Annotated[list[DecisionKind] | None, Query()] = None,
+    blocking_only: bool = False,
+    order: inbox_module.Order = "age",
     view: View = "summary",
     limit: int = DEFAULT_LIMIT,
     cursor: str | None = None,
 ) -> InboxPage:
-    """What waits on a manager, oldest first: blocked, in-review and
+    """What waits on a manager, oldest first (`order=impact`: most blocked tasks
+    first) and grouped by project and task (`groups`): blocked, in-review and
     awaiting-approval tasks with their open decision, pending tasks stuck behind a
     failed or cancelled dependency (`failed_dependencies`), plus open decisions
-    about pools and knowledge. `state` keeps only task rows in those states."""
+    about pools and knowledge. `state` keeps only task rows in those states;
+    `blocking_only` keeps rows that block at least one task (`blocks`, `impact`)."""
     async with db.snapshot() as snap:
         return await inbox_module.inbox(
             snap,
             project=project,
             states=state,
             decision_kinds=decision_kind,
+            blocking_only=blocking_only,
+            order=order,
             view=view,
             limit=limit,
             cursor=cursor,

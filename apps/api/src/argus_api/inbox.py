@@ -8,7 +8,7 @@ dependency (task dependencies 3.2); and open decisions about other subjects
 
 from collections import defaultdict
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from argus_core.decisions import Audience, DecisionKind
 from argus_core.tasks import TaskState
@@ -27,6 +27,14 @@ from argus_api.paging import (
 from argus_api.tasks import views as tasks
 from argus_api.tasks.views import TaskDetail
 
+Order = Literal["age", "impact"]
+
+
+class BlockedTask(BaseModel):
+    id: str
+    title: str
+    state: TaskState
+
 
 class InboxItem(BaseModel):
     subject_type: str  # task, pool, knowledge_proposal
@@ -41,14 +49,29 @@ class InboxItem(BaseModel):
     decision_kind: DecisionKind | None
     audience: Audience | None  # who may answer it
     age_s: int  # since it started waiting
+    group: str  # the InboxGroup.key it belongs to
+    blocks: list[BlockedTask]  # tasks that cannot proceed until this is resolved
+    impact: int  # len(blocks)
     artifact_ids: list[str]  # the current attempt's
     failed_dependencies: list[str]  # failed or cancelled; a pending task waits on them
     task: TaskDetail | None = None  # view=detail only
     decision: DecisionDetail | None = None  # view=detail only
 
 
+class InboxGroup(BaseModel):
+    key: str  # task:<id>, pool, or knowledge_proposal:<project>
+    project: str | None
+    subject_type: str
+    subject_id: str | None  # the task; None for pool and knowledge groups
+    title: str | None
+    open_decisions: int
+    oldest_age_s: int
+    stalled_tasks: int  # distinct tasks blocked by the group's rows
+
+
 class InboxPage(PageInfo):
     items: list[InboxItem]
+    groups: list[InboxGroup]  # every group of the filtered set, not just the page
     totals_by_state: dict[str, int]  # task state, else the subject type
     totals_by_decision_kind: dict[str, int]  # "none": no open decision
 
@@ -78,6 +101,21 @@ _ROWS = (
     " WHERE d.state = 'open' AND d.subject_type != 'task'"
 )
 
+# `impact`: the row's own task when blocked, plus its non-terminal direct dependents.
+_WITH_IMPACT = (
+    "SELECT r.*, coalesce(r.state = 'blocked', 0) + (SELECT count(*) FROM task_deps td"  # noqa: S608
+    " JOIN tasks c ON c.id = td.task_id WHERE r.subject_type = 'task'"
+    " AND td.depends_on_id = r.subject_id"
+    " AND c.state NOT IN ('succeeded', 'failed', 'cancelled')) AS impact"
+    f" FROM ({_ROWS}) r"
+)
+_DEPENDENTS = (
+    "SELECT td.depends_on_id, c.id, c.title, c.state FROM task_deps td"
+    " JOIN tasks c ON c.id = td.task_id"
+    " WHERE c.state NOT IN ('succeeded', 'failed', 'cancelled')"
+    " ORDER BY c.created_at, c.id"
+)
+
 _TOTALS = "coalesce(state, subject_type), coalesce(decision_kind, 'none'), count(*)"
 _CURRENT_ARTIFACTS = (
     "SELECT a.task_id, a.id FROM artifacts a JOIN tasks t ON t.id = a.task_id"
@@ -91,15 +129,21 @@ async def inbox(
     project: str | None = None,
     states: list[TaskState] | None = None,
     decision_kinds: list[DecisionKind] | None = None,
+    blocking_only: bool = False,
+    order: Order = "age",
     view: View = "summary",
     limit: int = 25,
     cursor: str | None = None,
 ) -> InboxPage:
-    """Oldest first. `states` keeps only task rows in those states."""
+    """Oldest first, or most impactful first with `order="impact"`. `states` keeps
+    only task rows in those states; `blocking_only` keeps rows that block a task."""
     limit = clamp(limit)
     filters: dict[str, Any] = {"project": project, "states": sorted(states or [])}
     filters |= {"decision_kinds": sorted(decision_kinds or [])}
+    filters |= {"blocking_only": blocking_only, "order": order}
     where, params = ["1 = 1"], []
+    if blocking_only:
+        where.append("impact >= 1")
     if project is not None:
         where.append("project = ?")
         params.append(project)
@@ -109,7 +153,7 @@ async def inbox(
     if decision_kinds:
         where.append(f"decision_kind IN ({','.join('?' * len(decision_kinds))})")
         params += decision_kinds
-    rows_sql = f"SELECT * FROM ({_ROWS}) WHERE {' AND '.join(where)}"  # noqa: S608
+    rows_sql = f"SELECT * FROM ({_WITH_IMPACT}) WHERE {' AND '.join(where)}"  # noqa: S608
     conn = snap.conn
     by_state: dict[str, int] = defaultdict(int)
     by_kind: dict[str, int] = defaultdict(int)
@@ -118,11 +162,19 @@ async def inbox(
         for state, kind, n in await cur.fetchall():
             by_state[state] += n
             by_kind[kind] += n
+    sort = "-impact, since, row_key" if order == "impact" else "since, row_key"
+    async with conn.execute(
+        f"SELECT * FROM ({rows_sql}) ORDER BY {sort}",  # noqa: S608
+        params,
+    ) as cur:
+        everything = list(await cur.fetchall())
+    dependents = await _dependents(snap)
+    groups = _groups(snap, everything, dependents, order)
     if (after := decode_cursor(cursor, filters)) is not None:
-        rows_sql += " AND (since, row_key) > (?, ?)"
+        rows_sql += f" AND ({sort}) > ({','.join('?' * len(after))})"
         params += after
     async with conn.execute(
-        rows_sql + " ORDER BY since, row_key LIMIT ?", [*params, limit + 1]
+        f"{rows_sql} ORDER BY {sort} LIMIT ?", [*params, limit + 1]
     ) as cur:
         rows = list(await cur.fetchall())
     has_more = len(rows) > limit
@@ -143,7 +195,10 @@ async def inbox(
         item = InboxItem.model_validate(
             {
                 **dict(r),
-                "age_s": max(0, int((snap.now - _at(r["since"])).total_seconds())),
+                "age_s": _age(snap, r),
+                "group": _group_key(r),
+                "blocks": (blocks := _blocks(r, dependents)),
+                "impact": len(blocks),
                 "artifact_ids": artifacts.get(r["subject_id"], []),
                 "failed_dependencies": stuck.get(r["subject_id"], []),
             }
@@ -167,13 +222,85 @@ async def inbox(
         items=items,
         total=sum(by_state.values()),
         has_more=has_more,
-        next_cursor=encode_cursor([last["since"], last["row_key"]], filters)
+        next_cursor=encode_cursor(_cursor_key(last, order), filters)
         if last is not None
         else None,
         omitted=sorted(omitted),
+        groups=groups,
         totals_by_state=dict(sorted(by_state.items())),
         totals_by_decision_kind=dict(sorted(by_kind.items())),
     )
+
+
+def _cursor_key(row: Any, order: Order) -> list[Any]:
+    key = [row["since"], row["row_key"]]
+    return [-row["impact"], *key] if order == "impact" else key
+
+
+def _age(snap: Snapshot, row: Any) -> int:
+    return max(0, int((snap.now - _at(row["since"])).total_seconds()))
+
+
+def _group_key(row: Any) -> str:
+    if row["subject_type"] == "task":
+        return f"task:{row['subject_id']}"
+    if row["subject_type"] == "knowledge_proposal":
+        return f"knowledge_proposal:{row['project']}"
+    return row["subject_type"]
+
+
+async def _dependents(snap: Snapshot) -> dict[str, list[BlockedTask]]:
+    """Non-terminal tasks that depend on each task, from task_deps."""
+    found: dict[str, list[BlockedTask]] = defaultdict(list)
+    async with snap.conn.execute(_DEPENDENTS) as cur:
+        for parent, task_id, title, state in await cur.fetchall():
+            found[parent].append(BlockedTask(id=task_id, title=title, state=state))
+    return found
+
+
+def _blocks(row: Any, dependents: dict[str, list[BlockedTask]]) -> list[BlockedTask]:
+    if row["subject_type"] != "task":
+        return []
+    own = []
+    if row["state"] == TaskState.BLOCKED:
+        own = [
+            BlockedTask(id=row["subject_id"], title=row["title"], state=row["state"])
+        ]
+    return own + dependents.get(row["subject_id"], [])
+
+
+def _groups(
+    snap: Snapshot,
+    rows: list[Any],
+    dependents: dict[str, list[BlockedTask]],
+    order: Order,
+) -> list[InboxGroup]:
+    """One group per task, per project's knowledge proposals, and for pools."""
+    members: dict[str, list[Any]] = {}
+    for r in rows:
+        members.setdefault(_group_key(r), []).append(r)
+    groups = []
+    for key, group_rows in members.items():
+        first = group_rows[0]
+        is_task = first["subject_type"] == "task"
+        stalled = {b.id for r in group_rows for b in _blocks(r, dependents)}
+        groups.append(
+            InboxGroup(
+                key=key,
+                project=None if first["subject_type"] == "pool" else first["project"],
+                subject_type=first["subject_type"],
+                subject_id=first["subject_id"] if is_task else None,
+                title=first["title"] if is_task else None,
+                open_decisions=sum(r["decision_id"] is not None for r in group_rows),
+                oldest_age_s=max(_age(snap, r) for r in group_rows),
+                stalled_tasks=len(stalled),
+            )
+        )
+    if order == "impact":
+        groups.sort(key=lambda g: (-g.stalled_tasks, -g.oldest_age_s, g.key))
+    else:
+        groups.sort(key=lambda g: (-g.oldest_age_s, g.key))
+    return groups
 
 
 async def _current_artifacts(snap: Snapshot, task_ids: list[str]) -> dict[str, list]:

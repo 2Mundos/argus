@@ -344,3 +344,61 @@ def test_answer_many_applies_each_item_on_its_own(client: TestClient) -> None:
     too_many = {"answers": [{"decision_id": a}] * 21}
     res = client.post("/api/decisions/answers", json=too_many, headers=ADMIN_H)
     assert res.status_code == 422
+
+
+def test_inbox_hides_what_the_caller_may_not_see(client: TestClient) -> None:
+    """The inbox is manager-only: a worker gets no rows, groups or ids from it."""
+    boot = client.post("/api/agents/bootstrap-tokens", json={}, headers=ADMIN_H).json()
+    reg = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
+    worker = {"Authorization": f"Bearer {reg.json()['token']}"}
+    client.post(
+        "/api/tasks",
+        json={"project": "global", "title": "t", "requires_approval": True},
+        headers=ADMIN_H,
+    )
+    assert client.get("/api/inbox", headers=worker).status_code == 403
+    page = client.get("/api/inbox", params={"order": "impact"}, headers=ADMIN_H).json()
+    assert page["total"] == 1 and len(page["groups"]) == 1
+    # a worker still sees only the decisions of tasks it holds
+    assert client.get("/api/decisions", headers=worker).json()["total"] == 0
+
+
+def test_batch_partial_failure_retries_with_the_original_request_ids(
+    client: TestClient,
+) -> None:
+    def approval() -> str:
+        task = client.post(
+            "/api/tasks",
+            json={"project": "global", "title": "t", "requires_approval": True},
+            headers=ADMIN_H,
+        ).json()
+        res = client.get(
+            "/api/decisions", params={"subject_id": task["id"]}, headers=ADMIN_H
+        )
+        return res.json()["items"][0]["id"]
+
+    good, bad = approval(), approval()
+    batch = {
+        "answers": [
+            {"decision_id": good, "choice": "approve", "request_id": "r-good"},
+            {"decision_id": bad, "choice": "maybe", "request_id": "r-bad"},
+        ]
+    }
+    first = client.post("/api/decisions/answers", json=batch, headers=ADMIN_H).json()
+    assert [r["ok"] for r in first["results"]] == [True, False]
+    assert first["results"][1]["error"]["code"] == "invalid_choice"
+
+    # Retry resends the failed item (fixed) and, as a client may, the ok one too:
+    # the same request_id replays instead of answering twice.
+    retry = {
+        "answers": [
+            batch["answers"][0],
+            {"decision_id": bad, "choice": "reject", "request_id": "r-bad"},
+        ]
+    }
+    again = client.post("/api/decisions/answers", json=retry, headers=ADMIN_H).json()
+    assert [r["ok"] for r in again["results"]] == [True, True]
+    assert [r["replayed"] for r in again["results"]] == [True, False]
+    third = client.post("/api/decisions/answers", json=retry, headers=ADMIN_H).json()
+    assert [r["replayed"] for r in third["results"]] == [True, True]
+    assert client.get("/api/decisions", headers=ADMIN_H).json()["total"] == 0

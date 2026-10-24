@@ -2052,6 +2052,28 @@
         "title": "BlockRequest",
         "type": "object"
       },
+      "BlockedTask": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "state"
+        ],
+        "title": "BlockedTask",
+        "type": "object"
+      },
       "BootstrapTokenCreate": {
         "properties": {
           "instance_id": {
@@ -6720,6 +6742,75 @@
         "title": "ImageChoice",
         "type": "object"
       },
+      "InboxGroup": {
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "oldest_age_s": {
+            "title": "Oldest Age S",
+            "type": "integer"
+          },
+          "open_decisions": {
+            "title": "Open Decisions",
+            "type": "integer"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "stalled_tasks": {
+            "title": "Stalled Tasks",
+            "type": "integer"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          },
+          "subject_type": {
+            "title": "Subject Type",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "key",
+          "project",
+          "subject_type",
+          "subject_id",
+          "title",
+          "open_decisions",
+          "oldest_age_s",
+          "stalled_tasks"
+        ],
+        "title": "InboxGroup",
+        "type": "object"
+      },
       "InboxItem": {
         "properties": {
           "age_s": {
@@ -6753,6 +6844,13 @@
                 "type": "null"
               }
             ]
+          },
+          "blocks": {
+            "items": {
+              "$ref": "#/components/schemas/BlockedTask"
+            },
+            "title": "Blocks",
+            "type": "array"
           },
           "decision": {
             "anyOf": [
@@ -6791,6 +6889,14 @@
             },
             "title": "Failed Dependencies",
             "type": "array"
+          },
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "impact": {
+            "title": "Impact",
+            "type": "integer"
           },
           "kind": {
             "anyOf": [
@@ -6878,6 +6984,9 @@
           "decision_kind",
           "audience",
           "age_s",
+          "group",
+          "blocks",
+          "impact",
           "artifact_ids",
           "failed_dependencies"
         ],
@@ -6886,6 +6995,13 @@
       },
       "InboxPage": {
         "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/InboxGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
           "has_more": {
             "title": "Has More",
             "type": "boolean"
@@ -6940,6 +7056,7 @@
           "next_cursor",
           "omitted",
           "items",
+          "groups",
           "totals_by_state",
           "totals_by_decision_kind"
         ],
@@ -18856,7 +18973,7 @@
     },
     "/api/inbox": {
       "get": {
-        "description": "What waits on a manager, oldest first: blocked, in-review and\nawaiting-approval tasks with their open decision, pending tasks stuck behind a\nfailed or cancelled dependency (`failed_dependencies`), plus open decisions\nabout pools and knowledge. `state` keeps only task rows in those states.",
+        "description": "What waits on a manager, oldest first (`order=impact`: most blocked tasks\nfirst) and grouped by project and task (`groups`): blocked, in-review and\nawaiting-approval tasks with their open decision, pending tasks stuck behind a\nfailed or cancelled dependency (`failed_dependencies`), plus open decisions\nabout pools and knowledge. `state` keeps only task rows in those states;\n`blocking_only` keeps rows that block at least one task (`blocks`, `impact`).",
         "operationId": "inbox_api_inbox_get",
         "parameters": [
           {
@@ -18911,6 +19028,30 @@
                 }
               ],
               "title": "Decision Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "blocking_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Blocking Only",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "default": "age",
+              "enum": [
+                "age",
+                "impact"
+              ],
+              "title": "Order",
+              "type": "string"
             }
           },
           {
