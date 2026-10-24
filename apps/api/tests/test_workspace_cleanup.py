@@ -709,6 +709,7 @@ async def test_git_timeout_blocks(env: Env) -> None:
     assert (await env.entry(A))["reason"] == "archive_timeout"
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
 async def test_unreadable_directory_blocks(env: Env) -> None:
     path = await env.instance(A)
     locked = path / "locked"
