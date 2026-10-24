@@ -534,6 +534,44 @@ async def test_concurrent_cleaners_delete_once(env: Env) -> None:
     assert row is not None and row["n"] == 2
 
 
+async def test_a_tombstone_leased_after_the_scan_snapshot_is_left_alone(
+    env: Env, monkeypatch
+) -> None:
+    # Another run leases and renames B after this run read its audit snapshot;
+    # settling must see that lease, not the stale snapshot.
+    await env.instance(A)
+    await env.instance(B)
+    real = wc._list_dir
+    raced = False
+
+    def list_dir(root: str) -> list[tuple[str, bool]]:
+        nonlocal raced
+        if not raced:
+            raced = True
+            os.rename(env.root / B, env.root / (wc.TOMBSTONE + B))
+            asyncio.run_coroutine_threadsafe(lease_b(), loop).result()
+        return real(root)
+
+    async def lease_b() -> None:
+        async with env.db.write() as tx:
+            await wc._put(
+                tx,
+                "other-run",
+                str(env.root),
+                B,
+                status=wc.S.ELIGIBLE,
+                reason="in_progress",
+                lock_run_id="other-run",
+                lock_expires_at=ts(tx.now.replace(year=2099)),
+            )
+
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(wc, "_list_dir", list_dir)
+    await env.run()
+    assert (env.root / (wc.TOMBSTONE + B)).exists()  # not renamed back
+    assert not (env.root / B).exists()
+
+
 async def test_leftover_tombstone_is_restored_unless_leased(env: Env) -> None:
     await env.instance(A)
     await env.instance(B, "running")
