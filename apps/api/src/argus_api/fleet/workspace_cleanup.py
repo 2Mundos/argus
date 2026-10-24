@@ -456,15 +456,24 @@ class WorkspaceCleaner:
                     for cand in candidates:
                         try:
                             await self._process(run, cand)
-                        except Exception:
+                        except Exception as exc:
                             # One directory's bug must not stop the others; the
                             # lease expires and a later run retries it.
-                            log.exception("workspace cleanup of %s failed", cand.name)
+                            # Sanitize: never log exception messages (may carry paths).
+                            log.error(
+                                "workspace cleanup of %s failed (%s)",
+                                cand.name,
+                                wa.sanitize(exc),
+                            )
                             run.skipped.append(f"{cand.name}: internal_error")
             except TimeoutError:
                 status, error = "timed_out", "TimeoutError"
             except Exception as exc:
-                log.exception("workspace cleanup run %s failed", run.id)
+                log.error(
+                    "workspace cleanup run %s failed (%s)",
+                    run.id,
+                    wa.sanitize(exc),
+                )
                 status, error = "failed", wa.sanitize(exc)
             free_after = self._free(roots)
         finally:
@@ -759,6 +768,15 @@ class WorkspaceCleaner:
         self, run: RunState, cand: Candidate, tomb: str, prev: dict
     ) -> Outcome | None:
         root, name = cand.root, cand.name
+        # Ownership / readability before anything moves (spec 3.3).
+        try:
+            tree = await asyncio.to_thread(measure, root, name, self.uid)
+        except Unsafe as exc:
+            return Outcome(S.BLOCKED, exc.code)
+        except OSError as exc:
+            return Outcome(S.BLOCKED, "permission_denied", error=wa.sanitize(exc))
+        if tree.foreign_owner:
+            return Outcome(S.BLOCKED, "permission_denied", tree.bytes)
         try:
             rfd = _open_dir(root, None)
         except OSError as exc:
@@ -779,7 +797,11 @@ class WorkspaceCleaner:
                         _rename_back(rfd, tomb, name)
                 raise
             except Exception as exc:
-                log.exception("workspace cleanup of %s failed", name)
+                log.error(
+                    "workspace cleanup of %s failed (%s)",
+                    name,
+                    wa.sanitize(exc),
+                )
                 outcome = (
                     Outcome(S.FAILED, "delete_error", error=wa.sanitize(exc))
                     if cand.deleting
@@ -855,7 +877,23 @@ class WorkspaceCleaner:
         )
         if problem:
             return Outcome(S.FAILED, problem)
-        return await self._delete(run, cand, tomb, None, None)
+        # Reuse the archive path recorded when deletion started so a later
+        # finish keeps reason=archived and events say archived=true.
+        archive_path: str | None = None
+        estimated: int | None = None
+        async with (
+            self.db.read() as conn,
+            conn.execute(
+                "SELECT archive_path, bytes_estimated FROM workspace_cleanup"
+                " WHERE root = ? AND name = ?",
+                (root, cand.name),
+            ) as cur,
+        ):
+            row = await cur.fetchone()
+        if row is not None:
+            archive_path = row["archive_path"]
+            estimated = row["bytes_estimated"]
+        return await self._delete(run, cand, tomb, estimated, archive_path)
 
     async def _delete(
         self,
@@ -1129,8 +1167,8 @@ class WorkspaceCleaner:
 
 
 def _log_failure(task: asyncio.Task) -> None:
-    if not task.cancelled() and task.exception() is not None:
-        log.error("workspace cleanup run failed", exc_info=task.exception())
+    if not task.cancelled() and (exc := task.exception()) is not None:
+        log.error("workspace cleanup run failed (%s)", wa.sanitize(exc))
 
 
 def _exists(name: str, dir_fd: int) -> bool:
