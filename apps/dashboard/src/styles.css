@@ -1723,3 +1723,15 @@ button.link.account-name {
 .term .steer-message {
   white-space: pre-wrap;
 }
+.pr-merged {
+  color: var(--ok);
+  border-color: currentColor;
+}
+.pr-closed {
+  color: var(--danger);
+  border-color: currentColor;
+}
+.pr-unknown {
+  color: var(--warn);
+  border-style: dashed;
+}

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, call, download } from "../api";
 import { ARCHIVABLE } from "../archive";
+import { TaskDelivery } from "../delivery";
 import { TaskFailover } from "../failover";
 import { bytes, relative, shortId } from "../format";
 import { useLiveData } from "../live";
@@ -34,10 +35,17 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
             signal,
           }),
         ),
+        // A forge hiccup must not take the drawer down: no delivery section instead.
+        call(
+          api.GET("/api/tasks/{task_id}/delivery", {
+            params: { path: { task_id: taskId } },
+            signal,
+          }),
+        ).catch(() => null),
       ]),
     [taskId],
   );
-  const [task, artifacts, events] = data ?? [];
+  const [task, artifacts, events, delivery] = data ?? [];
 
   async function act(action: "cancel" | "unblock" | "retry" | "archive" | "unarchive") {
     setError(undefined);
@@ -71,6 +79,7 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
           {task && (
             <>
               <Activity task={task} events={events ?? []} />
+              {delivery && <TaskDelivery delivery={delivery} onChanged={reload} />}
               <dl className="facts">
                 <dt>State</dt>
                 <dd>

@@ -94,6 +94,9 @@ every new dependency is judged against it.
   capabilities, pins and dependencies with one rule set for REST, MCP and the dashboard
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes
   that say whether an upgrade can be rolled back, the tagged image
+- [Task delivery](specs/task-delivery.spec.md) — read-only PR state (open, merged,
+  closed, unknown) of a task's delivery on REST, MCP and the dashboard; a merge is
+  flagged for review, never accepted.
 - [Task continuation](specs/task-continuation.spec.md) — one typed contract per task:
   phase, artifacts with provenance, checklist evidence, effective decisions, gaps;
   contract first, narrative as history
