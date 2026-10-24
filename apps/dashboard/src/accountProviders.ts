@@ -3,7 +3,7 @@ import type { EngineCatalog } from "./api";
 /** UI-only: never sent to the API. */
 export const PROVIDER_PICK_CUSTOM = "__custom__";
 
-export type AccountProviderOption = {
+type AccountProviderOption = {
   id: string;
   label: string;
   authMethods: string[];

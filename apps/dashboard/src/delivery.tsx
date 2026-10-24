@@ -10,7 +10,7 @@ const BLOCKED: Record<string, string> = {
   no_review: "No open review to accept.",
 };
 
-export function stateLabel(state: Delivery["pr_state"]): string {
+function stateLabel(state: Delivery["pr_state"]): string {
   return state === "unknown" ? "unknown (not read)" : state;
 }
 

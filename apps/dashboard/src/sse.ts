@@ -1,4 +1,4 @@
-export interface SseMessage {
+interface SseMessage {
   id: string | null;
   data: string;
 }
