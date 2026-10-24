@@ -3,7 +3,7 @@ import { relative } from "./format";
 
 // Account failover on a task (docs/specs/account-selection.spec.md 3.6).
 
-export type FailoverInfo = Pick<
+type FailoverInfo = Pick<
   Task,
   "state" | "block_reason" | "refill_at" | "serving_account" | "failover"
 > &

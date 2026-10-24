@@ -19,9 +19,9 @@ export type CustomForm = {
   executor: RoleForm;
 };
 
-export const OPENROUTER_URL = "https://openrouter.ai/api/v1";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1";
 
-export const emptyRole = (): RoleForm => ({
+const emptyRole = (): RoleForm => ({
   model: "",
   order: "",
   only: "",

@@ -129,7 +129,7 @@ export const list = (text: string): string[] =>
     .map((x) => x.trim())
     .filter(Boolean);
 
-export function parseEnv(text: string): Record<string, string> {
+function parseEnv(text: string): Record<string, string> {
   return Object.fromEntries(
     text
       .split("\n")

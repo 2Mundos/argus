@@ -1,4 +1,4 @@
-export const DEFAULT_PROJECT = "Global";
+const DEFAULT_PROJECT = "Global";
 
 /** "radar-web" → "Radar Web"; empty/missing → "Global". */
 export function humanizeProject(slug: string | null | undefined): string {

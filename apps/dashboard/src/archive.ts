@@ -11,7 +11,7 @@ export interface ArchiveCriteria {
   olderThanDays: string;
 }
 
-export interface BulkArchiveBody {
+interface BulkArchiveBody {
   states: TaskState[];
   project?: string;
   older_than_days?: number;

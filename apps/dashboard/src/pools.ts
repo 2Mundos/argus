@@ -1,5 +1,5 @@
 /** How the API shows a stored env value: values are write-only. */
-export const REDACTED = "***";
+const REDACTED = "***";
 
 /**
  * The `env` part of a pool PATCH from the editor's text: changed or new values
