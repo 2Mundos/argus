@@ -35,6 +35,7 @@ REASONS = (
     "channel_error",
     "provider_failure",
     "agent_ended",
+    "session_lost",
     "other",
 )
 

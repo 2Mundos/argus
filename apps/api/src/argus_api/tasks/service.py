@@ -676,12 +676,19 @@ class RejectedLease:
 
 
 async def renew(
-    tx: Tx, agent_id: str, leases: list[tuple[str, int]]
+    tx: Tx,
+    agent_id: str,
+    leases: list[tuple[str, int] | tuple[str, int, datetime | None]],
 ) -> tuple[list[RenewedLease], list[RejectedLease]]:
-    """Extend each still-valid lease; a rejected pair never blocks the others."""
+    """Extend each still-valid lease; a rejected pair never blocks the others.
+
+    An optional third element is `activity_at` (stall visibility): clamped to
+    `<= tx.now`, never moved backwards, and clears `quiet_at` when it advances."""
     renewed: list[RenewedLease] = []
     rejected: list[RejectedLease] = []
-    for task_id, attempt in leases:
+    for item in leases:
+        task_id, attempt = item[0], item[1]
+        activity_at = item[2] if len(item) > 2 else None
         try:
             row = await _owned(tx, task_id, attempt, agent_id)
         except (LeaseConflictError, NotFoundError) as exc:
@@ -692,8 +699,24 @@ async def renew(
             "UPDATE tasks SET lease_expires_at = ? WHERE id = ?",
             (ts(deadline), task_id),
         )
+        if activity_at is not None:
+            await _record_activity(tx, task_id, row, activity_at)
         renewed.append(RenewedLease(task_id, attempt, deadline))
     return renewed, rejected
+
+
+async def _record_activity(
+    tx: Tx, task_id: str, row: aiosqlite.Row, activity_at: datetime
+) -> None:
+    """Store a newer activity signal and clear quiet when it advances."""
+    at = min(activity_at, tx.now)
+    previous = row["activity_at"]
+    if previous is not None and at <= datetime.fromisoformat(previous):
+        return
+    await tx.conn.execute(
+        "UPDATE tasks SET activity_at = ?, quiet_at = NULL WHERE id = ?",
+        (ts(at), task_id),
+    )
 
 
 async def complete(
@@ -790,7 +813,7 @@ async def report_progress(
             )
     await tx.conn.execute(
         "UPDATE tasks SET progress_message = ?, progress_percent = ?, progress_at = ?,"
-        " lease_expires_at = ? WHERE id = ?",
+        " lease_expires_at = ?, quiet_at = NULL WHERE id = ?",
         (
             message,
             percent,
@@ -1999,15 +2022,122 @@ async def expire_agent_leases(tx: Tx, agent_id: str) -> list[str]:
     return await _expire_where(tx, "assignee_agent_id = ?", agent_id, "agent_ended")
 
 
-def _expiry_error(row: aiosqlite.Row, reason: str) -> str:
+# Reaper interval is 10 s (reaper.REAP_INTERVAL_S); three missed passes.
+LATE_DETECT_AFTER_S = 30
+QUIET_CLAIM_S = 1200  # default; reaper may pass Settings.quiet_claim_s
+
+
+def last_signal(
+    *,
+    activity_at: str | None = None,
+    progress_at: str | None = None,
+    output_at: str | None = None,
+    claimed_at: str | None = None,
+) -> tuple[datetime | None, str | None]:
+    """Newest of activity / progress / live log / claim time, with its source."""
+    candidates: list[tuple[datetime, str]] = []
+    for value, source in (
+        (activity_at, "activity"),
+        (progress_at, "progress"),
+        (output_at, "log"),
+    ):
+        if value is not None:
+            candidates.append((datetime.fromisoformat(value), source))
+    if claimed_at is not None:
+        candidates.append((datetime.fromisoformat(claimed_at), "claim"))
+    if not candidates:
+        return None, None
+    at, source = max(candidates, key=lambda c: c[0])
+    return at, source
+
+
+def _last_signal(
+    row: aiosqlite.Row, *, claimed_at: str | None = None
+) -> tuple[datetime | None, str | None]:
+    return last_signal(
+        activity_at=row["activity_at"],
+        progress_at=row["progress_at"],
+        output_at=row["output_at"],
+        claimed_at=claimed_at,
+    )
+
+
+def _expiry_error(
+    row: aiosqlite.Row,
+    reason: str,
+    *,
+    last_signal_at: datetime | None = None,
+    last_signal_source: str | None = None,
+    detected_late_s: int | None = None,
+) -> str:
     holder = row["assignee_agent_id"]
     match reason:
         case "lease_expired":
-            return f"lease expired at {row['lease_expires_at']} (holder {holder})"
+            base = f"lease expired at {row['lease_expires_at']} (holder {holder})"
         case "timeout":
-            return f"attempt timed out at {row['timeout_at']} (holder {holder})"
+            base = f"attempt timed out at {row['timeout_at']} (holder {holder})"
         case _:
-            return f"holder {holder} ended; its lease was released"
+            base = f"holder {holder} ended; its lease was released"
+    if last_signal_at is not None and last_signal_source is not None:
+        base += f"; last signal {last_signal_source} at {ts(last_signal_at)}"
+    if detected_late_s is not None and detected_late_s > 0:
+        mins = max(1, round(detected_late_s / 60))
+        base += f"; detected {mins} min late (Argus was not running)"
+    return base
+
+
+def _detected_late_s(tx: Tx, deadline: str | None) -> int | None:
+    if deadline is None:
+        return None
+    late = int((tx.now - datetime.fromisoformat(deadline)).total_seconds())
+    return late if late > LATE_DETECT_AFTER_S else None
+
+
+async def flag_quiet(
+    tx: Tx, quiet_after_s: int = QUIET_CLAIM_S, failed: list[str] | None = None
+) -> list[str]:
+    """Flag claimed tasks with no signal for `quiet_after_s` (stall visibility).
+
+    Sets `quiet_at` once per silence and emits `task.quiet`. Never expires."""
+    async with tx.conn.execute(
+        "SELECT t.*, a.claimed_at FROM tasks t"
+        " JOIN task_attempts a ON a.task_id = t.id AND a.attempt = t.attempt"
+        " WHERE t.state = 'claimed' AND t.quiet_at IS NULL ORDER BY t.id"
+    ) as cur:
+        rows = await cur.fetchall()
+    quieted: list[str] = []
+    cutoff = tx.now - timedelta(seconds=quiet_after_s)
+    for row in rows:
+        last_at, source = _last_signal(row, claimed_at=row["claimed_at"])
+        if last_at is None or last_at > cutoff:
+            continue
+        try:
+            async with tx.savepoint():
+                await tx.conn.execute(
+                    "UPDATE tasks SET quiet_at = ? WHERE id = ? AND quiet_at IS NULL",
+                    (ts(tx.now), row["id"]),
+                )
+                await record(
+                    tx,
+                    "system",
+                    "task",
+                    row["id"],
+                    "task.quiet",
+                    {
+                        "attempt": row["attempt"],
+                        "agent_id": row["assignee_agent_id"],
+                        "last_signal_at": ts(last_at),
+                        "last_signal_source": source,
+                    },
+                )
+        except Exception:
+            if failed is None:
+                raise
+            log.exception("could not flag quiet task %s", row["id"])
+            failed.append(row["id"])
+            continue
+        quieted.append(row["id"])
+    return quieted
 
 
 async def _expire_where(
@@ -2018,13 +2148,37 @@ async def _expire_where(
     failed: list[str] | None = None,
 ) -> list[str]:
     async with tx.conn.execute(
-        f"SELECT * FROM tasks WHERE state = 'claimed' AND {condition} ORDER BY id",  # noqa: S608
+        f"SELECT t.*, a.claimed_at FROM tasks t"  # noqa: S608
+        f" LEFT JOIN task_attempts a ON a.task_id = t.id AND a.attempt = t.attempt"
+        f" WHERE t.state = 'claimed' AND {condition} ORDER BY t.id",
         (param,),
     ) as cur:
         rows = await cur.fetchall()
     expired: list[str] = []
     for row in rows:
-        error = _expiry_error(row, reason)
+        last_at, source = _last_signal(row, claimed_at=row["claimed_at"])
+        deadline = {
+            "lease_expired": row["lease_expires_at"],
+            "timeout": row["timeout_at"],
+        }.get(reason)
+        late = _detected_late_s(tx, deadline)
+        error = _expiry_error(
+            row,
+            reason,
+            last_signal_at=last_at,
+            last_signal_source=source,
+            detected_late_s=late,
+        )
+        data: dict[str, Any] = {
+            "agent_id": row["assignee_agent_id"],
+            "reason": reason,
+            "error": error,
+        }
+        if last_at is not None:
+            data["last_signal_at"] = ts(last_at)
+            data["last_signal_source"] = source
+        if late is not None:
+            data["detected_late_s"] = late
         try:
             async with tx.savepoint():
                 await _apply(
@@ -2041,12 +2195,10 @@ async def _expire_where(
                             f" {'requeued' if row['failures'] + 1 < row['max_attempts'] else 'failed'}"
                         ),
                         "progress_percent": None,
+                        "quiet_at": None,
+                        "activity_at": None,
                     },
-                    data={
-                        "agent_id": row["assignee_agent_id"],
-                        "reason": reason,
-                        "error": error,
-                    },
+                    data=data,
                 )
         except Exception:
             if failed is None:

@@ -155,7 +155,7 @@ async def wait(
 
 # What adds a row to the inbox (inbox.py): a decision to answer, a task entering
 # a waiting state, or a pending task stuck on a failed dependency.
-_INBOX_KINDS = ("decision.opened", "task.dependency_failed")
+_INBOX_KINDS = ("decision.opened", "task.dependency_failed", "task.quiet")
 _INBOX_STATES = ("blocked", "in_review", "awaiting_approval")
 _INBOX_SQL = (
     f"kind IN ({', '.join(repr(k) for k in _INBOX_KINDS)})"

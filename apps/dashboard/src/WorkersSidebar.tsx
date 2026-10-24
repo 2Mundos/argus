@@ -3,10 +3,25 @@ import { shortId } from "./format";
 import { useLiveData } from "./live";
 import { useNow } from "./views/Activity";
 
+const RECENTLY_ENDED_MS = 60 * 60 * 1000;
+
 function liveWorkers(agents: Agent[] | undefined): Agent[] {
   return (agents ?? []).filter(
     (a) => a.role === "worker" && (a.state === "active" || a.state === "draining"),
   );
+}
+
+/** Workers that ended in the last hour (lost/gone), newest first. */
+function recentlyEnded(agents: Agent[] | undefined, now: number): Agent[] {
+  return (agents ?? [])
+    .filter(
+      (a) =>
+        a.role === "worker" &&
+        (a.state === "lost" || a.state === "gone") &&
+        a.ended_at != null &&
+        now - new Date(a.ended_at).getTime() <= RECENTLY_ENDED_MS,
+    )
+    .sort((a, b) => new Date(b.ended_at!).getTime() - new Date(a.ended_at!).getTime());
 }
 
 /** Compact age: "12s", "3m", "2h". */
@@ -18,8 +33,10 @@ function age(iso: string, now: number): string {
   return `${Math.round(s / 86_400)}d`;
 }
 
-function status(agent: Agent): "busy" | "idle" | "draining" {
+function status(agent: Agent): "busy" | "idle" | "draining" | "quiet" | "ended" {
+  if (agent.state === "lost" || agent.state === "gone") return "ended";
   if (agent.state === "draining") return "draining";
+  if (agent.quiet_since) return "quiet";
   return agent.claimed_tasks > 0 ? "busy" : "idle";
 }
 
@@ -81,7 +98,10 @@ export function WorkersSidebar({
     [],
   );
   const workers = liveWorkers(agents);
+  const ended = recentlyEnded(agents, now);
   const busy = workers.filter((a) => a.claimed_tasks > 0).length;
+  const quiet = workers.filter((a) => a.quiet_since).length;
+  const listed = [...workers, ...ended];
 
   return (
     <aside className="workers-rail" aria-label="Running workers">
@@ -91,16 +111,18 @@ export function WorkersSidebar({
           <p className="workers-rail-summary muted small">
             {workers.length} live
             {busy > 0 ? ` · ${busy} busy` : ""}
+            {quiet > 0 ? ` · ${quiet} quiet` : ""}
+            {ended.length > 0 ? ` · ${ended.length} ended` : ""}
           </p>
         )}
       </header>
       {agents === undefined ? (
         <p className="workers-rail-empty muted small">{error ? "—" : "…"}</p>
-      ) : workers.length === 0 ? (
+      ) : listed.length === 0 ? (
         <p className="workers-rail-empty muted small">None live</p>
       ) : (
         <ul>
-          {workers.map((a) => {
+          {listed.map((a) => {
             const kind = status(a);
             const eng = engineLabel(a);
             const exec = a.runtime?.executor;
@@ -111,7 +133,7 @@ export function WorkersSidebar({
                 <button
                   type="button"
                   className={`worker-chip worker-${kind}${selected ? " selected" : ""}`}
-                  title={a.name}
+                  title={a.end_reason ? `${a.name}: ${a.end_reason}` : a.name}
                   aria-current={selected ? "true" : undefined}
                   onClick={() => onSelect(a.id)}
                 >
@@ -121,27 +143,51 @@ export function WorkersSidebar({
                   </span>
                   <span className="worker-name">{shortName(a.name)}</span>
                   <span className="worker-stats">
-                    <span>
-                      <span className="muted">tasks</span> {a.claimed_tasks}
-                    </span>
-                    <span>
-                      <span className="muted">hb</span> {age(a.last_heartbeat_at, now)}
-                    </span>
-                    <span>
-                      <span className="muted">up</span> {age(a.created_at, now)}
-                    </span>
-                    <span className="worker-engine" title={[eng, exec].filter(Boolean).join(" · ")}>
-                      {eng}
-                      {exec && exec !== eng ? ` · ${exec}` : ""}
-                    </span>
-                    {caps.length > 0 && (
-                      <span className="worker-caps muted" title={caps.join(", ")}>
-                        {caps.length} cap{caps.length === 1 ? "" : "s"}
-                        {a.instance_id ? ` · ${shortId(a.instance_id)}` : ""}
-                      </span>
-                    )}
-                    {caps.length === 0 && a.instance_id && (
-                      <span className="worker-caps muted">{shortId(a.instance_id)}</span>
+                    {kind === "ended" ? (
+                      <>
+                        <span>
+                          <span className="muted">ended</span>{" "}
+                          {a.ended_at ? age(a.ended_at, now) : "—"}
+                        </span>
+                        {a.end_reason && (
+                          <span className="worker-end-reason" title={a.end_reason}>
+                            {a.end_reason}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <span>
+                          <span className="muted">tasks</span> {a.claimed_tasks}
+                        </span>
+                        <span>
+                          <span className="muted">hb</span> {age(a.last_heartbeat_at, now)}
+                        </span>
+                        {a.quiet_since && (
+                          <span>
+                            <span className="muted">quiet</span> {age(a.quiet_since, now)}
+                          </span>
+                        )}
+                        <span>
+                          <span className="muted">up</span> {age(a.created_at, now)}
+                        </span>
+                        <span
+                          className="worker-engine"
+                          title={[eng, exec].filter(Boolean).join(" · ")}
+                        >
+                          {eng}
+                          {exec && exec !== eng ? ` · ${exec}` : ""}
+                        </span>
+                        {caps.length > 0 && (
+                          <span className="worker-caps muted" title={caps.join(", ")}>
+                            {caps.length} cap{caps.length === 1 ? "" : "s"}
+                            {a.instance_id ? ` · ${shortId(a.instance_id)}` : ""}
+                          </span>
+                        )}
+                        {caps.length === 0 && a.instance_id && (
+                          <span className="worker-caps muted">{shortId(a.instance_id)}</span>
+                        )}
+                      </>
                     )}
                   </span>
                 </button>

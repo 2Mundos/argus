@@ -208,6 +208,7 @@ async def test_outcome_rates(db: Database) -> None:
 
 def test_classify_failure() -> None:
     c = fleet_health.classify_failure
+    assert c("session_lost", "container gone") == "session_lost"
     assert c("lease_expired", "x") == "lease_expired"
     assert c("timeout", None) == "timeout"
     assert c("agent_ended", None) == "agent_ended"

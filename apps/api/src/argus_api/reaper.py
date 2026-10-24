@@ -25,22 +25,36 @@ class ReapResult:
     failed_tasks: list[str] = field(default_factory=list)
     failed_agents: list[str] = field(default_factory=list)
     failed_stages: list[str] = field(default_factory=list)
+    failed_quiet: list[str] = field(default_factory=list)
+    quieted_tasks: list[str] = field(default_factory=list)
 
     @property
     def clean(self) -> bool:
-        return not (self.failed_tasks or self.failed_agents or self.failed_stages)
+        return not (
+            self.failed_tasks
+            or self.failed_agents
+            or self.failed_stages
+            or self.failed_quiet
+        )
 
 
-async def reap(tx: Tx, local: tuple[bool | None, str] = (None, "")) -> ReapResult:
+async def reap(
+    tx: Tx,
+    local: tuple[bool | None, str] = (None, ""),
+    *,
+    quiet_claim_s: int = tasks.QUIET_CLAIM_S,
+) -> ReapResult:
     """One pass (3.4). The stages share the transaction but not their fate: each
     runs in a savepoint, and so does every task or agent inside lease/timeout
     expiry and loss, so one bad row or stage never keeps leases from expiring.
 
     `local` is the local model's probe, taken before the transaction opened:
-    reachable (or not), with the detail. `(None, "")` means it was not probed."""
+    reachable (or not), with the detail. `(None, "")` means it was not probed.
+    `quiet_claim_s` flags silent claims without expiring them (stall visibility)."""
     failed_tasks: list[str] = []
     failed_agents: list[str] = []
     failed_stages: list[str] = []
+    failed_quiet: list[str] = []
 
     async def stage(name: str, call: Callable[[], Awaitable[list[str]]]) -> list[str]:
         try:
@@ -60,12 +74,23 @@ async def reap(tx: Tx, local: tuple[bool | None, str] = (None, "")) -> ReapResul
         "expire_timeouts", lambda: tasks.expire_timeouts(tx, failed_tasks)
     )
     lost = await stage("mark_lost", lambda: agents.mark_lost(tx, failed_agents))
+    quieted = await stage(
+        "flag_quiet",
+        lambda: tasks.flag_quiet(tx, quiet_claim_s, failed_quiet),
+    )
     recovered = await stage("accounts.recover", lambda: accounts.recover(tx))
     recovered += await stage(
         "accounts.local_health", lambda: accounts.sync_local_health(tx, *local)
     )
     return ReapResult(
-        expired, lost, recovered, failed_tasks, failed_agents, failed_stages
+        expired,
+        lost,
+        recovered,
+        failed_tasks,
+        failed_agents,
+        failed_stages,
+        failed_quiet,
+        quieted,
     )
 
 
@@ -74,6 +99,7 @@ async def run(
     interval: float = REAP_INTERVAL_S,
     stats: LoopStats | None = None,
     local_probe: Callable[[], Awaitable[tuple[bool | None, str]]] | None = None,
+    quiet_claim_s: int = tasks.QUIET_CLAIM_S,
 ) -> None:
     while True:
         started = time.monotonic()
@@ -88,21 +114,23 @@ async def run(
                         "local model probe failed; leaving accounts as they are"
                     )
             async with db.write() as tx:
-                result = await reap(tx, local)
+                result = await reap(tx, local, quiet_claim_s=quiet_claim_s)
             if stats:
                 stats.record(time.monotonic() - started)
             if not result.clean:
                 log.error(
-                    "reaper: failed tasks=%s agents=%s stages=%s",
+                    "reaper: failed tasks=%s agents=%s stages=%s quiet=%s",
                     result.failed_tasks,
                     result.failed_agents,
                     result.failed_stages,
+                    result.failed_quiet,
                 )
-            if result.expired_tasks or result.lost_agents:
+            if result.expired_tasks or result.lost_agents or result.quieted_tasks:
                 log.info(
-                    "reaper: expired %d leases, lost %d agents",
+                    "reaper: expired %d leases, lost %d agents, quieted %d",
                     len(result.expired_tasks),
                     len(result.lost_agents),
+                    len(result.quieted_tasks),
                 )
         except Exception:
             log.exception("reaper pass failed")

@@ -595,6 +595,68 @@ describe("Argus channel", () => {
     });
   });
 
+  it("fails with session_lost when a seen session container vanishes", async () => {
+    const fake = fakeArgus({ tasks: [task()] });
+    let containers = ["ctr-alive"];
+    // Skip project-runtime prepare so the task is injected on the base image.
+    const baseFetch = fake.fetchImpl;
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      const path = new URL(url).pathname.replace(/^\/api/, "");
+      if (path === "/runtime/prepare") {
+        return new Response(JSON.stringify({ state: "disabled", reason: "test" }), {
+          status: 200,
+        });
+      }
+      return baseFetch(url, init);
+    }) as unknown as typeof fetch;
+    const h = harness(
+      { ...fake, fetchImpl },
+      {
+        fetch: fetchImpl,
+        runtime: {
+          host: async () => ({
+            host_id: "h",
+            run_as: "1:1",
+            base_ref: "img",
+            base_id: "sha",
+            platform: "linux/amd64",
+          }),
+          apply: async () => undefined,
+          usedImage: async () =>
+            containers[0] ? { container: containers[0], imageId: "sha" } : null,
+          cleanup: async () => undefined,
+          sessions: async () => containers,
+          sessionEvidence: async () => ({
+            exitCode: 137,
+            logTail: "killed by reconciler",
+          }),
+        },
+      },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    // Heartbeat saw the container.
+    await until(() => fake.calls.some((c) => c.path === "/agents/me/heartbeat"), 2500);
+    const beatsBefore = fake.calls.filter((c) => c.path === "/agents/me/heartbeat").length;
+    containers = [];
+    // One heartbeat notices the gap; another after the grace window fails the attempt.
+    await until(
+      () => fake.calls.filter((c) => c.path === "/agents/me/heartbeat").length > beatsBefore,
+      2500,
+    );
+    h.advance(91_000);
+    await until(
+      () =>
+        fake.calls.some((c) => c.path === "/tasks/t1/fail" && c.body?.reason === "session_lost"),
+      4000,
+    );
+    const fail = fake.calls.find((c) => c.path === "/tasks/t1/fail")!;
+    expect(fail.body.reason).toBe("session_lost");
+    expect(fail.body.error).toMatch(/ctr-alive/);
+    expect(fail.body.error).toMatch(/137|killed/);
+  });
+
   it("stops claiming once Argus reports the agent as draining", async () => {
     const fake = fakeArgus({ heartbeat: { state: "draining", renewed: [], rejected: [] } });
     const h = harness(fake);

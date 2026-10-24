@@ -563,6 +563,27 @@ nav a[aria-current="page"] {
   color: var(--warn);
   border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
 }
+.worker-state-quiet {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
+}
+.worker-state-ended {
+  color: var(--muted);
+}
+.worker-chip.worker-ended {
+  opacity: 0.55;
+}
+.worker-end-reason {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  color: var(--muted);
+}
+.quiet-claim {
+  margin: 0.5rem 0;
+  padding: 0.75rem 1rem;
+}
 .worker-name {
   font-size: 0.8rem;
   font-weight: 600;

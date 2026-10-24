@@ -61,6 +61,8 @@ class Agent(BaseModel):
     end_reason: str | None
     archived_at: datetime | None = None  # set while an operator has archived it
     runtime: AgentRuntime | None = None  # last reported on heartbeat
+    # Earliest quiet_at among claimed tasks; null when none are quiet.
+    quiet_since: datetime | None = None
 
 
 class BootstrapTokenCreate(BaseModel):

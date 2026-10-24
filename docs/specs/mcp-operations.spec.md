@@ -99,15 +99,18 @@ Findings outside the gap list:
 
 - **`GET /api/inbox`** (manager scope) → MCP `get_inbox(project?, states?,
   decision_kinds?, view?, limit?, cursor?)`. Rows come from tasks in
-  `blocked | in_review | awaiting_approval`, plus open decisions whose subject is
-  not a task (pool policy, knowledge). Each row joins the task with its open
-  decision, if any, and adds `age_s`, `decision_id`, `decision_kind`,
-  `audience` and `artifact_ids` (the current attempt's). The response also carries
-  `totals_by_state` and `totals_by_decision_kind` for the filtered set, from the
-  same snapshot. A row about another subject counts under its subject type
-  (`pool`), and a task with no open decision under `none`. `states` keeps only
-  task rows. Order: oldest first, by when the row started waiting.
-  Pending tasks stuck behind a failed or cancelled dependency are rows too
+  `blocked | in_review | awaiting_approval`, plus claimed tasks with
+  `quiet_at` set ([stall visibility](stall-visibility.spec.md) 3.4), plus open
+  decisions whose subject is not a task (pool policy, knowledge). Each row joins
+  the task with its open decision, if any, and adds `age_s`, `decision_id`,
+  `decision_kind`, `audience`, `artifact_ids` (the current attempt's) and
+  nullable `last_signal_at` and `last_signal_source`. The response also carries
+  `totals_by_state` and
+  `totals_by_decision_kind` for the filtered set, from the same snapshot. A row
+  about another subject counts under its subject type (`pool`), and a task with
+  no open decision under `none`. `states` keeps only task rows. Order: oldest
+  first, by when the row started waiting. Pending tasks stuck behind a failed or
+  cancelled dependency are rows too
   ([task dependencies](task-dependencies.spec.md) 3.2).
 - **Inbox groups and impact:** `GET /api/inbox` and `get_inbox` also take
   `blocking_only` (bool, default false) and `order` (`age` default | `impact`),
@@ -264,12 +267,13 @@ token) wrap the model trace endpoints ([spec](model-observability.spec.md)).
   `GET /api/events` keeps its newest-first list. REST defaults `wait_s` to 0 (a
   plain read); MCP to 20.
 - **Inbox wait:** `inbox=true` on the same wait keeps only the events that add a
-  row to `get_inbox` (3.2): `decision.opened`, `task.dependency_failed`, and a
-  task transition whose `data.to` is `blocked`, `in_review` or
-  `awaiting_approval`. It combines with the subject filters. An orchestrator's
-  idle loop is `get_inbox` → work it → `wait_for_events(inbox=true)` → repeat,
-  woken only when something new waits on it. Events that leave the inbox
-  (answers, cancellations) are not included; re-read `get_inbox` after waking.
+  row to `get_inbox` (3.2): `decision.opened`, `task.dependency_failed`,
+  `task.quiet`, and a task transition whose `data.to` is `blocked`, `in_review`
+  or `awaiting_approval`. It combines with the subject filters. An
+  orchestrator's idle loop is `get_inbox` → work it →
+  `wait_for_events(inbox=true)` → repeat, woken only when something new waits on
+  it. Events that leave the inbox (answers, cancellations, a quiet claim that
+  signals again) are not included; re-read `get_inbox` after waking.
 - **Cursor on timeout:** when nothing matches, `next_cursor` moves to the newest
   event the wait checked, not back to `after`, so a filtered wait that idles
   does not rescan the same events on every call. Nothing is skipped: every

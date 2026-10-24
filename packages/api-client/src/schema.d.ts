@@ -2714,6 +2714,8 @@ export interface components {
             last_heartbeat_at: string;
             /** Name */
             name: string;
+            /** Quiet Since */
+            quiet_since?: string | null;
             role: components["schemas"]["Role"];
             runtime?: components["schemas"]["AgentRuntime"] | null;
             state: components["schemas"]["AgentState"];
@@ -4432,7 +4434,7 @@ export interface components {
              * @default worker_fail
              * @enum {string}
              */
-            reason?: "worker_fail" | "channel_error" | "provider_failure" | "quota" | "runtime_switch_failed" | "context_overflow" | "verification_failed";
+            reason?: "worker_fail" | "channel_error" | "provider_failure" | "quota" | "runtime_switch_failed" | "context_overflow" | "verification_failed" | "session_lost";
         };
         /**
          * Failover
@@ -4703,6 +4705,10 @@ export interface components {
             impact: number;
             /** Kind */
             kind: string | null;
+            /** Last Signal At */
+            last_signal_at?: string | null;
+            /** Last Signal Source */
+            last_signal_source?: string | null;
             /** Project */
             project: string | null;
             state: components["schemas"]["TaskState"] | null;
@@ -5064,6 +5070,8 @@ export interface components {
         };
         /** LeaseRef */
         LeaseRef: {
+            /** Activity At */
+            activity_at?: string | null;
             /** Attempt */
             attempt: number;
             /** Task Id */

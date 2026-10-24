@@ -107,6 +107,20 @@ const MAX_RESENDS = 3; // account switches for one attempt before giving up
 const REBALANCE_MS = 60_000; // task-bound re-evaluation for priority recovery
 const RUNTIME_VERIFY_MS = 120_000; // how long to look for the session container after injecting a task
 const RECYCLE_TIMEOUT_MS = 30_000; // wait for the old container to exit after an account rotation
+/** After a session was seen, how long it may stay gone before fail session_lost. */
+const SESSION_GONE_GRACE_MS = 90_000;
+const SESSION_LOG_TAIL_BYTES = 2 * 1024;
+const SESSION_LOG_TAIL_LINES = 40;
+
+/** Best-effort credential scrub for fail-error log excerpts (stall visibility). */
+function redactSessionTail(text: string): string {
+  return text
+    .replace(/\b(?:bearer\s+|sk-|eyJ)[A-Za-z0-9._~+/=-]{8,}/gi, "[redacted]")
+    .replace(
+      /((?:token|secret|password|passwd|pwd|api[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;]+/gi,
+      "$1[redacted]",
+    );
+}
 
 /** The accounts held when a task's models are chosen (null: not leased). */
 export interface HeldAccounts {
@@ -174,6 +188,12 @@ export interface RuntimeHooks {
   usedImage(): Promise<{ container: string; imageId: string } | null>;
   /** Stop the test services of exactly this task (if given) and remove the declaration. */
   cleanup(taskId?: string): Promise<void>;
+  /** Running session container ids for this group (stall visibility). */
+  sessions?(): Promise<string[]>;
+  /** Exit code and a short redacted log tail for a container that may already be gone. */
+  sessionEvidence?(containerId: string): Promise<{ exitCode: number | null; logTail: string }>;
+  /** Newest NanoClaw session `.heartbeat` mtime for this group, or null. */
+  sessionActivityAt?(): Promise<Date | null>;
 }
 
 export interface ArgusConfig {
@@ -1261,6 +1281,10 @@ export function createDelegateLogRelay(opts: {
     get stopped(): boolean {
       return stopped;
     },
+    /** Epoch ms of the last accepted log batch; -Infinity when none yet. */
+    get lastPostAt(): number {
+      return lastPostAt;
+    },
     stop(): void {
       stopped = true;
     },
@@ -1421,6 +1445,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let logTimer: ReturnType<typeof setInterval> | null = null;
   let usageRelay: ReturnType<typeof createUsageRelay> | null = null;
   let usageTimer: ReturnType<typeof setInterval> | null = null;
+  // Stall visibility: remember a session once seen; fail if it vanishes without a reply.
+  let seenSessionId: string | null = null;
+  let sessionMissingSince: number | null = null;
+  let resending = false; // mid-inject / mid-resend: skip session-lost watchdog
 
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -1441,11 +1469,99 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     return data.heartbeat_interval_s ?? 30;
   }
 
+  async function leaseActivityAt(): Promise<string | undefined> {
+    const times: number[] = [];
+    if (lastProgressAt > 0) times.push(lastProgressAt);
+    if (logRelay && Number.isFinite(logRelay.lastPostAt) && logRelay.lastPostAt > 0) {
+      times.push(logRelay.lastPostAt);
+    }
+    if (cfg.runtime?.sessionActivityAt) {
+      try {
+        const at = await cfg.runtime.sessionActivityAt();
+        if (at) times.push(at.getTime());
+      } catch {
+        /* best-effort */
+      }
+    }
+    if (times.length === 0) return undefined;
+    return new Date(Math.max(...times)).toISOString();
+  }
+
+  /** Fail the attempt when a previously-seen session container is gone for too long. */
+  async function watchSession(): Promise<void> {
+    const task = current;
+    if (!task || !sessionCarriesTask || !cfg.runtime?.sessions) return;
+    // Mid-recycle / mid-resend: containers are stopped on purpose.
+    if (recycleOnLease || switchFailure || resending) {
+      sessionMissingSince = null;
+      return;
+    }
+    let containers: string[] = [];
+    try {
+      containers = await cfg.runtime.sessions();
+    } catch (err) {
+      log.warn("Could not list session containers for stall watch", {
+        err: String(err).slice(0, 200),
+      });
+      return;
+    }
+    if (containers.length > 0) {
+      seenSessionId = containers[0] ?? seenSessionId;
+      sessionMissingSince = null;
+      return;
+    }
+    if (!seenSessionId) return; // not spawned yet
+    const now = nowMs();
+    sessionMissingSince ??= now;
+    if (now - sessionMissingSince < SESSION_GONE_GRACE_MS) return;
+    const missingId = seenSessionId;
+    let exitCode: number | null = null;
+    let logTail = "";
+    if (cfg.runtime.sessionEvidence) {
+      try {
+        const evidence = await cfg.runtime.sessionEvidence(missingId);
+        exitCode = evidence.exitCode;
+        logTail = redactSessionTail(evidence.logTail);
+      } catch {
+        /* still fail the attempt */
+      }
+    }
+    const codeBit = exitCode === null ? "gone" : `exited (code ${exitCode})`;
+    const tailBit = logTail ? `; last output: ${logTail}` : "";
+    const error = `session container ${missingId} ${codeBit} without a reply${tailBit}`;
+    log.warn("Session container vanished; failing the attempt", {
+      task: task.id,
+      container: missingId,
+      exitCode,
+    });
+    await client
+      .call("POST", `/tasks/${task.id}/fail`, {
+        attempt: task.attempt,
+        error: error.slice(0, 2000),
+        reason: "session_lost",
+      })
+      .catch(() => undefined);
+    current = null;
+    void cfg.runtime?.cleanup(task.id).catch(() => undefined);
+    finishTask();
+  }
+
   async function heartbeat(): Promise<void> {
     try {
+      await watchSession();
+      if (!current && sessionCarriesTask) return; // watchSession finished the task
       const acks = [...steerAcks];
+      const activity_at = current ? await leaseActivityAt() : undefined;
       const { data } = await client.call("POST", "/agents/me/heartbeat", {
-        leases: current ? [{ task_id: current.id, attempt: current.attempt }] : [],
+        leases: current
+          ? [
+              {
+                task_id: current.id,
+                attempt: current.attempt,
+                ...(activity_at ? { activity_at } : {}),
+              },
+            ]
+          : [],
         steer_acks: acks,
         // Self-reported, shown by pool inspection as such; null means not known.
         runtime: {
@@ -1589,6 +1705,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     logTimer = null;
     injectedSteers.clear();
     current = null;
+    seenSessionId = null;
+    sessionMissingSince = null;
     currentClaim = null;
     currentText = null;
     renderCurrent = null;
@@ -1659,12 +1777,17 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   }
 
   async function injectTask(taskId: string, attempt: number, text: string): Promise<void> {
-    await setupCfg!.onInbound(PLATFORM_ID, null, {
-      id: `argus-${taskId}-${attempt}${resends ? `-r${resends}` : ""}`,
-      kind: "chat",
-      timestamp: new Date().toISOString(),
-      content: { text, sender: "argus", senderId: `argus:${PLATFORM_ID}` },
-    });
+    resending = true;
+    try {
+      await setupCfg!.onInbound(PLATFORM_ID, null, {
+        id: `argus-${taskId}-${attempt}${resends ? `-r${resends}` : ""}`,
+        kind: "chat",
+        timestamp: new Date().toISOString(),
+        content: { text, sender: "argus", senderId: `argus:${PLATFORM_ID}` },
+      });
+    } finally {
+      resending = false;
+    }
   }
 
   async function deliverSteers(
@@ -3053,6 +3176,55 @@ export function runtimeFromEnv(): RuntimeHooks | undefined {
         base_id: baseId,
         platform: `${os}/${arch[machine] ?? machine}`,
       };
+    },
+    sessions: sessionContainers,
+    async sessionEvidence(containerId: string) {
+      let exitCode: number | null = null;
+      try {
+        const raw = await docker([
+          "inspect",
+          "--format",
+          "{{.State.ExitCode}}|{{.State.Running}}",
+          containerId,
+        ]);
+        const [code, running] = raw.split("|");
+        if (running !== "true" && code !== undefined && code !== "") {
+          exitCode = Number.parseInt(code, 10);
+          if (Number.isNaN(exitCode)) exitCode = null;
+        }
+      } catch {
+        /* container may already be removed */
+      }
+      let logTail = "";
+      try {
+        const logs = await docker(["logs", "--tail", String(SESSION_LOG_TAIL_LINES), containerId]);
+        logTail = redactSessionTail(logs).slice(-SESSION_LOG_TAIL_BYTES);
+      } catch {
+        /* gone */
+      }
+      return { exitCode, logTail };
+    },
+    async sessionActivityAt() {
+      // NanoClaw: data/v2-sessions/{agent_group_id}/{session_id}/.heartbeat
+      const g = await group();
+      const sessionsRoot = path.resolve("data", "v2-sessions", g.id);
+      let newest: number | null = null;
+      let entries: string[] = [];
+      try {
+        const { readdir } = await import("node:fs/promises");
+        entries = await readdir(sessionsRoot);
+      } catch {
+        return null;
+      }
+      for (const name of entries) {
+        try {
+          const st = await lstat(path.join(sessionsRoot, name, ".heartbeat"));
+          if (st.isFile()) newest = Math.max(newest ?? 0, st.mtimeMs);
+        } catch {
+          /* no heartbeat yet */
+        }
+      }
+      return newest === null ? null : new Date(newest);
     },
     async apply(taskId: string, selection: RuntimeSelection): Promise<void> {
       if (!selection.image) throw new Error("no image selected");

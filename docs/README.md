@@ -73,6 +73,9 @@ every new dependency is judged against it.
   feed, agent drawer with its current work and container output
 - [Progress milestones](specs/progress-milestones.spec.md) — structured progress
   signals (commit, PR, CI, gate) on task cards and a no-signal indicator
+- [Stall visibility](specs/stall-visibility.spec.md) — fail a vanished session
+  (`session_lost`), flag quiet claimed tasks in the inbox and worker rail, and
+  explain late lease/agent expiry
 - [Task live log](specs/task-live-log.spec.md) — a redacted ring of an attempt's
   output, streamed as `task.log`; the Live panel and MCP `get_task_log`
 - [Task steering](specs/task-steering.spec.md) — a manager sends a message to the

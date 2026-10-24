@@ -87,9 +87,11 @@ class FailRequest(BaseModel):
         "runtime_switch_failed",
         "context_overflow",
         "verification_failed",
+        "session_lost",
     ] = "worker_fail"
-    """Why the attempt failed: the worker said so, or the channel detected it. The
-    last two raise the task's difficulty one level for the next attempt."""
+    """Why the attempt failed: the worker said so, or the channel detected it.
+    `session_lost` is a vanished session container (stall visibility). The
+    difficulty raisers are `context_overflow` and `verification_failed`."""
 
 
 class DependenciesRequest(BaseModel):

@@ -1072,6 +1072,18 @@
             "title": "Name",
             "type": "string"
           },
+          "quiet_since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quiet Since"
+          },
           "role": {
             "$ref": "#/components/schemas/Role"
           },
@@ -6257,7 +6269,8 @@
               "quota",
               "runtime_switch_failed",
               "context_overflow",
-              "verification_failed"
+              "verification_failed",
+              "session_lost"
             ],
             "title": "Reason",
             "type": "string"
@@ -7109,6 +7122,29 @@
               }
             ],
             "title": "Kind"
+          },
+          "last_signal_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Signal At"
+          },
+          "last_signal_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Signal Source"
           },
           "project": {
             "anyOf": [
@@ -8191,6 +8227,18 @@
       },
       "LeaseRef": {
         "properties": {
+          "activity_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity At"
+          },
           "attempt": {
             "title": "Attempt",
             "type": "integer"

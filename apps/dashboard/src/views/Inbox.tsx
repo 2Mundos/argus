@@ -5,6 +5,8 @@ import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
 import { TaskLabel } from "../TaskLabel";
 import { BatchPanel, type Draft, type Entry, isAnswerable, MAX_BATCH } from "./InboxBatch";
+import { TaskDetail } from "./TaskDetail";
+import { TaskSteers } from "./TaskSteers";
 
 const dur = (s: number) =>
   s < 60
@@ -23,6 +25,7 @@ export function Inbox() {
   // The entries under confirmation, frozen when the step opens so results stay listed.
   const [batch, setBatch] = useState<Entry[] | null>(null);
   const confirming = batch !== null;
+  const [taskDrawer, setTaskDrawer] = useState<string | null>(null);
   const requestIds = useRef(new Map<string, string>());
   const { data: page, error } = useLiveData(
     (signal) =>
@@ -132,6 +135,12 @@ export function Inbox() {
                       setSelected((prev) => (on ? [...prev, id] : prev.filter((x) => x !== id)));
                     }}
                   />
+                ) : item.state === "claimed" ? (
+                  <QuietClaimCard
+                    key={item.subject_id}
+                    item={item}
+                    onOpenTask={() => setTaskDrawer(item.subject_id)}
+                  />
                 ) : (
                   <p key={item.subject_id} className="muted small">
                     {item.title ?? shortId(item.subject_id)} is stalled behind{" "}
@@ -143,7 +152,71 @@ export function Inbox() {
           ))}
         </div>
       ))}
+      {taskDrawer && <TaskDetail taskId={taskDrawer} onClose={() => setTaskDrawer(null)} />}
     </section>
+  );
+}
+
+function QuietClaimCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () => void }) {
+  const [steerOpen, setSteerOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const task = item.task;
+  const attempt = item.attempt ?? task?.attempt ?? 1;
+  const assigneeId = task?.assignee_agent_id ?? null;
+
+  const signalLine =
+    item.last_signal_at && item.last_signal_source
+      ? `; last signal: ${item.last_signal_source} at ${relative(item.last_signal_at)}`
+      : item.last_signal_at
+        ? `; last signal at ${relative(item.last_signal_at)}`
+        : "";
+
+  async function release() {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await call(
+        api.POST("/api/tasks/{task_id}/release", {
+          params: { path: { task_id: item.subject_id } },
+          body: { reason: "quiet in inbox", attempt: item.attempt ?? undefined },
+        }),
+      );
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <article className="card quiet-claim">
+      <p>
+        <TaskLabel title={item.title ?? shortId(item.subject_id)} project={item.project} /> is quiet
+        for {dur(item.age_s)}
+        {signalLine}.
+      </p>
+      {error && <p className="error">{error}</p>}
+      <div className="actions left">
+        <button type="button" className="link" onClick={onOpenTask}>
+          Open task
+        </button>
+        <button type="button" disabled={busy} onClick={() => void release()}>
+          Release
+        </button>
+        <button type="button" disabled={busy} onClick={() => setSteerOpen((o) => !o)}>
+          {steerOpen ? "Close steer" : "Steer"}
+        </button>
+      </div>
+      <TaskSteers
+        taskId={item.subject_id}
+        attempt={attempt}
+        claimed={true}
+        assigneeId={assigneeId}
+        composerOpen={steerOpen}
+        onComposerOpenChange={setSteerOpen}
+      />
+    </article>
   );
 }
 

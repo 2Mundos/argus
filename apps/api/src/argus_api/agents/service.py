@@ -221,7 +221,7 @@ class Heartbeat:
 async def heartbeat(
     tx: Tx,
     agent_id: str,
-    leases: list[tuple[str, int]],
+    leases: list[tuple[str, int] | tuple[str, int, datetime | None]],
     runtime: AgentRuntime | None = None,
     steer_acks: list[str] | None = None,
     *,
@@ -230,6 +230,7 @@ async def heartbeat(
     """Refresh the agent and renew the leases it lists, in one transaction. A
     reported `runtime` replaces the last one; without it the last one stays.
 
+    Each lease is `(task_id, attempt)` or `(task_id, attempt, activity_at)`.
     `steer_acks` are steers the worker has injected. Pending steers are returned
     only for leases renewed here (task steering spec 3.4)."""
     state = await _live_state(tx.conn, agent_id)
@@ -296,19 +297,41 @@ async def mark_lost(tx: Tx, failed: list[str] | None = None) -> list[str]:
     """Mark live agents whose heartbeat is older than LOST_AFTER_S as lost.
 
     Each agent is ended atomically in its own savepoint; with `failed`, one that
-    cannot be ended is rolled back alone, logged and appended there (3.4)."""
+    cannot be ended is rolled back alone, logged and appended there (3.4).
+    When Argus was down past three reaper passes, the loss event carries
+    `detected_late_s` (stall visibility)."""
     cutoff = ts(tx.now - timedelta(seconds=LOST_AFTER_S))
     async with tx.conn.execute(
-        "SELECT id FROM agents WHERE state IN ('active', 'draining')"
+        "SELECT id, last_heartbeat_at FROM agents"
+        " WHERE state IN ('active', 'draining')"
         " AND last_heartbeat_at < ? ORDER BY id",
         (cutoff,),
     ) as cur:
-        ids = [r["id"] for r in await cur.fetchall()]
+        rows = await cur.fetchall()
     lost: list[str] = []
-    for agent_id in ids:
+    for row in rows:
+        agent_id = row["id"]
+        deadline = datetime.fromisoformat(row["last_heartbeat_at"]) + timedelta(
+            seconds=LOST_AFTER_S
+        )
+        late = int((tx.now - deadline).total_seconds())
+        detected_late_s = late if late > tasks.LATE_DETECT_AFTER_S else None
+        reason = "heartbeat timeout"
+        if detected_late_s is not None:
+            mins = max(1, round(detected_late_s / 60))
+            reason = (
+                f"heartbeat timeout; detected {mins} min late (Argus was not running)"
+            )
         try:
             async with tx.savepoint():
-                await _end(tx, agent_id, AgentState.LOST, "heartbeat timeout", "system")
+                await _end(
+                    tx,
+                    agent_id,
+                    AgentState.LOST,
+                    reason,
+                    "system",
+                    detected_late_s=detected_late_s,
+                )
         except Exception:
             if failed is None:
                 raise
@@ -361,6 +384,7 @@ async def _end(
     actor: str,
     *,
     release: str | None = None,
+    detected_late_s: int | None = None,
 ) -> None:
     """End an identity: give up its tasks and revoke its credentials atomically.
 
@@ -390,13 +414,20 @@ async def _end(
     )
     released += await tasks.expire_agent_leases(tx, agent_id)
     await accounts.release(tx, agent_id, state)
+    data: dict[str, Any] = {
+        "reason": reason,
+        "instance_id": instance_id,
+        "released_tasks": released,
+    }
+    if detected_late_s is not None:
+        data["detected_late_s"] = detected_late_s
     await record(
         tx,
         actor,
         "agent",
         agent_id,
         f"agent.{state}",
-        {"reason": reason, "instance_id": instance_id, "released_tasks": released},
+        data,
     )
 
 
@@ -418,7 +449,10 @@ async def _live_state(conn: aiosqlite.Connection, agent_id: str) -> AgentState:
 
 _SELECT = (
     "SELECT a.*, (SELECT count(*) FROM tasks t WHERE t.state = 'claimed'"
-    " AND t.assignee_agent_id = a.id) AS claimed_tasks FROM agents a"
+    " AND t.assignee_agent_id = a.id) AS claimed_tasks,"
+    " (SELECT min(t.quiet_at) FROM tasks t WHERE t.state = 'claimed'"
+    " AND t.assignee_agent_id = a.id AND t.quiet_at IS NOT NULL) AS quiet_since"
+    " FROM agents a"
 )
 
 

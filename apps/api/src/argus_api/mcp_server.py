@@ -10,6 +10,7 @@ orchestrator-style tools).
 
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from types import FunctionType
 from typing import Annotated, Any, Literal
@@ -314,6 +315,7 @@ def _describe(status: int, body: Any) -> str:
 class Lease(BaseModel):
     task_id: str
     attempt: int
+    activity_at: datetime | None = None
 
 
 class Runtime(BaseModel):
@@ -324,7 +326,7 @@ class Runtime(BaseModel):
 
 
 ViewArg = Literal["summary", "detail"]
-InboxState = Literal["blocked", "in_review", "awaiting_approval", "pending"]
+InboxState = Literal["blocked", "in_review", "awaiting_approval", "pending", "claimed"]
 TaskStateArg = Literal[
     "awaiting_approval",
     "pending",

@@ -576,6 +576,13 @@ claim whose heartbeat has not advanced beyond that claim; a declared Bash
 timeout widens only that claim's tolerance. This is separate from Argus's
 wall-clock task/lease timeout in 3.2/3.3.
 
+A **vanished** session is different from a quiet one. Once the channel has seen
+a session container for the injected task, if none remain for 90 s and no reply
+has arrived (and it is not mid-recycle or mid-resend), it fails the attempt with
+`reason: session_lost`, naming the container, exit code and a short redacted log
+excerpt ([stall visibility](stall-visibility.spec.md) 3.1). Heartbeats also carry
+per-lease `activity_at` so Argus can flag a quiet claim without killing it.
+
 When Argus ends the channel's claim (a heartbeat rejects the pair: released,
 expired, reassigned), the channel stops the run: it forgets the task, so a late
 reply is dropped instead of reported, stops the session containers (the same

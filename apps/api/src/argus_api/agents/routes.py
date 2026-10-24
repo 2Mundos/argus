@@ -38,6 +38,8 @@ class Registration(BaseModel):
 class LeaseRef(BaseModel):
     task_id: str
     attempt: int
+    # Newest session/progress/log signal the worker saw for this lease (optional).
+    activity_at: datetime | None = None
 
 
 class HeartbeatRequest(BaseModel):
@@ -168,7 +170,10 @@ async def heartbeat(
         hb = await service.heartbeat(
             tx,
             agent_id,
-            [(lease.task_id, lease.attempt) for lease in body.leases],
+            [
+                (lease.task_id, lease.attempt, lease.activity_at)
+                for lease in body.leases
+            ],
             body.runtime,
             body.steer_acks,
             token_ttl_s=settings.agent_token_ttl_s,

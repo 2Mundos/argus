@@ -89,6 +89,9 @@ class Settings:
     lost_spike_window_hours: int = DEFAULT_LOST_SPIKE_WINDOW_HOURS
     lost_spike_min_count: int = DEFAULT_LOST_SPIKE_MIN_COUNT
     lost_spike_factor: float = DEFAULT_LOST_SPIKE_FACTOR
+    # Claimed task with no progress / live log / activity_at for this long is
+    # flagged quiet (inbox + rail); never expires the lease (stall-visibility).
+    quiet_claim_s: int = 1200
 
     @property
     def db_path(self) -> Path:
@@ -219,6 +222,7 @@ class Settings:
             lost_spike_factor=float(
                 os.environ.get("ARGUS_LOST_SPIKE_FACTOR", DEFAULT_LOST_SPIKE_FACTOR)
             ),
+            quiet_claim_s=int(os.environ.get("ARGUS_QUIET_CLAIM_S", 1200)),
         )
 
 

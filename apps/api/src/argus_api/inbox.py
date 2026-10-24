@@ -24,6 +24,7 @@ from argus_api.paging import (
     decode_cursor,
     encode_cursor,
 )
+from argus_api.tasks import service as tasks_service
 from argus_api.tasks import views as tasks
 from argus_api.tasks.views import TaskDetail
 
@@ -54,6 +55,10 @@ class InboxItem(BaseModel):
     impact: int  # len(blocks)
     artifact_ids: list[str]  # the current attempt's
     failed_dependencies: list[str]  # failed or cancelled; a pending task waits on them
+    last_signal_at: datetime | None = (
+        None  # quiet claims: newest activity/progress/log/claim
+    )
+    last_signal_source: str | None = None  # activity, progress, log, or claim
     task: TaskDetail | None = None  # view=detail only
     decision: DecisionDetail | None = None  # view=detail only
 
@@ -81,21 +86,29 @@ _ROWS = (
     " t.state, t.kind, t.attempt, t.updated_at AS version, d.id AS decision_id,"
     " d.kind AS decision_kind, d.audience,"
     " coalesce(d.created_at, t.updated_at) AS since,"
-    " coalesce(d.id, t.id) AS row_key"
+    " coalesce(d.id, t.id) AS row_key,"
+    " NULL AS last_signal_at"
     " FROM tasks t LEFT JOIN decisions d ON d.subject_type = 'task'"
     "  AND d.subject_id = t.id AND d.state = 'open'"
     " WHERE t.state IN ('blocked', 'in_review', 'awaiting_approval')"
     " UNION ALL"
     " SELECT 'task', t.id, t.title, t.project, t.state, t.kind, t.attempt,"
-    " t.updated_at, NULL, NULL, NULL, max(u.updated_at), t.id"
+    " t.updated_at, NULL, NULL, NULL, max(u.updated_at), t.id, NULL"
     " FROM tasks t JOIN task_deps td ON td.task_id = t.id"
     " JOIN tasks u ON u.id = td.depends_on_id"
     " WHERE t.state = 'pending' AND u.state IN ('failed', 'cancelled')"
     " GROUP BY t.id"
     " UNION ALL"
+    # Quiet claimed tasks (stall visibility): waiting since quiet_at.
+    " SELECT 'task', t.id, t.title, t.project, t.state, t.kind, t.attempt,"
+    " t.updated_at, NULL, NULL, NULL, t.quiet_at, t.id,"
+    " NULL"
+    " FROM tasks t"
+    " WHERE t.state = 'claimed' AND t.quiet_at IS NOT NULL"
+    " UNION ALL"
     " SELECT d.subject_type, d.subject_id, coalesce(kp.title, d.subject_id),"
     " kp.project, NULL, NULL, NULL, NULL, d.id, d.kind, d.audience,"
-    " d.created_at, d.id"
+    " d.created_at, d.id, NULL"
     " FROM decisions d LEFT JOIN knowledge_proposals kp"
     "  ON d.subject_type = 'knowledge_proposal' AND kp.id = d.subject_id"
     " WHERE d.state = 'open' AND d.subject_type != 'task'"
@@ -189,6 +202,12 @@ async def inbox(
     if view == "detail" and task_ids:
         page = await tasks.get_tasks(snap, task_ids, "detail")
         details = {t.id: t for t in page.items if isinstance(t, TaskDetail)}
+    quiet_ids = [
+        r["subject_id"]
+        for r in rows
+        if r["subject_type"] == "task" and r["state"] == TaskState.CLAIMED
+    ]
+    last_signals = await _quiet_last_signals(snap.conn, quiet_ids)
     items: list[InboxItem] = []
     omitted: set[str] = set()
     for r in rows:
@@ -203,6 +222,10 @@ async def inbox(
                 "failed_dependencies": stuck.get(r["subject_id"], []),
             }
         )
+        if sig := last_signals.get(r["subject_id"]):
+            at, source = sig
+            item.last_signal_at = at
+            item.last_signal_source = source
         if view == "detail":
             item.task = details.get(r["subject_id"])
             if r["decision_id"] is not None:
@@ -329,6 +352,32 @@ async def _failed_dependencies(
             found[task_id].append(dep_id)
     return found
 
+
+async def _quiet_last_signals(
+    conn: Any, task_ids: list[str]
+) -> dict[str, tuple[datetime | None, str | None]]:
+    if not task_ids:
+        return {}
+    marks = ",".join("?" * len(task_ids))
+    sql = f"{_QUIET_SIGNALS} WHERE t.id IN ({marks})"
+    async with conn.execute(sql, task_ids) as cur:
+        rows = await cur.fetchall()
+    return {
+        r["id"]: tasks_service.last_signal(
+            activity_at=r["activity_at"],
+            progress_at=r["progress_at"],
+            output_at=r["output_at"],
+            claimed_at=r["claimed_at"],
+        )
+        for r in rows
+    }
+
+
+_QUIET_SIGNALS = (
+    "SELECT t.id, t.activity_at, t.progress_at, t.output_at, a.claimed_at"
+    " FROM tasks t"
+    " LEFT JOIN task_attempts a ON a.task_id = t.id AND a.attempt = t.attempt"
+)
 
 _FAILED_DEPS = (
     "SELECT d.task_id, u.id FROM task_deps d JOIN tasks u ON u.id = d.depends_on_id"

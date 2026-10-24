@@ -188,7 +188,7 @@ async def append(
         )
         last_seq = first + len(kept) - 1
         await tx.conn.execute(
-            "UPDATE tasks SET log_seq = ?, output_at = ? WHERE id = ?",
+            "UPDATE tasks SET log_seq = ?, output_at = ?, quiet_at = NULL WHERE id = ?",
             (last_seq, at, task_id),
         )
         await _trim(tx.conn, task_id, attempt, last_seq)
