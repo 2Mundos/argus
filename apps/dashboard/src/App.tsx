@@ -1,22 +1,25 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { handleUnauthorized, setToken, token } from "./api";
 import { Brand } from "./Brand";
 import { LiveProvider, useLive } from "./live";
-import { Accounts } from "./views/Accounts";
-import { AgentDetail } from "./views/AgentDetail";
-import { Agents } from "./views/Agents";
-import { Cost } from "./views/Cost";
-import { Engines } from "./views/Engines";
-import { Events } from "./views/Events";
-import { Fleet } from "./views/Fleet";
 import { Home } from "./views/Home";
-import { Inbox } from "./views/Inbox";
-import { Knowledge } from "./views/Knowledge";
 import { Login } from "./views/Login";
-import { Pools } from "./views/Pools";
-import { System } from "./views/System";
-import { Tasks } from "./views/Tasks";
 import { WorkersSidebar } from "./WorkersSidebar";
+
+const Accounts = lazy(() => import("./views/Accounts").then((m) => ({ default: m.Accounts })));
+const AgentDetail = lazy(() =>
+  import("./views/AgentDetail").then((m) => ({ default: m.AgentDetail })),
+);
+const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
+const Cost = lazy(() => import("./views/Cost").then((m) => ({ default: m.Cost })));
+const Engines = lazy(() => import("./views/Engines").then((m) => ({ default: m.Engines })));
+const Events = lazy(() => import("./views/Events").then((m) => ({ default: m.Events })));
+const Fleet = lazy(() => import("./views/Fleet").then((m) => ({ default: m.Fleet })));
+const Inbox = lazy(() => import("./views/Inbox").then((m) => ({ default: m.Inbox })));
+const Knowledge = lazy(() => import("./views/Knowledge").then((m) => ({ default: m.Knowledge })));
+const Pools = lazy(() => import("./views/Pools").then((m) => ({ default: m.Pools })));
+const System = lazy(() => import("./views/System").then((m) => ({ default: m.System })));
+const Tasks = lazy(() => import("./views/Tasks").then((m) => ({ default: m.Tasks })));
 
 const TABS = {
   home: "Home",
@@ -91,29 +94,31 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
         </div>
       </header>
       <main>
-        {selectedWorker ? (
-          <AgentDetail
-            key={selectedWorker}
-            agentId={selectedWorker}
-            onClose={() => setSelectedWorker(null)}
-            variant="panel"
-          />
-        ) : (
-          <>
-            {tab === "home" && <Home />}
-            {tab === "tasks" && <Tasks />}
-            {tab === "agents" && <Agents />}
-            {tab === "pools" && <Pools />}
-            {tab === "fleet" && <Fleet />}
-            {tab === "inbox" && <Inbox />}
-            {tab === "knowledge" && <Knowledge />}
-            {tab === "accounts" && <Accounts />}
-            {tab === "cost" && <Cost />}
-            {tab === "engines" && <Engines />}
-            {tab === "events" && <Events />}
-            {tab === "system" && <System />}
-          </>
-        )}
+        <Suspense fallback={<p className="muted">Loading…</p>}>
+          {selectedWorker ? (
+            <AgentDetail
+              key={selectedWorker}
+              agentId={selectedWorker}
+              onClose={() => setSelectedWorker(null)}
+              variant="panel"
+            />
+          ) : (
+            <>
+              {tab === "home" && <Home />}
+              {tab === "tasks" && <Tasks />}
+              {tab === "agents" && <Agents />}
+              {tab === "pools" && <Pools />}
+              {tab === "fleet" && <Fleet />}
+              {tab === "inbox" && <Inbox />}
+              {tab === "knowledge" && <Knowledge />}
+              {tab === "accounts" && <Accounts />}
+              {tab === "cost" && <Cost />}
+              {tab === "engines" && <Engines />}
+              {tab === "events" && <Events />}
+              {tab === "system" && <System />}
+            </>
+          )}
+        </Suspense>
       </main>
       <WorkersSidebar selectedId={selectedWorker} onSelect={setSelectedWorker} />
     </div>
