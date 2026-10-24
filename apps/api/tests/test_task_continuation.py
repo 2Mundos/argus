@@ -457,20 +457,55 @@ async def test_missing_acceptance_is_not_success(db: Database) -> None:
     # A report cannot add or invent criteria.
     t3 = await new_task(db, acceptance=["only"])
     c3 = await claim(db, A)
+    with pytest.raises(ValidationFailedError) as err:
+        async with db.write() as tx:
+            await tasks.complete(
+                tx,
+                A,
+                t3,
+                c3.attempt,
+                TaskResult(
+                    summary="x",
+                    checklist=[
+                        {"id": "ac-forged", "status": "done", "evidence": "trust me"}
+                    ],
+                ),
+            )
+    assert err.value.code == "checklist_mismatch"
+
+
+async def test_checklist_ids_of_another_task_are_rejected(db: Database) -> None:
+    """A late result of task A carries A's checklist ids; applied to B it must not
+    be recorded as B's evidence nor complete B."""
+    a = await new_task(db, acceptance=["alpha criterion"])
+    ca = await claim(db, A)
+    b = await new_task(db, acceptance=["beta criterion"])
+    cb = await claim(db, B)
+    a_ids = [i.id for i in ca.continuation.checklist]
+    b_ids = [i.id for i in cb.continuation.checklist]
+    assert a == ca.id and b == cb.id and not set(a_ids) & set(b_ids)
+    stale = TaskResult(
+        summary="A's work",
+        checklist=[{"id": a_ids[0], "status": "done", "evidence": "PR 101"}],
+    )
+    with pytest.raises(ValidationFailedError) as err:
+        async with db.write() as tx:
+            await tasks.complete(tx, B, b, cb.attempt, stale)
+    assert err.value.code == "checklist_mismatch"
+    # Nothing was recorded: B's own ids still complete it.
     async with db.write() as tx:
-        res = await tasks.complete(
+        ok = await tasks.complete(
             tx,
-            A,
-            t3,
-            c3.attempt,
+            B,
+            b,
+            cb.attempt,
             TaskResult(
-                summary="x",
-                checklist=[
-                    {"id": "ac-forged", "status": "done", "evidence": "trust me"}
-                ],
+                summary="B's work",
+                checklist=[{"id": b_ids[0], "status": "done", "evidence": "qa ok"}],
             ),
         )
-    assert res.state is S.IN_REVIEW
+    assert ok.state is S.SUCCEEDED
+    assert [i.evidence for i in ok.continuation.checklist] == ["qa ok"]
 
 
 # -- environments: typed, and assistance is not a decision ------------------------------

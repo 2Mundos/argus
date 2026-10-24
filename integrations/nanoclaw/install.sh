@@ -31,6 +31,8 @@ cp "$here/argus-gitea-lease.test.ts" "$target/src/channels/argus-gitea-lease.tes
 cp "$here/argus-continuation.test.ts" "$target/src/channels/argus-continuation.test.ts"
 cp "$here/argus-continuation-observe.ts" "$target/src/channels/argus-continuation-observe.ts"
 cp "$here/argus-continuation-observe.test.ts" "$target/src/channels/argus-continuation-observe.test.ts"
+# Reply fencing: output of an earlier task never applies to the task claimed next.
+cp "$here/argus-reply-fence.test.ts" "$target/src/channels/argus-reply-fence.test.ts"
 mkdir -p "$target/src/channels/fixtures"
 rm -rf "$target/src/channels/fixtures/continuation"
 cp -r "$here/fixtures/continuation" "$target/src/channels/fixtures/continuation"

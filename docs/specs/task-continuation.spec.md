@@ -119,6 +119,11 @@ artifacts or WIP), completion also goes to review, flagged
 `acceptance_not_structured`: the orchestrator reconciles it by adding items.
 A first attempt with no criteria completes as before.
 
+A completion that reports an id the task does not hold is rejected with 422
+`checklist_mismatch` and records nothing: such ids are another task's work (a late
+result after a task switch), never evidence for this one. A task without criteria
+holds no ids and ignores reports as before.
+
 ## 3.6 Operating rules and technical assistance
 
 The prompt states for every attempt: resolve facts and technical blockers inside
@@ -152,7 +157,25 @@ that have no id); nothing parses them.
 upper-case `ASSIST: [resource:] text` and the scoped
 `ASK|FAIL|COMPLETE|ASSIST on|for [task] <task-id>:` where the id is exactly the
 task in flight. Any other mention of ask/fail/complete, another task id, lower
-case, or text not at the start stays progress.
+case, or text not at the start stays progress. `PROGRESS on <task-id>:` is the
+scoped form of a progress note.
+
+### Reply fencing
+
+The agent session outlives a claim (a question, a release, an account rotation), so
+output of an earlier task can arrive while the next is claimed. The channel never
+attributes a reply to "whatever is claimed now" by default:
+
+- Each claim is an immutable `{id, attempt, scopeRequired}`; progress timers and
+  deliveries are bound to it and are discarded if the claim is no longer current.
+- A reply scoped to another task id is dropped. A reply the host stamps as an answer
+  to another task's (or attempt's) message is dropped unless it is scoped to the claim.
+- Once the agent session was given a task and has not been recycled, the next claim
+  sets `scopeRequired`: its task text tells the agent to scope every reply, and an
+  unscoped reply is dropped (the agent is told to repeat it scoped, three times at most).
+  A session recycle (account rotation, abandoned claim) clears the requirement.
+- A completion whose checklist ids are not the claim's is not sent; the agent is
+  told the valid ids. The server rejects the same case (3.5).
 
 ## 3.9 Authority
 
