@@ -18,7 +18,7 @@ fails otherwise (`scripts/validate_docs.py`).
 | [`drafts/`](drafts) | Work in progress, not yet a spec |
 | [`research/`](research) | Investigations and comparisons |
 | [`runbooks/`](runbooks) | Operational procedures |
-| [`releases/`](releases) | Release notes, one per version |
+| [`releases/`](specs/releases.spec.md) | Release notes, one per version |
 
 ## Core principle
 
@@ -155,6 +155,6 @@ every new dependency is judged against it.
 
 ### Releases
 
-One document per released version, in [`releases/`](releases), written by
+One document per released version, in [`releases/`](specs/releases.spec.md), written by
 `make release`. Indexed as a series rather than file by file: the filenames are
 `YYYY-MM-DD.vX-Y-Z.ref.md` and sort chronologically.

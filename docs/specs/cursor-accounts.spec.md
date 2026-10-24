@@ -47,7 +47,7 @@ on create and replace, and deliver it to the **delegated** Cursor CLI
   matching the shipped CLI).
 - Replacing Claude/Codex as the default engine or global executor.
 - Running a paid Cursor model call in CI; fleet acceptance uses a parent-run
-  bounded smoke with a real leased account (see [fleet smoke ref](runbooks/2026-10-18.cursor-fleet-smoke.ref.md)).
+  bounded smoke with a real leased account (see [fleet smoke ref](../runbooks/2026-10-18.cursor-fleet-smoke.ref.md)).
 
 # 3. Decisions Made
 
@@ -120,4 +120,4 @@ on create and replace, and deliver it to the **delegated** Cursor CLI
   explicit model (for example `composer-2.5`), **native CLI exit code 0**, and an
   exact controlled nonce echoed in the CLI JSON result—not merely Argus task
   completion. Record outcomes in a dated ref when verified; see
-  [2026-10-18 cursor fleet smoke](runbooks/2026-10-18.cursor-fleet-smoke.ref.md).
+  [2026-10-18 cursor fleet smoke](../runbooks/2026-10-18.cursor-fleet-smoke.ref.md).
