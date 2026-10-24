@@ -210,9 +210,13 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   `channel_error` or `provider_failure` for failures it detects itself, and
   `quota` for a provider limit with no account left and `account_unavailable` for
   a lease or apply error that is not a limit; neither counts as a failure: see
-  [account selection](account-selection.spec.md)). A worker that cannot prepare
-  the repository credential for a claimed task does not fail it: it blocks the
-  task with `block_reason` `env_repository_unavailable`, spending no attempt, and
+  [account selection](account-selection.spec.md)). The reason's class picks what
+  happens next ([failure classes](failure-classes.spec.md) 3.2): a `transient`
+  fail requeues after a backoff (`retry_at`), a `session` fail requeues at once,
+  and a `worker_fail` with attempts left blocks the task as `worker_gave_up` for
+  a human. A worker that finds the environment broken does not fail the task: it
+  blocks it with an `env_*` reason and an optional `error` (`POST
+  /tasks/{id}/block` accepts only `ENV_BLOCK_REASONS`), spending no attempt, and
   a manager unblocks it once the environment is fixed.
 - **Operator release never burns an attempt.** `POST /tasks/{id}/release
   {reason, attempt?}` (orchestrator and admin, like cancel; workers get `403`)

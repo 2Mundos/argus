@@ -1212,7 +1212,7 @@ async def test_claim_is_not_held_while_an_account_is_available_or_none_exist(
     claimed = await _claim(db)  # unmanaged fleet: no accounts rows
     assert claimed is not None and claimed.id == task_id
     async with db.write() as tx:
-        await tasks.fail(tx, A, task_id, 1, "boom")
+        await tasks.fail(tx, A, task_id, 1, "boom", "session_lost")
 
     c1 = await add(db, store, "claude-1", "anthropic")
     await add(db, store, "claude-2", "anthropic")

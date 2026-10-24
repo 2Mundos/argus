@@ -241,6 +241,13 @@ async def test_failures_group_by_reason_with_links_and_excerpts(db: Database) ->
         ("other", 1),
         ("worker_fail", 1),
     ]
+    assert f.by_class == {
+        "admission": 0,
+        "environment": 0,
+        "transient": 0,
+        "session": 7,
+        "task": 3,
+    }
     lease = f.groups[0]
     assert len(lease.examples) == 5
     assert [e.task_id for e in lease.examples][:2] == ["lease6", "lease5"]  # newest

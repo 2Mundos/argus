@@ -264,12 +264,94 @@ async def test_failures_retry_until_max_attempts(db: Database) -> None:
         c = await claim(db)
         assert c is not None
         async with db.write() as tx:
-            after = await service.fail(tx, A, task.id, c.attempt, "nope")
+            after = await service.fail(
+                tx, A, task.id, c.attempt, "nope", "session_lost"
+            )
         assert after.state is expected
         assert after.assignee_agent_id is None
         assert after.lease_expires_at is None
     assert after.failures == 2
     assert after.error == "nope"
+
+
+# -- failure classes (failure classes spec 3.2) --------------------------------------
+
+
+async def test_a_worker_that_gives_up_waits_for_a_human(db: Database) -> None:
+    task = await create(db, max_attempts=3)
+    c = await claim(db)
+    assert c is not None
+    async with db.write() as tx:
+        after = await service.fail(tx, A, task.id, c.attempt, "cannot be done")
+    assert (after.state, after.block_reason) == (S.BLOCKED, "worker_gave_up")
+    assert (after.failures, after.error) == (1, "cannot be done")
+    async with db.write() as tx:
+        assert (await service.unblock(tx, task.id, "human:test")).state is S.READY
+
+
+async def test_a_worker_that_gives_up_on_the_last_attempt_fails(db: Database) -> None:
+    task = await create(db, max_attempts=1)
+    c = await claim(db)
+    assert c is not None
+    async with db.write() as tx:
+        after = await service.fail(tx, A, task.id, c.attempt, "cannot be done")
+    assert after.state is S.FAILED
+
+
+async def test_an_escalating_failure_requeues(db: Database) -> None:
+    task = await create(db, max_attempts=3)
+    c = await claim(db)
+    assert c is not None
+    async with db.write() as tx:
+        after = await service.fail(
+            tx, A, task.id, c.attempt, "too long", "context_overflow"
+        )
+    assert after.state is S.READY
+
+
+async def test_a_transient_failure_backs_off_before_the_retry(
+    db: Database, clock: FakeClock
+) -> None:
+    task = await create(db, max_attempts=5)
+    for delay in (60, 120, 240):
+        c = await claim(db)
+        assert c is not None and c.id == task.id
+        async with db.write() as tx:
+            after = await service.fail(
+                tx, A, task.id, c.attempt, "502", "provider_failure"
+            )
+        assert after.state is S.READY
+        clock.advance(delay - 1)
+        assert await claim(db) is None
+        clock.advance(1)
+
+
+async def test_another_transition_clears_the_backoff(db: Database) -> None:
+    task = await create(db, max_attempts=3)
+    c = await claim(db)
+    assert c is not None
+    async with db.write() as tx:
+        await service.fail(tx, A, task.id, c.attempt, "502", "provider_failure")
+        await service.cancel(tx, task.id, "human:test")
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT retry_at FROM tasks WHERE id = ?", (task.id,)) as cur,
+    ):
+        assert (await cur.fetchone())["retry_at"] is None
+
+
+async def test_an_environment_block_keeps_its_error_and_spends_nothing(
+    db: Database,
+) -> None:
+    task = await create(db)
+    c = await claim(db)
+    assert c is not None
+    async with db.write() as tx:
+        after = await service.block(
+            tx, A, task.id, c.attempt, "env_executor_auth", "codex: not logged in"
+        )
+    assert (after.state, after.block_reason) == (S.BLOCKED, "env_executor_auth")
+    assert (after.failures, after.error) == (0, "codex: not logged in")
 
 
 async def test_expire_leases_counts_as_failure(db: Database, clock: FakeClock) -> None:

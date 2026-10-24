@@ -2132,6 +2132,18 @@
             "title": "Attempt",
             "type": "integer"
           },
+          "error": {
+            "anyOf": [
+              {
+                "maxLength": 1500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
           "reason": {
             "minLength": 1,
             "title": "Reason",
@@ -6525,10 +6537,14 @@
           "reason": {
             "title": "Reason",
             "type": "string"
+          },
+          "retry_class": {
+            "$ref": "#/components/schemas/RetryClass"
           }
         },
         "required": [
           "reason",
+          "retry_class",
           "count",
           "examples"
         ],
@@ -6537,6 +6553,16 @@
       },
       "Failures": {
         "properties": {
+          "by_class": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/RetryClass"
+            },
+            "title": "By Class",
+            "type": "object"
+          },
           "groups": {
             "items": {
               "$ref": "#/components/schemas/FailureGroup"
@@ -6566,6 +6592,7 @@
           "source",
           "total",
           "groups",
+          "by_class",
           "truncated"
         ],
         "title": "Failures",
@@ -11683,6 +11710,18 @@
         ],
         "title": "RenewedLease",
         "type": "object"
+      },
+      "RetryClass": {
+        "description": "What kind of failure ended an attempt; it picks the retry (failure classes 3.2).",
+        "enum": [
+          "admission",
+          "environment",
+          "transient",
+          "session",
+          "task"
+        ],
+        "title": "RetryClass",
+        "type": "string"
       },
       "Review": {
         "enum": [

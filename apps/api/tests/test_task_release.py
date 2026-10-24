@@ -65,7 +65,7 @@ async def events(db: Database, task_id: str, kind: str) -> list[dict]:
 
 async def fail(db: Database, agent: str, task_id: str, attempt: int):
     async with db.write() as tx:
-        return await tasks.fail(tx, agent, task_id, attempt, "broke")
+        return await tasks.fail(tx, agent, task_id, attempt, "broke", "session_lost")
 
 
 # -- the release itself -------------------------------------------------------------

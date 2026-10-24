@@ -3064,6 +3064,8 @@ export interface components {
         BlockRequest: {
             /** Attempt */
             attempt: number;
+            /** Error */
+            error?: string | null;
             /** Reason */
             reason: string;
         };
@@ -4498,9 +4500,14 @@ export interface components {
             lost_seconds?: number | null;
             /** Reason */
             reason: string;
+            retry_class: components["schemas"]["RetryClass"];
         };
         /** Failures */
         Failures: {
+            /** By Class */
+            by_class: {
+                [key: string]: number;
+            };
             /** Groups */
             groups: components["schemas"]["FailureGroup"][];
             /** Source */
@@ -6300,6 +6307,12 @@ export interface components {
             /** Task Id */
             task_id: string;
         };
+        /**
+         * RetryClass
+         * @description What kind of failure ended an attempt; it picks the retry (failure classes 3.2).
+         * @enum {string}
+         */
+        RetryClass: "admission" | "environment" | "transient" | "session" | "task";
         /**
          * Review
          * @enum {string}

@@ -43,6 +43,7 @@ from argus_core.tasks import (
     Failover,
     HarnessModel,
     PromptTrust,
+    RetryClass,
     Review,
     ServingAccount,
     Task,
@@ -51,6 +52,8 @@ from argus_core.tasks import (
     TaskState,
     TransitionContext,
     check_harness_providers,
+    retry_class,
+    retry_delay_s,
     transition,
     validate_milestone,
 )
@@ -92,6 +95,8 @@ QUOTA_WAIT_REASONS = (AWAITING_QUOTA, "no_account")
 # (project runtime spec 3.4): neither spends `failures` or `max_attempts`.
 RUNTIME_PREPARING = "runtime_preparing"
 RUNTIME_FAILED = "runtime_failed"
+# `blocked` after the worker said FAIL with attempts left (failure classes 3.2).
+WORKER_GAVE_UP = "worker_gave_up"
 
 
 # -- reads -------------------------------------------------------------------
@@ -298,11 +303,12 @@ async def claim(
     if await awaiting_quota(tx.conn, tx.now):
         return None
     async with tx.conn.execute(
-        "SELECT * FROM tasks t WHERE state = 'ready' AND NOT EXISTS ("
+        "SELECT * FROM tasks t WHERE state = 'ready'"
+        " AND (retry_at IS NULL OR retry_at <= ?) AND NOT EXISTS ("
         "  SELECT 1 FROM json_each(t.required_capabilities) rc"
         "  WHERE rc.value NOT IN (SELECT value FROM json_each(?)))"
         " ORDER BY priority DESC, created_at, id",
-        (json.dumps(capabilities),),
+        (ts(tx.now), json.dumps(capabilities)),
     ) as cur:
         candidates = await cur.fetchall()
     gated = bool(runtime_providers) and await manages_accounts(tx.conn)
@@ -899,6 +905,26 @@ async def fail(
         )
         return await get_task(tx.conn, task_id)
     harder = {} if quota else _escalation(row, reason)
+    failures = row["failures"] + 1
+    retries = failures < row["max_attempts"]
+    kind = retry_class(reason)
+    if kind is RetryClass.TASK and reason not in ESCALATING_REASONS and retries:
+        # The worker gave up: asking again would get the same answer, so a human
+        # decides (failure classes 3.2). The attempt still counts.
+        await _apply(
+            tx,
+            row,
+            Action.BLOCK,
+            f"agent:{agent_id}",
+            set_={"error": error, "failures": failures, "block_reason": WORKER_GAVE_UP},
+            data={"error": error, "reason": reason, "retry_class": kind},
+        )
+        return await get_task(tx.conn, task_id)
+    backoff = (
+        {"retry_at": ts(tx.now + timedelta(seconds=retry_delay_s(failures)))}
+        if kind is RetryClass.TRANSIENT and retries
+        else {}
+    )
     await _apply(
         tx,
         row,
@@ -908,10 +934,13 @@ async def fail(
         | (
             {"progress_message": f"no account for the attempt; requeued: {error}"}
             if quota
-            else {"failures": row["failures"] + 1}
+            else {"failures": failures}
         )
+        | backoff
         | harder.get("set", {}),
-        data={"error": error, "reason": reason} | harder.get("data", {}),
+        data={"error": error, "reason": reason, "retry_class": kind}
+        | backoff
+        | harder.get("data", {}),
         counts_failure=not quota,
     )
     return await get_task(tx.conn, task_id)
@@ -936,15 +965,23 @@ def _escalation(row: aiosqlite.Row, reason: str) -> dict[str, dict[str, Any]]:
     }
 
 
-async def block(tx: Tx, agent_id: str, task_id: str, attempt: int, reason: str) -> Task:
+async def block(
+    tx: Tx,
+    agent_id: str,
+    task_id: str,
+    attempt: int,
+    reason: str,
+    error: str | None = None,
+) -> Task:
     row = await _owned(tx, task_id, attempt, agent_id)
     await _apply(
         tx,
         row,
         Action.BLOCK,
         f"agent:{agent_id}",
-        set_={"block_reason": reason},
-        data={"reason": reason},
+        set_={"block_reason": reason} | ({"error": error} if error else {}),
+        data={"reason": reason, "retry_class": retry_class(reason)}
+        | ({"error": error} if error else {}),
     )
     return await get_task(tx.conn, task_id)
 
@@ -2337,7 +2374,12 @@ async def _apply(
     new = transition(old, action, ctx)
     # strictly greater than the old version, so a transition always stales a pending edit
     bumped = ts(max(tx.now, datetime.fromisoformat(row["updated_at"]) + _TICK))
-    fields: dict[str, Any] = {"state": new, "updated_at": bumped, **(set_ or {})}
+    fields: dict[str, Any] = {
+        "state": new,
+        "updated_at": bumped,
+        "retry_at": None,  # only a transient fail's requeue waits (failure classes 3.2)
+        **(set_ or {}),
+    }
     leaving_claim = old is S.CLAIMED and new is not S.CLAIMED
     if leaving_claim:
         fields |= {

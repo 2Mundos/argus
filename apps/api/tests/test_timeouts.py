@@ -126,6 +126,6 @@ async def test_a_fresh_attempt_gets_a_fresh_deadline(
     first = await claim(db)
     clock.advance(100)  # within its 120 s lease
     async with db.write() as tx:  # it fails voluntarily; goes back to ready
-        await tasks.fail(tx, A, task.id, first.attempt, "oops")
+        await tasks.fail(tx, A, task.id, first.attempt, "oops", "session_lost")
     second = await claim(db)
     assert second.timeout_at == clock.now + timedelta(seconds=300)

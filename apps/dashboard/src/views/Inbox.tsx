@@ -141,11 +141,17 @@ export function Inbox() {
                     item={item}
                     onOpenTask={() => setTaskDrawer(item.subject_id)}
                   />
-                ) : (
+                ) : item.failed_dependencies.length > 0 ? (
                   <p key={item.subject_id} className="muted small">
                     {item.title ?? shortId(item.subject_id)} is stalled behind{" "}
                     {item.failed_dependencies.map(shortId).join(", ")}.
                   </p>
+                ) : (
+                  <BlockedCard
+                    key={item.subject_id}
+                    item={item}
+                    onOpenTask={() => setTaskDrawer(item.subject_id)}
+                  />
                 ),
               )}
             </div>
@@ -154,6 +160,34 @@ export function Inbox() {
       ))}
       {taskDrawer && <TaskDetail taskId={taskDrawer} onClose={() => setTaskDrawer(null)} />}
     </section>
+  );
+}
+
+/** Why a worker blocked a task (failure classes 3.2-3.4); unknown reasons show as-is. */
+const BLOCK_COPY: Record<string, string> = {
+  env_repository_unconfigured: "its project has no repository configured",
+  env_repository_unavailable: "the repository credential could not be applied",
+  env_repository_unreachable: "the repository did not answer",
+  env_executor_auth: "the executor could not log in",
+  worker_env: "the worker reported a missing workspace, tool or credential",
+  worker_gave_up: "the worker gave up; retry or cancel it",
+};
+
+function BlockedCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () => void }) {
+  const reason = item.task?.block_reason;
+  return (
+    <article className="card">
+      <p>
+        <TaskLabel title={item.title ?? shortId(item.subject_id)} project={item.project} /> is
+        blocked{reason ? `: ${BLOCK_COPY[reason] ?? reason}` : ""}.
+      </p>
+      {item.task?.error && <p className="small">{item.task.error}</p>}
+      <div className="actions left">
+        <button type="button" className="link" onClick={onOpenTask}>
+          Open task
+        </button>
+      </div>
+    </article>
   );
 }
 

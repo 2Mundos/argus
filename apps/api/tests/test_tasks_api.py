@@ -156,6 +156,23 @@ def test_errors_have_actionable_codes(
     assert res.json()["detail"]["code"] == "not_found"
 
 
+def test_a_worker_blocks_only_for_the_environment(
+    client: TestClient, agent: dict[str, str]
+) -> None:
+    task = client.post("/api/tasks", json={"project": "global", "title": "x"}).json()
+    claimed = client.post("/api/tasks/claim", json={}, headers=agent).json()
+    url = f"/api/tasks/{task['id']}/block"
+    attempt = claimed["attempt"]
+    res = client.post(url, json={"attempt": attempt, "reason": "bored"}, headers=agent)
+    assert res.status_code == 422
+    res = client.post(
+        url,
+        json={"attempt": attempt, "reason": "env_repository_unreachable", "error": "x"},
+        headers=agent,
+    )
+    assert (res.json()["state"], res.json()["error"]) == ("blocked", "x")
+
+
 def _fail_once(client: TestClient, agent: dict[str, str], **body: object) -> dict:
     """Create a task, claim it, and fail it; with max_attempts=1 it ends `failed`."""
     task = client.post(

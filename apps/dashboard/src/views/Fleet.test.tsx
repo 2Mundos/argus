@@ -67,9 +67,11 @@ function health(over: Record<string, unknown> = {}) {
       source: "events task.fail, task.expire",
       total: 1,
       truncated: false,
+      by_class: { admission: 0, environment: 0, transient: 0, session: 0, task: 1 },
       groups: [
         {
           reason: "auth_missing",
+          retry_class: "task",
           count: 1,
           examples: [
             {

@@ -142,6 +142,28 @@ describe("Inbox groups", () => {
   });
 });
 
+describe("Inbox blocked tasks", () => {
+  it("says why a worker blocked a task and shows its error", async () => {
+    const { decision: _, ...base } = item("b1", "question", "", null);
+    net.inbox = {
+      items: [
+        {
+          ...base,
+          decision_id: null,
+          decision_kind: null,
+          task: { block_reason: "env_executor_auth", error: "codex: not logged in" },
+        },
+      ],
+      groups: [group("b1", 1)],
+      total: 1,
+      has_more: false,
+    };
+    render(<Inbox />);
+    expect(await screen.findByText(/is\s+blocked: the executor could not log in/)).toBeTruthy();
+    expect(screen.getByText("codex: not logged in")).toBeTruthy();
+  });
+});
+
 describe("Inbox batch answers", () => {
   it("confirms each answer, shows per-item results and retries with the same request_id", async () => {
     seed();
