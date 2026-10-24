@@ -63,21 +63,21 @@ every new dependency is judged against it.
   agents and people, delivered with every claim
 - [Home](specs/home.spec.md) — the default dashboard tab: what needs attention,
   complete totals for every core state, recent activity, and health
-- [Fleet health](specs/fleet-health.spec.md) — the Frota tab: pool liveness, queue
-  and run time, success rate, failures by reason, with `sem dados` when unknown
+- [Fleet health](specs/fleet-health.spec.md) — the Fleet tab: pool liveness, queue
+  and run time, success rate, failures by reason, with `no data` when unknown
   Screenshot: [2026-10-20.fleet-health.screenshot.png](evidence/2026-10-20.fleet-health.screenshot.png)
 - [Live work](specs/live-work.spec.md) — what an agent is doing now: task activity
   feed, agent drawer with its current work and container output
 - [Progress milestones](specs/progress-milestones.spec.md) — structured progress
   signals (commit, PR, CI, gate) on task cards and a no-signal indicator
 - [Task live log](specs/task-live-log.spec.md) — a redacted ring of an attempt's
-  output, streamed as `task.log`; the "Ao vivo" panel and MCP `get_task_log`
+  output, streamed as `task.log`; the Live panel and MCP `get_task_log`
 - [Task steering](specs/task-steering.spec.md) — a manager sends a message to the
   attempt in flight; delivered on heartbeat, injected into the NanoClaw session as a
   framed operator instruction; expires with the attempt
 - [Account usage](specs/account-usage.spec.md) — tokens spent and quota left per
   provider account: reported usage, Codex quota probe, Cursor pools, charts
-- [Cost view](specs/cost-view.spec.md) — the Custo tab: tokens and estimated cost
+- [Cost view](specs/cost-view.spec.md) — the Cost tab: tokens and estimated cost
   per project and account over 24h/7d/30d, price table, unpriced models
 - [Model observability](specs/model-observability.spec.md) — which model ran in the
   harness and delegate layers, with evidence, and the routing/fallback timeline

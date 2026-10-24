@@ -29,8 +29,8 @@ export function Cost() {
   return (
     <section>
       <div className="toolbar">
-        <h2>Custo</h2>
-        <div className="segmented" role="group" aria-label="Período">
+        <h2>Cost</h2>
+        <div className="segmented" role="group" aria-label="Window">
           {COST_WINDOWS.map((w) => (
             <button
               key={w.id}
@@ -45,7 +45,7 @@ export function Cost() {
         </div>
       </div>
       {error && <p className="error">{error.message}</p>}
-      {data ? <Report report={data} tz={tz} /> : !error && <p className="muted">Carregando…</p>}
+      {data ? <Report report={data} tz={tz} /> : !error && <p className="muted">Loading…</p>}
     </section>
   );
 }
@@ -57,22 +57,22 @@ export function Report({ report, tz }: { report: CostReport; tz: string }) {
   return (
     <>
       <div className="stats">
-        <Stat label="Entrada" value={tokensOrDash(totals.input_tokens)} />
-        <Stat label="Saída" value={tokensOrDash(totals.output_tokens)} />
+        <Stat label="Input" value={tokensOrDash(totals.input_tokens)} />
+        <Stat label="Output" value={tokensOrDash(totals.output_tokens)} />
         <Stat label="Cache" value={tokensOrDash(totals.cached_input_tokens)} />
-        <Stat label={`Custo (estimativa, ${currency})`} value={costLabel(totals, currency)} />
-        <Stat label="Execuções medidas" value={String(totals.measured_runs)} />
-        {missed && <Stat label="Execuções sem números" value={missed} />}
+        <Stat label={`Cost (estimate, ${currency})`} value={costLabel(totals, currency)} />
+        <Stat label="Measured runs" value={String(totals.measured_runs)} />
+        {missed && <Stat label="Runs without figures" value={missed} />}
       </div>
       {totals.reported_cost_usd != null && (
         <p className="muted small">
-          Custo informado pelos motores (não somado à estimativa):{" "}
+          Cost reported by engines (not added to the estimate):{" "}
           {totals.reported_cost_usd.toFixed(2)} USD
         </p>
       )}
-      <h3>Por dia</h3>
+      <h3>By day</h3>
       <DailyBars report={report} tz={tz} />
-      <h3>Por conta</h3>
+      <h3>By account</h3>
       <Table
         rows={report.by_account.map((a) => ({
           key: a.account_id,
@@ -81,10 +81,10 @@ export function Report({ report, tz }: { report: CostReport; tz: string }) {
           extra: <AccountQuota quota={a.quota} status={a.quota_status} provider={a.provider} />,
         }))}
         currency={currency}
-        label="Conta"
-        extraLabel="Cota"
+        label="Account"
+        extraLabel="Quota"
       />
-      <h3>Por projeto</h3>
+      <h3>By project</h3>
       <Table
         rows={report.by_project.map((p) => ({
           key: p.project ?? "",
@@ -92,7 +92,7 @@ export function Report({ report, tz }: { report: CostReport; tz: string }) {
           f: p,
         }))}
         currency={currency}
-        label="Projeto"
+        label="Project"
       />
       <p className="muted small" data-testid="pricing-note">
         {pricingNote(pricing)}
@@ -121,11 +121,11 @@ function Table(props: { rows: Row[]; currency: string; label: string; extraLabel
       <thead>
         <tr>
           <th>{props.label}</th>
-          <th>Entrada</th>
-          <th>Saída</th>
+          <th>Input</th>
+          <th>Output</th>
           <th>Cache</th>
-          <th>Custo (estimativa)</th>
-          <th>Execuções</th>
+          <th>Cost (estimate)</th>
+          <th>Runs</th>
           {props.extraLabel && <th>{props.extraLabel}</th>}
         </tr>
       </thead>
@@ -149,7 +149,7 @@ function Table(props: { rows: Row[]; currency: string; label: string; extraLabel
             <td>{tokensOrDash(f.cached_input_tokens)}</td>
             <td>{costLabel(f, currency)}</td>
             <td>
-              {f.runs === 0 ? "sem uso" : f.measured_runs > 0 ? f.measured_runs : "—"}
+              {f.runs === 0 ? "no usage" : f.measured_runs > 0 ? f.measured_runs : "—"}
               {notReportedLabel(f) && <span className="badge"> {notReportedLabel(f)}</span>}
             </td>
             {props.extraLabel && <td>{extra}</td>}
@@ -158,7 +158,7 @@ function Table(props: { rows: Row[]; currency: string; label: string; extraLabel
         {rows.length === 0 && (
           <tr>
             <td colSpan={7} className="muted">
-              Nenhum uso no período.
+              No usage in this window.
             </td>
           </tr>
         )}
@@ -180,7 +180,7 @@ function DailyBars({ report, tz }: { report: CostReport; tz: string }) {
   const labelEvery = Math.ceil(days.length / 8);
   return (
     <figure className="chart">
-      <svg viewBox={`0 0 ${w} ${h + 18}`} role="img" aria-label="Tokens por dia">
+      <svg viewBox={`0 0 ${w} ${h + 18}`} role="img" aria-label="Tokens per day">
         {days.map((d, i) => {
           const x = i * slot + (slot - barW) / 2;
           const parts = [
@@ -194,9 +194,9 @@ function DailyBars({ report, tz }: { report: CostReport; tz: string }) {
             <g key={d.start}>
               <title>
                 {d.measured_runs === 0 && d.not_reported_runs === 0
-                  ? `${label}: sem uso`
-                  : `${label}: ${tokensOrDash(d.input_tokens)} entrada, ${tokensOrDash(d.output_tokens)} saída${
-                      d.not_reported_runs ? `, ${d.not_reported_runs} não reportado` : ""
+                  ? `${label}: no usage`
+                  : `${label}: ${tokensOrDash(d.input_tokens)} input, ${tokensOrDash(d.output_tokens)} output${
+                      d.not_reported_runs ? `, ${d.not_reported_runs} not reported` : ""
                     }`}
               </title>
               {parts.map(([cls, v]) => {
@@ -219,13 +219,13 @@ function DailyBars({ report, tz }: { report: CostReport; tz: string }) {
       </svg>
       <figcaption className="legend small muted">
         <span>
-          <i className="swatch bar-input" /> Entrada
+          <i className="swatch bar-input" /> Input
         </span>
         <span>
           <i className="swatch bar-cached" /> Cache
         </span>
         <span>
-          <i className="swatch bar-output" /> Saída
+          <i className="swatch bar-output" /> Output
         </span>
       </figcaption>
     </figure>

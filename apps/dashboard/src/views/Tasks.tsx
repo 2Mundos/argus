@@ -21,7 +21,7 @@ const COLUMNS: { title: string; states: TaskState[] }[] = [
 ];
 
 export function Tasks() {
-  // `#tasks/<id>` (linked from Frota) opens that task's detail.
+  // `#tasks/<id>` (linked from Fleet) opens that task's detail.
   const [selected, setSelected] = useState<string | null>(
     () => window.location.hash.match(/^#tasks\/(.+)$/)?.[1] ?? null,
   );

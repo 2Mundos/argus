@@ -1,8 +1,8 @@
-# Fleet health ("Frota")
+# Fleet health
 
 # 1. Purpose and Scope
 
-Frota is a dashboard tab (`#frota`) that answers: are the pools alive, how long do
+Fleet is a dashboard tab (`#fleet`) that answers: are the pools alive, how long do
 tasks wait and run, how often do they succeed, and why do they fail. It is one
 read-only endpoint, `GET /api/fleet/health?window=<hours>`, readable by the
 orchestrator and admin scopes (never workers). `window` defaults to 24, must be
@@ -21,7 +21,7 @@ failures grouped by reason with up to 5 recent examples each.
 # 3. Decisions Made
 
 - **One snapshot.** Every query runs in one read transaction.
-- **Unknown is not zero.** A missing value is `null` and the UI prints `sem dados`.
+- **Unknown is not zero.** A missing value is `null` and the UI prints `no data`.
   Durations and rates are `null` when fewer than `MIN_SAMPLES` (5) samples exist;
   a mean or percentile of 1-4 samples is never reported. `n` is always present.
 - **Provenance.** Every metric carries `window_hours` and `source`.
@@ -56,12 +56,12 @@ failures grouped by reason with up to 5 recent examples each.
 # 5. Constraints
 
 - Single node, SQLite only; reads never emit events or take the write lock.
-- UI text is English except the literal `sem dados`; layout works from 390 px.
+- UI text is English; layout works from 390 px.
 
 # 6. Implementation Consequences
 
 - Backend: `apps/api/src/argus_api/fleet_health.py`, route in `ops_routes.py`,
   tests in `apps/api/tests/test_fleet_health.py`.
-- Frontend: `views/Frota.tsx`, `frota` tab in `App.tsx`; `#tasks/<id>` opens that
+- Frontend: `views/Fleet.tsx`, Fleet tab (`#fleet`) in `App.tsx`; `#tasks/<id>` opens that
   task's detail in the Tasks tab.
 - Regenerate with `make openapi`.

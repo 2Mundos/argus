@@ -2,25 +2,46 @@ import { useEffect, useRef, useState } from "react";
 import { api, call } from "../api";
 import { useLive } from "../live";
 import { filterLines, type LogFilter, type LogLine, logEvent, mergeLines } from "../taskLog";
+import { TaskSteers } from "./TaskSteers";
 
 const READ_LIMIT = 1000; // the API's largest page
 
 const FILTERS: [LogFilter, string][] = [
-  ["all", "Tudo"],
+  ["all", "All"],
   ["worker", "Worker"],
   ["delegate", "Delegate"],
 ];
 
-/** The "Ao vivo" panel: the attempt's log tail, then its `task.log` events as they arrive. */
-export function TaskLog({ taskId, attempt }: { taskId: string; attempt: number }) {
+export type TaskLogSteer = {
+  claimed: boolean;
+  assigneeId: string | null;
+  supportsSteer?: boolean;
+};
+
+/** The live panel: the attempt's log tail, then its `task.log` events as they arrive. */
+export function TaskLog({
+  taskId,
+  attempt,
+  steer,
+}: {
+  taskId: string;
+  attempt: number;
+  /** When set, a Steer button sits next to Pause (task steering spec 3.9). */
+  steer?: TaskLogSteer;
+}) {
   const { subscribe, connection } = useLive();
   const [lines, setLines] = useState<LogLine[]>([]);
   const [filter, setFilter] = useState<LogFilter>("all");
   const [pausedAt, setPausedAt] = useState<number | null>(null); // last seq shown while paused
+  const [steerOpen, setSteerOpen] = useState(false);
   const [error, setError] = useState<string>();
   const box = useRef<HTMLPreElement>(null);
   const atEnd = useRef(true); // the reader is at the end: keep following
   const catchUp = useRef(() => {});
+
+  useEffect(() => {
+    setSteerOpen(false);
+  }, [taskId, attempt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,17 +153,17 @@ export function TaskLog({ taskId, attempt }: { taskId: string; attempt: number }
 
   const paused = pausedAt != null;
   return (
-    <section className={`term task-log${paused ? " term-paused" : ""}`} aria-label="Ao vivo">
+    <section className={`term task-log${paused ? " term-paused" : ""}`} aria-label="Live">
       <div className="term-bar">
         <span className="term-traffic" aria-hidden="true">
           <i />
           <i />
           <i />
         </span>
-        <span className="term-title">{`ao vivo · tentativa ${attempt}`}</span>
+        <span className="term-title">{`live · attempt ${attempt}`}</span>
         <select
           className="term-filter"
-          aria-label="Origem"
+          aria-label="Source"
           value={filter}
           onChange={(e) => setFilter(e.target.value as LogFilter)}
         >
@@ -160,9 +181,30 @@ export function TaskLog({ taskId, attempt }: { taskId: string; attempt: number }
           className="term-action"
           onClick={() => setPausedAt(paused ? null : (lines.at(-1)?.seq ?? 0))}
         >
-          {paused ? `Retomar${behind ? ` (+${behind})` : ""}` : "Pausar"}
+          {paused ? `Resume${behind ? ` (+${behind})` : ""}` : "Pause"}
         </button>
+        {steer?.claimed && (
+          <button
+            type="button"
+            className="term-action"
+            aria-expanded={steerOpen}
+            onClick={() => setSteerOpen((open) => !open)}
+          >
+            {steerOpen ? "Close steer" : "Steer"}
+          </button>
+        )}
       </div>
+      {steer && (
+        <TaskSteers
+          taskId={taskId}
+          attempt={attempt}
+          claimed={steer.claimed}
+          assigneeId={steer.assigneeId}
+          supportsSteer={steer.supportsSteer}
+          composerOpen={steerOpen}
+          onComposerOpenChange={setSteerOpen}
+        />
+      )}
       {error && <p className="term-error">{error}</p>}
       <pre
         ref={box}
@@ -174,7 +216,7 @@ export function TaskLog({ taskId, attempt }: { taskId: string; attempt: number }
         }}
       >
         {shown.length === 0 ? (
-          <span className="term-empty">Sem saída ainda.</span>
+          <span className="term-empty">No output yet.</span>
         ) : (
           shown.map((l) => (
             <div key={l.seq} className={`log-line ${l.source}`}>

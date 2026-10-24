@@ -5,7 +5,7 @@
 A claimed task shows a progress note and a milestone, but not what the executor is
 printing now. This spec adds a **live log**: a bounded, redacted tail of an attempt's
 output that the worker side posts, the API keeps and streams, and the dashboard
-("Ao vivo" in the task view) and MCP read. It also makes output count as a sign of
+(the **Live** panel in the task view) and MCP read. It also makes output count as a sign of
 life for the no-signal indicator of [progress milestones](progress-milestones.spec.md).
 
 # 2. Non-Goals
@@ -114,10 +114,10 @@ run. URL schemes are bounded to 16 characters; names, URL users and passwords ar
 
 ## 3.6 Dashboard
 
-- Panel **Ao vivo** in the task view and in the agent drawer/panel while that agent
+- Panel **Live** in the task view and in the agent drawer/panel while that agent
   holds the attempt: backfill with 3.5, then follow `task.log` through the shared
   event stream for that task, de-duplicated by `seq`. It shows the attempt, filters
-  `todos` / `worker` / `delegate`, scrolls to the end while the reader is at the end,
+  All / worker / delegate, scrolls to the end while the reader is at the end,
   and has pause/resume (paused lines are buffered and shown on resume). When the
   stream reconnects, or a batch's `seq` skips past the newest line held (or past the
   empty tail's `last_seq` when none is held), it reads the missed lines with `after`.

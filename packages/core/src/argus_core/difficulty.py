@@ -28,16 +28,14 @@ class DifficultySource(StrEnum):
 MAX_TRIVIAL_SPEC = 1500
 
 _COPY = re.compile(
-    r"\b(copy ?(change|edit|tweak)?|texto|typos?|erro de digita[cç][aã]o|wording|"
-    r"reda[cç][aã]o|tradu[cç][aã]o|traduzir|translations?|translate|"
-    r"docs? only|somente docs?|apenas docs?|readme|microcopy|r[oó]tulo|label text)\b",
+    r"\b(copy ?(change|edit|tweak)?|typos?|wording|translations?|translate|"
+    r"docs? only|readme|microcopy|label text)\b",
     re.IGNORECASE,
 )
 _RISK = re.compile(
-    r"\b(migrations?|schemas?|apis?|endpoints?|security|seguran[cç]a|auth\w*|autentica\w*|autoriza\w*|senhas?|passwords?|migra[cç][aã]o|migra[cç][oõ]es|esquema|"
-    r"credentials?|credenciais|secrets?|tokens?|tests?|testes?|refactor\w*|"
-    r"refatora\w*|bugs?|deploy\w*|database|banco de dados|sql|performance|"
-    r"concurrency|permissions?|permiss[oõ]es)\b",
+    r"\b(migrations?|schemas?|apis?|endpoints?|security|auth\w*|passwords?|"
+    r"credentials?|secrets?|tokens?|tests?|refactor\w*|bugs?|deploy\w*|"
+    r"database|sql|performance|concurrency|permissions?)\b",
     re.IGNORECASE,
 )
 
@@ -46,19 +44,18 @@ _RISK = re.compile(
 # expensive tier, so a false `hard` costs more than a missed one).
 _HARD = {
     "architecture": re.compile(
-        r"\b(architecture|arquitetura|redesign|re-?architect\w*)\b", re.IGNORECASE
+        r"\b(architecture|redesign|re-?architect\w*)\b", re.IGNORECASE
     ),
     "data_migration": re.compile(
-        r"\b(data migration|migra[cç][aã]o de dados|backfill|schema migration)\b",
+        r"\b(data migration|backfill|schema migration)\b",
         re.IGNORECASE,
     ),
     "security": re.compile(
-        r"\b(security|seguran[cç]a|vulnerabilit\w*|vulnerabilidade\w*|threat model)\b",
+        r"\b(security|vulnerabilit\w*|threat model)\b",
         re.IGNORECASE,
     ),
     "multi_service": re.compile(
-        r"\b(multi-?service|cross-?service|v[aá]rios servi[cç]os|"
-        r"m[uú]ltiplos servi[cç]os|distributed|distribu[ií]d[oa])\b",
+        r"\b(multi-?service|cross-?service|distributed)\b",
         re.IGNORECASE,
     ),
 }

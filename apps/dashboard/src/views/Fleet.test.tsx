@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Frota, percent, seconds } from "./Frota";
+import { Fleet, percent, seconds } from "./Fleet";
 
 const mock = vi.hoisted(() => ({ health: undefined as unknown }));
 
@@ -86,27 +86,27 @@ function health(over: Record<string, unknown> = {}) {
   };
 }
 
-describe("Frota", () => {
-  it("renders sem dados for unknown values, never 0", async () => {
+describe("Fleet", () => {
+  it("renders no data for unknown values, never 0", async () => {
     mock.health = health();
-    render(<Frota />);
+    render(<Fleet />);
     await screen.findByText("alpha");
     const pools = screen.getAllByRole("table")[0];
     if (!pools) throw new Error("no pools table");
     expect(within(pools).getByText("1 / 2")).toBeTruthy();
-    expect(within(pools).getByText("sem dados")).toBeTruthy(); // heartbeat
+    expect(within(pools).getByText("no data")).toBeTruthy(); // heartbeat
     const queue = screen.getByRole("heading", { name: "Queue time" }).parentElement;
-    expect(queue?.textContent).toContain("p50 sem dados");
+    expect(queue?.textContent).toContain("p50 no data");
     expect(queue?.textContent).toContain("n=2");
     const outcomes = screen.getByRole("heading", { name: "Outcomes" }).parentElement;
-    expect(outcomes?.textContent).toContain("success sem dados");
+    expect(outcomes?.textContent).toContain("success no data");
     expect(outcomes?.textContent).toContain("1 succeeded · 1 failed");
     expect(outcomes?.textContent).not.toMatch(/\b0%/);
   });
 
   it("shows values with window and source captions, and links failures", async () => {
     mock.health = health();
-    render(<Frota />);
+    render(<Fleet />);
     const run = (await screen.findByRole("heading", { name: "Run time" })).parentElement;
     expect(run?.textContent).toContain("p50 1.5 min");
     expect(run?.textContent).toContain("24 h · events task.claim");
@@ -128,16 +128,16 @@ describe("Frota", () => {
         failure_rate: 0.2,
       },
     });
-    render(<Frota />);
+    render(<Fleet />);
     const o = (await screen.findByRole("heading", { name: "Outcomes" })).parentElement;
     expect(o?.textContent).toContain("success 80%");
   });
 
   it("formats helpers", () => {
-    expect(seconds(null)).toBe("sem dados");
+    expect(seconds(null)).toBe("no data");
     expect(seconds(12.4)).toBe("12 s");
     expect(seconds(7200)).toBe("2.0 h");
-    expect(percent(undefined)).toBe("sem dados");
+    expect(percent(undefined)).toBe("no data");
     expect(percent(0)).toBe("0%"); // a measured zero is not missing
   });
 });

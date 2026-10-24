@@ -73,6 +73,7 @@ from argus_api.kinds import service as kinds
 from argus_api.modeltrace import service as modeltrace
 from argus_api.runtime.gate import claim_gate
 from argus_api.tasks import continuation as cont
+from argus_api.tasks import steers
 
 log = logging.getLogger(__name__)
 S = TaskState
@@ -1063,6 +1064,7 @@ async def retry(tx: Tx, task_id: str, actor: str) -> Task:
         (S.READY, ts(tx.now), task_id),
     )
     await tx.conn.execute("DELETE FROM task_log WHERE task_id = ?", (task_id,))
+    await steers.expire_task(tx, task_id)
     error = row["error"] or ""
     await record(
         tx,
@@ -2129,7 +2131,8 @@ async def _apply(
     # strictly greater than the old version, so a transition always stales a pending edit
     bumped = ts(max(tx.now, datetime.fromisoformat(row["updated_at"]) + _TICK))
     fields: dict[str, Any] = {"state": new, "updated_at": bumped, **(set_ or {})}
-    if old is S.CLAIMED and new is not S.CLAIMED:
+    leaving_claim = old is S.CLAIMED and new is not S.CLAIMED
+    if leaving_claim:
         fields |= {
             "assignee_agent_id": None,
             "lease_expires_at": None,
@@ -2148,6 +2151,9 @@ async def _apply(
         event or f"task.{action}",
         {"from": old, "to": new, "attempt": row["attempt"], **(data or {})},
     )
+    if leaving_claim:
+        # Pending steers belong to this attempt only (task steering spec 3.3).
+        await steers.expire_attempt(tx, row["id"], row["attempt"])
     # Decisions that waited on the old state are moot once the task leaves it
     # (an answered decision is already closed before its transition runs).
     if new in TERMINAL:

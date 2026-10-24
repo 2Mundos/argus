@@ -37,7 +37,7 @@ from argus_api.errors import ValidationFailedError
 from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
 from argus_api.paging import DEFAULT_LIMIT, View
-from argus_api.tasks import log, service, views
+from argus_api.tasks import log, service, steers, views
 from argus_api.tasks.views import TaskPage
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -285,6 +285,37 @@ async def post_log(
     )  # redaction stays outside the writer
     async with db.write() as tx:
         return await log.append(tx, agent_id, task_id, body.attempt, body.source, lines)
+
+
+@router.post("/{task_id}/steers", status_code=status.HTTP_201_CREATED)
+async def create_steer(
+    task_id: str, body: steers.SteerCreate, db: DbDep, caller: ManagerDep
+) -> steers.Steer:
+    """Send an instruction to the attempt in flight. The assignee must report
+    the `steer` feature; the message expires if the attempt ends first."""
+    async with db.write() as tx:
+        return await steers.create(tx, task_id, body.message, caller.actor)
+
+
+@router.get("/{task_id}/steers")
+async def list_steers(
+    task_id: str,
+    db: DbDep,
+    _: ManagerDep,
+    attempt: Annotated[int | None, Query(ge=0, le=log.MAX_SEQ)] = None,
+) -> steers.SteerPage:
+    """Steers for one attempt (the current one, when `attempt` is omitted), oldest first."""
+    async with db.read() as conn:
+        return await steers.list_steers(conn, task_id, attempt)
+
+
+@router.delete("/{task_id}/steers/{steer_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_steer(
+    task_id: str, steer_id: str, db: DbDep, caller: ManagerDep
+) -> None:
+    """Cancel a pending steer. A delivered steer cannot be taken back."""
+    async with db.write() as tx:
+        await steers.cancel(tx, task_id, steer_id, caller.actor)
 
 
 @router.get("/{task_id}/log")

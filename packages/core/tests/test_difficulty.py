@@ -9,12 +9,12 @@ T, S = Difficulty.TRIVIAL, Difficulty.STANDARD
     ("title", "spec"),
     [
         ("Fix typo in the pricing page", ""),
-        ("Corrigir erro de digitação no rodapé", ""),
-        ("Ajustar texto do botão de login", "Trocar 'Entrar' por 'Acessar'."),
+        ("Fix typo in the footer", ""),
+        ("Adjust the login button copy", "Replace 'Sign in' with 'Continue'."),
         ("Change the copy on the landing hero", "Shorter wording, same meaning."),
-        ("Atualizar a tradução para inglês", ""),
+        ("Update the translation to English", ""),
         ("Improve onboarding wording", "docs only, no behaviour change"),
-        ("Revisar redação da página Sobre", ""),
+        ("Review the About page wording", ""),
         ("README: translate the intro", ""),
     ],
 )
@@ -28,7 +28,7 @@ def test_clear_copy_changes_are_trivial(title: str, spec: str) -> None:
         ("Add a retry to the sync worker", ""),
         ("Refactor the account service", ""),
         ("Fix typo in the API endpoint name", ""),  # copy + risk word
-        ("Corrigir texto da tela de autenticação", ""),
+        ("Fix copy on the authentication screen", ""),
         ("Update copy", "Also add a migration for the new column"),
         ("Change the copy on the checkout", "and cover it with a test"),
         ("Rotate the credential text", ""),
@@ -66,7 +66,7 @@ H = Difficulty.HARD
 @pytest.mark.parametrize(
     ("title", "spec"),
     [
-        ("Redesenhar a arquitetura de segurança dos workers", ""),
+        ("Redesign the worker security architecture", ""),
         ("Data migration across multi-service accounts", ""),
         ("Security review of the cross-service token flow", ""),
         ("Architecture: backfill the ledger", "and keep it distributed"),
@@ -79,7 +79,7 @@ def test_two_distinct_hard_signals_are_hard(title: str, spec: str) -> None:
 @pytest.mark.parametrize(
     ("title", "spec"),
     [
-        ("Melhorar a segurança do login", ""),  # one signal only
+        ("Improve login security", ""),  # one signal only
         ("Write the architecture doc", ""),
         ("Security and more security", "vulnerability fix"),  # one kind, twice
         ("Fix typo", ""),

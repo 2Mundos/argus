@@ -8,7 +8,7 @@ import { Agents } from "./views/Agents";
 import { Cost } from "./views/Cost";
 import { Engines } from "./views/Engines";
 import { Events } from "./views/Events";
-import { Frota } from "./views/Frota";
+import { Fleet } from "./views/Fleet";
 import { Home } from "./views/Home";
 import { Inbox } from "./views/Inbox";
 import { Knowledge } from "./views/Knowledge";
@@ -23,11 +23,11 @@ const TABS = {
   tasks: "Tasks",
   agents: "Agents",
   pools: "Pools",
-  frota: "Frota",
+  fleet: "Fleet",
   inbox: "Inbox",
   knowledge: "Knowledge",
   accounts: "Accounts",
-  cost: "Custo",
+  cost: "Cost",
   engines: "Engines",
   events: "Events",
   system: "System",
@@ -36,6 +36,8 @@ type Tab = keyof typeof TABS;
 
 function currentTab(): Tab {
   const hash = window.location.hash.slice(1).split("/")[0] ?? "";
+  // `#frota` was the old name of the Fleet tab.
+  if (hash === "frota") return "fleet";
   return hash in TABS ? (hash as Tab) : "home";
 }
 
@@ -102,7 +104,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
             {tab === "tasks" && <Tasks />}
             {tab === "agents" && <Agents />}
             {tab === "pools" && <Pools />}
-            {tab === "frota" && <Frota />}
+            {tab === "fleet" && <Fleet />}
             {tab === "inbox" && <Inbox />}
             {tab === "knowledge" && <Knowledge />}
             {tab === "accounts" && <Accounts />}

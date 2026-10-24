@@ -1686,3 +1686,40 @@ button.link.account-name {
 .task-log .log-line.delegate {
   opacity: 0.85;
 }
+
+.term .steer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  border-bottom: 1px solid #243041;
+  background: #151c27;
+  color: #c8d0db;
+}
+.term .steer textarea {
+  min-height: 3.5rem;
+  resize: vertical;
+  background: #0d1219;
+  border-color: #2b3648;
+  color: #c8d0db;
+}
+.term .steer .muted {
+  color: #8b95a8;
+}
+.term .steer-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.term .steer-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin: 0.35rem 0;
+  font-size: 12px;
+}
+.term .steer-message {
+  white-space: pre-wrap;
+}

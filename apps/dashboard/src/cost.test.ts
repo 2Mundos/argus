@@ -31,10 +31,10 @@ describe("cost helpers", () => {
   });
 
   it("never prints an unpriced group as zero cost", () => {
-    expect(costLabel(f({ estimated_cost_usd: null, unpriced_runs: 2 }), "USD")).toBe("sem preço");
+    expect(costLabel(f({ estimated_cost_usd: null, unpriced_runs: 2 }), "USD")).toBe("unpriced");
     expect(costLabel(f({ estimated_cost_usd: null, input_tokens: null }), "USD")).toBe("—");
     expect(costLabel(f({ estimated_cost_usd: 1.234, unpriced_runs: 1 }), "USD")).toBe(
-      "1.23 USD (parcial)",
+      "1.23 USD (partial)",
     );
     expect(costLabel(f({ estimated_cost_usd: 0 }), "USD")).toBe("0.00 USD");
     expect(money(0.001, "EUR")).toBe("<0.01 EUR");
@@ -42,7 +42,7 @@ describe("cost helpers", () => {
 
   it("labels not_reported runs only when there are some", () => {
     expect(notReportedLabel(f())).toBeNull();
-    expect(notReportedLabel(f({ not_reported_runs: 3 }))).toBe("3 não reportado");
+    expect(notReportedLabel(f({ not_reported_runs: 3 }))).toBe("3 not reported");
   });
 
   it("takes the top five among groups with measured runs", () => {

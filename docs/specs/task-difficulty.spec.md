@@ -62,14 +62,14 @@ the engine role, and the model-policy maps that pin the models.
   handling are unchanged.
 - **Heuristic fallback.** Only when the creator sends no `difficulty`,
   `argus_core.difficulty.classify(title, spec)` decides. It returns `trivial` only
-  when the title or spec carries a copy signal (copy, text, typo, wording,
-  translation, docs-only; English and pt-BR), no code-risk signal (migration,
+  when the title or spec carries a copy signal (copy, typo, wording,
+  translation, docs-only), no code-risk signal (migration,
   schema, API, endpoint, security, auth, credential, test, refactor, bug, deploy,
   …) and the spec is at most 1500 characters. It returns `hard` only when the
   title and spec carry at least two distinct hard signals among architecture
-  (arquitetura, redesign), data migration (migração de dados, backfill), security
-  (segurança, vulnerability, threat model) and several services (multi-service,
-  vários serviços, cross-service); one signal alone is `standard`, since Opus is
+  (redesign, re-architect), data migration (backfill, schema migration), security
+  (vulnerability, threat model) and several services (multi-service,
+  cross-service, distributed); one signal alone is `standard`, since Opus is
   the expensive tier. Anything else is `standard`. A declared value always wins,
   including a declared `standard`; `hard` is meant to be set explicitly by the
   orchestrator (REST, MCP `create_task`, task edit).

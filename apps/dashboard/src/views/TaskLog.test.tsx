@@ -61,7 +61,7 @@ describe("TaskLog", () => {
     render(<TaskLog taskId="t1" attempt={2} />);
     await screen.findByText("first");
     expect(mock.query).toEqual({ attempt: 2 });
-    expect(screen.getByText(/tentativa 2/)).toBeTruthy();
+    expect(screen.getByText(/attempt 2/)).toBeTruthy();
     emit("t1", 2, 1, ["first", "second"]);
     expect(screen.getAllByText("first")).toHaveLength(1);
     expect(screen.getByText("second")).toBeTruthy();
@@ -75,10 +75,10 @@ describe("TaskLog", () => {
     render(<TaskLog taskId="t1" attempt={2} />);
     await screen.findByText("first");
     emit("t1", 2, 2, ["from delegate"], "delegate");
-    fireEvent.change(screen.getByLabelText("Origem"), { target: { value: "delegate" } });
+    fireEvent.change(screen.getByLabelText("Source"), { target: { value: "delegate" } });
     expect(screen.queryByText("first")).toBeNull();
     expect(screen.getByText(/from delegate/)).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("Origem"), { target: { value: "worker" } });
+    fireEvent.change(screen.getByLabelText("Source"), { target: { value: "worker" } });
     expect(screen.getByText("first")).toBeTruthy();
     expect(screen.queryByText(/from delegate/)).toBeNull();
   });
@@ -86,10 +86,10 @@ describe("TaskLog", () => {
   it("pauses the view while lines keep arriving, then resumes", async () => {
     render(<TaskLog taskId="t1" attempt={2} />);
     await screen.findByText("first");
-    fireEvent.click(screen.getByRole("button", { name: "Pausar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     emit("t1", 2, 2, ["while paused"]);
     expect(screen.queryByText("while paused")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Retomar (+1)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume (+1)" }));
     await waitFor(() => expect(screen.getByText("while paused")).toBeTruthy());
   });
 
@@ -163,7 +163,7 @@ describe("TaskLog", () => {
   it("reads back a gap before the first live line when the tail was empty", async () => {
     mock.page = { attempt: 2, lines: [], last_seq: 0 };
     render(<TaskLog taskId="t1" attempt={2} />);
-    await screen.findByText("Sem saída ainda.");
+    await screen.findByText("No output yet.");
     mock.after = {
       attempt: 2,
       lines: [{ seq: 1, source: "worker", at, line: "missed first" }],
@@ -180,7 +180,7 @@ describe("TaskLog", () => {
     // seq counts across attempts: attempt 1 used seq 1..40, so attempt 2 starts at 41
     mock.page = { attempt: 2, lines: [], last_seq: 40 };
     render(<TaskLog taskId="t1" attempt={2} />);
-    await screen.findByText("Sem saída ainda.");
+    await screen.findByText("No output yet.");
     emit("t1", 2, 41, ["first of attempt 2"]);
     await screen.findByText("first of attempt 2");
     expect(mock.queries).toHaveLength(1); // the tail only

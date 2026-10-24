@@ -229,7 +229,16 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                   </div>
                 </>
               )}
-              {task.attempt > 0 && <TaskLog taskId={taskId} attempt={task.attempt} />}
+              {task.attempt > 0 && (
+                <TaskLog
+                  taskId={taskId}
+                  attempt={task.attempt}
+                  steer={{
+                    claimed: task.state === "claimed",
+                    assigneeId: task.assignee_agent_id,
+                  }}
+                />
+              )}
               {task.result && (
                 <>
                   <h3>Result</h3>

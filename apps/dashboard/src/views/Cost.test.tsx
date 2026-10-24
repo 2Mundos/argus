@@ -137,7 +137,7 @@ const row = (name: string) => screen.getByText(name).closest("tr") as HTMLElemen
 describe("Cost view", () => {
   it("shows tiles labelled as an estimate with the currency", async () => {
     render(<Cost />);
-    await screen.findByText("Custo (estimativa, USD)");
+    await screen.findByText("Cost (estimate, USD)");
     expect(screen.getAllByText("1.50 USD").length).toBeGreaterThan(0);
     expect(mock.queries[0]).toMatchObject({ window: "7d" });
   });
@@ -147,18 +147,18 @@ describe("Cost view", () => {
     await screen.findByText("nr-only");
     const nr = within(row("nr-only"));
     expect(nr.getAllByText("—").length).toBeGreaterThanOrEqual(4);
-    expect(nr.getByText("4 não reportado")).toBeTruthy();
+    expect(nr.getByText("4 not reported")).toBeTruthy();
     expect(nr.queryByText("0")).toBeNull();
     const idle = within(row("idle"));
-    expect(idle.getByText("sem uso")).toBeTruthy();
+    expect(idle.getByText("no usage")).toBeTruthy();
     expect(idle.queryByText("0")).toBeNull();
   });
 
   it("marks an unpriced group and keeps a measured zero as 0", async () => {
     render(<Cost />);
     await screen.findByText("unpriced-acc");
-    expect(within(row("unpriced-acc")).getByText("sem preço")).toBeTruthy();
-    expect(within(row("sem projeto")).getAllByText("0").length).toBe(2);
+    expect(within(row("unpriced-acc")).getByText("unpriced")).toBeTruthy();
+    expect(within(row("no project")).getAllByText("0").length).toBe(2);
   });
 
   it("shows quota status through the Accounts component", async () => {
@@ -187,7 +187,7 @@ describe("Cost view", () => {
   it("reloads for another period", async () => {
     render(<Cost />);
     await screen.findByText("codex-main");
-    fireEvent.click(screen.getByRole("button", { name: "30 dias" }));
+    fireEvent.click(screen.getByRole("button", { name: "30 days" }));
     await waitFor(() => expect(mock.queries.at(-1)).toMatchObject({ window: "30d" }));
   });
 });

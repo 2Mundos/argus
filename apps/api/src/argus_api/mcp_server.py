@@ -65,7 +65,9 @@ For the fleet: inspect_pool shows what each instance is proven to run (a fact's
 work (recycle_instance(requeue=true) and release_task requeue it without costing an
 attempt); admins change options with update_pool(expected_version=the pool's version).
 wait_for_events(subject_type, subject_id) waits for the change to happen instead
-of polling; then inspect_pool or get_tasks reads back the effect.
+of polling; then inspect_pool or get_tasks reads back the effect. steer_task sends
+an instruction to the worker holding a claimed task; it arrives on that worker's
+next heartbeat.
 
 Orchestrators: read the skill at skill://argus-orchestrator/SKILL.md (also the
 prompt "argus-orchestrator") before acting: what you must and must not do."""
@@ -317,6 +319,7 @@ class Runtime(BaseModel):
     worker_version: str | None = None
     engine: str | None = None
     executor: str | None = None
+    features: list[str] = []
 
 
 ViewArg = Literal["summary", "detail"]
@@ -368,13 +371,21 @@ async def claim_task(
 
 @tool(AGENTS)
 async def heartbeat(
-    ctx: Context, leases: list[Lease] | None = None, runtime: Runtime | None = None
+    ctx: Context,
+    leases: list[Lease] | None = None,
+    runtime: Runtime | None = None,
+    steer_acks: list[str] | None = None,
 ) -> dict:
     """Prove you are alive and renew the leases on tasks you hold. Call it at least
     every heartbeat_interval_s (30 s). If a lease comes back rejected, stop working on
     that task. If state is "draining", finish your task and then call leave.
-    `runtime` reports what you run (worker_version, engine, executor), if known."""
-    body: dict[str, Any] = {"leases": [lease.model_dump() for lease in leases or []]}
+    `runtime` reports what you run (worker_version, engine, executor, features), if known.
+    `steers` in the answer are operator instructions to inject; send their ids back as
+    `steer_acks` once injected. A steer stays listed until you ack it."""
+    body: dict[str, Any] = {
+        "leases": [lease.model_dump() for lease in leases or []],
+        "steer_acks": steer_acks or [],
+    }
     if runtime is not None:
         body["runtime"] = runtime.model_dump()
     return await _call(ctx, "POST", "/agents/me/heartbeat", json=body)
@@ -998,6 +1009,35 @@ async def set_task_dependencies(
         f"/tasks/{task_id}/dependencies",
         json={"depends_on": depends_on, "expected_version": expected_version},
     )
+
+
+@tool(MANAGERS)
+async def steer_task(ctx: Context, task_id: str, message: str) -> dict:
+    """Send an instruction to the worker holding this claimed task. 409 not_claimed
+    if it is not claimed, 409 steer_unsupported if that worker does not report the
+    steer feature, 409 too_many_pending after 10 waiting steers, 429 rate_limited
+    more than once a second. The steer expires when the attempt ends."""
+    return await _call(
+        ctx, "POST", f"/tasks/{task_id}/steers", json={"message": message}
+    )
+
+
+@tool(MANAGERS)
+async def list_task_steers(
+    ctx: Context, task_id: str, attempt: int | None = None
+) -> dict:
+    """Steers for one attempt (the current one, when attempt is omitted), oldest first:
+    pending, delivered, cancelled or expired."""
+    return await _call(
+        ctx, "GET", f"/tasks/{task_id}/steers", params={"attempt": attempt}
+    )
+
+
+@tool(MANAGERS)
+async def cancel_steer(ctx: Context, task_id: str, steer_id: str) -> dict:
+    """Cancel a pending steer (409 not_pending otherwise). A delivered steer cannot
+    be taken back; send another one."""
+    return await _call(ctx, "DELETE", f"/tasks/{task_id}/steers/{steer_id}")
 
 
 @tool(MANAGERS)

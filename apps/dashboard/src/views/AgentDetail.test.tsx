@@ -20,6 +20,7 @@ vi.mock("../api", () => ({
     if (path === "/api/tasks") return { items: mock.tasks };
     if (path === "/api/events") return mock.events;
     if (path === "/api/tasks/{task_id}/log") return mock.taskLog;
+    if (path === "/api/tasks/{task_id}/steers") return { attempt: 2, items: [] };
     throw new Error(`unexpected ${path}`);
   },
   fetchText: (path: string) => mock.fetchText(path),
@@ -137,7 +138,7 @@ describe("AgentDetail", () => {
     expect(screen.getByText("Global - Finance canary")).toBeTruthy();
     expect(screen.getByText("running the tests")).toBeTruthy();
     expect(screen.getByText("40%")).toBeTruthy();
-    expect(screen.getByLabelText("Ao vivo")).toBeTruthy();
+    expect(screen.getByLabelText("Live")).toBeTruthy();
     expect(screen.getByText("thinking about the canary")).toBeTruthy();
     expect(mock.fetchText).not.toHaveBeenCalled();
   });

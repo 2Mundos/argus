@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Role(StrEnum):
@@ -31,6 +31,20 @@ class AgentRuntime(BaseModel):
     worker_version: str | None = Field(default=None, max_length=100)
     engine: str | None = Field(default=None, max_length=100)
     executor: str | None = Field(default=None, max_length=100)
+    # Capabilities the worker will act on. `steer` means it injects operator steers.
+    features: list[str] = Field(default_factory=list, max_length=16)
+
+    @field_validator("features")
+    @classmethod
+    def _features(cls, value: list[str]) -> list[str]:
+        kept: list[str] = []
+        for item in value:
+            item = item.strip()
+            if not item or len(item) > 40:
+                raise ValueError("a feature name must be 1 to 40 characters")
+            if item not in kept:
+                kept.append(item)
+        return kept
 
 
 class Agent(BaseModel):

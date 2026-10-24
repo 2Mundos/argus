@@ -121,6 +121,10 @@ Findings outside the gap list:
 - **Task log:** MCP `get_task_log(task_id, attempt?, after?, limit?)` reads the live
   log tail like `GET /api/tasks/{id}/log` ([task live log](task-live-log.spec.md) 3.5),
   with REST's permissions; it is listed to every scope.
+- **Task steering:** MCP `steer_task(task_id, message)`, `list_task_steers(task_id,
+  attempt?)` and `cancel_steer(task_id, steer_id)` wrap the steer routes
+  ([task steering](task-steering.spec.md) 3.8). Listed to orchestrators and admins.
+  `heartbeat` passes `steer_acks` through and returns `steers` for renewed leases.
 - **Decisions:** MCP `list_decisions` exposes REST's `state` and `subject_id`
   filters and the new `project` and `kind` filters, with the page envelope. Add
   MCP `get_decision`.

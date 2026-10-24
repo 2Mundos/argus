@@ -1,4 +1,4 @@
-// Pure helpers for the Custo view (docs/specs/cost-view.spec.md).
+// Pure helpers for the Cost view (docs/specs/cost-view.spec.md).
 import type { components } from "@argus/api-client";
 import { tokens } from "./usage";
 
@@ -8,8 +8,8 @@ export type CostWindow = CostReport["window"];
 
 export const COST_WINDOWS: { id: CostWindow; label: string }[] = [
   { id: "24h", label: "24h" },
-  { id: "7d", label: "7 dias" },
-  { id: "30d", label: "30 dias" },
+  { id: "7d", label: "7 days" },
+  { id: "30d", label: "30 days" },
 ];
 
 /** A missing figure is "—", never 0 (cost view 3.1). */
@@ -24,18 +24,18 @@ export function money(n: number, currency: string): string {
   return `${small ? "<0.01" : n.toFixed(FRACTION_DIGITS)} ${currency}`;
 }
 
-/** The estimate for a group: "sem preço" when nothing could be priced but tokens exist,
- * "—" when there is nothing to price, and "parcial" when some runs were left out. */
+/** The estimate for a group: "unpriced" when nothing could be priced but tokens exist,
+ * "—" when there is nothing to price, and "partial" when some runs were left out. */
 export function costLabel(f: CostFigures, currency: string): string {
   if (f.estimated_cost_usd == null) {
-    return f.unpriced_runs > 0 ? "sem preço" : "—";
+    return f.unpriced_runs > 0 ? "unpriced" : "—";
   }
-  return money(f.estimated_cost_usd, currency) + (f.unpriced_runs > 0 ? " (parcial)" : "");
+  return money(f.estimated_cost_usd, currency) + (f.unpriced_runs > 0 ? " (partial)" : "");
 }
 
 /** Runs the engine did not measure, as a badge text; null when there are none. */
 export function notReportedLabel(f: Pick<CostFigures, "not_reported_runs">): string | null {
-  return f.not_reported_runs > 0 ? `${f.not_reported_runs} não reportado` : null;
+  return f.not_reported_runs > 0 ? `${f.not_reported_runs} not reported` : null;
 }
 
 /** The API sorts groups with measured runs first; the top five are the first
@@ -56,13 +56,13 @@ export function share(f: CostFigures, rows: CostFigures[]): number {
 }
 
 export function projectName(p: string | null): string {
-  return p ?? "sem projeto";
+  return p ?? "no project";
 }
 
 /** Footer text: where the prices come from and what was left unpriced. */
 export function pricingNote(p: CostReport["pricing"]): string {
   const unpriced = p.unpriced_models.length
-    ? ` Modelos sem preço: ${p.unpriced_models.join(", ")}.`
+    ? ` Unpriced models: ${p.unpriced_models.join(", ")}.`
     : "";
-  return `Estimativa a partir de ${p.source} (${p.version}, de ${p.as_of}), em ${p.currency} por tokens × preço do modelo.${unpriced}`;
+  return `Estimate from ${p.source} (${p.version}, as of ${p.as_of}), in ${p.currency} from tokens × model price.${unpriced}`;
 }

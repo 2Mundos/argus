@@ -177,23 +177,24 @@ edit](task-edit.spec.md).
 
 ## 3.9 Dashboard
 
-- **Task view**, while `claimed`: a composer under the live log ("Steer this
-  attempt…", Enter sends, Shift+Enter breaks a line), then the attempt's steers
-  with their state: `pending` (with Cancel), `delivered` (with the time),
-  `cancelled`, `expired`. Steers also appear in the task's event timeline.
-- **Worker panel** (the workers sidebar's main panel, `AgentDetail`): the same
-  composer above the claimed task's terminal, targeting that task. With no claimed
-  task, no composer.
+- **Live-log terminal** (task view and the worker panel's claimed-task terminal): a
+  **Steer** button next to Pause on the term bar. The composer stays closed until
+  that button opens it ("Steer this attempt…", Enter sends, Shift+Enter breaks a
+  line); sending or toggling Steer again closes it. The attempt's steers list
+  (under the bar when non-empty) shows state: `pending` (with Cancel),
+  `delivered` (with the time), `cancelled`, `expired`. Steers also appear in the
+  task's event timeline. With no claimed task, no Steer button.
 - The composer is disabled with the reason when the assignee lacks `steer` (3.5),
   and shows the server's refusal otherwise (`too_many_pending`, `rate_limited`).
 - The message is rendered as text, never as HTML.
 
 # 4. Open Questions
 
-- **Mid-turn pickup.** Whether NanoClaw's agent runner feeds an inbound message into
-  a query already running, or only at the next turn, must be checked against the
-  pinned NanoClaw release before the channel change lands; 3.6 holds either way, and
-  the answer goes into the NanoClaw README.
+- **Mid-turn pickup.** This repo does not vendor NanoClaw's agent runner. The
+  channel queues the steer with `onInbound`; [the NanoClaw
+  README](../../integrations/nanoclaw/README.md) records that a running
+  `argus-delegate` process is not interrupted. Whether that runner feeds inbound
+  into a query already in progress is NanoClaw's behavior. 3.6 holds either way.
 - **Delegated runs.** A steer cannot reach a running `argus-delegate` executor (its
   stdin is closed after the prompt). A follow-up could let the agent stop the
   delegate and resume it with the steer appended, where the executor supports a
@@ -227,7 +228,7 @@ and its routes; expiry wired into every transition out of `claimed` in
 `tasks/service.py`; `steers` and `steer_acks` on the heartbeat models in
 `agents/routes.py` and `agents/service.py`; `features` on `AgentRuntime`; the three
 events; MCP tools and the catalog; regenerated `openapi.json` and `schema.d.ts`; the
-composer and steer list in the task view and `AgentDetail`. Tests cover each state
+Steer button on the live-log term bar, composer, and steer list. Tests cover each state
 transition, expiry on each attempt-ending path, the limits, the
 `steer_unsupported` refusal, heartbeat ack idempotency, and that a rejected lease
 receives no steers.

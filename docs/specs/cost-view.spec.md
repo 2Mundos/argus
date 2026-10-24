@@ -4,7 +4,7 @@
 
 Show, in one place, how many tokens Argus's runs spent and what that probably
 cost, per project and per account, over the last 24 hours, 7 days or 30 days.
-The dashboard tab is **Custo** (`#cost`). Readable by the manager scope
+The dashboard tab is **Cost** (`#cost`). Readable by the manager scope
 (orchestrator, admin), like `GET /api/accounts`.
 
 It reads the usage rows of [account usage](account-usage.spec.md) and adds
@@ -90,13 +90,13 @@ manager scope. The window is `(now − window, now]`. Response:
 
 ## 3.4 Dashboard
 
-- **Custo** tab: a 24h / 7d / 30d filter; tiles for input, output and cached
-  tokens and the estimated cost with its currency, labelled "estimativa";
-  a "não reportado" count when any run lacked figures; per-account and
+- **Cost** tab: a 24h / 7d / 30d filter; tiles for input, output and cached
+  tokens and the estimated cost with its currency, labelled "estimate";
+  a "not reported" count when any run lacked figures; per-account and
   per-project tables with a bar and the top five; a daily bar chart; each
   account's quota status through the Accounts screen's component.
 - A group with `null` tokens renders "—", never 0. An unpriced group renders
-  "sem preço". The footer shows the pricing source, currency, `as_of`,
+  "unpriced". The footer shows the pricing source, currency, `as_of`,
   version and the unpriced models.
 - Hand-written SVG; no chart dependency.
 

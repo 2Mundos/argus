@@ -73,7 +73,7 @@ async def test_default_is_standard_by_heuristic(db: Database) -> None:
 
 
 async def test_heuristic_marks_a_clear_copy_change_trivial(db: Database) -> None:
-    task = await create(db, title="Corrigir erro de digitação no rodapé")
+    task = await create(db, title="Fix typo in the footer")
     assert (task.difficulty, task.difficulty_source) == (TRIVIAL, "inferred")
 
 
@@ -305,7 +305,7 @@ async def test_hard_is_set_explicitly_or_by_two_hard_signals(db: Database) -> No
     assert (explicit.difficulty, explicit.difficulty_source) == (HARD, "declared")
     guessed = await create(db, title="Data migration across multi-service accounts")
     assert (guessed.difficulty, guessed.difficulty_source) == (HARD, "inferred")
-    one = await create(db, title="Melhorar a segurança do login")
+    one = await create(db, title="Improve login security")
     assert one.difficulty == STANDARD
 
 

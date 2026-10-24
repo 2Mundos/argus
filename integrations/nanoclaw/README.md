@@ -13,11 +13,19 @@ holds an Argus token.
 | Direction | Mechanism |
 | --- | --- |
 | Claim | registers with a bootstrap token, long-polls `/api/tasks/claim`, injects the task (spec, acceptance, pinned knowledge page bodies) as an inbound message |
-| Liveness | heartbeats, renewing the lease on the task it holds; stops claiming when Argus reports `draining`; leaves Argus on shutdown |
+| Liveness | heartbeats, renewing the lease on the task it holds; reports `features: ["steer"]`; injects operator steers from the heartbeat answer and acks them on the next beat; stops claiming when Argus reports `draining`; leaves Argus on shutdown |
 | Reply | plain message → progress note (at most one per 10 s, coalesced); `COMPLETE: …` → complete; `FAIL: …` → fail; `ASK: …` → ask a question (the task waits for an answer); `ASSIST: [resource:] …` → ask the orchestrator for a missing tool/environment; `ASK on <task-id>: …` is accepted for the task in flight only. The prompt carries the task's [continuation contract](../../docs/specs/task-continuation.spec.md) |
 
 One task at a time per channel. A 409 from Argus (lease lost, attempt
 superseded) drops the reply and the channel moves on.
+
+A steer is another inbound message (`argus-steer-<id>`), with the operator's
+text length-framed so it cannot close the frame or override the reply protocol.
+This repo does not vendor NanoClaw's agent runner: `onInbound` queues the
+message on the session, and the agent reads it the next time that runner takes
+input. A steer does not interrupt a running `argus-delegate` process; the agent
+sees it when that process returns. A steer for any other task or attempt is
+acknowledged and not injected.
 
 ## Install
 

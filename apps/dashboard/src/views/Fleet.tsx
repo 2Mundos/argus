@@ -3,7 +3,7 @@ import { api, call, type FleetHealth } from "../api";
 import { relative } from "../format";
 import { useLiveData } from "../live";
 
-export const NO_DATA = "sem dados";
+export const NO_DATA = "no data";
 const WINDOWS = [1, 6, 24, 168, 720];
 
 export function seconds(value: number | null | undefined): string {
@@ -34,7 +34,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
-export function Frota() {
+export function Fleet() {
   const [window, setWindow] = useState(24);
   const { data, error, reload } = useLiveData(
     (signal) => call(api.GET("/api/fleet/health", { params: { query: { window } }, signal })),
@@ -42,9 +42,9 @@ export function Frota() {
   );
 
   return (
-    <section className="frota">
+    <section className="fleet">
       <div className="toolbar">
-        <h2>Frota</h2>
+        <h2>Fleet</h2>
         <label>
           Window{" "}
           <select value={window} onChange={(e) => setWindow(Number(e.target.value))}>

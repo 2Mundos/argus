@@ -1,5 +1,6 @@
 from collections import Counter
 from datetime import datetime
+from typing import Annotated
 
 from argus_core.agents import (
     Agent,
@@ -10,11 +11,12 @@ from argus_core.agents import (
 )
 from argus_core.model_trace import Execution, LayerModels
 from fastapi import APIRouter, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StringConstraints
 
 from argus_api.agents import service
 from argus_api.deps import AdminDep, AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
 from argus_api.modeltrace import service as modeltrace
+from argus_api.tasks.steers import SteerNotice
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -38,6 +40,10 @@ class LeaseRef(BaseModel):
 class HeartbeatRequest(BaseModel):
     leases: list[LeaseRef] = []
     runtime: AgentRuntime | None = None  # what you run; shown as validated
+    # Steers this worker has injected since the last heartbeat (task steering spec).
+    steer_acks: list[Annotated[str, StringConstraints(min_length=1, max_length=80)]] = (
+        Field(default_factory=list, max_length=100)
+    )
 
 
 class RenewedLease(BaseModel):
@@ -58,6 +64,7 @@ class HeartbeatResponse(BaseModel):
     renewed: list[RenewedLease]
     rejected: list[RejectedLease]
     heartbeat_interval_s: int
+    steers: list[SteerNotice] = []
 
 
 @router.post("/bootstrap-tokens", status_code=status.HTTP_201_CREATED)
@@ -102,6 +109,7 @@ async def heartbeat(
             agent_id,
             [(lease.task_id, lease.attempt) for lease in body.leases],
             body.runtime,
+            body.steer_acks,
             token_ttl_s=settings.agent_token_ttl_s,
         )
     return HeartbeatResponse(
@@ -109,6 +117,7 @@ async def heartbeat(
         renewed=[RenewedLease(**vars(r)) for r in hb.renewed],
         rejected=[RejectedLease(**vars(r)) for r in hb.rejected],
         heartbeat_interval_s=service.HEARTBEAT_INTERVAL_S,
+        steers=hb.steers,
     )
 
 

@@ -176,7 +176,15 @@ export function AgentDetail({
   const output =
     agent &&
     (held && held.attempt > 0 ? (
-      <TaskLog taskId={held.id} attempt={held.attempt} />
+      <TaskLog
+        taskId={held.id}
+        attempt={held.attempt}
+        steer={{
+          claimed: held.state === "claimed",
+          assigneeId: held.assignee_agent_id ?? agent.id,
+          supportsSteer: agent.runtime?.features?.includes("steer") ?? false,
+        }}
+      />
     ) : agent.instance_id ? (
       <LogTail instanceId={agent.instance_id} tail={LOG_TAIL} />
     ) : (

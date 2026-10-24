@@ -1,50 +1,50 @@
-# Runbook — provar o sandbox interno do Codex com as políticas candidatas
+# Runbook — prove the Codex internal sandbox with the candidate policies
 
-> **WIP / CANDIDATO.** O opt-in por worker **está implementado** (passo 7), mas as políticas **não foram
-> carregadas nem testadas em runtime** e **nada aqui autoriza deploy ou ativação**. Ligar a pool só depois do
-> `ALL-AS-EXPECTED` do passo 3 na imagem que será usada. **Estado real:** o probe com o perfil v1 (enforce) falhou no
-> positivo (`bwrap: Failed to make / slave`, kernel: `flags="rw, silent, rslave"`); o perfil v2 corrige a regra mas
-> **ainda não foi carregado nem testado**. Nada passou em runtime. Contrato: [spec](../../../docs/specs/codex-sandbox-profile.spec.md).
+> **WIP / CANDIDATE.** Per-worker opt-in **is implemented** (step 7), but the policies **have not been
+> loaded or tested at runtime** and **nothing here authorizes deploy or activation**. Turn the pool on only after
+> `ALL-AS-EXPECTED` from step 3 on the image that will be used. **Current state:** the probe with the v1 (enforce) profile failed the
+> positive check (`bwrap: Failed to make / slave`, kernel: `flags="rw, silent, rslave"`); the v2 profile fixes the rule but
+> **has still not been loaded or tested**. Nothing has passed at runtime. Contract: [spec](../../../docs/specs/codex-sandbox-profile.spec.md).
 
-Operador executa (precisa de sudo; a sessão do agente não tem: `sudo -n` →
-"interactive authentication is required"). **Nada abaixo foi executado pelo agente**, exceto os passos 0 e 7a
-(offline). Os passos 1, 3, 4 e 6 exigem root/Docker e continuam pendentes.
-Rode da raiz `integrations/nanoclaw/security/`. Imagem:
-`argus-nanoclaw-agent:radar-74b160e-deadline7200`. Sem `--privileged`, sem `SYS_ADMIN`, sem sysctl
-global, sem `unconfined`, sem reiniciar o Docker.
+The operator runs this (needs sudo; the agent session does not have it: `sudo -n` →
+"interactive authentication is required"). **Nothing below was run by the agent**, except steps 0 and 7a
+(offline). Steps 1, 3, 4 and 6 need root/Docker and remain pending.
+Run from `integrations/nanoclaw/security/`. Image:
+`argus-nanoclaw-agent:radar-74b160e-deadline7200`. No `--privileged`, no `SYS_ADMIN`, no global
+sysctl, no `unconfined`, no Docker restart.
 
-## 0. Validação offline (sem root)
+## 0. Offline validation (no root)
 ```bash
 scripts/validate-offline.sh
-scripts/verify-install.sh /caminho/do/checkout-nanoclaw-git   # fixture descartável: install.sh 2x + tsc + testes do driver
+scripts/verify-install.sh /path/to/nanoclaw-git-checkout   # disposable fixture: install.sh twice + tsc + driver tests
 ```
 
-## 1. Instalar e carregar o perfil (root)
+## 1. Install and load the profile (root)
 ```bash
-sudo apparmor_parser -QK -S argus-codex-worker.apparmor >/dev/null   # revalida como root
+sudo apparmor_parser -QK -S argus-codex-worker.apparmor >/dev/null   # re-validate as root
 sudo install -m 0644 -o root -g root argus-codex-worker.apparmor /etc/apparmor.d/argus-codex-worker
 sudo apparmor_parser -r -W /etc/apparmor.d/argus-codex-worker
-sudo aa-status | grep -n argus-codex-worker      # deve listar em "profiles are in enforce mode"
+sudo aa-status | grep -n argus-codex-worker      # must list under "profiles are in enforce mode"
 ```
-Persistência no boot: `/etc/apparmor.d/` é relido pelo `apparmor.service`. Perfil não carregado ⇒ o
-container **não inicia** (o runc falha no `start`, não no `create`; falha fechada, sem cair para o default).
+Boot persistence: `/etc/apparmor.d/` is re-read by `apparmor.service`. Profile not loaded ⇒ the
+container **does not start** (runc fails at `start`, not `create`; closed failure, no fallthrough to the default).
 
-Recarga da v1 para a v2 (mesmos comandos; `-r` substitui o perfil carregado, sem reiniciar o Docker). Containers
-já em execução com o perfil continuam com o carregado até serem recriados. Depois do reload confirme o modo:
+Reload from v1 to v2 (same commands; `-r` replaces the loaded profile without restarting Docker). Containers
+already running with the profile keep the one they loaded until recreated. After reload confirm the mode:
 ```bash
-sudo aa-status | grep -n argus-codex-worker       # "enforce"; se aparecer em "complain", o código recusa o spawn
+sudo aa-status | grep -n argus-codex-worker       # "enforce"; if it shows under "complain", the code refuses the spawn
 ```
 
-## 2. Preparar workspace descartável e canários (sem credenciais, sem host root)
+## 2. Prepare a disposable workspace and canaries (no credentials, no host root)
 ```bash
 export PROBE=$(mktemp -d "${TMPDIR:-$HOME/.hermes/cache/scratch}/argus-codex-probe.XXXXXX")
 mkdir -p "$PROBE/ws" "$PROBE/other" && chmod 0777 "$PROBE/ws" "$PROBE/other"
 export IMG=argus-nanoclaw-agent:radar-74b160e-deadline7200
 ```
 
-## 3. Rodar o probe (container descartável, sem rede, caps ALL dropped, no-new-privileges)
+## 3. Run the probe (disposable container, no network, caps ALL dropped, no-new-privileges)
 ```bash
-set -o pipefail   # sem isto, `| tee` mascara o código de saída do probe
+set -o pipefail   # without this, `| tee` masks the probe's exit code
 docker run --rm --init --name argus-codex-probe \
   --network none --cap-drop ALL \
   --security-opt no-new-privileges \
@@ -55,97 +55,97 @@ docker run --rm --init --name argus-codex-probe \
   -v "$PWD/scripts/probe.sh:/probe.sh:ro" \
   --entrypoint /bin/bash "$IMG" /probe.sh 2>&1 | tee "$PROBE/probe.log"
 ```
-Forma do comando Codex: no 0.162.1 o fonte (`cli/src/main.rs`, testes de parse) usa
-`codex sandbox --permission-profile :workspace -- <cmd>`; a forma anterior
-`sandbox linux --full-auto` não é subcomando nesta versão (o `codex 0.163.0` do host respondeu
-`Failed to execvp linux`). O probe imprime `sandbox --help` para você confirmar.
+Codex command shape: in 0.162.1 the source (`cli/src/main.rs`, parse tests) uses
+`codex sandbox --permission-profile :workspace -- <cmd>`; the older form
+`sandbox linux --full-auto` is not a subcommand in this version (host `codex 0.163.0` answered
+`Failed to execvp linux`). The probe prints `sandbox --help` so you can confirm.
 
-### Saída esperada
-- Cabeçalho: `argus-codex-worker (enforce)`, `Seccomp: 2`, `NoNewPrivs: 1`, `CapEff: 0000…`.
-- **Controles** `control-write-*` = PASS (se falharem, os negativos não provam nada).
-- `write-workspace` PASS e `write-other/home/etc-denied` PASS + `absent:*` PASS.
-- `net-denied` com código impresso; `EPERM/EACCES` ⇒ bloqueio do sandbox; `ENETUNREACH` ⇒ só o
-  `--network none` (o Codex em `:workspace` pode ou não bloquear; não afirmar mais que isso).
-- Bloco "blast radius": `userns-tmpfs-mount` PASS (aceito pelo candidato), demais mounts PASS = negados.
-- Resultado final `ALL-AS-EXPECTED` (exit 0). Exit 1 = alguma checagem falhou; exit 2 = binário do Codex ausente;
-  **exit 3 = `BOOTSTRAP-FAILED`**: o sandbox do Codex não subiu, as checagens negativas ficam `NOT_EXECUTED` e **nada foi provado**
-  (um negativo só vale se o comando chegou a iniciar; o script exige o marcador). Qualquer FAIL ⇒ não ativar; ver passo 4.
-- Rede: `PASS net-blocked-by-sandbox` só com EPERM/EACCES; `INFO net-blocked-only-by-docker-network-none` não prova o sandbox.
-- Blast radius usa `unshare -Urm --propagation unchanged` para o próprio `unshare` não tentar montar `/`; se ele nem inicia, as
-  checagens ficam `NOT_EXECUTED`.
+### Expected output
+- Header: `argus-codex-worker (enforce)`, `Seccomp: 2`, `NoNewPrivs: 1`, `CapEff: 0000…`.
+- **Controls** `control-write-*` = PASS (if they fail, the negatives prove nothing).
+- `write-workspace` PASS and `write-other/home/etc-denied` PASS + `absent:*` PASS.
+- `net-denied` with a printed code; `EPERM/EACCES` ⇒ sandbox block; `ENETUNREACH` ⇒ only
+  `--network none` (Codex on `:workspace` may or may not block; do not claim more than that).
+- "blast radius" block: `userns-tmpfs-mount` PASS (accepted by the candidate), other mounts PASS = denied.
+- Final result `ALL-AS-EXPECTED` (exit 0). Exit 1 = some check failed; exit 2 = Codex binary missing;
+  **exit 3 = `BOOTSTRAP-FAILED`**: the Codex sandbox did not start, negative checks stay `NOT_EXECUTED` and **nothing was proven**
+  (a negative only counts if the command actually started; the script requires the marker). Any FAIL ⇒ do not activate; see step 4.
+- Network: `PASS net-blocked-by-sandbox` only with EPERM/EACCES; `INFO net-blocked-only-by-docker-network-none` does not prove the sandbox.
+- Blast radius uses `unshare -Urm --propagation unchanged` so `unshare` itself does not try to mount `/`; if it never starts, the
+  checks stay `NOT_EXECUTED`.
 
-Se `write-workspace` falhar, o perfil ainda não é suficiente: as regras de mount são candidatas.
+If `write-workspace` fails, the profile is still not enough: the mount rules are candidates.
 
-## 4. Diagnóstico e estreitamento (root)
+## 4. Diagnosis and tightening (root)
 ```bash
 sudo journalctl -k --since "-10min" | grep 'apparmor="DENIED"'   # operation="mount"/"pivot_root", name=, flags=
 ```
-Ajuste só a regra citada em `DENIED`, recarregue (`apparmor_parser -r -W`) e repita o passo 3. Depois de
-passar, troque `/**` pelos destinos observados e anexe o log em um relatório `YYYY-MM-DD.*.report.md`.
-Falha de seccomp (sem DENIED no kernel, `EPERM`/`ENOSYS`): `strace` exigiria `SYS_PTRACE`; isole com
-`unshare -Ur true` e `unshare -Urm sh -c 'mount -t tmpfs t /mnt'` dentro do mesmo `docker run` do passo 3.
+Adjust only the rule cited in `DENIED`, reload (`apparmor_parser -r -W`) and repeat step 3. After it
+passes, replace `/**` with the observed destinations and attach the log to a `YYYY-MM-DD.*.report.md`.
+Seccomp failure (no DENIED in the kernel, `EPERM`/`ENOSYS`): `strace` would need `SYS_PTRACE`; isolate with
+`unshare -Ur true` and `unshare -Urm sh -c 'mount -t tmpfs t /mnt'` inside the same `docker run` as step 3.
 
-## 5. Se NÃO for possível sem relaxar
-Se o único caminho for `unconfined`, `--privileged`, `CAP_SYS_ADMIN` ou sysctl global: **parar** e
-**manter a tarefa bloqueada** (o worker Codex não roda nessa configuração) e reportar o bloqueio ao
-dono. **Não** desativar o sandbox interno do Codex como contorno: isso exigiria decisão do dono em
-outro PR/spec. Não relaxe nada aqui.
+## 5. If it is NOT possible without relaxing
+If the only path is `unconfined`, `--privileged`, `CAP_SYS_ADMIN` or a global sysctl: **stop** and
+**keep the task blocked** (the Codex worker does not run in that configuration) and report the block to
+the owner. **Do not** turn off Codex's internal sandbox as a workaround: that would need an owner decision in
+another PR/spec. Do not relax anything here.
 
-## 6. Limpeza e rollback (root; só sem dependentes)
+## 6. Cleanup and rollback (root; only with no dependents)
 ```bash
-rm -rf "$PROBE"                                           # sem sudo, é seu
-# dependentes (rodando OU parados: um start com perfil ausente falha):
+rm -rf "$PROBE"                                           # no sudo; it is yours
+# dependents (running OR stopped: a start with a missing profile fails):
 docker ps -a --format '{{.Names}}' | xargs -r docker inspect --format '{{.Name}} {{.HostConfig.SecurityOpt}}' | grep argus-codex-worker
-# só se a saída acima for vazia:
+# only if the output above is empty:
 sudo apparmor_parser -R /etc/apparmor.d/argus-codex-worker && sudo rm /etc/apparmor.d/argus-codex-worker
 ```
 
-## 7. Perfil por pool — só depois do passo 3 (default on)
+## 7. Per-pool profile — only after step 3 (default on)
 
-`ARGUS_CODEX_SANDBOX_PROFILE` no `env` da pool (nada global). **Default on:** ausente/blank =
-`codex-bwrap`. Valores: `codex-bwrap` | `off` (escape hatch). Vale só para o container **agente** do
-provider **`codex`** nativo; gateways/auxiliares, outros providers e o Codex delegado (`argus-delegate`)
-não recebem. `nanoclaw-sandbox` (daemon interno) **exige** `off` (on é recusado).
+`ARGUS_CODEX_SANDBOX_PROFILE` in the pool `env` (nothing global). **Default on:** missing/blank =
+`codex-bwrap`. Values: `codex-bwrap` | `off` (escape hatch). Applies only to the **agent** container of the
+native **`codex`** provider; gateways/auxiliaries, other providers and delegated Codex (`argus-delegate`)
+do not get it. `nanoclaw-sandbox` (internal daemon) **requires** `off` (on is refused).
 
-**a) Instalar os artefatos no checkout (sem root, idempotente; é o que o `provision.sh` já roda):**
+**a) Install the artifacts in the checkout (no root, idempotent; what `provision.sh` already runs):**
 ```bash
-integrations/nanoclaw/install.sh /caminho/do/checkout-nanoclaw    # copia o driver e o JSON seccomp para <checkout>/security/
-(cd /caminho/do/checkout-nanoclaw && pnpm run build)               # o host roda dist/
+integrations/nanoclaw/install.sh /path/to/nanoclaw-checkout    # copies the driver and seccomp JSON to <checkout>/security/
+(cd /path/to/nanoclaw-checkout && pnpm run build)               # the host runs dist/
 ```
 
-**b) Preflight (o código faz sozinho; estes são os equivalentes manuais):**
+**b) Preflight (the code does this itself; these are the manual equivalents):**
 ```bash
-sudo aa-status | grep -n argus-codex-worker                        # perfil carregado, em "enforce"
-docker info --format '{{json .SecurityOptions}}'                   # name=apparmor e name=seccomp… (necessário, NÃO suficiente)
-jq -e '.defaultAction=="SCMP_ACT_ERRNO"' /caminho/do/checkout-nanoclaw/security/argus-codex-worker.seccomp.json
+sudo aa-status | grep -n argus-codex-worker                        # profile loaded, under "enforce"
+docker info --format '{{json .SecurityOptions}}'                   # name=apparmor and name=seccomp… (necessary, NOT sufficient)
+jq -e '.defaultAction=="SCMP_ACT_ERRNO"' /path/to/nanoclaw-checkout/security/argus-codex-worker.seccomp.json
 ```
-`docker info` só diz que o AppArmor existe; não prova que o perfil está carregado nem em enforce. Por isso, antes de cada
-`docker create` do agente optado (cache de 30 s por imagem), o driver roda **um container descartável no mesmo daemon** com a
-imagem e as flags do agente, `--network none --read-only --pull=never`, sem mounts, sem env, sem credenciais, e lê
-`/proc/self/attr/current` e `/proc/self/status`. Exige `argus-codex-worker (enforce)`, `NoNewPrivs: 1`, `Seccomp: 2` e `CapEff`
-zerado; `complain`, `unconfined`, outro perfil, perfil não carregado (runc `change_onexec … label not found`) ou falha do probe
-**recusam** o spawn (negado, sem fallback). Limite: prova o estado no momento do probe, não ao longo da sessão. Um container
-de sessão já existente só é adotado se o `docker inspect` (apenas `SecurityOpt`, `CapDrop`, `CapAdd`, `Privileged`,
-`AppArmorProfile`, `Init`) mostrar exatamente o perfil, o seccomp idêntico ao JSON instalado e `cap-drop ALL`; senão é recusado e
-**não é tocado**. Sem root não há como carregar o perfil; nesse caso **não ligue**.
+`docker info` only says AppArmor exists; it does not prove the profile is loaded or in enforce. So before each
+`docker create` of an opted-in agent (30 s cache per image), the driver runs **one disposable container on the same daemon** with the
+agent image and flags, `--network none --read-only --pull=never`, no mounts, no env, no credentials, and reads
+`/proc/self/attr/current` and `/proc/self/status`. It requires `argus-codex-worker (enforce)`, `NoNewPrivs: 1`, `Seccomp: 2` and zeroed
+`CapEff`; `complain`, `unconfined`, another profile, unloaded profile (runc `change_onexec … label not found`) or probe failure
+**refuse** the spawn (denied, no fallback). Limit: proves state at probe time, not across the session. An existing session
+container is adopted only if `docker inspect` (only `SecurityOpt`, `CapDrop`, `CapAdd`, `Privileged`,
+`AppArmorProfile`, `Init`) shows exactly the profile, seccomp identical to the installed JSON and `cap-drop ALL`; otherwise it is refused and
+**not touched**. Without root the profile cannot be loaded; in that case **do not turn it on**.
 
-**c) Explicitar on (opcional — já é o default) ou desligar uma pool:**
+**c) Set on explicitly (optional — already the default) or turn a pool off:**
 ```bash
-# on explícito (redundante com o default):
+# explicit on (redundant with the default):
 curl -fsS -X PATCH "$ARGUS_URL/api/pools/<pool>" -H "Authorization: Bearer $ARGUS_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"expected_version":"<pool.version>","env":{"ARGUS_CODEX_SANDBOX_PROFILE":"codex-bwrap"}}'
-# off (arquiteturas que não podem enforce, ex. inner Docker):
+# off (architectures that cannot enforce, e.g. inner Docker):
 curl -fsS -X PATCH "$ARGUS_URL/api/pools/<pool>" -H "Authorization: Bearer $ARGUS_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"expected_version":"<pool.version>","env":{"ARGUS_CODEX_SANDBOX_PROFILE":"off"}}'
 ```
-Valor desconhecido (`true`, `unconfined`, `CODEX-BWRAP`…): o host recusa subir (`entrypoint.sh`, exit 78) e,
-se chegar ao spawn, o spawn é negado. Não há fallback para `unconfined`.
+Unknown value (`true`, `unconfined`, `CODEX-BWRAP`…): the host refuses to start (`entrypoint.sh`, exit 78) and,
+if spawn is reached, the spawn is denied. There is no fallback to `unconfined`.
 
-**d) Remover a chave do env:** `"env":{"ARGUS_CODEX_SANDBOX_PROFILE":null}` no mesmo `PATCH`; hosts novos
-voltam ao **default on** (`codex-bwrap`). Containers agentes já criados só mudam quando forem recriados.
-Só descarregue o AppArmor (passo 6) depois que nenhum container dependente existir.
+**d) Remove the key from env:** `"env":{"ARGUS_CODEX_SANDBOX_PROFILE":null}` on the same `PATCH`; new hosts
+return to **default on** (`codex-bwrap`). Already-created agent containers only change when recreated.
+Unload AppArmor (step 6) only after no dependent container remains.
 
-**Não faça:** `security_opt` arbitrário, `unconfined`, `--privileged`, `SYS_ADMIN`, ligar fora do provider Codex,
-ou reciclar workers vivos como parte disto.
+**Do not:** arbitrary `security_opt`, `unconfined`, `--privileged`, `SYS_ADMIN`, enable outside the Codex provider,
+or recycle live workers as part of this.

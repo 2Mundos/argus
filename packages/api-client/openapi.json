@@ -1177,6 +1177,14 @@
             ],
             "title": "Executor"
           },
+          "features": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 16,
+            "title": "Features",
+            "type": "array"
+          },
           "worker_version": {
             "anyOf": [
               {
@@ -6600,6 +6608,16 @@
                 "type": "null"
               }
             ]
+          },
+          "steer_acks": {
+            "items": {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Steer Acks",
+            "type": "array"
           }
         },
         "title": "HeartbeatRequest",
@@ -6627,6 +6645,14 @@
           },
           "state": {
             "$ref": "#/components/schemas/AgentState"
+          },
+          "steers": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SteerNotice"
+            },
+            "title": "Steers",
+            "type": "array"
           }
         },
         "required": [
@@ -12213,6 +12239,148 @@
           "ref"
         ],
         "title": "Source",
+        "type": "object"
+      },
+      "Steer": {
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "delivered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivered At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "delivered",
+              "cancelled",
+              "expired"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "attempt",
+          "message",
+          "actor",
+          "state",
+          "created_at"
+        ],
+        "title": "Steer",
+        "type": "object"
+      },
+      "SteerCreate": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "SteerCreate",
+        "type": "object"
+      },
+      "SteerNotice": {
+        "description": "What a heartbeat hands the assignee: the text, not the lifecycle.",
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "task_id",
+          "attempt",
+          "message",
+          "actor",
+          "created_at"
+        ],
+        "title": "SteerNotice",
+        "type": "object"
+      },
+      "SteerPage": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Steer"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "attempt"
+        ],
+        "title": "SteerPage",
         "type": "object"
       },
       "SystemSummary": {
@@ -22528,6 +22696,178 @@
           }
         ],
         "summary": "Retry Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/steers": {
+      "get": {
+        "description": "Steers for one attempt (the current one, when `attempt` is omitted), oldest first.",
+        "operationId": "list_steers_api_tasks__task_id__steers_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "attempt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Attempt"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SteerPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Steers",
+        "tags": [
+          "tasks"
+        ]
+      },
+      "post": {
+        "description": "Send an instruction to the attempt in flight. The assignee must report\nthe `steer` feature; the message expires if the attempt ends first.",
+        "operationId": "create_steer_api_tasks__task_id__steers_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SteerCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Steer"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Steer",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/steers/{steer_id}": {
+      "delete": {
+        "description": "Cancel a pending steer. A delivered steer cannot be taken back.",
+        "operationId": "cancel_steer_api_tasks__task_id__steers__steer_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "steer_id",
+            "required": true,
+            "schema": {
+              "title": "Steer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Steer",
         "tags": [
           "tasks"
         ]

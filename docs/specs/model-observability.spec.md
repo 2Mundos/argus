@@ -130,4 +130,4 @@ therefore can never be labelled a model switch.
   routes), `Task.models`, `GET /api/agents/{id}/models`, the account failover
   hook and three MCP tools. Regenerated `openapi.json` and `schema.d.ts`.
 - Follow-ups: NanoClaw and `argus-delegate` send the ingestion payload with
-  evidence; dashboard cards, drawer timeline and Frota current model.
+  evidence; dashboard cards, drawer timeline and Fleet current model.

@@ -28,7 +28,9 @@ from argus_api.db import Tx, ts
 from argus_api.errors import ConflictError, NotFoundError, UnauthorizedError
 from argus_api.events import record
 from argus_api.tasks import service as tasks
+from argus_api.tasks import steers
 from argus_api.tasks.service import RejectedLease, RenewedLease
+from argus_api.tasks.steers import SteerNotice
 
 log = logging.getLogger(__name__)
 
@@ -164,6 +166,7 @@ class Heartbeat:
     state: AgentState
     renewed: list[RenewedLease]
     rejected: list[RejectedLease]
+    steers: list[SteerNotice]
 
 
 async def heartbeat(
@@ -171,11 +174,15 @@ async def heartbeat(
     agent_id: str,
     leases: list[tuple[str, int]],
     runtime: AgentRuntime | None = None,
+    steer_acks: list[str] | None = None,
     *,
     token_ttl_s: int = 7 * 24 * 3600,
 ) -> Heartbeat:
     """Refresh the agent and renew the leases it lists, in one transaction. A
-    reported `runtime` replaces the last one; without it the last one stays."""
+    reported `runtime` replaces the last one; without it the last one stays.
+
+    `steer_acks` are steers the worker has injected. Pending steers are returned
+    only for leases renewed here (task steering spec 3.4)."""
     state = await _live_state(tx.conn, agent_id)
     await tx.conn.execute(
         "UPDATE agents SET last_heartbeat_at = ?,"
@@ -188,7 +195,11 @@ async def heartbeat(
     )
     await _slide_agent_token(tx, agent_id, token_ttl_s)
     renewed, rejected = await tasks.renew(tx, agent_id, leases)
-    return Heartbeat(state, renewed, rejected)
+    await steers.acknowledge(tx, agent_id, steer_acks or [])
+    pending = await steers.pending_for(
+        tx, [(item.task_id, item.attempt) for item in renewed]
+    )
+    return Heartbeat(state, renewed, rejected, pending)
 
 
 async def _slide_agent_token(tx: Tx, agent_id: str, token_ttl_s: int) -> None:

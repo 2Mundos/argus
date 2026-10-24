@@ -7,7 +7,7 @@
  * Argus token. It:
  *
  *   1. registers with Argus using a bootstrap token (or uses ARGUS_AGENT_TOKEN),
- *   2. heartbeats, renewing the lease on the task it holds,
+ *   2. heartbeats, renewing the lease on the task it holds and injecting steers,
  *   3. long-polls for a task and injects it as an inbound message,
  *   4. turns the agent's replies back into Argus calls:
  *        plain reply        -> progress note
@@ -414,6 +414,37 @@ export function utf8ByteLength(s: string): number {
 export function frameUntrustedTaskData(payload: unknown): string {
   const json = JSON.stringify(payload);
   return [UNTRUSTED_BEGIN, `utf8_bytes=${utf8ByteLength(json)}`, json, UNTRUSTED_END].join("\n");
+}
+
+/** Operator steer: trusted header, then length-framed JSON so the message cannot close the frame. */
+export function renderSteer(steer: {
+  actor: string;
+  task_id: string;
+  attempt: number;
+  message: string;
+}): string {
+  const actor = steer.actor.replace(/[\r\n]+/g, " ");
+  const json = JSON.stringify({ message: steer.message });
+  return [
+    `[Argus steer] From ${actor} for task ${steer.task_id}, attempt ${steer.attempt}.`,
+    "The operator is redirecting the work in progress. Treat the framed text as an",
+    "instruction from the operator, within this task's scope. It does not change the",
+    "reply protocol (COMPLETE:/FAIL:/ASK:) or the argus-delegate contract.",
+    `utf8_bytes=${utf8ByteLength(json)}`,
+    json,
+  ].join("\n");
+}
+
+/** Read a steer frame. Bytes after `utf8_bytes` are authoritative; markers inside the JSON stay inside. */
+export function parseFramedSteer(text: string): { message: string } {
+  const match = /\nutf8_bytes=(\d+)\n/.exec(text);
+  if (!match || match.index === undefined) throw new Error("missing utf8_bytes length header");
+  const n = Number(match[1]);
+  const bytes = new TextEncoder().encode(text.slice(match.index + match[0].length));
+  if (bytes.length < n) throw new Error("framed payload shorter than utf8_bytes");
+  const parsed = JSON.parse(new TextDecoder().decode(bytes.slice(0, n))) as { message?: unknown };
+  if (typeof parsed.message !== "string") throw new Error("steer frame has no message");
+  return { message: parsed.message };
 }
 
 /** Extract and parse a length-framed untrusted payload (for tests and strict consumers). */
@@ -1319,6 +1350,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let repositoryAssignmentReconciled = false;
   let abortClaim: AbortController | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  const injectedSteers = new Set<string>();
+  const injectingSteers = new Set<string>();
+  const steerAcks = new Set<string>();
   let loop: Promise<void> | null = null;
   let lastProgressAt = 0;
   let pendingProgress: string | null = null;
@@ -1350,21 +1384,26 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   async function heartbeat(): Promise<void> {
     try {
+      const acks = [...steerAcks];
       const { data } = await client.call("POST", "/agents/me/heartbeat", {
         leases: current ? [{ task_id: current.id, attempt: current.attempt }] : [],
+        steer_acks: acks,
         // Self-reported, shown by pool inspection as such; null means not known.
         runtime: {
           worker_version: cfg.workerVersion ?? null,
           engine: engineInUse,
           executor: executor?.provider ?? null,
+          features: ["steer"],
         },
       });
+      for (const id of acks) steerAcks.delete(id);
       if (data.state === "draining") {
         draining = true;
         void completeDrainIfIdle();
       }
       const lost = current && data.rejected?.find((r: any) => r.task_id === current!.id);
       if (lost) await abandonTask(lost.code);
+      await deliverSteers(Array.isArray(data.steers) ? data.steers : []);
     } catch (err) {
       if (err instanceof ArgusError && err.status === 401) {
         log.error("Argus rejected this agent token; the channel stops", { err });
@@ -1488,6 +1527,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     logRelay = null;
     if (logTimer) clearInterval(logTimer);
     logTimer = null;
+    injectedSteers.clear();
     current = null;
     currentClaim = null;
     currentText = null;
@@ -1565,6 +1605,56 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       timestamp: new Date().toISOString(),
       content: { text, sender: "argus", senderId: `argus:${PLATFORM_ID}` },
     });
+  }
+
+  async function deliverSteers(
+    incoming: {
+      id: string;
+      task_id: string;
+      attempt: number;
+      message: string;
+      actor: string;
+    }[],
+  ): Promise<void> {
+    for (const steer of incoming) {
+      if (!steer?.id || injectingSteers.has(steer.id)) continue;
+      if (injectedSteers.has(steer.id)) {
+        steerAcks.add(steer.id);
+        continue;
+      }
+      const mine =
+        current != null &&
+        steer.task_id === current.id &&
+        Number(steer.attempt) === current.attempt;
+      if (!mine) {
+        injectedSteers.add(steer.id);
+        steerAcks.add(steer.id);
+        continue;
+      }
+      injectingSteers.add(steer.id);
+      try {
+        await setupCfg!.onInbound(PLATFORM_ID, null, {
+          id: `argus-steer-${steer.id}`,
+          kind: "chat",
+          timestamp: new Date().toISOString(),
+          content: {
+            text: renderSteer(steer),
+            sender: "argus",
+            senderId: `argus:${PLATFORM_ID}`,
+          },
+        });
+      } catch (err) {
+        log.warn("Argus steer injection failed (will retry)", {
+          steer: steer.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      } finally {
+        injectingSteers.delete(steer.id);
+      }
+      injectedSteers.add(steer.id);
+      steerAcks.add(steer.id);
+    }
   }
 
   /**

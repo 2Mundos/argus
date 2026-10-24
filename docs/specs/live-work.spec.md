@@ -60,7 +60,7 @@ The sources are:
   The Drain action stays on the table.
 - Current work: `GET /api/tasks?assignee={id}&state=claimed`, each with its title
   and the activity of 3.1.
-- Live stream: when the agent holds a claimed task, the same **Ao vivo** panel as
+- Live stream: when the agent holds a claimed task, the same **Live** panel as
   the task view ([task live log](task-live-log.spec.md) 3.6) for that attempt —
   that is the NanoClaw/delegate output, not container stdout.
 - Container output (fallback): when the agent holds no task but has an

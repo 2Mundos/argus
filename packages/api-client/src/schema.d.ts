@@ -2181,6 +2181,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/steers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Steers
+         * @description Steers for one attempt (the current one, when `attempt` is omitted), oldest first.
+         */
+        get: operations["list_steers_api_tasks__task_id__steers_get"];
+        put?: never;
+        /**
+         * Create Steer
+         * @description Send an instruction to the attempt in flight. The assignee must report
+         *     the `steer` feature; the message expires if the attempt ends first.
+         */
+        post: operations["create_steer_api_tasks__task_id__steers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/steers/{steer_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Cancel Steer
+         * @description Cancel a pending steer. A delivered steer cannot be taken back.
+         */
+        delete: operations["cancel_steer_api_tasks__task_id__steers__steer_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/unarchive": {
         parameters: {
             query?: never;
@@ -2643,6 +2688,8 @@ export interface components {
             engine?: string | null;
             /** Executor */
             executor?: string | null;
+            /** Features */
+            features?: string[];
             /** Worker Version */
             worker_version?: string | null;
         };
@@ -4419,6 +4466,8 @@ export interface components {
              */
             leases?: components["schemas"]["LeaseRef"][];
             runtime?: components["schemas"]["AgentRuntime"] | null;
+            /** Steer Acks */
+            steer_acks?: string[];
         };
         /** HeartbeatResponse */
         HeartbeatResponse: {
@@ -4429,6 +4478,11 @@ export interface components {
             /** Renewed */
             renewed: components["schemas"]["RenewedLease"][];
             state: components["schemas"]["AgentState"];
+            /**
+             * Steers
+             * @default []
+             */
+            steers?: components["schemas"]["SteerNotice"][];
         };
         /**
          * HoldRequest
@@ -6377,6 +6431,64 @@ export interface components {
              * @enum {string}
              */
             type: "task" | "decision" | "artifact" | "url";
+        };
+        /** Steer */
+        Steer: {
+            /** Actor */
+            actor: string;
+            /** Attempt */
+            attempt: number;
+            /** Closed At */
+            closed_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Delivered At */
+            delivered_at?: string | null;
+            /** Id */
+            id: string;
+            /** Message */
+            message: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "delivered" | "cancelled" | "expired";
+        };
+        /** SteerCreate */
+        SteerCreate: {
+            /** Message */
+            message: string;
+        };
+        /**
+         * SteerNotice
+         * @description What a heartbeat hands the assignee: the text, not the lifecycle.
+         */
+        SteerNotice: {
+            /** Actor */
+            actor: string;
+            /** Attempt */
+            attempt: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Message */
+            message: string;
+            /** Task Id */
+            task_id: string;
+        };
+        /** SteerPage */
+        SteerPage: {
+            /** Attempt */
+            attempt: number;
+            /** Items */
+            items?: components["schemas"]["Steer"][];
         };
         /** SystemSummary */
         SystemSummary: {
@@ -11419,6 +11531,104 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Task"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_steers_api_tasks__task_id__steers_get: {
+        parameters: {
+            query?: {
+                attempt?: number | null;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SteerPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_steer_api_tasks__task_id__steers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SteerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Steer"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_steer_api_tasks__task_id__steers__steer_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+                steer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

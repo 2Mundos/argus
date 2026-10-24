@@ -1,4 +1,4 @@
-"""Fleet health for the dashboard "Frota" view (docs/specs/fleet-health.spec.md).
+"""Fleet health for the dashboard Fleet view (docs/specs/fleet-health.spec.md).
 
 Read-only, one snapshot. Every query is bounded by the window through an index
 (`tasks_finished`, `events_kind_at`, `events_subject`, `tasks_state`); none scans
@@ -74,7 +74,7 @@ class PoolHealth(BaseModel):
     desired: int
     live: int  # instances not terminated
     running: int
-    last_heartbeat_at: datetime | None  # None: no live agent has reported ("sem dados")
+    last_heartbeat_at: datetime | None  # None: no live agent has reported ("no data")
     source: str = "pools, instances, agents.last_heartbeat_at"
 
 
