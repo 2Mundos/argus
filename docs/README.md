@@ -66,6 +66,9 @@ every new dependency is judged against it.
 - [Agent hygiene](specs/agent-hygiene.spec.md) — lost/gone identities by pool and
   heartbeat age, bounded opt-in archiving, and the lost-holding-claims and
   lost-spike alerts
+- [Failure classes](specs/failure-classes.spec.md) — one class per failure reason
+  picks the retry (block, backoff, requeue, hand to a human), and a channel
+  preflight blocks environment problems before any model work
 - [Fleet health](specs/fleet-health.spec.md) — the Fleet tab: pool liveness, queue
   and run time, success rate, failures by reason, with `no data` when unknown
   Screenshot: [2026-10-20.fleet-health.screenshot.png](evidence/2026-10-20.fleet-health.screenshot.png)
@@ -126,7 +129,8 @@ every new dependency is judged against it.
 - [Worker efficiency](drafts/2026-10-24.worker-efficiency.draft.md) — why tasks are
   interrupted and tokens wasted (baseline numbers, root causes), and eight ordered
   proposals: claim reserves the account, owned workspace, one task per session,
-  resumable attempts, progress-based liveness, failure classes, single-layer run
+  resumable attempts, progress-based liveness, failure classes, single-layer run;
+  P1 shipped, P3/P5/P6/P8 partly
 
 ### Runbooks
 
