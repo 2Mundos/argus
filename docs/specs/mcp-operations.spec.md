@@ -109,6 +109,37 @@ Findings outside the gap list:
   task rows. Order: oldest first, by when the row started waiting.
   Pending tasks stuck behind a failed or cancelled dependency are rows too
   ([task dependencies](task-dependencies.spec.md) 3.2).
+- **Inbox groups and impact:** `GET /api/inbox` and `get_inbox` also take
+  `blocking_only` (bool, default false) and `order` (`age` default | `impact`),
+  and return the same data to the dashboard, MCP and REST.
+  - *Impact* is derived only from task rows and `task_deps`. A row's `blocks` lists
+    the tasks that cannot proceed until it is resolved: its own task when that task
+    is `blocked`, plus the direct dependents (`task_deps.depends_on_id` = the row's
+    task) that are not in a terminal state (`succeeded | failed | cancelled`). It
+    is `[]` for pool and knowledge rows. Each entry is `{id, title, state}`;
+    `impact` is its length. Nothing else is inferred.
+  - `blocking_only=true` keeps only rows with `impact >= 1`, in `total`, totals and
+    `groups` alike. `order=impact` sorts by `impact` descending, ties by age
+    (oldest first); `order=age` is the existing order. The cursor carries the order.
+  - Every row has `group`, `decision_kind` (the type: `question`, `review`,
+    `approval`, `policy`, `knowledge`), `age_s`, `blocks` and `impact`.
+  - `groups` covers the whole filtered set (not just the page), one per project and
+    task: `{key, project, subject_type, subject_id, title, open_decisions,
+    oldest_age_s, stalled_tasks}`. A task's rows form the group `task:<id>`; open
+    pool decisions form `pool` (project `null`); knowledge proposals form
+    `knowledge_proposal:<project>`. `open_decisions` counts rows with an open
+    decision, `oldest_age_s` is the age of the group's oldest row, and
+    `stalled_tasks` is the number of distinct tasks in the group's `blocks`.
+    Groups follow the requested order (`impact`: `stalled_tasks` desc, then age).
+  - The dashboard Inbox reads `/api/inbox` (detail view), shows project headings
+    over these groups, and lets the manager tick up to 20 open decisions (the
+    `answers` batch limit). Each ticked decision carries its own answer (choice
+    and/or text). A confirmation step lists every decision with the answer that
+    will be sent, and sends `POST /api/decisions/answers` only on confirm; nothing
+    is answered automatically. The result of each item is shown (`ok`, `replayed`,
+    or the error message). Retrying failed items resends them with the
+    `request_id` first generated for that item, so a retry never duplicates an
+    answer. Accept/reject and audience rules are unchanged.
 - **`GET /api/tasks`** gains `project`, `kind`, repeated `state`, `view` and
   `cursor`. It always returns the page envelope. The dashboard moves to the new
   shape in the same PR, so the generated client keeps a single response type.

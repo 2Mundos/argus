@@ -242,3 +242,124 @@ def test_inbox_needs_a_manager(client: TestClient) -> None:
     worker = register(client)
     assert client.get("/api/inbox", headers=worker).status_code == 403
     assert client.get("/api/inbox", headers=register(client, "orchestrator")).is_success
+
+
+# -- groups, impact, blocking_only and order (MCP operations 3.2) ---------------------
+
+
+def seed_impact(client: TestClient) -> dict:
+    """alpha: `big` is blocked by a question and holds two pending dependents; `small`
+    is awaiting approval with one dependent. beta: `solo` awaits approval, no dependents.
+    A pool decision rounds it out."""
+    worker = register(client)
+    big = create(client, title="big")
+    question = ask(client, worker, "which?")
+    create(client, depends_on=[big["id"]], title="dep-1")
+    create(client, depends_on=[big["id"]], title="dep-2")
+    small = create(client, title="small", requires_approval=True)
+    create(client, depends_on=[small["id"]], title="dep-3")
+    solo = create(client, "beta", title="solo", requires_approval=True)
+    client.put(
+        "/api/pools/web",
+        json={"image": "example/w:1", "desired_replicas": 0, "max_replicas": 1},
+    )
+    client.post(
+        "/api/pools/web/scale",
+        json={"desired_replicas": 3},
+        headers=register(client, "orchestrator"),
+    )
+    return {"big": big, "small": small, "solo": solo, "question": question}
+
+
+def test_inbox_groups_by_project_and_task_with_age_and_impact(
+    client: TestClient,
+) -> None:
+    ids = seed_impact(client)
+    page = ok(client.get("/api/inbox"))
+    groups = {g["key"]: g for g in page["groups"]}
+    big, small, solo = (f"task:{ids[k]['id']}" for k in ("big", "small", "solo"))
+    assert set(groups) == {big, small, solo, "pool"}
+    assert (groups[big]["project"], groups[big]["title"]) == ("alpha", "big")
+    # the blocked task itself plus its two non-terminal dependents
+    assert (groups[big]["open_decisions"], groups[big]["stalled_tasks"]) == (1, 3)
+    assert (groups[small]["open_decisions"], groups[small]["stalled_tasks"]) == (1, 1)
+    assert (groups[solo]["project"], groups[solo]["stalled_tasks"]) == ("beta", 0)
+    assert (groups["pool"]["project"], groups["pool"]["subject_id"]) == (None, None)
+    assert all(g["oldest_age_s"] >= 0 for g in groups.values())
+
+    rows = {r["subject_id"]: r for r in page["items"]}
+    row = rows[ids["big"]["id"]]
+    assert row["group"] == big and row["decision_kind"] == "question"
+    assert row["impact"] == 3
+    assert [b["title"] for b in row["blocks"]] == ["big", "dep-1", "dep-2"]
+    assert rows[ids["solo"]["id"]]["blocks"] == []
+    assert rows["web"]["blocks"] == [] and rows["web"]["impact"] == 0
+
+
+def test_inbox_group_age_is_the_oldest_row(client: TestClient) -> None:
+    ids = seed_impact(client)
+    # Two rows in one task group cannot exist (one open decision per task), so the
+    # group age equals its row age; check it against the row.
+    page = ok(client.get("/api/inbox"))
+    row = next(r for r in page["items"] if r["subject_id"] == ids["big"]["id"])
+    group = next(g for g in page["groups"] if g["key"] == row["group"])
+    assert group["oldest_age_s"] >= row["age_s"] >= 0
+
+
+def test_blocking_only_keeps_rows_that_block_a_task(client: TestClient) -> None:
+    ids = seed_impact(client)
+    page = ok(client.get("/api/inbox", params={"blocking_only": True}))
+    assert {r["subject_id"] for r in page["items"]} == {
+        ids["big"]["id"],
+        ids["small"]["id"],
+    }
+    assert page["total"] == 2
+    assert {g["key"] for g in page["groups"]} == {
+        f"task:{ids['big']['id']}",
+        f"task:{ids['small']['id']}",
+    }
+    assert sum(page["totals_by_state"].values()) == 2
+
+
+def test_inbox_sorts_by_impact_or_age(client: TestClient) -> None:
+    ids = seed_impact(client)
+    by_age = ok(client.get("/api/inbox"))
+    assert [r["subject_id"] for r in by_age["items"]][:2] == [
+        ids["big"]["id"],
+        ids["small"]["id"],
+    ]  # oldest first
+    by_impact = ok(client.get("/api/inbox", params={"order": "impact"}))
+    assert [r["impact"] for r in by_impact["items"]] == [3, 1, 0, 0]
+    assert by_impact["items"][0]["subject_id"] == ids["big"]["id"]
+    # impact ties fall back to age: solo (older) before the pool decision
+    assert [r["subject_id"] for r in by_impact["items"]][2:] == [
+        ids["solo"]["id"],
+        "web",
+    ]
+    assert [g["stalled_tasks"] for g in by_impact["groups"]] == [3, 1, 0, 0]
+    # paging in impact order visits the same rows
+    items, totals = walk(client, "/api/inbox", order="impact", limit=1)
+    assert [r["subject_id"] for r in items] == [
+        r["subject_id"] for r in by_impact["items"]
+    ]
+    assert totals == [4, 4, 4, 4]
+    bad = client.get("/api/inbox", params={"order": "nope"})
+    assert bad.status_code == 422
+
+
+def test_inbox_cursor_is_bound_to_order_and_blocking_filter(client: TestClient) -> None:
+    seed_impact(client)
+    page = ok(client.get("/api/inbox", params={"limit": 1, "order": "impact"}))
+    res = client.get("/api/inbox", params={"cursor": page["next_cursor"]})
+    assert res.status_code == 400, res.text
+    assert "cursor_mismatch" in res.text
+
+
+def test_inbox_dependents_that_finished_do_not_count(client: TestClient) -> None:
+    worker = register(client)
+    big = create(client, title="big")
+    ask(client, worker, "which?")
+    done = create(client, depends_on=[big["id"]], title="gone")
+    client.post(f"/api/tasks/{done['id']}/cancel").raise_for_status()
+    row = next(r for r in ok(client.get("/api/inbox"))["items"])
+    assert [b["title"] for b in row["blocks"]] == ["big"]

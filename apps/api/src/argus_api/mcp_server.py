@@ -914,15 +914,20 @@ async def get_inbox(
     project: str | None = None,
     states: list[InboxState] | None = None,
     decision_kinds: list[DecisionKindArg] | None = None,
+    blocking_only: bool = False,
+    order: Literal["age", "impact"] = "age",
     view: ViewArg = "summary",
     limit: int = 25,
     cursor: str | None = None,
 ) -> dict:
-    """What waits on you, oldest first: blocked, in-review and awaiting-approval
+    """What waits on you, oldest first (order=impact: most blocked tasks first): blocked, in-review and awaiting-approval
     tasks with their open decision (id, kind, audience) and current artifact ids,
     pending tasks stuck on a failed or cancelled dependency (`failed_dependencies`:
-    retry it or set_task_dependencies), plus open pool and knowledge decisions. Totals by state and decision kind
-    cover every match. view=detail adds each task and decision in full."""
+    retry it or set_task_dependencies), plus open pool and knowledge decisions. Each row
+    has `blocks` (the tasks it holds up) and `impact`; `groups` count open decisions,
+    oldest age and stalled tasks per project/task. blocking_only=true keeps rows that
+    block a task. Totals by state and decision kind cover every match. view=detail
+    adds each task and decision in full."""
     return await _call(
         ctx,
         "GET",
@@ -931,6 +936,8 @@ async def get_inbox(
             "project": project,
             "state": states,
             "decision_kind": decision_kinds,
+            "blocking_only": blocking_only,
+            "order": order,
             "view": view,
             "limit": limit,
             "cursor": cursor,

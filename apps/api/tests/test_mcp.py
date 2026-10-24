@@ -354,13 +354,28 @@ def test_inbox_journey_tools_match_rest(client: TestClient) -> None:
     )
 
     def without_ages(page: dict) -> dict:
-        return {**page, "items": [{**r, "age_s": 0} for r in page["items"]]}
+        return {
+            **page,
+            "items": [{**r, "age_s": 0} for r in page["items"]],
+            "groups": [{**g, "oldest_age_s": 0} for g in page["groups"]],
+        }
 
     inbox = tool(client, orchestrator, "get_inbox", project="global")
     direct = client.get("/api/inbox?project=global", headers=rest).json()
     assert without_ages(inbox) == without_ages(direct)
     [row] = inbox["items"]
     assert (row["decision_id"], row["artifact_ids"]) == (asked["id"], [artifact["id"]])
+    assert [(g["key"], g["open_decisions"]) for g in inbox["groups"]] == [
+        (f"task:{task_id}", 1)
+    ]
+    mcp = tool(
+        client, orchestrator, "get_inbox", project="global", blocking_only=True,
+        order="impact",
+    )  # fmt: skip
+    query = "project=global&blocking_only=true&order=impact"
+    rest_page = client.get(f"/api/inbox?{query}", headers=rest).json()
+    assert without_ages(mcp) == without_ages(rest_page)
+    assert [r["impact"] for r in mcp["items"]] == [1]
     page = tool(
         client, orchestrator, "list_decisions", kinds=["question"], view="detail"
     )
