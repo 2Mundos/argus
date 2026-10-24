@@ -207,7 +207,7 @@ def test_harness_fallback_across_attempts(client, agent) -> None:
     post(client, agent, task_id, attempt, [harness("h1", state="running")])
     client.post(
         f"/api/tasks/{task_id}/fail",
-        json={"attempt": attempt, "error": "boom"},
+        json={"attempt": attempt, "error": "boom", "reason": "session_lost"},
         headers=agent,
     )
     again = client.post("/api/tasks/claim", json={}, headers=agent).json()

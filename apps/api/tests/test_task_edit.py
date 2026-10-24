@@ -392,7 +392,7 @@ async def in_state(db: Database, state: S):
             return await tasks.complete(tx, A, task.id, claimed.attempt, DONE)
         assert state is S.FAILED
         for _ in range(3):
-            await tasks.fail(tx, A, task.id, claimed.attempt, "boom")
+            await tasks.fail(tx, A, task.id, claimed.attempt, "boom", "session_lost")
             again = await tasks.claim(tx, A, [])
             if again is None:
                 break

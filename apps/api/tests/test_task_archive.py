@@ -55,9 +55,12 @@ def make(client: TestClient, agent: dict[str, str], state: str, **body: object) 
     if state == "claimed":
         return claimed
     if state == "blocked":
-        path, payload = "block", {"attempt": attempt, "reason": "need"}
+        path, payload = "block", {"attempt": attempt, "reason": "worker_env"}
     elif state == "failed":
-        path, payload = "fail", {"attempt": attempt, "error": "boom"}
+        path, payload = (
+            "fail",
+            {"attempt": attempt, "error": "boom", "reason": "session_lost"},
+        )
     else:
         path, payload = "complete", {"attempt": attempt, "result": {"summary": "ok"}}
         if state == "in_review":

@@ -11,6 +11,7 @@ from argus_core.continuation import (
 from argus_core.delivery import Delivery
 from argus_core.task_edit import TaskAttempt, TaskEdit
 from argus_core.tasks import (
+    ENV_BLOCK_REASONS,
     ClaimedTask,
     Task,
     TaskCreate,
@@ -19,7 +20,13 @@ from argus_core.tasks import (
     validate_milestone,
 )
 from fastapi import APIRouter, Query, Request, Response, status
-from pydantic import BaseModel, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from argus_api.access import require_task_readable, worker_task_filter
 from argus_api.accounts import service as accounts
@@ -133,6 +140,15 @@ class ReleaseRequest(BaseModel):
 class BlockRequest(BaseModel):
     attempt: int
     reason: str = Field(min_length=1)
+    """An environment problem (failure classes 3.3): one of `ENV_BLOCK_REASONS`."""
+    error: str | None = Field(default=None, max_length=1500)
+
+    @field_validator("reason")
+    @classmethod
+    def _environment(cls, value: str) -> str:
+        if value not in ENV_BLOCK_REASONS:
+            raise ValueError(f"reason must be one of {sorted(ENV_BLOCK_REASONS)}")
+        return value
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -395,7 +411,9 @@ async def block_task(
     task_id: str, body: BlockRequest, db: DbDep, agent_id: AgentDep
 ) -> Task:
     async with db.write() as tx:
-        return await service.block(tx, agent_id, task_id, body.attempt, body.reason)
+        return await service.block(
+            tx, agent_id, task_id, body.attempt, body.reason, body.error
+        )
 
 
 @router.post("/{task_id}/unblock")

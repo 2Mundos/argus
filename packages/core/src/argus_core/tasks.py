@@ -235,6 +235,53 @@ class TransitionContext:
     deps_done: bool = True
 
 
+class RetryClass(StrEnum):
+    """What kind of failure ended an attempt; it picks the retry (failure classes 3.2)."""
+
+    ADMISSION = "admission"
+    ENVIRONMENT = "environment"
+    TRANSIENT = "transient"
+    SESSION = "session"
+    TASK = "task"
+
+
+# Block reasons a worker may send: the environment, not the task, is broken
+# (failure classes 3.3, 3.4).
+ENV_BLOCK_REASONS = frozenset(
+    {
+        "env_repository_unconfigured",
+        "env_repository_unavailable",
+        "env_repository_unreachable",
+        "env_executor_auth",
+        "worker_env",
+    }
+)
+
+# The one map from a failure reason to its class; a reason not listed is `task`.
+FAILURE_CLASS: dict[str, RetryClass] = {
+    "quota": RetryClass.ADMISSION,
+    "account_unavailable": RetryClass.ADMISSION,
+    **dict.fromkeys(ENV_BLOCK_REASONS, RetryClass.ENVIRONMENT),
+    "provider_failure": RetryClass.TRANSIENT,
+    "channel_error": RetryClass.TRANSIENT,
+    "runtime_switch_failed": RetryClass.TRANSIENT,
+    "session_lost": RetryClass.SESSION,
+    "stalled": RetryClass.SESSION,
+    "timeout": RetryClass.SESSION,
+    "lease_expired": RetryClass.SESSION,
+    "agent_ended": RetryClass.SESSION,
+}
+
+
+def retry_class(reason: str | None) -> RetryClass:
+    return FAILURE_CLASS.get(reason or "", RetryClass.TASK)
+
+
+def retry_delay_s(failures: int) -> int:
+    """Backoff before a transient failure's retry; `failures` counts this one."""
+    return min(60 * 2 ** max(failures - 1, 0), 900)
+
+
 class InvalidTransitionError(Exception):
     def __init__(self, state: TaskState, action: Action) -> None:
         super().__init__(f"cannot {action} a task that is {state}")

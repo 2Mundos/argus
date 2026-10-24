@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from argus_core.fleet import InstanceState
-from argus_core.tasks import TaskState
+from argus_core.tasks import RetryClass, TaskState, retry_class
 from pydantic import BaseModel, ConfigDict, Field
 
 from argus_api.db import Database, ts, utcnow
@@ -119,6 +119,7 @@ class FailureExample(BaseModel):
 
 class FailureGroup(BaseModel):
     reason: str
+    retry_class: RetryClass  # failure classes 3.1
     count: int
     # Time the failed attempts held a claim (claim to failure or expiry); None when
     # no event in the group has a claim before it.
@@ -129,6 +130,7 @@ class FailureGroup(BaseModel):
 class Failures(Provenance):
     total: int
     groups: list[FailureGroup]
+    by_class: dict[RetryClass, int]
     truncated: bool
 
 
@@ -354,7 +356,10 @@ def _group_failures(rows: list[Any], window: int) -> Failures:
         data = json.loads(row["data"])
         reason = classify_failure(data.get("reason"), data.get("error"))
         group = groups.setdefault(
-            reason, FailureGroup(reason=reason, count=0, examples=[])
+            reason,
+            FailureGroup(
+                reason=reason, retry_class=retry_class(reason), count=0, examples=[]
+            ),
         )
         group.count += 1
         if row["claim_at"]:
@@ -376,5 +381,8 @@ def _group_failures(rows: list[Any], window: int) -> Failures:
         source="events task.fail, task.expire",
         total=len(rows),
         groups=ordered,
+        by_class={
+            c: sum(g.count for g in ordered if g.retry_class is c) for c in RetryClass
+        },
         truncated=len(rows) >= MAX_ROWS,
     )

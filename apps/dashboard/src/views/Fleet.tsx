@@ -194,6 +194,7 @@ function Body({ h }: { h: FleetHealth }) {
           <thead>
             <tr>
               <th>Reason</th>
+              <th>Class</th>
               <th>Count</th>
               <th>Time held</th>
               <th>Recent examples</th>
@@ -203,6 +204,7 @@ function Body({ h }: { h: FleetHealth }) {
             {f.groups.map((g) => (
               <tr key={g.reason}>
                 <td>{g.reason}</td>
+                <td>{g.retry_class}</td>
                 <td>{g.count}</td>
                 <td>{seconds(g.lost_seconds)}</td>
                 <td>

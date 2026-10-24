@@ -657,6 +657,7 @@ async def test_interruptions_are_remembered_for_the_next_attempt(db: Database) -
         await tasks.fail(
             tx, A, task_id, t.attempt, "gate failed: lint (token=abcd1234efgh5678)"
         )
+        await tasks.unblock(tx, task_id, "user:op")  # a worker_fail waits for a human
     t = await claim(db, B)
     i = t.continuation.interruption
     assert i is not None and i.reason == "worker_fail"
