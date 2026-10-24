@@ -125,6 +125,13 @@ class LabeledContainer:
 
 
 @dataclass(frozen=True)
+class MountSource:
+    container: str
+    source: str  # host path of a bind mount or volume
+    running: bool
+
+
+@dataclass(frozen=True)
 class TargetInfo:
     """What a probe of the target measured."""
 
@@ -205,6 +212,10 @@ class DockerTarget:
 
     async def probe(self) -> TargetInfo:
         return await self._call(self._probe)
+
+    async def mount_sources(self) -> builtins.list[MountSource]:
+        """Host paths mounted by every container (any state); raises TargetError."""
+        return await self._call(self._mount_sources)
 
     async def image_present(self, image: str) -> bool | None:
         return await self._call(self._image_present, image)
@@ -441,6 +452,16 @@ class DockerTarget:
             )
             for c in found
             if key in c.labels
+        ]
+
+    def _mount_sources(self) -> builtins.list[MountSource]:
+        return [
+            MountSource(
+                c.name, m["Source"], c.status in ("running", "paused", "restarting")
+            )
+            for c in self._docker().containers.list(all=True)
+            for m in c.attrs.get("Mounts") or []
+            if m.get("Source")
         ]
 
     def _logs(self, ref: str, tail: int) -> str:

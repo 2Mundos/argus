@@ -1040,6 +1040,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/fleet/workspace-cleanup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Cleanup Summary
+         * @description Settings, last run, per-status counts, estimated vs freed bytes, and the
+         *     latest blocked or failed directories of the workspace cleanup.
+         */
+        get: operations["workspace_cleanup_summary_api_fleet_workspace_cleanup_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/workspace-cleanup/instances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Cleanup Entries
+         * @description Per-directory audit rows, most recently updated first.
+         */
+        get: operations["workspace_cleanup_entries_api_fleet_workspace_cleanup_instances_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/workspace-cleanup/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Workspace Cleanup
+         * @description Start a cleanup run now and wait up to `wait_s` for it; the summary shows
+         *     its progress. A dry run (the default) deletes nothing and works while cleanup
+         *     is disabled; `dry_run: false` needs an admin token, cleanup enabled and a
+         *     valid archive root.
+         */
+        post: operations["run_workspace_cleanup_api_fleet_workspace_cleanup_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/inbox": {
         parameters: {
             query?: never;
@@ -7641,6 +7705,156 @@ export interface components {
             /** Warning */
             warning: string | null;
         };
+        /** WorkspaceCleanupEntry */
+        WorkspaceCleanupEntry: {
+            /** Archive Path */
+            archive_path: string | null;
+            /** Attempts */
+            attempts: number;
+            /** Bytes Estimated */
+            bytes_estimated: number | null;
+            /** Bytes Freed */
+            bytes_freed: number | null;
+            /** Cleaned At */
+            cleaned_at: string | null;
+            /** Error */
+            error: string | null;
+            /**
+             * First Seen At
+             * Format: date-time
+             */
+            first_seen_at: string;
+            /** Instance Id */
+            instance_id: string | null;
+            /** Last Run Id */
+            last_run_id: string;
+            /** Name */
+            name: string;
+            /** Pool */
+            pool: string | null;
+            /** Reason */
+            reason: string;
+            /** Root */
+            root: string;
+            status: components["schemas"]["WorkspaceCleanupStatus"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** WorkspaceCleanupPage */
+        WorkspaceCleanupPage: {
+            /** Items */
+            items: components["schemas"]["WorkspaceCleanupEntry"][];
+            /** Total */
+            total: number;
+        };
+        /** WorkspaceCleanupRun */
+        WorkspaceCleanupRun: {
+            /** Actor */
+            actor: string;
+            /** Blocked */
+            blocked: number;
+            /** Bytes Estimated */
+            bytes_estimated: number;
+            /** Bytes Freed */
+            bytes_freed: number;
+            /** Cleaned */
+            cleaned: number;
+            /** Dry Run */
+            dry_run: boolean;
+            /** Eligible */
+            eligible: number;
+            /** Error */
+            error: string | null;
+            /** Failed */
+            failed: number;
+            /** Finished At */
+            finished_at: string | null;
+            /** Free After */
+            free_after: number | null;
+            /** Free Before */
+            free_before: number | null;
+            /** Id */
+            id: string;
+            /** Low Disk */
+            low_disk: boolean;
+            /** Preserved */
+            preserved: number;
+            /** Scanned */
+            scanned: number;
+            /** Skipped */
+            skipped: string[];
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Status */
+            status: string;
+            /** Trigger */
+            trigger: string;
+        };
+        /** WorkspaceCleanupRunRequest */
+        WorkspaceCleanupRunRequest: {
+            /**
+             * Dry Run
+             * @default true
+             */
+            dry_run?: boolean;
+            /**
+             * Wait S
+             * @default 5
+             */
+            wait_s?: number;
+        };
+        /** WorkspaceCleanupSettings */
+        WorkspaceCleanupSettings: {
+            /** Archive Root */
+            archive_root: string | null;
+            /** Dry Run */
+            dry_run: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /** Interval S */
+            interval_s: number;
+            /** Low Disk Bytes */
+            low_disk_bytes: number;
+            /** Max Archive Bytes */
+            max_archive_bytes: number;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Max Instances */
+            max_instances: number;
+            /** Min Age Hours */
+            min_age_hours: number;
+            /** Run Timeout S */
+            run_timeout_s: number;
+        };
+        /**
+         * WorkspaceCleanupStatus
+         * @description Audit status of one instances-root entry (workspace-cleanup.spec.md 3.2).
+         * @enum {string}
+         */
+        WorkspaceCleanupStatus: "eligible" | "preserved" | "blocked" | "cleaned" | "failed";
+        /** WorkspaceCleanupSummary */
+        WorkspaceCleanupSummary: {
+            /** Bytes Estimated */
+            bytes_estimated: number;
+            /** Bytes Freed */
+            bytes_freed: number;
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            last_run: components["schemas"]["WorkspaceCleanupRun"] | null;
+            /** Problems */
+            problems: components["schemas"]["WorkspaceCleanupEntry"][];
+            /** Running */
+            running: boolean;
+            settings: components["schemas"]["WorkspaceCleanupSettings"];
+        };
         /**
          * Yield
          * @description What the fleet got for what it spent (worker efficiency draft, P8).
@@ -9640,6 +9854,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateWorkerResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_cleanup_summary_api_fleet_workspace_cleanup_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceCleanupSummary"];
+                };
+            };
+        };
+    };
+    workspace_cleanup_entries_api_fleet_workspace_cleanup_instances_get: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["WorkspaceCleanupStatus"] | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceCleanupPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_workspace_cleanup_api_fleet_workspace_cleanup_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceCleanupRunRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceCleanupSummary"];
                 };
             };
             /** @description Validation Error */

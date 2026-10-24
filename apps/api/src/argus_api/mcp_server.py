@@ -1392,6 +1392,49 @@ async def create_worker(
     )
 
 
+@tool(MANAGERS)
+async def get_workspace_cleanup(ctx: Context) -> dict:
+    """Cleanup of terminated NanoClaw instance directories: settings in effect,
+    last run, counts per status (eligible/preserved/blocked/cleaned/failed), bytes
+    estimated vs freed (approximate), and the latest blocked or failed rows."""
+    return await _call(ctx, "GET", "/fleet/workspace-cleanup")
+
+
+@tool(MANAGERS)
+async def list_workspace_cleanup(
+    ctx: Context,
+    status: Literal["eligible", "preserved", "blocked", "cleaned", "failed"]
+    | None = None,
+    limit: Annotated[int, Field(ge=1, le=500)] = 100,
+    offset: Annotated[int, Field(ge=0)] = 0,
+) -> dict:
+    """Per-directory workspace cleanup audit rows (reason codes, attempts, bytes,
+    archive path), most recently updated first, with a total."""
+    return await _call(
+        ctx,
+        "GET",
+        "/fleet/workspace-cleanup/instances",
+        params={"status": status, "limit": limit, "offset": offset},
+    )
+
+
+@tool(MANAGERS)
+async def run_workspace_cleanup(
+    ctx: Context,
+    dry_run: bool = True,
+    wait_s: Annotated[float, Field(ge=0, le=30)] = 5,
+) -> dict:
+    """Start a workspace cleanup run now and wait up to wait_s for it. A dry run
+    (the default) only reports. dry_run=false deletes terminated instances'
+    directories after archiving their WIP: admin only, needs cleanup enabled."""
+    return await _call(
+        ctx,
+        "POST",
+        "/fleet/workspace-cleanup/run",
+        json={"dry_run": dry_run, "wait_s": wait_s},
+    )
+
+
 # -- preferred models -------------------------------------------------------------------
 
 

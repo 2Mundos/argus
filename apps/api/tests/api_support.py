@@ -52,6 +52,9 @@ class FakeTarget:
         # Containers the runtime itself created (not started by Argus):
         # name -> {"label": key, "value": value}
         self.children: dict[str, dict] = {}
+        # Extra (container, host path, running) mounts for workspace cleanup.
+        self.mounts: list[tuple[str, str, bool]] = []
+        self.mounts_error = False
 
     def _check(self) -> None:
         from argus_api.fleet.targets import TargetError
@@ -70,6 +73,14 @@ class FakeTarget:
             memory_mb=8192,
             shares_filesystem=self.shares_filesystem,
         )
+
+    async def mount_sources(self):
+        from argus_api.fleet.targets import MountSource, TargetError
+
+        self._check()
+        if self.mounts_error:
+            raise TargetError("listing failed")
+        return [MountSource(*m) for m in self.mounts]
 
     async def labeled_images(self, key):
         from argus_api.fleet.targets import LabeledImage

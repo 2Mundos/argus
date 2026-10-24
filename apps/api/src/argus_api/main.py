@@ -40,6 +40,7 @@ from argus_api.fleet import reconciler
 from argus_api.fleet.reconciler import FleetSettings
 from argus_api.fleet.routes import router as fleet_router
 from argus_api.fleet.targets import TargetRegistry
+from argus_api.fleet.workspace_cleanup import WorkspaceCleaner
 from argus_api.kinds.routes import router as kinds_router
 from argus_api.knowledge.routes import router as knowledge_router
 from argus_api.model_policy import router as models_router
@@ -128,6 +129,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.codex_login = CodexLoginManager(db, secrets, settings)
         app.state.claude_login = ClaudeLoginManager(db, secrets, settings)
         app.state.targets = TargetRegistry()
+        app.state.workspace_cleanup = WorkspaceCleaner(db, app.state.targets, settings)
         app.state.fleet = FleetSettings(
             argus_url=settings.public_url,
             model_policy_path=settings.model_policy_path,
@@ -186,6 +188,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                     app.state.loops["reconciler"],
                 )
             ),
+            *(
+                [asyncio.create_task(app.state.workspace_cleanup.loop())]
+                if settings.workspace_cleanup_enabled
+                else []
+            ),
         ]
         try:
             async with mcp_server.endpoint.running():
@@ -193,6 +200,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         finally:
             await app.state.codex_login.shutdown()
             await app.state.claude_login.shutdown()
+            if app.state.workspace_cleanup.current:
+                loops.append(app.state.workspace_cleanup.current)
             for loop in loops:
                 loop.cancel()
             for loop in loops:

@@ -69,6 +69,9 @@ every new dependency is judged against it.
 - [Fleet health](specs/fleet-health.spec.md) — the Fleet tab: pool liveness, queue
   and run time, success rate, failures by reason, with `no data` when unknown
   Screenshot: [2026-10-20.fleet-health.screenshot.png](evidence/2026-10-20.fleet-health.screenshot.png)
+- [Workspace cleanup](specs/workspace-cleanup.spec.md) — opt-in, dry-run-first
+  deletion of terminated NanoClaw instance directories after their unpublished git
+  work is archived and verified
 - [Live work](specs/live-work.spec.md) — what an agent is doing now: task activity
   feed, agent drawer with its current work and container output
 - [Progress milestones](specs/progress-milestones.spec.md) — structured progress
@@ -132,6 +135,8 @@ every new dependency is judged against it.
 
 - [NanoClaw worker template: setting up a node](runbooks/2026-10-16.nanoclaw-worker-setup.ref.md) —
   user-owned artifacts, the isolation runtime, environment
+- [Workspace cleanup](runbooks/2026-10-24.workspace-cleanup.ref.md) — enabling it,
+  dry run first, the archive root, restore and reason codes
 
 ### Research
 

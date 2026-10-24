@@ -546,3 +546,88 @@ class CreateWorkerResult(BaseModel):
     pool: Pool
     requested: int
     desired_replicas: int
+
+
+class WorkspaceCleanupStatus(StrEnum):
+    """Audit status of one instances-root entry (workspace-cleanup.spec.md 3.2)."""
+
+    ELIGIBLE = "eligible"
+    PRESERVED = "preserved"
+    BLOCKED = "blocked"
+    CLEANED = "cleaned"
+    FAILED = "failed"
+
+
+class WorkspaceCleanupEntry(BaseModel):
+    root: str
+    name: str  # the directory name; the instance id when it is one
+    instance_id: str | None
+    pool: str | None
+    status: WorkspaceCleanupStatus
+    reason: str  # a reason code, never free text
+    attempts: int
+    bytes_estimated: int | None
+    bytes_freed: int | None
+    archive_path: str | None
+    error: str | None  # sanitized: exception class and errno name only
+    last_run_id: str
+    first_seen_at: datetime
+    updated_at: datetime
+    cleaned_at: datetime | None
+
+
+class WorkspaceCleanupPage(BaseModel):
+    total: int
+    items: list[WorkspaceCleanupEntry]
+
+
+class WorkspaceCleanupRun(BaseModel):
+    id: str
+    trigger: str  # loop | manual
+    actor: str
+    dry_run: bool
+    low_disk: bool
+    status: str  # running | finished | failed | timed_out | interrupted
+    started_at: datetime
+    finished_at: datetime | None
+    scanned: int
+    eligible: int
+    preserved: int
+    blocked: int
+    cleaned: int
+    failed: int
+    bytes_estimated: int
+    # statvfs free-space delta around deletions: approximate, not `du`.
+    bytes_freed: int
+    free_before: int | None
+    free_after: int | None
+    skipped: list[str]  # roots or pools skipped as a whole, with a reason code
+    error: str | None
+
+
+class WorkspaceCleanupSettings(BaseModel):
+    enabled: bool
+    dry_run: bool
+    archive_root: str | None
+    min_age_hours: int
+    interval_s: float
+    run_timeout_s: float
+    max_instances: int
+    max_archive_bytes: int
+    max_attempts: int
+    low_disk_bytes: int
+
+
+class WorkspaceCleanupSummary(BaseModel):
+    settings: WorkspaceCleanupSettings
+    running: bool
+    last_run: WorkspaceCleanupRun | None
+    counts: dict[WorkspaceCleanupStatus, int]
+    bytes_estimated: int  # over rows that are not cleaned yet
+    bytes_freed: int  # over cleaned rows; approximate
+    problems: list[WorkspaceCleanupEntry]  # latest blocked or failed rows
+
+
+class WorkspaceCleanupRunRequest(BaseModel):
+    dry_run: bool = True  # a real run needs dry_run=false and the admin scope
+    wait_s: float = Field(default=5.0, ge=0, le=30)

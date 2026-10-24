@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { api, call, type FleetHealth } from "../api";
-import { relative } from "../format";
+import { api, call, type FleetHealth, type WorkspaceCleanupSummary } from "../api";
+import { bytes, relative } from "../format";
 import { useLiveData } from "../live";
 
 export const NO_DATA = "no data";
@@ -74,6 +74,7 @@ export function Fleet() {
       ) : (
         <Body h={data} />
       )}
+      <WorkspaceCleanup />
     </section>
   );
 }
@@ -225,6 +226,68 @@ function Body({ h }: { h: FleetHealth }) {
       {(f.truncated || h.truncated) && (
         <p className="muted small">Showing the newest 5000 rows only.</p>
       )}
+    </>
+  );
+}
+
+/** Optional: a token without fleet-manager access gets no card, not an error. */
+function WorkspaceCleanup() {
+  const { data, reload } = useLiveData(
+    (signal) =>
+      call(api.GET("/api/fleet/workspace-cleanup", { signal })).catch(
+        (): WorkspaceCleanupSummary | null => null,
+      ),
+    [],
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  if (!data) return null;
+  const { settings: s, last_run: run } = data;
+
+  async function dryRun() {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await call(api.POST("/api/fleet/workspace-cleanup/run", { body: { dry_run: true } }));
+      reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <h3>Maintenance</h3>
+      <div className="home-groups">
+        <Card title="Workspace cleanup">
+          <p>
+            <strong>{s.enabled ? "enabled" : "disabled"}</strong> ·{" "}
+            {s.dry_run ? "dry-run mode" : "deletes archived workspaces"}
+            {data.running && " · running"}
+          </p>
+          <p className="muted small">archive root {s.archive_root ?? "not set"}</p>
+          <p className="small">
+            last run{" "}
+            {run
+              ? `${relative(run.started_at)} · ${run.dry_run ? "dry" : "real"} · ${run.status}`
+              : NO_DATA}
+          </p>
+          <p className="small">
+            {Object.entries(data.counts)
+              .map(([status, n]) => `${n} ${status}`)
+              .join(" · ") || NO_DATA}
+          </p>
+          <p className="muted small">
+            approx. {bytes(data.bytes_estimated)} estimated · {bytes(data.bytes_freed)} freed
+          </p>
+          <button type="button" disabled={busy} onClick={() => void dryRun()}>
+            Dry run now
+          </button>
+          {error && <p className="error">Dry run failed: {error}</p>}
+        </Card>
+      </div>
     </>
   );
 }
