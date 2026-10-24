@@ -64,10 +64,11 @@ For the fleet: inspect_pool shows what each instance is proven to run (a fact's
 `source`, or `unknown`); recycle_instance and drain_agent never interrupt claimed
 work (recycle_instance(requeue=true) and release_task requeue it without costing an
 attempt); admins change options with update_pool(expected_version=the pool's version).
-wait_for_events(subject_type, subject_id) waits for the change to happen instead
-of polling; then inspect_pool or get_tasks reads back the effect. steer_task sends
-an instruction to the worker holding a claimed task; it arrives on that worker's
-next heartbeat.
+get_agent_hygiene reports lost/gone aggregates and alerts; archive_agents (admin)
+archives old lost/gone identities in bounded batches. wait_for_events(subject_type,
+subject_id) waits for the change to happen instead of polling; then inspect_pool or
+get_tasks reads back the effect. steer_task sends an instruction to the worker
+holding a claimed task; it arrives on that worker's next heartbeat.
 
 Orchestrators: read the skill at skill://argus-orchestrator/SKILL.md (also the
 prompt "argus-orchestrator") before acting: what you must and must not do."""
@@ -1094,6 +1095,28 @@ async def cancel_task(ctx: Context, task_id: str) -> dict:
 async def list_agents(ctx: Context, state: str | None = None) -> list[dict]:
     """List agents (active, draining, gone, lost) and how many tasks each holds."""
     return await _call(ctx, "GET", "/agents", params={"state": state})
+
+
+@tool(MANAGERS)
+async def get_agent_hygiene(ctx: Context) -> dict:
+    """Lost and gone aggregates by pool and age, claim holders, and the lost spike."""
+    return await _call(ctx, "GET", "/agents/hygiene")
+
+
+@tool(ADMINS)
+async def archive_agents(
+    ctx: Context,
+    states: list[str],
+    older_than_days: int | None = None,
+    limit: int = 200,
+    dry_run: bool = False,
+) -> dict:
+    """Archive lost/gone identities older than N days (admin). dry_run counts only.
+    With no older_than_days and no ARGUS_AGENT_ARCHIVE_AFTER_DAYS, returns 409."""
+    body: dict = {"states": states, "limit": limit, "dry_run": dry_run}
+    if older_than_days is not None:
+        body["older_than_days"] = older_than_days
+    return await _call(ctx, "POST", "/agents/archive", json=body)
 
 
 @tool(MANAGERS)

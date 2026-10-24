@@ -100,6 +100,7 @@ def test_tools_are_listed_by_scope(client: TestClient) -> None:
         "reset_model_policy",
         "set_project_runtime",
         "rebuild_project_runtime",
+        "archive_agents",
     }
     assert by_scope[Scope.ORCHESTRATOR] == set(mcp_server.audiences) - admin_only
 

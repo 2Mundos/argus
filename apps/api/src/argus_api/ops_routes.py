@@ -156,9 +156,9 @@ async def system(
 
 
 @router.get("/overview")
-async def overview(db: DbDep, _: ManagerDep) -> Overview:
+async def overview(db: DbDep, _: ManagerDep, settings: SettingsDep) -> Overview:
     """Fleet-wide totals per state for the Home view (orchestrator or admin)."""
-    return await overview_module.overview(db)
+    return await overview_module.overview(db, settings)
 
 
 @router.get("/fleet/health")

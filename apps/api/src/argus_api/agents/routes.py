@@ -14,7 +14,10 @@ from fastapi import APIRouter, status
 from pydantic import BaseModel, Field, StringConstraints
 
 from argus_api.agents import service
+from argus_api.agents.hygiene import AgentHygiene, agent_hygiene
+from argus_api.db import utcnow
 from argus_api.deps import AdminDep, AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
+from argus_api.errors import ConflictError
 from argus_api.modeltrace import service as modeltrace
 from argus_api.tasks.steers import SteerNotice
 
@@ -92,10 +95,68 @@ async def register(
 
 @router.get("")
 async def list_agents(
-    db: DbDep, _: CallerDep, state: AgentState | None = None
+    db: DbDep,
+    _: CallerDep,
+    state: AgentState | None = None,
+    archived: bool = False,
 ) -> list[Agent]:
     async with db.read() as conn:
-        return await service.list_agents(conn, state=state)
+        return await service.list_agents(conn, state=state, archived=archived)
+
+
+class BulkArchiveRequest(BaseModel):
+    """Which ended identities to archive: all of `states` (lost/gone), older than
+    `older_than_days`. `dry_run` only counts. At most `limit` rows per call."""
+
+    states: list[AgentState] = Field(min_length=1)
+    older_than_days: int | None = Field(default=None, ge=0)
+    limit: int = Field(default=200, ge=1, le=1000)
+    dry_run: bool = False
+
+
+class BulkArchiveResult(BaseModel):
+    count: int
+    dry_run: bool
+
+
+@router.get("/hygiene")
+async def get_agent_hygiene(
+    db: DbDep, _: ManagerDep, settings: SettingsDep
+) -> AgentHygiene:
+    """Lost/gone aggregates by pool and age, claim holders, and the lost spike."""
+    async with db.read() as conn:
+        return await agent_hygiene(conn, now=utcnow(), settings=settings)
+
+
+@router.post("/archive")
+async def archive_agents(
+    body: BulkArchiveRequest, db: DbDep, caller: AdminDep, settings: SettingsDep
+) -> BulkArchiveResult:
+    """Archive lost/gone identities older than N days, in a bounded batch.
+    With no body `older_than_days` and no `ARGUS_AGENT_ARCHIVE_AFTER_DAYS`,
+    answers 409 `agent_archive_disabled`. Non-lost/gone states are refused with
+    422 `state_not_archivable` before anything changes."""
+    days = (
+        body.older_than_days
+        if body.older_than_days is not None
+        else settings.agent_archive_after_days
+    )
+    if days is None:
+        raise ConflictError(
+            "agent archive is disabled: set older_than_days or"
+            " ARGUS_AGENT_ARCHIVE_AFTER_DAYS",
+            code="agent_archive_disabled",
+        )
+    async with db.write() as tx:
+        count = await service.archive_matching(
+            tx,
+            caller.actor,
+            states=body.states,
+            older_than_days=days,
+            limit=body.limit,
+            dry_run=body.dry_run,
+        )
+    return BulkArchiveResult(count=count, dry_run=body.dry_run)
 
 
 @router.post("/me/heartbeat")

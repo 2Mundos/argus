@@ -471,6 +471,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Archive Agents
+         * @description Archive lost/gone identities older than N days, in a bounded batch.
+         *     With no body `older_than_days` and no `ARGUS_AGENT_ARCHIVE_AFTER_DAYS`,
+         *     answers 409 `agent_archive_disabled`. Non-lost/gone states are refused with
+         *     422 `state_not_archivable` before anything changes.
+         */
+        post: operations["archive_agents_api_agents_archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/bootstrap-tokens": {
         parameters: {
             query?: never;
@@ -485,6 +508,26 @@ export interface paths {
          * @description Mint a one-time token an agent redeems at registration.
          */
         post: operations["create_bootstrap_token_api_agents_bootstrap_tokens_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/hygiene": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Hygiene
+         * @description Lost/gone aggregates by pool and age, claim holders, and the lost spike.
+         */
+        get: operations["get_agent_hygiene_api_agents_hygiene_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2645,6 +2688,8 @@ export interface components {
         };
         /** Agent */
         Agent: {
+            /** Archived At */
+            archived_at?: string | null;
             /** Capabilities */
             capabilities: string[];
             /** Claimed Tasks */
@@ -2672,6 +2717,26 @@ export interface components {
             role: components["schemas"]["Role"];
             runtime?: components["schemas"]["AgentRuntime"] | null;
             state: components["schemas"]["AgentState"];
+        };
+        /** AgentHygiene */
+        AgentHygiene: {
+            /** Age Buckets */
+            age_buckets: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            /** Claim Holders */
+            claim_holders: components["schemas"]["ClaimHoldingAgent"][];
+            /** Groups */
+            groups: components["schemas"]["HygieneGroup"][];
+            lost_spike: components["schemas"]["LostSpike"];
+            totals: components["schemas"]["HygieneTotals"];
         };
         /**
          * AgentModels
@@ -2739,8 +2804,17 @@ export interface components {
             };
             /** Holding Claims */
             holding_claims: number;
+            /** Hygiene By Pool */
+            hygiene_by_pool: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Lost Holding Claims */
+            lost_holding_claims: number;
             /** Lost On Unfinished Instance */
             lost_on_unfinished_instance: number;
+            lost_spike: components["schemas"]["LostSpike"];
         };
         /**
          * Alternative
@@ -3045,24 +3119,6 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
-        /**
-         * BulkArchiveRequest
-         * @description Which terminal tasks to archive: all of `states`, narrowed by project and
-         *     by how long ago they last changed. `dry_run` only counts.
-         */
-        BulkArchiveRequest: {
-            /**
-             * Dry Run
-             * @default false
-             */
-            dry_run?: boolean;
-            /** Older Than Days */
-            older_than_days?: number | null;
-            /** Project */
-            project?: string | null;
-            /** States */
-            states: components["schemas"]["TaskState"][];
-        };
         /** BulkArchiveResult */
         BulkArchiveResult: {
             /** Count */
@@ -3121,6 +3177,13 @@ export interface components {
             /** Id */
             id: string;
             status: components["schemas"]["ItemStatus"];
+        };
+        /** ClaimHoldingAgent */
+        ClaimHoldingAgent: {
+            /** Agent Id */
+            agent_id: string;
+            /** Task Id */
+            task_id: string;
         };
         /** ClaimRequest */
         ClaimRequest: {
@@ -4553,6 +4616,42 @@ export interface components {
             /** Task Id */
             task_id: string;
         };
+        /** HygieneGroup */
+        HygieneGroup: {
+            /** Count */
+            count: number;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Max Age Hours */
+            max_age_hours: number;
+            /**
+             * Newest Heartbeat At
+             * Format: date-time
+             */
+            newest_heartbeat_at: string;
+            /**
+             * Oldest Heartbeat At
+             * Format: date-time
+             */
+            oldest_heartbeat_at: string;
+            /** Pool */
+            pool: string;
+            state: components["schemas"]["AgentState"];
+        };
+        /** HygieneTotals */
+        HygieneTotals: {
+            /** Archived */
+            archived: number;
+            /** Gone */
+            gone: number;
+            /** Lost */
+            lost: number;
+            /** Lost Holding Claims */
+            lost_holding_claims: number;
+        };
         /** ImageChoice */
         ImageChoice: {
             /** Capabilities */
@@ -5141,6 +5240,21 @@ export interface components {
             passes_total: number;
             /** Status */
             status: string;
+        };
+        /** LostSpike */
+        LostSpike: {
+            /** Current */
+            current: number;
+            /** Factor */
+            factor: number;
+            /** Min Count */
+            min_count: number;
+            /** Previous */
+            previous: number;
+            /** Triggered */
+            triggered: boolean;
+            /** Window Hours */
+            window_hours: number;
         };
         /**
          * ModelEndpoint
@@ -7515,6 +7629,45 @@ export interface components {
             /** Warning */
             warning: string | null;
         };
+        /**
+         * BulkArchiveRequest
+         * @description Which ended identities to archive: all of `states` (lost/gone), older than
+         *     `older_than_days`. `dry_run` only counts. At most `limit` rows per call.
+         */
+        argus_api__agents__routes__BulkArchiveRequest: {
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run?: boolean;
+            /**
+             * Limit
+             * @default 200
+             */
+            limit?: number;
+            /** Older Than Days */
+            older_than_days?: number | null;
+            /** States */
+            states: components["schemas"]["AgentState"][];
+        };
+        /**
+         * BulkArchiveRequest
+         * @description Which terminal tasks to archive: all of `states`, narrowed by project and
+         *     by how long ago they last changed. `dry_run` only counts.
+         */
+        argus_api__tasks__routes__BulkArchiveRequest: {
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run?: boolean;
+            /** Older Than Days */
+            older_than_days?: number | null;
+            /** Project */
+            project?: string | null;
+            /** States */
+            states: components["schemas"]["TaskState"][];
+        };
         /** Usage */
         argus_core__accounts__Usage: {
             /**
@@ -8587,6 +8740,7 @@ export interface operations {
         parameters: {
             query?: {
                 state?: components["schemas"]["AgentState"] | null;
+                archived?: boolean;
             };
             header?: never;
             path?: never;
@@ -8601,6 +8755,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Agent"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_agents_api_agents_archive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["argus_api__agents__routes__BulkArchiveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkArchiveResult"];
                 };
             };
             /** @description Validation Error */
@@ -8643,6 +8830,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_hygiene_api_agents_hygiene_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentHygiene"];
                 };
             };
         };
@@ -10825,7 +11032,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BulkArchiveRequest"];
+                "application/json": components["schemas"]["argus_api__tasks__routes__BulkArchiveRequest"];
             };
         };
         responses: {

@@ -26,6 +26,7 @@ export type Instance = components["schemas"]["Instance"];
 export type FleetCapabilities = components["schemas"]["FleetCapabilities"];
 export type FleetHealth = components["schemas"]["FleetHealth"];
 export type Overview = components["schemas"]["Overview"];
+export type AgentHygiene = components["schemas"]["AgentHygiene"];
 export type EngineCatalog = components["schemas"]["EngineCatalog"];
 export type ModelPolicy = components["schemas"]["ModelPolicy"];
 export type TemplateCatalog = components["schemas"]["TemplateCatalog"];

@@ -25,7 +25,12 @@ from argus_api.agents.tokens import (
     new_token,
 )
 from argus_api.db import Tx, ts
-from argus_api.errors import ConflictError, NotFoundError, UnauthorizedError
+from argus_api.errors import (
+    ConflictError,
+    NotFoundError,
+    UnauthorizedError,
+    ValidationFailedError,
+)
 from argus_api.events import record
 from argus_api.tasks import service as tasks
 from argus_api.tasks import steers
@@ -36,6 +41,8 @@ log = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL_S = 30
 LOST_AFTER_S = 3 * HEARTBEAT_INTERVAL_S
+
+_ARCHIVABLE = frozenset({AgentState.LOST, AgentState.GONE})
 
 
 # -- reads -------------------------------------------------------------------------
@@ -50,14 +57,56 @@ async def get_agent(conn: aiosqlite.Connection, agent_id: str) -> Agent:
 
 
 async def list_agents(
-    conn: aiosqlite.Connection, *, state: AgentState | None = None
+    conn: aiosqlite.Connection,
+    *,
+    state: AgentState | None = None,
+    archived: bool = False,
 ) -> list[Agent]:
-    sql, params = _SELECT, []
+    where = ["a.archived_at IS NOT NULL" if archived else "a.archived_at IS NULL"]
+    params: list[Any] = []
     if state is not None:
-        sql += " WHERE a.state = ?"
+        where.append("a.state = ?")
         params.append(state)
+    sql = _SELECT + " WHERE " + " AND ".join(where)
     async with conn.execute(sql + " ORDER BY a.created_at DESC, a.id", params) as cur:
         return [_to_agent(r) for r in await cur.fetchall()]
+
+
+async def archive_matching(
+    tx: Tx,
+    actor: str,
+    *,
+    states: list[AgentState],
+    older_than_days: int,
+    limit: int,
+    dry_run: bool = False,
+) -> int:
+    """Archive up to `limit` unarchived agents in `states` (lost/gone only) whose
+    `ended_at` is older than `older_than_days`. Writes no event and touches no
+    task or lease. With `dry_run` nothing is written; either way the count is of
+    rows that match now (oldest `ended_at` first)."""
+    del actor  # kept for call-site parity with task archive; no event is written
+    if bad := sorted({s.value for s in states if s not in _ARCHIVABLE}):
+        raise ValidationFailedError(
+            f"only lost and gone agents can be archived, not {', '.join(bad)}",
+            code="state_not_archivable",
+        )
+    cutoff = ts(tx.now - timedelta(days=older_than_days))
+    placeholders = ",".join("?" * len(states))
+    async with tx.conn.execute(
+        f"SELECT id FROM agents WHERE state IN ({placeholders})"  # noqa: S608
+        " AND archived_at IS NULL AND ended_at < ?"
+        " ORDER BY ended_at ASC, id LIMIT ?",
+        [*states, cutoff, limit],
+    ) as cur:
+        ids = [r["id"] for r in await cur.fetchall()]
+    if not dry_run and ids:
+        stamp = ts(tx.now)
+        await tx.conn.executemany(
+            "UPDATE agents SET archived_at = ? WHERE id = ?",
+            [(stamp, agent_id) for agent_id in ids],
+        )
+    return len(ids)
 
 
 # -- registration --------------------------------------------------------------------

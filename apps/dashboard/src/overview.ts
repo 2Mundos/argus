@@ -161,6 +161,25 @@ export function attention(input: {
       href: "#agents",
     });
     add({
+      id: "lost-holding-claims",
+      severity: "critical",
+      human: false,
+      count: o.agents.lost_holding_claims,
+      text: `${plural(o.agents.lost_holding_claims, "lost agent")} still hold a claimed task.`,
+      href: "#agents",
+    });
+    {
+      const spike = o.agents.lost_spike;
+      add({
+        id: "lost-spike",
+        severity: "attention",
+        human: false,
+        count: spike.triggered ? spike.current : 0,
+        text: `${spike.current} agents lost in the last ${spike.window_hours}h, up from ${spike.previous} in the window before.`,
+        href: "#agents",
+      });
+    }
+    add({
       id: "blocked",
       severity: "attention",
       human: false,

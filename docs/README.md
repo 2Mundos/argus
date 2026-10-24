@@ -63,6 +63,9 @@ every new dependency is judged against it.
   agents and people, delivered with every claim
 - [Home](specs/home.spec.md) — the default dashboard tab: what needs attention,
   complete totals for every core state, recent activity, and health
+- [Agent hygiene](specs/agent-hygiene.spec.md) — lost/gone identities by pool and
+  heartbeat age, bounded opt-in archiving, and the lost-holding-claims and
+  lost-spike alerts
 - [Fleet health](specs/fleet-health.spec.md) — the Fleet tab: pool liveness, queue
   and run time, success rate, failures by reason, with `no data` when unknown
   Screenshot: [2026-10-20.fleet-health.screenshot.png](evidence/2026-10-20.fleet-health.screenshot.png)

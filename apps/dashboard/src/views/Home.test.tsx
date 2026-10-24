@@ -65,6 +65,16 @@ describe("Home", () => {
         by_role: {},
         holding_claims: 0,
         lost_on_unfinished_instance: 0,
+        lost_holding_claims: 0,
+        lost_spike: {
+          window_hours: 24,
+          current: 0,
+          previous: 0,
+          min_count: 5,
+          factor: 2,
+          triggered: false,
+        },
+        hygiene_by_pool: {},
       },
       pools: {
         by_status: zeros("ok"),

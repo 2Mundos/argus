@@ -23,6 +23,16 @@ function overview(patch: Partial<Overview> = {}): Overview {
       by_role: {},
       holding_claims: 0,
       lost_on_unfinished_instance: 0,
+      lost_holding_claims: 0,
+      lost_spike: {
+        window_hours: 24,
+        current: 0,
+        previous: 0,
+        min_count: 5,
+        factor: 2,
+        triggered: false,
+      },
+      hygiene_by_pool: {},
     },
     pools: {
       by_status: zeros("ok", "unreachable", "failing"),
@@ -97,6 +107,34 @@ describe("attention", () => {
     o.agents.lost_on_unfinished_instance = 2;
     const a = attention({ stream: "live", overview: ok(o), system: ok(system()) });
     expect(a.items.map((i) => i.id)).toEqual(["lost-unfinished"]);
+  });
+
+  it("flags lost agents that still hold a claimed task as critical", () => {
+    const o = overview();
+    o.agents.lost_holding_claims = 3;
+    const a = attention({ stream: "live", overview: ok(o), system: ok(system()) });
+    expect(a.items.map((i) => [i.id, i.severity])).toEqual([["lost-holding-claims", "critical"]]);
+    expect(a.items[0]?.text).toMatch(/3 lost agents still hold a claimed task/);
+  });
+
+  it("flags a lost spike only when triggered", () => {
+    const o = overview();
+    o.agents.lost_spike = {
+      window_hours: 24,
+      current: 5,
+      previous: 2,
+      min_count: 5,
+      factor: 2,
+      triggered: true,
+    };
+    const a = attention({ stream: "live", overview: ok(o), system: ok(system()) });
+    expect(a.items.map((i) => i.id)).toEqual(["lost-spike"]);
+    expect(a.items[0]?.text).toBe("5 agents lost in the last 24h, up from 2 in the window before.");
+
+    o.agents.lost_spike.triggered = false;
+    o.agents.lost_spike.current = 4;
+    const quiet = attention({ stream: "live", overview: ok(o), system: ok(system()) });
+    expect(quiet.items.map((i) => i.id)).toEqual([]);
   });
 
   it("treats failed tasks as info, never critical", () => {
