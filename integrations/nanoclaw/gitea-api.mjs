@@ -94,6 +94,10 @@ export class GiteaApi {
     return text ? JSON.parse(text) : null;
   }
 
+  getRepository() {
+    return this.request("");
+  }
+
   createPullRequest(input) {
     const { title, head, base, body = "" } = input;
     if (![title, head, base].every((v) => typeof v === "string" && v.length))

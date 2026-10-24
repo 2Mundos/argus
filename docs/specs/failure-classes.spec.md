@@ -80,12 +80,12 @@ task. No model session starts and no attempt is spent.
 | --- | --- |
 | The task needs `repository:write` and its project has a repository URL | `env_repository_unconfigured` |
 | The repository lease is taken and applied (today's step) | `env_repository_unavailable` |
-| `git ls-remote <url> HEAD` through the applied credential answers within 20 s | `env_repository_unreachable` |
-| The leased executor's credential works: `argus-delegate --probe` (below) exits 0 within 30 s | `env_executor_auth` |
+| A read of the repository through the OneCLI gateway (the Gitea API, with the applied credential) answers within 20 s | `env_repository_unreachable` |
 
-- `argus-delegate --probe --engine <engine>` runs the engine's own credential check
-  without a model call and prints one line. An engine with no such check passes.
-  It reads the same environment as a real run.
+- `env_executor_auth` is reserved for an executor credential check. It is not run
+  yet: `argus-delegate` only runs inside the session container, which does not
+  exist at preflight time (4). Until then a worker whose executor cannot log in
+  reports it with `FAIL (environment):` (3.4).
 - `BlockRequest` gains an optional `error` (at most 1,500 characters, redacted by
   the channel like the live log), stored as the task's `error`. A worker may block
   only with an `env_*` reason from `ENV_BLOCK_REASONS` or the reasons it sends
@@ -98,7 +98,8 @@ task. No model session starts and no attempt is spent.
 
 ## 3.4 The worker can say "environment"
 
-The reply protocol gains `FAIL (environment): <why>`. The channel blocks the task
+The reply protocol gains `FAIL (environment): <why>` (in the scoped form,
+`FAIL on <task-id>: (environment) <why>`). The channel blocks the task
 as `worker_env` with `<why>` as `error`, instead of failing it. The task prompt
 says to use it only when the workspace, tools or credentials are missing, not
 when the work is hard. Any other `FAIL:` is `worker_fail`.
@@ -107,6 +108,9 @@ when the work is hard. Any other `FAIL:` is `worker_fail`.
 
 - Should one `env_repository_*` block hold the project's other ready tasks until
   it is unblocked, or is one cheap preflight per task fine?
+- How should the executor credential be probed before the session starts: a
+  throwaway container on the session image, or a check NanoClaw runs at session
+  start?
 - Is blocking on the first `worker_fail` too strict for tasks that would pass on a
   plain retry? Re-check after two weeks against the baseline.
 
@@ -127,7 +131,7 @@ when the work is hard. Any other `FAIL:` is `worker_fail`.
 - API: `fail` applies 3.2; `claim` honours `retry_at`; `BlockRequest.error`;
   migration `0047`; Fleet `failure_class`; `make openapi`.
 - Channel: preflight steps and reasons, `FAIL (environment):`, per-step errors in
-  place of the outer `catch`; `argus-delegate --probe`.
+  place of the outer `catch`.
 - Dashboard: inbox copy for `env_*`, `worker_env` and `worker_gave_up`; Fleet
   counts by class.
 - Amend [worker lifecycle](worker-lifecycle.spec.md) (the fail and block

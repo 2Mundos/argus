@@ -113,6 +113,25 @@ const SESSION_GONE_GRACE_MS = 90_000;
 const SESSION_LOG_TAIL_BYTES = 2 * 1024;
 const SESSION_LOG_TAIL_LINES = 40;
 
+const REPOSITORY_PROBE_MS = 20_000; // failure classes 3.3
+
+/** Read the repository through the OneCLI gateway with the applied credential. */
+async function defaultProbeRepository(
+  repositoryUrl: string,
+  allowlist: readonly string[],
+): Promise<void> {
+  const { GiteaApi } = await import("./gitea-api.mjs");
+  await new GiteaApi(repositoryUrl, [...allowlist]).getRepository();
+}
+
+function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+
 /** Best-effort credential scrub for fail-error log excerpts (stall visibility). */
 function redactSessionTail(text: string): string {
   return text
@@ -203,6 +222,11 @@ export interface ArgusConfig {
    * omitted, the channel observes PR artifacts through the scoped allowlist + OneCLI proxy.
    */
   observe?: (task: ArgusTask) => Promise<Observation | null>;
+  /**
+   * Override the repository reachability probe (failure classes 3.3). When omitted,
+   * the channel reads the repository through the OneCLI gateway.
+   */
+  probeRepository?: (repositoryUrl: string, allowlist: readonly string[]) => Promise<void>;
   url: string;
   bootstrapToken?: string;
   agentToken?: string;
@@ -497,6 +521,8 @@ export type Directive = {
   text: string;
   /** assist only: the resource the worker says it lacks. */
   resource?: string;
+  /** fail only: the workspace, a tool or a credential is missing (failure classes 3.4). */
+  environment?: boolean;
 };
 
 /** Preserve an explicit structured result envelope emitted by the worker. */
@@ -559,6 +585,12 @@ const DASH_DIRECTIVE = new RegExp(`^${LEAD}(COMPLETE|FAIL|ASK)[*_\`~]*\\s+[-–�
 // "ASSIST: resource: what is missing" — upper case only, a technical-assistance request.
 const ASSIST_DIRECTIVE = new RegExp(`^${LEAD}(ASSIST)[*_\`~]*\\s*[:：][*_\`~]*\\s*`);
 const ASSIST_RESOURCE = /^([A-Za-z0-9._-]{1,40})\s*:\s*([\s\S]+)$/;
+// "FAIL (environment): why", or "(environment) why" after any FAIL directive (scoped too).
+const ENV_FAIL_DIRECTIVE = new RegExp(
+  `^${LEAD}FAIL[*_\`~]*\\s*\\(environment\\)[*_\`~]*\\s*[:：][*_\`~]*\\s*`,
+  "i",
+);
+const ENV_FAIL_PREFIX = /^\(environment\)\s*[:：]?\s*/i;
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -628,10 +660,17 @@ export function foreignChecklistIds(
  */
 export function parseReply(raw: string, taskId?: string): Directive {
   const text = raw.trim();
+  const env = ENV_FAIL_DIRECTIVE.exec(text);
+  if (env) return { kind: "fail", environment: true, text: text.slice(env[0].length).trim() };
   const scoped = taskId ? scopedDirective(taskId).exec(text) : null;
   const m = COLON_DIRECTIVE.exec(text) ?? DASH_DIRECTIVE.exec(text) ?? scoped;
   if (m) {
-    return { kind: m[1]!.toLowerCase() as Directive["kind"], text: text.slice(m[0].length).trim() };
+    const kind = m[1]!.toLowerCase() as Directive["kind"];
+    const rest = text.slice(m[0].length).trim();
+    const prefix = kind === "fail" ? ENV_FAIL_PREFIX.exec(rest) : null;
+    return prefix
+      ? { kind, environment: true, text: rest.slice(prefix[0].length).trim() }
+      : { kind, text: rest };
   }
   const a = ASSIST_DIRECTIVE.exec(text);
   if (!a) return { kind: "progress", text };
@@ -983,7 +1022,8 @@ export function renderTask(
     "",
     "How to respond: send short progress updates as normal messages. When you are done, reply with a",
     'message starting with "COMPLETE:" followed by a summary of what you did. If you cannot do it,',
-    'start with "FAIL:" and say why. If you need a real scope, cost or permission choice, start with "ASK:"',
+    'start with "FAIL:" and say why; only when the workspace, a tool or a credential is missing (not when the',
+    'work is hard), start with "FAIL (environment):" instead. If you need a real scope, cost or permission choice, start with "ASK:"',
     'and ask the question; you will be given the answer. For a missing tool or environment start with "ASSIST:"',
     "(see the operating rules). A directive must be the first thing in your reply.",
   ];
@@ -2161,6 +2201,65 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     attached.set(await ensureArtifact(task, name, bytes, sha, "application/json"), { name, sha });
   }
 
+  /**
+   * Repository access for a `repository:write` task, checked in code before any model
+   * work (failure classes 3.3). Null when the task may start; otherwise the typed
+   * reason it is blocked for and what went wrong.
+   */
+  async function repositoryPreflight(
+    task: ArgusTask,
+  ): Promise<{ reason: string; error: string } | null> {
+    if (!task.required_capabilities?.includes("repository:write")) return null;
+    const acc = cfg.accounts;
+    const repositoryUrl = acc?.repositories?.[task.project];
+    if (!acc || !repositoryUrl)
+      return {
+        reason: "env_repository_unconfigured",
+        error: `no repository is configured for project ${task.project}`,
+      };
+    try {
+      if (activeAccountLeases.length === 0)
+        throw new Error("cannot safely reconcile repository access without active base leases");
+      const normalizedRepository = normalizeRepositoryUrl(repositoryUrl);
+      const { data } = await client.call("POST", "/accounts/lease", {
+        role: "repository",
+        runtime_providers: ["gitea"],
+        task_id: task.id,
+        attempt: task.attempt,
+      });
+      const lease = data as AccountLease;
+      repositoryLeaseHeld = true;
+      activeRepositoryLease = lease;
+      activeRepositoryUrl = normalizedRepository.cloneUrl;
+      activeRepositoryAllowlist = Object.values(acc.repositories ?? {});
+      repositoryTarget = await acc.resolveTarget();
+      await applyRepositoryLease(
+        acc.onecli,
+        repositoryTarget,
+        lease,
+        normalizedRepository.cloneUrl,
+        activeRepositoryAllowlist,
+        activeAccountLeases,
+      );
+      task.repository_url = normalizedRepository.cloneUrl;
+    } catch (err) {
+      return { reason: "env_repository_unavailable", error: String(err) };
+    }
+    try {
+      await withTimeout(
+        (cfg.probeRepository ?? defaultProbeRepository)(
+          task.repository_url,
+          activeRepositoryAllowlist,
+        ),
+        REPOSITORY_PROBE_MS,
+        "the repository did not answer within 20 s",
+      );
+    } catch (err) {
+      return { reason: "env_repository_unreachable", error: String(err) };
+    }
+    return null;
+  }
+
   async function runTask(task: ArgusTask): Promise<void> {
     current = Object.freeze({
       id: task.id,
@@ -2212,54 +2311,30 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       finishTask();
       return;
     }
+    // The step in flight, so a failure names it instead of blaming the repository.
+    let step = "repository preflight";
     try {
-      try {
-        if (task.required_capabilities?.includes("repository:write")) {
-          const acc = cfg.accounts;
-          const repositoryUrl = acc?.repositories?.[task.project];
-          if (!acc || !repositoryUrl)
-            throw new Error("repository is not configured for this task project");
-          if (activeAccountLeases.length === 0)
-            throw new Error("cannot safely reconcile repository access without active base leases");
-          const normalizedRepository = normalizeRepositoryUrl(repositoryUrl);
-          const { data } = await client.call("POST", "/accounts/lease", {
-            role: "repository",
-            runtime_providers: ["gitea"],
-            task_id: task.id,
-            attempt: task.attempt,
-          });
-          const lease = data as AccountLease;
-          repositoryLeaseHeld = true;
-          activeRepositoryLease = lease;
-          activeRepositoryUrl = normalizedRepository.cloneUrl;
-          activeRepositoryAllowlist = Object.values(acc.repositories ?? {});
-          repositoryTarget = await acc.resolveTarget();
-          await applyRepositoryLease(
-            acc.onecli,
-            repositoryTarget,
-            lease,
-            normalizedRepository.cloneUrl,
-            activeRepositoryAllowlist,
-            activeAccountLeases,
-          );
-          task.repository_url = normalizedRepository.cloneUrl;
-        }
-      } catch (err) {
-        // The environment is broken, not the task: a retry would hit the same
-        // wall, so block it with a typed reason instead of spending an attempt.
-        log.warn("Repository access could not be prepared; blocking the task", { err });
+      const envBlock = await repositoryPreflight(task);
+      if (envBlock) {
+        // The environment is broken, not the task: a retry would hit the same wall,
+        // so block it with a typed reason instead of spending an attempt.
+        log.warn("Repository preflight failed; blocking the task", { task: task.id, ...envBlock });
         await client
           .call("POST", `/tasks/${task.id}/block`, {
             attempt: task.attempt,
-            reason: "env_repository_unavailable",
+            reason: envBlock.reason,
+            error: redactSessionTail(envBlock.error).slice(0, 1500),
           })
           .catch(() => undefined);
         finishTask();
         return;
       }
+      step = "continuation preflight";
       await preflight(task);
+      step = "knowledge pages";
       const pages = await inlinePages(task);
       log.info("Argus task claimed", { task: task.id, attempt: task.attempt });
+      step = "task injection";
       if (!logRelay) await startLogRelay(task);
       if (!usageRelay) await startUsageRelay(task);
       resends = 0;
@@ -2282,11 +2357,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       await injectTask(task.id, task.attempt, currentText);
       void verifyRuntimeUsed(task);
       await finished;
-    } catch {
+    } catch (err) {
       await client
         .call("POST", `/tasks/${task.id}/fail`, {
           attempt: task.attempt,
-          error: "worker repository credential unavailable or repository is not allowlisted",
+          error: redactSessionTail(`${step} failed: ${String(err)}`).slice(0, 1500),
           reason: "channel_error",
         })
         .catch(() => undefined);
@@ -2935,6 +3010,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             result.data,
             result.checklist,
           );
+          finishTask();
+        } else if (d.kind === "fail" && d.environment) {
+          // The environment, not the task, is broken: a human fixes it, no attempt spent.
+          await client.call("POST", `/tasks/${task.id}/block`, {
+            attempt: task.attempt,
+            reason: "worker_env",
+            error: redactSessionTail(d.text || "environment missing").slice(0, 1500),
+          });
           finishTask();
         } else if (d.kind === "fail") {
           await client.call("POST", `/tasks/${task.id}/fail`, {
