@@ -997,6 +997,18 @@
       },
       "Agent": {
         "properties": {
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
           "capabilities": {
             "items": {
               "type": "string"
@@ -1091,6 +1103,55 @@
           "end_reason"
         ],
         "title": "Agent",
+        "type": "object"
+      },
+      "AgentHygiene": {
+        "properties": {
+          "age_buckets": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "title": "Age Buckets",
+            "type": "object"
+          },
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "claim_holders": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimHoldingAgent"
+            },
+            "title": "Claim Holders",
+            "type": "array"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/HygieneGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "lost_spike": {
+            "$ref": "#/components/schemas/LostSpike"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/HygieneTotals"
+          }
+        },
+        "required": [
+          "as_of",
+          "totals",
+          "groups",
+          "claim_holders",
+          "lost_spike",
+          "age_buckets"
+        ],
+        "title": "AgentHygiene",
         "type": "object"
       },
       "AgentModels": {
@@ -1235,16 +1296,36 @@
             "title": "Holding Claims",
             "type": "integer"
           },
+          "hygiene_by_pool": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "title": "Hygiene By Pool",
+            "type": "object"
+          },
+          "lost_holding_claims": {
+            "title": "Lost Holding Claims",
+            "type": "integer"
+          },
           "lost_on_unfinished_instance": {
             "title": "Lost On Unfinished Instance",
             "type": "integer"
+          },
+          "lost_spike": {
+            "$ref": "#/components/schemas/LostSpike"
           }
         },
         "required": [
           "by_state",
           "by_role",
           "holding_claims",
-          "lost_on_unfinished_instance"
+          "lost_on_unfinished_instance",
+          "lost_holding_claims",
+          "lost_spike",
+          "hygiene_by_pool"
         ],
         "title": "AgentsOverview",
         "type": "object"
@@ -2183,52 +2264,6 @@
         "title": "BuildView",
         "type": "object"
       },
-      "BulkArchiveRequest": {
-        "description": "Which terminal tasks to archive: all of `states`, narrowed by project and\nby how long ago they last changed. `dry_run` only counts.",
-        "properties": {
-          "dry_run": {
-            "default": false,
-            "title": "Dry Run",
-            "type": "boolean"
-          },
-          "older_than_days": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Older Than Days"
-          },
-          "project": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Project"
-          },
-          "states": {
-            "items": {
-              "$ref": "#/components/schemas/TaskState"
-            },
-            "minItems": 1,
-            "title": "States",
-            "type": "array"
-          }
-        },
-        "required": [
-          "states"
-        ],
-        "title": "BulkArchiveRequest",
-        "type": "object"
-      },
       "BulkArchiveResult": {
         "properties": {
           "count": {
@@ -2397,6 +2432,24 @@
           "status"
         ],
         "title": "ChecklistReport",
+        "type": "object"
+      },
+      "ClaimHoldingAgent": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "task_id"
+        ],
+        "title": "ClaimHoldingAgent",
         "type": "object"
       },
       "ClaimRequest": {
@@ -6694,6 +6747,79 @@
         "title": "HoldRequest",
         "type": "object"
       },
+      "HygieneGroup": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "day": {
+            "format": "date",
+            "title": "Day",
+            "type": "string"
+          },
+          "max_age_hours": {
+            "title": "Max Age Hours",
+            "type": "number"
+          },
+          "newest_heartbeat_at": {
+            "format": "date-time",
+            "title": "Newest Heartbeat At",
+            "type": "string"
+          },
+          "oldest_heartbeat_at": {
+            "format": "date-time",
+            "title": "Oldest Heartbeat At",
+            "type": "string"
+          },
+          "pool": {
+            "title": "Pool",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AgentState"
+          }
+        },
+        "required": [
+          "pool",
+          "state",
+          "day",
+          "count",
+          "oldest_heartbeat_at",
+          "newest_heartbeat_at",
+          "max_age_hours"
+        ],
+        "title": "HygieneGroup",
+        "type": "object"
+      },
+      "HygieneTotals": {
+        "properties": {
+          "archived": {
+            "title": "Archived",
+            "type": "integer"
+          },
+          "gone": {
+            "title": "Gone",
+            "type": "integer"
+          },
+          "lost": {
+            "title": "Lost",
+            "type": "integer"
+          },
+          "lost_holding_claims": {
+            "title": "Lost Holding Claims",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lost",
+          "gone",
+          "archived",
+          "lost_holding_claims"
+        ],
+        "title": "HygieneTotals",
+        "type": "object"
+      },
       "ImageChoice": {
         "properties": {
           "capabilities": {
@@ -8377,6 +8503,44 @@
           "passes_total"
         ],
         "title": "LoopOut",
+        "type": "object"
+      },
+      "LostSpike": {
+        "properties": {
+          "current": {
+            "title": "Current",
+            "type": "integer"
+          },
+          "factor": {
+            "title": "Factor",
+            "type": "number"
+          },
+          "min_count": {
+            "title": "Min Count",
+            "type": "integer"
+          },
+          "previous": {
+            "title": "Previous",
+            "type": "integer"
+          },
+          "triggered": {
+            "title": "Triggered",
+            "type": "boolean"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "current",
+          "previous",
+          "min_count",
+          "factor",
+          "triggered"
+        ],
+        "title": "LostSpike",
         "type": "object"
       },
       "ModelEndpoint": {
@@ -15426,6 +15590,94 @@
         "title": "WorkerTemplate",
         "type": "object"
       },
+      "argus_api__agents__routes__BulkArchiveRequest": {
+        "description": "Which ended identities to archive: all of `states` (lost/gone), older than\n`older_than_days`. `dry_run` only counts. At most `limit` rows per call.",
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 200,
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "older_than_days": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Older Than Days"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/components/schemas/AgentState"
+            },
+            "minItems": 1,
+            "title": "States",
+            "type": "array"
+          }
+        },
+        "required": [
+          "states"
+        ],
+        "title": "BulkArchiveRequest",
+        "type": "object"
+      },
+      "argus_api__tasks__routes__BulkArchiveRequest": {
+        "description": "Which terminal tasks to archive: all of `states`, narrowed by project and\nby how long ago they last changed. `dry_run` only counts.",
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "older_than_days": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Older Than Days"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/components/schemas/TaskState"
+            },
+            "minItems": 1,
+            "title": "States",
+            "type": "array"
+          }
+        },
+        "required": [
+          "states"
+        ],
+        "title": "BulkArchiveRequest",
+        "type": "object"
+      },
       "argus_core__accounts__Usage": {
         "properties": {
           "cached_input_tokens": {
@@ -17431,6 +17683,16 @@
               ],
               "title": "State"
             }
+          },
+          {
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Archived",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -17465,6 +17727,53 @@
           }
         ],
         "summary": "List Agents",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/agents/archive": {
+      "post": {
+        "description": "Archive lost/gone identities older than N days, in a bounded batch.\nWith no body `older_than_days` and no `ARGUS_AGENT_ARCHIVE_AFTER_DAYS`,\nanswers 409 `agent_archive_disabled`. Non-lost/gone states are refused with\n422 `state_not_archivable` before anything changes.",
+        "operationId": "archive_agents_api_agents_archive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/argus_api__agents__routes__BulkArchiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkArchiveResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Archive Agents",
         "tags": [
           "agents"
         ]
@@ -17512,6 +17821,33 @@
           }
         ],
         "summary": "Create Bootstrap Token",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/agents/hygiene": {
+      "get": {
+        "description": "Lost/gone aggregates by pool and age, claim holders, and the lost spike.",
+        "operationId": "get_agent_hygiene_api_agents_hygiene_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentHygiene"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Agent Hygiene",
         "tags": [
           "agents"
         ]
@@ -21332,7 +21668,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/BulkArchiveRequest"
+                "$ref": "#/components/schemas/argus_api__tasks__routes__BulkArchiveRequest"
               }
             }
           },

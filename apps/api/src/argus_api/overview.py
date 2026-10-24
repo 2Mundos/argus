@@ -20,6 +20,17 @@ from argus_core.tasks import TaskState
 from pydantic import BaseModel
 
 from argus_api.accounts.eligibility import engine_pool
+from argus_api.agents.hygiene import (
+    LostSpike,
+    hygiene_by_pool_buckets,
+    lost_spike,
+)
+from argus_api.config import (
+    DEFAULT_LOST_SPIKE_FACTOR,
+    DEFAULT_LOST_SPIKE_MIN_COUNT,
+    DEFAULT_LOST_SPIKE_WINDOW_HOURS,
+    Settings,
+)
 from argus_api.db import Database, utcnow
 
 Counts = dict[str, int]
@@ -54,6 +65,11 @@ class AgentsOverview(BaseModel):
     # Lost agents whose instance has not been terminated yet: a rollout still
     # in progress. The rest of `by_state.lost` is history.
     lost_on_unfinished_instance: int
+    # Lost agents that still hold a claimed task (normally 0; a real inconsistency).
+    lost_holding_claims: int
+    lost_spike: LostSpike
+    # "<state>:<pool>" → age-bucket counts for lost/gone (archived excluded).
+    hygiene_by_pool: dict[str, Counts]
 
 
 class InstancesOverview(BaseModel):
@@ -107,8 +123,22 @@ def _filled(states: type[StrEnum], rows: Iterable[tuple[Any, ...]]) -> Counts:
     return counts
 
 
-async def overview(db: Database) -> Overview:
+async def overview(db: Database, settings: Settings | None = None) -> Overview:
     now = utcnow()
+    # Without settings (direct callers, tests) the rule keeps its documented defaults.
+    spike_window = (
+        DEFAULT_LOST_SPIKE_WINDOW_HOURS
+        if settings is None
+        else settings.lost_spike_window_hours
+    )
+    spike_min = (
+        DEFAULT_LOST_SPIKE_MIN_COUNT
+        if settings is None
+        else settings.lost_spike_min_count
+    )
+    spike_factor = (
+        DEFAULT_LOST_SPIKE_FACTOR if settings is None else settings.lost_spike_factor
+    )
     async with db.read() as conn:
         await conn.execute("BEGIN")  # one snapshot for every query below
         try:
@@ -131,7 +161,8 @@ async def overview(db: Database) -> Overview:
             agents_by_state = _zeros(AgentState)
             agents_by_role = {r.value: _zeros(AgentState) for r in Role}
             for role, state, n in await grouped(
-                "SELECT role, state, count(*) FROM agents GROUP BY role, state"
+                "SELECT role, state, count(*) FROM agents"
+                " WHERE archived_at IS NULL GROUP BY role, state"
             ):
                 agents_by_state[state] = agents_by_state.get(state, 0) + n
                 agents_by_role.setdefault(role, _zeros(AgentState))[state] = n
@@ -142,7 +173,39 @@ async def overview(db: Database) -> Overview:
             )
             lost_unfinished = await scalar(
                 "SELECT count(*) FROM agents a JOIN instances i ON i.id = a.instance_id"
-                " WHERE a.state = 'lost' AND i.state != 'terminated'"
+                " WHERE a.state = 'lost' AND a.archived_at IS NULL"
+                " AND i.state != 'terminated'"
+            )
+            lost_holding = await scalar(
+                "SELECT count(DISTINCT a.id) FROM agents a"
+                " JOIN tasks t ON t.assignee_agent_id = a.id"
+                " WHERE a.state = 'lost' AND t.state = 'claimed'"
+            )
+            hygiene_by_pool = hygiene_by_pool_buckets(
+                [
+                    (state, pool, datetime.fromisoformat(heartbeat))
+                    for state, pool, heartbeat in await grouped(
+                        "SELECT a.state, COALESCE(i.pool, 'unknown'),"
+                        " a.last_heartbeat_at"
+                        " FROM agents a LEFT JOIN instances i ON i.id = a.instance_id"
+                        " WHERE a.state IN ('lost', 'gone') AND a.archived_at IS NULL"
+                    )
+                ],
+                now=now,
+            )
+            ended = [
+                datetime.fromisoformat(row[0])
+                for row in await grouped(
+                    "SELECT ended_at FROM agents"
+                    " WHERE state = 'lost' AND ended_at IS NOT NULL"
+                )
+            ]
+            spike = lost_spike(
+                ended,
+                now=now,
+                window_hours=spike_window,
+                min_count=spike_min,
+                factor=spike_factor,
             )
 
             instances = _filled(
@@ -233,6 +296,9 @@ async def overview(db: Database) -> Overview:
             by_role=agents_by_role,
             holding_claims=holding,
             lost_on_unfinished_instance=lost_unfinished,
+            lost_holding_claims=lost_holding,
+            lost_spike=spike,
+            hygiene_by_pool=hygiene_by_pool,
         ),
         pools=PoolsOverview(
             by_status=_pool_status_counts(pool_items),

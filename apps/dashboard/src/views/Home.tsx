@@ -81,6 +81,7 @@ export function Home() {
             <Stat label="Draining" value={o.agents.by_state.draining} />
             <Stat label="Lost" value={o.agents.by_state.lost} />
             <Stat label="Holding claims" value={o.agents.holding_claims} />
+            <Stat label="Lost holding claims" value={o.agents.lost_holding_claims} />
           </Group>
           <Group title="Pools" href="#pools">
             <Stat label="Pools" value={o.pools.total} />

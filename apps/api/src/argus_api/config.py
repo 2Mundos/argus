@@ -6,6 +6,12 @@ from typing import Literal
 
 from argus_core.difficulty import Difficulty
 
+# Defaults for the lost-spike rule (agent-hygiene.spec.md 3); the rule and its
+# configuration read them here so they cannot disagree.
+DEFAULT_LOST_SPIKE_WINDOW_HOURS = 24
+DEFAULT_LOST_SPIKE_MIN_COUNT = 5
+DEFAULT_LOST_SPIKE_FACTOR = 2.0
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -75,6 +81,14 @@ class Settings:
     claude_bin: str | None = None
     # Price table for the cost view (cost view 3.2); default is the shipped one.
     pricing_file: Path | None = None
+    # Agent hygiene (agent-hygiene.spec.md): default age before an admin may
+    # archive lost/gone identities. Unset disables archive until the caller
+    # passes older_than_days explicitly.
+    agent_archive_after_days: int | None = None
+    # Abnormal jump in newly lost agents against the preceding window.
+    lost_spike_window_hours: int = DEFAULT_LOST_SPIKE_WINDOW_HOURS
+    lost_spike_min_count: int = DEFAULT_LOST_SPIKE_MIN_COUNT
+    lost_spike_factor: float = DEFAULT_LOST_SPIKE_FACTOR
 
     @property
     def db_path(self) -> Path:
@@ -186,6 +200,24 @@ class Settings:
             ),
             dashboard_dir=(
                 Path(d) if (d := os.environ.get("ARGUS_DASHBOARD_DIR")) else None
+            ),
+            agent_archive_after_days=(
+                int(v)
+                if (v := os.environ.get("ARGUS_AGENT_ARCHIVE_AFTER_DAYS") or None)
+                else None
+            ),
+            lost_spike_window_hours=int(
+                os.environ.get(
+                    "ARGUS_LOST_SPIKE_WINDOW_HOURS", DEFAULT_LOST_SPIKE_WINDOW_HOURS
+                )
+            ),
+            lost_spike_min_count=int(
+                os.environ.get(
+                    "ARGUS_LOST_SPIKE_MIN_COUNT", DEFAULT_LOST_SPIKE_MIN_COUNT
+                )
+            ),
+            lost_spike_factor=float(
+                os.environ.get("ARGUS_LOST_SPIKE_FACTOR", DEFAULT_LOST_SPIKE_FACTOR)
             ),
         )
 

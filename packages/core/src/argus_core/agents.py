@@ -59,6 +59,7 @@ class Agent(BaseModel):
     created_at: datetime
     ended_at: datetime | None
     end_reason: str | None
+    archived_at: datetime | None = None  # set while an operator has archived it
     runtime: AgentRuntime | None = None  # last reported on heartbeat
 
 

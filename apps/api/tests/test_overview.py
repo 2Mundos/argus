@@ -123,6 +123,9 @@ async def test_empty_database_reports_every_state_as_zero(db: Database) -> None:
     assert all(c == {s.value: 0 for s in AgentState} for c in o.agents.by_role.values())
     assert o.agents.holding_claims == 0
     assert o.agents.lost_on_unfinished_instance == 0
+    assert o.agents.lost_holding_claims == 0
+    assert o.agents.lost_spike.triggered is False
+    assert o.agents.hygiene_by_pool == {}
     assert o.instances.by_state == {s.value: 0 for s in InstanceState}
     assert o.pools.by_status == {s.value: 0 for s in PoolStatus}
     assert (o.pools.total, o.pools.desired, o.pools.live, o.pools.items) == (
@@ -229,6 +232,10 @@ async def test_counts_by_state_role_pool_and_provider(db: Database) -> None:
     assert o.agents.by_role["worker"]["lost"] == 3
     assert o.agents.holding_claims == 1
     assert o.agents.lost_on_unfinished_instance == 1
+    # Task 902 is claimed by lost agent "old" (inserted to prove holding_claims
+    # ignores it); lost_holding_claims surfaces that inconsistency.
+    assert o.agents.lost_holding_claims == 1
+    assert isinstance(o.agents.hygiene_by_pool, dict)
 
     assert o.instances.by_state == {
         "reserved": 0,

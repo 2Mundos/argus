@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, call, type FleetCapabilities } from "../api";
+import { type AgentHygiene, api, call, type FleetCapabilities } from "../api";
 import { relative, shortId } from "../format";
 import { launchGate, launchStatus } from "../launch";
 import { useLiveData } from "../live";
 import { AgentDetail } from "./AgentDetail";
 import { NewWorker } from "./GuidedWorker";
+
+const AGE_BUCKETS = [
+  ["under_1d", "Under 1 day"],
+  ["1d_to_7d", "1–7 days"],
+  ["7d_to_30d", "7–30 days"],
+  ["30d_and_over", "30 days and over"],
+] as const;
 
 function CreateWorker({ onError }: { onError: (message?: string) => void }) {
   const { data: pools } = useLiveData((signal) => call(api.GET("/api/pools", { signal })), []);
@@ -148,7 +155,13 @@ export function Agents() {
   const [opened, setOpened] = useState<string | null>(null);
   const [issued, setIssued] = useState<{ token: string; expires_at: string }>();
   const [error, setError] = useState<string>();
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const { data: agents } = useLiveData((signal) => call(api.GET("/api/agents", { signal })), []);
+  const {
+    data: hygiene,
+    error: hygieneError,
+    reload: reloadHygiene,
+  } = useLiveData((signal) => call(api.GET("/api/agents/hygiene", { signal })), []);
   const visible = (agents ?? []).filter(
     (a) => showEnded || a.state === "active" || a.state === "draining",
   );
@@ -190,6 +203,9 @@ export function Agents() {
         <button type="button" onClick={() => mint("orchestrator")}>
           Orchestrator bootstrap token
         </button>
+        <button type="button" onClick={() => setArchiveOpen(true)}>
+          Archive old identities…
+        </button>
       </div>
       {error && <p className="error">{error}</p>}
       <CreateWorker onError={setError} />
@@ -209,6 +225,15 @@ export function Agents() {
             </button>
           </div>
         </div>
+      )}
+      <HygieneSection hygiene={hygiene} error={hygieneError?.message} onRetry={reloadHygiene} />
+      {archiveOpen && (
+        <ArchiveAgents
+          onClose={() => {
+            setArchiveOpen(false);
+            reloadHygiene();
+          }}
+        />
       )}
       <table>
         <thead>
@@ -263,5 +288,230 @@ export function Agents() {
       </table>
       {opened && <AgentDetail agentId={opened} onClose={() => setOpened(null)} />}
     </section>
+  );
+}
+
+function HygieneSection(props: {
+  hygiene: AgentHygiene | undefined;
+  error: string | undefined;
+  onRetry: () => void;
+}) {
+  const { hygiene, error, onRetry } = props;
+  if (hygiene === undefined) {
+    return (
+      <div className="card">
+        <h3>Lost and gone</h3>
+        {error !== undefined ? (
+          <p className="error" role="alert">
+            Lost and gone failed to load: {error}{" "}
+            <button type="button" onClick={onRetry}>
+              Retry
+            </button>
+          </p>
+        ) : (
+          <p className="muted">Loading lost and gone…</p>
+        )}
+      </div>
+    );
+  }
+  const t = hygiene.totals;
+  const spike = hygiene.lost_spike;
+  return (
+    <div className="card">
+      <h3>Lost and gone</h3>
+      <p className="small">
+        {t.lost} lost · {t.gone} gone · {t.archived} archived
+        {t.lost_holding_claims > 0 &&
+          ` · ${t.lost_holding_claims} lost still holding a claimed task`}
+      </p>
+      {spike.triggered && (
+        <p className="error small" role="status">
+          {spike.current} agents lost in the last {spike.window_hours}h, up from {spike.previous} in
+          the window before.
+        </p>
+      )}
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>State</th>
+              {AGE_BUCKETS.map(([key, label]) => (
+                <th key={key}>{label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {(["lost", "gone"] as const).map((state) => (
+              <tr key={state}>
+                <td>{state}</td>
+                {AGE_BUCKETS.map(([key]) => (
+                  <td key={key}>{hygiene.age_buckets[state]?.[key] ?? 0}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Pool</th>
+              <th>State</th>
+              <th>Day</th>
+              <th>Count</th>
+              <th>Max age (h)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {hygiene.groups.map((g) => (
+              <tr key={`${g.pool}-${g.state}-${g.day}`}>
+                <td>{g.pool}</td>
+                <td>{g.state}</td>
+                <td>{g.day}</td>
+                <td>{g.count}</td>
+                <td>{g.max_age_hours.toFixed(1)}</td>
+              </tr>
+            ))}
+            {hygiene.groups.length === 0 && (
+              <tr>
+                <td colSpan={5} className="muted">
+                  No lost or gone identities.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {hygiene.claim_holders.length > 0 && (
+        <>
+          <h4>Lost agents holding a claimed task</h4>
+          <ul className="small">
+            {hygiene.claim_holders.map((h) => (
+              <li key={`${h.agent_id}-${h.task_id}`}>
+                agent {shortId(h.agent_id)} · task {shortId(h.task_id)}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ArchiveAgents({ onClose }: { onClose: () => void }) {
+  const [states, setStates] = useState<Array<"lost" | "gone">>(["lost", "gone"]);
+  const [olderThanDays, setOlderThanDays] = useState("30");
+  const [count, setCount] = useState<number>();
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setCount(undefined);
+    if (states.length === 0) {
+      setCount(0);
+      return;
+    }
+    const days = olderThanDays.trim() === "" ? undefined : Number(olderThanDays);
+    if (days !== undefined && (!Number.isInteger(days) || days < 0)) {
+      setCount(0);
+      return;
+    }
+    let cancelled = false;
+    call(
+      api.POST("/api/agents/archive", {
+        body: {
+          states,
+          ...(days !== undefined ? { older_than_days: days } : {}),
+          dry_run: true,
+        },
+      }),
+    ).then(
+      (result) => {
+        if (!cancelled) setCount(result.count);
+      },
+      (err: Error) => {
+        if (!cancelled) setError(err.message);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [states, olderThanDays]);
+
+  async function confirm() {
+    if (states.length === 0) return;
+    const days = olderThanDays.trim() === "" ? undefined : Number(olderThanDays);
+    setBusy(true);
+    setError(undefined);
+    try {
+      await call(
+        api.POST("/api/agents/archive", {
+          body: {
+            states,
+            ...(days !== undefined ? { older_than_days: days } : {}),
+            dry_run: false,
+          },
+        }),
+      );
+      onClose();
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  }
+
+  const toggle = (state: "lost" | "gone", on: boolean) =>
+    setStates((s) => (on ? [...s, state] : s.filter((x) => x !== state)));
+
+  const label =
+    count === undefined
+      ? "Counting…"
+      : count === 0
+        ? "Nothing to archive"
+        : `Archive ${count} ${count === 1 ? "identity" : "identities"}`;
+
+  return (
+    <div className="overlay">
+      <div className="dialog">
+        <h2>Archive old identities</h2>
+        <p className="muted small">
+          Archived lost and gone identities leave lists and aggregates. Nothing is deleted; rows
+          stay readable by id.
+        </p>
+        <fieldset>
+          <legend>States</legend>
+          {(["lost", "gone"] as const).map((state) => (
+            <label className="check" key={state}>
+              <input
+                type="checkbox"
+                checked={states.includes(state)}
+                onChange={(e) => toggle(state, e.target.checked)}
+              />
+              {state}
+            </label>
+          ))}
+        </fieldset>
+        <label>
+          Ended more than (days ago)
+          <input
+            type="number"
+            min={0}
+            placeholder="use server default"
+            value={olderThanDays}
+            onChange={(e) => setOlderThanDays(e.target.value)}
+          />
+        </label>
+        {error && <p className="error">{error}</p>}
+        <div className="actions">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="primary" disabled={busy || !count} onClick={confirm}>
+            {label}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
