@@ -18594,7 +18594,7 @@
     },
     "/api/events/wait": {
       "get": {
-        "description": "Events after the cursor `after`, oldest first, waiting up to `wait_s`\nseconds for one when none has happened yet (long-poll, like a claim). Without\n`after`, waits for the next event from now. Keep `next_cursor` for the next\ncall; nothing is missed between calls.",
+        "description": "Events after the cursor `after`, oldest first, waiting up to `wait_s`\nseconds for one when none has happened yet (long-poll, like a claim). Without\n`after`, waits for the next event from now. Keep `next_cursor` for the next\ncall; nothing is missed between calls. `inbox` keeps only events that add an\ninbox row (MCP operations 3.3).",
         "operationId": "wait_events_api_events_wait_get",
         "parameters": [
           {
@@ -18656,6 +18656,16 @@
                 }
               ],
               "title": "Subject Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "inbox",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Inbox",
+              "type": "boolean"
             }
           }
         ],

@@ -902,7 +902,8 @@ export interface paths {
          * @description Events after the cursor `after`, oldest first, waiting up to `wait_s`
          *     seconds for one when none has happened yet (long-poll, like a claim). Without
          *     `after`, waits for the next event from now. Keep `next_cursor` for the next
-         *     call; nothing is missed between calls.
+         *     call; nothing is missed between calls. `inbox` keeps only events that add an
+         *     inbox row (MCP operations 3.3).
          */
         get: operations["wait_events_api_events_wait_get"];
         put?: never;
@@ -9186,6 +9187,7 @@ export interface operations {
                 wait_s?: number;
                 subject_type?: string | null;
                 subject_id?: string | null;
+                inbox?: boolean;
             };
             header?: never;
             path?: never;

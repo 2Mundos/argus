@@ -60,9 +60,11 @@ tokens. With an orchestrator token, ask a human admin for those changes.
 2. **Work the inbox**, oldest first (below).
 3. **Create and route new work** from the goals you were given (below).
 4. **Keep the fleet able to run it** (below).
-5. **Wait.** `wait_for_events(subject_type, subject_id)` for the thing you
-   just changed, or `wait_for_events()` for anything. Pass `next_cursor` back as
-   `after`. Then return to step 1.
+5. **Wait.** `wait_for_events(inbox=true)` when you have nothing in flight: it
+   wakes only when something new waits on you (a question, a review, an
+   approval, a task stuck on a failed dependency). Use
+   `wait_for_events(subject_type, subject_id)` for the thing you just changed.
+   Pass `next_cursor` back as `after`. Then return to step 1.
 
 ## Working the inbox
 

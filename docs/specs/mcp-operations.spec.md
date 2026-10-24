@@ -232,6 +232,17 @@ token) wrap the model trace endpoints ([spec](model-observability.spec.md)).
   first. Without `after` it waits from the newest event. It has its own path, so
   `GET /api/events` keeps its newest-first list. REST defaults `wait_s` to 0 (a
   plain read); MCP to 20.
+- **Inbox wait:** `inbox=true` on the same wait keeps only the events that add a
+  row to `get_inbox` (3.2): `decision.opened`, `task.dependency_failed`, and a
+  task transition whose `data.to` is `blocked`, `in_review` or
+  `awaiting_approval`. It combines with the subject filters. An orchestrator's
+  idle loop is `get_inbox` → work it → `wait_for_events(inbox=true)` → repeat,
+  woken only when something new waits on it. Events that leave the inbox
+  (answers, cancellations) are not included; re-read `get_inbox` after waking.
+- **Cursor on timeout:** when nothing matches, `next_cursor` moves to the newest
+  event the wait checked, not back to `after`, so a filtered wait that idles
+  does not rescan the same events on every call. Nothing is skipped: every
+  event up to that cursor was already checked against the filters.
 
 ## 3.4 Discovery
 

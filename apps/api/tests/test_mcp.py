@@ -287,6 +287,46 @@ def test_dict_results_also_come_as_text_content(client: TestClient) -> None:
     assert json.loads(text)["title"] == "t"  # for clients that only read content
 
 
+def test_inbox_wait_wakes_only_for_new_inbox_rows(client: TestClient) -> None:
+    worker, orchestrator = register(client), register(client, "orchestrator")
+    start = tool(client, orchestrator, "wait_for_events", wait_s=0)["next_cursor"]
+    tool(client, orchestrator, "create_task", title="t", project="global")
+    claimed = tool(client, worker, "claim_task", wait_s=0)["task"]
+    task_id, attempt = claimed["id"], claimed["attempt"]
+    tool(
+        client, worker, "report_progress", task_id=task_id, attempt=attempt, message="m"
+    )
+
+    # Created, claimed and progress are not inbox rows; the cursor still moves
+    # past them so the next wait does not rescan them.
+    idle = tool(
+        client, orchestrator, "wait_for_events", after=start, wait_s=0, inbox=True
+    )
+    assert idle["timed_out"] and idle["events"] == []
+    assert idle["next_cursor"] > start
+
+    asked = tool(
+        client,
+        worker,
+        "ask_question",
+        task_id=task_id,
+        attempt=attempt,
+        question="Which?",
+    )
+    woke = tool(
+        client,
+        orchestrator,
+        "wait_for_events",
+        after=idle["next_cursor"],
+        wait_s=0,
+        inbox=True,
+    )
+    kinds = {(e["kind"], e["subject_id"]) for e in woke["events"]}
+    assert ("decision.opened", asked["id"]) in kinds
+    assert all(e["kind"] != "task.progress" for e in woke["events"])
+    assert any(e["data"].get("to") == "blocked" for e in woke["events"])
+
+
 def test_inbox_journey_tools_match_rest(client: TestClient) -> None:
     worker, orchestrator = register(client), register(client, "orchestrator")
     rest = {"Authorization": f"Bearer {orchestrator}"}

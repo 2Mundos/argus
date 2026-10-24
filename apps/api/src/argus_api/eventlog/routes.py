@@ -92,14 +92,18 @@ async def wait_events(
     wait_s: Annotated[float, Query(ge=0, le=30)] = 0,
     subject_type: str | None = None,
     subject_id: str | None = None,
+    inbox: bool = False,
 ) -> EventWait:
     """Events after the cursor `after`, oldest first, waiting up to `wait_s`
     seconds for one when none has happened yet (long-poll, like a claim). Without
     `after`, waits for the next event from now. Keep `next_cursor` for the next
-    call; nothing is missed between calls."""
+    call; nothing is missed between calls. `inbox` keeps only events that add an
+    inbox row (MCP operations 3.3)."""
     async with db.read() as conn:
         scope = await _scope(conn, caller)
-    return await wait(db, after, wait_s, subject_type, subject_id, scope=scope)
+    return await wait(
+        db, after, wait_s, subject_type, subject_id, inbox=inbox, scope=scope
+    )
 
 
 async def wait(
@@ -109,11 +113,14 @@ async def wait(
     subject_type: str | None = None,
     subject_id: str | None = None,
     *,
+    inbox: bool = False,
     scope: tuple[str, list[str]] | None = None,
 ) -> EventWait:
     def matches(e: Event) -> bool:
-        return (subject_type is None or e.subject_type == subject_type) and (
-            subject_id is None or e.subject_id == subject_id
+        return (
+            (subject_type is None or e.subject_type == subject_type)
+            and (subject_id is None or e.subject_id == subject_id)
+            and (not inbox or _adds_inbox_row(e.subject_type, e.kind, e.data))
         )
 
     loop = asyncio.get_running_loop()
@@ -121,30 +128,55 @@ async def wait(
     # Subscribe before reading, so an event committed in between is not missed.
     with db.bus.subscribe() as sub:
         if after is None:
-            async with (
-                db.read() as conn,
-                conn.execute("SELECT coalesce(max(id), 0) FROM events") as cur,
-            ):
-                row = await cur.fetchone()
-            after = row[0] if row else 0
+            after = await _newest_id(db)
         while True:
+            # One writer assigns ids in commit order, so every event up to the
+            # newest id is visible to the read below: a miss can skip past them.
+            newest = await _newest_id(db)
             events = await _events_after(
-                db, after, subject_type, subject_id, scope=scope
+                db, after, subject_type, subject_id, inbox=inbox, scope=scope
             )
             if events:
                 return EventWait(
                     events=events, next_cursor=events[-1].id, timed_out=False
                 )
+            after = max(after, newest)
             remaining = deadline - loop.time()
             if remaining <= 0:
                 return EventWait(events=[], next_cursor=after, timed_out=True)
             try:
                 async with asyncio.timeout(remaining):
-                    await sub.next_matching(lambda e: e.id > after and matches(e))
+                    await sub.next_matching(lambda e, a=after: e.id > a and matches(e))
             except OverflowedError:
                 continue  # missed events on the bus: the table has them
             except TimeoutError:
                 return EventWait(events=[], next_cursor=after, timed_out=True)
+
+
+# What adds a row to the inbox (inbox.py): a decision to answer, a task entering
+# a waiting state, or a pending task stuck on a failed dependency.
+_INBOX_KINDS = ("decision.opened", "task.dependency_failed")
+_INBOX_STATES = ("blocked", "in_review", "awaiting_approval")
+_INBOX_SQL = (
+    f"kind IN ({', '.join(repr(k) for k in _INBOX_KINDS)})"
+    " OR (subject_type = 'task'"
+    f" AND json_extract(data, '$.to') IN ({', '.join(repr(s) for s in _INBOX_STATES)}))"
+)
+
+
+def _adds_inbox_row(subject_type: str, kind: str, data: dict[str, Any]) -> bool:
+    return kind in _INBOX_KINDS or (
+        subject_type == "task" and data.get("to") in _INBOX_STATES
+    )
+
+
+async def _newest_id(db: Database) -> int:
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT coalesce(max(id), 0) FROM events") as cur,
+    ):
+        row = await cur.fetchone()
+    return row[0] if row else 0
 
 
 async def _events_after(
@@ -153,10 +185,13 @@ async def _events_after(
     subject_type: str | None,
     subject_id: str | None,
     *,
+    inbox: bool = False,
     scope: tuple[str, list[str]] | None = None,
 ) -> list[EventOut]:
     sql = "SELECT * FROM events WHERE id > ?"
     params: list[int | str] = [after]
+    if inbox:
+        sql += f" AND ({_INBOX_SQL})"
     if scope is not None:
         clause, scope_params = scope
         sql += f" AND ({clause})"

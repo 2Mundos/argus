@@ -1264,11 +1264,14 @@ async def wait_for_events(
     wait_s: Annotated[float, Field(ge=0, le=30)] = 20,
     subject_type: str | None = None,
     subject_id: str | None = None,
+    inbox: bool = False,
 ) -> dict:
     """Wait for what happens next instead of polling: events after cursor `after`
     (oldest first, ≤100), or up to wait_s seconds (max 30) for the first one.
     Without `after`, waits from now. Pass back `next_cursor`; `timed_out` means
-    nothing happened. Filter by subject, e.g. ("instance", id) or ("task", id)."""
+    nothing happened. Filter by subject, e.g. ("instance", id) or ("task", id).
+    inbox=true wakes only on what adds a get_inbox row (a decision opened, a task
+    blocked/in review/awaiting approval, a dependency failed); then get_inbox."""
     return await _call(
         ctx,
         "GET",
@@ -1278,6 +1281,7 @@ async def wait_for_events(
             "wait_s": wait_s,
             "subject_type": subject_type,
             "subject_id": subject_id,
+            "inbox": inbox,
         },
     )
 
