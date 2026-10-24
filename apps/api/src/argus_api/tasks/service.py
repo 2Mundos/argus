@@ -705,12 +705,24 @@ async def complete(
     kind = await kinds.get_kind(tx.conn, row["kind"])
     kinds.validate(kind.result_schema, result.data, "result.data")
     await _check_artifacts(tx.conn, task_id, result.artifacts)
+    have = cont.load(row)
+    held = merge_acceptance(have.checklist, json.loads(row["acceptance"]))
+    # A report naming an item this task does not hold came from another task's work
+    # (a late reply after a switch); fail closed instead of recording it as evidence.
+    foreign = (
+        sorted({r.id for r in result.checklist} - {i.id for i in held}) if held else []
+    )
+    if foreign:
+        raise ValidationFailedError(
+            "checklist items do not belong to this task",
+            code="checklist_mismatch",
+            details=[f"unknown checklist item {i}" for i in foreign],
+        )
     await _record_result_usage(tx, agent_id, task_id, result)
     # A completion claims; only evidenced items count as done. Anything still open
     # sends the result to review instead of success (continuation spec 3.5).
-    have = cont.load(row)
     items = cont.apply_reports(
-        merge_acceptance(have.checklist, json.loads(row["acceptance"])),
+        held,
         result.checklist,
         ContinuationProvenance.WORKER,
         tx.now,

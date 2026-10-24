@@ -135,6 +135,8 @@ every new dependency is judged against it.
   base × tools × project layers, building and pointing a pool at one
 - [Validating Claude and Codex as executors](runbooks/2026-10-21.executor-layer-validation.ref.md) —
   procedure, not yet run
+- [Reply fencing activation](runbooks/2026-10-24.reply-fencing-activation.ref.md) —
+  containment and manual activation of the cross-task reply fence
 - [Cursor executor fleet smoke](runbooks/2026-10-18.cursor-fleet-smoke.ref.md) —
   completed parent verification of delegated `composer-2.5` (2026-10-18)
 

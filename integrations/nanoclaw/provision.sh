@@ -125,7 +125,7 @@ if [ "$ENGINES" = 1 ]; then "$here/engines/install-engines.sh" "$SRC"; fi
   pnpm run build
   # tsc does not emit imported JS assets; restore them even if build cleaned dist.
   "$here/install.sh" "$SRC" >/dev/null
-  pnpm exec vitest run src/channels/argus.test.ts src/channels/argus-accounts.test.ts src/channels/argus-gitea-lease.test.ts src/gateway-providers/argus-cursor-stub.test.ts src/gateway-providers/argus-local-harness.test.ts src/gateway-providers/argus-onecli-git-ca.test.ts src/gateway-providers/onecli.test.ts src/gateway-providers/onecli-files.test.ts src/gateway-providers/gateway-provider-registry.test.ts src/drivers/argus-codex-sandbox.test.ts src/argus-codex-sandbox-composition.test.ts src/drivers/docker-driver.test.ts
+  pnpm exec vitest run src/channels/argus.test.ts src/channels/argus-accounts.test.ts src/channels/argus-continuation.test.ts src/channels/argus-continuation-observe.test.ts src/channels/argus-reply-fence.test.ts src/channels/argus-gitea-lease.test.ts src/gateway-providers/argus-cursor-stub.test.ts src/gateway-providers/argus-local-harness.test.ts src/gateway-providers/argus-onecli-git-ca.test.ts src/gateway-providers/onecli.test.ts src/gateway-providers/onecli-files.test.ts src/gateway-providers/gateway-provider-registry.test.ts src/drivers/argus-codex-sandbox.test.ts src/argus-codex-sandbox-composition.test.ts src/drivers/docker-driver.test.ts
 )
 
 if [ "$CHECK_ONLY" = 1 ]; then

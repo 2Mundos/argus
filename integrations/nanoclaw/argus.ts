@@ -542,8 +542,51 @@ function escapeRegExp(text: string): string {
  */
 function scopedDirective(taskId: string): RegExp {
   return new RegExp(
-    `^${LEAD}(COMPLETE|FAIL|ASK|ASSIST)[*_\`~]*\\s+(?:on|for)\\s+(?:task\\s+)?${escapeRegExp(taskId)}[*_\`~]*\\s*[:：][*_\`~]*\\s*`,
+    `^${LEAD}(COMPLETE|FAIL|ASK|ASSIST|PROGRESS)[*_\`~]*\\s+(?:on|for)\\s+(?:task\\s+)?${escapeRegExp(taskId)}[*_\`~]*\\s*[:：][*_\`~]*\\s*`,
   );
+}
+
+const ANY_SCOPE = new RegExp(
+  `^${LEAD}(COMPLETE|FAIL|ASK|ASSIST|PROGRESS)[*_\`~]*\\s+(?:on|for)\\s+(?:task\\s+)?([A-Za-z0-9._:-]+?)[*_\`~]*\\s*[:：]`,
+);
+// The id of the inbound message that carried a task (`injectTask`), as the host stamps it on a reply.
+const TASK_MESSAGE_ID = /^argus-(.+?)-(\d+)(?:-r\d+)?$/;
+
+export type ReplyFence =
+  | { ok: true }
+  | { ok: false; reason: "other_task" | "stale_message" | "unscoped_after_switch" };
+
+/**
+ * Whose reply is this? The agent session outlives a task (a question, a release, an
+ * account rotation), so output of an earlier task can still arrive while the next one
+ * is claimed. Identity therefore comes from the reply itself, never from "whatever is
+ * claimed now": an explicit scope names a task and must be the claimed one; the id of
+ * the message being answered, when the host stamps it, must be the claim's own; and
+ * once this session has carried another task every reply must be scoped.
+ */
+export function fenceReply(
+  claim: { id: string; attempt: number; scopeRequired: boolean },
+  text: string,
+  inReplyTo?: string | null,
+): ReplyFence {
+  const scope = ANY_SCOPE.exec(text.trim());
+  if (scope && scope[2] !== claim.id) return { ok: false, reason: "other_task" };
+  const scoped = !!scope;
+  const stamp = inReplyTo ? TASK_MESSAGE_ID.exec(inReplyTo) : null;
+  if (!scoped && stamp && (stamp[1] !== claim.id || Number(stamp[2]) !== claim.attempt))
+    return { ok: false, reason: "stale_message" };
+  if (!scoped && claim.scopeRequired) return { ok: false, reason: "unscoped_after_switch" };
+  return { ok: true };
+}
+
+/** Checklist ids of a completion that the claimed task does not hold; an empty checklist holds none. */
+export function foreignChecklistIds(
+  claim: Pick<ArgusTask, "continuation"> | null,
+  reports: ChecklistReport[] | undefined,
+): string[] {
+  const held = new Set((claim?.continuation?.checklist ?? []).map((i) => i.id));
+  if (held.size === 0) return [];
+  return (reports ?? []).map((r) => r.id).filter((id) => !held.has(id));
 }
 
 /**
@@ -721,6 +764,14 @@ const PHASE_RULES: Record<ContinuationPhase, string[]> = {
     "Attempt objective (Argus-derived): CLOSE WITH EVIDENCE. Work and checks are recorded as done; gather and attach the missing proof for the checklist, then COMPLETE.",
   ],
 };
+
+/** Appended to a task given to a session that already carried another one (see fenceReply). */
+export const replyScopeNotice = (taskId: string): string =>
+  [
+    "[Argus reply scope] This agent session handled earlier tasks, and late output of those may still arrive.",
+    `Start EVERY reply for this task with its id: \`PROGRESS on ${taskId}:\`, \`COMPLETE on ${taskId}:\`,`,
+    `\`FAIL on ${taskId}:\`, \`ASK on ${taskId}:\` or \`ASSIST on ${taskId}:\`. A reply without it, or naming another task, is dropped.`,
+  ].join("\n");
 
 /** Rules that hold for every attempt. */
 export const OPERATING_RULES = [
@@ -1324,7 +1375,15 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let stopped = true;
   let draining = false;
   let registered = false;
-  let current: { id: string; attempt: number } | null = null;
+  // The claim in flight. Each claim is its own immutable object: asynchronous work captures it
+  // and is applied only while it is still `current` (identity, not id), so nothing a
+  // previous claim started can land on the next one.
+  type Claim = Readonly<{ id: string; attempt: number; scopeRequired: boolean }>;
+  let current: Claim | null = null;
+  // The agent session has been given a task and was not recycled since: late output of
+  // that task may still arrive, so the next claim demands scoped replies.
+  let sessionCarriesTask = false;
+  let scopeReminders = 0;
   let currentClaim: ArgusTask | null = null;
   let currentText: string | null = null; // what the agent was sent, to re-send after a switch
   // Renders the task for the account held now (a switch to local adds its rules).
@@ -1355,7 +1414,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   const steerAcks = new Set<string>();
   let loop: Promise<void> | null = null;
   let lastProgressAt = 0;
-  let pendingProgress: string | null = null;
+  let pendingProgress: { task: Claim; text: string } | null = null;
   let progressTimer: ReturnType<typeof setTimeout> | null = null;
   let taskDone: (() => void) | null = null;
   let logRelay: ReturnType<typeof createDelegateLogRelay> | null = null;
@@ -1431,6 +1490,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     account = null;
     try {
       await cfg.accounts?.recycleRuntime?.();
+      sessionCarriesTask = false;
     } catch (err) {
       log.error("The abandoned run could not be stopped; recycling before the next task", { err });
       recycleOnLease = true;
@@ -1923,7 +1983,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   }
 
   async function runTask(task: ArgusTask): Promise<void> {
-    current = { id: task.id, attempt: task.attempt };
+    current = Object.freeze({
+      id: task.id,
+      attempt: task.attempt,
+      scopeRequired: sessionCarriesTask,
+    });
+    scopeReminders = 0;
     lastProgressAt = 0;
     const finished = new Promise<void>((resolve) => {
       taskDone = resolve;
@@ -2010,7 +2075,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           customHarness: account?.provider === "custom",
           runtime: runtimeSelection,
         });
+      const scopeRequired = current?.scopeRequired === true;
+      const render = renderCurrent;
+      renderCurrent = () => render() + (scopeRequired ? `\n\n${replyScopeNotice(task.id)}` : "");
       currentText = renderCurrent();
+      sessionCarriesTask = true;
       await injectTask(task.id, task.attempt, currentText);
       void verifyRuntimeUsed(task);
       await finished;
@@ -2268,6 +2337,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         if (rebalancing || recycleOnLease) {
           try {
             await acc.recycleRuntime?.();
+            sessionCarriesTask = false;
           } catch (err) {
             switchFailure = err instanceof Error ? err.message : String(err);
             // The old runtime may still be up: the next lease must stop it first
@@ -2330,6 +2400,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         // block task after task with runtime_switch_failed.
         try {
           await cfg.accounts.recycleRuntime();
+          sessionCarriesTask = false;
           recycleOnLease = false;
         } catch (err) {
           log.warn("The previous runtime still does not stop; not claiming yet", { err });
@@ -2485,9 +2556,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
-  async function sendProgress(text: string): Promise<void> {
-    const task = current;
-    if (!task) return;
+  async function sendProgress(task: Claim, text: string): Promise<void> {
+    if (current !== task) return; // the claim ended or changed while this note waited
     lastProgressAt = nowMs(); // count the interval from the send, not the response
     try {
       await client.call("POST", `/tasks/${task.id}/progress`, {
@@ -2496,7 +2566,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       });
     } catch (err) {
       if (err instanceof ArgusError && err.status === 429)
-        pendingProgress = text; // retry on the timer
+        pendingProgress = { task, text }; // retry on the timer
       else if (err instanceof ArgusError && err.status === 409 && CLAIM_LOST.includes(err.code))
         await abandonTask(err.code);
       else
@@ -2507,19 +2577,19 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
-  function queueProgress(text: string): void {
+  function queueProgress(task: Claim, text: string): void {
     const wait = lastProgressAt + progressInterval - nowMs();
     if (wait <= 0) {
-      void sendProgress(text);
+      void sendProgress(task, text);
       return;
     }
-    pendingProgress = text; // coalesce: only the latest note is worth sending
+    pendingProgress = { task, text }; // coalesce: only the latest note is worth sending
     if (!progressTimer) {
       progressTimer = setTimeout(() => {
         progressTimer = null;
         const t = pendingProgress;
         pendingProgress = null;
-        if (t) void sendProgress(t);
+        if (t) void sendProgress(t.task, t.text);
       }, wait);
     }
   }
@@ -2571,8 +2641,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       message: OutboundMessage,
     ): Promise<string | undefined> {
       if (platformId !== PLATFORM_ID) return undefined;
-      const task = current;
-      if (task && message.files?.length) await attachFiles(task, message.files);
+      const task = current; // the claim this reply is judged against, fixed for the whole delivery
       const content = message.content as Record<string, unknown> | string | undefined;
       const text =
         typeof content === "string"
@@ -2580,7 +2649,15 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           : typeof content?.text === "string"
             ? content.text
             : null;
-      if (!text?.trim()) return undefined;
+      const inReplyTo =
+        (message as { inReplyTo?: string | null }).inReplyTo ??
+        (message as { in_reply_to?: string | null }).in_reply_to;
+      if (!text?.trim()) {
+        // Attachments alone carry no scope: only the stamped reply to this very claim counts.
+        if (task && message.files?.length && fenceReply(task, "", inReplyTo).ok)
+          await attachFiles(task, message.files);
+        return undefined;
+      }
       if (!task) {
         log.warn("Argus channel got a reply with no task in flight; dropped", {
           text: text.slice(0, 80),
@@ -2589,16 +2666,57 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       }
       const isFailureNotice =
         typeof content === "object" && content !== null && content.failureNotice === true;
+      // A failure notice is about the session's account, not about a task's work.
+      const fence = isFailureNotice ? ({ ok: true } as const) : fenceReply(task, text, inReplyTo);
+      if (!fence.ok) {
+        log.warn("Argus channel dropped a reply that is not provably this task's", {
+          task: task.id,
+          attempt: task.attempt,
+          reason: fence.reason,
+          text: text.slice(0, 80),
+        });
+        if (fence.reason === "unscoped_after_switch" && scopeReminders < MAX_RESENDS) {
+          scopeReminders += 1;
+          resends += 1;
+          await injectTask(
+            task.id,
+            task.attempt,
+            `[Argus] Your last reply was dropped because it was not scoped to this task. Repeat it starting with the task id, for example \`COMPLETE on ${task.id}:\`.`,
+          );
+        }
+        return undefined;
+      }
+      if (message.files?.length) await attachFiles(task, message.files);
       const d = parseReply(text, task.id);
       // The last lines of the run, before the attempt ends and Argus stops taking them.
       if (d.kind !== "progress" && !isFailureNotice) await logRelay?.drain();
       // Usage first, on every way out (a failure notice may rotate the leases it is billed to).
       if (d.kind !== "progress" || isFailureNotice) await drainUsage();
+      if (current !== task) {
+        // The claim ended while the relays drained; nothing of this reply may touch the next one.
+        log.warn("Argus claim changed during delivery; reply dropped", { task: task.id });
+        return undefined;
+      }
       try {
         if (isFailureNotice) {
           await handleFailure(task, text, (content as Record<string, unknown>).providerFailure);
         } else if (d.kind === "complete") {
           const result = completionPayload(d.text);
+          const foreign = foreignChecklistIds(currentClaim, result.checklist);
+          if (foreign.length > 0) {
+            // Evidence for items this task does not hold is another task's work: never record it.
+            log.warn("Argus channel rejected a completion naming foreign checklist ids", {
+              task: task.id,
+              foreign,
+            });
+            resends += 1;
+            await injectTask(
+              task.id,
+              task.attempt,
+              `[Argus] Your COMPLETE was not sent: checklist ids ${foreign.join(", ")} do not belong to task ${task.id}. Report only its own ids (${(currentClaim?.continuation?.checklist ?? []).map((i) => i.id).join(", ")}) with evidence gathered for this task.`,
+            );
+            return undefined;
+          }
           await completeWithResult(
             task,
             result.summary || "(no summary)",
@@ -2623,7 +2741,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           });
           finishTask();
         } else {
-          queueProgress(d.text);
+          queueProgress(task, d.text);
         }
       } catch (err) {
         if (err instanceof ArgusError && err.status === 409 && err.code === "already_answered") {
@@ -2633,6 +2751,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             task.id,
             task.attempt,
             `[Argus] That question is already answered; do not ask it again. ${err.message}`,
+          );
+        } else if (err instanceof ArgusError && err.code === "checklist_mismatch") {
+          resends += 1;
+          await injectTask(
+            task.id,
+            task.attempt,
+            `[Argus] Your COMPLETE was rejected: ${err.message}. Report only the checklist ids of this task.`,
           );
         } else if (err instanceof ArgusError && err.status === 409) {
           log.warn("Argus says this task is no longer ours; dropping the reply", {
