@@ -604,7 +604,7 @@ class WorkspaceCleaner:
         rows: list[tuple[str, str, str | None, str | None, Outcome]] = []
         for root in roots:
             if not run.dry_run:
-                await asyncio.to_thread(self._settle_tombstones, root, audit, ts(now))
+                await self._settle_tombstones(root, ts(now))
             try:
                 entries = await asyncio.to_thread(_list_dir, root)
             except OSError:
@@ -675,25 +675,36 @@ class WorkspaceCleaner:
         candidates.sort(key=lambda c: c[0])
         return roots, [c for _, c in candidates[: s.workspace_cleanup_max_instances]]
 
-    def _settle_tombstones(self, root: str, audit: dict, now: str) -> None:
+    async def _settle_tombstones(self, root: str, now: str) -> None:
         """Rename back a leftover tombstone whose deletion never started and
-        that no live lease holds (another process may be working on it)."""
-        for name, _ in _list_dir(root):
+        that no live lease holds (another process may be working on it).
+
+        The lease is read fresh for each tombstone, never from the run's scan
+        snapshot: a concurrent run leases and renames after that snapshot."""
+        try:
+            entries = await asyncio.to_thread(_list_dir, root)
+        except OSError:
+            return
+        for name, _ in entries:
             if not name.startswith(TOMBSTONE):
                 continue
             original = name.removeprefix(TOMBSTONE)
-            row = audit.get((root, original))
-            if not UUID_RE.match(original) or (row and row["reason"] in DELETING):
+            if not UUID_RE.match(original):
+                continue
+            async with (
+                self.db.read() as conn,
+                conn.execute(
+                    "SELECT reason, lock_run_id, lock_expires_at FROM workspace_cleanup"
+                    " WHERE root = ? AND name = ?",
+                    (root, original),
+                ) as cur,
+            ):
+                row = await cur.fetchone()
+            if row and row["reason"] in DELETING:
                 continue
             if row and row["lock_run_id"] and (row["lock_expires_at"] or "") > now:
                 continue
-            with contextlib.suppress(OSError):
-                rfd = _open_dir(root, None)
-                try:
-                    if not _exists(original, rfd):
-                        os.rename(name, original, src_dir_fd=rfd, dst_dir_fd=rfd)
-                finally:
-                    os.close(rfd)
+            await asyncio.to_thread(_restore_tombstone, root, name, original)
 
     # -- one candidate ----------------------------------------------------------
 
@@ -1134,6 +1145,16 @@ def _rename_back(rfd: int, tomb: str, name: str) -> None:
     if _exists(name, rfd):
         raise FileExistsError(errno.EEXIST, "exists")
     os.rename(tomb, name, src_dir_fd=rfd, dst_dir_fd=rfd)
+
+
+def _restore_tombstone(root: str, tomb: str, original: str) -> None:
+    with contextlib.suppress(OSError):
+        rfd = _open_dir(root, None)
+        try:
+            if not _exists(original, rfd):
+                os.rename(tomb, original, src_dir_fd=rfd, dst_dir_fd=rfd)
+        finally:
+            os.close(rfd)
 
 
 def _list_dir(root: str) -> list[tuple[str, bool]]:

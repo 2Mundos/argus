@@ -304,7 +304,7 @@ Nothing outside eligible terminated instances is touched.
 
 ## 3.8 Audit, API and surfaces
 
-**Migration.** `0047_workspace_cleanup.sql` adds two tables:
+**Migration.** `0048_workspace_cleanup.sql` adds two tables:
 
 - `workspace_cleanup_runs`: one row per run, with its counts, bytes, free
   space before and after, `skipped` targets and pools, and sanitized error.
