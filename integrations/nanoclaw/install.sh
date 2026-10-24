@@ -538,4 +538,7 @@ cp "$here/overlays/docker-stop-removal.ts" "$here/overlays/docker-stop-removal.t
   "$here/overlays/docker-driver-teardown.test.ts" "$target/src/drivers/"
 python3 "$here/patch-docker-teardown.py" "$target"
 
+# No blanket running-session ceiling (reconcile-session.ts): only a stale message claim kills.
+python3 "$here/patch-no-session-ceiling.py" "$target"
+
 echo "installed. Next: (cd $target && pnpm run build && pnpm exec vitest run src/channels/argus.test.ts)"

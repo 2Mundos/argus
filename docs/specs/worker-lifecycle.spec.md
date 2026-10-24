@@ -569,6 +569,13 @@ pluggable provider interface (Claude Code by default), supports user-added MCP
 servers, and is administered locally by the `ncl` CLI over a Unix socket (no
 HTTP admin API). See https://docs.nanoclaw.dev/concepts/architecture.
 
+The Argus-installed NanoClaw overlay imposes no wall-clock or heartbeat-age
+ceiling on a running container: a quiet or long-running session remains valid.
+The reconciliation sweep kills only for a stale message-scoped processing
+claim whose heartbeat has not advanced beyond that claim; a declared Bash
+timeout widens only that claim's tolerance. This is separate from Argus's
+wall-clock task/lease timeout in 3.2/3.3.
+
 When Argus ends the channel's claim (a heartbeat rejects the pair: released,
 expired, reassigned), the channel stops the run: it forgets the task, so a late
 reply is dropped instead of reported, stops the session containers (the same

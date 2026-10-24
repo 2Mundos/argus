@@ -55,6 +55,12 @@ done
 ! grep -q "assertDaemonSupportsProfile" "$fx/src/drivers/docker-driver.ts" || { echo "FAIL: stale v1 hook left in docker-driver.ts" >&2; exit 1; }
 [ "$(grep -c "argus-codex-sandbox" "$fx/src/drivers/docker-driver.ts")" = 1 ] || { echo "FAIL: docker-driver.ts patch not applied exactly once" >&2; exit 1; }
 cmp "$nc/security/argus-codex-worker.seccomp.json" "$fx/security/argus-codex-worker.seccomp.json"
+# No blanket session ceiling (patch-no-session-ceiling.py): only the stale-claim path kills.
+! grep -rqE "ABSOLUTE_CEILING_MS|kill-ceiling|absolute-ceiling" "$fx/src/reconcile-session.ts" "$fx/src/host-sweep.ts" \
+  || { echo "FAIL: session ceiling left in reconcile-session.ts/host-sweep.ts" >&2; exit 1; }
+[ "$(grep -c "killContainer(session.id, 'claim-stuck')" "$fx/src/reconcile-session.ts")" = 1 ] || { echo "FAIL: claim-stuck kill missing" >&2; exit 1; }
+grep -q "const tolerance = Math.max(CLAIM_STUCK_MS, declaredBashMs ?? 0);" "$fx/src/reconcile-session.ts" || { echo "FAIL: Bash claim tolerance missing" >&2; exit 1; }
+echo "no session ceiling; claim-stuck and Bash claim tolerance intact"
 
 if [ -n "${CONVERGE_WITH:-}" ]; then
   other="$(cd "$CONVERGE_WITH" && find . -path ./node_modules -prune -o -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
@@ -71,5 +77,6 @@ node_modules/.bin/vitest run \
   src/container-runner.test.ts src/channels/argus.test.ts src/channels/argus-accounts.test.ts \
   src/channels/argus-gitea-lease.test.ts src/gateway-providers/argus-cursor-stub.test.ts \
   src/gateway-providers/argus-onecli-git-ca.test.ts src/gateway-providers/onecli.test.ts \
-  src/gateway-providers/argus-local-harness.test.ts
+  src/gateway-providers/argus-local-harness.test.ts \
+  src/host-sweep.test.ts src/host-sweep.queue.test.ts src/host-sweep.feeds.test.ts src/host-sweep-grace.test.ts
 echo "fixture kept at $fx"

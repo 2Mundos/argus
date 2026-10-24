@@ -68,6 +68,17 @@ ARGUS_CAPABILITIES=python,git pnpm start
 
 Without `ARGUS_URL` the channel is simply off.
 
+### No session-age ceiling
+
+Upstream's `reconcile-session.ts` kills any running container whose heartbeat (or
+spawn time, when it never wrote one) is older than 30 minutes, which ended valid
+long-running workers. `patch-no-session-ceiling.py` removes that ceiling, its
+export, and the matching upstream tests (replaced with ones asserting a quiet
+session older than 30 minutes is kept). Only the per-message recovery remains: a
+`processing` claim older than `max(60 s, declared Bash timeout)` with no heartbeat
+since is killed and reset. No other global age or heartbeat cap replaces it. The
+patch is idempotent and stops the install if NanoClaw's code moved.
+
 ### Updating an installed copy
 
 Nothing here updates an installed NanoClaw by itself. The channel (`src/channels/`)
