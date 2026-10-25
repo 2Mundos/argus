@@ -2778,7 +2778,8 @@
             "$ref": "#/components/schemas/ModelsSummary",
             "default": {
               "executions": 0,
-              "switches": 0
+              "switches": 0,
+              "used": []
             }
           },
           "output_at": {
@@ -5641,6 +5642,17 @@
               }
             ],
             "title": "Account Id"
+          },
+          "account_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Name"
           },
           "agent_id": {
             "anyOf": [
@@ -9199,6 +9211,14 @@
             "default": 0,
             "title": "Switches",
             "type": "integer"
+          },
+          "used": {
+            "items": {
+              "$ref": "#/components/schemas/UsedModel"
+            },
+            "maxItems": 8,
+            "title": "Used",
+            "type": "array"
           }
         },
         "title": "ModelsSummary",
@@ -13273,7 +13293,8 @@
             "$ref": "#/components/schemas/ModelsSummary",
             "default": {
               "executions": 0,
-              "switches": 0
+              "switches": 0,
+              "used": []
             }
           },
           "output_at": {
@@ -14219,7 +14240,8 @@
             "$ref": "#/components/schemas/ModelsSummary",
             "default": {
               "executions": 0,
-              "switches": 0
+              "switches": 0,
+              "used": []
             }
           },
           "output_at": {
@@ -14997,7 +15019,8 @@
             "$ref": "#/components/schemas/ModelsSummary",
             "default": {
               "executions": 0,
-              "switches": 0
+              "switches": 0,
+              "used": []
             }
           },
           "output_at": {
@@ -15657,6 +15680,51 @@
           "accounts"
         ],
         "title": "UsageSeries",
+        "type": "object"
+      },
+      "UsedModel": {
+        "description": "Distinct model identity for compact task cards.",
+        "properties": {
+          "layer": {
+            "enum": [
+              "harness",
+              "delegate"
+            ],
+            "title": "Layer",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "observed": {
+            "default": false,
+            "title": "Observed",
+            "type": "boolean"
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool"
+          }
+        },
+        "required": [
+          "layer"
+        ],
+        "title": "UsedModel",
         "type": "object"
       },
       "UsedRequest": {
@@ -16807,6 +16875,17 @@
             ],
             "title": "From Account Id"
           },
+          "from_account_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Account Name"
+          },
           "from_executor": {
             "anyOf": [
               {
@@ -16940,6 +17019,17 @@
               }
             ],
             "title": "To Account Id"
+          },
+          "to_account_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Account Name"
           },
           "to_executor": {
             "anyOf": [

@@ -579,6 +579,80 @@ function finish(code, report) {
   process.exit(code);
 }
 
+/** Append a model-observability record to the live-log relay (spec 3.6). Never throws. */
+function appendModelRelay(e, { taskId, attempt, executions, selections = [], usage = null }) {
+  if (!taskId || !Number.isSafeInteger(attempt) || attempt < 1) return;
+  const relayFile =
+    e.ARGUS_TASK_LOG_FILE ||
+    path.join(
+      path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
+      RELAY_FILE,
+    );
+  try {
+    fs.appendFileSync(
+      relayFile,
+      `${JSON.stringify({
+        v: 1,
+        task_id: taskId,
+        attempt,
+        at: new Date().toISOString(),
+        models: { executions, selections },
+        ...(usage ? { usage } : {}),
+      })}\n`,
+    );
+  } catch {
+    /* model reporting must never change the CLI result */
+  }
+}
+
+/** A run blocked before the CLI started: failed, no started_at (spec 3.6). */
+function reportBlocked(e, snapshot, selection, executor, errorCode) {
+  const taskId = snapshot.context?.task_id ?? null;
+  const attempt = Number(snapshot.context?.attempt);
+  const accountId = snapshot.context?.executor_account_id ?? null;
+  const ended = new Date().toISOString();
+  const key = `dlg:blocked:${errorCode}:${ended}`;
+  appendModelRelay(e, {
+    taskId,
+    attempt,
+    executions: [
+      {
+        key,
+        layer: "delegate",
+        runtime: "argus-delegate",
+        executor,
+        state: "failed",
+        provider: snapshot.context?.executor_account_provider ?? null,
+        requested_model: selection?.requested_model ?? null,
+        configured_model: selection?.configured_model ?? null,
+        evidence: "not_reported",
+        account_id: accountId,
+        policy_revision: selection?.policy_revision ?? null,
+        started_at: null,
+        ended_at: ended,
+        error_code: errorCode,
+      },
+    ],
+    selections: selection
+      ? [
+          {
+            key: `${key}:selection`,
+            layer: "delegate",
+            kind: selection.model_attempt > 1 ? "model_switch" : "initial",
+            reason_code: selection.model_attempt > 1 ? "error" : "policy",
+            from_model: selection.model_attempt > 1 ? (selection.previous_model ?? null) : null,
+            to_model: selection.configured_model ?? null,
+            to_executor: executor,
+            to_account_id: accountId,
+            execution_key: key,
+            policy_revision: selection.policy_revision ?? null,
+            outcome: "failed",
+          },
+        ]
+      : [],
+  });
+}
+
 /** Exit 0 with is_error in JSON is still a failure (quota/auth/etc.). */
 export function executorJsonFailure(executor, stdoutText) {
   const trimmed = stdoutText.trim();
@@ -672,13 +746,15 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
 
   const roots = (e.ARGUS_DELEGATE_ROOTS || "/workspace").split(":").filter(Boolean);
   const cwd = authorizedCwd(opts.cwd || process.cwd(), roots);
-  if (!cwd)
+  if (!cwd) {
+    reportBlocked(e, snapshot, selection, executor, "cwd_not_allowed");
     finish(77, {
       ...identity,
       blocked: "cwd_not_allowed",
       cwd: opts.cwd || process.cwd(),
       allowed_roots: roots,
     });
+  }
 
   // A custom harness's bridge serves only the harness: no executor inherits it.
   const customHarness = customHarnessActive(e);
@@ -687,13 +763,15 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
     identity = { ...identity, harness: "custom" };
   }
   const localRefusal = localHarnessRefusal(executor, e);
-  if (localRefusal)
+  if (localRefusal) {
+    reportBlocked(e, snapshot, selection, executor, "auth_missing");
     finish(78, {
       ...identity,
       blocked: "auth_missing",
       reason: "local_harness_engine_only",
       need: localRefusal,
     });
+  }
   if (executor === "claude") {
     const restored = restoreClaudeGatewayAuth(e, claudeStub);
     e = restored.env;
@@ -701,23 +779,31 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
     if (restored.stub) identity = { ...identity, gateway_stub: restored.stub };
     // On a custom harness Claude Code runs only on a real Anthropic account, through
     // the gateway (an Anthropic executor lease); never on the custom account.
-    if (customHarness && restored.source !== "gateway_sentinel")
+    if (customHarness && restored.source !== "gateway_sentinel") {
+      reportBlocked(e, snapshot, selection, executor, "auth_missing");
       finish(78, {
         ...identity,
         blocked: "auth_missing",
         reason: "custom_harness_engine_only",
         need: "the custom account serves only the harness; delegate with EXECUTOR agent (Cursor), or lease an Anthropic executor account",
       });
+    }
   }
   e = prepareExecutorEnv(executor, e, path.join(cwd, ".argus-delegate-runtime"));
   e = withCliToolsPath(e);
 
   // Auth first: a missing credential blocks, it never reroutes.
   const auth = authStatus(executor, e, os.homedir(), settings);
-  if (!auth.ok) finish(78, { ...identity, blocked: "auth_missing", need: auth.need });
+  if (!auth.ok) {
+    reportBlocked(e, snapshot, selection, executor, "auth_missing");
+    finish(78, { ...identity, blocked: "auth_missing", need: auth.need });
+  }
 
   const version = versionOf(executor === "agent" ? "agent" : executor, e);
-  if (version === null) finish(127, { ...identity, blocked: "not_installed" });
+  if (version === null) {
+    reportBlocked(e, snapshot, selection, executor, "not_installed");
+    finish(127, { ...identity, blocked: "not_installed" });
+  }
 
   let prompt = opts.promptFile ? fs.readFileSync(opts.promptFile, "utf8") : await readStdin();
   if (!prompt.trim()) finish(64, { ...identity, error: "usage", detail: "empty prompt" });
@@ -753,6 +839,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
       )
     )
       break;
+    const previousModel = selection.configured_model;
     selection = selectModel(
       snapshot,
       selection.scope,
@@ -760,6 +847,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
       selection.model_attempt + 1,
       outcome.report.executor_error?.kind || "executor_failed",
     );
+    selection.previous_model = previousModel;
   } while (Date.now() < deadline);
   finish(outcome.exit, { ...outcome.report, attempts });
 }
@@ -851,6 +939,56 @@ async function runAttempt(
   const outFd = fs.openSync(stdoutFile, "w");
   const errFd = fs.openSync(stderrFile, "w");
   const started = Date.now();
+  const startedAt = new Date(started).toISOString();
+  const taskIdEarly = snapshot.context?.task_id ?? null;
+  const attemptEarly = Number(snapshot.context?.attempt);
+  const accountIdEarly = snapshot.context?.executor_account_id ?? null;
+  const runKeyEarly = runKey({
+    taskId: taskIdEarly,
+    agentId: e.ARGUS_AGENT_ID || os.hostname(),
+    engine: identity.engine,
+    executor,
+    startedAt,
+  });
+  const execKey = `dlg:${runKeyHash(runKeyEarly)}`;
+  const selectionKind = selection.model_attempt > 1 ? "model_switch" : "initial";
+  const selectionRecord = {
+    key: `${execKey}:selection`,
+    layer: "delegate",
+    kind: selectionKind,
+    reason_code: selection.model_attempt > 1 ? "error" : "policy",
+    from_model: selection.model_attempt > 1 ? (selection.previous_model ?? null) : null,
+    to_model: selection.configured_model ?? null,
+    to_executor: executor,
+    to_account_id: accountIdEarly,
+    execution_key: execKey,
+    policy_revision: selection.policy_revision ?? null,
+    outcome: "unknown",
+  };
+  appendModelRelay(e, {
+    taskId: taskIdEarly,
+    attempt: attemptEarly,
+    executions: [
+      {
+        key: execKey,
+        layer: "delegate",
+        runtime: "argus-delegate",
+        executor,
+        state: "running",
+        provider: snapshot.context?.executor_account_provider ?? null,
+        requested_model: selection.requested_model ?? null,
+        configured_model: selection.configured_model ?? null,
+        evidence: "not_reported",
+        account_id: accountIdEarly,
+        delegation_id: path.basename(reportFile, ".json"),
+        run_key: runKeyEarly,
+        policy_revision: selection.policy_revision ?? null,
+        started_at: startedAt,
+        ended_at: null,
+      },
+    ],
+    selections: [selectionRecord],
+  });
   // Own process group: one signal ends the CLI and everything it started.
   const child = spawn(cmd.bin, args, {
     cwd,
@@ -961,18 +1099,11 @@ async function runAttempt(
   const tail = redact(fs.readFileSync(tailSource, "utf8")).slice(-TAIL_CHARS);
   const jsonFail = !timedOut && code === 0 ? executorJsonFailure(executor, stdoutText) : null;
   const exit = timedOut ? 124 : interrupted || jsonFail || code !== 0 ? 1 : 0;
-  const startedAt = new Date(started).toISOString();
-  const taskId = snapshot.context?.task_id ?? null;
+  const taskId = taskIdEarly;
   const usage = parseUsage(executor, stdoutText);
-  const key = runKey({
-    taskId,
-    agentId: e.ARGUS_AGENT_ID || os.hostname(),
-    engine: identity.engine,
-    executor,
-    startedAt,
-  });
+  const key = runKeyEarly;
   // The delegate always runs as the executor role: it reports against the executor account.
-  const accountId = snapshot.context?.executor_account_id ?? null;
+  const accountId = accountIdEarly;
   const payload = usagePayload({
     taskId,
     model: usage.model ?? selection.configured_model,
@@ -987,13 +1118,13 @@ async function runAttempt(
   // Inside the worker container there is no Argus token (and there must not be): the NanoClaw
   // host reads this file and posts with its own, after checking the task, attempt and account.
   if (accountId && taskId && usageReport.status !== "sent") {
-    const relayFile =
+    const usageRelayFile =
       e.ARGUS_USAGE_RELAY_FILE ||
       path.join(
         path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
         USAGE_RELAY_FILE,
       );
-    const queued = appendUsageRecord(relayFile, {
+    const queued = appendUsageRecord(usageRelayFile, {
       source: "delegate",
       role: "executor",
       task_id: taskId,
@@ -1032,6 +1163,48 @@ async function runAttempt(
     ...(jsonFail ? { executor_error: { ...jsonFail, detail: redact(jsonFail.detail) } } : {}),
   };
   fs.writeFileSync(reportFile, JSON.stringify(report, null, 2) + "\n");
+  // Terminal update for the same execution key (fills gaps / advances state).
+  const terminalState =
+    exit === 0 ? "succeeded" : interrupted ? "cancelled" : timedOut ? "failed" : "failed";
+  appendModelRelay(e, {
+    taskId,
+    attempt: attemptEarly,
+    executions: [
+      {
+        key: execKey,
+        layer: "delegate",
+        runtime: "argus-delegate",
+        executor,
+        state: terminalState,
+        provider: snapshot.context?.executor_account_provider ?? null,
+        requested_model: selection.requested_model ?? null,
+        configured_model: selection.configured_model ?? null,
+        observed_model: usage.model ?? null,
+        evidence: usage.model ? "cli_output" : "not_reported",
+        account_id: accountId,
+        delegation_id: path.basename(reportFile, ".json"),
+        run_key: key,
+        policy_revision: selection.policy_revision ?? null,
+        started_at: startedAt,
+        ended_at: new Date().toISOString(),
+        error_code:
+          exit === 0
+            ? null
+            : timedOut
+              ? "timeout"
+              : interrupted
+                ? "cancelled"
+                : jsonFail?.kind || (code != null ? `exit_${code}` : "executor_failed"),
+      },
+    ],
+    selections: [
+      {
+        ...selectionRecord,
+        outcome: exit === 0 ? "succeeded" : "failed",
+      },
+    ],
+    usage: accountId ? { account_id: accountId, payload } : null,
+  });
   return { exit, report };
 }
 

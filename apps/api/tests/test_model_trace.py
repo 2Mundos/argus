@@ -137,14 +137,36 @@ def test_both_layers_flow_and_card_summary(client, agent) -> None:
     assert models["harness"]["observed_model"] == "gpt-6-luna"
     assert models["delegate"]["observed_model"] is None
     assert (models["executions"], models["switches"]) == (2, 0)
+    assert models["used"] == [
+        {
+            "layer": "harness",
+            "tool": "codex",
+            "model": "gpt-6-luna",
+            "observed": True,
+        },
+        {
+            "layer": "delegate",
+            "tool": "claude",
+            "model": "claude-sonnet-5-5",
+            "observed": False,
+        },
+    ]
+    assert "account_name" in h and "account_name" in d
     card = client.get("/api/tasks").json()["items"][0]["models"]
     assert card["delegate"]["executor"] == "claude" and "timeline" not in card
+    assert card["used"][0]["model"] == "gpt-6-luna"
 
 
 def test_old_task_has_unknown_models_not_invented(client, agent) -> None:
     task_id, _ = claimed(client, agent)
     models = client.get(f"/api/tasks/{task_id}").json()["models"]
-    assert models == {"harness": None, "delegate": None, "executions": 0, "switches": 0}
+    assert models == {
+        "harness": None,
+        "delegate": None,
+        "executions": 0,
+        "switches": 0,
+        "used": [],
+    }
     trace = client.get(f"/api/tasks/{task_id}/models").json()
     assert trace["executions"] == [] and trace["timeline"] == []
     assert client.get("/api/tasks/nope/models").status_code == 404
@@ -485,6 +507,7 @@ async def test_usage_correlation_is_unknown_until_reported(db: Database) -> None
     assert first.usage is not None and first.usage.measurement == "not_reported"
     assert first.usage.input_tokens is None and first.usage.cost_usd is None  # not 0
     assert second.usage is None
+    assert first.account_name == "acct" and second.account_name == "acct"
 
 
 async def test_quota_failover_records_account_switch(db: Database) -> None:
@@ -521,6 +544,7 @@ async def test_quota_failover_records_account_switch(db: Database) -> None:
         "quota",
     )
     assert (switch.from_account_id, switch.to_account_id) == (a, b)
+    assert (switch.from_account_name, switch.to_account_name) == ("first", "second")
     assert (
         switch.from_model is None and switch.to_model is None
     )  # model unknown, not guessed

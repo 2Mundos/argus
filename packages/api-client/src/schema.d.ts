@@ -3351,7 +3351,8 @@ export interface components {
             /**
              * @default {
              *       "executions": 0,
-             *       "switches": 0
+             *       "switches": 0,
+             *       "used": []
              *     }
              */
             models?: components["schemas"]["ModelsSummary"];
@@ -4311,6 +4312,8 @@ export interface components {
         Execution: {
             /** Account Id */
             account_id?: string | null;
+            /** Account Name */
+            account_name?: string | null;
             /** Agent Id */
             agent_id: string | null;
             /** Attempt */
@@ -5461,6 +5464,8 @@ export interface components {
              * @default 0
              */
             switches?: number;
+            /** Used */
+            used?: components["schemas"]["UsedModel"][];
         };
         /**
          * NanoclawOptions
@@ -6907,7 +6912,8 @@ export interface components {
             /**
              * @default {
              *       "executions": 0,
-             *       "switches": 0
+             *       "switches": 0,
+             *       "used": []
              *     }
              */
             models?: components["schemas"]["ModelsSummary"];
@@ -7193,7 +7199,8 @@ export interface components {
             /**
              * @default {
              *       "executions": 0,
-             *       "switches": 0
+             *       "switches": 0,
+             *       "used": []
              *     }
              */
             models?: components["schemas"]["ModelsSummary"];
@@ -7425,7 +7432,8 @@ export interface components {
             /**
              * @default {
              *       "executions": 0,
-             *       "switches": 0
+             *       "switches": 0,
+             *       "used": []
              *     }
              */
             models?: components["schemas"]["ModelsSummary"];
@@ -7639,6 +7647,26 @@ export interface components {
             start: string;
             /** Tz */
             tz: string;
+        };
+        /**
+         * UsedModel
+         * @description Distinct model identity for compact task cards.
+         */
+        UsedModel: {
+            /**
+             * Layer
+             * @enum {string}
+             */
+            layer: "harness" | "delegate";
+            /** Model */
+            model?: string | null;
+            /**
+             * Observed
+             * @default false
+             */
+            observed?: boolean;
+            /** Tool */
+            tool?: string | null;
         };
         /** UsedRequest */
         UsedRequest: {
@@ -8055,6 +8083,8 @@ export interface components {
             explanation?: string | null;
             /** From Account Id */
             from_account_id?: string | null;
+            /** From Account Name */
+            from_account_name?: string | null;
             /** From Executor */
             from_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
             /** From Model */
@@ -8099,6 +8129,8 @@ export interface components {
             task_id: string;
             /** To Account Id */
             to_account_id?: string | null;
+            /** To Account Name */
+            to_account_name?: string | null;
             /** To Executor */
             to_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
             /** To Model */

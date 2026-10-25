@@ -104,7 +104,8 @@
     "delegate": null,
     "executions": 0,
     "harness": null,
-    "switches": 0
+    "switches": 0,
+    "used": []
   },
   "output_at": null,
   "parent_id": null,

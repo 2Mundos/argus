@@ -22,6 +22,7 @@ from argus_core.model_trace import (
     Selection,
     SelectionReport,
     UsageRef,
+    UsedModel,
 )
 
 from argus_api.db import Tx, ts
@@ -337,7 +338,8 @@ async def record_account_switch(
 _SELECT_EXECUTION = (
     "SELECT e.*, u.measurement AS u_measurement, u.input_tokens AS u_in,"
     " u.output_tokens AS u_out, u.cached_input_tokens AS u_cached,"
-    " u.cost_usd AS u_cost FROM model_executions e LEFT JOIN account_usage u"
+    " u.cost_usd AS u_cost, a.name AS account_name FROM model_executions e"
+    " LEFT JOIN accounts a ON a.id = e.account_id LEFT JOIN account_usage u"
     " ON u.account_id = e.account_id AND u.run_key = e.run_key"
 )
 _ORDER = " ORDER BY coalesce(e.started_at, e.recorded_at), e.rowid"
@@ -399,7 +401,28 @@ def _summarize(executions: list[Execution], switches: int) -> ModelsSummary:
     out = {
         layer: layer_models(items[-1], len(items)) for layer, items in layers.items()
     }
-    return ModelsSummary(**out, executions=len(executions), switches=switches)
+    used: list[UsedModel] = []
+    seen: set[tuple[str, str | None, str | None]] = set()
+    for execution in executions:
+        model = (
+            execution.observed_model
+            or execution.configured_model
+            or execution.requested_model
+        )
+        identity = (execution.layer, execution.executor or execution.engine, model)
+        if model and identity not in seen:
+            seen.add(identity)
+            used.append(
+                UsedModel(
+                    layer=identity[0],
+                    tool=identity[1],
+                    model=model,
+                    observed=execution.observed_model is not None,
+                )
+            )
+    return ModelsSummary(
+        **out, executions=len(executions), switches=switches, used=used[:8]
+    )
 
 
 async def summaries(
@@ -434,7 +457,11 @@ async def get_trace(conn: aiosqlite.Connection, task_id: str) -> ModelTrace:
     ) as cur:
         executions = [_to_execution(r) for r in await cur.fetchall()]
     async with conn.execute(
-        "SELECT * FROM model_selections WHERE task_id = ? ORDER BY at, rowid",
+        "SELECT s.*, fa.name AS from_account_name, ta.name AS to_account_name"
+        " FROM model_selections s"
+        " LEFT JOIN accounts fa ON fa.id = s.from_account_id"
+        " LEFT JOIN accounts ta ON ta.id = s.to_account_id"
+        " WHERE s.task_id = ? ORDER BY s.at, s.rowid",
         (task_id,),
     ) as cur:
         timeline = [_to_selection(r) for r in await cur.fetchall()]

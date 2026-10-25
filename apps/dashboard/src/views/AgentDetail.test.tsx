@@ -6,6 +6,7 @@ import { AgentDetail } from "./AgentDetail";
 
 const mock = vi.hoisted(() => ({
   agent: {} as Record<string, unknown>,
+  models: undefined as undefined | { current: Record<string, unknown>; history: unknown[] },
   tasks: [] as unknown[],
   events: [] as unknown[],
   taskLog: { attempt: 2, lines: [] as unknown[], last_seq: 0 },
@@ -17,6 +18,8 @@ vi.mock("../api", () => ({
   api: { GET: (path: string, opts: unknown) => ({ path, opts }) },
   call: async ({ path }: { path: string }) => {
     if (path === "/api/agents/{agent_id}") return mock.agent;
+    if (path === "/api/agents/{agent_id}/models")
+      return mock.models ?? { current: {}, history: [] };
     if (path === "/api/tasks") return { items: mock.tasks };
     if (path === "/api/events") return mock.events;
     if (path === "/api/tasks/{task_id}/log") return mock.taskLog;
@@ -98,6 +101,7 @@ beforeEach(() => {
     lines: [{ seq: 1, source: "delegate", at: NOW, line: "thinking about the canary" }],
     last_seq: 1,
   };
+  mock.models = undefined;
   mock.listener = undefined;
 });
 
@@ -140,7 +144,36 @@ describe("AgentDetail", () => {
     expect(screen.getByText("40%")).toBeTruthy();
     expect(screen.getByLabelText("Live")).toBeTruthy();
     expect(screen.getByText("thinking about the canary")).toBeTruthy();
+    expect(screen.getByText("No model reports.")).toBeTruthy();
     expect(mock.fetchText).not.toHaveBeenCalled();
+  });
+
+  it("shows current and recent models from the agent models endpoint", async () => {
+    mock.models = {
+      current: {
+        harness: {
+          engine: "codex",
+          configured_model: "gpt-6",
+          observed_model: null,
+          evidence: "not_reported",
+        },
+      },
+      history: [
+        {
+          id: "r1",
+          layer: "delegate",
+          executor: "claude",
+          observed_model: "sonnet",
+          state: "succeeded",
+        },
+      ],
+    };
+    render(<AgentDetail agentId="agent-1" onClose={() => {}} />);
+    await flush();
+    expect(screen.getByLabelText("Current models").textContent).toMatch(/codex · gpt-6/);
+    expect(screen.getByLabelText("Recent model runs").textContent).toMatch(
+      /delegate · claude · sonnet · succeeded/,
+    );
   });
 
   it("falls back to container output when the agent holds no task", async () => {

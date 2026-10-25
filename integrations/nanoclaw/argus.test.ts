@@ -17,6 +17,7 @@ import {
   parseFramedUntrustedTaskData,
   parseReply,
   relayLines,
+  relayModelReports,
   renderSteer,
   renderTask,
   resetRelayFile,
@@ -1263,6 +1264,60 @@ describe("delegate live log relay", () => {
     expect(got.slice(0, 3)).toEqual(["a", "b", "c"]);
     expect(got[3]).toHaveLength(2000);
     expect(got).toHaveLength(4);
+  });
+
+  it("filters model reports by task and attempt and ignores torn or foreign lines", () => {
+    const trace = (task_id: string, attempt: number, layer = "delegate") =>
+      JSON.stringify({
+        v: 1,
+        task_id,
+        attempt,
+        at: "2026-10-21T00:00:00Z",
+        models: { executions: [{ key: `${task_id}-${attempt}`, layer }], selections: [] },
+      });
+    expect(
+      relayModelReports(`${trace("t1", 1)}\n${trace("t1", 2)}\n${trace("t9", 1)}\n{torn`, {
+        id: "t1",
+        attempt: 1,
+      }),
+    ).toHaveLength(1);
+    expect(
+      relayModelReports(`${trace("t1", 1)}\n`, { id: "t1", attempt: 1 })[0]?.executions[0],
+    ).toMatchObject({ key: "t1-1", layer: "delegate" });
+    expect(
+      relayModelReports(`${trace("t1", 1, "harness")}\n`, { id: "t1", attempt: 1 }),
+    ).toHaveLength(0);
+  });
+
+  it("reports model traces and usage while preserving log relay after model post failure", async () => {
+    const { dir, file } = tmp();
+    const logs: any[] = [];
+    const usages: any[] = [];
+    const modelRec = {
+      v: 1,
+      task_id: "t1",
+      attempt: 1,
+      at: "2026-10-21T00:00:00Z",
+      models: {
+        executions: [{ key: "e1", layer: "delegate" }],
+        selections: [{ kind: "initial", layer: "delegate" }],
+      },
+      usage: { account_id: "acc1", payload: { run_key: "rk1" } },
+    };
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      post: async (body) => void logs.push(body),
+      postModels: async () => {
+        throw new Error("model endpoint unavailable");
+      },
+      postUsage: async (id, body) => void usages.push({ id, body }),
+    });
+    fs.writeFileSync(file, `${JSON.stringify(modelRec)}\n${rec(["ordinary log line"])}`);
+    await relay.poll();
+    expect(usages).toEqual([{ id: "acc1", body: { run_key: "rk1" } }]);
+    expect(logs).toEqual([{ attempt: 1, source: "delegate", lines: ["ordinary log line"] }]);
+    fs.rmSync(dir, { recursive: true });
   });
 
   it("batches stay within 200 lines and 64 KiB", () => {
