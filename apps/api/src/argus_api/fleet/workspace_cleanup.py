@@ -122,6 +122,19 @@ def read_mounts(path: str = "/proc/self/mounts") -> list[str]:
     return points
 
 
+def _load_mounts(mounts: Callable[[], list[str]] | None) -> list[str]:
+    """Current mount table, or mounts_unreadable when the table cannot be read."""
+    try:
+        return read_mounts() if mounts is None else mounts()
+    except OSError as exc:
+        raise Unsafe("mounts_unreadable") from exc
+
+
+def _mount_at_or_under(abs_path: str, mounts: list[str]) -> bool:
+    """True when abs_path is a mount point or a mount sits at/under it."""
+    return any(_within(m, abs_path) for m in mounts)
+
+
 def check_root(root: str, forbidden: list[str], mounts: list[str]) -> str | None:
     """None when `root` may hold deletable instance directories, else why not."""
     if root in ("", "/") or not os.path.isabs(root):
@@ -251,21 +264,40 @@ def _measure(
         os.close(fd)
 
 
-def remove_tree(root: str, name: str, dev: int) -> None:
-    """Delete root/name with fd-relative unlink/rmdir; symlinks are unlinked."""
+def remove_tree(
+    root: str,
+    name: str,
+    dev: int,
+    mounts: Callable[[], list[str]] | None = None,
+) -> None:
+    """Delete root/name with fd-relative unlink/rmdir; symlinks are unlinked.
+
+    Re-reads the mount table at each directory so same-device bind mounts and
+    mounts added after revalidation still raise `mount_present` (fail-closed
+    when the table cannot be read).
+    """
     rfd = _open_dir(root, None)
     try:
-        _remove(rfd, name, dev, 0)
+        _remove(rfd, name, os.path.join(root, name), dev, mounts, 0)
     finally:
         os.close(rfd)
 
 
-def _remove(parent_fd: int, name: str, dev: int, depth: int) -> None:
+def _remove(
+    parent_fd: int,
+    name: str,
+    abs_path: str,
+    dev: int,
+    mounts: Callable[[], list[str]] | None,
+    depth: int,
+) -> None:
     st = os.lstat(name, dir_fd=parent_fd)
     if not stat.S_ISDIR(st.st_mode):
         os.unlink(name, dir_fd=parent_fd)
         return
     if st.st_dev != dev:
+        raise Unsafe("mount_present")
+    if _mount_at_or_under(abs_path, _load_mounts(mounts)):
         raise Unsafe("mount_present")
     if depth > MAX_TREE_DEPTH:
         raise Unsafe("scan_limit")
@@ -276,13 +308,26 @@ def _remove(parent_fd: int, name: str, dev: int, depth: int) -> None:
         with os.scandir(fd) as it:
             names = [e.name for e in it]
         for child in names:
-            _remove(fd, child, dev, depth + 1)
+            _remove(
+                fd,
+                child,
+                os.path.join(abs_path, child),
+                dev,
+                mounts,
+                depth + 1,
+            )
     finally:
         os.close(fd)
     os.rmdir(name, dir_fd=parent_fd)
 
 
-def prune_caches(root: str, name: str, caches: list[str], dev: int) -> None:
+def prune_caches(
+    root: str,
+    name: str,
+    caches: list[str],
+    dev: int,
+    mounts: Callable[[], list[str]] | None = None,
+) -> None:
     """Delete only the given allowlisted cache directories under root/name."""
     rfd = _open_dir(root, None)
     try:
@@ -298,7 +343,10 @@ def prune_caches(root: str, name: str, caches: list[str], dev: int) -> None:
                     fd = nxt
                 if os.fstat(fd).st_dev != dev:
                     raise Unsafe("mount_present")
-                _remove(fd, parts[-1], dev, 0)
+                cache_abs = os.path.join(root, name, *parts)
+                if _mount_at_or_under(cache_abs, _load_mounts(mounts)):
+                    raise Unsafe("mount_present")
+                _remove(fd, parts[-1], cache_abs, dev, mounts, 0)
             finally:
                 os.close(fd)
     finally:
@@ -907,7 +955,7 @@ class WorkspaceCleaner:
         before = free_bytes(root)
         try:
             dev = os.lstat(root).st_dev
-            await asyncio.to_thread(remove_tree, root, tomb, dev)
+            await asyncio.to_thread(remove_tree, root, tomb, dev, self.mounts)
         except Unsafe as exc:
             return Outcome(
                 S.FAILED,
@@ -942,7 +990,9 @@ class WorkspaceCleaner:
         before = free_bytes(root)
         try:
             dev = os.lstat(root).st_dev
-            await asyncio.to_thread(prune_caches, root, tomb, found.cache_dirs, dev)
+            await asyncio.to_thread(
+                prune_caches, root, tomb, found.cache_dirs, dev, self.mounts
+            )
         except Unsafe as exc:
             return Outcome(S.BLOCKED, "low_disk", tree.bytes, error=exc.code)
         except OSError as exc:

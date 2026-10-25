@@ -151,7 +151,8 @@ every new dependency is judged against it.
 - [Workspace cleanup QA receipt (task f9a048fa)](reports/2026-10-24.workspace-cleanup-qa.ref.md) —
   commands, exit statuses, restore proof, Biome/`make check`, CI probe, limitations
 - [Workspace cleanup delegate review extract](reports/2026-10-24.workspace-cleanup-delegate-review.ref.md) —
-  verbatim independent `argus-delegate --read-only` report at SHA `60576ab…`
+  verbatim independent `argus-delegate --read-only` report at baseline SHA `60576ab…`
+  (P3-2 later fixed in PR #114; final-head review stored outside git)
 
 ### Research
 

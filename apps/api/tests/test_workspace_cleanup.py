@@ -333,6 +333,106 @@ async def test_unreadable_mount_table_fails_closed(env: Env) -> None:
     assert "all roots: mounts_unreadable" in run.skipped
 
 
+def test_remove_tree_refuses_same_device_mount_listed_in_table(tmp_path: Path) -> None:
+    """Same-device bind mounts have matching st_dev; the mounts table must stop delete."""
+    tree = tmp_path / "d"
+    nested = tree / "bind"
+    nested.mkdir(parents=True)
+    (nested / "foreign.txt").write_text("keep-me")
+    (tree / "own.txt").write_text("own")
+    mounts = [str(nested)]
+    with pytest.raises(wc.Unsafe) as exc:
+        wc.remove_tree(str(tmp_path), "d", os.lstat(tree).st_dev, mounts=lambda: mounts)
+    assert exc.value.code == "mount_present"
+    assert (nested / "foreign.txt").read_text() == "keep-me"
+    assert (tree / "own.txt").read_text() == "own"
+
+
+def test_remove_tree_rereads_mounts_during_walk(tmp_path: Path) -> None:
+    """A mount that appears after the walk starts still aborts (TOCTOU vs revalidation)."""
+    tree = tmp_path / "d"
+    nested = tree / "later"
+    nested.mkdir(parents=True)
+    (nested / "secret.txt").write_text("secret")
+    (tree / "early.txt").write_text("early")
+    calls = {"n": 0}
+
+    def mounts() -> list[str]:
+        calls["n"] += 1
+        # First directory (tree root) is clear; nested sees the new mount.
+        return [str(nested)] if calls["n"] > 1 else []
+
+    with pytest.raises(wc.Unsafe) as exc:
+        wc.remove_tree(str(tmp_path), "d", os.lstat(tree).st_dev, mounts=mounts)
+    assert exc.value.code == "mount_present"
+    assert (nested / "secret.txt").read_text() == "secret"
+    assert calls["n"] >= 2
+
+
+def test_remove_tree_unreadable_mounts_during_delete_fails_closed(
+    tmp_path: Path,
+) -> None:
+    tree = tmp_path / "d"
+    tree.mkdir()
+    (tree / "notes.txt").write_text("hello")
+
+    def broken() -> list[str]:
+        raise OSError(errno.EACCES, "denied")
+
+    with pytest.raises(wc.Unsafe) as exc:
+        wc.remove_tree(str(tmp_path), "d", os.lstat(tree).st_dev, mounts=broken)
+    assert exc.value.code == "mounts_unreadable"
+    assert (tree / "notes.txt").read_text() == "hello"
+
+
+def test_remove_tree_success_control_with_empty_mounts(tmp_path: Path) -> None:
+    tree = tmp_path / "d"
+    tree.mkdir()
+    (tree / "notes.txt").write_text("hello")
+    wc.remove_tree(str(tmp_path), "d", os.lstat(tree).st_dev, mounts=list)
+    assert not tree.exists()
+
+
+async def test_mount_appearing_only_at_delete_blocks_and_keeps_tree(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revalidation sees no mounts; delete-time table lists a same-device path under the tombstone."""
+    path = await env.instance(A)
+    bind = path / "bind"
+    bind.mkdir()
+    (bind / "foreign.txt").write_text("keep")
+    env.mounts = []
+
+    real_remove = wc.remove_tree
+
+    def remove_with_late_mount(
+        root: str,
+        name: str,
+        dev: int,
+        mounts: object = None,
+    ) -> None:
+        tomb = Path(root) / name
+        real_remove(root, name, dev, mounts=lambda: [str(tomb / "bind")])
+
+    monkeypatch.setattr(wc, "remove_tree", remove_with_late_mount)
+    await env.run()
+    # Tombstone may remain after delete_error; live name must not be gone cleanly
+    # without preserving bind contents somewhere under the root.
+    leftovers = list(env.root.iterdir())
+    assert leftovers, "directory must not vanish when a late mount blocks delete"
+    found = False
+    for entry in leftovers:
+        candidate = entry / "bind" / "foreign.txt"
+        if candidate.is_file():
+            assert candidate.read_text() == "keep"
+            found = True
+    assert found
+    row = await env.entry(A)
+    assert row["status"] == "failed"
+    assert row["reason"] == "delete_error"
+    assert row["error"] == "mount_present"
+
+
 async def test_measure_refuses_another_device(tmp_path: Path) -> None:
     (tmp_path / "d").mkdir()
     st = os.lstat(tmp_path / "d")
