@@ -88,6 +88,14 @@ Targets, checked as the code grows:
 - Zero required external services; Docker access only when a `docker` target is
   configured.
 
+## 3.8 Packaged local Docker access
+
+The base Compose file publishes the API on host loopback. The optional local
+Docker overlay also publishes it on the daemon's default bridge gateway, so
+workers can reach `ARGUS_PUBLIC_URL=http://host.docker.internal:8000` through
+their `host.docker.internal:host-gateway` mapping. The operator supplies that
+gateway as `DOCKER_BRIDGE_IP`; neither file publishes on all host interfaces.
+
 # 4. Open Questions
 
 1. Backup for `/data/artifacts`: Litestream covers only SQLite (the encrypted
@@ -113,5 +121,9 @@ Targets, checked as the code grows:
   and `sops` binaries.
 - The data layer is a thin repository module over `sqlite3`/`aiosqlite`, with
   one writer and a reader pool; tests use a temporary database file per test.
-- No `docker-compose.yml` is needed for development: `make dev-api` creates
-  `./data/argus.db` on first run.
+- No Compose stack is needed for development: `make dev-api` creates
+  `./data/argus.db` on first run. For a packaged run, `deploy/compose.yaml` is
+  still one process and one named volume (`docker compose -f deploy/compose.yaml
+  up --build`); an optional `deploy/compose.docker.yaml` overlay adds the host
+  Docker socket and a bridge-gateway port binding when the operator wants local
+  pools.

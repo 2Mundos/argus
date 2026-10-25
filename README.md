@@ -23,7 +23,7 @@ one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md)
   Argus worker (installed into a NanoClaw checkout).
 - `examples/echo-worker/` — Minimal worker speaking the Argus API (reference and
   integration-test image).
-- `deploy/` — Dockerfiles. `.gitea/` — CI.
+- `deploy/` — Dockerfiles and Compose (`compose.yaml`). `.gitea/` — CI.
 
 ## Development
 
@@ -37,26 +37,54 @@ make dev-dashboard # http://localhost:3000, proxies /api to :8000
 make check        # lint + typecheck + test (what CI runs)
 ```
 
-## Running the image
+## Run with Docker
+
+One process, one volume ([single-node](docs/specs/single-node.spec.md)). From a
+clone:
+
+```bash
+docker compose -f deploy/compose.yaml up --build
+# Dashboard: http://127.0.0.1:8000
+docker compose -f deploy/compose.yaml exec argus cat /data/admin-token
+```
+
+Or without Compose:
 
 ```bash
 docker build -f deploy/Dockerfile.api -t argus .
-docker run -p 127.0.0.1:8000:8000 -v argus-data:/data argus   # dashboard at http://localhost:8000
-# Publish on loopback as above: Argus serves plain HTTP and ships no reverse proxy,
-# so TLS must terminate at a proxy you run in front of it before exposing it beyond
-# this host. The container binds UVICORN_HOST (default 0.0.0.0, needed for
-# published ports); exposure is controlled by the `-p` address.
-# First start saves the admin token to /data/admin-token (never logged);
-# or preset one with -e ARGUS_ADMIN_TOKEN=<32+ chars>.
-# Provider accounts: mount an age key so Argus can read/write its SOPS file:
-#   -v ./age-key.txt:/keys/age.txt:ro -e SOPS_AGE_KEY_FILE=/keys/age.txt \
-#   -e SOPS_AGE_RECIPIENTS=age1...   (age-keygen -o age-key.txt)
-# Pools on the local Docker: give Argus the socket and tell containers where it is:
-#   -v /var/run/docker.sock:/var/run/docker.sock --group-add $(stat -c %g /var/run/docker.sock) \
-#   -e ARGUS_PUBLIC_URL=http://host.docker.internal:8000
-# Optional continuous backup: add -e LITESTREAM_REPLICA_URL=s3://bucket/argus
-# (plus LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY)
+docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data argus
+docker exec argus cat /data/admin-token
 ```
+
+A release tag also publishes the image to this repo's container registry
+([releases](docs/specs/releases.spec.md)); pull `…/argus:vX.Y.Z` instead of
+building when you have registry access.
+
+Publish on loopback as above: Argus serves plain HTTP and ships no reverse
+proxy, so TLS must terminate at a proxy you run in front of it before exposing
+it beyond this host. Exposure is the `-p` / Compose `ports` address.
+
+- Preset the admin token with `-e ARGUS_ADMIN_TOKEN=<32+ chars>` (otherwise
+  first start writes `/data/admin-token`, never logged).
+- Provider accounts: mount an age key so Argus can read/write its SOPS file:
+  `-v ./age-key.txt:/keys/age.txt:ro -e SOPS_AGE_KEY_FILE=/keys/age.txt`
+  `-e SOPS_AGE_RECIPIENTS=age1…` (`age-keygen -o age-key.txt`).
+- Local Docker pools on Linux: merge the overlay to mount the socket and publish
+  the API on Docker's bridge gateway, where workers reach it through
+  `host.docker.internal`. The dashboard remains available on loopback:
+
+  ```bash
+  DOCKER_GID=$(stat -c %g /var/run/docker.sock) \
+    DOCKER_BRIDGE_IP=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}') \
+    docker compose -f deploy/compose.yaml -f deploy/compose.docker.yaml up --build
+  ```
+
+- Continuous backup: `-e LITESTREAM_REPLICA_URL=s3://bucket/argus` (plus
+  `LITESTREAM_ACCESS_KEY_ID` / `LITESTREAM_SECRET_ACCESS_KEY`).
+
+CI builds and boots the control-plane image, and builds the NanoClaw host and
+echo-worker images, on every `main` push and when their inputs change on a PR
+(`.gitea/workflows/quality.yaml`).
 
 ## Operating it
 

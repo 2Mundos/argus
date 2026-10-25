@@ -13,7 +13,9 @@ the tag builds and publishes everything else.
 - `.gitea/workflows/release.yaml` runs on a `v*` tag push (or by hand for an
   existing tag). It builds `deploy/Dockerfile.api` with the version baked in,
   pushes `<registry>/<owner>/argus:vX.Y.Z` to the Gitea container registry, and
-  creates the Gitea release with the notes as its body.
+  creates the Gitea release with the notes as its body. Quality CI also builds
+  (without publishing) the NanoClaw host and echo-worker images so those
+  Dockerfiles cannot rot; only the control-plane image is a release artifact.
 - The running process reports that version: `argus_build_info{version}`,
   `GET /api/system`, and the System tab ([operations](operations.spec.md)).
 

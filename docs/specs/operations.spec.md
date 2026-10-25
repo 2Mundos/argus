@@ -133,3 +133,7 @@ System tab renders it and refreshes with the event stream.
 - `/readyz` replaces nothing: it sits beside `/healthz`.
 - CI gains manual jobs for the real-Docker and real-Kubernetes (kind) integration
   tests; the production image builds `sops` for both amd64 and arm64.
+- Quality CI builds `deploy/Dockerfile.api`, loads it, and smokes `/healthz`,
+  `/readyz`, and `/data/admin-token`; it also builds `deploy/nanoclaw-host` and
+  `examples/echo-worker`. The NanoClaw agent image stays a host build
+  (`provision.sh`). Operator quick-start: `deploy/compose.yaml` (README).

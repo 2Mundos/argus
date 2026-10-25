@@ -22,7 +22,11 @@ dev-api: ## Run the API with reload on :8000.
 dev-dashboard: ## Run the dashboard on :3000 (ARGUS_API_URL overrides the API proxy target).
 	$(PNPM) dev
 
-.PHONY: test-docker
+.PHONY: image run-docker test-docker
+image: ## Build the control-plane image (deploy/Dockerfile.api → argus:local).
+	docker build -f deploy/Dockerfile.api -t argus:local .
+run-docker: ## Start Argus via Compose (http://127.0.0.1:8000); Ctrl-C stops.
+	docker compose -f deploy/compose.yaml up --build
 test-docker: ## Run the real-Docker integration tests (needs a Docker daemon).
 	ARGUS_DOCKER_TESTS=1 $(UV) run pytest -q -p no:cacheprovider apps/api/tests/test_docker_integration.py
 

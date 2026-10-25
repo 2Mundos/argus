@@ -1,0 +1,16 @@
+# Overlay for pools that use the host Docker daemon. Merge with the base file:
+#   DOCKER_GID=$(stat -c %g /var/run/docker.sock) \
+#     DOCKER_BRIDGE_IP=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}') \
+#     docker compose -f deploy/compose.yaml -f deploy/compose.docker.yaml up --build
+services:
+  argus:
+    # Keep the base loopback binding; workers reach this additional binding via
+    # host.docker.internal:host-gateway, without publishing on LAN interfaces.
+    ports:
+      - "${DOCKER_BRIDGE_IP:?set DOCKER_BRIDGE_IP to the host Docker bridge gateway}:8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID to the host docker group gid}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

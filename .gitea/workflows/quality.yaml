@@ -58,9 +58,9 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
-  # Smoke that Dockerfile.api still builds. On PRs, skip when no image inputs
-  # changed (job still runs so a required "image" check gets a green status).
-  # Buildx + actions/cache keeps layer reuse across runs on Gitea runners.
+  # Build and boot the control-plane image (deploy/Dockerfile.api). On PRs, skip
+  # when no image inputs changed (job still runs so a required "image" check gets
+  # a green status). Buildx + actions/cache keeps layer reuse across runs.
   image:
     runs-on: ubuntu-latest
     steps:
@@ -78,7 +78,8 @@ jobs:
           fi
           git fetch --no-tags --depth=1 origin "$BASE"
           # Paths copied by deploy/Dockerfile.api (or that change its context).
-          pattern='^(deploy/|\.dockerignore$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.npmrc$|tsconfig\.base\.json$|packages/api-client/|apps/dashboard/|pyproject\.toml$|uv\.lock$|apps/api/|packages/core/|integrations/nanoclaw/engines/model-policy\.defaults\.json$)'
+          # Compose overlays are docs for operators; they do not change the image.
+          pattern='^(deploy/Dockerfile\.api$|deploy/entrypoint\.sh$|deploy/litestream\.yml$|\.dockerignore$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.npmrc$|tsconfig\.base\.json$|packages/api-client/|apps/dashboard/|pyproject\.toml$|uv\.lock$|apps/api/|packages/core/|integrations/nanoclaw/engines/model-policy\.defaults\.json$|\.gitea/workflows/quality\.yaml$)'
           if git diff --name-only "$BASE" HEAD | grep -E "$pattern" >/dev/null; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
@@ -104,7 +105,7 @@ jobs:
           context: .
           file: deploy/Dockerfile.api
           tags: argus:ci
-          # Validate the build only; no need to load into the local daemon.
+          load: true
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
       - name: Rotate buildx cache
@@ -112,6 +113,74 @@ jobs:
         run: |
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+      - name: Smoke the image (healthz, readyz, admin token)
+        if: steps.need.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          docker rm -f argus-ci >/dev/null 2>&1 || true
+          docker volume rm argus-ci-data >/dev/null 2>&1 || true
+          docker run -d --name argus-ci \
+            -p 127.0.0.1:18000:8000 \
+            -v argus-ci-data:/data \
+            argus:ci
+          cleanup() { docker rm -f argus-ci >/dev/null 2>&1 || true; docker volume rm argus-ci-data >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18000/healthz | grep -q '"status"'; then
+              break
+            fi
+            sleep 1
+            if [ "$i" -eq 30 ]; then
+              docker logs argus-ci >&2 || true
+              echo "healthz did not become ready" >&2
+              exit 1
+            fi
+          done
+          curl -fsS http://127.0.0.1:18000/readyz | grep -q '"status"'
+          token=$(docker exec argus-ci cat /data/admin-token)
+          case "$token" in
+            argus_admin_*) ;;
+            *) echo "expected admin token in /data/admin-token, got: ${token:0:20}…" >&2; exit 1 ;;
+          esac
+          echo "image smoke ok"
+
+  # Companion images the control plane expects on a Docker host: NanoClaw host
+  # runtime and the echo-worker reference. Agent images (6 GB) stay host builds
+  # (provision.sh). On PRs, skip when their inputs did not change.
+  companion-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decide whether companion image inputs changed
+        id: need
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE"
+          if git diff --name-only "$BASE" HEAD | grep -E '^(deploy/nanoclaw-host/|examples/echo-worker/|\.gitea/workflows/quality\.yaml$)' >/dev/null; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping companion images: inputs unchanged"
+          fi
+      - name: Build nanoclaw-host and echo-worker
+        if: steps.need.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          docker build -t argus-nanoclaw-host:ci deploy/nanoclaw-host
+          docker build -t argus-echo-worker:ci examples/echo-worker
+          docker run --rm --entrypoint docker argus-nanoclaw-host:ci --version
+          docker run --rm --entrypoint python argus-echo-worker:ci -c \
+            'import pathlib; assert pathlib.Path("/worker.py").is_file()'
+      - name: Remove the CI images
+        if: always() && steps.need.outputs.build == 'true'
+        run: docker rmi -f argus-nanoclaw-host:ci argus-echo-worker:ci >/dev/null 2>&1 || true
 
   # The NanoClaw tools layer builds from this checkout alone (apply-tools-layer.sh's
   # staged context) and argus-delegate loads every module it imports. The base is
