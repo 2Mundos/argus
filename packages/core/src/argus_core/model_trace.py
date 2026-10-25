@@ -241,6 +241,7 @@ class Execution(ExecutionReport):
     task_id: str
     attempt: int
     agent_id: str | None
+    account_name: str | None = None
     recorded_at: datetime
     updated_at: datetime
     usage: UsageRef | None = None
@@ -251,6 +252,8 @@ class Selection(SelectionReport):
     task_id: str
     attempt: int
     agent_id: str | None  # reporter; Argus-recorded switches use an `argus:` key
+    from_account_name: str | None = None
+    to_account_name: str | None = None
     at: datetime
     recorded_at: datetime
 
@@ -278,6 +281,16 @@ class ModelsSummary(BaseModel):
     delegate: LayerModels | None = None
     executions: int = 0
     switches: int = 0  # selections other than `initial`
+    used: list["UsedModel"] = Field(default_factory=list, max_length=8)
+
+
+class UsedModel(BaseModel):
+    """Distinct model identity for compact task cards."""
+
+    layer: Layer
+    tool: str | None = None
+    model: str | None = None
+    observed: bool = False
 
 
 class ModelTrace(BaseModel):

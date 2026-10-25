@@ -42,10 +42,19 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
             signal,
           }),
         ).catch(() => null),
+        call(
+          api.GET("/api/tasks/{task_id}/models", {
+            params: { path: { task_id: taskId } },
+            signal,
+          }),
+        ),
       ]),
     [taskId],
   );
-  const [task, artifacts, events, delivery] = data ?? [];
+  const [task, artifacts, events, delivery, modelTrace] = data ?? [];
+  const modelAttempts = [...new Set(modelTrace?.executions.map((run) => run.attempt) ?? [])].sort(
+    (a, b) => b - a,
+  );
 
   async function act(action: "cancel" | "unblock" | "retry" | "archive" | "unarchive") {
     setError(undefined);
@@ -80,6 +89,63 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
             <>
               <Activity task={task} events={events ?? []} />
               {delivery && <TaskDelivery delivery={delivery} onChanged={reload} />}
+              <h3>Models</h3>
+              {modelTrace?.executions.length ? (
+                <div className="plain">
+                  {modelAttempts.map((attempt) => (
+                    <section key={attempt} aria-label={`Attempt ${attempt} models`}>
+                      <h4>Attempt {attempt}</h4>
+                      {modelTrace.executions
+                        .filter((run) => run.attempt === attempt)
+                        .map((run) => (
+                          <p key={run.id}>
+                            <strong>
+                              {run.layer === "harness"
+                                ? (run.engine ?? "harness")
+                                : (run.executor ?? "executor")}
+                            </strong>{" "}
+                            {run.observed_model ?? run.configured_model ?? "not reported"}
+                            {run.observed_model
+                              ? ` (${run.evidence})`
+                              : run.configured_model
+                                ? " (configured)"
+                                : ""}
+                            {run.account_name
+                              ? ` · account ${run.account_name}`
+                              : run.account_id
+                                ? ` · account ${run.account_id}`
+                                : ""}{" "}
+                            · {run.state}
+                            {run.started_at ? ` · ${new Date(run.started_at).toISOString()}` : ""}
+                            {run.ended_at ? ` → ${new Date(run.ended_at).toISOString()}` : ""}
+                            {run.usage
+                              ? ` · ${run.usage.input_tokens ?? 0}+${run.usage.output_tokens ?? 0} tokens · $${run.usage.cost_usd ?? "?"}`
+                              : ""}
+                          </p>
+                        ))}
+                      {modelTrace.timeline
+                        .filter((selection) => selection.attempt === attempt)
+                        .map((selection) => (
+                          <p key={selection.id} className="muted small">
+                            {selection.kind} · {selection.reason_code} ·{" "}
+                            {selection.from_model ??
+                              selection.from_account_name ??
+                              selection.from_account_id ??
+                              "start"}{" "}
+                            →{" "}
+                            {selection.to_model ??
+                              selection.to_account_name ??
+                              selection.to_account_id ??
+                              "?"}
+                            {selection.outcome ? ` · ${selection.outcome}` : ""}
+                          </p>
+                        ))}
+                    </section>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">No model reports.</p>
+              )}
               <dl className="facts">
                 <dt>State</dt>
                 <dd>

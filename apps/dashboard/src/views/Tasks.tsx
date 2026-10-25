@@ -103,6 +103,16 @@ function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
         {task.priority !== 0 && <span className="badge">p{task.priority}</span>}
         {task.attempt > 0 && <span className="muted">attempt {task.attempt}</span>}
       </span>
+      {task.models?.used?.length ? (
+        <span className="meta" aria-label="Models used">
+          {task.models.used.map((item) => (
+            <span className="badge" key={`${item.layer}-${item.tool}-${item.model}`}>
+              {item.tool ?? item.layer} · {item.model ?? "?"}
+              {!item.observed && item.model ? " · configured" : ""}
+            </span>
+          ))}
+        </span>
+      ) : null}
       {task.state === "claimed" && (
         <span className="muted small">
           {shortId(task.assignee_agent_id ?? "")} · lease {relative(task.lease_expires_at)}

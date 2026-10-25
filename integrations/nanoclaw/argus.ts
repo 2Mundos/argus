@@ -1154,6 +1154,49 @@ export function relayLines(text: string, task: { id: string; attempt: number }):
   return out;
 }
 
+/**
+ * Structured delegate model reports share the mounted relay file (model observability
+ * spec 3.6): `{v, task_id, attempt, at, models: {executions, selections}, usage?}`.
+ * Only delegate-layer rows for the held task/attempt are taken (at most 20 each).
+ */
+export function relayModelReports(
+  text: string,
+  task: { id: string; attempt: number },
+): Array<{
+  executions: unknown[];
+  selections: unknown[];
+  usage: { account_id?: string; payload?: unknown } | null;
+}> {
+  const out: Array<{
+    executions: unknown[];
+    selections: unknown[];
+    usage: { account_id?: string; payload?: unknown } | null;
+  }> = [];
+  for (const raw of text.split("\n")) {
+    try {
+      const rec = JSON.parse(raw);
+      if (rec?.task_id !== task.id || rec?.attempt !== task.attempt) continue;
+      const models = rec.models;
+      if (!models || typeof models !== "object") continue;
+      const executions = (Array.isArray(models.executions) ? models.executions : [])
+        .filter((e: { layer?: string }) => e?.layer === "delegate")
+        .slice(0, 20);
+      const selections = (Array.isArray(models.selections) ? models.selections : [])
+        .filter((s: { layer?: string }) => s?.layer === "delegate")
+        .slice(0, 20);
+      if (!executions.length && !selections.length) continue;
+      out.push({
+        executions,
+        selections,
+        usage: rec.usage ?? null,
+      });
+    } catch {
+      /* torn or foreign line */
+    }
+  }
+  return out;
+}
+
 /** The first batch of `lines` within the line and byte limits (at least one line). */
 export function takeLogBatch(lines: string[]): string[] {
   let bytes = 0;
@@ -1176,6 +1219,8 @@ export function createDelegateLogRelay(opts: {
   file: string;
   task: { id: string; attempt: number };
   post: (body: { attempt: number; source: "delegate"; lines: string[] }) => Promise<unknown>;
+  postModels?: (body: unknown) => Promise<unknown>;
+  postUsage?: (accountId: string, body: unknown) => Promise<unknown>;
   now?: () => number;
   /** Between batches in `drain()`; default just over the server's one-per-second limit. */
   paceMs?: number;
@@ -1239,7 +1284,31 @@ export function createDelegateLogRelay(opts: {
         return;
       }
       offset += end;
-      pending.push(...relayLines(chunk.subarray(0, end).toString("utf8"), opts.task));
+      const records = chunk.subarray(0, end).toString("utf8");
+      pending.push(...relayLines(records, opts.task));
+      for (const item of relayModelReports(records, opts.task)) {
+        try {
+          await opts.postModels?.({
+            attempt: opts.task.attempt,
+            executions: item.executions,
+            selections: item.selections,
+          });
+        } catch (err) {
+          log.warn("Could not report delegate model trace", {
+            task: opts.task.id,
+            err: String(err).slice(0, 120),
+          });
+        }
+        try {
+          if (item.usage?.account_id && item.usage.payload)
+            await opts.postUsage?.(item.usage.account_id, item.usage.payload);
+        } catch (err) {
+          log.warn("Could not report delegate model usage", {
+            task: opts.task.id,
+            err: String(err).slice(0, 120),
+          });
+        }
+      }
       if (pending.length > LOG_PENDING_MAX) pending = pending.slice(-LOG_PENDING_MAX);
     } finally {
       await handle.close();
@@ -1430,6 +1499,21 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let current: Claim | null = null;
   // The agent session has been given a task and was not recycled since.
   let sessionCarriesTask = false;
+  let harnessRun: {
+    key: string;
+    session: number;
+    started_at: string;
+    engine: string;
+    provider: string | null;
+    account_id: string | null;
+    requested_model: string | null;
+    configured_model: string | null;
+    policy_revision: string | null;
+    resumed_from: string | null;
+  } | null = null;
+  let harnessSession = 0;
+  let selectedModels: ModelSelection | null = null;
+  let previousHarnessModel: string | null = null;
   let currentClaim: ArgusTask | null = null;
   let currentText: string | null = null; // what the agent was sent, to re-send after a switch
   // Renders the task for the account held now (a switch to local adds its rules).
@@ -1667,6 +1751,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         task,
         now: nowMs,
         post: (body) => client.call("POST", `/tasks/${task.id}/log`, body),
+        postModels: (body: unknown) => client.call("POST", `/tasks/${task.id}/models`, body),
+        postUsage: (accountId: string, payload: unknown) =>
+          client.call("POST", `/accounts/${accountId}/usage`, payload),
       });
       logRelay = relay;
       logTimer = setInterval(() => void relay.poll(), cfg.logPollMs ?? LOG_POLL_MS);
@@ -1732,6 +1819,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     current = null;
     seenSessionId = null;
     sessionMissingSince = null;
+    harnessRun = null;
+    harnessSession = 0;
     currentClaim = null;
     currentText = null;
     renderCurrent = null;
@@ -1896,6 +1985,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     noticeText: string,
     providerFailure?: unknown,
   ): Promise<void> {
+    await reportHarness(task, "failed");
     const textual = classifyFailure(noticeText, account?.provider);
     let f: FailureKind =
       textual.kind === "failed"
@@ -2151,6 +2241,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       executor_settings:
         executorLease?.provider === "custom" ? (executorLease.settings ?? null) : null,
     });
+    selectedModels = selection;
     const bytes = new TextEncoder().encode(JSON.stringify(selection, null, 2));
     const sha = createHash("sha256").update(bytes).digest("hex");
     const name = `model-policy-attempt-${task.attempt}.json`;
@@ -2267,6 +2358,23 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
     // The step in flight, so a failure names it instead of blaming the repository.
     let step = "repository preflight";
+    const harnessSelection = selectedModels;
+    const engine = harnessSelection?.policy_engine ?? "unknown";
+    harnessSession += 1;
+    const resumed_from = harnessRun?.key ?? null;
+    harnessRun = {
+      key: `nanoclaw:${task.attempt}:${harnessSession}`,
+      session: harnessSession,
+      started_at: new Date(nowMs()).toISOString(),
+      engine,
+      provider: account?.provider ?? null,
+      account_id: account?.id ?? null,
+      requested_model: harnessSelection?.requested_model ?? null,
+      configured_model: harnessSelection?.configured_model ?? null,
+      policy_revision: harnessSelection?.policy_revision ?? null,
+      resumed_from: harnessSession > 1 ? resumed_from : null,
+    };
+    await reportHarness(task, "running");
     try {
       const envBlock = await repositoryPreflight(task);
       if (envBlock) {
@@ -2694,6 +2802,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     data?: Record<string, unknown>,
     checklist?: ChecklistReport[],
   ): Promise<void> {
+    await reportHarness(t, "succeeded");
     const extra = [...attached.keys()];
     const missing = attachFailures.length ? `\n\n[Not stored: ${attachFailures.join("; ")}]` : "";
     if (chars(text + missing).length <= SUMMARY_MAX_CHARS) {
@@ -2725,6 +2834,98 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         artifacts: [...new Set([artifactId, ...extra])],
       },
     });
+  }
+
+  async function reportHarness(
+    task: { id: string; attempt: number },
+    state: "running" | "succeeded" | "failed",
+  ): Promise<void> {
+    if (!harnessRun) return;
+    const ended_at = state === "running" ? null : new Date(nowMs()).toISOString();
+    const model = harnessRun.configured_model;
+    const selections =
+      state !== "running"
+        ? []
+        : (() => {
+            const to_model = model;
+            const base = {
+              layer: "harness" as const,
+              to_model,
+              to_account_id: harnessRun!.account_id,
+              execution_key: harnessRun!.key,
+              policy_revision: harnessRun!.policy_revision,
+            };
+            if (harnessSession <= 1 && !previousHarnessModel) {
+              return [
+                {
+                  ...base,
+                  key: `${harnessRun!.key}:initial`,
+                  kind: "initial" as const,
+                  reason_code: "policy" as const,
+                },
+              ];
+            }
+            if (previousHarnessModel && to_model && previousHarnessModel !== to_model) {
+              return [
+                {
+                  ...base,
+                  key: `${harnessRun!.key}:switch`,
+                  kind: "model_switch" as const,
+                  reason_code: "error" as const,
+                  from_model: previousHarnessModel,
+                },
+              ];
+            }
+            if (previousHarnessModel && previousHarnessModel === to_model) {
+              return [
+                {
+                  ...base,
+                  key: `${harnessRun!.key}:retry`,
+                  kind: "retry_no_fallback" as const,
+                  reason_code: "error" as const,
+                  from_model: previousHarnessModel,
+                },
+              ];
+            }
+            return [
+              {
+                ...base,
+                key: `${harnessRun!.key}:initial`,
+                kind: "initial" as const,
+                reason_code: "policy" as const,
+              },
+            ];
+          })();
+    await client
+      .call("POST", `/tasks/${task.id}/models`, {
+        attempt: task.attempt,
+        executions: [
+          {
+            key: harnessRun.key,
+            layer: "harness",
+            runtime: "nanoclaw",
+            engine: harnessRun.engine,
+            state,
+            provider: harnessRun.provider,
+            account_id: harnessRun.account_id,
+            requested_model: harnessRun.requested_model,
+            configured_model: harnessRun.configured_model,
+            policy_revision: harnessRun.policy_revision,
+            evidence: "not_reported",
+            started_at: harnessRun.started_at,
+            ended_at,
+            resumed_from: harnessRun.resumed_from,
+          },
+        ],
+        selections,
+      })
+      .catch((err) =>
+        log.warn("Could not report NanoClaw model execution", {
+          task: task.id,
+          err: String(err).slice(0, 120),
+        }),
+      );
+    if (state !== "running" && model) previousHarnessModel = model;
   }
 
   async function ensureArtifact(
@@ -2954,12 +3155,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           });
           finishTask();
         } else if (d.kind === "fail") {
+          await reportHarness(task, "failed");
           await client.call("POST", `/tasks/${task.id}/fail`, {
             attempt: task.attempt,
             error: d.text || "failed",
           });
           finishTask();
         } else if (d.kind === "ask" || d.kind === "assist") {
+          await reportHarness(task, "succeeded");
           await client.call("POST", `/tasks/${task.id}/ask`, {
             attempt: task.attempt,
             question: d.text || "?",

@@ -31,9 +31,15 @@ export function AgentDetail({
   const [metaPct, setMetaPct] = useState(META_PCT_DEFAULT);
   const { data } = useLiveData(
     async (signal) => {
-      const [agent, page] = await Promise.all([
+      const [agent, models, page] = await Promise.all([
         call(
           api.GET("/api/agents/{agent_id}", { params: { path: { agent_id: agentId } }, signal }),
+        ),
+        call(
+          api.GET("/api/agents/{agent_id}/models", {
+            params: { path: { agent_id: agentId } },
+            signal,
+          }),
         ),
         call(
           api.GET("/api/tasks", {
@@ -44,6 +50,7 @@ export function AgentDetail({
       ]);
       return {
         agent,
+        models,
         work: page.items.filter((task) => "progress_at" in task),
       };
     },
@@ -131,6 +138,39 @@ export function AgentDetail({
         <dt>Instance</dt>
         <dd>{agent.instance_id ? shortId(agent.instance_id) : "none"}</dd>
       </dl>
+      <h3>Models</h3>
+      {data?.models && Object.keys(data.models.current).length ? (
+        <dl className="facts" aria-label="Current models">
+          {Object.entries(data.models.current).map(([layer, run]) => (
+            <div key={layer}>
+              <dt>{layer}</dt>
+              <dd>
+                {run.executor ?? run.engine ?? "unknown"} ·{" "}
+                {run.observed_model ?? run.configured_model ?? run.requested_model ?? "?"}
+                {run.observed_model
+                  ? ` (${run.evidence})`
+                  : run.configured_model
+                    ? " (configured)"
+                    : ""}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <p className="muted">No model reports.</p>
+      )}
+      {data?.models?.history?.length ? (
+        <div className="plain" aria-label="Recent model runs">
+          {data.models.history.slice(0, 8).map((run) => (
+            <p key={run.id} className="muted small">
+              {run.layer} · {run.executor ?? run.engine ?? "unknown"} ·{" "}
+              {run.observed_model ?? run.configured_model ?? run.requested_model ?? "?"} ·{" "}
+              {run.state}
+            </p>
+          ))}
+        </div>
+      ) : null}
+      <h3>Current work</h3>
       <table className="work-table">
         <thead>
           <tr>

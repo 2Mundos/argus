@@ -496,17 +496,42 @@ cat >/dev/null; echo '{"is_error":true,"result":"failed"}'`,
     { task_id: "task1", attempt: 3 },
   );
   const file = path.join(s.work, "policy.json");
+  const relayFile = path.join(s.dir, "task-log.jsonl");
   fs.writeFileSync(file, JSON.stringify(snapshot));
   const retry = await run(
     ["claude", "--cwd", s.work, "--model-attempt", "2", "--fallback-reason", "verification_failed"],
     {
-      env: { ...s.env, ANTHROPIC_API_KEY: "x", ARGUS_MODEL_POLICY_FILE: file },
+      env: {
+        ...s.env,
+        ANTHROPIC_API_KEY: "x",
+        ARGUS_MODEL_POLICY_FILE: file,
+        ARGUS_TASK_LOG_FILE: relayFile,
+      },
     },
   );
   assert.equal(retry.report.configured_model, "opus");
   assert.equal(retry.report.fallback_reason, "verification_failed");
   assert.deepEqual(retry.report.task, { task_id: "task1", attempt: 3 });
   assert.equal(retry.report.attempts.length, 1);
+  const records = fs.readFileSync(relayFile, "utf8").trim().split("\n").map(JSON.parse);
+  const modelRecs = records.filter((r) => r.models?.executions?.length);
+  assert.ok(modelRecs.length >= 2); // running, then terminal
+  const terminal = modelRecs.at(-1);
+  const execution = terminal.models.executions[0];
+  const selection = terminal.models.selections[0];
+  assert.equal(terminal.v, 1);
+  assert.equal(execution.layer, "delegate");
+  assert.equal(execution.executor, "claude");
+  assert.equal(execution.configured_model, "opus");
+  assert.equal(execution.observed_model, null);
+  assert.equal(execution.evidence, "not_reported");
+  assert.equal(execution.account_id, null);
+  assert.equal(execution.run_key, retry.report.run_key);
+  assert.match(execution.key, /^dlg:[0-9a-f]+$/);
+  assert.equal(execution.state, "failed");
+  assert.equal(selection.kind, "model_switch");
+  assert.equal(selection.reason_code, "error");
+  assert.equal(selection.to_model, "opus");
 });
 
 test("invalid policies and invalid retry requests fail before CLI execution", async (t) => {
@@ -1242,7 +1267,7 @@ test("a claude run streams readable, redacted lines to the relay file beside the
   assert.equal(code, 0);
   assert.equal(report.exit_code, 0);
   assert.equal(report.executor_error, undefined);
-  const lines = l.records().flatMap((r) => r.lines);
+  const lines = l.records().flatMap((r) => (Array.isArray(r.lines) ? r.lines : []));
   assert.deepEqual(lines.slice(0, 3), [
     "claude started (m-1)",
     "Reading the spec",
@@ -1250,7 +1275,9 @@ test("a claude run streams readable, redacted lines to the relay file beside the
   ]);
   assert.equal(lines[3], "[redacted]");
   assert.equal(lines.at(-1), "claude finished");
-  assert.ok(l.records().every((r) => r.task_id === "t1" && r.attempt === 3 && r.v === 1));
+  assert.ok(
+    l.records().every((r) => r.task_id === "t1" && r.attempt === 3 && (r.v === 1 || r.models)),
+  );
   // The raw stream stays the artifact and its last line is the final report.
   const out = fs.readFileSync(report.artifacts[0], "utf8").trim().split("\n");
   assert.equal(JSON.parse(out.at(-1)).type, "result");
