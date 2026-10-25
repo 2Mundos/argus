@@ -158,6 +158,16 @@ matches the head, or the matching comment has no count, `finding_count` is `null
 - Tests (`integrations/nanoclaw/gitea-api.test.mjs`, fixtures in
   `integrations/nanoclaw/fixtures/gitea-api/`) are offline and use a mocked fetch or a
   local proxy. They run in `pnpm test`.
+- Installer acceptance is
+  `integrations/nanoclaw/tests/test_gitea_api_install.py`, collected by `uv run pytest`.
+  It exercises the three install shapes (`install.sh`, `engines/install-engines.sh`, and
+  `Dockerfile.tools-layer` / `apply-tools-layer.sh`) by double-installing into isolated
+  temporary roots, asserting byte-identical copies of `gitea-api.mjs` as
+  `argus-gitea-api`, and that a missing OneCLI proxy fails closed with exit 13. It also
+  guards against installer script drift: the real `install.sh`,
+  `engines/install-engines.sh`, and `engines/Dockerfile.tools-layer` (and/or
+  `apply-tools-layer.sh`) must still contain the expected `cp` / `install -m` /
+  `COPY --chmod` lines that place `gitea-api.mjs` at `/usr/local/bin/argus-gitea-api`.
 
 # 6. Implementation Consequences
 
@@ -168,7 +178,8 @@ matches the head, or the matching comment has no count, `finding_count` is `null
   image was built with. Rollout is an operator step:
   1. Rebuild the agent or project image (`provision.sh`, `build-project-image.sh`, or the
      tools layer) and confirm `cmp` of the installed `/usr/local/bin/argus-gitea-api`
-     against the source.
+     against the source. The installer pytest above is the offline gate that the copy
+     steps stay wired; image rebuild remains the live delivery step.
   2. Canary on one worker: run `argus-gitea-api --help`, then read-only `repo-get`,
      `issue-list --limit 1`, and `review-findings --pr <open PR>`. Check the exit codes and
      that there is no credential in stdout or stderr.

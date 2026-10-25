@@ -740,7 +740,24 @@ export class GiteaApi {
   updatePullRequest(number, input) {
     if (Object.keys(input).some((key) => !["title", "body", "state", "base"].includes(key)))
       throw usage("unsupported PR update field");
-    return this.request(`/pulls/${positiveNumber(number)}`, { method: "PATCH", body: input });
+    const n = positiveNumber(number);
+    if (!Object.keys(input).length) throw usage("nothing to update");
+    // Sync validation above; async mutate+readback mirrors editIssue (base compares as ref).
+    return (async () => {
+      const { reconciled } = await this.mutate(
+        `/pulls/${n}`,
+        { method: "PATCH", body: input },
+        async () => {
+          const current = await this.getPullRequest(n);
+          const match = Object.entries(input).every(([key, value]) => {
+            if (key === "base") return (current.base?.ref ?? "") === value;
+            return (current[key] ?? "") === value;
+          });
+          return match ? current : undefined;
+        },
+      );
+      return { pull: await this.getPullRequest(n), reconciled };
+    })();
   }
 
   async getPullRequestStatus(number) {

@@ -829,6 +829,187 @@ describe("argus-gitea-api command matrix", () => {
     assert.equal(lost.calls.filter((c) => c.method === "POST").length, 1);
   });
 
+  it("never retries a PATCH on 5xx and reconciles PR updates by readback", async () => {
+    let pr = {
+      number: 7,
+      title: "Old",
+      body: "old body",
+      state: "open",
+      html_url: "https://git.example.test/team/project/pulls/7",
+      head: { sha: "head-abc", ref: "topic" },
+      base: { ref: "main" },
+    };
+    const gitea = mockGitea(({ route, method, body }) => {
+      if (route === "/pulls/7" && method === "PATCH") {
+        pr = {
+          ...pr,
+          ...(body.title !== undefined ? { title: body.title } : {}),
+          ...(body.body !== undefined ? { body: body.body } : {}),
+          ...(body.state !== undefined ? { state: body.state } : {}),
+          ...(body.base !== undefined ? { base: { ...pr.base, ref: body.base } } : {}),
+        };
+        return Response.json({ message: "gateway timeout" }, { status: 502 });
+      }
+      if (route === "/pulls/7") return Response.json(pr);
+    });
+    const api = new GiteaApi(REPO, [REPO], gitea.fetch);
+    const reconciled = await api.updatePullRequest(7, {
+      title: "New title",
+      body: "new body",
+      base: "develop",
+    });
+    assert.equal(reconciled.reconciled, true);
+    assert.equal(reconciled.pull.title, "New title");
+    assert.equal(reconciled.pull.body, "new body");
+    assert.equal(reconciled.pull.base.ref, "develop");
+    assert.equal(gitea.calls.filter((c) => c.method === "PATCH").length, 1);
+
+    // CLI keeps post-success get and historical PR shape (no reconciled wrapper).
+    const viaCli = await cli(["update", "--number", "7", "--title", "Newer"], gitea);
+    assert.equal(viaCli.code, 0, viaCli.err);
+    assert.equal(viaCli.json().number, 7);
+    assert.equal(viaCli.json().title, "Newer");
+    assert.equal(viaCli.json().html_url, pr.html_url);
+    assert.equal(viaCli.json().head.sha, "head-abc");
+    assert.equal(viaCli.json().reconciled, undefined);
+    assert.equal(gitea.calls.filter((c) => c.method === "PATCH").length, 2);
+
+    const lost = mockGitea(({ route, method }) => {
+      if (route === "/pulls/7" && method === "PATCH") throw new TypeError("fetch failed");
+      if (route === "/pulls/7")
+        return Response.json({
+          number: 7,
+          title: "stale",
+          body: "",
+          state: "open",
+          base: { ref: "main" },
+          head: { sha: "x" },
+        });
+    });
+    const failed = await cli(["update", "--number", "7", "--title", "nope"], lost);
+    assert.equal(failed.code, EXIT_CODES.network_error);
+    assert.match(failed.error().message, /not retried/);
+    assert.equal(lost.calls.filter((c) => c.method === "PATCH").length, 1);
+  });
+
+  it("preserves historical CLI shapes for create, list-prs, update, and status", async () => {
+    let pr = null;
+    const gitea = mockGitea(({ route, method, body }) => {
+      if (route === "/pulls" && method === "POST") {
+        pr = {
+          number: 42,
+          html_url: "https://git.example.test/team/project/pulls/42",
+          title: body.title,
+          body: body.body ?? "",
+          state: "open",
+          head: { ref: body.head, sha: "deadbeef", repo: { full_name: "team/project" } },
+          base: { ref: body.base },
+        };
+        return Response.json(pr, { status: 201 });
+      }
+      // create idempotency probe and list-prs both GET /pulls?... (pathname route is /pulls).
+      if (route === "/pulls" && method === "GET") return Response.json(pr ? [pr] : []);
+      if (route === "/pulls/42" && method === "PATCH") {
+        pr = {
+          ...pr,
+          ...(body.title !== undefined ? { title: body.title } : {}),
+          ...(body.body !== undefined ? { body: body.body } : {}),
+          ...(body.state !== undefined ? { state: body.state } : {}),
+          ...(body.base !== undefined ? { base: { ...pr.base, ref: body.base } } : {}),
+        };
+        return Response.json(pr);
+      }
+      if (route === "/pulls/42") return Response.json(pr);
+      if (route === "/statuses/deadbeef")
+        return Response.json([{ state: "success", context: "ci", sha: "deadbeef" }]);
+    });
+
+    const created = await cli(
+      ["create", "--title", "Docs", "--head", "topic", "--base", "main", "--body", "hello"],
+      gitea,
+    );
+    assert.equal(created.code, 0, created.err);
+    const createdPr = created.json();
+    assert.equal(createdPr.number, 42);
+    assert.equal(createdPr.html_url, "https://git.example.test/team/project/pulls/42");
+    assert.equal(createdPr.head.sha, "deadbeef");
+
+    const listed = await cli(["list-prs", "--state", "open"], gitea);
+    assert.equal(listed.code, 0, listed.err);
+    assert.ok(Array.isArray(listed.json()));
+    assert.equal(listed.json()[0].number, 42);
+
+    const updated = await cli(["update", "--number", "42", "--title", "Docs v2"], gitea);
+    assert.equal(updated.code, 0, updated.err);
+    assert.equal(updated.json().number, 42);
+    assert.equal(updated.json().title, "Docs v2");
+    assert.equal(updated.json().html_url, createdPr.html_url);
+    assert.equal(updated.json().head.sha, "deadbeef");
+
+    const status = await cli(["status", "--number", "42"], gitea);
+    assert.equal(status.code, 0, status.err);
+    assert.deepEqual(Object.keys(status.json()).sort(), ["head_sha", "number", "statuses"]);
+    assert.equal(status.json().number, 42);
+    assert.equal(status.json().head_sha, "deadbeef");
+    assert.equal(status.json().statuses[0].state, "success");
+  });
+
+  it("lists labels and comments and gets a comment by id", async () => {
+    const labels = [
+      { id: 1, name: "bug", color: "ff0000" },
+      { id: 2, name: "docs", color: "0000ff" },
+    ];
+    const comments = [
+      {
+        id: 900,
+        body: "first",
+        html_url: "https://git.example.test/team/project/issues/5#issuecomment-900",
+      },
+      {
+        id: 901,
+        body: "second",
+        html_url: "https://git.example.test/team/project/issues/5#issuecomment-901",
+      },
+    ];
+    const gitea = mockGitea(({ route }) => {
+      if (route === "/labels") return page(labels);
+      if (route === "/issues/5/labels") return Response.json([labels[0]]);
+      if (route === "/issues/5/comments") return page(comments);
+      if (route === "/issues/comments/900") return Response.json(comments[0]);
+    });
+
+    const repoLabels = await cli(["label-list"], gitea);
+    assert.equal(repoLabels.code, 0, repoLabels.err);
+    assert.equal(repoLabels.json().count, 2);
+    assert.deepEqual(
+      repoLabels.json().items.map((l) => [l.label_id, l.name]),
+      [
+        [1, "bug"],
+        [2, "docs"],
+      ],
+    );
+
+    const onIssue = await cli(["label-list", "--number", "5"], gitea);
+    assert.equal(onIssue.code, 0, onIssue.err);
+    assert.equal(onIssue.json().issue_number, 5);
+    assert.equal(onIssue.json().items[0].label_id, 1);
+
+    const listed = await cli(["comment-list", "--number", "5"], gitea);
+    assert.equal(listed.code, 0, listed.err);
+    assert.equal(listed.json().issue_number, 5);
+    assert.equal(listed.json().count, 2);
+    assert.deepEqual(
+      listed.json().items.map((c) => c.comment_id),
+      [900, 901],
+    );
+
+    const one = await cli(["comment-get", "--comment-id", "900"], gitea);
+    assert.equal(one.code, 0, one.err);
+    assert.equal(one.json().comment_id, 900);
+    assert.equal(one.json().html_url, comments[0].html_url);
+    assert.equal(one.json().comment.body, "first");
+  });
+
   it("reads back issue state changes and verifies comment deletion", async () => {
     let issue = { id: 31, number: 3, state: "open", title: "T" };
     let comment = { id: 800, body: "x" };

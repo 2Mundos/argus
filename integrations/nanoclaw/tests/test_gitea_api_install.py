@@ -131,6 +131,38 @@ def _assert_help_and_no_proxy(installed: Path) -> None:
     assert "proxy" in no_proxy.stderr.lower()
 
 
+def test_installer_scripts_still_wire_gitea_api() -> None:
+    """Fail if real install scripts drop the gitea-api.mjs → argus-gitea-api copy steps."""
+    install_sh = (NANOCLAW / "install.sh").read_text(encoding="utf-8")
+    assert 'cp "$here/gitea-api.mjs" "$target/container/gitea-api.mjs"' in install_sh
+    assert "COPY gitea-api.mjs /tmp/argus-gitea-api.mjs" in install_sh
+    assert (
+        "install -m 0755 /tmp/argus-gitea-api.mjs /usr/local/bin/argus-gitea-api"
+        in install_sh
+    )
+
+    engines = (NANOCLAW / "engines" / "install-engines.sh").read_text(encoding="utf-8")
+    assert 'cp "$here/../gitea-api.mjs" "$target/container/"' in engines
+
+    patch = (NANOCLAW / "engines" / "patch-engines-dockerfile.py").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api"
+        in patch
+    )
+
+    tools = (NANOCLAW / "engines" / "Dockerfile.tools-layer").read_text(
+        encoding="utf-8"
+    )
+    assert "COPY --chmod=0755 gitea-api.mjs /usr/local/bin/argus-gitea-api" in tools
+    assert "gitea-api.mjs /usr/local/bin/" in tools  # staged 0644 sibling COPY
+
+    apply = (NANOCLAW / "engines" / "apply-tools-layer.sh").read_text(encoding="utf-8")
+    assert 'cp -p "$gitea_src" "$ctx/gitea-api.mjs"' in apply
+    assert 'gitea_src="$here/../gitea-api.mjs"' in apply
+
+
 @pytest.mark.parametrize("name,installer", INSTALLERS)
 def test_gitea_api_install_idempotent(tmp_path: Path, name: str, installer) -> None:
     assert SOURCE.is_file()
