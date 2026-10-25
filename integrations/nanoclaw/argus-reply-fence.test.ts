@@ -133,10 +133,7 @@ const paths = (f: ReturnType<typeof fakeArgus>) => f.calls.map((c) => c.path);
  * preflight observation and model-trace lifecycle posts (phase 2 harness reports). */
 const writesTo = (f: ReturnType<typeof fakeArgus>, id: string) =>
   paths(f).filter(
-    (p) =>
-      p.startsWith(`/tasks/${id}/`) &&
-      !p.endsWith("/observations") &&
-      !p.endsWith("/models"),
+    (p) => p.startsWith(`/tasks/${id}/`) && !p.endsWith("/observations") && !p.endsWith("/models"),
   );
 /** Where A's session sends its late output. */
 const A_THREAD = "argus:task-a:1";
