@@ -16,5 +16,6 @@ ctx="$(mktemp -d)"
 trap 'rm -rf "$ctx"' EXIT
 shopt -s nullglob
 cp -p "$here"/*.mjs "$here"/*.json "$ctx/"
-cp -p "$gitea_src" "$ctx/gitea-api.mjs"
+# Shared helper (also exercised by offline installer tests).
+bash "$here/../install-gitea-api.sh" stage-tools-ctx "$ctx"
 docker build --build-arg "BASE=$base" -f "$here/Dockerfile.tools-layer" -t "$tag" "$ctx"

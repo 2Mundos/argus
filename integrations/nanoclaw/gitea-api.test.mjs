@@ -606,7 +606,7 @@ describe("argus-gitea-api command matrix", () => {
       if (route === "/actions/artifacts/41/zip")
         return new Response(null, {
           status: 302,
-          // Same origin as the allowlisted repository only; off-origin blob hosts are refused.
+          // Artifact evidence path: same-origin /storage/…/{artifactId}.zip only.
           headers: { location: "https://git.example.test/storage/a/41.zip?sig=x" },
         });
       if (route === "https://git.example.test/storage/a/41.zip?sig=x") {
@@ -853,15 +853,18 @@ describe("argus-gitea-api command matrix", () => {
       if (route === "/pulls/7") return Response.json(pr);
     });
     const api = new GiteaApi(REPO, [REPO], gitea.fetch);
-    const reconciled = await api.updatePullRequest(7, {
+    // Library keeps the legacy PR object return (not {pull, reconciled}).
+    const updated = await api.updatePullRequest(7, {
       title: "New title",
       body: "new body",
       base: "develop",
     });
-    assert.equal(reconciled.reconciled, true);
-    assert.equal(reconciled.pull.title, "New title");
-    assert.equal(reconciled.pull.body, "new body");
-    assert.equal(reconciled.pull.base.ref, "develop");
+    assert.equal(updated.title, "New title");
+    assert.equal(updated.body, "new body");
+    assert.equal(updated.base.ref, "develop");
+    assert.equal(updated.number, 7);
+    assert.equal(updated.reconciled, undefined);
+    assert.equal(updated.pull, undefined);
     assert.equal(gitea.calls.filter((c) => c.method === "PATCH").length, 1);
 
     // CLI keeps post-success get and historical PR shape (no reconciled wrapper).
@@ -1330,7 +1333,8 @@ describe("argus-gitea-api security", () => {
       );
     }
 
-    const sameOrigin = mockGitea(({ route, url, headers }) => {
+    // Positive: same-repo web/raw path under /{owner}/{repo}/…
+    const sameRepoWeb = mockGitea(({ route, url, headers }) => {
       if (route === "/actions/jobs/2/logs")
         return new Response(null, {
           status: 302,
@@ -1343,9 +1347,103 @@ describe("argus-gitea-api security", () => {
       }
       assert.fail(`unexpected request ${url.href}`);
     });
-    const followed = await cli(["job-logs", "--job-id", "2"], sameOrigin);
+    const followed = await cli(["job-logs", "--job-id", "2"], sameRepoWeb);
     assert.equal(followed.code, 0);
     assert.equal(followed.out, "log-ok");
-    assert.equal(sameOrigin.calls.length, 2);
+    assert.equal(sameRepoWeb.calls.length, 2);
+
+    // Positive: same-repo API namespace under /api/v1/repos/{owner}/{repo}/…
+    const sameRepoApi = mockGitea(({ route, url, headers }) => {
+      if (route === "/actions/jobs/3/logs")
+        return new Response(null, {
+          status: 302,
+          headers: {
+            location: `${new URL(REPO).origin}/api/v1/repos/team/project/actions/artifacts/9/download`,
+          },
+        });
+      if (url.pathname === "/api/v1/repos/team/project/actions/artifacts/9/download") {
+        assert.deepEqual(Object.keys(headers).sort(), ["Accept"]);
+        return new Response("artifact-ok", { status: 200 });
+      }
+      assert.fail(`unexpected request ${url.href}`);
+    });
+    const apiFollow = await cli(["job-logs", "--job-id", "3"], sameRepoApi);
+    assert.equal(apiFollow.code, 0);
+    assert.equal(apiFollow.out, "artifact-ok");
+
+    // Negative: same-origin but CROSS-REPO / CROSS-TENANT path must not follow.
+    for (const cross of [
+      `${new URL(REPO).origin}/other-org/other-repo/raw/secret.log`,
+      `${new URL(REPO).origin}/api/v1/repos/other-org/other-repo/actions/jobs/1/logs`,
+      `${new URL(REPO).origin}/team/evil-sibling/raw/x`,
+      `${new URL(REPO).origin}/robots.txt`,
+      `${new URL(REPO).origin}/api/v1/user`,
+      // /storage/ is not a free pass for non-artifact downloads.
+      `${new URL(REPO).origin}/storage/a/41.zip?sig=x`,
+    ]) {
+      const crossRepo = mockGitea(({ route, headers }) => {
+        if (route === "/actions/jobs/4/logs")
+          return new Response(null, { status: 302, headers: { location: cross } });
+        assert.fail(`must not follow cross-repo redirect to ${cross} (${JSON.stringify(headers)})`);
+      });
+      const denied = await cli(["job-logs", "--job-id", "4"], crossRepo);
+      assert.equal(denied.code, EXIT_CODES.policy_denied, cross);
+      assert.equal(crossRepo.calls.length, 1, `must not follow ${cross}`);
+      assert.match(denied.error().message, /namespace|repository/, cross);
+    }
+
+    // Artifact evidence: /storage/…/{id}.zip allowed only for that artifact id.
+    const wrongStorage = mockGitea(({ route, headers }) => {
+      if (route === "/actions/artifacts/41/zip")
+        return new Response(null, {
+          status: 302,
+          headers: { location: `${new URL(REPO).origin}/storage/a/99.zip?sig=x` },
+        });
+      assert.fail(`must not follow mismatched artifact storage (${JSON.stringify(headers)})`);
+    });
+    const artDir = mkdtempSync(join(tmpdir(), "gitea-art-"));
+    try {
+      const wrongId = await cli(["artifact-download", "--artifact-id", "41", "--out", "w.zip"], {
+        ...wrongStorage,
+        cwd: artDir,
+      });
+      assert.equal(wrongId.code, EXIT_CODES.policy_denied);
+      assert.equal(wrongStorage.calls.length, 1);
+    } finally {
+      rmSync(artDir, { recursive: true, force: true });
+    }
+  });
+
+  it("updatePullRequest library return stays a PR object (legacy shape)", async () => {
+    let pr = {
+      number: 7,
+      title: "Old",
+      body: "",
+      state: "open",
+      html_url: "https://git.example.test/team/project/pulls/7",
+      head: { sha: "abc", ref: "topic" },
+      base: { ref: "main" },
+    };
+    const gitea = mockGitea(({ route, method, body }) => {
+      if (route === "" && method === "GET")
+        return Response.json({ full_name: "team/project", default_branch: "main" });
+      if (route === "/pulls/7" && method === "PATCH") {
+        pr = { ...pr, title: body.title };
+        return Response.json(pr);
+      }
+      if (route === "/pulls/7") return Response.json(pr);
+    });
+    const api = new GiteaApi(REPO, [REPO], gitea.fetch);
+    const result = await api.updatePullRequest(7, { title: "Legacy shape" });
+    assert.equal(result.number, 7);
+    assert.equal(result.title, "Legacy shape");
+    assert.equal(result.head.sha, "abc");
+    assert.equal(Object.hasOwn(result, "reconciled"), false);
+    assert.equal(Object.hasOwn(result, "pull"), false);
+    // getRepository stays a bare repo payload (not a mutator wrapper).
+    const repo = await api.getRepository();
+    assert.equal(repo.full_name, "team/project");
+    assert.equal(repo.reconciled, undefined);
+    assert.equal(repo.pull, undefined);
   });
 });

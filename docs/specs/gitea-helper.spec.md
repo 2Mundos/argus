@@ -130,10 +130,16 @@ matches the head, or the matching comment has no count, `finding_count` is `null
   with `encodeURIComponent`. A final guard refuses any API path with `..`, `%2e`, `%2f`,
   `\`, `//`, or an absolute URL. Cross-repository access cannot be expressed.
 - API requests use `redirect: "error"`. Downloads follow at most 3 redirects by hand,
-  and only when the next URL is HTTPS, same origin as the allowlisted repository
-  (`this.repository.origin`), and has no userinfo. Follow requests send only an
-  `Accept` header (no `Authorization` or `Cookie`). Any other host, scheme, or
-  credentialed URL is refused with `policy_denied`.
+  and only when the next URL is HTTPS, same origin as the allowlisted repository,
+  has no userinfo, **and** the path stays under the authorized repository namespace:
+  `/api/v1/repos/{owner}/{repo}/…` or `/{owner}/{repo}/…` (exact owner/repo, normalized).
+  Host-only same-origin is not enough — a redirect to another repo or tenant on the
+  same Gitea host is refused. For `artifact-download` only, a same-origin
+  `/storage/…` blob whose path is tied to that artifact id (Gitea signed storage) is
+  also allowed; `/storage/` redirects during other downloads, or for a different id,
+  are refused. Follow requests send only an `Accept` header (no `Authorization` or
+  `Cookie`). Any other host, scheme, path, or credentialed URL is refused with
+  `policy_denied`.
 - `--out` must not contain `..` and must not be a symlink. It must not exist, or must be
   an empty regular file. The bytes go to an exclusive `0600` temp file in the same
   directory, which is renamed or hard-linked into place, so an existing file is never
@@ -153,21 +159,28 @@ matches the head, or the matching comment has no count, `finding_count` is `null
   `engines/Dockerfile.tools-layer`, `apply-tools-layer.sh`, `build-project-image.sh`, and
   the project Dockerfiles copy the file unchanged, and that copy is idempotent.
 - Existing callers (`argus-delegate` CI probe, continuation observer) use `GiteaApi`,
-  `request`, `getPullRequest`, and `createGatewayFetch`. Their signatures are unchanged;
-  the constructor only gained an optional fourth `options` argument.
+  `request`, `getPullRequest`, `updatePullRequest`, `getRepository`, and
+  `createGatewayFetch`. Their public return shapes stay backward compatible:
+  `updatePullRequest` returns the PR object (not `{pull, reconciled}`);
+  `getRepository` returns the repository JSON. Reconciliation after ambiguous mutator
+  failures is an internal/CLI concern (mutate + readback; CLI re-GETs after `update`).
+  The constructor only gained an optional fourth `options` argument.
 - Tests (`integrations/nanoclaw/gitea-api.test.mjs`, fixtures in
   `integrations/nanoclaw/fixtures/gitea-api/`) are offline and use a mocked fetch or a
   local proxy. They run in `pnpm test`.
 - Installer acceptance is
   `integrations/nanoclaw/tests/test_gitea_api_install.py`, collected by `uv run pytest`.
-  It exercises the three install shapes (`install.sh`, `engines/install-engines.sh`, and
-  `Dockerfile.tools-layer` / `apply-tools-layer.sh`) by double-installing into isolated
-  temporary roots, asserting byte-identical copies of `gitea-api.mjs` as
-  `argus-gitea-api`, and that a missing OneCLI proxy fails closed with exit 13. It also
-  guards against installer script drift: the real `install.sh`,
-  `engines/install-engines.sh`, and `engines/Dockerfile.tools-layer` (and/or
-  `apply-tools-layer.sh`) must still contain the expected `cp` / `install -m` /
-  `COPY --chmod` lines that place `gitea-api.mjs` at `/usr/local/bin/argus-gitea-api`.
+  The shared script `integrations/nanoclaw/install-gitea-api.sh` is what `install.sh`,
+  `engines/install-engines.sh`, and `engines/apply-tools-layer.sh` call to place
+  `gitea-api.mjs`. The pytest **executes that script** (and the real `install.sh` against
+  a disposable NanoClaw stub with isolated `HOME` and fake `docker`/`podman` stubs) twice
+  into isolated temporary roots — it does not re-implement copy semantics in Python.
+  After each pass it asserts byte-identical `argus-gitea-api`, `--help` exit 0, and
+  missing OneCLI proxy → exit 13. It also guards script drift: those callers must still
+  invoke `install-gitea-api.sh`, and the Dockerfiles / `patch-engines-dockerfile.py` must
+  still contain the `install -m` / `COPY --chmod` lines that place the binary at
+  `/usr/local/bin/argus-gitea-api`. Candidate image build/probe still needs docker/podman
+  (ASSIST when absent); this offline gate is not a live image smoke.
 
 # 6. Implementation Consequences
 

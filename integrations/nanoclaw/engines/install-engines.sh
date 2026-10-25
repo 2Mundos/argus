@@ -55,6 +55,6 @@ JS
 
 # 3. image: the Cursor agent, argus-delegate, and a version smoke that fails the build
 cp "$here/install-cursor-agent.sh" "$here/argus-delegate.mjs" "$here/account-settings.mjs" "$here/anthropic-redirect.mjs" "$here/model-policy.mjs" "$here/model-policy.defaults.json" "$here/milestones.mjs" "$here/livelog.mjs" "$here/usage.mjs" "$target/container/"
-cp "$here/../gitea-api.mjs" "$target/container/"
+bash "$here/../install-gitea-api.sh" stage-engines "$target"
 python3 "$here/patch-engines-dockerfile.py" "$target/container/Dockerfile"
 echo "engines overlay applied to $target"

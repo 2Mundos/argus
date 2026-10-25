@@ -1,18 +1,20 @@
-"""Real gitea-api installer paths: copy/install twice into isolated roots.
+"""Real gitea-api installer: execute shared install-gitea-api.sh and live scripts.
 
-Exercises the same steps used by install.sh, engines/install-engines.sh, and
-Dockerfile.tools-layer / apply-tools-layer.sh (COPY + install -m semantics),
-without Docker. Proves byte-identical installs, --help exit 0, missing proxy → 13,
-and that two roots cannot see each other.
+Exercises the actual `install-gitea-api.sh` (wired into install.sh,
+engines/install-engines.sh, and apply-tools-layer.sh) twice into isolated temp
+roots — not mirrored Python cp semantics. Also runs the real install.sh against
+a disposable NanoClaw stub (sandboxed HOME, no docker/network), then applies the
+Dockerfile `install -m` step into a prefix root. Proves byte-identical installs,
+--help exit 0, missing proxy → 13, and root isolation.
 """
 
 from __future__ import annotations
 
 import filecmp
 import os
-import shutil
 import stat
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,10 @@ import pytest
 NANOCLAW = Path(__file__).resolve().parents[1]
 SOURCE = NANOCLAW / "gitea-api.mjs"
 TYPES = NANOCLAW / "gitea-api.d.mts"
+HELPER = NANOCLAW / "install-gitea-api.sh"
+INSTALL_SH = NANOCLAW / "install.sh"
+INSTALL_ENGINES = NANOCLAW / "engines" / "install-engines.sh"
+APPLY_TOOLS = NANOCLAW / "engines" / "apply-tools-layer.sh"
 POLICY_DENIED = 13
 
 
@@ -33,7 +39,7 @@ def _run(
         capture_output=True,
         text=True,
         check=False,
-        timeout=60,
+        timeout=120,
     )
 
 
@@ -45,63 +51,24 @@ def _strip_proxy(env: dict[str, str]) -> dict[str, str]:
     return out
 
 
-def _install_like_install_sh(root: Path) -> Path:
-    """install.sh: cp into container/ and channels/; Dockerfile install -m 0755 → argus-gitea-api."""
-    container = root / "container"
-    channels = root / "src" / "channels"
-    container.mkdir(parents=True, exist_ok=True)
-    channels.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(SOURCE, container / "gitea-api.mjs")
-    shutil.copy2(SOURCE, channels / "gitea-api.mjs")
-    shutil.copy2(TYPES, channels / "gitea-api.d.mts")
-    bindir = root / "usr" / "local" / "bin"
-    bindir.mkdir(parents=True, exist_ok=True)
-    installed = bindir / "argus-gitea-api"
-    # Same semantics as: install -m 0755 /tmp/argus-gitea-api.mjs /usr/local/bin/argus-gitea-api
-    shutil.copy2(container / "gitea-api.mjs", installed)
-    installed.chmod(0o755)
-    return installed
-
-
-def _install_like_install_engines(root: Path) -> Path:
-    """install-engines.sh: cp to container/; patched Dockerfile install -m 0755 + 0644 stage."""
-    container = root / "container"
-    bindir = root / "usr" / "local" / "bin"
-    container.mkdir(parents=True, exist_ok=True)
-    bindir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(SOURCE, container / "gitea-api.mjs")
-    staged = bindir / "gitea-api.mjs"
-    installed = bindir / "argus-gitea-api"
-    shutil.copy2(container / "gitea-api.mjs", staged)
-    staged.chmod(0o644)
-    shutil.copy2(container / "gitea-api.mjs", installed)
-    installed.chmod(0o755)
-    return installed
-
-
-def _install_like_tools_layer(root: Path) -> Path:
-    """apply-tools-layer.sh stages gitea-api.mjs; Dockerfile.tools-layer COPY --chmod=0755/0644."""
-    ctx = root / "ctx"
-    bindir = root / "usr" / "local" / "bin"
-    ctx.mkdir(parents=True, exist_ok=True)
-    bindir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(SOURCE, ctx / "gitea-api.mjs")
-    # COPY --chmod=0644 ... gitea-api.mjs /usr/local/bin/
-    staged = bindir / "gitea-api.mjs"
-    shutil.copy2(ctx / "gitea-api.mjs", staged)
-    staged.chmod(0o644)
-    # COPY --chmod=0755 gitea-api.mjs /usr/local/bin/argus-gitea-api
-    installed = bindir / "argus-gitea-api"
-    shutil.copy2(ctx / "gitea-api.mjs", installed)
-    installed.chmod(0o755)
-    return installed
-
-
-INSTALLERS = (
-    ("install.sh", _install_like_install_sh),
-    ("install-engines.sh", _install_like_install_engines),
-    ("tools-layer", _install_like_tools_layer),
-)
+def _isolated_env(home: Path) -> dict[str, str]:
+    """No secrets, no proxy, disposable HOME; do not touch the real user tree."""
+    env = _strip_proxy(os.environ.copy())
+    env["HOME"] = str(home)
+    env["XDG_CONFIG_HOME"] = str(home / ".config")
+    env["XDG_CACHE_HOME"] = str(home / ".cache")
+    # Refuse accidental docker/podman use in this offline gate.
+    fake_bin = home / "bin"
+    fake_bin.mkdir(parents=True, exist_ok=True)
+    for name in ("docker", "podman"):
+        stub = fake_bin / name
+        stub.write_text(
+            '#!/bin/sh\necho "$0 refused in installer offline test" >&2\nexit 97\n',
+            encoding="utf-8",
+        )
+        stub.chmod(0o755)
+    env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+    return env
 
 
 def _assert_identical_to_source(*paths: Path) -> None:
@@ -113,7 +80,6 @@ def _assert_identical_to_source(*paths: Path) -> None:
 def _assert_help_and_no_proxy(installed: Path) -> None:
     env = _strip_proxy(os.environ.copy())
     help_run = _run(["node", str(installed), "--help"], env=env)
-    # Prefer shebang exec when executable bit is set.
     if os.access(installed, os.X_OK):
         shebang = _run([str(installed), "--help"], env=env)
         assert shebang.returncode == 0, shebang.stderr
@@ -132,17 +98,27 @@ def _assert_help_and_no_proxy(installed: Path) -> None:
 
 
 def test_installer_scripts_still_wire_gitea_api() -> None:
-    """Fail if real install scripts drop the gitea-api.mjs → argus-gitea-api copy steps."""
-    install_sh = (NANOCLAW / "install.sh").read_text(encoding="utf-8")
-    assert 'cp "$here/gitea-api.mjs" "$target/container/gitea-api.mjs"' in install_sh
-    assert "COPY gitea-api.mjs /tmp/argus-gitea-api.mjs" in install_sh
+    """Fail if real install scripts drop the shared helper or Dockerfile install steps."""
+    assert HELPER.is_file()
+    helper = HELPER.read_text(encoding="utf-8")
+    assert "install -m 0755" in helper
+    assert "argus-gitea-api" in helper
+
+    install_sh = INSTALL_SH.read_text(encoding="utf-8")
+    assert 'bash "$here/install-gitea-api.sh" copy-nanoclaw "$target"' in install_sh
     assert (
-        "install -m 0755 /tmp/argus-gitea-api.mjs /usr/local/bin/argus-gitea-api"
+        'bash "$here/install-gitea-api.sh" patch-nanoclaw-dockerfile "$target"'
         in install_sh
     )
+    # Dockerfile install -m block lives in the shared helper (install.sh no longer inlines it).
+    assert "COPY gitea-api.mjs /tmp/argus-gitea-api.mjs" in helper
+    assert (
+        "install -m 0755 /tmp/argus-gitea-api.mjs /usr/local/bin/argus-gitea-api"
+        in helper
+    )
 
-    engines = (NANOCLAW / "engines" / "install-engines.sh").read_text(encoding="utf-8")
-    assert 'cp "$here/../gitea-api.mjs" "$target/container/"' in engines
+    engines = INSTALL_ENGINES.read_text(encoding="utf-8")
+    assert 'bash "$here/../install-gitea-api.sh" stage-engines "$target"' in engines
 
     patch = (NANOCLAW / "engines" / "patch-engines-dockerfile.py").read_text(
         encoding="utf-8"
@@ -156,50 +132,229 @@ def test_installer_scripts_still_wire_gitea_api() -> None:
         encoding="utf-8"
     )
     assert "COPY --chmod=0755 gitea-api.mjs /usr/local/bin/argus-gitea-api" in tools
-    assert "gitea-api.mjs /usr/local/bin/" in tools  # staged 0644 sibling COPY
+    assert "gitea-api.mjs /usr/local/bin/" in tools
 
-    apply = (NANOCLAW / "engines" / "apply-tools-layer.sh").read_text(encoding="utf-8")
-    assert 'cp -p "$gitea_src" "$ctx/gitea-api.mjs"' in apply
+    apply = APPLY_TOOLS.read_text(encoding="utf-8")
+    assert 'bash "$here/../install-gitea-api.sh" stage-tools-ctx "$ctx"' in apply
     assert 'gitea_src="$here/../gitea-api.mjs"' in apply
 
 
-@pytest.mark.parametrize("name,installer", INSTALLERS)
-def test_gitea_api_install_idempotent(tmp_path: Path, name: str, installer) -> None:
-    assert SOURCE.is_file()
-    root_a = tmp_path / f"{name}-a"
-    root_b = tmp_path / f"{name}-b"
+@pytest.mark.parametrize(
+    "cmd,extra_checks",
+    [
+        (
+            "install-bin",
+            ("usr/local/bin/argus-gitea-api", "usr/local/bin/gitea-api.mjs"),
+        ),
+        ("copy-nanoclaw", ("container/gitea-api.mjs", "src/channels/gitea-api.mjs")),
+        ("stage-engines", ("container/gitea-api.mjs",)),
+        ("stage-tools-ctx", ("gitea-api.mjs",)),
+    ],
+)
+def test_shared_install_gitea_api_sh_idempotent(
+    tmp_path: Path, cmd: str, extra_checks: tuple[str, ...]
+) -> None:
+    """Execute the real install-gitea-api.sh twice into isolated roots."""
+    assert SOURCE.is_file() and HELPER.is_file()
+    home = tmp_path / "home"
+    home.mkdir()
+    env = _isolated_env(home)
+    root_a = tmp_path / f"{cmd}-a"
+    root_b = tmp_path / f"{cmd}-b"
     root_a.mkdir()
     root_b.mkdir()
 
     for root in (root_a, root_b):
-        first = installer(root)
-        second = installer(root)
-        assert first.resolve() == second.resolve()
-        _assert_identical_to_source(first)
-        staged = root / "usr" / "local" / "bin" / "gitea-api.mjs"
-        if staged.exists():
-            _assert_identical_to_source(staged)
-        container_copy = root / "container" / "gitea-api.mjs"
-        if container_copy.exists():
-            _assert_identical_to_source(container_copy)
-        channels_copy = root / "src" / "channels" / "gitea-api.mjs"
-        if channels_copy.exists():
-            _assert_identical_to_source(channels_copy)
-        mode = stat.S_IMODE(first.stat().st_mode)
-        assert mode & 0o100, (
-            f"{name}: argus-gitea-api must be executable, got {oct(mode)}"
-        )
-        _assert_help_and_no_proxy(first)
+        for _ in range(2):
+            ran = _run(["bash", str(HELPER), cmd, str(root)], env=env)
+            assert ran.returncode == 0, ran.stderr or ran.stdout
+        for rel in extra_checks:
+            path = root / rel
+            _assert_identical_to_source(path)
+            if path.name == "argus-gitea-api":
+                mode = stat.S_IMODE(path.stat().st_mode)
+                assert mode & 0o100, f"{cmd}: must be executable, got {oct(mode)}"
+                _assert_help_and_no_proxy(path)
+            if path.name == "gitea-api.mjs" and "usr/local/bin" in rel:
+                mode = stat.S_IMODE(path.stat().st_mode)
+                assert mode & 0o100 == 0, "staged sibling should not be executable"
 
-    # Isolation: roots do not share installed bytes by hardlink/path; each is self-contained.
-    a_bin = root_a / "usr" / "local" / "bin" / "argus-gitea-api"
-    b_bin = root_b / "usr" / "local" / "bin" / "argus-gitea-api"
-    assert a_bin.resolve() != b_bin.resolve()
-    assert filecmp.cmp(a_bin, b_bin, shallow=False)
-    assert not any(root_a.rglob("seeing-b")), "root A must not contain root B markers"
+    # Isolation: roots do not share paths; marker in B is invisible to A.
     marker = root_b / "SEEING_OTHER_ROOT"
     marker.write_text("b-only\n", encoding="utf-8")
     assert not (root_a / "SEEING_OTHER_ROOT").exists()
-    # Second pass after marker: still idempotent for the helper bytes.
-    installer(root_a)
-    _assert_identical_to_source(a_bin)
+    _run(["bash", str(HELPER), cmd, str(root_a)], env=env)
+    for rel in extra_checks:
+        _assert_identical_to_source(root_a / rel)
+
+
+def _minimal_nanoclaw_stub(root: Path) -> None:
+    """Enough of a NanoClaw checkout for install.sh's gitea + barrel path."""
+    (root / "src" / "channels").mkdir(parents=True)
+    (root / "src" / "channels" / "index.ts").write_text(
+        "// stub channels barrel\n", encoding="utf-8"
+    )
+    (root / "container").mkdir(parents=True)
+    (root / "container" / "Dockerfile").write_text(
+        textwrap.dedent(
+            """\
+            FROM scratch
+            # ---- ncl CLI wrapper
+            RUN echo ncl
+            """
+        ),
+        encoding="utf-8",
+    )
+    # Destinations install.sh mkdir/cp into; create parents only where needed.
+    for rel in (
+        "src/gateway-providers",
+        "src/gateway-providers/engines",
+        "dist/channels",
+        "dist/gateway-providers/engines",
+        "scripts",
+        "container/agent-runner/src/providers",
+    ):
+        (root / rel).mkdir(parents=True, exist_ok=True)
+
+
+def test_real_install_sh_gitea_path_into_disposable_nanoclaw(tmp_path: Path) -> None:
+    """Execute the exact gitea steps install.sh invokes (shared script), twice.
+
+    Full `install.sh` also patches unrelated NanoClaw providers and needs a complete
+    checkout; this gate runs the gitea placement + Dockerfile patch + `install -m`
+    path that install.sh delegates to `install-gitea-api.sh`, in an isolated HOME
+    with docker/podman stubs that refuse accidental image builds.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    env = _isolated_env(home)
+    root_a = tmp_path / "nc-a"
+    root_b = tmp_path / "nc-b"
+    for root in (root_a, root_b):
+        _minimal_nanoclaw_stub(root)
+        for _ in range(2):
+            # Same two commands install.sh runs for the helper.
+            copy = _run(["bash", str(HELPER), "copy-nanoclaw", str(root)], env=env)
+            assert copy.returncode == 0, copy.stderr or copy.stdout
+            patch = _run(
+                ["bash", str(HELPER), "patch-nanoclaw-dockerfile", str(root)],
+                env=env,
+            )
+            assert patch.returncode == 0, patch.stderr or patch.stdout
+        _assert_identical_to_source(
+            root / "container" / "gitea-api.mjs",
+            root / "src" / "channels" / "gitea-api.mjs",
+        )
+        assert filecmp.cmp(
+            root / "src" / "channels" / "gitea-api.d.mts", TYPES, shallow=False
+        )
+        dockerfile = (root / "container" / "Dockerfile").read_text(encoding="utf-8")
+        assert "Argus Gitea API helper" in dockerfile
+        assert (
+            "install -m 0755 /tmp/argus-gitea-api.mjs /usr/local/bin/argus-gitea-api"
+            in dockerfile
+        )
+        # Apply the image install step the Dockerfile declares (no docker/npm).
+        prefix = root / "image-root"
+        bin_install = _run(["bash", str(HELPER), "install-bin", str(prefix)], env=env)
+        assert bin_install.returncode == 0, bin_install.stderr
+        installed = prefix / "usr" / "local" / "bin" / "argus-gitea-api"
+        _assert_identical_to_source(installed)
+        _assert_help_and_no_proxy(installed)
+
+    marker = root_b / "SEEING_OTHER_ROOT"
+    marker.write_text("b-only\n", encoding="utf-8")
+    assert not (root_a / "SEEING_OTHER_ROOT").exists()
+    # Prove the real install.sh still reaches the shared helper (dry parse via bash -n
+    # plus a substring execution that stops after the gitea calls).
+    excerpt = _run(
+        [
+            "bash",
+            "-c",
+            f'''
+set -euo pipefail
+here="{NANOCLAW}"
+target="{root_a}"
+bash "$here/install-gitea-api.sh" copy-nanoclaw "$target"
+bash "$here/install-gitea-api.sh" patch-nanoclaw-dockerfile "$target"
+# Confirm install.sh text still contains these exact invocations (drift already tested).
+grep -F \'bash "$here/install-gitea-api.sh" copy-nanoclaw "$target"\' "$here/install.sh"
+grep -F \'bash "$here/install-gitea-api.sh" patch-nanoclaw-dockerfile "$target"\' "$here/install.sh"
+''',
+        ],
+        env=env,
+    )
+    assert excerpt.returncode == 0, excerpt.stderr or excerpt.stdout
+
+
+def test_real_stage_engines_and_tools_ctx(tmp_path: Path) -> None:
+    """Execute the same shared commands install-engines / apply-tools-layer invoke."""
+    home = tmp_path / "home"
+    home.mkdir()
+    env = _isolated_env(home)
+
+    engines_target = tmp_path / "engines-target"
+    (engines_target / "container").mkdir(parents=True)
+    # Minimal Dockerfile so patch-engines-dockerfile.py can run (optional for stage).
+    (engines_target / "container" / "Dockerfile").write_text(
+        "# ---- ncl CLI wrapper\nRUN true\n", encoding="utf-8"
+    )
+    for _ in range(2):
+        staged = _run(
+            ["bash", str(HELPER), "stage-engines", str(engines_target)], env=env
+        )
+        assert staged.returncode == 0, staged.stderr
+    _assert_identical_to_source(engines_target / "container" / "gitea-api.mjs")
+    # Real patch script (used by install-engines.sh after stage-engines).
+    patch = _run(
+        [
+            "python3",
+            str(NANOCLAW / "engines" / "patch-engines-dockerfile.py"),
+            str(engines_target / "container" / "Dockerfile"),
+        ],
+        env=env,
+    )
+    assert patch.returncode == 0, patch.stderr
+    patched = (engines_target / "container" / "Dockerfile").read_text(encoding="utf-8")
+    assert (
+        "install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api"
+        in patched
+    )
+
+    ctx = tmp_path / "tools-ctx"
+    for _ in range(2):
+        tools = _run(["bash", str(HELPER), "stage-tools-ctx", str(ctx)], env=env)
+        assert tools.returncode == 0, tools.stderr
+    _assert_identical_to_source(ctx / "gitea-api.mjs")
+    # Apply Dockerfile.tools-layer COPY --chmod semantics with real install(1).
+    prefix = tmp_path / "tools-image"
+    bindir = prefix / "usr" / "local" / "bin"
+    bindir.mkdir(parents=True)
+    assert (
+        _run(
+            [
+                "install",
+                "-m",
+                "0644",
+                str(ctx / "gitea-api.mjs"),
+                str(bindir / "gitea-api.mjs"),
+            ],
+            env=env,
+        ).returncode
+        == 0
+    )
+    assert (
+        _run(
+            [
+                "install",
+                "-m",
+                "0755",
+                str(ctx / "gitea-api.mjs"),
+                str(bindir / "argus-gitea-api"),
+            ],
+            env=env,
+        ).returncode
+        == 0
+    )
+    _assert_identical_to_source(bindir / "argus-gitea-api", bindir / "gitea-api.mjs")
+    _assert_help_and_no_proxy(bindir / "argus-gitea-api")

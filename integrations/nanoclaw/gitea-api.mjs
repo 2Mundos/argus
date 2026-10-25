@@ -225,6 +225,52 @@ function safeApiPath(path) {
   return path;
 }
 
+/**
+ * Download redirects must stay on the allowlisted host AND inside the authorized
+ * owner/repo namespace (API `/api/v1/repos/{owner}/{repo}/…` or web `/{owner}/{repo}/…`).
+ * Same-origin alone is not enough — cross-repo / cross-tenant paths on the host are refused.
+ * Artifact downloads may also follow a same-origin `/storage/…` blob whose path is tied
+ * to that artifact id (Gitea signed storage), and nothing else.
+ */
+function isAuthorizedDownloadRedirect(next, repository, evidence = null) {
+  if (
+    next.protocol !== "https:" ||
+    next.username ||
+    next.password ||
+    next.origin !== repository.origin
+  )
+    return false;
+  const pathname = next.pathname;
+  if (
+    !pathname.startsWith("/") ||
+    pathname.startsWith("//") ||
+    /[\\#]|%2e|%2f|%5c/i.test(pathname) ||
+    pathname.split("/").some((part) => part === "." || part === "..")
+  )
+    return false;
+  const owner = encodeURIComponent(repository.owner);
+  const repo = encodeURIComponent(repository.repo);
+  const apiPrefix = `/api/v1/repos/${owner}/${repo}`;
+  const webPrefix = `/${owner}/${repo}`;
+  if (
+    pathname === apiPrefix ||
+    pathname.startsWith(`${apiPrefix}/`) ||
+    pathname === webPrefix ||
+    pathname.startsWith(`${webPrefix}/`)
+  )
+    return true;
+  if (evidence?.kind === "artifact" && Number.isSafeInteger(evidence.id) && evidence.id >= 1) {
+    const id = String(evidence.id);
+    const parts = pathname.split("/").filter(Boolean);
+    // Explicit evidence path: /storage/…/{id}.zip (or a segment equal to the id).
+    if (parts[0] === "storage" && parts.length >= 2) {
+      const last = parts.at(-1);
+      if (last === `${id}.zip` || last === id || parts.includes(id)) return true;
+    }
+  }
+  return false;
+}
+
 // ---- error sanitizing ----
 
 const SECRETISH = [
@@ -647,10 +693,12 @@ export class GiteaApi {
 
   /**
    * GET a binary resource. Follows at most 3 redirects by hand, and only when the next
-   * URL is HTTPS, same origin as the allowlisted repository, and has no userinfo.
-   * Follow requests send Accept only (no Authorization/Cookie). Other hosts → policy_denied.
+   * URL is HTTPS, same origin, no userinfo, and under the authorized repo API or web
+   * namespace (not an arbitrary same-host path). Artifact downloads may also follow a
+   * `/storage/…` blob tied to that artifact id. Follow requests send Accept only
+   * (no Authorization/Cookie). Other hosts or repos → policy_denied.
    */
-  async download(path, { maxBytes, sink, timeoutMs }) {
+  async download(path, { maxBytes, sink, timeoutMs, evidence = null } = {}) {
     let response = await this.exchange(path, { accept: "*/*", redirect: "manual", timeoutMs });
     let current = `${this.base}${path}`;
     for (let hops = 0; isRedirect(response.status); hops++) {
@@ -663,13 +711,10 @@ export class GiteaApi {
       } catch {
         throw new GiteaError("bad_response", "redirect without a valid location");
       }
-      if (
-        next.protocol !== "https:" ||
-        next.username ||
-        next.password ||
-        next.origin !== this.repository.origin
-      )
-        throw policy("redirect outside the allowlisted repository origin refused");
+      if (!isAuthorizedDownloadRedirect(next, this.repository, evidence))
+        throw policy(
+          "redirect outside the allowlisted repository namespace (host/owner/repo) refused",
+        );
       current = next.toString();
       response = await this.exchange(null, {
         url: current,
@@ -743,8 +788,9 @@ export class GiteaApi {
     const n = positiveNumber(number);
     if (!Object.keys(input).length) throw usage("nothing to update");
     // Sync validation above; async mutate+readback mirrors editIssue (base compares as ref).
+    // Legacy library return is the PR object (not {pull, reconciled}); CLI re-GETs after.
     return (async () => {
-      const { reconciled } = await this.mutate(
+      const { value } = await this.mutate(
         `/pulls/${n}`,
         { method: "PATCH", body: input },
         async () => {
@@ -756,7 +802,7 @@ export class GiteaApi {
           return match ? current : undefined;
         },
       );
-      return { pull: await this.getPullRequest(n), reconciled };
+      return value;
     })();
   }
 
@@ -1089,8 +1135,12 @@ export class GiteaApi {
     return this.request(`/actions/artifacts/${positiveNumber(id, "artifact-id")}`);
   }
 
-  artifactZip(id, options) {
-    return this.download(`/actions/artifacts/${positiveNumber(id, "artifact-id")}/zip`, options);
+  artifactZip(id, options = {}) {
+    const artifactId = positiveNumber(id, "artifact-id");
+    return this.download(`/actions/artifacts/${artifactId}/zip`, {
+      ...options,
+      evidence: { kind: "artifact", id: artifactId },
+    });
   }
 
   pullDiff(number, options) {

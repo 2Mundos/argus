@@ -88,6 +88,7 @@ export class GiteaApi {
     fetchImpl?: typeof fetch,
     options?: GiteaApiOptions,
   );
+  /** Repository JSON from Gitea (not a `{pull, reconciled}` wrapper). */
   getRepository(): Promise<unknown>;
   request(path: string, init?: { method?: string; body?: unknown }): Promise<unknown>;
   paginate(
@@ -99,6 +100,22 @@ export class GiteaApi {
     number: number;
     state?: string;
     merged?: boolean;
+    head?: { sha?: string };
+    html_url?: string;
+  }>;
+  /**
+   * Legacy return: the pull-request object itself (not `{pull, reconciled}`).
+   * Ambiguous mutator failures still reconcile via GET readback internally.
+   */
+  updatePullRequest(
+    number: number,
+    input: { title?: string; body?: string; state?: string; base?: string },
+  ): Promise<{
+    number: number;
+    title?: string;
+    body?: string;
+    state?: string;
+    base?: { ref?: string };
     head?: { sha?: string };
     html_url?: string;
   }>;
