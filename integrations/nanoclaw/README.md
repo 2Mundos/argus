@@ -44,6 +44,14 @@ leases use OneCLI path `/{owner}/{repo}.git/*` for smart-HTTP injection while th
 Operator `docker exec` Git probes do not substitute for a full native worker checkout under
 Codex; see [worker lifecycle spec 3.8](../../docs/specs/worker-lifecycle.spec.md).
 
+Workers reach the Gitea REST API only through `gitea-api.mjs`, installed as
+`/usr/local/bin/argus-gitea-api`. It is credential-free (OneCLI injects auth), limited to
+the allowlisted repository, and has no merge command. It covers PRs, issues, labels,
+comments, reviews, statuses, Actions logs and artifacts, and `review-findings`. The
+commands, exit codes and the operator canary are in
+[the Gitea helper spec](../../docs/specs/gitea-helper.spec.md). Its offline tests run with
+`node --test integrations/nanoclaw/gitea-api.test.mjs` (also part of `pnpm test`).
+
 ### Codex sandbox profile (default on for Codex agents)
 
 `install.sh` also installs the Codex sandbox profile

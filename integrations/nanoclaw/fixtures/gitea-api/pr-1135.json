@@ -1,0 +1,23 @@
+{
+  "id": 51135,
+  "number": 1135,
+  "title": "[REDACTED] tighten worker retry policy",
+  "state": "open",
+  "html_url": "https://git.example.test/team/project/pulls/1135",
+  "head": {
+    "ref": "feat/redacted",
+    "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+    "repo": {
+      "full_name": "team/project"
+    }
+  },
+  "base": {
+    "ref": "main",
+    "sha": "0123456789abcdef0123456789abcdef01234567",
+    "repo": {
+      "full_name": "team/project"
+    }
+  },
+  "mergeable": true,
+  "merged": false
+}

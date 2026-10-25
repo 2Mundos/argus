@@ -1,0 +1,38 @@
+[
+  {
+    "id": 9100,
+    "user": {
+      "login": "argus-review"
+    },
+    "body": "## Agentic review — no findings\n\nReviewed head: `0123456789abcdef0123456789abcdef01234567`\n\nfinding_count: 0\n",
+    "created_at": "2026-10-20T10:00:00Z",
+    "updated_at": "2026-10-20T10:00:00Z",
+    "html_url": "https://git.example.test/team/project/pulls/1135#issuecomment-9100",
+    "issue_url": "https://git.example.test/api/v1/repos/team/project/issues/1135",
+    "pull_request_url": "https://git.example.test/team/project/pulls/1135"
+  },
+  {
+    "id": 9150,
+    "user": {
+      "login": "maintainer"
+    },
+    "body": "Pushed a fix for the retry loop; please re-review.",
+    "created_at": "2026-10-21T09:00:00Z",
+    "updated_at": "2026-10-21T09:00:00Z",
+    "html_url": "https://git.example.test/team/project/pulls/1135#issuecomment-9150",
+    "issue_url": "https://git.example.test/api/v1/repos/team/project/issues/1135",
+    "pull_request_url": "https://git.example.test/team/project/pulls/1135"
+  },
+  {
+    "id": 9208,
+    "user": {
+      "login": "argus-review"
+    },
+    "body": "## Agentic review — 2 findings\n\nReviewed head: `4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d`\n\nfinding_count: 2\n\n### P2 — [REDACTED] retry loop ignores Retry-After\n\n`[REDACTED]/client.py:88` retries immediately after a 429.\n\n### P2 — [REDACTED] missing readback after PATCH\n\n`[REDACTED]/client.py:141` assumes the edit landed.\n",
+    "created_at": "2026-10-21T11:30:00Z",
+    "updated_at": "2026-10-21T11:30:00Z",
+    "html_url": "https://git.example.test/team/project/pulls/1135#issuecomment-9208",
+    "issue_url": "https://git.example.test/api/v1/repos/team/project/issues/1135",
+    "pull_request_url": "https://git.example.test/team/project/pulls/1135"
+  }
+]
