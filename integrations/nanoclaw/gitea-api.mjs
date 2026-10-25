@@ -229,8 +229,8 @@ function safeApiPath(path) {
  * Download redirects must stay on the allowlisted host AND inside the authorized
  * owner/repo namespace (API `/api/v1/repos/{owner}/{repo}/…` or web `/{owner}/{repo}/…`).
  * Same-origin alone is not enough — cross-repo / cross-tenant paths on the host are refused.
- * Artifact downloads may also follow a same-origin `/storage/…` blob whose path is tied
- * to that artifact id (Gitea signed storage), and nothing else.
+ * Artifact downloads may also follow a same-origin `/storage/…` blob whose final
+ * segment is exactly `{id}.zip` or `{id}` (Gitea signed storage), and nothing else.
  */
 function isAuthorizedDownloadRedirect(next, repository, evidence = null) {
   if (
@@ -262,10 +262,11 @@ function isAuthorizedDownloadRedirect(next, repository, evidence = null) {
   if (evidence?.kind === "artifact" && Number.isSafeInteger(evidence.id) && evidence.id >= 1) {
     const id = String(evidence.id);
     const parts = pathname.split("/").filter(Boolean);
-    // Explicit evidence path: /storage/…/{id}.zip (or a segment equal to the id).
+    // Explicit evidence path: final segment must be exactly `{id}.zip` or `{id}`.
+    // Interior segments that merely embed the id (e.g. /storage/x/41/other.zip) are refused.
     if (parts[0] === "storage" && parts.length >= 2) {
       const last = parts.at(-1);
-      if (last === `${id}.zip` || last === id || parts.includes(id)) return true;
+      if (last === `${id}.zip` || last === id) return true;
     }
   }
   return false;

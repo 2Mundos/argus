@@ -1392,7 +1392,7 @@ describe("argus-gitea-api security", () => {
       assert.match(denied.error().message, /namespace|repository/, cross);
     }
 
-    // Artifact evidence: /storage/…/{id}.zip allowed only for that artifact id.
+    // Artifact evidence: final segment must be `{id}.zip` or `{id}` for that artifact.
     const wrongStorage = mockGitea(({ route, headers }) => {
       if (route === "/actions/artifacts/41/zip")
         return new Response(null, {
@@ -1409,6 +1409,45 @@ describe("argus-gitea-api security", () => {
       });
       assert.equal(wrongId.code, EXIT_CODES.policy_denied);
       assert.equal(wrongStorage.calls.length, 1);
+
+      // Negative: interior segment equal to the id is not enough (/storage/x/41/other.zip).
+      const interiorStorage = mockGitea(({ route, headers }) => {
+        if (route === "/actions/artifacts/41/zip")
+          return new Response(null, {
+            status: 302,
+            headers: {
+              location: `${new URL(REPO).origin}/storage/x/41/other.zip?sig=x`,
+            },
+          });
+        assert.fail(`must not follow interior-id storage path (${JSON.stringify(headers)})`);
+      });
+      const interior = await cli(["artifact-download", "--artifact-id", "41", "--out", "i.zip"], {
+        ...interiorStorage,
+        cwd: artDir,
+      });
+      assert.equal(interior.code, EXIT_CODES.policy_denied);
+      assert.equal(interiorStorage.calls.length, 1);
+
+      // Positive: bare final segment `{id}` (not only `{id}.zip`) is authorized.
+      const bareZip = Buffer.from("bare-artifact");
+      const bareStorage = mockGitea(({ route, headers }) => {
+        if (route === "/actions/artifacts/41/zip")
+          return new Response(null, {
+            status: 302,
+            headers: { location: `${new URL(REPO).origin}/storage/a/41?sig=x` },
+          });
+        if (route === `${new URL(REPO).origin}/storage/a/41?sig=x`) {
+          assert.deepEqual(Object.keys(headers), ["Accept"]);
+          return new Response(bareZip, { headers: { "content-type": "application/zip" } });
+        }
+      });
+      const bare = await cli(["artifact-download", "--artifact-id", "41", "--out", "bare.zip"], {
+        ...bareStorage,
+        cwd: artDir,
+      });
+      assert.equal(bare.code, 0, bare.err);
+      assert.equal(bareStorage.calls.length, 2);
+      assert.deepEqual(readFileSync(join(artDir, "bare.zip")), bareZip);
     } finally {
       rmSync(artDir, { recursive: true, force: true });
     }

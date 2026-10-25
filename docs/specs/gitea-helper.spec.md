@@ -135,11 +135,12 @@ matches the head, or the matching comment has no count, `finding_count` is `null
   `/api/v1/repos/{owner}/{repo}/…` or `/{owner}/{repo}/…` (exact owner/repo, normalized).
   Host-only same-origin is not enough — a redirect to another repo or tenant on the
   same Gitea host is refused. For `artifact-download` only, a same-origin
-  `/storage/…` blob whose path is tied to that artifact id (Gitea signed storage) is
-  also allowed; `/storage/` redirects during other downloads, or for a different id,
-  are refused. Follow requests send only an `Accept` header (no `Authorization` or
-  `Cookie`). Any other host, scheme, path, or credentialed URL is refused with
-  `policy_denied`.
+  `/storage/…` blob whose **final path segment** is exactly `{id}.zip` or `{id}`
+  (Gitea signed storage for that artifact) is also allowed; an interior segment that
+  merely embeds the id (e.g. `/storage/x/{id}/other.zip`), `/storage/` redirects
+  during other downloads, or a different id, are refused. Follow requests send only
+  an `Accept` header (no `Authorization` or `Cookie`). Any other host, scheme, path,
+  or credentialed URL is refused with `policy_denied`.
 - `--out` must not contain `..` and must not be a symlink. It must not exist, or must be
   an empty regular file. The bytes go to an exclusive `0600` temp file in the same
   directory, which is renamed or hard-linked into place, so an existing file is never
