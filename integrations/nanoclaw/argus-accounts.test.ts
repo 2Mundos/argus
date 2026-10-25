@@ -1536,7 +1536,16 @@ describe("task-scoped repository auth", () => {
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
     await until(() => recycleRuntime.mock.calls.length > 0, 3000);
-    expect(w.calls.some((call) => call.path.startsWith("/tasks/t1/"))).toBe(false);
+    // Model-trace lifecycle posts on claim are fine; a released claim must not
+    // complete, fail, ask, progress or block.
+    expect(
+      w.calls.some(
+        (call) =>
+          call.path.startsWith("/tasks/t1/") &&
+          !call.path.endsWith("/models") &&
+          !call.path.endsWith("/observations"),
+      ),
+    ).toBe(false);
   });
 
   it("fails closed before requesting Gitea access without a known base lease set", async () => {
