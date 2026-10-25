@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
-import { accountsFromEnv, createArgusAdapter, renderTask } from "./argus.js";
+import { accountsFromEnv, closeSessionFromEnv, createArgusAdapter, renderTask } from "./argus.js";
 import {
   type AccountLease,
   applyLease,
@@ -39,7 +39,7 @@ const nanoclaw = vi.hoisted(() => ({
   running: new Set<string>(),
   killed: [] as string[],
   exits: new Map<string, () => void>(),
-  sessions: [] as { id: string }[],
+  sessions: [] as { id: string; thread_id?: string | null; status?: string }[],
 }));
 vi.mock("../db/messaging-groups.js", () => ({
   getMessagingGroupByPlatform: async () => ({ id: "mg-1" }),
@@ -50,6 +50,14 @@ vi.mock("../db/agent-groups.js", () => ({
 }));
 vi.mock("../db/sessions.js", () => ({
   getSessionsByAgentGroup: async (id: string) => (id === "group-1" ? nanoclaw.sessions : []),
+  findSessionForAgent: async (group: string, mg: string, thread: string | null) =>
+    group === "group-1" && mg === "mg-1"
+      ? nanoclaw.sessions.find((s) => (s.thread_id ?? null) === thread && s.status === "active")
+      : undefined,
+  updateSession: async (id: string, updates: { status?: string }) => {
+    const session = nanoclaw.sessions.find((s) => s.id === id);
+    if (session) Object.assign(session, updates);
+  },
 }));
 // A local lease would bind the real Docker bridge (172.17.0.1:PORT), colliding with a host's own
 // forward; the forwarder has its own test (argus-local-forward.test.ts).
@@ -392,8 +400,13 @@ function harness(
   top: Partial<Parameters<typeof createArgusAdapter>[0]> = {},
 ) {
   const inbound: any[] = [];
+  // The attempt's thread: replies go back on it, as the session's do.
+  let thread: string | null = null;
   const setup = {
-    onInbound: vi.fn(async (_p: string, _t: string | null, m: any) => void inbound.push(m)),
+    onInbound: vi.fn(async (_p: string, t: string | null, m: any) => {
+      thread = t;
+      inbound.push(m);
+    }),
     onInboundEvent: vi.fn(),
     onMetadata: vi.fn(),
     onAction: vi.fn(),
@@ -416,7 +429,7 @@ function harness(
         }
       : undefined,
   });
-  return { adapter, setup, inbound };
+  return { adapter, setup, inbound, thread: () => thread };
 }
 
 const isRepositoryRelease = (c: Call) =>
@@ -706,7 +719,7 @@ describe("channel with accounts", () => {
 
     await h.adapter.deliver(
       "local",
-      null,
+      h.thread(),
       failure("Rate limit [five_hour] (resets 2026-10-15T01:00:00.000Z)"),
     );
     const report = w.calls.find((c) => c.path === "/accounts/a-a/exhausted")!;
@@ -721,7 +734,7 @@ describe("channel with accounts", () => {
     expect(h.inbound[1].content.text).toContain("Write the report");
     expect(w.calls.some((c) => c.path.endsWith("/fail"))).toBe(false); // still the same attempt
 
-    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     expect(w.calls.some((c) => c.path === "/tasks/t1/complete")).toBe(true);
   });
 
@@ -731,12 +744,12 @@ describe("channel with accounts", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, failure("Out of credits"));
+    await h.adapter.deliver("local", h.thread(), failure("Out of credits"));
     expect(w.calls.some((c) => c.path === "/accounts/a-a/exhausted")).toBe(true);
     expect(w.calls.some((c) => c.path.endsWith("/fail"))).toBe(false); // Argus blocked it
     // Anything the agent says now is not for a task we hold.
     const before = w.calls.length;
-    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: late" });
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: late" });
     expect(w.calls.slice(before).some((c) => c.path.endsWith("/complete"))).toBe(false);
   });
 
@@ -752,7 +765,7 @@ describe("channel with accounts", () => {
     await until(() => h.inbound.length === 1);
     await h.adapter.deliver(
       "local",
-      null,
+      h.thread(),
       failure("You've hit your session limit · resets 11:50pm (UTC)"),
     );
     expect(w.calls.some((c) => c.path === "/accounts/a-a/exhausted")).toBe(true);
@@ -803,7 +816,7 @@ describe("channel with accounts", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, failure("Failed to authenticate. API Error: 401"));
+    await h.adapter.deliver("local", h.thread(), failure("Failed to authenticate. API Error: 401"));
     const fail = w.calls.find((c) => c.path === "/tasks/t1/fail")!;
     expect(fail.body).toEqual({
       attempt: 1,
@@ -819,7 +832,7 @@ describe("channel with accounts", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, failure("Rate limit"));
+    await h.adapter.deliver("local", h.thread(), failure("Rate limit"));
     expect(w.calls.some((c) => c.who === "onecli" || c.path.startsWith("/accounts"))).toBe(false);
     expect(w.calls.find((c) => c.path === "/tasks/t1/fail")!.body.error).toBe("Rate limit");
   });
@@ -1266,7 +1279,7 @@ describe("a limit of the executor's provider leaves the Codex engine lease alone
     await until(() => h.inbound.length > 0);
     await h.adapter.deliver(
       "local",
-      null,
+      h.thread(),
       failure("Rate limit [five_hour] (resets 2026-10-15T01:00:00.000Z)"),
     );
     await until(() => w.calls.some((c) => /\/tasks\/t1\/fail$/.test(c.path)));
@@ -1279,7 +1292,7 @@ describe("a limit of the executor's provider leaves the Codex engine lease alone
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
-    await h.adapter.deliver("local", null, failure("usage_limit_reached"));
+    await h.adapter.deliver("local", h.thread(), failure("usage_limit_reached"));
     await until(() => w.calls.some((c) => /\/exhausted$/.test(c.path)));
     const call = w.calls.find((c) => /\/exhausted$/.test(c.path))!;
     expect(call.path).toBe("/accounts/a-codex-1/exhausted");
@@ -1299,7 +1312,7 @@ describe("structured providerFailure on a failure notice", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
-    await h.adapter.deliver("local", null, msg as any);
+    await h.adapter.deliver("local", h.thread(), msg as any);
     await until(() =>
       w.calls.some((c) => /\/exhausted$/.test(c.path) || /\/tasks\/t1\/fail$/.test(c.path)),
     );
@@ -1366,7 +1379,7 @@ describe("structured providerFailure on a failure notice", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
-    await h.adapter.deliver("local", null, structured(ok, false) as any);
+    await h.adapter.deliver("local", h.thread(), structured(ok, false) as any);
     await new Promise((r) => setTimeout(r, 50));
     expect(exhaustedCalls(w)).toEqual([]);
     expect(w.calls.some((c) => /\/tasks\/t1\/fail$/.test(c.path))).toBe(false);
@@ -1431,7 +1444,7 @@ describe("task-scoped repository auth", () => {
         },
         { role: "repository", runtime_providers: ["gitea"], task_id: "t1", attempt: 1 },
       ]);
-      await h.adapter.deliver("local", null, {
+      await h.adapter.deliver("local", h.thread(), {
         kind: "chat",
         content: {
           text: `COMPLETE: ${JSON.stringify({
@@ -1484,7 +1497,7 @@ describe("task-scoped repository auth", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
-    await h.adapter.deliver("local", null, { kind: "chat", content: { text: reply } });
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: { text: reply } });
     await until(() => w.calls.some((call) => isRepositoryRelease(call)));
     expect(w.calls.some((call) => call.path === endpoint)).toBe(true);
   });
@@ -1603,7 +1616,7 @@ describe("task-scoped repository auth", () => {
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
     expect(h.inbound[0].content.text).toContain('"FAIL (environment):"');
-    await h.adapter.deliver("local", null, {
+    await h.adapter.deliver("local", h.thread(), {
       kind: "chat",
       content: { text: "FAIL (environment): no checkout in /workspace" },
     });
@@ -1649,7 +1662,7 @@ describe("runtime recycling on an account rotation", () => {
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
     expect(recycleRuntime).not.toHaveBeenCalled(); // the initial lease kills nothing
-    await h.adapter.deliver("local", null, expired as any);
+    await h.adapter.deliver("local", h.thread(), expired as any);
     await until(() => h.inbound.length === 2);
     expect(recycleRuntime).toHaveBeenCalledTimes(1);
     // Recycled before the replacement's secret was written (account-selection.spec.md 3.6).
@@ -1674,7 +1687,7 @@ describe("runtime recycling on an account rotation", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, expired as any);
+    await h.adapter.deliver("local", h.thread(), expired as any);
     await until(() => h.inbound.length === 2);
     // The old runtime stops before the new account is written and its engine selected.
     expect(calls).toEqual(["select:codex", "recycle", "select:claude"]);
@@ -1687,7 +1700,7 @@ describe("runtime recycling on an account rotation", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, expired as any);
+    await h.adapter.deliver("local", h.thread(), expired as any);
     await until(() => w.calls.some((c) => /\/exhausted$/.test(c.path)));
     expect(recycleRuntime).not.toHaveBeenCalled();
   });
@@ -1704,7 +1717,7 @@ describe("runtime recycling on an account rotation", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, expired as any);
+    await h.adapter.deliver("local", h.thread(), expired as any);
     await until(() => w.calls.some((c) => /\/tasks\/t1\/fail$/.test(c.path)));
     const fail = w.calls.find((c) => /\/tasks\/t1\/fail$/.test(c.path))!;
     expect(fail.body.attempt).toBe(1);
@@ -1884,7 +1897,7 @@ describe("global account selection in the channel", () => {
     await until(() => h.inbound.length === 1);
     expect(recycleRuntime).not.toHaveBeenCalled();
     await new Promise((r) => setTimeout(r, 60));
-    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await until(() => selectEngine.mock.calls.some((c) => c[0] === "claude"), 5000);
     expect(selectEngine.mock.calls.map((c) => c[0])).toEqual(["codex", "claude"]);
     expect(recycleRuntime).toHaveBeenCalledTimes(1);
@@ -1905,7 +1918,7 @@ describe("global account selection in the channel", () => {
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
     await new Promise((r) => setTimeout(r, 60));
-    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await until(() => w.calls.some((c) => c.path === "/tasks/t2/fail"), 5000);
     const fail = w.calls.find((c) => c.path === "/tasks/t2/fail")!;
     expect(fail.body.reason).toBe("runtime_switch_failed");
@@ -1927,7 +1940,7 @@ describe("global account selection in the channel", () => {
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
     await new Promise((r) => setTimeout(r, 60));
-    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await until(() => h.inbound.length === 2, 5000); // t3 runs once the runtime stopped
     const fail = w.calls.find((c) => c.path === "/tasks/t2/fail")!;
     expect(fail.body.reason).toBe("runtime_switch_failed");
@@ -1961,7 +1974,7 @@ describe("global account selection in the channel", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await until(() => h.inbound.length === 2, 5000); // t2 runs on the next account
     expect(w.calls.some((c) => c.path === "/accounts/release" && c.search === "?role=engine")).toBe(
       true,
@@ -1983,7 +1996,7 @@ describe("global account selection in the channel", () => {
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
     await new Promise((r) => setTimeout(r, 40));
-    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await until(() => h.inbound.length === 2, 5000);
     expect(w.calls.filter((c) => c.path === "/accounts/lease").length).toBeGreaterThanOrEqual(2);
     expect(selectEngine).toHaveBeenCalledTimes(1);
@@ -2006,7 +2019,7 @@ describe("global account selection in the channel", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await until(() => h.inbound.length === 2, 5000);
     const engineLeases = w.calls.filter(
       (c) => c.path === "/accounts/lease" && (c.body?.role ?? "engine") === "engine",
@@ -2194,7 +2207,7 @@ describe("a Claude rate limit that only the structured field or the log shows", 
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, {
+    await h.adapter.deliver("local", h.thread(), {
       kind: "chat",
       content: {
         text: GENERIC,
@@ -2223,7 +2236,7 @@ describe("a Claude rate limit that only the structured field or the log shows", 
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, failure(GENERIC));
+    await h.adapter.deliver("local", h.thread(), failure(GENERIC));
     const report = w.calls.find((c) => c.path === "/accounts/a-a/exhausted")!;
     expect(report.body).toMatchObject({ until: resets, attempt: 1 });
     await until(() => h.inbound.length === 2);
@@ -2260,7 +2273,7 @@ describe("a Claude rate limit that only the structured field or the log shows", 
         live.push(h.adapter);
         await h.adapter.setup(h.setup);
         await until(() => h.inbound.length === 1);
-        await h.adapter.deliver("local", null, msg as any);
+        await h.adapter.deliver("local", h.thread(), msg as any);
         await until(() => h.inbound.length === 2);
         const report = w.calls.find((c) => c.path === "/accounts/a-a/exhausted")!;
         expect(report.body).toMatchObject({ until: NEXT_2AM, task_id: "t1", attempt: 1 });
@@ -2280,7 +2293,7 @@ describe("a Claude rate limit that only the structured field or the log shows", 
       live.push(h.adapter);
       await h.adapter.setup(h.setup);
       await until(() => h.inbound.length === 1);
-      await h.adapter.deliver("local", null, failure(text));
+      await h.adapter.deliver("local", h.thread(), failure(text));
       await until(() => w.calls.some((c) => c.path === "/tasks/t1/fail"));
       expect(w.calls.some((c) => c.path.endsWith("/exhausted"))).toBe(false);
     });
@@ -2292,7 +2305,7 @@ describe("a Claude rate limit that only the structured field or the log shows", 
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, failure(GENERIC));
+    await h.adapter.deliver("local", h.thread(), failure(GENERIC));
     await until(() => w.calls.some((c) => c.path === "/tasks/t1/fail"));
     expect(w.calls.some((c) => c.path.endsWith("/exhausted"))).toBe(false);
   });
@@ -2304,7 +2317,7 @@ describe("a Claude rate limit that only the structured field or the log shows", 
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, failure(GENERIC));
+    await h.adapter.deliver("local", h.thread(), failure(GENERIC));
     await until(() => w.calls.some((c) => c.path === "/tasks/t1/fail"));
     const body = w.calls.find((c) => c.path === "/tasks/t1/fail")!.body as { error: string };
     expect(body.error).toContain("fatal: no checkout in /workspace");
@@ -2312,59 +2325,77 @@ describe("a Claude rate limit that only the structured field or the log shows", 
   });
 });
 
-describe("one task per session", () => {
-  it("clears the session, waits for the ack, then injects the task", async () => {
+describe("one session per attempt", () => {
+  it("closes the old shared session, runs the attempt on its thread, then closes its session", async () => {
     const w = world({ leases: [lease("a", "sk-ant-AAAA")], tasks: [task()] });
-    const ensureAuthority = vi.fn(async () => undefined);
-    const h = harness(w, true, {}, { freshSession: { ensureAuthority } });
+    const closeSession = vi.fn(async (_thread: string | null) => undefined);
+    const h = harness(w, true, {}, { closeSession });
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    expect(h.inbound[0].content.text).toBe("/clear");
-    expect(h.inbound[0].id).toBe("argus-clear-t1-1");
-    expect(ensureAuthority).toHaveBeenCalledTimes(1);
-    await h.adapter.deliver("local", null, { kind: "chat", content: { text: "Session cleared." } });
+    expect(closeSession.mock.calls).toEqual([[null]]);
+    expect(h.thread()).toBe("argus:t1:1");
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
+    await until(() => closeSession.mock.calls.length === 2);
+    expect(closeSession.mock.calls[1]).toEqual(["argus:t1:1"]);
+  });
+
+  it("stops the runtime before the next claim when the session did not close", async () => {
+    const w = world({
+      leases: [lease("a", "sk-ant-AAAA"), lease("a", "sk-ant-AAAA")],
+      tasks: [task(), { ...task(), id: "t2" }],
+    });
+    const claimsAtRecycle: number[] = [];
+    const recycleRuntime = vi.fn(async () => {
+      claimsAtRecycle.push(w.calls.filter((c) => c.path === "/tasks/claim").length);
+    });
+    const closeSession = vi.fn(async (thread: string | null) => {
+      if (thread === "argus:t1:1") throw new Error("session s1 did not stop");
+    });
+    const h = harness(w, true, { recycleRuntime }, { closeSession });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await until(() => h.inbound.length === 2);
-    expect(h.inbound[1].content.text).toContain("t1");
-    // the ack is not a task reply: nothing was reported to Argus
-    expect(w.calls.some((c) => c.path.startsWith("/tasks/t1/") && c.path !== "/tasks/t1/log")).toBe(
-      false,
-    );
+    expect(h.thread()).toBe("argus:t2:1");
+    expect(claimsAtRecycle[0]).toBe(1); // stopped before t2 was claimed
+  });
+});
+
+describe("closeSessionFromEnv (real hook, NanoClaw modules faked)", () => {
+  afterEach(() => {
+    nanoclaw.running.clear();
+    nanoclaw.killed.length = 0;
+    nanoclaw.exits.clear();
+    nanoclaw.sessions.length = 0;
   });
 
-  it("falls back to the shared session when the clear is not acknowledged", async () => {
-    const w = world({ leases: [lease("a", "sk-ant-AAAA")], tasks: [task()] });
-    const h = harness(
-      w,
-      true,
-      {},
-      { freshSession: { ensureAuthority: async () => undefined, ackTimeoutMs: 100 } },
+  it("closes the thread's session, then stops its container", async () => {
+    nanoclaw.sessions.push(
+      { id: "s-old", thread_id: null, status: "active" },
+      { id: "s1", thread_id: "argus:t1:1", status: "active" },
     );
-    live.push(h.adapter);
-    await h.adapter.setup(h.setup);
-    await until(() => h.inbound.length === 2, 3000);
-    expect(h.inbound[0].content.text).toBe("/clear");
-    expect(h.inbound[1].content.text).toContain("t1");
+    nanoclaw.running.add("s1");
+    const closing = closeSessionFromEnv("argus:t1:1");
+    await until(() => nanoclaw.exits.has("s1"));
+    expect(nanoclaw.sessions.find((s) => s.id === "s1")!.status).toBe("closed");
+    nanoclaw.exits.get("s1")!();
+    await closing;
+    expect(nanoclaw.killed).toEqual(["s1"]);
+    expect(nanoclaw.sessions.find((s) => s.id === "s-old")!.status).toBe("active");
   });
 
-  it("falls back when the sender cannot be authorised", async () => {
-    const w = world({ leases: [lease("a", "sk-ant-AAAA")], tasks: [task()] });
-    const h = harness(
-      w,
-      true,
-      {},
-      {
-        freshSession: {
-          ensureAuthority: async () => {
-            throw new Error("no wiring");
-          },
-        },
-      },
-    );
-    live.push(h.adapter);
-    await h.adapter.setup(h.setup);
-    await until(() => h.inbound.length === 1);
-    expect(h.inbound[0].content.text).toContain("t1"); // no /clear was sent
+  it("closes the top-level session of the old shared wiring", async () => {
+    nanoclaw.sessions.push({ id: "s-old", thread_id: null, status: "active" });
+    await closeSessionFromEnv(null);
+    expect(nanoclaw.sessions[0].status).toBe("closed");
+    expect(nanoclaw.killed).toEqual([]); // nothing was running
+  });
+
+  it("does nothing for a thread that never got a session", async () => {
+    await closeSessionFromEnv("argus:t9:1");
+    expect(nanoclaw.killed).toEqual([]);
   });
 });
 
@@ -2534,7 +2565,7 @@ describe("usage relay in the channel", () => {
       w,
       dir,
       usageFile,
-      finish: () => h.adapter.deliver("local", null, { kind: "chat", content: reply }),
+      finish: () => h.adapter.deliver("local", h.thread(), { kind: "chat", content: reply }),
       posts: () => w.calls.filter((c) => /^\/accounts\/[^/]+\/usage$/.test(c.path)),
     };
   }

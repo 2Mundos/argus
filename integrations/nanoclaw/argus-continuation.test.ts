@@ -295,8 +295,13 @@ function fakeArgus(task: ArgusTask, over: Record<string, (body: any) => Response
 
 function harness(fake: ReturnType<typeof fakeArgus>, over: Partial<ArgusConfig> = {}) {
   const inbound: any[] = [];
+  // The attempt's thread: replies go back on it, as the session's do.
+  let thread: string | null = null;
   const setup = {
-    onInbound: vi.fn(async (_p: string, _t: string | null, m: any) => void inbound.push(m)),
+    onInbound: vi.fn(async (_p: string, t: string | null, m: any) => {
+      thread = t;
+      inbound.push(m);
+    }),
     onInboundEvent: vi.fn(),
     onMetadata: vi.fn(),
     onAction: vi.fn(),
@@ -310,7 +315,7 @@ function harness(fake: ReturnType<typeof fakeArgus>, over: Partial<ArgusConfig> 
     claimWaitS: 1,
     ...over,
   });
-  return { adapter, setup, inbound };
+  return { adapter, setup, inbound, thread: () => thread };
 }
 
 const until = async (cond: () => boolean, ms = 2000) => {
@@ -397,7 +402,7 @@ describe("Argus channel: claim -> preflight -> render -> reply", () => {
   it("ASK on <id> and ASSIST become Argus calls; assistance never targets a human", async () => {
     const task = fixture("ca2-resume");
     const a = await start(task);
-    await a.h.adapter.deliver("local", null, {
+    await a.h.adapter.deliver("local", a.h.thread(), {
       kind: "chat",
       content: { text: `ASK on ${task.id}: which of the two PRs should I continue?` },
     });
@@ -408,7 +413,7 @@ describe("Argus channel: claim -> preflight -> render -> reply", () => {
     await a.h.adapter.teardown();
 
     const b = await start(task);
-    await b.h.adapter.deliver("local", null, {
+    await b.h.adapter.deliver("local", b.h.thread(), {
       kind: "chat",
       content: { text: "ASSIST: browser: no headless browser in this image" },
     });
@@ -428,7 +433,7 @@ describe("Argus channel: claim -> preflight -> render -> reply", () => {
       "Will complete after CI; failing tests are fixed.",
       `ask on ${task.id}: lower case`,
     ])
-      await h.adapter.deliver("local", null, { kind: "chat", content: { text } });
+      await h.adapter.deliver("local", h.thread(), { kind: "chat", content: { text } });
     await new Promise((r) => setTimeout(r, 50));
     for (const tail of ["/ask", "/fail", "/complete"])
       expect(fake.calls.some((c) => c.path === `/tasks/${task.id}${tail}`)).toBe(false);
@@ -452,7 +457,7 @@ describe("Argus channel: claim -> preflight -> render -> reply", () => {
           ),
       },
     );
-    await h.adapter.deliver("local", null, {
+    await h.adapter.deliver("local", h.thread(), {
       kind: "chat",
       content: { text: "ASK: may I run browser QA?" },
     });
@@ -461,7 +466,7 @@ describe("Argus channel: claim -> preflight -> render -> reply", () => {
     expect(h.inbound[1].content.text).toContain("Yes, QA on Stage");
     expect(fake.calls.some((c) => c.path === `/tasks/${task.id}/fail`)).toBe(false);
     // the task is still in flight: a COMPLETE still reaches Argus
-    await h.adapter.deliver("local", null, {
+    await h.adapter.deliver("local", h.thread(), {
       kind: "chat",
       content: { text: "COMPLETE: qa done" },
     });
@@ -480,7 +485,7 @@ describe("Argus channel: claim -> preflight -> render -> reply", () => {
         { status: "done" },
       ],
     });
-    await h.adapter.deliver("local", null, {
+    await h.adapter.deliver("local", h.thread(), {
       kind: "chat",
       content: { text: `COMPLETE: ${envelope}` },
     });

@@ -71,7 +71,7 @@ reasons and adds `failure_class` to each failure row and a count per class.
 
 ## 3.3 Channel preflight
 
-After the account and repository lease, and before `/clear` and injection, the
+After the account and repository lease, and before injection, the
 channel runs these checks in order. The first one that fails calls
 `POST /tasks/{id}/block` with its reason and a short `error`, then finishes the
 task. No model session starts and no attempt is spent.

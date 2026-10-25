@@ -104,8 +104,11 @@ function harness(
   beforeInbound?: (message: any) => Promise<void> | void,
 ) {
   const inbound: any[] = [];
+  // The attempt's thread: replies go back on it, as the session's do.
+  let thread: string | null = null;
   const setup = {
-    onInbound: vi.fn(async (_p: string, _t: string | null, m: any) => {
+    onInbound: vi.fn(async (_p: string, t: string | null, m: any) => {
+      thread = t;
       if (beforeInbound) await beforeInbound(m);
       inbound.push(m);
     }),
@@ -124,7 +127,7 @@ function harness(
     claimWaitS: 1,
     ...over,
   });
-  return { adapter, setup, inbound, advance: (ms: number) => (clock += ms) };
+  return { adapter, setup, inbound, thread: () => thread, advance: (ms: number) => (clock += ms) };
 }
 
 const until = async (cond: () => boolean, ms = 2000) => {
@@ -507,7 +510,7 @@ describe("Argus channel", () => {
     expect(text).toContain("Deploy the app");
     expect(text).toContain("make deploy-stage"); // pinned page body inlined
 
-    await h.adapter.deliver("local", null, {
+    await h.adapter.deliver("local", h.thread(), {
       kind: "chat",
       content: { text: "COMPLETE: shipped it" },
     });
@@ -527,7 +530,7 @@ describe("Argus channel", () => {
       live.push(h.adapter);
       await h.adapter.setup(h.setup);
       await until(() => h.inbound.length === 1);
-      await h.adapter.deliver("local", null, { kind: "chat", content: reply });
+      await h.adapter.deliver("local", h.thread(), { kind: "chat", content: reply });
       expect(fake.calls.find((c) => c.path === path)!.body).toEqual(body);
       await h.adapter.teardown();
     }
@@ -539,7 +542,7 @@ describe("Argus channel", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, {
+    await h.adapter.deliver("local", h.thread(), {
       kind: "chat",
       content: { text: "**FAIL:** cannot open the PR\n\nNo PR tool was available." },
     });
@@ -558,7 +561,7 @@ describe("Argus channel", () => {
     await until(() => h.inbound.length === 1);
 
     const say = (text: string) =>
-      h.adapter.deliver("local", null, { kind: "chat", content: { text } });
+      h.adapter.deliver("local", h.thread(), { kind: "chat", content: { text } });
     await say("step 1");
     await until(() => fake.calls.some((c) => c.path === "/tasks/t1/progress"));
     h.advance(10); // inside the interval
@@ -579,7 +582,7 @@ describe("Argus channel", () => {
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
     await expect(
-      h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: late" }),
+      h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: late" }),
     ).resolves.toBeUndefined();
     await until(() => fake.calls.filter((c) => c.path === "/tasks/claim").length >= 2);
   });
@@ -589,7 +592,7 @@ describe("Argus channel", () => {
     const h = harness(fake);
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
-    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: nothing" });
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: nothing" });
     expect(fake.calls.some((c) => c.path.includes("/complete"))).toBe(false);
   });
 
@@ -724,7 +727,7 @@ describe("Argus channel", () => {
     expect(onDrained).not.toHaveBeenCalled(); // still working
     expect(fake.calls.some((c) => c.path === "/agents/me/leave")).toBe(false);
 
-    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await until(() => onDrained.mock.calls.length === 1);
     expect(fake.calls.some((c) => c.path === "/tasks/t1/complete")).toBe(true);
     expect(fake.calls.some((c) => c.path === "/agents/me/leave")).toBe(true);
@@ -748,7 +751,7 @@ describe("Argus channel", () => {
     // The next heartbeat rejects the pair (an operator released it): back to claiming.
     await until(() => claims() > before, 3000);
     // A late reply from the abandoned run is dropped, not reported.
-    await h.adapter.deliver("local", null, { kind: "chat", content: "COMPLETE: done" });
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await new Promise((r) => setTimeout(r, 100));
     expect(fake.calls.some((c) => c.path.startsWith("/tasks/t1/"))).toBe(false);
   });
@@ -879,7 +882,7 @@ async function inFlight(fake: ReturnType<typeof resultArgus>, over = {}) {
 }
 
 const reply = (h: Awaited<ReturnType<typeof inFlight>>, text: string) =>
-  h.adapter.deliver("local", null, { kind: "chat", content: { text } });
+  h.adapter.deliver("local", h.thread(), { kind: "chat", content: { text } });
 const completes = (fake: ReturnType<typeof resultArgus>) =>
   fake.calls.filter((c) => c.path.endsWith("/complete"));
 
@@ -986,7 +989,7 @@ const withFile = (
   filename: string,
   data: string,
 ) =>
-  h.adapter.deliver("local", null, {
+  h.adapter.deliver("local", h.thread(), {
     kind: "chat",
     content: { text },
     files: [{ filename, data: Buffer.from(data, "utf8") }],
@@ -1009,7 +1012,7 @@ describe("files the agent attaches", () => {
   it("a file-only message (no text) is stored, not dropped", async () => {
     const fake = resultArgus();
     const h = await inFlight(fake);
-    await h.adapter.deliver("local", null, {
+    await h.adapter.deliver("local", h.thread(), {
       kind: "chat",
       content: {},
       files: [{ filename: "a.txt", data: Buffer.from("hi") }],
