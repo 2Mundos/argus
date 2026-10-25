@@ -360,6 +360,9 @@ describe("renderTask", () => {
     expect(text).toContain('--head <branch> --base <base-branch> --body "<text>"');
     expect(text).toContain("idempotent");
     expect(text).toContain("argus-gitea-api update --repository");
+    expect(text).toContain("review-findings");
+    expect(text).toContain("finding_count");
+    expect(text).toMatch(/job-logs|comment-create|artifact-download/);
     expect(text).toContain("Do not merge pull requests unless");
     expect(text).not.toContain("force_merge");
     expect(text).not.toContain("This task explicitly authorizes merge");

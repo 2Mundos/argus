@@ -77,6 +77,8 @@ every new dependency is judged against it.
   work is archived and verified
 - [Live work](specs/live-work.spec.md) — what an agent is doing now: task activity
   feed, agent drawer with its current work and container output
+- [Gitea helper for workers](specs/gitea-helper.spec.md) — `argus-gitea-api`
+  command matrix, exit codes, security model, and the review-findings gate
 - [Progress milestones](specs/progress-milestones.spec.md) — structured progress
   signals (commit, PR, CI, gate) on task cards and a no-signal indicator
 - [Stall visibility](specs/stall-visibility.spec.md) — fail a vanished session

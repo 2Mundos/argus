@@ -1,0 +1,20 @@
+[
+  {
+    "id": 701,
+    "status": "success",
+    "context": "ci / test",
+    "description": "passed",
+    "target_url": "https://git.example.test/team/project/actions/runs/88",
+    "created_at": "2026-10-21T11:00:00Z",
+    "updated_at": "2026-10-21T11:00:00Z"
+  },
+  {
+    "id": 702,
+    "status": "success",
+    "context": "argus / agentic-review",
+    "description": "review posted",
+    "target_url": "https://git.example.test/team/project/pulls/1135#issuecomment-9208",
+    "created_at": "2026-10-21T11:31:00Z",
+    "updated_at": "2026-10-21T11:31:00Z"
+  }
+]

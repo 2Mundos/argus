@@ -742,6 +742,10 @@ so long PR bodies need no shell quoting and `--body` together with it is refused
 number) and `list-prs` (paginated PR list with explicit `--state` and capped
 `--limit`). The `get` command is pull-request-only; a 404 on `get` does not
 imply auth failure when the tracker number is an issue — use `issue-get`.
+The helper also covers issues, labels, comments, PR commits/files/diff/reviews, commit
+statuses, Actions runs/jobs/logs/artifacts and `review-findings` (the agentic review for
+the exact head SHA), with classified exit codes, GET-only retries and readback after every
+mutation; see [the Gitea helper spec](gitea-helper.spec.md).
 A retry of PR creation returns an existing open PR for the same source branch and
 base rather than creating a duplicate. `updatePullRequest` does not accept a
 merge flag; authorized delivery merges use the Gitea pull-request merge REST

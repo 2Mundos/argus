@@ -76,28 +76,9 @@ cp "$here/onecli-path-match.ts" "$target/src/gateway-providers/onecli-path-match
 mkdir -p "$target/src/gateway-providers/fixtures"
 cp -r "$here/fixtures/cursor-gateway" "$target/src/gateway-providers/fixtures/"
 cp "$here/init-argus-agent.ts" "$target/scripts/init-argus-agent.ts"
-cp "$here/gitea-api.mjs" "$target/container/gitea-api.mjs"
-cp "$here/gitea-api.mjs" "$here/gitea-api.d.mts" "$target/src/channels/"
-
-# The helper runs inside the agent container, not on the NanoClaw host.
-python3 - "$target/container/Dockerfile" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-if "Argus Gitea API helper" not in s:
-    marker = "# ---- ncl CLI wrapper"
-    block = '''# ---- Argus Gitea API helper -----------------------------------------------
-# The token stays in OneCLI; this client sends HTTPS through the injected proxy.
-COPY gitea-api.mjs /tmp/argus-gitea-api.mjs
-RUN npm install --prefix /usr/local/lib/argus-gitea --omit=dev --no-audit --no-fund undici@8.12.2 \\
- && install -m 0755 /tmp/argus-gitea-api.mjs /usr/local/bin/argus-gitea-api \\
- && rm /tmp/argus-gitea-api.mjs
-
-'''
-    assert marker in s, "NanoClaw container Dockerfile has no ncl CLI insertion marker"
-    s = s.replace(marker, block + marker, 1)
-open(p, "w").write(s)
-PY
+# Shared helper (also exercised by offline installer tests).
+bash "$here/install-gitea-api.sh" copy-nanoclaw "$target"
+bash "$here/install-gitea-api.sh" patch-nanoclaw-dockerfile "$target"
 
 barrel="$target/src/channels/index.ts"
 if ! grep -q "import './argus.js';" "$barrel"; then
