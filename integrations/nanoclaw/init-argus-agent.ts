@@ -15,11 +15,13 @@ import {
 import { CENTRAL_DB_PATH } from "../src/config.js";
 import { createAgentGroup, getAgentGroupByFolder } from "../src/db/agent-groups.js";
 import { initDb } from "../src/db/connection.js";
+import { updateContainerConfigScalars } from "../src/db/container-configs.js";
 import {
   createMessagingGroup,
   createMessagingGroupAgent,
   getMessagingGroupAgentByPair,
   getMessagingGroupByPlatform,
+  updateMessagingGroupAgent,
 } from "../src/db/messaging-groups.js";
 import { runMigrations } from "../src/db/migrations/index.js";
 import { initGroupFilesystem } from "../src/group-init.js";
@@ -73,6 +75,8 @@ async function main(): Promise<void> {
       '(or "FAIL:" with the reason, or "ASK:" with a question you need answered). Keep messages concise.',
     provider: process.env.NANOCLAW_PICKED_PROVIDER?.trim().toLowerCase(),
   });
+  // The worker never runs `ncl`: leave the cli and scheduling instructions out of its CLAUDE.md.
+  await updateContainerConfigScalars(ag.id, { cli_scope: "disabled" });
 
   let mg: MessagingGroup | undefined = await getMessagingGroupByPlatform(CHANNEL, PLATFORM_ID);
   if (!mg) {
@@ -89,7 +93,8 @@ async function main(): Promise<void> {
     console.log(`Created Argus messaging group: ${mg.id}`);
   }
 
-  if (!(await getMessagingGroupAgentByPair(mg.id, ag.id))) {
+  let wired = await getMessagingGroupAgentByPair(mg.id, ag.id);
+  if (!wired) {
     const engage = resolveWiringDefaults(CHANNEL, false, ag.name);
     await createMessagingGroupAgent({
       id: id("mga"),
@@ -99,11 +104,18 @@ async function main(): Promise<void> {
       engage_pattern: engage.engage_pattern,
       sender_scope: "all",
       ignored_message_policy: "drop",
-      session_mode: "shared",
+      session_mode: "per-thread",
       priority: 0,
       created_at: now,
     });
+    wired = (await getMessagingGroupAgentByPair(mg.id, ag.id))!;
     console.log(`Wired ${CHANNEL}: ${mg.id} -> ${ag.id}`);
+  }
+  // One session per attempt: every attempt is its own thread (worker-lifecycle.spec.md).
+  // An existing wiring converges too, so every host start applies it.
+  if (wired.session_mode !== "per-thread" || wired.threads !== 1) {
+    await updateMessagingGroupAgent(wired.id, { session_mode: "per-thread", threads: 1 });
+    console.log(`Set ${CHANNEL} wiring ${wired.id} to one session per thread`);
   }
   console.log(`\nDone. Start the host with ARGUS_URL and a bootstrap token set.`);
 }

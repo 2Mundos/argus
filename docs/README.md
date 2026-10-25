@@ -136,7 +136,7 @@ every new dependency is judged against it.
   interrupted and tokens wasted (baseline numbers, root causes), and eight ordered
   proposals: claim reserves the account, owned workspace, one task per session,
   resumable attempts, progress-based liveness, failure classes, single-layer run;
-  P1 shipped, P3/P5/P6/P8 partly
+  P1, P3 and P6 shipped, P2/P5/P8 partly
 
 ### Runbooks
 

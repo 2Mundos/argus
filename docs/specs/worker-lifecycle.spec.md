@@ -593,7 +593,11 @@ earlier tasks neither inflate its cost nor contaminate its replies
 - When the attempt ends, whatever the outcome, the channel stops the session's
   container and marks the session `closed`. NanoClaw never resolves a closed
   session again. Its directory stays on disk until the instance's workspace is
-  cleaned up.
+  cleaned up. The session is closed before its container stops, so NanoClaw's
+  cross-session context never echoes it into, or backfills from it, a later
+  session. A container that does not stop is stopped with the runtime before
+  the next claim. On start, the channel also closes the top-level session of the
+  old shared wiring for the same reason.
 - Every claim is a new attempt, including the one after an answered `ASK`. That
   attempt starts in a fresh session and learns the answer from the task's
   decisions and continuation, not from the earlier conversation. Resuming the

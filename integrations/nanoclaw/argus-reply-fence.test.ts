@@ -3,8 +3,10 @@
  *
  * Incident: task A asked for assistance, the same worker claimed unrelated task B, and A's
  * delayed `COMPLETE:` (with A's checklist ids) was posted as B's result because `deliver`
- * judged every reply against whatever was claimed at that moment. These tests replay that
- * sequence against the real channel with a scripted Argus; no live task is touched.
+ * judged every reply against whatever was claimed at that moment. Each attempt now runs on
+ * its own thread (`argus:<task>:<attempt>`), and only replies on the claim's thread count.
+ * These tests replay that sequence against the real channel with a scripted Argus; no live
+ * task is touched.
  */
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -14,7 +16,6 @@ import {
   type ArgusConfig,
   type ArgusTask,
   createArgusAdapter,
-  fenceReply,
   foreignChecklistIds,
   parseReply,
 } from "./argus.js";
@@ -87,8 +88,13 @@ function fakeArgus(
 
 function harness(fake: ReturnType<typeof fakeArgus>, over: Partial<ArgusConfig> = {}) {
   const inbound: any[] = [];
+  // The attempt's thread: replies go back on it, as the session's do.
+  let thread: string | null = null;
   const setup = {
-    onInbound: vi.fn(async (_p: string, _t: string | null, m: any) => void inbound.push(m)),
+    onInbound: vi.fn(async (_p: string, t: string | null, m: any) => {
+      thread = t;
+      inbound.push(m);
+    }),
     onInboundEvent: vi.fn(),
     onMetadata: vi.fn(),
     onAction: vi.fn(),
@@ -104,7 +110,7 @@ function harness(fake: ReturnType<typeof fakeArgus>, over: Partial<ArgusConfig> 
     progressIntervalMs: 0,
     ...over,
   });
-  return { adapter, setup, inbound };
+  return { adapter, setup, inbound, thread: () => thread };
 }
 
 const until = async (cond: () => boolean, ms = 3000) => {
@@ -126,6 +132,8 @@ const paths = (f: ReturnType<typeof fakeArgus>) => f.calls.map((c) => c.path);
 /** What would change B's record: everything under /tasks/task-b/ except the claim's own preflight observation. */
 const writesTo = (f: ReturnType<typeof fakeArgus>, id: string) =>
   paths(f).filter((p) => p.startsWith(`/tasks/${id}/`) && !p.endsWith("/observations"));
+/** Where A's session sends its late output. */
+const A_THREAD = "argus:task-a:1";
 const staleResult = JSON.stringify({
   summary: "PR101 reconciliation prepared",
   checklist: [{ id: "ac-a1", status: "done", evidence: "PR 101 head 1565536" }],
@@ -138,7 +146,7 @@ async function switchToB(over: Partial<ArgusConfig> = {}) {
   live.push(h.adapter);
   await h.adapter.setup(h.setup);
   await until(() => h.inbound.length === 1);
-  await h.adapter.deliver("local", null, reply("ASSIST: prometheus_client: not installed"));
+  await h.adapter.deliver("local", h.thread(), reply("ASSIST: prometheus_client: not installed"));
   expect(paths(fake)).toContain("/tasks/task-a/ask");
   await until(() => h.inbound.some((m) => m.id === "argus-task-b-1"));
   return { fake, h };
@@ -147,18 +155,18 @@ async function switchToB(over: Partial<ArgusConfig> = {}) {
 describe("a delayed result of task A after task B was claimed", () => {
   it("is not applied to B (the incident sequence)", async () => {
     const { fake, h } = await switchToB();
-    await h.adapter.deliver("local", null, reply(`COMPLETE: ${staleResult}`));
+    expect(h.thread()).toBe("argus:task-b:1");
+    await h.adapter.deliver("local", A_THREAD, reply(`COMPLETE: ${staleResult}`));
     expect(writesTo(fake, "task-b")).toEqual([]);
     // Nothing completed A either: its claim had ended with the question.
     expect(paths(fake)).not.toContain("/tasks/task-a/complete");
-    // B is asked to scope its replies instead, and still holds its claim.
-    const reminder = h.inbound.at(-1).content.text as string;
-    expect(reminder).toContain("COMPLETE on task-b:");
+    // B's session is not bothered: the last message it got is its task.
+    expect(h.inbound.at(-1).id).toBe("argus-task-b-1");
   });
 
   it("is not applied to B when it names A explicitly", async () => {
     const { fake, h } = await switchToB();
-    await h.adapter.deliver("local", null, reply(`COMPLETE on task-a: ${staleResult}`));
+    await h.adapter.deliver("local", A_THREAD, reply(`COMPLETE on task-a: ${staleResult}`));
     expect(writesTo(fake, "task-b")).toEqual([]);
     expect(paths(fake)).not.toContain("/tasks/task-a/complete");
   });
@@ -172,22 +180,15 @@ describe("a delayed result of task A after task B was claimed", () => {
       "ASSIST: bridge: fetch failed",
       "PROGRESS on task-a: 90%",
     ])
-      await h.adapter.deliver("local", null, reply(text));
+      await h.adapter.deliver("local", A_THREAD, reply(text));
     expect(writesTo(fake, "task-b")).toEqual([]);
   });
 
-  it("drops an unscoped reply that the host stamped as an answer to A's message", () => {
-    const claim = { id: "task-b", attempt: 1, scopeRequired: false };
-    expect(fenceReply(claim, "COMPLETE: {}", "argus-task-a-1")).toEqual({
-      ok: false,
-      reason: "stale_message",
-    });
-    expect(fenceReply(claim, "COMPLETE: {}", "argus-task-b-2")).toEqual({
-      ok: false,
-      reason: "stale_message",
-    }); // an earlier attempt of the same task
-    expect(fenceReply(claim, "COMPLETE: {}", "argus-task-b-1-r2").ok).toBe(true);
-    expect(fenceReply(claim, "COMPLETE: {}", "argus-steer-s1").ok).toBe(true);
+  it("drops a reply from the old shared session or another attempt of B", async () => {
+    const { fake, h } = await switchToB();
+    for (const thread of [null, "argus:task-b:2", "argus:task-b"])
+      await h.adapter.deliver("local", thread, reply(`COMPLETE on task-b: ${staleResult}`));
+    expect(writesTo(fake, "task-b")).toEqual([]);
   });
 });
 
@@ -198,7 +199,7 @@ describe("B's own replies after the switch", () => {
       summary: "B done",
       checklist: [{ id: "ac-b1", status: "done", evidence: "receipt" }],
     });
-    await h.adapter.deliver("local", null, reply(`COMPLETE on task-b: ${own}`));
+    await h.adapter.deliver("local", h.thread(), reply(`COMPLETE on task-b: ${own}`));
     const done = fake.calls.find((c) => c.path === "/tasks/task-b/complete")!;
     expect(done.body).toMatchObject({
       attempt: 1,
@@ -208,7 +209,7 @@ describe("B's own replies after the switch", () => {
 
   it("send progress when scoped to B", async () => {
     const { fake, h } = await switchToB();
-    await h.adapter.deliver("local", null, reply("PROGRESS on task-b: checking the ledger"));
+    await h.adapter.deliver("local", h.thread(), reply("PROGRESS on task-b: checking the ledger"));
     await until(() => paths(fake).includes("/tasks/task-b/progress"));
     expect(fake.calls.find((c) => c.path === "/tasks/task-b/progress")!.body.message).toBe(
       "checking the ledger",
@@ -217,13 +218,13 @@ describe("B's own replies after the switch", () => {
 
   it("are rejected when scoped to B but carrying A's checklist ids", async () => {
     const { fake, h } = await switchToB();
-    await h.adapter.deliver("local", null, reply(`COMPLETE on task-b: ${staleResult}`));
+    await h.adapter.deliver("local", h.thread(), reply(`COMPLETE on task-b: ${staleResult}`));
     expect(paths(fake)).not.toContain("/tasks/task-b/complete");
     expect(h.inbound.at(-1).content.text).toContain("ac-a1 do not belong to task task-b");
     // The claim is intact: a corrected completion goes through.
     await h.adapter.deliver(
       "local",
-      null,
+      h.thread(),
       reply(
         `COMPLETE on task-b: ${JSON.stringify({ summary: "ok", checklist: [{ id: "ac-b1", status: "done", evidence: "e" }] })}`,
       ),
@@ -245,7 +246,7 @@ describe("B's own replies after the switch", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await h.adapter.deliver("local", null, reply('COMPLETE: {"summary":"x"}'));
+    await h.adapter.deliver("local", h.thread(), reply('COMPLETE: {"summary":"x"}'));
     expect(paths(fake)).toContain("/tasks/task-a/complete");
     expect(paths(fake)).not.toContain("/tasks/task-a/fail");
   });
@@ -262,49 +263,36 @@ describe("a task switch by release", () => {
     lost = "task-a"; // heartbeat: A's lease is gone
     await until(() => h.inbound.some((m) => m.id === "argus-task-b-1"), 5000);
     lost = null;
-    await h.adapter.deliver("local", null, reply(`COMPLETE: ${staleResult}`));
+    await h.adapter.deliver("local", A_THREAD, reply(`COMPLETE: ${staleResult}`));
     expect(writesTo(fake, "task-b")).toEqual([]);
   }, 10_000);
 });
 
 describe("normal continuation of one task", () => {
-  it("accepts unscoped replies when the session carried no other task", async () => {
+  it("accepts unscoped replies on the attempt's thread", async () => {
     const fake = fakeArgus([A]);
     const h = harness(fake);
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    expect(h.inbound[0].content.text).not.toContain("[Argus reply scope]");
-    await h.adapter.deliver("local", null, reply("working on it"));
+    await h.adapter.deliver("local", h.thread(), reply("working on it"));
     await until(() => paths(fake).includes("/tasks/task-a/progress"));
-    await h.adapter.deliver("local", null, reply(`COMPLETE: ${staleResult}`));
+    await h.adapter.deliver("local", h.thread(), reply(`COMPLETE: ${staleResult}`));
     expect(paths(fake)).toContain("/tasks/task-a/complete");
   });
 
-  it("tells a later task to scope its replies, and honours them", async () => {
+  it("asks no later task to scope its replies", async () => {
     const { fake, h } = await switchToB();
     const text = h.inbound.find((m) => m.id === "argus-task-b-1").content.text as string;
-    expect(text).toContain("[Argus reply scope]");
-    expect(text).toContain("COMPLETE on task-b:");
-    await h.adapter.deliver("local", null, reply("ASK on task-b: which ledger?"));
+    expect(text).not.toContain("COMPLETE on task-b:");
+    await h.adapter.deliver("local", h.thread(), reply("ASK: which ledger?"));
     expect(fake.calls.find((c) => c.path === "/tasks/task-b/ask")!.body.question).toBe(
       "which ledger?",
     );
   });
 });
 
-describe("fenceReply and foreignChecklistIds", () => {
-  const claim = { id: "task-b", attempt: 1, scopeRequired: true };
-  it("requires scope once the session carried a task, and only for the claimed one", () => {
-    expect(fenceReply(claim, "COMPLETE: x")).toEqual({
-      ok: false,
-      reason: "unscoped_after_switch",
-    });
-    expect(fenceReply(claim, "COMPLETE on task-a: x")).toEqual({ ok: false, reason: "other_task" });
-    expect(fenceReply(claim, "**FAIL for task task-a:** x").ok).toBe(false);
-    expect(fenceReply(claim, "FAIL on task-b: x").ok).toBe(true);
-    expect(fenceReply({ ...claim, scopeRequired: false }, "just a note").ok).toBe(true);
-  });
+describe("parseReply and foreignChecklistIds", () => {
   it("parses PROGRESS as a scoped progress note only for the claimed id", () => {
     expect(parseReply("PROGRESS on task-b: 50%", "task-b")).toEqual({
       kind: "progress",

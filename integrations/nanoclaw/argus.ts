@@ -87,7 +87,14 @@ export const PLATFORM_ID = "local";
 export const CHANNEL_TYPE = "argus";
 
 const ARGUS_DEFAULTS: ChannelDefaults = {
-  dm: { engageMode: "pattern", engagePattern: ".", threads: false, unknownSenderPolicy: "public" },
+  // Each attempt is a thread with its own session (one session per attempt).
+  dm: {
+    engageMode: "pattern",
+    engagePattern: ".",
+    threads: true,
+    sessionMode: "per-thread",
+    unknownSenderPolicy: "public",
+  },
   group: {
     engageMode: "pattern",
     engagePattern: ".",
@@ -283,12 +290,12 @@ export interface ArgusConfig {
    */
   agentLogTail?: () => Promise<string>;
   /**
-   * One task per session: before a task is injected, send NanoClaw's `/clear` so the
-   * session starts from an empty context. `ensureAuthority` makes sure the Argus
-   * sender may run it (an admin command). Absent, or no acknowledgement within
-   * `ackTimeoutMs`: the session is shared with the earlier tasks, as before.
+   * One session per attempt: close the session of `thread` (null: the top-level session
+   * of the old shared wiring) so NanoClaw never resolves it again, then stop its
+   * container. Rejects when the container could not be stopped. Absent only in test
+   * adapters.
    */
-  freshSession?: { ensureAuthority(): Promise<void>; ackTimeoutMs?: number };
+  closeSession?: (thread: string | null) => Promise<void>;
   /** Called once, after Argus drained this agent, its work is done, and it left. */
   onDrained?: () => void;
   /** Reported on heartbeat as `runtime.worker_version`, e.g. "nanoclaw/1.2.3". */
@@ -608,38 +615,13 @@ function scopedDirective(taskId: string): RegExp {
   );
 }
 
-const ANY_SCOPE = new RegExp(
-  `^${LEAD}(COMPLETE|FAIL|ASK|ASSIST|PROGRESS)[*_\`~]*\\s+(?:on|for)\\s+(?:task\\s+)?([A-Za-z0-9._:-]+?)[*_\`~]*\\s*[:：]`,
-);
-// The id of the inbound message that carried a task (`injectTask`), as the host stamps it on a reply.
-const TASK_MESSAGE_ID = /^argus-(.+?)-(\d+)(?:-r\d+)?$/;
-
-export type ReplyFence =
-  | { ok: true }
-  | { ok: false; reason: "other_task" | "stale_message" | "unscoped_after_switch" };
-
 /**
- * Whose reply is this? The agent session outlives a task (a question, a release, an
- * account rotation), so output of an earlier task can still arrive while the next one
- * is claimed. Identity therefore comes from the reply itself, never from "whatever is
- * claimed now": an explicit scope names a task and must be the claimed one; the id of
- * the message being answered, when the host stamps it, must be the claim's own; and
- * once this session has carried another task every reply must be scoped.
+ * The NanoClaw thread of one attempt. Every message of the attempt carries it, so the
+ * attempt runs in its own session, and a reply belongs to the attempt only when it
+ * arrives on it (worker-lifecycle.spec.md, one session per attempt).
  */
-export function fenceReply(
-  claim: { id: string; attempt: number; scopeRequired: boolean },
-  text: string,
-  inReplyTo?: string | null,
-): ReplyFence {
-  const scope = ANY_SCOPE.exec(text.trim());
-  if (scope && scope[2] !== claim.id) return { ok: false, reason: "other_task" };
-  const scoped = !!scope;
-  const stamp = inReplyTo ? TASK_MESSAGE_ID.exec(inReplyTo) : null;
-  if (!scoped && stamp && (stamp[1] !== claim.id || Number(stamp[2]) !== claim.attempt))
-    return { ok: false, reason: "stale_message" };
-  if (!scoped && claim.scopeRequired) return { ok: false, reason: "unscoped_after_switch" };
-  return { ok: true };
-}
+export const attemptThread = (claim: { id: string; attempt: number }): string =>
+  `argus:${claim.id}:${claim.attempt}`;
 
 /** Checklist ids of a completion that the claimed task does not hold; an empty checklist holds none. */
 export function foreignChecklistIds(
@@ -833,18 +815,6 @@ const PHASE_RULES: Record<ContinuationPhase, string[]> = {
     "Attempt objective (Argus-derived): CLOSE WITH EVIDENCE. Work and checks are recorded as done; gather and attach the missing proof for the checklist, then COMPLETE.",
   ],
 };
-
-/** The runner's reply to `/clear`; the only text the channel treats as a command ack. */
-export const SESSION_CLEARED_NOTICE = "Session cleared.";
-const CLEAR_ACK_TIMEOUT_MS = 60_000;
-
-/** Appended to a task given to a session that already carried another one (see fenceReply). */
-export const replyScopeNotice = (taskId: string): string =>
-  [
-    "[Argus reply scope] This agent session handled earlier tasks, and late output of those may still arrive.",
-    `Start EVERY reply for this task with its id: \`PROGRESS on ${taskId}:\`, \`COMPLETE on ${taskId}:\`,`,
-    `\`FAIL on ${taskId}:\`, \`ASK on ${taskId}:\` or \`ASSIST on ${taskId}:\`. A reply without it, or naming another task, is dropped.`,
-  ].join("\n");
 
 /** Rules that hold for every attempt. */
 export const OPERATING_RULES = [
@@ -1456,12 +1426,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   // The claim in flight. Each claim is its own immutable object: asynchronous work captures it
   // and is applied only while it is still `current` (identity, not id), so nothing a
   // previous claim started can land on the next one.
-  type Claim = Readonly<{ id: string; attempt: number; scopeRequired: boolean }>;
+  type Claim = Readonly<{ id: string; attempt: number }>;
   let current: Claim | null = null;
-  // The agent session has been given a task and was not recycled since: late output of
-  // that task may still arrive, so the next claim demands scoped replies.
+  // The agent session has been given a task and was not recycled since.
   let sessionCarriesTask = false;
-  let scopeReminders = 0;
   let currentClaim: ArgusTask | null = null;
   let currentText: string | null = null; // what the agent was sent, to re-send after a switch
   // Renders the task for the account held now (a switch to local adds its rules).
@@ -1833,42 +1801,29 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
-  let clearWaiter: (() => void) | null = null;
-
-  /** True once the session confirmed it holds no earlier context (one task per session). */
-  async function clearSession(task: ArgusTask): Promise<boolean> {
-    const fresh = cfg.freshSession;
-    if (!fresh) return false;
+  /**
+   * The attempt is over, whatever its outcome: close its session so no later attempt
+   * resolves or is seeded from it. A container that does not stop is stopped with the
+   * runtime before the next claim (account-selection.spec.md 3.6).
+   */
+  async function closeAttemptSession(task: Claim): Promise<void> {
+    if (!cfg.closeSession) return;
     try {
-      await fresh.ensureAuthority();
-      const acked = new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => resolve(false), fresh.ackTimeoutMs ?? CLEAR_ACK_TIMEOUT_MS);
-        clearWaiter = () => {
-          clearTimeout(timer);
-          resolve(true);
-        };
-      });
-      await setupCfg!.onInbound(PLATFORM_ID, null, {
-        id: `argus-clear-${task.id}-${task.attempt}`,
-        kind: "chat",
-        timestamp: new Date().toISOString(),
-        content: { text: "/clear", sender: "argus", senderId: `argus:${PLATFORM_ID}` },
-      });
-      const ok = await acked;
-      if (!ok) log.warn("The session did not confirm /clear; it stays shared", { task: task.id });
-      return ok;
+      await cfg.closeSession(attemptThread(task));
     } catch (err) {
-      log.warn("Could not clear the session; it stays shared", { task: task.id, err });
-      return false;
-    } finally {
-      clearWaiter = null;
+      log.warn("Could not close the attempt's session; recycling before the next task", {
+        task: task.id,
+        attempt: task.attempt,
+        err,
+      });
+      recycleOnLease = true;
     }
   }
 
   async function injectTask(taskId: string, attempt: number, text: string): Promise<void> {
     resending = true;
     try {
-      await setupCfg!.onInbound(PLATFORM_ID, null, {
+      await setupCfg!.onInbound(PLATFORM_ID, attemptThread({ id: taskId, attempt }), {
         id: `argus-${taskId}-${attempt}${resends ? `-r${resends}` : ""}`,
         kind: "chat",
         timestamp: new Date().toISOString(),
@@ -1905,7 +1860,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       }
       injectingSteers.add(steer.id);
       try {
-        await setupCfg!.onInbound(PLATFORM_ID, null, {
+        const thread = attemptThread({ id: steer.task_id, attempt: Number(steer.attempt) });
+        await setupCfg!.onInbound(PLATFORM_ID, thread, {
           id: `argus-steer-${steer.id}`,
           kind: "chat",
           timestamp: new Date().toISOString(),
@@ -2264,9 +2220,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     current = Object.freeze({
       id: task.id,
       attempt: task.attempt,
-      scopeRequired: sessionCarriesTask,
     });
-    scopeReminders = 0;
     lastProgressAt = 0;
     const finished = new Promise<void>((resolve) => {
       taskDone = resolve;
@@ -2345,13 +2299,6 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           customHarness: account?.provider === "custom",
           runtime: runtimeSelection,
         });
-      if (await clearSession(task)) {
-        sessionCarriesTask = false;
-        if (current) current = Object.freeze({ ...current, scopeRequired: false });
-      }
-      const scopeRequired = current?.scopeRequired === true;
-      const render = renderCurrent;
-      renderCurrent = () => render() + (scopeRequired ? `\n\n${replyScopeNotice(task.id)}` : "");
       currentText = renderCurrent();
       sessionCarriesTask = true;
       await injectTask(task.id, task.attempt, currentText);
@@ -2705,7 +2652,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           abortClaim.signal,
         );
         backoff = 1000;
-        if (status === 200 && data) await runTask(data as ArgusTask);
+        if (status === 200 && data) {
+          const task = data as ArgusTask;
+          try {
+            await runTask(task);
+          } finally {
+            await closeAttemptSession(task);
+          }
+        }
       } catch (err) {
         if (stopped) return;
         if (err instanceof ArgusError && err.code === "lease_account_unusable") {
@@ -2880,7 +2834,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   const adapter: ChannelAdapter = {
     name: CHANNEL_TYPE,
     channelType: CHANNEL_TYPE,
-    supportsThreads: false,
+    supportsThreads: true,
     defaults: ARGUS_DEFAULTS,
 
     async setup(config: ChannelSetup): Promise<void> {
@@ -2888,6 +2842,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       // A restart reconciles: no declaration of a task that no longer runs may linger.
       await cfg.runtime?.cleanup().catch((err) => {
         log.warn("Could not reset the test-services declaration", { err });
+      });
+      // The shared session of the old wiring would seed every attempt's session.
+      await cfg.closeSession?.(null).catch((err) => {
+        log.warn("Could not close the shared session", { err });
       });
       const interval = await register();
       registered = true;
@@ -2920,7 +2878,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
     async deliver(
       platformId: string,
-      _threadId: string | null,
+      threadId: string | null,
       message: OutboundMessage,
     ): Promise<string | undefined> {
       if (platformId !== PLATFORM_ID) return undefined;
@@ -2932,47 +2890,23 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           : typeof content?.text === "string"
             ? content.text
             : null;
-      const inReplyTo =
-        (message as { inReplyTo?: string | null }).inReplyTo ??
-        (message as { in_reply_to?: string | null }).in_reply_to;
-      if (!text?.trim()) {
-        // Attachments alone carry no scope: only the stamped reply to this very claim counts.
-        if (task && message.files?.length && fenceReply(task, "", inReplyTo).ok)
-          await attachFiles(task, message.files);
-        return undefined;
-      }
-      if (clearWaiter && text.trim() === SESSION_CLEARED_NOTICE) {
-        clearWaiter();
-        return undefined;
-      }
-      if (!task) {
-        log.warn("Argus channel got a reply with no task in flight; dropped", {
-          text: text.slice(0, 80),
+      // Only the session of the claim in flight answers for it; anything else is the late
+      // output of an earlier attempt.
+      if (!task || threadId !== attemptThread(task)) {
+        log.warn("Argus channel dropped a reply from outside the attempt in flight", {
+          task: task?.id,
+          attempt: task?.attempt,
+          thread: threadId,
+          text: text?.slice(0, 80),
         });
+        return undefined;
+      }
+      if (!text?.trim()) {
+        if (message.files?.length) await attachFiles(task, message.files);
         return undefined;
       }
       const isFailureNotice =
         typeof content === "object" && content !== null && content.failureNotice === true;
-      // A failure notice is about the session's account, not about a task's work.
-      const fence = isFailureNotice ? ({ ok: true } as const) : fenceReply(task, text, inReplyTo);
-      if (!fence.ok) {
-        log.warn("Argus channel dropped a reply that is not provably this task's", {
-          task: task.id,
-          attempt: task.attempt,
-          reason: fence.reason,
-          text: text.slice(0, 80),
-        });
-        if (fence.reason === "unscoped_after_switch" && scopeReminders < MAX_RESENDS) {
-          scopeReminders += 1;
-          resends += 1;
-          await injectTask(
-            task.id,
-            task.attempt,
-            `[Argus] Your last reply was dropped because it was not scoped to this task. Repeat it starting with the task id, for example \`COMPLETE on ${task.id}:\`.`,
-          );
-        }
-        return undefined;
-      }
       if (message.files?.length) await attachFiles(task, message.files);
       const d = parseReply(text, task.id);
       // The last lines of the run, before the attempt ends and Argus stops taking them.
@@ -3163,6 +3097,7 @@ export function accountsFromEnv(): ArgusConfig["accounts"] {
         changed = true;
       }
       for (const session of await getSessionsByAgentGroup(groupId)) {
+        if (session.status !== "active") continue; // one per past attempt: nothing resolves them
         const current = (session.agent_provider || config.provider || "claude").toLowerCase();
         if (current === engine && session.agent_provider === engine) continue;
         await updateSession(session.id, { agent_provider: engine });
@@ -3187,22 +3122,29 @@ export function accountsFromEnv(): ArgusConfig["accounts"] {
  */
 async function stopGroupSessions(groupId: string): Promise<void> {
   const { getSessionsByAgentGroup } = await import("../db/sessions.js");
+  const sessions = await getSessionsByAgentGroup(groupId);
+  await stopSessions(
+    sessions.map((session) => session.id),
+    "argus: account rotated",
+  );
+}
+
+/** Stop the sessions' running containers; resolves once each has exited, rejects when one did not. */
+async function stopSessions(ids: string[], reason: string): Promise<void> {
   const { isContainerRunning, killContainer } = await import("../container-runner.js");
-  const stopped = (await getSessionsByAgentGroup(groupId))
-    .filter((session) => isContainerRunning(session.id))
-    .map(
-      (session) =>
-        new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(
-            () => reject(new Error(`session ${session.id} did not stop`)),
-            RECYCLE_TIMEOUT_MS,
-          );
-          killContainer(session.id, "argus: account rotated", () => {
-            clearTimeout(timer);
-            resolve();
-          });
-        }),
-    );
+  const stopped = ids.filter(isContainerRunning).map(
+    (id) =>
+      new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error(`session ${id} did not stop`)),
+          RECYCLE_TIMEOUT_MS,
+        );
+        killContainer(id, reason, () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      }),
+  );
   await Promise.all(stopped);
 }
 
@@ -3531,30 +3473,21 @@ function nanoclawVersion(): string | undefined {
   }
 }
 
-/** Lets the Argus sender run `/clear` in the worker group (an admin command); idempotent. */
-function freshSessionFromEnv(): NonNullable<ArgusConfig["freshSession"]> {
-  return {
-    async ensureAuthority(): Promise<void> {
-      const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
-        "../db/messaging-groups.js"
-      );
-      const { getUserRoles, grantRole } = await import("../modules/permissions/db/user-roles.js");
-      const mg = await getMessagingGroupByPlatform(CHANNEL_TYPE, PLATFORM_ID);
-      const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
-      if (!wiring) throw new Error("no agent group is wired to the argus channel");
-      const userId = `${CHANNEL_TYPE}:${PLATFORM_ID}`;
-      const held = await getUserRoles(userId);
-      if (held.some((r) => r.role === "admin" && r.agent_group_id === wiring.agent_group_id))
-        return;
-      await grantRole({
-        user_id: userId,
-        role: "admin",
-        agent_group_id: wiring.agent_group_id,
-        granted_by: null,
-        granted_at: new Date().toISOString(),
-      });
-    },
-  };
+/** Closes the session of one thread of the Argus wiring and stops its container. */
+export async function closeSessionFromEnv(thread: string | null): Promise<void> {
+  const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
+    "../db/messaging-groups.js"
+  );
+  const { findSessionForAgent, updateSession } = await import("../db/sessions.js");
+  const mg = await getMessagingGroupByPlatform(CHANNEL_TYPE, PLATFORM_ID);
+  const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
+  if (!mg || !wiring) return;
+  const session = await findSessionForAgent(wiring.agent_group_id, mg.id, thread);
+  if (!session) return;
+  // Closed first: NanoClaw resolves no new turn into it, and it leaves the hot set
+  // that cross-session context backfills new sessions from.
+  await updateSession(session.id, { status: "closed" });
+  await stopSessions([session.id], "argus: attempt ended");
 }
 
 /** The redacted log tails of the group's session containers, from the runtime hooks. */
@@ -3592,7 +3525,7 @@ export function fromEnv(): ChannelAdapter | null {
     workerVersion: nanoclawVersion(),
     accounts: accountsFromEnv(),
     runtime,
-    freshSession: process.env.ARGUS_FRESH_SESSION === "off" ? undefined : freshSessionFromEnv(),
+    closeSession: closeSessionFromEnv,
     agentLogTail:
       runtime?.sessionEvidence && runtime.sessions ? sessionLogTail(runtime) : undefined,
     selectModels: modelsFromEnv(),
