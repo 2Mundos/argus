@@ -333,6 +333,106 @@ async def test_unreadable_mount_table_fails_closed(env: Env) -> None:
     assert "all roots: mounts_unreadable" in run.skipped
 
 
+def test_remove_tree_refuses_same_device_mount_listed_in_table(tmp_path: Path) -> None:
+    """Same-device bind mounts have matching st_dev; the mounts table must stop delete."""
+    tree = tmp_path / "d"
+    nested = tree / "bind"
+    nested.mkdir(parents=True)
+    (nested / "foreign.txt").write_text("keep-me")
+    (tree / "own.txt").write_text("own")
+    mounts = [str(nested)]
+    with pytest.raises(wc.Unsafe) as exc:
+        wc.remove_tree(str(tmp_path), "d", os.lstat(tree).st_dev, mounts=lambda: mounts)
+    assert exc.value.code == "mount_present"
+    assert (nested / "foreign.txt").read_text() == "keep-me"
+    assert (tree / "own.txt").read_text() == "own"
+
+
+def test_remove_tree_rereads_mounts_during_walk(tmp_path: Path) -> None:
+    """A mount that appears after the walk starts still aborts (TOCTOU vs revalidation)."""
+    tree = tmp_path / "d"
+    nested = tree / "later"
+    nested.mkdir(parents=True)
+    (nested / "secret.txt").write_text("secret")
+    (tree / "early.txt").write_text("early")
+    calls = {"n": 0}
+
+    def mounts() -> list[str]:
+        calls["n"] += 1
+        # First directory (tree root) is clear; nested sees the new mount.
+        return [str(nested)] if calls["n"] > 1 else []
+
+    with pytest.raises(wc.Unsafe) as exc:
+        wc.remove_tree(str(tmp_path), "d", os.lstat(tree).st_dev, mounts=mounts)
+    assert exc.value.code == "mount_present"
+    assert (nested / "secret.txt").read_text() == "secret"
+    assert calls["n"] >= 2
+
+
+def test_remove_tree_unreadable_mounts_during_delete_fails_closed(
+    tmp_path: Path,
+) -> None:
+    tree = tmp_path / "d"
+    tree.mkdir()
+    (tree / "notes.txt").write_text("hello")
+
+    def broken() -> list[str]:
+        raise OSError(errno.EACCES, "denied")
+
+    with pytest.raises(wc.Unsafe) as exc:
+        wc.remove_tree(str(tmp_path), "d", os.lstat(tree).st_dev, mounts=broken)
+    assert exc.value.code == "mounts_unreadable"
+    assert (tree / "notes.txt").read_text() == "hello"
+
+
+def test_remove_tree_success_control_with_empty_mounts(tmp_path: Path) -> None:
+    tree = tmp_path / "d"
+    tree.mkdir()
+    (tree / "notes.txt").write_text("hello")
+    wc.remove_tree(str(tmp_path), "d", os.lstat(tree).st_dev, mounts=list)
+    assert not tree.exists()
+
+
+async def test_mount_appearing_only_at_delete_blocks_and_keeps_tree(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revalidation sees no mounts; delete-time table lists a same-device path under the tombstone."""
+    path = await env.instance(A)
+    bind = path / "bind"
+    bind.mkdir()
+    (bind / "foreign.txt").write_text("keep")
+    env.mounts = []
+
+    real_remove = wc.remove_tree
+
+    def remove_with_late_mount(
+        root: str,
+        name: str,
+        dev: int,
+        mounts: object = None,
+    ) -> None:
+        tomb = Path(root) / name
+        real_remove(root, name, dev, mounts=lambda: [str(tomb / "bind")])
+
+    monkeypatch.setattr(wc, "remove_tree", remove_with_late_mount)
+    await env.run()
+    # Tombstone may remain after delete_error; live name must not be gone cleanly
+    # without preserving bind contents somewhere under the root.
+    leftovers = list(env.root.iterdir())
+    assert leftovers, "directory must not vanish when a late mount blocks delete"
+    found = False
+    for entry in leftovers:
+        candidate = entry / "bind" / "foreign.txt"
+        if candidate.is_file():
+            assert candidate.read_text() == "keep"
+            found = True
+    assert found
+    row = await env.entry(A)
+    assert row["status"] == "failed"
+    assert row["reason"] == "delete_error"
+    assert row["error"] == "mount_present"
+
+
 async def test_measure_refuses_another_device(tmp_path: Path) -> None:
     (tmp_path / "d").mkdir()
     st = os.lstat(tmp_path / "d")
@@ -593,8 +693,11 @@ async def test_leftover_tombstone_is_restored_unless_leased(env: Env) -> None:
     assert (env.root / (wc.TOMBSTONE + B)).exists()  # another run holds it
 
 
-async def test_internal_error_keeps_the_directory(env: Env, monkeypatch) -> None:
+async def test_internal_error_keeps_the_directory(
+    env: Env, monkeypatch, caplog: pytest.LogCaptureFixture
+) -> None:
     path = await env.instance(A)
+    caplog.set_level(logging.DEBUG)
 
     def boom(*args, **kwargs):
         raise RuntimeError(SECRET)
@@ -606,6 +709,47 @@ async def test_internal_error_keeps_the_directory(env: Env, monkeypatch) -> None
     row = await env.entry(A)
     assert (row["status"], row["reason"]) == ("blocked", "internal_error")
     assert SECRET not in json.dumps(row)
+    # Unexpected exceptions must not leak payloads into logs (sanitize only).
+    assert SECRET not in caplog.text
+
+
+async def test_resume_after_delete_interrupted_keeps_archived_reason(env: Env) -> None:
+    """A leftover tombstone whose archive already landed finishes as archived."""
+    path = await env.instance(A)
+    make_wip_repo(env.tmp, path)
+    archive_dir = env.archive / A / "prior-run"
+    archive_dir.mkdir(parents=True)
+    (archive_dir / "manifest.json").write_text("{}")
+    os.rename(path, env.root / (wc.TOMBSTONE + A))
+    async with env.db.write() as tx:
+        await wc._put(
+            tx,
+            "prior-run",
+            str(env.root),
+            A,
+            instance_id=A,
+            pool="nc",
+            status=wc.S.FAILED,
+            reason="delete_interrupted",
+            archive_path=str(archive_dir),
+            bytes_estimated=1234,
+        )
+    run = await env.run()
+    assert run.cleaned == 1
+    assert not (env.root / (wc.TOMBSTONE + A)).exists()
+    row = await env.entry(A)
+    assert (row["status"], row["reason"]) == ("cleaned", "archived")
+    assert row["archive_path"] == str(archive_dir)
+    async with (
+        env.db.read() as conn,
+        conn.execute(
+            "SELECT data FROM events WHERE subject_id = ? AND kind = 'workspace.cleaned'",
+            (A,),
+        ) as cur,
+    ):
+        event = await cur.fetchone()
+    assert event is not None
+    assert json.loads(event["data"])["archived"] is True
 
 
 # -- WIP preservation -----------------------------------------------------------------
@@ -747,18 +891,64 @@ async def test_git_timeout_blocks(env: Env) -> None:
     assert (await env.entry(A))["reason"] == "archive_timeout"
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
-async def test_unreadable_directory_blocks(env: Env) -> None:
+async def test_permission_error_blocks_and_restores_source(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EACCES during measure blocks cleanup and renames the tombstone back.
+
+    Inject PermissionError so the assertion holds under root and non-root.
+    chmod(0) alone is not enough: as root, DAC is bypassed, the directory is
+    deleted, and a finally-chmod then raises FileNotFoundError.
+    """
     path = await env.instance(A)
+    marker = path / "keep.txt"
+    marker.write_text("preserve-me")
+
+    def deny(root: str, name: str, uid: int) -> wc.Tree:
+        raise PermissionError(errno.EACCES, "Permission denied", name)
+
+    monkeypatch.setattr(wc, "measure", deny)
+    run = await env.run()
+    assert run.cleaned == 0 and run.failed == 0
+    assert path.exists()
+    assert marker.read_text() == "preserve-me"
+    assert sorted(p.name for p in env.root.iterdir()) == [A]
+    assert not (env.root / (wc.TOMBSTONE + A)).exists()
+    row = await env.entry(A)
+    assert (row["status"], row["reason"]) == ("blocked", "permission_denied")
+
+
+async def test_permission_error_success_control_still_cleans(env: Env) -> None:
+    """Same layout without the fault: cleanup deletes the directory."""
+    path = await env.instance(A)
+    (path / "keep.txt").write_text("preserve-me")
+    run = await env.run()
+    assert run.cleaned == 1
+    assert not path.exists()
+    assert not any(env.root.iterdir())
+    assert (await env.entry(A))["status"] == "cleaned"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory mode bits")
+async def test_unreadable_directory_mode_zero_blocks_as_nonroot(env: Env) -> None:
+    """Optional real DAC check: mode 0 on a subdirectory yields permission_denied."""
+    path = await env.instance(A)
+    marker = path / "keep.txt"
+    marker.write_text("preserve-me")
     locked = path / "locked"
     locked.mkdir()
     locked.chmod(0)
     try:
-        await env.run()
+        run = await env.run()
+        assert run.cleaned == 0
         assert path.exists()
+        assert marker.read_text() == "preserve-me"
+        assert not (env.root / (wc.TOMBSTONE + A)).exists()
         assert (await env.entry(A))["status"] == "blocked"
+        assert (await env.entry(A))["reason"] == "permission_denied"
     finally:
-        locked.chmod(0o700)
+        if locked.exists():
+            locked.chmod(0o700)
 
 
 def test_verify_rejects_tampering_and_unsafe_names(tmp_path: Path) -> None:

@@ -1,0 +1,16 @@
+{
+  "account_id": "34f4d2a8-8e95-4469-bfb2-2db8135def8f",
+  "payload": {
+    "task_id": "f9a048fa-f6d5-443e-bced-7639a31344b9",
+    "model": null,
+    "engine": "agent",
+    "role": "executor",
+    "measurement": "measured",
+    "input_tokens": 97317,
+    "output_tokens": 14554,
+    "cached_input_tokens": 361856,
+    "cost_usd": null,
+    "reason": null,
+    "run_key": "r1:f9a048fa-f6d5-443e-bced-7639a31344b9:760733c75f12:codex:agent:2026-10-24T23_34_41.922Z"
+  }
+}

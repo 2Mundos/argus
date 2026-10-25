@@ -122,6 +122,19 @@ def read_mounts(path: str = "/proc/self/mounts") -> list[str]:
     return points
 
 
+def _load_mounts(mounts: Callable[[], list[str]] | None) -> list[str]:
+    """Current mount table, or mounts_unreadable when the table cannot be read."""
+    try:
+        return read_mounts() if mounts is None else mounts()
+    except OSError as exc:
+        raise Unsafe("mounts_unreadable") from exc
+
+
+def _mount_at_or_under(abs_path: str, mounts: list[str]) -> bool:
+    """True when abs_path is a mount point or a mount sits at/under it."""
+    return any(_within(m, abs_path) for m in mounts)
+
+
 def check_root(root: str, forbidden: list[str], mounts: list[str]) -> str | None:
     """None when `root` may hold deletable instance directories, else why not."""
     if root in ("", "/") or not os.path.isabs(root):
@@ -251,21 +264,40 @@ def _measure(
         os.close(fd)
 
 
-def remove_tree(root: str, name: str, dev: int) -> None:
-    """Delete root/name with fd-relative unlink/rmdir; symlinks are unlinked."""
+def remove_tree(
+    root: str,
+    name: str,
+    dev: int,
+    mounts: Callable[[], list[str]] | None = None,
+) -> None:
+    """Delete root/name with fd-relative unlink/rmdir; symlinks are unlinked.
+
+    Re-reads the mount table at each directory so same-device bind mounts and
+    mounts added after revalidation still raise `mount_present` (fail-closed
+    when the table cannot be read).
+    """
     rfd = _open_dir(root, None)
     try:
-        _remove(rfd, name, dev, 0)
+        _remove(rfd, name, os.path.join(root, name), dev, mounts, 0)
     finally:
         os.close(rfd)
 
 
-def _remove(parent_fd: int, name: str, dev: int, depth: int) -> None:
+def _remove(
+    parent_fd: int,
+    name: str,
+    abs_path: str,
+    dev: int,
+    mounts: Callable[[], list[str]] | None,
+    depth: int,
+) -> None:
     st = os.lstat(name, dir_fd=parent_fd)
     if not stat.S_ISDIR(st.st_mode):
         os.unlink(name, dir_fd=parent_fd)
         return
     if st.st_dev != dev:
+        raise Unsafe("mount_present")
+    if _mount_at_or_under(abs_path, _load_mounts(mounts)):
         raise Unsafe("mount_present")
     if depth > MAX_TREE_DEPTH:
         raise Unsafe("scan_limit")
@@ -276,13 +308,26 @@ def _remove(parent_fd: int, name: str, dev: int, depth: int) -> None:
         with os.scandir(fd) as it:
             names = [e.name for e in it]
         for child in names:
-            _remove(fd, child, dev, depth + 1)
+            _remove(
+                fd,
+                child,
+                os.path.join(abs_path, child),
+                dev,
+                mounts,
+                depth + 1,
+            )
     finally:
         os.close(fd)
     os.rmdir(name, dir_fd=parent_fd)
 
 
-def prune_caches(root: str, name: str, caches: list[str], dev: int) -> None:
+def prune_caches(
+    root: str,
+    name: str,
+    caches: list[str],
+    dev: int,
+    mounts: Callable[[], list[str]] | None = None,
+) -> None:
     """Delete only the given allowlisted cache directories under root/name."""
     rfd = _open_dir(root, None)
     try:
@@ -298,7 +343,10 @@ def prune_caches(root: str, name: str, caches: list[str], dev: int) -> None:
                     fd = nxt
                 if os.fstat(fd).st_dev != dev:
                     raise Unsafe("mount_present")
-                _remove(fd, parts[-1], dev, 0)
+                cache_abs = os.path.join(root, name, *parts)
+                if _mount_at_or_under(cache_abs, _load_mounts(mounts)):
+                    raise Unsafe("mount_present")
+                _remove(fd, parts[-1], cache_abs, dev, mounts, 0)
             finally:
                 os.close(fd)
     finally:
@@ -456,15 +504,24 @@ class WorkspaceCleaner:
                     for cand in candidates:
                         try:
                             await self._process(run, cand)
-                        except Exception:
+                        except Exception as exc:
                             # One directory's bug must not stop the others; the
                             # lease expires and a later run retries it.
-                            log.exception("workspace cleanup of %s failed", cand.name)
+                            # Sanitize: never log exception messages (may carry paths).
+                            log.error(
+                                "workspace cleanup of %s failed (%s)",
+                                cand.name,
+                                wa.sanitize(exc),
+                            )
                             run.skipped.append(f"{cand.name}: internal_error")
             except TimeoutError:
                 status, error = "timed_out", "TimeoutError"
             except Exception as exc:
-                log.exception("workspace cleanup run %s failed", run.id)
+                log.error(
+                    "workspace cleanup run %s failed (%s)",
+                    run.id,
+                    wa.sanitize(exc),
+                )
                 status, error = "failed", wa.sanitize(exc)
             free_after = self._free(roots)
         finally:
@@ -759,6 +816,15 @@ class WorkspaceCleaner:
         self, run: RunState, cand: Candidate, tomb: str, prev: dict
     ) -> Outcome | None:
         root, name = cand.root, cand.name
+        # Ownership / readability before anything moves (spec 3.3).
+        try:
+            tree = await asyncio.to_thread(measure, root, name, self.uid)
+        except Unsafe as exc:
+            return Outcome(S.BLOCKED, exc.code)
+        except OSError as exc:
+            return Outcome(S.BLOCKED, "permission_denied", error=wa.sanitize(exc))
+        if tree.foreign_owner:
+            return Outcome(S.BLOCKED, "permission_denied", tree.bytes)
         try:
             rfd = _open_dir(root, None)
         except OSError as exc:
@@ -779,7 +845,11 @@ class WorkspaceCleaner:
                         _rename_back(rfd, tomb, name)
                 raise
             except Exception as exc:
-                log.exception("workspace cleanup of %s failed", name)
+                log.error(
+                    "workspace cleanup of %s failed (%s)",
+                    name,
+                    wa.sanitize(exc),
+                )
                 outcome = (
                     Outcome(S.FAILED, "delete_error", error=wa.sanitize(exc))
                     if cand.deleting
@@ -855,7 +925,23 @@ class WorkspaceCleaner:
         )
         if problem:
             return Outcome(S.FAILED, problem)
-        return await self._delete(run, cand, tomb, None, None)
+        # Reuse the archive path recorded when deletion started so a later
+        # finish keeps reason=archived and events say archived=true.
+        archive_path: str | None = None
+        estimated: int | None = None
+        async with (
+            self.db.read() as conn,
+            conn.execute(
+                "SELECT archive_path, bytes_estimated FROM workspace_cleanup"
+                " WHERE root = ? AND name = ?",
+                (root, cand.name),
+            ) as cur,
+        ):
+            row = await cur.fetchone()
+        if row is not None:
+            archive_path = row["archive_path"]
+            estimated = row["bytes_estimated"]
+        return await self._delete(run, cand, tomb, estimated, archive_path)
 
     async def _delete(
         self,
@@ -869,7 +955,7 @@ class WorkspaceCleaner:
         before = free_bytes(root)
         try:
             dev = os.lstat(root).st_dev
-            await asyncio.to_thread(remove_tree, root, tomb, dev)
+            await asyncio.to_thread(remove_tree, root, tomb, dev, self.mounts)
         except Unsafe as exc:
             return Outcome(
                 S.FAILED,
@@ -904,7 +990,9 @@ class WorkspaceCleaner:
         before = free_bytes(root)
         try:
             dev = os.lstat(root).st_dev
-            await asyncio.to_thread(prune_caches, root, tomb, found.cache_dirs, dev)
+            await asyncio.to_thread(
+                prune_caches, root, tomb, found.cache_dirs, dev, self.mounts
+            )
         except Unsafe as exc:
             return Outcome(S.BLOCKED, "low_disk", tree.bytes, error=exc.code)
         except OSError as exc:
@@ -1129,8 +1217,8 @@ class WorkspaceCleaner:
 
 
 def _log_failure(task: asyncio.Task) -> None:
-    if not task.cancelled() and task.exception() is not None:
-        log.error("workspace cleanup run failed", exc_info=task.exception())
+    if not task.cancelled() and (exc := task.exception()) is not None:
+        log.error("workspace cleanup run failed (%s)", wa.sanitize(exc))
 
 
 def _exists(name: str, dir_fd: int) -> bool:

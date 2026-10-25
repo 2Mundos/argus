@@ -18,6 +18,7 @@ fails otherwise (`scripts/validate_docs.py`).
 | [`drafts/`](drafts) | Work in progress, not yet a spec |
 | [`research/`](research) | Investigations and comparisons |
 | [`runbooks/`](runbooks) | Operational procedures |
+| [`reports/`](reports) | Point-in-time review and QA receipts |
 | [`releases/`](specs/releases.spec.md) | Release notes, one per version |
 
 ## Core principle
@@ -143,6 +144,17 @@ every new dependency is judged against it.
   user-owned artifacts, the isolation runtime, environment
 - [Workspace cleanup](runbooks/2026-10-24.workspace-cleanup.ref.md) — enabling it,
   dry run first, the archive root, restore and reason codes
+
+### Reports
+
+- [Workspace cleanup exact-head review (task f9a048fa)](reports/2026-10-24.workspace-cleanup-review.ref.md) —
+  independent P1–P3 review of the merged cleanup feature; non-git state and
+  committed secrets explicitly not total preservation
+- [Workspace cleanup QA receipt (task f9a048fa)](reports/2026-10-24.workspace-cleanup-qa.ref.md) —
+  commands, exit statuses, restore proof, Biome/`make check`, CI probe, limitations
+- [Workspace cleanup delegate review extract](reports/2026-10-24.workspace-cleanup-delegate-review.ref.md) —
+  verbatim independent `argus-delegate --read-only` report at baseline SHA `60576ab…`
+  (P3-2 later fixed in PR #114; final-head review stored outside git)
 
 ### Research
 
