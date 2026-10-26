@@ -340,6 +340,8 @@ async def _live_allowed(
     if agent_id is None:
         return False
     if event.subject_type == "task":
+        if event.kind == "task.attachment":
+            return False
         if event.subject_id in granted:
             return True
         async with db.read() as conn:

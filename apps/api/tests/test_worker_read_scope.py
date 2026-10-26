@@ -308,6 +308,18 @@ def test_live_stream_filter_matches_replay_rule(client: TestClient) -> None:
 
     assert allowed(claimed["id"])
     assert not allowed(other["id"])
+    attached = Event(
+        2,
+        datetime.now(UTC),
+        "orchestrator:x",
+        "task",
+        claimed["id"],
+        "task.attachment",
+        {},
+    )
+    assert not client.portal.call(  # type: ignore[union-attr]
+        _live_allowed, db, attached, {"alpha"}, agent_id, set()
+    )
 
 
 def test_worker_can_read_page_pinned_on_leased_task(client: TestClient) -> None:

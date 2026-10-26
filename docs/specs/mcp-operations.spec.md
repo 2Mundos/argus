@@ -177,6 +177,26 @@ Findings outside the gap list:
   there. REST serves it as `GET /artifacts/{id}/text?offset&max_bytes`
   (64 to 65536), and gets `Range` support on `/content` and
   `GET /artifacts/{id}` for metadata.
+- **Attachments:** an orchestrator or admin can attach evidence (screenshots,
+  ZIPs, logs) to any task without a worker lease. REST
+  `POST /api/tasks/{id}/attachments?name&role` takes the raw body (same name
+  rules, same `ARGUS_ARTIFACT_MAX_BYTES` limit and streaming as the worker
+  upload); MCP `attach_artifact(task_id, name, content | content_base64,
+  media_type?, role?)` wraps it and is listed to managers only. Attachments are
+  stored at `tasks/{id}/0/{name}` (attempt 0 is the task-level pseudo attempt, so
+  a duplicate name is `409 artifact_exists` and never overwrites), do not count
+  against the agent quota, and are capped per task by
+  `ARGUS_ATTACHMENT_MAX_PER_TASK` (default 50, `400 attachment_limit`). Rows carry
+  `source: attachment` and `attached_by` (`orchestrator:<id>` or `admin:<label>`,
+  never `agent:…`); worker rows are `source: worker` with `attached_by` null.
+  Attachments are readable by orchestrators and admins only: workers get `403
+  attachment_scope` on get, content, text and verify, do not see them in
+  `GET /tasks/{id}/artifacts`, and cannot list them in `result.artifacts`. The
+  existing read, `/content`, `/text` and `/verify` endpoints serve them. The
+  `task.attachment` event records only `{source: attachment}` and the actor: no id,
+  name, size or hash, so the feed never discloses evidence names or digests. Read
+  the artifact for those. The dashboard
+  shows name, size, media type and source for every artifact with a download.
 - **Verification:** `POST /api/artifacts/{id}/verify` → MCP
   `verify_artifact`. It re-hashes the stored file and returns
   `{ok, size, sha256, expected_size, expected_sha256}`. `ok` means the bytes are

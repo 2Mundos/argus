@@ -8,6 +8,7 @@ Connect with `Authorization: Bearer <agent token>` (or an admin token for the
 orchestrator-style tools).
 """
 
+from base64 import b64decode
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -767,6 +768,40 @@ async def upload_text_artifact(
         f"/tasks/{task_id}/artifacts",
         params={"attempt": attempt, "name": name, "role": role},
         content=content.encode(),
+        headers={"Content-Type": media_type},
+    )
+
+
+@tool(MANAGERS)
+async def attach_artifact(
+    ctx: Context,
+    task_id: str,
+    name: str,
+    content: str | None = None,
+    content_base64: str | None = None,
+    media_type: str = "text/plain",
+    role: ArtifactRole | None = None,
+) -> dict:
+    """Attach evidence to any task without a lease: pass text as `content` or binary
+    (screenshot, ZIP) as `content_base64`. Returns the artifact (id, size, sha256,
+    source "attachment"). Immutable; names: letters, digits, . _ - Only orchestrators
+    and admins can read attachments; workers cannot."""
+    if (content is None) == (content_base64 is None):
+        raise ToolError("pass exactly one of content or content_base64")
+    try:
+        data = (
+            content.encode()
+            if content is not None
+            else b64decode(content_base64 or "", validate=True)
+        )
+    except ValueError as e:
+        raise ToolError("content_base64 is not valid base64") from e
+    return await _call(
+        ctx,
+        "POST",
+        f"/tasks/{task_id}/attachments",
+        params={"name": name, "role": role},
+        content=data,
         headers={"Content-Type": media_type},
     )
 

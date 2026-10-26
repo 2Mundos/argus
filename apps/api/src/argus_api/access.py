@@ -231,7 +231,8 @@ def worker_event_filter(
     Task events (and decisions on tasks) need a lease grant for that very task;
     project, knowledge page, and knowledge-proposal decision events need the
     subject's project to be in `projects`. Everything else is fleet-wide and
-    hidden."""
+    hidden. `task.attachment` events are hidden too: their actor is the
+    uploader's principal."""
     if is_global_reader(caller):
         return None
     agent_id = _worker_id(caller)
@@ -245,7 +246,8 @@ def worker_event_filter(
     # `marks` is only "?" placeholders; values are bound separately.
     in_projects = " IN (" + marks + ")"
     clause = (
-        "(subject_type = 'task' AND subject_id IN (" + leased + "))"  # noqa: S608
+        "(subject_type = 'task' AND kind != 'task.attachment'"  # noqa: S608
+        "  AND subject_id IN (" + leased + "))"
         " OR (subject_type = 'project' AND subject_id" + in_projects + ")"
         " OR (subject_type = 'knowledge_page' AND subject_id IN ("
         "  SELECT id FROM knowledge_pages WHERE project" + in_projects + "))"
@@ -260,3 +262,16 @@ def worker_event_filter(
         "(" + clause + ")",
         [agent_id, *allowed, *allowed, agent_id, *allowed],
     )
+
+
+async def require_artifact_readable(
+    conn: aiosqlite.Connection, caller: Identity, task_id: str, source: str
+) -> None:
+    """Attachments (orchestrator evidence) are for global readers only; worker
+    artifacts follow the task rule."""
+    if source == "attachment" and not is_global_reader(caller):
+        raise ForbiddenError(
+            "attachments are readable by orchestrators and admins only",
+            code="attachment_scope",
+        )
+    await require_task_readable(conn, caller, task_id)

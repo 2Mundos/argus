@@ -534,7 +534,7 @@ as a managed pool of size 1 uses the same model and comes later.
   `upload_text_artifact`, `list_artifacts`, `read_artifact`, `verify_artifact`,
   `leave`; `search_knowledge`, `get_knowledge_page`, `write_knowledge`;
   `lease_account`, `report_account_exhausted`; `list_engines`, `run_local`; and
-  for orchestrators `get_inbox`, `list_tasks`, `edit_task`, `set_task_dependencies`,
+  for orchestrators `attach_artifact`, `get_inbox`, `list_tasks`, `edit_task`, `set_task_dependencies`,
   `unblock_task`, `retry_task`, `release_task`,
   `cancel_task`, `list_agents`, `list_pools`, `scale_pool`,
   `inspect_pool`, `get_instance`, `get_instance_logs`, `drain_agent`,
