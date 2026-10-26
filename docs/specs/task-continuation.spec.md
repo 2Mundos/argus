@@ -177,6 +177,16 @@ attributes a reply to "whatever is claimed now" by default:
 - A completion whose checklist ids are not the claim's is not sent; the agent is
   told the valid ids. The server rejects the same case (3.5).
 
+The executable contract for two tasks alternating on one worker (A asks, B is claimed
+and completes, A returns as attempt 2) is
+`integrations/nanoclaw/argus-claim-isolation.test.ts`: each prompt names only its own
+task, replies on any other thread write nothing, attached files are stored only under
+the claim in flight (an identical file of another task or attempt is not deduplicated
+away), and foreign checklist ids are never sent. On the server,
+`test_a_requeued_task_keeps_its_own_checklist_after_another_task` in
+`apps/api/tests/test_task_continuation.py` holds that A's attempt 2 keeps exactly A's
+checklist and that B's ids fail closed with `checklist_mismatch`.
+
 ## 3.9 Authority
 
 `delivery.allow_merge` only counts on orchestrator-origin tasks: `input` of a
