@@ -100,6 +100,22 @@ async def agent_bytes_used(conn: aiosqlite.Connection, agent_id: str) -> int:
     return int(row[0])
 
 
+_MEDIA_TYPE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*"
+    r"(?:\s*;\s*[A-Za-z0-9!#$&^_.+-]+=(?:[A-Za-z0-9!#$&^_.+-]+|\"[^\"\r\n\0]*\"))*"
+)
+
+
+def check_media_type(media_type: str) -> str:
+    """A `type/subtype[; param=value]` token of at most 255 characters."""
+    if len(media_type) > 255 or not _MEDIA_TYPE.fullmatch(media_type):
+        raise ValidationFailedError(
+            "Content-Type must be a type/subtype media type of at most 255 characters",
+            code="invalid_media_type",
+        )
+    return media_type
+
+
 def _check_name(name: str) -> None:
     if not _NAME.fullmatch(name):
         raise ValidationFailedError(
@@ -125,6 +141,7 @@ async def attach(
     staging as `upload`; the staged file is discarded on any error."""
     _check_name(name)
     staged = await store.stage(chunks)
+    promoted: Path | None = None
     try:
         async with db.write() as tx:
             await tasks.get_task(tx.conn, task_id)  # 404 for unknown tasks
@@ -172,7 +189,7 @@ async def attach(
             await record(
                 tx,
                 attached_by,
-                "task",
+                "task_attachment",  # not "task": worker event feeds hide this subject
                 task_id,
                 "task.attachment",
                 {
@@ -183,8 +200,11 @@ async def attach(
                 },
             )
             store.promote(staged, key(task_id, ATTACHMENT_ATTEMPT, name))
+            promoted = store.path(key(task_id, ATTACHMENT_ATTEMPT, name))
     except BaseException:
         store.discard(staged)
+        if promoted is not None:  # the commit failed: drop the file with no row
+            promoted.unlink(missing_ok=True)
         raise
     async with db.read() as conn:
         return await get_artifact(conn, artifact_id)
@@ -217,6 +237,7 @@ async def upload(
     else:
         used = 0
     staged = await store.stage(chunks)
+    promoted: Path | None = None
     try:
         if agent_quota_bytes is not None and used + staged.size > agent_quota_bytes:
             raise DomainError(
@@ -263,10 +284,13 @@ async def upload(
                 {"artifact_id": artifact_id, "name": name, "size": staged.size},
             )
             # Last step inside the transaction: if the rename fails, the row rolls
-            # back; if the commit fails afterwards, an orphan file is harmless.
+            # back; if the commit fails afterwards, the final file is removed below.
             store.promote(staged, key(task_id, attempt, name))
+            promoted = store.path(key(task_id, attempt, name))
     except BaseException:
         store.discard(staged)
+        if promoted is not None:
+            promoted.unlink(missing_ok=True)
         raise
     async with db.read() as conn:
         return await get_artifact(conn, artifact_id)
@@ -288,7 +312,7 @@ async def list_artifacts(
     *,
     attempt: int | None = None,
     role: ArtifactRole | None = None,
-    include_attachments: bool = True,
+    include_attachments: bool = False,
 ) -> list[TaskArtifact]:
     task = await tasks.get_task(conn, task_id)  # 404 for unknown tasks
     listed = set(task.result.artifacts) if task.result is not None else set()

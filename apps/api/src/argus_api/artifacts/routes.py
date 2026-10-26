@@ -96,7 +96,9 @@ async def attach_artifact(
         attached_by=f"{caller.scope}:{caller.agent_id or caller.label or caller.token_id[:8]}",
         task_id=task_id,
         name=name,
-        media_type=request.headers.get("content-type", "application/octet-stream"),
+        media_type=service.check_media_type(
+            request.headers.get("content-type", "application/octet-stream")
+        ),
         chunks=request.stream(),
         role=role,
         max_per_task=settings.attachment_max_per_task,

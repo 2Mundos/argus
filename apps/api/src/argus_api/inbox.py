@@ -132,7 +132,7 @@ _DEPENDENTS = (
 _TOTALS = "coalesce(state, subject_type), coalesce(decision_kind, 'none'), count(*)"
 _CURRENT_ARTIFACTS = (
     "SELECT a.task_id, a.id FROM artifacts a JOIN tasks t ON t.id = a.task_id"
-    " WHERE a.attempt = t.attempt"
+    " WHERE a.attempt = t.attempt AND a.source = 'worker'"
 )
 
 

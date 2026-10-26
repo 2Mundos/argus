@@ -1,10 +1,12 @@
 import hashlib
 import sqlite3
 from collections.abc import Generator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 from argus_api.artifacts.store import LocalArtifactStore
+from argus_api.db import Database
 from argus_api.main import app
 from fastapi.testclient import TestClient
 
@@ -296,3 +298,123 @@ def test_attachments_do_not_use_the_agent_quota(
             headers=worker,
         )
         assert res.status_code == 201  # the worker's own quota is untouched
+
+
+def test_worker_event_feed_omits_attachment_events(
+    client: TestClient, orchestrator, worker, task
+) -> None:
+    claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    assert claimed["id"] == task["id"]
+    art = attach(client, orchestrator, task, name="secret-shot.png").json()
+    feed = client.get("/api/events", params={"limit": 200}, headers=worker)
+    assert feed.status_code == 200
+    assert "task.attachment" not in feed.text
+    assert "secret-shot.png" not in feed.text and art["id"] not in feed.text
+    assert "task.claim" in feed.text  # the worker still sees its own task events
+    seen = client.get("/api/events", params={"limit": 200}, headers=orchestrator).text
+    assert "task.attachment" in seen and "secret-shot.png" in seen
+
+
+def test_leased_worker_listing_has_own_artifacts_but_no_attachments(
+    client: TestClient, orchestrator, worker, task
+) -> None:
+    claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    up = client.post(
+        f"/api/tasks/{task['id']}/artifacts",
+        params={"attempt": claimed["attempt"], "name": "r.md"},
+        content=b"hi",
+        headers=worker,
+    ).json()
+    att = attach(client, orchestrator, task).json()
+    url = f"/api/tasks/{task['id']}/artifacts"
+    assert [a["id"] for a in client.get(url, headers=worker).json()] == [up["id"]]
+    both = {a["id"] for a in client.get(url, headers=orchestrator).json()}
+    assert both == {up["id"], att["id"]}
+
+
+def test_inbox_lists_worker_artifacts_not_attachments(
+    client: TestClient, orchestrator, worker
+) -> None:
+    approval = client.post(
+        "/api/tasks",
+        json={"project": "global", "title": "a", "requires_approval": True},
+        headers=ADMIN,
+    ).json()
+    att = attach(client, orchestrator, approval).json()  # attempt 0 == task attempt
+    review = client.post(
+        "/api/tasks",
+        json={"project": "global", "title": "r", "review": "orchestrator"},
+        headers=ADMIN,
+    ).json()
+    claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    assert claimed["id"] == review["id"]
+    up = client.post(
+        f"/api/tasks/{review['id']}/artifacts",
+        params={"attempt": claimed["attempt"], "name": "r.md"},
+        content=b"hi",
+        headers=worker,
+    ).json()
+    done = client.post(
+        f"/api/tasks/{review['id']}/complete",
+        json={
+            "attempt": claimed["attempt"],
+            "result": {"summary": "s", "artifacts": [up["id"]]},
+        },
+        headers=worker,
+    )
+    assert done.status_code == 200, done.text
+    items = {
+        i["subject_id"]: i
+        for i in client.get("/api/inbox", headers=ADMIN).json()["items"]
+    }
+    assert items[approval["id"]]["artifact_ids"] == []
+    assert items[review["id"]]["artifact_ids"] == [up["id"]]
+    assert att["id"] not in str(items)
+
+
+def test_failed_commit_leaves_no_row_or_final_file(
+    client: TestClient, task, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = Database.write
+
+    @asynccontextmanager
+    async def failing(self):
+        async with real(self) as tx:
+            yield tx
+            raise RuntimeError("commit failed")  # after promote, rolls the row back
+
+    monkeypatch.setattr(Database, "write", failing)
+    with pytest.raises(RuntimeError):
+        attach(client, ADMIN, task)
+    assert files(tmp_path) == []
+    assert rows(tmp_path) == 0
+
+
+@pytest.mark.parametrize("media_type", ["image/png", "text/plain; charset=utf-8"])
+def test_valid_media_type_is_stored(
+    client: TestClient, orchestrator, task, media_type: str
+) -> None:
+    res = client.post(
+        f"/api/tasks/{task['id']}/attachments",
+        params={"name": "a.bin"},
+        content=b"x",
+        headers={**orchestrator, "Content-Type": media_type},
+    )
+    assert res.status_code == 201
+    assert res.json()["media_type"] == media_type
+
+
+@pytest.mark.parametrize(
+    "media_type", ["text/plain\x00x", "nonsense", "a/b" + "x" * 300, "text/plain;"]
+)
+def test_bad_media_type_is_422_and_writes_nothing(
+    client: TestClient, task, tmp_path: Path, media_type: str
+) -> None:
+    res = client.post(
+        f"/api/tasks/{task['id']}/attachments",
+        params={"name": "a.bin"},
+        content=b"x",
+        headers={**ADMIN, "Content-Type": media_type},
+    )
+    assert res.status_code == 422
+    assert files(tmp_path) == [] and rows(tmp_path) == 0
