@@ -193,7 +193,9 @@ Findings outside the gap list:
   attachment_scope` on get, content, text and verify, do not see them in
   `GET /tasks/{id}/artifacts`, and cannot list them in `result.artifacts`. The
   existing read, `/content`, `/text` and `/verify` endpoints serve them. The
-  event records metadata only (id, name, size, SHA-256 prefix). The dashboard
+  `task.attachment` event records only `{source: attachment}` and the actor: no id,
+  name, size or hash, so the feed never discloses evidence names or digests. Read
+  the artifact for those. The dashboard
   shows name, size, media type and source for every artifact with a download.
 - **Verification:** `POST /api/artifacts/{id}/verify` → MCP
   `verify_artifact`. It re-hashes the stored file and returns
