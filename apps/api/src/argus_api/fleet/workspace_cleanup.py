@@ -89,9 +89,10 @@ class CleanupRunningError(ConflictError):
 class Unsafe(Exception):
     """A safety check failed; `code` is the audit reason code."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, detail: str = "") -> None:
         super().__init__(code)
         self.code = code
+        self.detail = detail
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +235,7 @@ def _measure(
     depth: int,
 ) -> None:
     if depth > MAX_TREE_DEPTH:
-        raise Unsafe("scan_limit")
+        raise Unsafe("scan_limit", "tree_depth")
     if st.st_dev != dev:
         raise Unsafe("mount_present")
     key = (st.st_dev, st.st_ino)
@@ -300,7 +301,7 @@ def _remove(
     if _mount_at_or_under(abs_path, _load_mounts(mounts)):
         raise Unsafe("mount_present")
     if depth > MAX_TREE_DEPTH:
-        raise Unsafe("scan_limit")
+        raise Unsafe("scan_limit", "tree_depth")
     fd = _open_dir(name, parent_fd, st)
     try:
         if (st.st_mode & 0o700) != 0o700:
@@ -794,7 +795,7 @@ class WorkspaceCleaner:
         try:
             tree = await asyncio.to_thread(measure, cand.root, cand.name, self.uid)
         except Unsafe as exc:
-            return Outcome(S.BLOCKED, exc.code)
+            return Outcome(S.BLOCKED, exc.code, error=exc.detail or None)
         except OSError as exc:
             return Outcome(S.BLOCKED, "permission_denied", error=wa.sanitize(exc))
         if tree.foreign_owner:
@@ -820,7 +821,7 @@ class WorkspaceCleaner:
         try:
             tree = await asyncio.to_thread(measure, root, name, self.uid)
         except Unsafe as exc:
-            return Outcome(S.BLOCKED, exc.code)
+            return Outcome(S.BLOCKED, exc.code, error=exc.detail or None)
         except OSError as exc:
             return Outcome(S.BLOCKED, "permission_denied", error=wa.sanitize(exc))
         if tree.foreign_owner:
@@ -877,7 +878,7 @@ class WorkspaceCleaner:
         try:
             tree = await asyncio.to_thread(measure, root, tomb, self.uid)
         except Unsafe as exc:
-            return Outcome(S.BLOCKED, exc.code)
+            return Outcome(S.BLOCKED, exc.code, error=exc.detail or None)
         except OSError as exc:
             return Outcome(S.BLOCKED, "permission_denied", error=wa.sanitize(exc))
         if tree.foreign_owner:
@@ -962,7 +963,7 @@ class WorkspaceCleaner:
                 "delete_error",
                 estimated,
                 archive_path=archive_path,
-                error=exc.code,
+                error=" ".join(filter(None, (exc.code, exc.detail))),
             )
         except OSError as exc:
             return Outcome(
@@ -994,7 +995,12 @@ class WorkspaceCleaner:
                 prune_caches, root, tomb, found.cache_dirs, dev, self.mounts
             )
         except Unsafe as exc:
-            return Outcome(S.BLOCKED, "low_disk", tree.bytes, error=exc.code)
+            return Outcome(
+                S.BLOCKED,
+                "low_disk",
+                tree.bytes,
+                error=" ".join(filter(None, (exc.code, exc.detail))),
+            )
         except OSError as exc:
             return Outcome(S.BLOCKED, "low_disk", tree.bytes, error=wa.sanitize(exc))
         after = free_bytes(root)

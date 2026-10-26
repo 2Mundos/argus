@@ -820,8 +820,420 @@ def test_repository_under_a_cache_name_outside_a_repo_is_found(tmp_path: Path) -
     git(tmp_path / "top", "init", "-q")
     (tmp_path / "top" / "node_modules" / "x").mkdir(parents=True)
     repos, caches = wa.find_repos(tmp_path)
-    assert repos == [("build/proj", "worktree"), ("top", "worktree")]
+    assert [(r.rel, r.kind) for r in repos] == [
+        ("build/proj", "worktree"),
+        ("top", "worktree"),
+    ]
     assert caches == ["top/node_modules"]
+
+
+# -- gitfiles, unborn and broken repositories, scan limits ----------------------------
+
+MOUNT = "/mnt/agent-test"  # stands in for CONTAINER_MOUNT in gitfiles
+
+
+def snapshot(repo: Path) -> dict[str, str | bytes]:
+    """Everything a restore must reproduce: history, index, worktree diff and
+    the untracked file list with contents."""
+    untracked = git(repo, "ls-files", "--others", "-z").split("\0")
+    return {
+        "log": git(repo, "log", "--all", "--format=%H %D %s"),
+        "head": git(repo, "symbolic-ref", "HEAD"),
+        "staged": git(repo, "diff", "--cached", "--binary"),
+        "unstaged": git(repo, "diff", "--binary"),
+        **{f"u:{u}": (repo / u).read_bytes() for u in untracked if u},
+    }
+
+
+def make_linked_worktree(
+    tmp: Path, path: Path
+) -> tuple[Path, Path, dict[str, str | bytes]]:
+    """A main clone at `path/w/main` and a linked worktree at `path/w/wt`,
+    each with a commit that exists nowhere else; the worktree also has staged,
+    unstaged and untracked WIP. Its gitfile and admin `gitdir` then name MOUNT,
+    as NanoClaw leaves them (`commondir` stays git's relative `../..`); returns
+    the worktree snapshot taken before that."""
+    origin = tmp / "wt-origin.git"
+    git(tmp, "init", "-q", "--bare", str(origin))
+    main = path / "w" / "main"
+    git(tmp, "clone", "-q", str(origin), str(main))
+    (main / "a.txt").write_text("one\n")
+    git(main, "add", "a.txt")
+    git(main, "commit", "-q", "-m", "pushed")
+    git(main, "push", "-q", "origin", "HEAD:main")
+    (main / "m.txt").write_text("main only\n")
+    git(main, "add", "m.txt")
+    git(main, "commit", "-q", "-m", "main local")
+    wt = path / "w" / "wt"
+    git(main, "worktree", "add", "-q", "-b", "feature", str(wt))
+    (wt / "f.txt").write_text("feature\n")
+    git(wt, "add", "f.txt")
+    git(wt, "commit", "-q", "-m", "feature local")
+    (wt / "staged.txt").write_text("staged\n")
+    git(wt, "add", "staged.txt")
+    (wt / "a.txt").write_text("one\nunstaged\n")
+    (wt / "new.bin").write_bytes(bytes(range(256)))
+    expected = snapshot(wt) | {"main": git(main, "log", "--all", "--format=%H %s")}
+    (wt / ".env").write_text(f"TOKEN={SECRET}\n")
+    (wt / ".git").write_text(f"gitdir: {MOUNT}/w/main/.git/worktrees/wt\n")
+    admin = main / ".git" / "worktrees" / "wt"
+    (admin / "gitdir").write_text(f"{MOUNT}/w/wt/.git\n")
+    assert (admin / "commondir").read_text() == "../..\n"
+    return main, wt, expected
+
+
+def assert_clean_audit(row: dict, tmp: Path) -> None:
+    """Audit details carry reason codes only: no path, no file content."""
+    for key, value in row.items():
+        if key in ("root", "archive_path"):
+            continue
+        assert SECRET not in str(value)
+        assert str(tmp) not in str(value)
+    assert "/" not in (row["error"] or "")
+
+
+def test_container_mount_is_the_documented_prefix() -> None:
+    assert wa.CONTAINER_MOUNT == "/workspace/agent"
+
+
+async def test_linked_worktree_with_container_gitdir_restores_exactly(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a `.git` file used to block the instance (`unsupported_repo`).
+    The gitfile names the container mount; the instance is scanned under its
+    tombstone name, so only the remapped path can work."""
+    monkeypatch.setattr(wa, "CONTAINER_MOUNT", MOUNT)
+    path = await env.instance(A)
+    _, _, expected = make_linked_worktree(env.tmp, path)
+
+    run = await env.run()
+    row = await env.entry(A)
+    assert (row["status"], row["reason"], row["error"]) == ("cleaned", "archived", None)
+    assert run.cleaned == 1
+    archive = Path(row["archive_path"])
+    manifest = wa.verify(archive)
+    by_rel = {r["rel"]: r for r in manifest["repos"]}
+    assert by_rel["w/wt"]["git_dir"] == "w/main/.git/worktrees/wt"
+    assert by_rel["w/wt"]["common_dir"] == "w/main/.git"
+    assert by_rel["w/wt"]["skipped_sensitive"] == [".env"]
+    for f in archive.iterdir():
+        assert SECRET.encode() not in f.read_bytes()
+
+    dest = env.tmp / "restored"
+    restore(archive, dest)
+    assert (
+        git(dest / "w" / "main", "log", "--all", "--format=%H %s") == expected["main"]
+    )
+    back = snapshot(dest / "w" / "wt")
+    for key in ("head", "staged", "unstaged", "u:new.bin"):
+        assert back[key] == expected[key], key
+    assert [k for k in back if k.startswith("u:")] == ["u:new.bin"]
+    assert "feature local" in str(back["log"]) and "main local" in str(back["log"])
+
+
+def test_submodule_gitfile_is_resolved_inside_the_instance(tmp_path: Path) -> None:
+    origin = tmp_path / "sub-origin"
+    origin.mkdir()
+    git(origin, "init", "-q")
+    (origin / "s.txt").write_text("s\n")
+    git(origin, "add", "s.txt")
+    git(origin, "commit", "-q", "-m", "s")
+    base = tmp_path / "inst"
+    parent = base / "parent"
+    parent.mkdir(parents=True)
+    git(parent, "init", "-q")
+    git(parent, "-c", "protocol.file.allow=always", "submodule", "add", "-q",
+        str(origin), "sub")  # fmt: skip
+    git(parent, "commit", "-q", "-m", "add sub")
+    sub = parent / "sub"
+    assert (sub / ".git").read_text().startswith("gitdir: ../.git/modules/sub")
+    (sub / "wip.txt").write_text("wip\n")
+    git(sub, "add", "wip.txt")
+    git(sub, "commit", "-q", "-m", "sub local")
+    (sub / "loose.txt").write_text("loose\n")
+
+    result = wa.scan(base, wa.Git())
+    by_rel = {r.rel: r for r in result.repos}
+    assert by_rel["parent/sub"].git_dir == "parent/.git/modules/sub"
+    assert by_rel["parent/sub"].local_commits == 1
+    assert by_rel["parent/sub"].untracked == ["loose.txt"]
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    out = wa.archive(
+        base, result, archive_root, A, "r1", "t", wa.Git(), max_bytes=1 << 30
+    )
+    dest = tmp_path / "restored"
+    restore(out, dest)
+    back = dest / "parent" / "sub"
+    assert git(back, "log", "--format=%s") == git(sub, "log", "--format=%s")
+    assert (back / "loose.txt").read_text() == "loose\n"
+
+
+@pytest.mark.parametrize(
+    ("gitfile", "detail"),
+    [
+        ("gitdir: /etc", "gitdir_outside"),
+        ("gitdir: ../../..", "gitdir_outside"),
+        ("gitdir: ../nowhere", "gitdir_missing"),
+        ("gitdir: ../link/.git", "gitdir_symlink"),
+        ("gitdir: ../plain.txt", "gitdir_missing"),
+        ("not a gitfile", "gitfile_invalid"),
+        ("gitdir: x\nmore: y", "gitfile_invalid"),
+        ("gitdir: " + "x" * 5000, "gitfile_too_large"),
+        (b"gitdir: \xff", "gitfile_invalid"),
+    ],
+)
+def test_unsafe_gitfiles_fail_closed(
+    tmp_path: Path, gitfile: str | bytes, detail: str
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    git(outside, "init", "-q")
+    base = tmp_path / "inst"
+    (base / "wt").mkdir(parents=True)
+    (base / "link").symlink_to(outside)
+    (base / "plain.txt").write_text("x")
+    data = gitfile.encode() if isinstance(gitfile, str) else gitfile
+    (base / "wt" / ".git").write_bytes(data)
+    with pytest.raises(wa.ArchiveError) as exc:
+        wa.find_repos(base)
+    assert (exc.value.code, exc.value.detail) == ("unsupported_repo", detail)
+
+
+def test_unsafe_commondir_fails_closed(tmp_path: Path) -> None:
+    base = tmp_path / "inst"
+    gd = base / "main" / ".git" / "worktrees" / "wt"
+    gd.mkdir(parents=True)
+    (base / "wt").mkdir()
+    (base / "wt" / ".git").write_text("gitdir: ../main/.git/worktrees/wt\n")
+    for text, detail in [
+        ("/srv/elsewhere", "commondir_outside"),
+        ("../../../..", "commondir_outside"),
+        ("../../gone", "commondir_missing"),
+    ]:
+        (gd / "commondir").write_text(text + "\n")
+        with pytest.raises(wa.ArchiveError) as exc:
+            wa.find_repos(base)
+        assert (exc.value.code, exc.value.detail) == ("unsupported_repo", detail)
+    (gd / "commondir").write_text(f"{MOUNT}/main/.git\n")
+    with pytest.raises(wa.ArchiveError) as exc:
+        wa.find_repos(base, MOUNT)
+    assert exc.value.detail == "commondir_absolute"
+    (gd / "commondir").write_text("../..\n")
+    repo = {r.rel: r for r in wa.find_repos(base)[0]}["wt"]
+    assert (repo.git_dir, repo.common_dir) == ("main/.git/worktrees/wt", "main/.git")
+
+
+def test_symlinked_git_entry_fails_closed(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    git(real, "init", "-q")
+    base = tmp_path / "inst"
+    (base / "wt").mkdir(parents=True)
+    (base / "wt" / ".git").symlink_to(real / ".git")
+    with pytest.raises(wa.ArchiveError) as exc:
+        wa.find_repos(base)
+    assert (exc.value.code, exc.value.detail) == ("unsupported_repo", "gitfile_type")
+
+
+async def test_gitdir_outside_the_instance_blocks_with_detail(env: Env) -> None:
+    path = await env.instance(A)
+    wt = path / "wt"
+    wt.mkdir()
+    (wt / ".git").write_text(f"gitdir: {env.tmp}/elsewhere/.git\n")
+    (wt / ".env").write_text(SECRET)
+    await env.run()
+    assert (wt / ".git").exists() and (wt / ".env").read_text() == SECRET
+    assert not (env.root / (wc.TOMBSTONE + A)).exists()
+    row = await env.entry(A)
+    assert (row["status"], row["reason"], row["error"]) == (
+        "blocked",
+        "unsupported_repo",
+        "gitdir_outside",
+    )
+    assert_clean_audit(row, env.tmp)
+
+
+def test_symlinks_are_not_followed_in_the_scan(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    (outside / "repo").mkdir(parents=True)
+    git(outside / "repo", "init", "-q")
+    base = tmp_path / "inst"
+    base.mkdir()
+    (base / "link").symlink_to(outside)
+    (base / "repo-link").symlink_to(outside / "repo")
+    assert wa.find_repos(base) == ([], [])
+
+
+async def test_unborn_repository_wip_is_archived_and_restored(env: Env) -> None:
+    path = await env.instance(A)
+    repo = path / "fresh"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "unborn-topic")  # not the restore's default
+    (repo / "s.txt").write_text("staged\n")
+    git(repo, "add", "s.txt")
+    (repo / "s.txt").write_text("staged\nthen edited\n")
+    (repo / "u.txt").write_text("untracked\n")
+    expected = snapshot(repo)
+    await env.run()
+    row = await env.entry(A)
+    assert (row["status"], row["reason"]) == ("cleaned", "archived")
+    dest = env.tmp / "restored"
+    restore(Path(row["archive_path"]), dest)
+    assert snapshot(dest / "fresh") == expected
+
+
+async def test_shallow_clone_with_wip_blocks(env: Env) -> None:
+    """Regression: the bundle verified against the source yet could not be
+    restored without it (prerequisite commits), so WIP would have been lost."""
+    origin = env.tmp / "deep"
+    origin.mkdir()
+    git(origin, "init", "-q")
+    for n in range(2):
+        (origin / "f.txt").write_text(str(n))
+        git(origin, "add", "f.txt")
+        git(origin, "commit", "-q", "-m", str(n))
+    path = await env.instance(A)
+    repo = path / "shallow"
+    git(env.tmp, "clone", "-q", "--depth", "1", f"file://{origin}", str(repo))
+    git(repo, "remote", "remove", "origin")
+    (repo / "wip.txt").write_text("wip\n")
+    await env.run()
+    assert (repo / "wip.txt").exists()
+    row = await env.entry(A)
+    assert (row["status"], row["reason"], row["error"]) == (
+        "blocked",
+        "unsupported_repo",
+        "shallow",
+    )
+    assert list(env.archive.iterdir()) == []
+
+
+def test_bundle_prerequisites_are_detected(tmp_path: Path) -> None:
+    repo = tmp_path / "r"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    for n in range(2):
+        (repo / "f").write_text(str(n))
+        git(repo, "add", "f")
+        git(repo, "commit", "-q", "-m", str(n))
+    git(repo, "bundle", "create", "-q", str(tmp_path / "full"), "--all")
+    git(repo, "bundle", "create", "-q", str(tmp_path / "thin"), "HEAD~1..main")
+    assert not wa._bundle_has_prerequisites(tmp_path / "full")
+    assert wa._bundle_has_prerequisites(tmp_path / "thin")
+
+
+@pytest.mark.parametrize("damage", ["dangling_branch", "dangling_head", "bad_head"])
+async def test_broken_refs_fail_closed(env: Env, damage: str) -> None:
+    path = await env.instance(A)
+    repo = path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    (repo / "u.txt").write_text("wip\n")
+    if damage == "dangling_branch":
+        (repo / ".git" / "refs" / "heads" / "main").write_text("1" * 40 + "\n")
+    elif damage == "dangling_head":
+        (repo / ".git" / "HEAD").write_text("2" * 40 + "\n")
+    else:
+        (repo / ".git" / "HEAD").write_text("ref: refs/heads/../../evil\n")
+    await env.run()
+    assert (repo / "u.txt").exists()
+    row = await env.entry(A)
+    assert (row["status"], row["reason"]) == ("blocked", "git_error")
+    assert_clean_audit(row, env.tmp)
+
+
+async def test_broken_git_directory_never_reads_as_no_wip(env: Env) -> None:
+    """A `.git` directory git cannot use must not fall through to an enclosing
+    repository (which would report no WIP for these files)."""
+    outer = env.tmp / "outer"
+    outer.mkdir()
+    git(outer, "init", "-q")
+    path = await env.instance(A)
+    repo = path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "u.txt").write_text("wip\n")
+    await env.run()
+    assert (repo / "u.txt").exists()
+    row = await env.entry(A)
+    assert (row["status"], row["reason"]) == ("blocked", "git_error")
+
+
+@pytest.mark.parametrize(
+    ("limit", "value", "detail"),
+    [
+        ("MAX_SCAN_DEPTH", 3, "depth"),
+        ("MAX_REPOS", 1, "repo_count"),
+        ("MAX_SCAN_ENTRIES", 5, "entry_count"),
+    ],
+)
+async def test_scan_limits_block_with_detail(
+    env: Env, monkeypatch: pytest.MonkeyPatch, limit: str, value: int, detail: str
+) -> None:
+    path = await env.instance(A)
+    (path / "a" / "b" / "c" / "d" / "e").mkdir(parents=True)
+    for name in ("r1", "r2"):
+        (path / name).mkdir()
+        git(path / name, "init", "-q")
+    monkeypatch.setattr(wa, limit, value)
+    await env.run()
+    assert path.exists()
+    row = await env.entry(A)
+    assert (row["status"], row["reason"], row["error"]) == (
+        "blocked",
+        "scan_limit",
+        detail,
+    )
+    assert_clean_audit(row, env.tmp)
+
+
+async def test_tree_depth_limit_blocks_with_detail(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = await env.instance(A)
+    (path / "a" / "b" / "c" / "d" / "e").mkdir(parents=True)
+    monkeypatch.setattr(wc, "MAX_TREE_DEPTH", 3)
+    await env.run()
+    assert path.exists()
+    row = await env.entry(A)
+    assert (row["reason"], row["error"]) == ("scan_limit", "tree_depth")
+
+
+async def test_deep_repository_and_deep_caches_do_not_trip_the_limit(
+    env: Env,
+) -> None:
+    """Regression: depth 16 blocked real instances; caches are never walked."""
+    path = await env.instance(A)
+    deep = path.joinpath(*[f"d{n}" for n in range(20)])
+    deep.mkdir(parents=True)
+    git(deep, "init", "-q")
+    (deep / "u.txt").write_text("wip\n")
+    cache = deep / "node_modules"
+    cache.joinpath(*[f"n{n}" for n in range(wa.MAX_SCAN_DEPTH + 10)]).mkdir(
+        parents=True
+    )
+    await env.run()
+    row = await env.entry(A)
+    assert (row["status"], row["reason"]) == ("cleaned", "archived")
+
+
+@pytest.mark.parametrize("mode", ["enospc", "eacces", "hash", "boom"])
+async def test_worktree_archive_failures_keep_the_source(
+    env: Env, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    monkeypatch.setattr(wa, "CONTAINER_MOUNT", MOUNT)
+    path = await env.instance(A)
+    main, wt, _ = make_linked_worktree(env.tmp, path)
+    gitfile = (wt / ".git").read_text()
+    await env.run(writer=FailingWriter(mode))
+    assert (wt / "f.txt").exists() and (wt / ".git").read_text() == gitfile
+    assert (wt / ".env").read_text() == f"TOKEN={SECRET}\n"
+    assert (main / ".git" / "worktrees" / "wt" / "index").is_file()
+    assert not (env.root / (wc.TOMBSTONE + A)).exists()
+    assert list(env.archive.iterdir()) == []
+    row = await env.entry(A)
+    assert row["status"] == "blocked"
+    assert_clean_audit(row, env.tmp)
 
 
 class FailingWriter(wa.ArchiveWriter):

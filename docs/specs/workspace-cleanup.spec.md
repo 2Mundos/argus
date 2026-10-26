@@ -184,16 +184,59 @@ Concurrency and leftovers:
 ## 3.5 WIP preservation
 
 **Finding repositories.** The run walks the directory and treats as a
-repository any directory that contains a `.git` directory (a worktree), or that
-has `HEAD`, `objects/` and `refs/` (a bare repository). The walk does not
-follow symlinks. It is limited to depth 16 and 50 repositories. It does not
-descend into `.git`, nor into a regenerable directory inside a repository's
-working tree. Outside a repository a regenerable name is walked like any other
-directory, so a repository under `build/` is still found.
+repository any directory that contains `.git` (a directory, or a gitfile as
+below), or that has `HEAD`, `objects/` and `refs/` (a bare repository). Each
+directory is opened with `O_NOFOLLOW` and must be the inode its parent listed;
+the walk never follows a symlink and never crosses onto another device
+(`mount_present`). It does not descend into `.git`, nor into a regenerable
+directory inside a repository's working tree, so deep `node_modules` or
+`.cache` trees never count against the limits. Outside a repository a
+regenerable name is walked like any other directory, so a repository under
+`build/` is still found. The walk reads directory entries and gitfiles only,
+never other file contents.
 
-- A `.git` *file* (a linked worktree or submodule) points outside the walk.
-  The instance is blocked with `unsupported_repo`.
-- Too many repositories, or too deep, gives `scan_limit`.
+**Limits.** The walk stops at depth 64, 50 repositories or 1,000,000 directory
+entries in total; the safe walker that measures and deletes stops at depth
+256. Each gives `scan_limit`, with the limit named in the audit `error` field:
+`depth`, `repo_count`, `entry_count` or `tree_depth`. Details are fixed codes,
+never paths or contents.
+
+**Gitfiles.** A `.git` *file* (a linked worktree, or a submodule's
+`gitdir: ../.git/modules/<name>`) is read without following a symlink, as a
+regular file of at most 4096 bytes holding one `gitdir: <path>` line. NanoClaw
+creates worktrees inside its container, where the instance directory is
+mounted at `/workspace/agent` (`CONTAINER_MOUNT`), so an absolute path is
+resolved as follows:
+
+- under `/workspace/agent`, that prefix is replaced by the scanned directory;
+- under the scanned directory, it is used as it is;
+- anything else is refused.
+
+A relative path resolves from the gitfile's directory. The resolved git
+directory must exist and stay inside the scanned directory, with no `..`
+escape, no symlink at any component and no other device. A linked worktree's
+`commondir` is checked the same way. Git always writes it as the relative
+`../..`; an absolute one outside the scanned directory is refused, because git
+rereads that file itself. Git then runs with explicit `--git-dir` and
+`--work-tree`, never discovering a repository on its own, so a broken `.git`
+cannot fall through to an enclosing one. Each repository's scan, bundle and
+patches therefore cover its own HEAD and index, plus all shared refs. A
+worktree is restored as a standalone repository. Any failed check blocks the
+instance with `unsupported_repo` and a detail: `gitfile_type`,
+`gitfile_invalid`, `gitfile_too_large`, `gitfile_unreadable`, `gitdir_outside`,
+`gitdir_missing`, `gitdir_symlink`, `gitdir_unreadable`, or the same
+`commondir_*` codes plus `commondir_absolute`.
+
+**Unborn and broken repositories.** A repository with no commit yet (unborn
+HEAD on a branch) has no bundle, but its staged, unstaged and untracked WIP is
+archived, and restore points HEAD at that branch before applying the patches.
+Objects that no ref reaches are not WIP and are not archived. Anything git
+cannot read blocks the instance with `git_error` and is never taken as "no
+WIP": a HEAD that is neither a commit nor a branch (detail `head_invalid`), a
+ref naming a missing object, or a `.git` directory git rejects. A shallow
+repository with WIP is `unsupported_repo` (`shallow`), because its bundle would
+need commits the archive lacks. A bundle that lists prerequisites is refused
+for the same reason (`bundle_not_self_contained`).
 
 **Classification, per repository:**
 
