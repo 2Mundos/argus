@@ -39,6 +39,9 @@ B = "22222222-2222-4222-8222-222222222222"
 
 
 def git(cwd: Path, *args: str) -> str:
+    # Strip GIT_* so a parent git hook (pre-push sets GIT_DIR) cannot redirect
+    # these fixture repos into the caller's worktree.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     out = subprocess.run(
         [
             "git",
@@ -53,6 +56,7 @@ def git(cwd: Path, *args: str) -> str:
         cwd=cwd,
         check=True,
         capture_output=True,
+        env=env,
     )
     return out.stdout.decode()
 

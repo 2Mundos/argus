@@ -129,9 +129,12 @@ afterEach(async () => {
 const reply = (text: string, extra: Record<string, unknown> = {}) =>
   ({ kind: "chat", content: { text }, ...extra }) as any;
 const paths = (f: ReturnType<typeof fakeArgus>) => f.calls.map((c) => c.path);
-/** What would change B's record: everything under /tasks/task-b/ except the claim's own preflight observation. */
+/** What would change B's record from a leaked reply: task writes except the claim's own
+ * preflight observation and model-trace lifecycle posts (phase 2 harness reports). */
 const writesTo = (f: ReturnType<typeof fakeArgus>, id: string) =>
-  paths(f).filter((p) => p.startsWith(`/tasks/${id}/`) && !p.endsWith("/observations"));
+  paths(f).filter(
+    (p) => p.startsWith(`/tasks/${id}/`) && !p.endsWith("/observations") && !p.endsWith("/models"),
+  );
 /** Where A's session sends its late output. */
 const A_THREAD = "argus:task-a:1";
 const staleResult = JSON.stringify({

@@ -754,7 +754,15 @@ describe("Argus channel", () => {
     // A late reply from the abandoned run is dropped, not reported.
     await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await new Promise((r) => setTimeout(r, 100));
-    expect(fake.calls.some((c) => c.path.startsWith("/tasks/t1/"))).toBe(false);
+    // Harness model-trace posts on claim are fine; no complete/fail/ask/progress.
+    expect(
+      fake.calls.some(
+        (c) =>
+          c.path.startsWith("/tasks/t1/") &&
+          !c.path.endsWith("/models") &&
+          !c.path.endsWith("/observations"),
+      ),
+    ).toBe(false);
   });
 
   it("leaves Argus on teardown", async () => {
