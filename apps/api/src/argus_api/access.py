@@ -260,3 +260,16 @@ def worker_event_filter(
         "(" + clause + ")",
         [agent_id, *allowed, *allowed, agent_id, *allowed],
     )
+
+
+async def require_artifact_readable(
+    conn: aiosqlite.Connection, caller: Identity, task_id: str, source: str
+) -> None:
+    """Attachments (orchestrator evidence) are for global readers only; worker
+    artifacts follow the task rule."""
+    if source == "attachment" and not is_global_reader(caller):
+        raise ForbiddenError(
+            "attachments are readable by orchestrators and admins only",
+            code="attachment_scope",
+        )
+    await require_task_readable(conn, caller, task_id)

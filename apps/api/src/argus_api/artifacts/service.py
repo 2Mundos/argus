@@ -35,6 +35,16 @@ class ArtifactRole(StrEnum):
     OTHER = "other"
 
 
+class ArtifactSource(StrEnum):
+    WORKER = "worker"  # uploaded by the worker holding the attempt
+    ATTACHMENT = "attachment"  # attached by an orchestrator or admin
+
+
+# Attachments hang off the task, not an attempt; this makes UNIQUE (task_id, attempt,
+# name) refuse duplicate names and keeps the storage key shape.
+ATTACHMENT_ATTEMPT = 0
+
+
 class Artifact(BaseModel):
     id: str
     task_id: str
@@ -46,6 +56,8 @@ class Artifact(BaseModel):
     created_by: str
     created_at: datetime
     role: ArtifactRole | None = None
+    source: ArtifactSource = ArtifactSource.WORKER
+    attached_by: str | None = None  # uploader of an attachment; never `agent:…`
 
 
 class TaskArtifact(Artifact):
@@ -88,6 +100,96 @@ async def agent_bytes_used(conn: aiosqlite.Connection, agent_id: str) -> int:
     return int(row[0])
 
 
+def _check_name(name: str) -> None:
+    if not _NAME.fullmatch(name):
+        raise ValidationFailedError(
+            "artifact name must be 1-200 characters of letters, digits, '.', '_', '-'"
+            " and must not start with '.', '_' or '-'",
+            code="invalid_name",
+        )
+
+
+async def attach(
+    db: Database,
+    store: LocalArtifactStore,
+    *,
+    attached_by: str,
+    task_id: str,
+    name: str,
+    media_type: str,
+    chunks: AsyncIterator[bytes],
+    role: ArtifactRole | None = None,
+    max_per_task: int,
+) -> Artifact:
+    """Attach evidence to a task for a manager: no lease, no agent quota. Same
+    staging as `upload`; the staged file is discarded on any error."""
+    _check_name(name)
+    staged = await store.stage(chunks)
+    try:
+        async with db.write() as tx:
+            await tasks.get_task(tx.conn, task_id)  # 404 for unknown tasks
+            async with tx.conn.execute(
+                "SELECT count(*) FROM artifacts WHERE task_id = ? AND source = ?",
+                (task_id, ArtifactSource.ATTACHMENT),
+            ) as cur:
+                row = await cur.fetchone()
+            assert row is not None
+            if row[0] >= max_per_task:
+                raise DomainError(
+                    f"task already has {row[0]} attachments (limit {max_per_task})",
+                    code="attachment_limit",
+                )
+            async with tx.conn.execute(
+                "SELECT 1 FROM artifacts WHERE task_id = ? AND attempt = ? AND name = ?",
+                (task_id, ATTACHMENT_ATTEMPT, name),
+            ) as cur:
+                if await cur.fetchone() is not None:
+                    raise ConflictError(
+                        f"attachment {name!r} already exists on this task;"
+                        " attachments are immutable, use another name",
+                        code="artifact_exists",
+                    )
+            artifact_id = str(uuid4())
+            await tx.conn.execute(
+                "INSERT INTO artifacts (id, task_id, attempt, name, media_type, size,"
+                " sha256, created_by, created_at, role, source, attached_by)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    artifact_id,
+                    task_id,
+                    ATTACHMENT_ATTEMPT,
+                    name,
+                    media_type,
+                    staged.size,
+                    staged.sha256,
+                    attached_by,
+                    ts(tx.now),
+                    role,
+                    ArtifactSource.ATTACHMENT,
+                    attached_by,
+                ),
+            )
+            await record(
+                tx,
+                attached_by,
+                "task",
+                task_id,
+                "task.attachment",
+                {
+                    "artifact_id": artifact_id,
+                    "name": name,
+                    "size": staged.size,
+                    "sha256": staged.sha256[:12],
+                },
+            )
+            store.promote(staged, key(task_id, ATTACHMENT_ATTEMPT, name))
+    except BaseException:
+        store.discard(staged)
+        raise
+    async with db.read() as conn:
+        return await get_artifact(conn, artifact_id)
+
+
 async def upload(
     db: Database,
     store: LocalArtifactStore,
@@ -102,12 +204,7 @@ async def upload(
     agent_quota_bytes: int | None = None,
 ) -> Artifact:
     """Stage the bytes first (no lock held), then check the lease and commit."""
-    if not _NAME.match(name):
-        raise ValidationFailedError(
-            "artifact name must be 1-200 characters of letters, digits, '.', '_', '-'"
-            " and must not start with '.', '_' or '-'",
-            code="invalid_name",
-        )
+    _check_name(name)
     if agent_quota_bytes is not None:
         async with db.read() as conn:
             used = await agent_bytes_used(conn, agent_id)
@@ -191,11 +288,14 @@ async def list_artifacts(
     *,
     attempt: int | None = None,
     role: ArtifactRole | None = None,
+    include_attachments: bool = True,
 ) -> list[TaskArtifact]:
     task = await tasks.get_task(conn, task_id)  # 404 for unknown tasks
     listed = set(task.result.artifacts) if task.result is not None else set()
     sql = "SELECT * FROM artifacts WHERE task_id = ?"
     params: list[str | int] = [task_id]
+    if not include_attachments:
+        sql += " AND source = 'worker'"
     if attempt is not None:
         sql += " AND attempt = ?"
         params.append(attempt)

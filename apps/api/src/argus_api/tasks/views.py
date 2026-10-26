@@ -218,7 +218,7 @@ async def refs(conn: aiosqlite.Connection, ids: list[str]) -> dict[str, Refs]:
         ),
         (
             "artifact_ids",
-            "SELECT task_id, id FROM artifacts WHERE task_id",
+            "SELECT task_id, id FROM artifacts WHERE source = 'worker' AND task_id",
             "attempt, created_at, id",
         ),
     ):

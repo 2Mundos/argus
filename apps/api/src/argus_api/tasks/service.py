@@ -2597,7 +2597,8 @@ async def _check_artifacts(
         return
     marks = ",".join("?" * len(artifact_ids))
     async with conn.execute(
-        f"SELECT id FROM artifacts WHERE task_id = ? AND id IN ({marks})",  # noqa: S608
+        f"SELECT id FROM artifacts WHERE source = 'worker' AND task_id = ?"  # noqa: S608
+        f" AND id IN ({marks})",
         (task_id, *artifact_ids),
     ) as cur:
         found = {r["id"] for r in await cur.fetchall()}

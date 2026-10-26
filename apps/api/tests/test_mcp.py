@@ -1,3 +1,4 @@
+import base64
 import itertools
 import json
 import re
@@ -617,3 +618,37 @@ def test_orchestrator_skill_names_only_real_tools() -> None:
     tool_like = {n for n in named if n.split("_")[0] in verbs}
     assert tool_like - set(mcp_server.audiences) == set()
     assert {"get_inbox", "answer_decisions", "wait_for_events"} <= tool_like
+
+
+def test_attach_artifact_is_manager_only_and_round_trips(client: TestClient) -> None:
+    worker, orchestrator = register(client), register(client, "orchestrator")
+    assert "attach_artifact" not in listed(client, worker)
+    assert "attach_artifact" in listed(client, orchestrator)
+    assert "attach_artifact" in listed(client, ADMIN_TOKEN)
+    created = tool(
+        client, orchestrator, "create_task", title="Evidence", project="global"
+    )
+    task_id = created["id"]
+    raw = b"\x00\xff evidence"
+    art = tool(
+        client,
+        orchestrator,
+        "attach_artifact",
+        task_id=task_id,
+        name="shot.bin",
+        content_base64=base64.b64encode(raw).decode(),
+        media_type="application/octet-stream",
+    )
+    assert (art["source"], art["size"]) == ("attachment", len(raw))
+    rest = client.get(
+        f"/api/artifacts/{art['id']}/content",
+        headers={"Authorization": f"Bearer {orchestrator}"},
+    )
+    assert rest.content == raw
+    assert "error" in tool(
+        client, orchestrator, "attach_artifact", task_id=task_id, name="x"
+    )
+    denied = tool(
+        client, worker, "attach_artifact", task_id=task_id, name="y", content="z"
+    )
+    assert "error" in denied

@@ -335,7 +335,8 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                           {a.name}
                         </button>{" "}
                         <span className="muted small">
-                          attempt {a.attempt} · {bytes(a.size)}
+                          {a.source === "attachment" ? "attachment" : `attempt ${a.attempt}`} ·{" "}
+                          {bytes(a.size)} · {a.media_type} · {a.source}
                         </span>
                       </li>
                     ))}

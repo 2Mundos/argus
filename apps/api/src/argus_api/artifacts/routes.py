@@ -3,7 +3,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import FileResponse
 
-from argus_api.access import require_task_readable
+from argus_api.access import (
+    is_global_reader,
+    require_artifact_readable,
+    require_task_readable,
+)
 from argus_api.artifacts import service
 from argus_api.artifacts.service import (
     Artifact,
@@ -13,7 +17,7 @@ from argus_api.artifacts.service import (
     Verification,
 )
 from argus_api.artifacts.store import LocalArtifactStore
-from argus_api.deps import AgentDep, CallerDep, DbDep, SettingsDep
+from argus_api.deps import AgentDep, CallerDep, DbDep, ManagerDep, SettingsDep
 
 router = APIRouter(tags=["artifacts"])
 
@@ -63,6 +67,42 @@ async def upload_artifact(
     )
 
 
+@router.post(
+    "/tasks/{task_id}/attachments",
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra={
+        "requestBody": {"content": {"application/octet-stream": {}}, "required": True}
+    },
+)
+async def attach_artifact(
+    task_id: str,
+    request: Request,
+    db: DbDep,
+    store: StoreDep,
+    caller: ManagerDep,
+    settings: SettingsDep,
+    name: Annotated[str, Query()],
+    role: Annotated[ArtifactRole | None, Query()] = None,
+) -> Artifact:
+    """Attach the raw request body to a task as evidence (orchestrator or admin).
+
+    Needs no lease and does not count against any agent quota. Attachments have
+    `source: attachment`, are immutable, and are readable by orchestrators and
+    admins only; workers cannot read them.
+    """
+    return await service.attach(
+        db,
+        store,
+        attached_by=f"{caller.scope}:{caller.agent_id or caller.label or caller.token_id[:8]}",
+        task_id=task_id,
+        name=name,
+        media_type=request.headers.get("content-type", "application/octet-stream"),
+        chunks=request.stream(),
+        role=role,
+        max_per_task=settings.attachment_max_per_task,
+    )
+
+
 @router.get("/tasks/{task_id}/artifacts")
 async def list_artifacts(
     task_id: str,
@@ -75,14 +115,20 @@ async def list_artifacts(
     whether the task's result lists one."""
     async with db.read() as conn:
         await require_task_readable(conn, caller, task_id)
-        return await service.list_artifacts(conn, task_id, attempt=attempt, role=role)
+        return await service.list_artifacts(
+            conn,
+            task_id,
+            attempt=attempt,
+            role=role,
+            include_attachments=is_global_reader(caller),
+        )
 
 
 @router.get("/artifacts/{artifact_id}")
 async def get_artifact(artifact_id: str, db: DbDep, caller: CallerDep) -> Artifact:
     async with db.read() as conn:
         artifact = await service.get_artifact(conn, artifact_id)
-        await require_task_readable(conn, caller, artifact.task_id)
+        await require_artifact_readable(conn, caller, artifact.task_id, artifact.source)
         return artifact
 
 
@@ -93,7 +139,7 @@ async def download_artifact(
     """The raw bytes. Honours `Range: bytes=…` for partial reads."""
     async with db.read() as conn:
         artifact = await service.get_artifact(conn, artifact_id)
-        await require_task_readable(conn, caller, artifact.task_id)
+        await require_artifact_readable(conn, caller, artifact.task_id, artifact.source)
     return FileResponse(
         store.path(service.key(artifact.task_id, artifact.attempt, artifact.name)),
         media_type=artifact.media_type,
@@ -114,7 +160,7 @@ async def read_artifact_text(
     continue from `next_offset`. Other media types return `binary` and no bytes."""
     async with db.read() as conn:
         artifact = await service.get_artifact(conn, artifact_id)
-        await require_task_readable(conn, caller, artifact.task_id)
+        await require_artifact_readable(conn, caller, artifact.task_id, artifact.source)
     return await service.read_text(store, artifact, offset, max_bytes)
 
 
@@ -126,5 +172,5 @@ async def verify_artifact(
     `ok` means intact, not acceptable."""
     async with db.read() as conn:
         artifact = await service.get_artifact(conn, artifact_id)
-        await require_task_readable(conn, caller, artifact.task_id)
+        await require_artifact_readable(conn, caller, artifact.task_id, artifact.source)
     return await service.verify(store, artifact)

@@ -20,6 +20,8 @@ class Settings:
     artifact_max_bytes: int = 100 * 1024 * 1024
     # Sum of artifact sizes one agent may own; default 2 GiB.
     artifact_agent_quota_bytes: int = 2 * 1024 * 1024 * 1024
+    # Orchestrator attachments one task may hold (no worker lease, no agent quota).
+    attachment_max_per_task: int = 50
     # Absolute lifetime of an agent bearer token; heartbeats slide it forward.
     agent_token_ttl_s: int = 7 * 24 * 3600
     # Wall-clock cap per task attempt unless the task or its kind sets one;
@@ -140,6 +142,9 @@ class Settings:
                 os.environ.get(
                     "ARGUS_ARTIFACT_AGENT_QUOTA_BYTES", 2 * 1024 * 1024 * 1024
                 )
+            ),
+            attachment_max_per_task=int(
+                os.environ.get("ARGUS_ATTACHMENT_MAX_PER_TASK", 50)
             ),
             agent_token_ttl_s=int(
                 os.environ.get("ARGUS_AGENT_TOKEN_TTL_S", 7 * 24 * 3600)

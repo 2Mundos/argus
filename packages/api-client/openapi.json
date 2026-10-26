@@ -1741,6 +1741,17 @@
       },
       "Artifact": {
         "properties": {
+          "attached_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attached By"
+          },
           "attempt": {
             "title": "Attempt",
             "type": "integer"
@@ -1783,6 +1794,10 @@
           "size": {
             "title": "Size",
             "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ArtifactSource",
+            "default": "worker"
           },
           "task_id": {
             "title": "Task Id",
@@ -1883,6 +1898,14 @@
           "other"
         ],
         "title": "ArtifactRole",
+        "type": "string"
+      },
+      "ArtifactSource": {
+        "enum": [
+          "worker",
+          "attachment"
+        ],
+        "title": "ArtifactSource",
         "type": "string"
       },
       "ArtifactState": {
@@ -13520,6 +13543,17 @@
       },
       "TaskArtifact": {
         "properties": {
+          "attached_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attached By"
+          },
           "attempt": {
             "title": "Attempt",
             "type": "integer"
@@ -13566,6 +13600,10 @@
           "size": {
             "title": "Size",
             "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ArtifactSource",
+            "default": "worker"
           },
           "task_id": {
             "title": "Task Id",
@@ -23268,6 +23306,85 @@
         "summary": "Ask",
         "tags": [
           "decisions"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/attachments": {
+      "post": {
+        "description": "Attach the raw request body to a task as evidence (orchestrator or admin).\n\nNeeds no lease and does not count against any agent quota. Attachments have\n`source: attachment`, are immutable, and are readable by orchestrators and\nadmins only; workers cannot read them.",
+        "operationId": "attach_artifact_api_tasks__task_id__attachments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ArtifactRole"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Role"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {}
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Artifact"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Attach Artifact",
+        "tags": [
+          "artifacts"
         ]
       }
     },

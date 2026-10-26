@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { download } from "../api";
 import { TaskDetail } from "./TaskDetail";
 
 const mock = vi.hoisted(() => ({
   task: {} as Record<string, unknown>,
   trace: {} as Record<string, unknown>,
+  artifacts: [] as Record<string, unknown>[],
 }));
 vi.mock("../api", () => ({
   api: { GET: (path: string) => path },
@@ -15,7 +17,7 @@ vi.mock("../api", () => ({
       : path.includes("delivery")
         ? null
         : path.includes("artifacts")
-          ? []
+          ? mock.artifacts
           : path.includes("events")
             ? []
             : mock.task,
@@ -62,7 +64,10 @@ const base = {
   result: null,
 };
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  mock.artifacts = [];
+});
 describe("TaskDetail model trace", () => {
   it("renders attempt grouped harness and delegate executions, evidence, accounts, usage and switches", async () => {
     mock.task = base;
@@ -123,5 +128,33 @@ describe("TaskDetail model trace", () => {
     expect(screen.getByText(/8\+3 tokens · \$0.12/)).toBeTruthy();
     expect(screen.getByText(/model_switch · verification_failed · sonnet → opus/)).toBeTruthy();
     expect(screen.getByText(/not reported/)).toBeTruthy();
+  });
+});
+
+describe("TaskDetail artifacts", () => {
+  it("shows name, size, media type and source, and downloads from the content path", async () => {
+    mock.task = base;
+    mock.trace = { executions: [], timeline: [] };
+    mock.artifacts = [
+      {
+        id: "a1",
+        attempt: 0,
+        name: "shot.png",
+        size: 2048,
+        media_type: "image/png",
+        source: "attachment",
+      },
+    ];
+    await act(async () => {
+      render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    });
+    const item = screen.getByText("shot.png").closest("li");
+    expect(item?.textContent).toContain("2.0 KB");
+    expect(item?.textContent).toContain("image/png");
+    expect(item?.textContent).toContain("attachment");
+    await act(async () => {
+      screen.getByText("shot.png").click();
+    });
+    expect(download).toHaveBeenCalledWith("/api/artifacts/a1/content", "shot.png");
   });
 });

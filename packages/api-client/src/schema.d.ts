@@ -2005,6 +2005,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach Artifact
+         * @description Attach the raw request body to a task as evidence (orchestrator or admin).
+         *
+         *     Needs no lease and does not count against any agent quota. Attachments have
+         *     `source: attachment`, are immutable, and are readable by orchestrators and
+         *     admins only; workers cannot read them.
+         */
+        post: operations["attach_artifact_api_tasks__task_id__attachments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/attempts": {
         parameters: {
             query?: never;
@@ -2994,6 +3018,8 @@ export interface components {
         };
         /** Artifact */
         Artifact: {
+            /** Attached By */
+            attached_by?: string | null;
             /** Attempt */
             attempt: number;
             /**
@@ -3014,6 +3040,8 @@ export interface components {
             sha256: string;
             /** Size */
             size: number;
+            /** @default worker */
+            source?: components["schemas"]["ArtifactSource"];
             /** Task Id */
             task_id: string;
         };
@@ -3045,6 +3073,11 @@ export interface components {
          * @enum {string}
          */
         ArtifactRole: "report" | "delegate_report" | "policy_snapshot" | "qa_receipt" | "other";
+        /**
+         * ArtifactSource
+         * @enum {string}
+         */
+        ArtifactSource: "worker" | "attachment";
         /**
          * ArtifactState
          * @enum {string}
@@ -6965,6 +6998,8 @@ export interface components {
         };
         /** TaskArtifact */
         TaskArtifact: {
+            /** Attached By */
+            attached_by?: string | null;
             /** Attempt */
             attempt: number;
             /**
@@ -6987,6 +7022,8 @@ export interface components {
             sha256: string;
             /** Size */
             size: number;
+            /** @default worker */
+            source?: components["schemas"]["ArtifactSource"];
             /** Task Id */
             task_id: string;
         };
@@ -11673,6 +11710,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Decision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attach_artifact_api_tasks__task_id__attachments_post: {
+        parameters: {
+            query: {
+                name: string;
+                role?: components["schemas"]["ArtifactRole"] | null;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": unknown;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Artifact"];
                 };
             };
             /** @description Validation Error */
