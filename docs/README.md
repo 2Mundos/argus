@@ -126,6 +126,12 @@ every new dependency is judged against it.
   response headers and CSP, docs off by default, sessionStorage tokens, pod and
   container hardening, OneCLI URL rules, task/artifact caps, agent token expiry
 
+- [Settings](specs/settings.spec.md) — typed global settings with per-project
+  overrides; model preferences move there; optional review by a different model
+  before a code task succeeds
+- [Routines](specs/routines.spec.md) — cron-scheduled task templates per project;
+  run findings become deduplicated tasks, approval-gated by default
+
 ### Drafts
 
 - [Knowledge](drafts/2026-10-14.knowledge.draft.md) — superseded by the spec
