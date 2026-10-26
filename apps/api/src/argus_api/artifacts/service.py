@@ -107,7 +107,7 @@ _OWS = r"[ \t]*"
 _QUOTED = r'"(?:[\x20\x21\x23-\x5b\x5d-\x7e]|\\[\x20-\x7e])*"'
 _MEDIA_TYPE = re.compile(
     rf"{_CONCRETE}/{_CONCRETE}"
-    rf"(?:{_OWS};{_OWS}{_RFC_TCHARS}{_OWS}={_OWS}(?:{_RFC_TCHARS}|{_QUOTED}))*"
+    rf"(?:{_OWS};{_OWS}{_RFC_TCHARS}=(?:{_RFC_TCHARS}|{_QUOTED}))*"
 )
 
 

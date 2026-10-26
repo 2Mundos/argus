@@ -439,7 +439,8 @@ def test_bad_media_type_is_422_and_writes_nothing(
     [
         "text/plain; charset=utf-8",
         "text/plain ; charset=utf-8",
-        "text/plain\t;\ta = b",
+        "text/plain\t;\ta=b",
+        'text/plain; charset="utf-8"',
         'text/plain; a="b c\\"d"',
         "application/vnd.x+json",
     ],
@@ -462,6 +463,8 @@ def test_check_media_type_accepts(media_type: str) -> None:
         "text/plain\x00",
         'text/plain; a="b\tc"',
         'text/plain; a="b\\\tc"',
+        "text/plain; charset = utf-8",
+        "text/plain\t;\ta = b",
         "text/*",
         "*/*",
         "a/b" + "x" * 300,
