@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import sqlite3
 from collections.abc import Generator
@@ -5,8 +6,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+from argus_api.artifacts.service import check_media_type, list_artifacts
 from argus_api.artifacts.store import LocalArtifactStore
 from argus_api.db import Database
+from argus_api.errors import ValidationFailedError
 from argus_api.main import app
 from fastapi.testclient import TestClient
 
@@ -300,19 +303,25 @@ def test_attachments_do_not_use_the_agent_quota(
         assert res.status_code == 201  # the worker's own quota is untouched
 
 
-def test_worker_event_feed_omits_attachment_events(
+def test_attachment_event_is_in_task_feeds_without_identity(
     client: TestClient, orchestrator, worker, task
 ) -> None:
     claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
     assert claimed["id"] == task["id"]
     art = attach(client, orchestrator, task, name="secret-shot.png").json()
+    params = {"subject_type": "task", "limit": 200}
+    managers = client.get("/api/events", params=params, headers=orchestrator)
+    events = [e for e in managers.json() if e["kind"] == "task.attachment"]
+    assert len(events) == 1
+    assert events[0]["subject_id"] == task["id"]
+    for key in ("name", "artifact_id", "size", "sha256"):
+        assert key not in events[0]["data"]
+    assert events[0]["data"] == {"source": "attachment"}
     feed = client.get("/api/events", params={"limit": 200}, headers=worker)
     assert feed.status_code == 200
-    assert "task.attachment" not in feed.text
     assert "secret-shot.png" not in feed.text and art["id"] not in feed.text
-    assert "task.claim" in feed.text  # the worker still sees its own task events
-    seen = client.get("/api/events", params={"limit": 200}, headers=orchestrator).text
-    assert "task.attachment" in seen and "secret-shot.png" in seen
+    assert art["sha256"][:12] not in feed.text
+    assert "task.claim" in feed.text
 
 
 def test_leased_worker_listing_has_own_artifacts_but_no_attachments(
@@ -418,3 +427,73 @@ def test_bad_media_type_is_422_and_writes_nothing(
     )
     assert res.status_code == 422
     assert files(tmp_path) == [] and rows(tmp_path) == 0
+
+
+@pytest.mark.parametrize(
+    "media_type",
+    ["text/plain; charset=utf-8", 'text/plain; a="b c\\"d"', "application/vnd.x+json"],
+)
+def test_check_media_type_accepts(media_type: str) -> None:
+    assert check_media_type(media_type) == media_type
+
+
+@pytest.mark.parametrize(
+    "media_type",
+    [
+        "text/plain\x0b; a=b",
+        "text/plain\x01",
+        "text/plain\x7f",
+        "text/plain\u2028",
+        "text/plain\x85",
+        "text/plain\xa0",
+        "text/plain\r",
+        "text/plain\n",
+        "text/plain\x00",
+        "text/plain;\ta=b",
+        "a/b" + "x" * 300,
+    ],
+)
+def test_check_media_type_rejects(media_type: str) -> None:
+    with pytest.raises(ValidationFailedError):
+        check_media_type(media_type)
+
+
+def test_failed_commit_after_worker_upload_leaves_no_row_or_file(
+    client: TestClient, worker, task, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    real = Database.write
+
+    @asynccontextmanager
+    async def failing(self):
+        async with real(self) as tx:
+            yield tx
+            raise RuntimeError("commit failed")  # after promote, rolls the row back
+
+    monkeypatch.setattr(Database, "write", failing)
+    with pytest.raises(RuntimeError):
+        client.post(
+            f"/api/tasks/{task['id']}/artifacts",
+            params={"attempt": claimed["attempt"], "name": "r.md"},
+            content=b"hi",
+            headers=worker,
+        )
+    assert files(tmp_path) == []
+    assert rows(tmp_path) == 0
+
+
+def test_list_artifacts_excludes_attachments_by_default(
+    client: TestClient, orchestrator, task
+) -> None:
+    attach(client, orchestrator, task)
+
+    async def run() -> tuple[list, list]:
+        async with client.app.state.db.read() as conn:
+            return (
+                await list_artifacts(conn, task["id"]),
+                await list_artifacts(conn, task["id"], include_attachments=True),
+            )
+
+    default, withall = asyncio.run(run())
+    assert default == []
+    assert len(withall) == 1

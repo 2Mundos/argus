@@ -100,15 +100,21 @@ async def agent_bytes_used(conn: aiosqlite.Connection, agent_id: str) -> int:
     return int(row[0])
 
 
+_RFC_TCHARS = r"[A-Za-z0-9!#$%&'*+.^_`|~-]+"
 _MEDIA_TYPE = re.compile(
-    r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*"
-    r"(?:\s*;\s*[A-Za-z0-9!#$&^_.+-]+=(?:[A-Za-z0-9!#$&^_.+-]+|\"[^\"\r\n\0]*\"))*"
+    rf"{_RFC_TCHARS}/{_RFC_TCHARS}"
+    rf'(?:;[ \t]*{_RFC_TCHARS}=(?:{_RFC_TCHARS}|"(?:[\t \x21\x23-\x5b\x5d-\x7e]|\\[\t\x20-\x7e])*"))*'
 )
 
 
 def check_media_type(media_type: str) -> str:
     """A `type/subtype[; param=value]` token of at most 255 characters."""
-    if len(media_type) > 255 or not _MEDIA_TYPE.fullmatch(media_type):
+    if (
+        len(media_type) > 255
+        or not media_type.isascii()
+        or not media_type.isprintable()
+        or not _MEDIA_TYPE.fullmatch(media_type)
+    ):
         raise ValidationFailedError(
             "Content-Type must be a type/subtype media type of at most 255 characters",
             code="invalid_media_type",
@@ -189,15 +195,10 @@ async def attach(
             await record(
                 tx,
                 attached_by,
-                "task_attachment",  # not "task": worker event feeds hide this subject
+                "task",
                 task_id,
                 "task.attachment",
-                {
-                    "artifact_id": artifact_id,
-                    "name": name,
-                    "size": staged.size,
-                    "sha256": staged.sha256[:12],
-                },
+                {"source": "attachment"},  # workers on the lease see no identity
             )
             store.promote(staged, key(task_id, ATTACHMENT_ATTEMPT, name))
             promoted = store.path(key(task_id, ATTACHMENT_ATTEMPT, name))
