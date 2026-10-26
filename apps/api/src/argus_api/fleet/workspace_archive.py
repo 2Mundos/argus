@@ -20,7 +20,7 @@ import time
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import BinaryIO, Literal
+from typing import BinaryIO, Literal, TypedDict
 
 # Directory names that are rebuilt from sources (exact names, nothing else).
 REGENERABLE = frozenset(
@@ -53,9 +53,14 @@ SENSITIVE_FILES = (
     "credentials*",
     ".credentials.json",
 )
-MAX_SCAN_DEPTH = 16
+MAX_SCAN_DEPTH = 64
 MAX_REPOS = 50
+MAX_SCAN_ENTRIES = 1_000_000
 MAX_UNTRACKED_FILES = 100_000
+MAX_GITFILE_BYTES = 4096
+# Where NanoClaw mounts an instance directory inside its container. Gitfiles
+# written in the container name this prefix; it maps to the scanned directory.
+CONTAINER_MOUNT = "/workspace/agent"
 CHUNK = 1024 * 1024
 RepoKind = Literal["worktree", "bare"]
 
@@ -119,7 +124,11 @@ class Git:
         return min(self.timeout_s, left)
 
     def _argv(
-        self, args: list[str], git_dir: Path | None, cwd: Path | None
+        self,
+        args: list[str],
+        git_dir: Path | None,
+        cwd: Path | None,
+        work_tree: Path | None,
     ) -> list[str]:
         argv = [
             self.binary,
@@ -135,6 +144,8 @@ class Git:
         ]
         if git_dir is not None:
             argv += ["--git-dir", str(git_dir)]
+        if work_tree is not None:
+            argv += ["--work-tree", str(work_tree)]
         if cwd is not None:
             argv += ["-C", str(cwd)]
         return argv + args
@@ -150,11 +161,12 @@ class Git:
         *,
         cwd: Path | None = None,
         git_dir: Path | None = None,
+        work_tree: Path | None = None,
         ok: tuple[int, ...] = (0,),
     ) -> tuple[int, bytes]:
         try:
             proc = subprocess.run(  # noqa: S603 - fixed binary, no shell
-                self._argv(args, git_dir, cwd),
+                self._argv(args, git_dir, cwd, work_tree),
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 timeout=self._timeout(),
@@ -178,10 +190,11 @@ class Git:
         *,
         cwd: Path | None = None,
         git_dir: Path | None = None,
+        work_tree: Path | None = None,
     ) -> None:
         try:
             proc = subprocess.run(  # noqa: S603 - fixed binary, no shell
-                self._argv(args, git_dir, cwd),
+                self._argv(args, git_dir, cwd, work_tree),
                 stdin=subprocess.DEVNULL,
                 stdout=out,
                 stderr=subprocess.DEVNULL,
@@ -208,6 +221,10 @@ class Artifact:
 class RepoScan:
     rel: str  # relative to the instance directory; "." for the top
     kind: RepoKind
+    # A worktree's git and common directories, relative to the instance
+    # directory (a gitfile's target is resolved and remapped by find_repos).
+    git_dir: str | None = None
+    common_dir: str | None = None
     head: str | None = None
     branch: str | None = None
     remote_refs: dict[str, str] = field(default_factory=dict)
@@ -242,52 +259,188 @@ class Scan:
         return any(r.has_wip for r in self.repos)
 
 
-def find_repos(base: Path) -> tuple[list[tuple[str, RepoKind]], list[str]]:
-    """(rel path, kind) of every repository under `base`, and the allowlisted
-    cache directories, walking without following symlinks. A regenerable name
-    counts as a cache only inside a repository's working tree; elsewhere it is
-    walked like any directory, so a repository under `build/` is still found."""
-    repos: list[tuple[str, RepoKind]] = []
+def _join(rel: str, name: str) -> str:
+    return name if rel == "." else f"{rel}/{name}"
+
+
+def find_repos(
+    base: Path, mount: str | None = None
+) -> tuple[list[RepoScan], list[str]]:
+    """Every repository under `base` (location fields only) and the allowlisted
+    cache directories. Each directory is opened with O_NOFOLLOW and must be the
+    inode its parent listed, on `base`'s device. A regenerable name counts as a
+    cache only inside a repository's working tree; elsewhere it is walked like
+    any directory, so a repository under `build/` is still found. A `.git` file
+    is resolved inside `base`, `mount` (default CONTAINER_MOUNT) mapping to it."""
+    mount = CONTAINER_MOUNT if mount is None else mount
+    try:
+        top = os.lstat(base)
+    except OSError as exc:
+        raise ArchiveError("unreadable", sanitize(exc)) from exc
+    repos: list[RepoScan] = []
     caches: list[str] = []
-    stack: list[tuple[Path, str, int, bool]] = [(base, ".", 0, False)]
+    seen = 0
+    stack = [(str(base), ".", 0, False, (top.st_dev, top.st_ino))]
     while stack:
-        path, rel, depth, in_repo = stack.pop()
+        path, rel, depth, in_repo, ident = stack.pop()
         try:
-            with os.scandir(path) as it:
-                entries = list(it)
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         except OSError as exc:
             raise ArchiveError("unreadable", sanitize(exc)) from exc
-        names = {e.name: e for e in entries}
-        git = names.get(".git")
-        if git is not None:
-            if not git.is_dir(follow_symlinks=False):
-                raise ArchiveError("unsupported_repo")
-            repos.append((rel, "worktree"))
-            in_repo = True
-        elif (
-            "HEAD" in names
-            and names.get("objects") is not None
-            and names["objects"].is_dir(follow_symlinks=False)
-            and names.get("refs") is not None
-            and names["refs"].is_dir(follow_symlinks=False)
-        ):
-            repos.append((rel, "bare"))
-            continue  # a bare repository holds no working tree to descend into
-        if len(repos) > MAX_REPOS:
-            raise ArchiveError("scan_limit")
-        for e in entries:
-            if e.name == ".git" or not e.is_dir(follow_symlinks=False):
-                continue
-            child = e.name if rel == "." else f"{rel}/{e.name}"
-            if in_repo and e.name in REGENERABLE:
-                caches.append(child)
-                continue
-            if depth + 1 > MAX_SCAN_DEPTH:
-                raise ArchiveError("scan_limit")  # a deeper repository would be missed
-            stack.append((Path(e.path), child, depth + 1, in_repo))
-    repos.sort()
+        try:
+            st = os.fstat(fd)
+            if (st.st_dev, st.st_ino) != ident:
+                raise ArchiveError("path_changed")
+            with os.scandir(fd) as it:
+                entries = list(it)
+            seen += len(entries)
+            if seen > MAX_SCAN_ENTRIES:
+                raise ArchiveError("scan_limit", "entry_count")
+            names = {e.name: e for e in entries}
+            git = names.get(".git")
+            bare = git is None and (
+                "HEAD" in names
+                and names.get("objects") is not None
+                and names["objects"].is_dir(follow_symlinks=False)
+                and names.get("refs") is not None
+                and names["refs"].is_dir(follow_symlinks=False)
+            )
+            if git is not None:
+                if git.is_dir(follow_symlinks=False):
+                    repos.append(RepoScan(rel, "worktree", _join(rel, ".git")))
+                elif git.is_file(follow_symlinks=False):
+                    repos.append(_gitfile_repo(base, rel, fd, top.st_dev, mount))
+                else:
+                    raise ArchiveError("unsupported_repo", "gitfile_type")
+                in_repo = True
+            elif bare:
+                repos.append(RepoScan(rel, "bare"))
+            if len(repos) > MAX_REPOS:
+                raise ArchiveError("scan_limit", "repo_count")
+            if bare:
+                continue  # a bare repository holds no working tree to descend into
+            for e in entries:
+                if e.name == ".git" or not e.is_dir(follow_symlinks=False):
+                    continue
+                child = _join(rel, e.name)
+                if in_repo and e.name in REGENERABLE:
+                    caches.append(child)
+                    continue
+                if depth + 1 > MAX_SCAN_DEPTH:
+                    # A deeper repository would be missed.
+                    raise ArchiveError("scan_limit", "depth")
+                cst = e.stat(follow_symlinks=False)
+                if cst.st_dev != top.st_dev:
+                    raise ArchiveError("mount_present")
+                ident = (cst.st_dev, cst.st_ino)
+                stack.append(
+                    (os.path.join(path, e.name), child, depth + 1, in_repo, ident)
+                )
+        except OSError as exc:
+            raise ArchiveError("unreadable", sanitize(exc)) from exc
+        finally:
+            os.close(fd)
+    repos.sort(key=lambda r: r.rel)
     caches.sort()
     return repos, caches
+
+
+def _read_pointer(name: str, dir_fd: int, prefix: str, what: str) -> str | None:
+    """The one-line path in a gitfile or `commondir` file, or None when it does
+    not exist. Size-capped, never through a symlink, never a FIFO."""
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        fd = os.open(name, flags, dir_fd=dir_fd)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ArchiveError("unsupported_repo", f"{what}_unreadable") from exc
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise ArchiveError("unsupported_repo", f"{what}_type")
+        data = f.read(MAX_GITFILE_BYTES + 1)
+    if len(data) > MAX_GITFILE_BYTES:
+        raise ArchiveError("unsupported_repo", f"{what}_too_large")
+    try:
+        text = data.decode().rstrip()
+    except UnicodeDecodeError as exc:
+        raise ArchiveError("unsupported_repo", f"{what}_invalid") from exc
+    value = text.removeprefix(prefix)
+    if not text.startswith(prefix) or not value or "\n" in value or "\0" in value:
+        raise ArchiveError("unsupported_repo", f"{what}_invalid")
+    return value
+
+
+def _resolve(
+    base: Path, start: str, target: str, mount: str, dev: int, what: str
+) -> str:
+    """`target` as a directory relative to `base`. A relative target resolves
+    from `start`; an absolute one must lie under `mount` (remapped to `base`)
+    or under `base`. Every component must be a real directory on `base`'s
+    device, never a symlink, and `..` may not leave `base`."""
+    b = str(base)
+    if os.path.isabs(target):
+        for prefix in (mount, b):
+            if target == prefix or target.startswith(prefix.rstrip("/") + "/"):
+                parts = target[len(prefix) :].split("/")
+                break
+        else:
+            raise ArchiveError("unsupported_repo", f"{what}_outside")
+    else:
+        parts = [*([] if start == "." else start.split("/")), *target.split("/")]
+    out: list[str] = []
+    for part in parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not out:
+                raise ArchiveError("unsupported_repo", f"{what}_outside")
+            out.pop()
+            continue
+        out.append(part)
+        try:
+            st = os.lstat(os.path.join(b, *out))
+        except FileNotFoundError as exc:
+            raise ArchiveError("unsupported_repo", f"{what}_missing") from exc
+        except OSError as exc:
+            raise ArchiveError("unreadable", sanitize(exc)) from exc
+        if stat.S_ISLNK(st.st_mode):
+            raise ArchiveError("unsupported_repo", f"{what}_symlink")
+        if not stat.S_ISDIR(st.st_mode):
+            raise ArchiveError("unsupported_repo", f"{what}_missing")
+        if st.st_dev != dev:
+            raise ArchiveError("mount_present")
+    if not out:
+        raise ArchiveError("unsupported_repo", f"{what}_outside")
+    return "/".join(out)
+
+
+def _gitfile_repo(base: Path, rel: str, dir_fd: int, dev: int, mount: str) -> RepoScan:
+    """A worktree whose `.git` is a file: a linked worktree (`gitdir:` names
+    `<main>/.git/worktrees/<id>`, whose `commondir` names the main git
+    directory) or a submodule (`gitdir:` names `.git/modules/<name>`)."""
+    target = _read_pointer(".git", dir_fd, "gitdir: ", "gitfile")
+    if target is None:
+        raise ArchiveError("path_changed")
+    git_dir = _resolve(base, rel, target, mount, dev, "gitdir")
+    try:
+        gfd = os.open(
+            os.path.join(base, git_dir), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        )
+    except OSError as exc:
+        raise ArchiveError("unsupported_repo", "gitdir_unreadable") from exc
+    try:
+        common = _read_pointer("commondir", gfd, "", "commondir")
+    finally:
+        os.close(gfd)
+    common_dir = None
+    if common is not None:
+        common_dir = _resolve(base, git_dir, common, mount, dev, "commondir")
+        if os.path.isabs(common) and not common.startswith(str(base) + "/"):
+            # Git rereads `commondir` itself (GIT_COMMON_DIR does not stop it), so
+            # a remapped absolute one cannot work. `git worktree` writes `../..`.
+            raise ArchiveError("unsupported_repo", "commondir_absolute")
+    return RepoScan(rel, "worktree", git_dir, common_dir)
 
 
 def _z(out: bytes) -> list[str]:
@@ -299,52 +452,47 @@ def _safe_rel(rel: str) -> bool:
 
 
 def scan(base: Path, git: Git) -> Scan:
+    base = Path(os.path.abspath(base))
     found, caches = find_repos(base)
-    repos = [_scan_repo(base, rel, kind, git) for rel, kind in found]
-    return Scan(repos, caches)
+    return Scan([_scan_repo(base, r, git) for r in found], caches)
 
 
-def _scan_repo(base: Path, rel: str, kind: RepoKind, git: Git) -> RepoScan:
-    path = base / rel
-    r = RepoScan(rel=rel, kind=kind)
-    gd = path if kind == "bare" else None
-    cwd = None if kind == "bare" else path
-    rc, out = git.run(
-        ["rev-parse", "--verify", "-q", "HEAD"], cwd=cwd, git_dir=gd, ok=(0, 1)
-    )
+def _scan_repo(base: Path, r: RepoScan, git: Git) -> RepoScan:
+    path = base / r.rel
+    where = _where(base, r)
+    rc, out = git.run(["rev-parse", "--verify", "-q", "HEAD"], **where, ok=(0, 1))
     r.head = out.decode().strip() if rc == 0 else None
-    rc, out = git.run(
-        ["symbolic-ref", "-q", "--short", "HEAD"], cwd=cwd, git_dir=gd, ok=(0, 1)
-    )
+    rc, out = git.run(["symbolic-ref", "-q", "--short", "HEAD"], **where, ok=(0, 1))
     r.branch = out.decode().strip() if rc == 0 else None
+    if r.head is None and r.branch is None:
+        raise ArchiveError("git_error", "head_invalid")  # neither a commit nor a branch
+    _, out = git.run(["rev-parse", "--is-shallow-repository"], **where)
+    shallow = out.decode().strip() == "true"
     _, out = git.run(
-        ["for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes"],
-        cwd=cwd,
-        git_dir=gd,
+        ["for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes"], **where
     )
     for line in out.decode().splitlines():
         name, _, sha = line.partition(" ")
         r.remote_refs[name] = sha
-    _, out = git.run(
-        ["rev-list", "--count", "--all", "--not", "--remotes"], cwd=cwd, git_dir=gd
-    )
+    _, out = git.run(["rev-list", "--count", "--all", "--not", "--remotes"], **where)
     r.local_commits = int(out.decode().strip() or 0)
     if r.local_commits:
         _, out = git.run(
             ["log", "--all", "--not", "--remotes", "--name-only", "-z", "--format="],
-            cwd=cwd,
-            git_dir=gd,
+            **where,
         )
         r.sensitive_in_commits = sorted({p for p in _z(out) if is_sensitive(p)})
-    if kind == "bare":
+    if r.kind == "bare":
+        if shallow and r.has_wip:
+            raise ArchiveError("unsupported_repo", "shallow")
         return r
     diff = ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only"]
-    _, out = git.run([*diff, "--cached", "-z"], cwd=path)
+    _, out = git.run([*diff, "--cached", "-z"], **where)
     staged = _z(out)
-    _, out = git.run([*diff, "-z"], cwd=path)
+    _, out = git.run([*diff, "-z"], **where)
     unstaged = _z(out)
     excludes = [f"--exclude={name}/" for name in sorted(REGENERABLE)]
-    _, out = git.run(["ls-files", "--others", "-z", *excludes], cwd=path)
+    _, out = git.run(["ls-files", "--others", "-z", *excludes], **where)
     # Entries ending in "/" are nested repositories: archived on their own.
     untracked = [p for p in _z(out) if not p.endswith("/")]
     if len(untracked) > MAX_UNTRACKED_FILES:
@@ -367,6 +515,9 @@ def _scan_repo(base: Path, rel: str, kind: RepoKind, git: Git) -> RepoScan:
             r.untracked.append(p)
             r.untracked_bytes += st.st_size
     r.skipped_sensitive = sorted(sensitive)
+    if shallow and r.has_wip:
+        # A bundle of a shallow history needs objects the archive lacks.
+        raise ArchiveError("unsupported_repo", "shallow")
     return r
 
 
@@ -473,17 +624,16 @@ def archive(
         for n, repo in enumerate(wip):
             prefix = f"repo-{n}"
             files: list[str] = []
+            where = _where(base, repo)
             if _repo_has_commits(repo):
-                cwd, gd = _where(base, repo)
                 name = f"{prefix}.bundle"
                 with writer.open(tmp / name) as f:
-                    git.to_file(
-                        ["bundle", "create", "-", "--all"], f, cwd=cwd, git_dir=gd
-                    )
+                    git.to_file(["bundle", "create", "-", "--all"], f, **where)
                     _fsync(f)
-                git.run(
-                    ["bundle", "verify", "-q", str(tmp / name)], cwd=cwd, git_dir=gd
-                )
+                git.run(["bundle", "verify", "-q", str(tmp / name)], **where)
+                if _bundle_has_prerequisites(tmp / name):
+                    # Verified against the source, yet not restorable without it.
+                    raise ArchiveError("unsupported_repo", "bundle_not_self_contained")
                 files.append(name)
             if repo.kind == "worktree":
                 diff = [
@@ -504,7 +654,7 @@ def archive(
                         git.to_file(
                             [*diff, *extra, "--", ".", *_pathspec_excludes()],
                             f,
-                            cwd=base / repo.rel,
+                            **where,
                         )
                         _fsync(f)
                     files.append(name)
@@ -551,9 +701,32 @@ def archive(
     return final
 
 
-def _where(base: Path, repo: RepoScan) -> tuple[Path | None, Path | None]:
+class Where(TypedDict, total=False):
+    cwd: Path
+    work_tree: Path
+    git_dir: Path
+
+
+def _where(base: Path, repo: RepoScan) -> Where:
+    """Explicit git locations, so git never discovers a repository by itself
+    (a broken `.git` must not fall through to an enclosing one)."""
     path = base / repo.rel
-    return (None, path) if repo.kind == "bare" else (path, None)
+    if repo.kind == "bare":
+        return {"git_dir": path}
+    if repo.git_dir is None:
+        raise ArchiveError("unsupported_repo")
+    return {"cwd": path, "work_tree": path, "git_dir": base / repo.git_dir}
+
+
+def _bundle_has_prerequisites(path: Path) -> bool:
+    """True when the bundle header lists a prerequisite (`-<oid>`) line."""
+    with path.open("rb") as f:
+        for line in f:
+            if line == b"\n":
+                return False
+            if line.startswith(b"-"):
+                return True
+    raise ArchiveError("archive_error", "bundle_header")
 
 
 def _fsync(f: BinaryIO) -> None:
