@@ -317,6 +317,11 @@ def test_attachment_event_is_in_task_feeds_without_identity(
     for key in ("name", "artifact_id", "size", "sha256"):
         assert key not in events[0]["data"]
     assert events[0]["data"] == {"source": "attachment"}
+    assert events[0]["actor"].startswith("orchestrator:")
+    own = client.get("/api/events", params=params, headers=worker).json()
+    assert [e for e in own if e["kind"] == "task.attachment"] == []
+    waited = client.get("/api/events/wait", params={"after": 0}, headers=worker).json()
+    assert [e for e in waited["events"] if e["kind"] == "task.attachment"] == []
     feed = client.get("/api/events", params={"limit": 200}, headers=worker)
     assert feed.status_code == 200
     assert "secret-shot.png" not in feed.text and art["id"] not in feed.text
@@ -431,7 +436,13 @@ def test_bad_media_type_is_422_and_writes_nothing(
 
 @pytest.mark.parametrize(
     "media_type",
-    ["text/plain; charset=utf-8", 'text/plain; a="b c\\"d"', "application/vnd.x+json"],
+    [
+        "text/plain; charset=utf-8",
+        "text/plain ; charset=utf-8",
+        "text/plain\t;\ta = b",
+        'text/plain; a="b c\\"d"',
+        "application/vnd.x+json",
+    ],
 )
 def test_check_media_type_accepts(media_type: str) -> None:
     assert check_media_type(media_type) == media_type
@@ -449,7 +460,10 @@ def test_check_media_type_accepts(media_type: str) -> None:
         "text/plain\r",
         "text/plain\n",
         "text/plain\x00",
-        "text/plain;\ta=b",
+        'text/plain; a="b\tc"',
+        'text/plain; a="b\\\tc"',
+        "text/*",
+        "*/*",
         "a/b" + "x" * 300,
     ],
 )

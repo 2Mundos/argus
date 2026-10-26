@@ -101,20 +101,19 @@ async def agent_bytes_used(conn: aiosqlite.Connection, agent_id: str) -> int:
 
 
 _RFC_TCHARS = r"[A-Za-z0-9!#$%&'*+.^_`|~-]+"
+_CONCRETE = r"[A-Za-z0-9!#$%&'+.^_`|~-]+"  # no '*': wildcard types are not concrete
+_OWS = r"[ \t]*"
+# Tab is allowed only as OWS, never inside a quoted-string.
+_QUOTED = r'"(?:[\x20\x21\x23-\x5b\x5d-\x7e]|\\[\x20-\x7e])*"'
 _MEDIA_TYPE = re.compile(
-    rf"{_RFC_TCHARS}/{_RFC_TCHARS}"
-    rf'(?:;[ \t]*{_RFC_TCHARS}=(?:{_RFC_TCHARS}|"(?:[\t \x21\x23-\x5b\x5d-\x7e]|\\[\t\x20-\x7e])*"))*'
+    rf"{_CONCRETE}/{_CONCRETE}"
+    rf"(?:{_OWS};{_OWS}{_RFC_TCHARS}{_OWS}={_OWS}(?:{_RFC_TCHARS}|{_QUOTED}))*"
 )
 
 
 def check_media_type(media_type: str) -> str:
-    """A `type/subtype[; param=value]` token of at most 255 characters."""
-    if (
-        len(media_type) > 255
-        or not media_type.isascii()
-        or not media_type.isprintable()
-        or not _MEDIA_TYPE.fullmatch(media_type)
-    ):
+    """A concrete `type/subtype[; param=value]` media type of at most 255 characters."""
+    if len(media_type) > 255 or not _MEDIA_TYPE.fullmatch(media_type):
         raise ValidationFailedError(
             "Content-Type must be a type/subtype media type of at most 255 characters",
             code="invalid_media_type",

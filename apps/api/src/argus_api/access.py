@@ -231,7 +231,8 @@ def worker_event_filter(
     Task events (and decisions on tasks) need a lease grant for that very task;
     project, knowledge page, and knowledge-proposal decision events need the
     subject's project to be in `projects`. Everything else is fleet-wide and
-    hidden."""
+    hidden. `task.attachment` events are hidden too: their actor is the
+    uploader's principal."""
     if is_global_reader(caller):
         return None
     agent_id = _worker_id(caller)
@@ -245,7 +246,8 @@ def worker_event_filter(
     # `marks` is only "?" placeholders; values are bound separately.
     in_projects = " IN (" + marks + ")"
     clause = (
-        "(subject_type = 'task' AND subject_id IN (" + leased + "))"  # noqa: S608
+        "(subject_type = 'task' AND kind != 'task.attachment'"  # noqa: S608
+        "  AND subject_id IN (" + leased + "))"
         " OR (subject_type = 'project' AND subject_id" + in_projects + ")"
         " OR (subject_type = 'knowledge_page' AND subject_id IN ("
         "  SELECT id FROM knowledge_pages WHERE project" + in_projects + "))"
