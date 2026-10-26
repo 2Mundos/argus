@@ -119,25 +119,31 @@ jobs:
           set -euo pipefail
           docker rm -f argus-ci >/dev/null 2>&1 || true
           docker volume rm argus-ci-data >/dev/null 2>&1 || true
+          # No host port publish: act job containers cannot reliably reach
+          # 127.0.0.1-published ports. Probe inside the image instead.
           docker run -d --name argus-ci \
-            -p 127.0.0.1:18000:8000 \
             -v argus-ci-data:/data \
             argus:ci
           cleanup() { docker rm -f argus-ci >/dev/null 2>&1 || true; docker volume rm argus-ci-data >/dev/null 2>&1 || true; }
           trap cleanup EXIT
-          # Cold import can take >30s on the self-hosted runner (seen ~31s on main).
-          for i in $(seq 1 90); do
-            if curl -fsS http://127.0.0.1:18000/healthz | grep -q '"status"'; then
+          probe() {
+            docker exec argus-ci python3 -c \
+              "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8000/$1', timeout=2); sys.exit(0 if b'\"status\"' in r.read() else 1)" \
+              2>/dev/null
+          }
+          # Cold import has taken ~31–90s on the self-hosted runner.
+          for i in $(seq 1 180); do
+            if probe healthz; then
               break
             fi
             sleep 1
-            if [ "$i" -eq 90 ]; then
+            if [ "$i" -eq 180 ]; then
               docker logs argus-ci >&2 || true
               echo "healthz did not become ready" >&2
               exit 1
             fi
           done
-          curl -fsS http://127.0.0.1:18000/readyz | grep -q '"status"'
+          probe readyz
           token=$(docker exec argus-ci cat /data/admin-token)
           case "$token" in
             argus_admin_*) ;;
