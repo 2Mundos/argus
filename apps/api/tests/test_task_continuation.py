@@ -508,6 +508,45 @@ async def test_checklist_ids_of_another_task_are_rejected(db: Database) -> None:
     assert [i.evidence for i in ok.continuation.checklist] == ["qa ok"]
 
 
+async def test_a_requeued_task_keeps_its_own_checklist_after_another_task(
+    db: Database,
+) -> None:
+    """One agent holds A, then B; A is released and reclaimed as attempt 2. A's second
+    attempt still holds exactly A's checklist, and B's ids never complete it."""
+    a = await new_task(db, acceptance=["alpha criterion", "alpha docs"])
+    a1 = await claim(db, A)
+    b = await new_task(db, acceptance=["beta criterion"])
+    b1 = await claim(db, A)
+    assert (a1.id, b1.id) == (a, b)
+    a_ids = [i.id for i in a1.continuation.checklist]
+    b_ids = [i.id for i in b1.continuation.checklist]
+    await release(db, a)
+    a2 = await claim(db, A)
+    assert (a2.id, a2.attempt) == (a, a1.attempt + 1)
+    assert [i.id for i in a2.continuation.checklist] == a_ids
+    assert not set(a_ids) & set(b_ids)
+    foreign = TaskResult(
+        summary="B's work",
+        checklist=[{"id": b_ids[0], "status": "done", "evidence": "B receipt"}],
+    )
+    with pytest.raises(ValidationFailedError) as err:
+        async with db.write() as tx:
+            await tasks.complete(tx, A, a, a2.attempt, foreign)
+    assert err.value.code == "checklist_mismatch"
+    # Fail-closed: A's attempt is still running and nothing of B's was recorded.
+    held = await get(db, a)
+    assert (held.state, held.attempt) == (S.CLAIMED, a2.attempt)
+    assert [i.evidence for i in held.continuation.checklist] == [None, None]
+    own = [{"id": i, "status": "done", "evidence": f"A {i}"} for i in a_ids]
+    async with db.write() as tx:
+        ok = await tasks.complete(
+            tx, A, a, a2.attempt, TaskResult(summary="A's work", checklist=own)
+        )
+    assert ok.state is S.SUCCEEDED
+    assert [i.evidence for i in ok.continuation.checklist] == [f"A {i}" for i in a_ids]
+    assert (await get(db, b)).state is S.CLAIMED  # B was never touched
+
+
 # -- environments: typed, and assistance is not a decision ------------------------------
 
 
