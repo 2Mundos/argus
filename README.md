@@ -1,4 +1,12 @@
-# Argus
+<p align="center">
+  <img src="assets/logo.svg" alt="Argus logo" width="96">
+</p>
+
+<h1 align="center">Argus</h1>
+
+<p align="center">
+  Control plane for a fleet of AI coding agents. One process, one SQLite file.
+</p>
 
 Control plane for a fleet of agents. Argus owns shared state (tasks, agents,
 assignments), exposes it to an orchestrator agent and to worker agents through an
@@ -10,6 +18,19 @@ database (continuously backed up by Litestream) and no required external
 services: `docker run -v argus-data:/data argus` is a full deployment. The fleet
 it manages can live on remote Docker hosts or Kubernetes; Argus itself stays on
 one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md).
+
+![Argus dashboard home: items needing attention, task, agent, pool, inbox and account summaries, and live workers](assets/screenshots/home.png)
+
+<table>
+  <tr>
+    <td><img src="assets/screenshots/fleet.png" alt="Fleet: pool health and tasks by state"><br><sub><b>Fleet</b>: pool health, tasks by state, queue and run times</sub></td>
+    <td><img src="assets/screenshots/cost.png" alt="Cost: token usage and estimated spend by day"><br><sub><b>Cost</b>: tokens and estimated spend per day</sub></td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/engines.png" alt="Engines: installed agent CLIs and their auth status"><br><sub><b>Engines</b>: agent CLIs (Claude Code, Codex, OpenCode, Cursor, local models)</sub></td>
+    <td><img src="assets/screenshots/system.png" alt="System: health checks and background loops"><br><sub><b>System</b>: health checks, background loops, work counts</sub></td>
+  </tr>
+</table>
 
 ## Layout
 
