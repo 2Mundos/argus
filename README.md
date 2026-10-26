@@ -8,8 +8,7 @@
   Control plane for a fleet of AI coding agents. One process, one SQLite file.
 </p>
 
-Control plane for a fleet of agents. Argus owns shared state (tasks, agents,
-assignments), exposes it to an orchestrator agent and to worker agents through an
+Argus owns shared state (tasks, agents, assignments), exposes it to an orchestrator agent and to worker agents through an
 API, gives humans a dashboard for visibility, and deploys additional worker
 instances (containers) on request from the orchestrator or a user.
 
@@ -21,16 +20,33 @@ one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md)
 
 ![Argus dashboard home: items needing attention, task, agent, pool, inbox and account summaries, and live workers](assets/screenshots/home.png)
 
-<table>
-  <tr>
-    <td><img src="assets/screenshots/fleet.png" alt="Fleet: pool health and tasks by state"><br><sub><b>Fleet</b>: pool health, tasks by state, queue and run times</sub></td>
-    <td><img src="assets/screenshots/cost.png" alt="Cost: token usage and estimated spend by day"><br><sub><b>Cost</b>: tokens and estimated spend per day</sub></td>
-  </tr>
-  <tr>
-    <td><img src="assets/screenshots/engines.png" alt="Engines: installed agent CLIs and their auth status"><br><sub><b>Engines</b>: agent CLIs (Claude Code, Codex, OpenCode, Cursor, local models)</sub></td>
-    <td><img src="assets/screenshots/system.png" alt="System: health checks and background loops"><br><sub><b>System</b>: health checks, background loops, work counts</sub></td>
-  </tr>
-</table>
+<details>
+<summary>More screenshots: Fleet, Cost, Engines, System</summary>
+
+**Fleet**: pool health, tasks by state, queue and run times.
+![Fleet: pool health and tasks by state](assets/screenshots/fleet.png)
+
+**Cost**: tokens and estimated spend per day.
+![Cost: token usage and estimated spend by day](assets/screenshots/cost.png)
+
+**Engines**: agent CLIs (Claude Code, Codex, OpenCode, Cursor, local models).
+![Engines: installed agent CLIs and their auth status](assets/screenshots/engines.png)
+
+**System**: health checks, background loops, work counts.
+![System: health checks and background loops](assets/screenshots/system.png)
+
+</details>
+
+## Quickstart
+
+```bash
+docker build -f deploy/Dockerfile.api -t argus .
+docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data argus
+docker exec argus cat /data/admin-token   # sign in at http://127.0.0.1:8000
+```
+
+Configuration, Compose, Docker pools and backups are under
+[Run with Docker](#run-with-docker).
 
 ## Layout
 
@@ -163,3 +179,7 @@ The tools cover the whole loop: `claim_task`, `heartbeat`, `report_progress`,
 `complete_task`, `ask_question`, knowledge search and writes, and account leasing
 with quota fallback.
 
+
+## License
+
+Apache License 2.0. See [`LICENSE`](LICENSE).
