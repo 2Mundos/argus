@@ -39,7 +39,7 @@ every new dependency is judged against it.
 - [Worker lifecycle and task coordination](specs/worker-lifecycle.spec.md) —
   tasks, leases, agents, provisioning, accounts, decisions, outputs
 - [Operations](specs/operations.spec.md) — health, readiness, Prometheus metrics,
-  and the System view
+  and the System widgets
 - [Worker launch and node capabilities](specs/worker-launch.spec.md) —
   request a worker from the dashboard or MCP; Argus reports what the node can run
 - [Project runtime images](specs/project-runtime.spec.md) — per-project agent

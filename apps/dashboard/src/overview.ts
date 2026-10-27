@@ -98,7 +98,7 @@ export function attention(input: {
         human: false,
         count: 1,
         text: `Check "${name}" is ${check.status}${check.detail ? `: ${check.detail}` : ""}.`,
-        href: "#system",
+        href: "#home",
       });
     }
   }

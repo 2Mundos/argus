@@ -1,6 +1,5 @@
-import { api, call } from "../api";
+import type { SystemSummary } from "../api";
 import { bytes } from "../format";
-import { useLiveData } from "../live";
 
 function duration(seconds: number | null | undefined): string {
   if (seconds == null) return "—";
@@ -9,15 +8,12 @@ function duration(seconds: number | null | undefined): string {
   return `${(seconds / 3600).toFixed(1)} h`;
 }
 
-export function System() {
-  const { data, error } = useLiveData((signal) => call(api.GET("/api/system", { signal })), []);
-  if (error) return <p className="error">{error.message}</p>;
-  if (!data) return null;
+export function SystemWidgets({ data }: { data: SystemSummary }) {
   const ready = data.readiness.status === "ready";
   return (
     <section className="system">
       <div className="toolbar">
-        <h2>System</h2>
+        <h3>System</h3>
         <span className={`badge ${ready ? "state-succeeded" : "state-failed"}`}>
           {ready ? "ready" : "not ready"}
         </span>
@@ -26,7 +22,7 @@ export function System() {
         </span>
       </div>
 
-      <h3>Checks</h3>
+      <h4>Checks</h4>
       <table>
         <tbody>
           {Object.entries(data.readiness.checks).map(([name, check]) => (
@@ -51,7 +47,7 @@ export function System() {
         </tbody>
       </table>
 
-      <h3>Background loops</h3>
+      <h4>Background loops</h4>
       <table>
         <thead>
           <tr>
@@ -85,7 +81,7 @@ export function System() {
         </tbody>
       </table>
 
-      <h3>Work</h3>
+      <h4>Work</h4>
       <div className="stats">
         {Object.entries(data.tasks).map(([state, n]) => (
           <div className="stat" key={state}>
@@ -100,7 +96,7 @@ export function System() {
         <strong>{data.events_total}</strong>
       </p>
 
-      <h3>Agents</h3>
+      <h4>Agents</h4>
       <div className="stats">
         {Object.entries(data.agents).map(([state, n]) => (
           <div className="stat" key={state}>
@@ -110,7 +106,7 @@ export function System() {
         ))}
       </div>
 
-      <h3>Pools</h3>
+      <h4>Pools</h4>
       {data.pools.length === 0 ? (
         <p className="muted small">No pools.</p>
       ) : (
@@ -140,7 +136,7 @@ export function System() {
         </table>
       )}
 
-      <h3>Storage</h3>
+      <h4>Storage</h4>
       <p className="small">
         Database {bytes(data.database.main_bytes)} (WAL {bytes(data.database.wal_bytes)}) · disk
         free {bytes(data.disk_free_bytes)}

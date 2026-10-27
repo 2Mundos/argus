@@ -14,6 +14,7 @@ import {
   verdict,
 } from "../overview";
 import { EventList } from "./Events";
+import { SystemWidgets } from "./SystemWidgets";
 
 function useSource<T>(
   load: (signal: AbortSignal) => Promise<T>,
@@ -121,42 +122,18 @@ export function Home() {
         <a href="#events">All events</a>
       </p>
 
-      <details className="home-details">
-        <summary>Health and loops</summary>
-        {system.data === undefined ? (
-          <p className={system.error ? "error" : "muted"}>
-            {system.error ? `System health unavailable: ${system.error}` : "Loading…"}
+      {system.data === undefined ? (
+        <p className={system.error ? "error" : "muted"}>
+          {system.error ? `System health unavailable: ${system.error}` : "Loading system…"}
+        </p>
+      ) : (
+        <>
+          <SystemWidgets data={system.data} />
+          <p className="muted small">
+            Heartbeats and running state show that processes are alive, not that a model answers.
           </p>
-        ) : (
-          <>
-            <p className="small">
-              Readiness: <strong>{system.data.readiness.status}</strong>. Heartbeats and running
-              state show that processes are alive, not that a model answers.
-            </p>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Loop</th>
-                    <th>Status</th>
-                    <th>Errors</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(system.data.loops).map(([name, l]) => (
-                    <tr key={name}>
-                      <td>{name}</td>
-                      <td>{l.status}</td>
-                      <td>{l.errors_total}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <a href="#system">System details</a>
-          </>
-        )}
-      </details>
+        </>
+      )}
 
       <details className="home-details">
         <summary>All states</summary>

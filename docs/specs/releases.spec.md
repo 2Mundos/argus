@@ -17,7 +17,7 @@ the tag builds and publishes everything else.
   (without publishing) the NanoClaw host and echo-worker images so those
   Dockerfiles cannot rot; only the control-plane image is a release artifact.
 - The running process reports that version: `argus_build_info{version}`,
-  `GET /api/system`, and the System tab ([operations](operations.spec.md)).
+  `GET /api/system`, and the Home System widgets ([operations](operations.spec.md)).
 
 # 2. Non-Goals
 

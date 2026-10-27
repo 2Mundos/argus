@@ -17,8 +17,18 @@ vi.mock("../api", () => ({
     }
     if (path === "/api/system") {
       return {
+        version: "0.0.0+dev",
+        uptime_s: 5,
         readiness: { status: "ready", checks: { database: { status: "ok" } } },
         loops: {},
+        tasks: {},
+        oldest_ready_age_s: null,
+        decisions_open: 0,
+        events_total: 0,
+        agents: {},
+        pools: [],
+        database: { main_bytes: 0, wal_bytes: 0 },
+        disk_free_bytes: 0,
       };
     }
     return [];

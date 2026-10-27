@@ -1,6 +1,6 @@
 # Operations Spec
 
-Health, readiness, metrics, and the System view. Everything here follows
+Health, readiness, metrics, and the System widgets. Everything here follows
 [lightweight single-node](single-node.spec.md): no required external service, and
 nothing to install to know whether Argus is healthy.
 
@@ -16,7 +16,7 @@ without reading code or logs:
 
 Surfaces: `GET /healthz` (liveness), `GET /readyz` (readiness), `GET /api/metrics`
 (Prometheus text), `GET /api/system` (the same facts as JSON for the dashboard),
-and the dashboard's System tab.
+and the dashboard's Home.
 
 # 2. Non-Goals
 
@@ -100,16 +100,16 @@ constrained to `[a-z0-9-]`); user text never becomes a label value.
 
 Each background loop (`reaper`, `reconciler`) records, in process memory, when
 its last pass finished, how long it took, and how many passes failed. These feed
-`/readyz`, `/api/metrics`, and the System view. They are not persisted: after a
+`/readyz`, `/api/metrics`, and the Home System widgets. They are not persisted: after a
 restart they start empty and readiness waits (up to the stale window) for the
 first pass.
 
-## 3.4 System view
+## 3.4 System widgets
 
 `GET /api/system` (any valid token) returns the readiness checks, the same
 numbers as `/api/metrics` in structured form, and the build version (the release
-tag baked into the image, `0.0.0+dev` otherwise; [releases](releases.spec.md) 3.5). The dashboard's
-System tab renders it and refreshes with the event stream.
+tag baked into the image, `0.0.0+dev` otherwise; [releases](releases.spec.md) 3.5). Home
+renders it as its System widgets and refreshes with the event stream.
 
 # 4. Open Questions
 
