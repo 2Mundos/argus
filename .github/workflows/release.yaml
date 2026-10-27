@@ -14,6 +14,10 @@ concurrency:
   group: release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -34,19 +38,17 @@ jobs:
           git merge-base --is-ancestor HEAD origin/main || { echo "$TAG is not on main" >&2; exit 1; }
           notes=$(ls docs/releases/*."${TAG//./-}".ref.md 2>/dev/null | head -1)
           [ -n "$notes" ] || { echo "no notes for $TAG in docs/releases" >&2; exit 1; }
-          registry="${GITHUB_SERVER_URL#*://}"
           {
             echo "tag=$TAG"
             echo "notes=$notes"
-            echo "registry=$registry"
-            echo "image=$registry/${GITHUB_REPOSITORY,,}"
+            echo "image=ghcr.io/${GITHUB_REPOSITORY,,}"
           } >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@v3
         with:
-          registry: ${{ steps.meta.outputs.registry }}
-          username: ${{ secrets.REGISTRY_USER }}
-          password: ${{ secrets.REGISTRY_WRITE_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push the image
         env:
@@ -62,24 +64,17 @@ jobs:
             -t "$IMAGE:$TAG" .
           docker push "$IMAGE:$TAG"
 
-      - name: Create the Gitea release
+      - name: Create the GitHub release
         env:
-          TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
-          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag }}
           NOTES: ${{ steps.meta.outputs.notes }}
           IMAGE: ${{ steps.meta.outputs.image }}
         run: |
           set -euo pipefail
-          if curl -sf -o /dev/null -H "Authorization: token $TOKEN" "$API/releases/tags/$TAG"; then
+          if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists"; exit 0
           fi
-          python3 - <<'PY' | curl -sSf -o /dev/null -X POST "$API/releases" \
-            -H "Authorization: token $TOKEN" -H "Content-Type: application/json" --data @-
-          import json, os
-          tag, image = os.environ["TAG"], os.environ["IMAGE"]
-          body = open(os.environ["NOTES"]).read().split("\n", 1)[1].lstrip()
-          body = f"Image: `{image}:{tag}`\n\n{body}"
-          print(json.dumps({"tag_name": tag, "name": tag, "body": body}))
-          PY
+          { printf 'Image: `%s:%s`\n\n' "$IMAGE" "$TAG"; tail -n +2 "$NOTES" | sed '/./,$!d'; } > /tmp/release-notes.md
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file /tmp/release-notes.md
           echo "Created release $TAG"

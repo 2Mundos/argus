@@ -19,7 +19,12 @@ NOTES_DIR = "docs/releases"
 MIGRATIONS = "apps/api/src/argus_api/db/migrations"
 SPECS = "docs/specs"
 TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
-PR_MERGE = re.compile(r"^Merge pull request '(?P<title>.+)' \(#(?P<pr>\d+)\) from ")
+PR_MERGE = re.compile(
+    r"^Merge pull request '(?P<title>.+)' \(#(?P<pr>\d+)\) from "
+)  # Gitea
+GH_MERGE = re.compile(
+    r"^Merge pull request #(?P<pr>\d+) from "
+)  # GitHub: title is the body
 CONVENTIONAL = re.compile(
     r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]+)\))?(?P<bang>!)?:\s+(?P<desc>.+)$", re.I
 )
@@ -52,6 +57,9 @@ def parse(sha: str, subject: str, body: str) -> Change | None:
     pr = None
     if m := PR_MERGE.match(subject):
         subject, pr = m["title"], int(m["pr"])
+    elif (m := GH_MERGE.match(subject)) and body.strip():
+        subject, _, body = body.strip().partition("\n")
+        pr = int(m["pr"])
     elif subject.startswith("Merge "):
         return None
     c = CONVENTIONAL.match(subject)

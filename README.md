@@ -60,7 +60,7 @@ Configuration, Compose, Docker pools and backups are under
   Argus worker (installed into a NanoClaw checkout).
 - `examples/echo-worker/` — Minimal worker speaking the Argus API (reference and
   integration-test image).
-- `deploy/` — Dockerfiles and Compose (`compose.yaml`). `.gitea/` — CI.
+- `deploy/` — Dockerfiles and Compose (`compose.yaml`). `.github/` — CI.
 
 ## Development
 
@@ -121,7 +121,7 @@ it beyond this host. Exposure is the `-p` / Compose `ports` address.
 
 CI builds and boots the control-plane image, and builds the NanoClaw host and
 echo-worker images, on every `main` push and when their inputs change on a PR
-(`.gitea/workflows/quality.yaml`).
+(`.github/workflows/quality.yaml`).
 
 ## Operating it
 
