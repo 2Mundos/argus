@@ -19,7 +19,7 @@ fails otherwise (`scripts/validate_docs.py`).
 | [`research/`](research) | Investigations and comparisons |
 | [`runbooks/`](runbooks) | Operational procedures |
 | [`reports/`](reports) | Point-in-time review and QA receipts |
-| [`releases/`](specs/releases.spec.md) | Release notes, one per version |
+| [`releases/`](releases) | Release notes, one per version |
 
 ## Core principle
 
@@ -184,6 +184,6 @@ every new dependency is judged against it.
 
 ### Releases
 
-One document per released version, in [`releases/`](specs/releases.spec.md), written by
+One document per released version, in [`releases/`](releases), written by
 `make release`. Indexed as a series rather than file by file: the filenames are
 `YYYY-MM-DD.vX-Y-Z.ref.md` and sort chronologically.
