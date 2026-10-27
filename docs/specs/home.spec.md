@@ -13,7 +13,8 @@ It shows, in order:
 3. compact summary groups (Tasks, Agents, Pools, Inbox, Accounts), each linking to
    its existing tab;
 4. **Recent activity** (the latest 10 events, link to Events);
-5. an expandable **Health and loops** section;
+5. the **System** widgets (readiness checks, background loops, work, agents, pools,
+   storage and build version), formerly the System tab;
 6. an expandable **All states** section: every state of every core enum, zeros included.
 
 Totals come from one read-only endpoint, `GET /api/overview`, readable by the
