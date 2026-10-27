@@ -16,6 +16,9 @@ visible and explainable:
 4. A claim that was flagged quiet and then stays silent for `ARGUS_STALL_FAIL_S`
    (default 3600 s) is expired as `stalled` and retried, instead of holding the
    task until the wall-clock timeout.
+5. Each heartbeat says what the host sees for the claim (workspace, session,
+   delegate), so quiet, stalled and expired claims name a likely cause, and a
+   workspace that is gone blocks the attempt instead of spending it.
 
 # 2. Non-Goals
 
@@ -24,7 +27,9 @@ visible and explainable:
   (3.6), never how long it has run.
 - No change to lease TTL, heartbeat interval, attempt timeout, or `lost` rules.
 - Final `failed` tasks stay out of the inbox; Fleet owns failure totals.
-- No new service, broker, or table beyond two nullable columns on `tasks`.
+- No new service, broker, or table beyond nullable columns on `tasks`.
+- The stall cause (3.7) is descriptive: it never moves the quiet or stall
+  thresholds and never decides an expiry or requeue.
 
 # 3. Decisions Made
 
@@ -103,6 +108,47 @@ nothing for hours, while heartbeats kept the lease alive.
 - Fleet `classify_failure` keeps `stalled` as a first-class reason, with its time
   held, so the effect shows in Fleet.
 
+## 3.7 Stall causes
+
+Incident (2026-10): hosts kept heartbeating while their instance directories had
+been deleted, so sessions never started and each claim sat quiet until
+`stalled` spent an attempt.
+
+- Channel: `RuntimeHooks.workspaceState()` (optional) stats the Argus agent group
+  directory on the host: a directory is `ok`, `ENOENT` is `missing`, any other
+  error, or no answer within 5 s, is `unknown`. While a task is claimed, each
+  heartbeat lease carries an optional `observation`:
+  `{workspace: ok|missing|unknown, session: running|gone|unknown,
+  delegate: active|silent|unknown}`. `session` is what the 3.1 watch saw
+  (`unknown` when listing fails, before the first container, or mid-recycle).
+  `delegate` is `active` when the newest `activity_at` source (3.2) is under
+  5 min old, `silent` when older, `unknown` when no source answered.
+- Server: each part is a closed enum (`422` otherwise); unknown keys are
+  ignored. The heartbeat stores the newest observation in `tasks.observation`
+  (JSON) and `tasks.observation_at` (`tx.now`, never moved backwards); expiry
+  clears both. Migration `0050`.
+- `stall_cause` is derived when read: no observation, one older than three
+  heartbeat intervals (90 s), or one sent before the current claim, is
+  `unknown`. Otherwise, in this order: workspace `missing` is
+  `workspace_missing`; session `gone` is `session_gone`; delegate `active` is
+  `silent_delegate_active`; `ok`/`running`/`silent` is `no_progress`; anything
+  else is `unknown`. `task.quiet` and `task.expire` carry `stall_cause` and
+  `observation_at`; inbox quiet rows carry `stall_cause`; a `stalled` expiry
+  error, or any expiry with a known cause, ends with `stall cause: <cause>`.
+- `env_workspace_missing` (class `environment`, [failure classes](failure-classes.spec.md)
+  3.3): when the channel sees `workspace: missing` for 90 s (the 3.1 grace) while
+  the task is injected and no recycle or resend is in progress, it blocks the
+  attempt with that reason and an error naming the probed directory (not its
+  path). No attempt is spent; the continuation and WIP are kept; the task shows
+  in the inbox. It never stops or recycles a session, and never acts while the
+  delegate is `active`.
+- `unknown` is conservative: it never triggers an action, and a running grace
+  is neither reset nor fired by it (only `ok` resets it). A probe that flaps
+  between `missing` and `unknown` therefore still blocks after 90 s of not being
+  `ok`, while one that cannot tell at all never blocks.
+- Session death keeps the 3.1 `session_lost` path; a busy session with an active
+  delegate is never touched.
+
 # 4. Open Questions
 
 - Should a final `failed` task with `reason=session_lost` also land in the inbox
@@ -119,7 +165,10 @@ nothing for hours, while heartbeats kept the lease alive.
 
 - Spec + index; amendments to [worker lifecycle](worker-lifecycle.spec.md) 3.8
   and [MCP operations](mcp-operations.spec.md) 3.2.
-- Migration `0045`; heartbeat, reaper, expiry, inbox, agent views, fleet
+- Migration `0045` (3.2) and `0050` (3.7); heartbeat, reaper, expiry, inbox, agent views, fleet
   classifier; `make openapi`.
 - NanoClaw channel watchdog + `activity_at` on heartbeat; dashboard Inbox and
   WorkersSidebar; tests for each layer.
+- 3.7: `LeaseObservation` on the heartbeat, `stall_cause` in events, inbox and
+  errors, `env_workspace_missing`, the channel workspace probe and its test
+  (`argus-stall-causes.test.ts`).

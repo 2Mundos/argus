@@ -169,6 +169,7 @@ const BLOCK_COPY: Record<string, string> = {
   env_repository_unavailable: "the repository credential could not be applied",
   env_repository_unreachable: "the repository did not answer",
   env_executor_auth: "the executor could not log in",
+  env_workspace_missing: "its agent group directory is missing on the worker host",
   worker_env: "the worker reported a missing workspace, tool or credential",
   worker_gave_up: "the worker gave up; retry or cancel it",
 };
@@ -191,6 +192,14 @@ function BlockedCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () => 
   );
 }
 
+/** What the worker host last saw for a quiet claim (stall visibility 3.7). */
+const STALL_CAUSE_COPY: Record<string, string> = {
+  workspace_missing: "workspace missing on the host",
+  session_gone: "session container gone",
+  silent_delegate_active: "delegate busy but silent",
+  no_progress: "session running, no progress",
+};
+
 function QuietClaimCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () => void }) {
   const [steerOpen, setSteerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -205,6 +214,10 @@ function QuietClaimCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () 
       : item.last_signal_at
         ? `; last signal at ${relative(item.last_signal_at)}`
         : "";
+  const cause =
+    item.stall_cause && item.stall_cause !== "unknown"
+      ? `; likely cause: ${STALL_CAUSE_COPY[item.stall_cause]}`
+      : "";
 
   async function release() {
     setBusy(true);
@@ -228,7 +241,8 @@ function QuietClaimCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () 
       <p>
         <TaskLabel title={item.title ?? shortId(item.subject_id)} project={item.project} /> is quiet
         for {dur(item.age_s)}
-        {signalLine}.
+        {signalLine}
+        {cause}.
       </p>
       {error && <p className="error">{error}</p>}
       <div className="actions left">

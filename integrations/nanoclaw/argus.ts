@@ -117,6 +117,8 @@ const RUNTIME_VERIFY_MS = 120_000; // how long to look for the session container
 const RECYCLE_TIMEOUT_MS = 30_000; // wait for the old container to exit after an account rotation
 /** After a session was seen, how long it may stay gone before fail session_lost. */
 const SESSION_GONE_GRACE_MS = 90_000;
+/** A delegate with a signal (progress, log line, session heartbeat) this recent is "active". */
+const DELEGATE_ACTIVE_MS = 5 * 60_000;
 const SESSION_LOG_TAIL_BYTES = 2 * 1024;
 const SESSION_LOG_TAIL_LINES = 40;
 
@@ -221,6 +223,15 @@ export interface RuntimeHooks {
   sessionEvidence?(containerId: string): Promise<{ exitCode: number | null; logTail: string }>;
   /** Newest NanoClaw session `.heartbeat` mtime for this group, or null. */
   sessionActivityAt?(): Promise<Date | null>;
+  /** Whether the Argus agent group directory exists: ENOENT is "missing", any other error "unknown". */
+  workspaceState?(): Promise<"ok" | "missing" | "unknown">;
+}
+
+/** What the host saw for the claimed lease on one heartbeat (stall visibility 3.7). */
+export interface LeaseObservation {
+  workspace: "ok" | "missing" | "unknown";
+  session: "running" | "gone" | "unknown";
+  delegate: "active" | "silent" | "unknown";
 }
 
 export interface ArgusConfig {
@@ -1558,6 +1569,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let seenSessionId: string | null = null;
   let sessionMissingSince: number | null = null;
   let resending = false; // mid-inject / mid-resend: skip session-lost watchdog
+  let sessionState: LeaseObservation["session"] = "unknown"; // what watchSession saw last
+  let workspaceMissingSince: number | null = null;
 
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -1599,6 +1612,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   /** Fail the attempt when a previously-seen session container is gone for too long. */
   async function watchSession(): Promise<void> {
     const task = current;
+    sessionState = "unknown";
     if (!task || !sessionCarriesTask || !cfg.runtime?.sessions) return;
     // Mid-recycle / mid-resend: containers are stopped on purpose.
     if (recycleOnLease || switchFailure || resending) {
@@ -1617,9 +1631,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     if (containers.length > 0) {
       seenSessionId = containers[0] ?? seenSessionId;
       sessionMissingSince = null;
+      sessionState = "running";
       return;
     }
     if (!seenSessionId) return; // not spawned yet
+    sessionState = "gone";
     const now = nowMs();
     sessionMissingSince ??= now;
     if (now - sessionMissingSince < SESSION_GONE_GRACE_MS) return;
@@ -1655,12 +1671,67 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     finishTask();
   }
 
+  /** Probe the agent group directory; a throw or a slow probe is "unknown". */
+  async function workspaceState(): Promise<LeaseObservation["workspace"]> {
+    if (!cfg.runtime?.workspaceState) return "unknown";
+    try {
+      return await withTimeout(cfg.runtime.workspaceState(), 5_000, "workspace probe timed out");
+    } catch {
+      return "unknown";
+    }
+  }
+
+  /**
+   * Block the attempt `env_workspace_missing` (no attempt spent, WIP kept) when the
+   * group directory stays missing for the session grace. "ok" clears the timer;
+   * "unknown" neither starts, clears nor fires it. Never stops or recycles anything,
+   * and never acts while the delegate is still active.
+   */
+  async function watchWorkspace(obs: LeaseObservation): Promise<void> {
+    const task = current;
+    if (!task || !sessionCarriesTask || recycleOnLease || switchFailure || resending) {
+      workspaceMissingSince = null;
+      return;
+    }
+    if (obs.workspace === "ok") workspaceMissingSince = null;
+    if (obs.workspace !== "missing") return;
+    const now = nowMs();
+    workspaceMissingSince ??= now;
+    const missingS = Math.round((now - workspaceMissingSince) / 1000);
+    if (now - workspaceMissingSince < SESSION_GONE_GRACE_MS || obs.delegate === "active") return;
+    log.warn("Agent group directory missing; blocking the attempt", { task: task.id, missingS });
+    await client
+      .call("POST", `/tasks/${task.id}/block`, {
+        attempt: task.attempt,
+        reason: "env_workspace_missing",
+        error:
+          `the Argus agent group directory (workspace) is missing on the host for ${missingS} s ` +
+          "while the task was claimed; heartbeat alive",
+      })
+      .catch(() => undefined);
+    current = null;
+    void cfg.runtime?.cleanup(task.id).catch(() => undefined);
+    finishTask();
+  }
+
   async function heartbeat(): Promise<void> {
     try {
       await watchSession();
       if (!current && sessionCarriesTask) return; // watchSession finished the task
       const acks = [...steerAcks];
       const activity_at = current ? await leaseActivityAt() : undefined;
+      let observation: LeaseObservation | undefined;
+      if (current) {
+        const at = activity_at ? Date.parse(activity_at) : null;
+        observation = {
+          workspace: await workspaceState(),
+          session: sessionState,
+          delegate:
+            at === null ? "unknown" : nowMs() - at < DELEGATE_ACTIVE_MS ? "active" : "silent",
+        };
+        await watchWorkspace(observation);
+        if (!current) return; // watchWorkspace blocked the task
+      }
       const { data } = await client.call("POST", "/agents/me/heartbeat", {
         leases: current
           ? [
@@ -1668,6 +1739,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
                 task_id: current.id,
                 attempt: current.attempt,
                 ...(activity_at ? { activity_at } : {}),
+                observation,
               },
             ]
           : [],
@@ -1819,6 +1891,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     current = null;
     seenSessionId = null;
     sessionMissingSince = null;
+    sessionState = "unknown";
+    workspaceMissingSince = null;
     harnessRun = null;
     harnessSession = 0;
     currentClaim = null;
@@ -3542,6 +3616,13 @@ export function runtimeFromEnv(): RuntimeHooks | undefined {
         }
       }
       return newest === null ? null : new Date(newest);
+    },
+    async workspaceState() {
+      try {
+        return (await lstat((await group()).dir)).isDirectory() ? "ok" : "unknown";
+      } catch (err) {
+        return (err as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unknown";
+      }
     },
     async apply(taskId: string, selection: RuntimeSelection): Promise<void> {
       if (!selection.image) throw new Error("no image selected");

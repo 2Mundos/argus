@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from argus_core.decisions import Audience, DecisionKind
-from argus_core.tasks import TaskState
+from argus_core.tasks import StallCause, TaskState
 from pydantic import BaseModel
 
 from argus_api.db import Snapshot
@@ -59,6 +59,7 @@ class InboxItem(BaseModel):
         None  # quiet claims: newest activity/progress/log/claim
     )
     last_signal_source: str | None = None  # activity, progress, log, or claim
+    stall_cause: StallCause | None = None  # quiet claims (stall visibility 3.7)
     task: TaskDetail | None = None  # view=detail only
     decision: DecisionDetail | None = None  # view=detail only
 
@@ -207,7 +208,7 @@ async def inbox(
         for r in rows
         if r["subject_type"] == "task" and r["state"] == TaskState.CLAIMED
     ]
-    last_signals = await _quiet_last_signals(snap.conn, quiet_ids)
+    last_signals = await _quiet_last_signals(snap, quiet_ids)
     items: list[InboxItem] = []
     omitted: set[str] = set()
     for r in rows:
@@ -223,9 +224,7 @@ async def inbox(
             }
         )
         if sig := last_signals.get(r["subject_id"]):
-            at, source = sig
-            item.last_signal_at = at
-            item.last_signal_source = source
+            item.last_signal_at, item.last_signal_source, item.stall_cause = sig
         if view == "detail":
             item.task = details.get(r["subject_id"])
             if r["decision_id"] is not None:
@@ -354,27 +353,33 @@ async def _failed_dependencies(
 
 
 async def _quiet_last_signals(
-    conn: Any, task_ids: list[str]
-) -> dict[str, tuple[datetime | None, str | None]]:
+    snap: Snapshot, task_ids: list[str]
+) -> dict[str, tuple[datetime | None, str | None, StallCause]]:
     if not task_ids:
         return {}
     marks = ",".join("?" * len(task_ids))
     sql = f"{_QUIET_SIGNALS} WHERE t.id IN ({marks})"
-    async with conn.execute(sql, task_ids) as cur:
+    async with snap.conn.execute(sql, task_ids) as cur:
         rows = await cur.fetchall()
     return {
-        r["id"]: tasks_service.last_signal(
-            activity_at=r["activity_at"],
-            progress_at=r["progress_at"],
-            output_at=r["output_at"],
-            claimed_at=r["claimed_at"],
+        r["id"]: (
+            *tasks_service.last_signal(
+                activity_at=r["activity_at"],
+                progress_at=r["progress_at"],
+                output_at=r["output_at"],
+                claimed_at=r["claimed_at"],
+            ),
+            tasks_service.stall_cause(
+                snap.now, r["observation"], r["observation_at"], r["claimed_at"]
+            )[0],
         )
         for r in rows
     }
 
 
 _QUIET_SIGNALS = (
-    "SELECT t.id, t.activity_at, t.progress_at, t.output_at, a.claimed_at"
+    "SELECT t.id, t.activity_at, t.progress_at, t.output_at, a.claimed_at,"
+    " t.observation, t.observation_at"
     " FROM tasks t"
     " LEFT JOIN task_attempts a ON a.task_id = t.id AND a.attempt = t.attempt"
 )

@@ -42,10 +42,12 @@ from argus_core.tasks import (
     ExecutorModel,
     Failover,
     HarnessModel,
+    LeaseObservation,
     PromptTrust,
     RetryClass,
     Review,
     ServingAccount,
+    StallCause,
     Task,
     TaskCreate,
     TaskResult,
@@ -679,6 +681,13 @@ async def block_switch_failed(
     return await get_task(tx.conn, task_id)
 
 
+Lease = (
+    tuple[str, int]
+    | tuple[str, int, datetime | None]
+    | tuple[str, int, datetime | None, LeaseObservation | None]
+)
+
+
 @dataclass(frozen=True)
 class RenewedLease:
     task_id: str
@@ -697,17 +706,20 @@ class RejectedLease:
 async def renew(
     tx: Tx,
     agent_id: str,
-    leases: list[tuple[str, int] | tuple[str, int, datetime | None]],
+    leases: list[Lease],
 ) -> tuple[list[RenewedLease], list[RejectedLease]]:
     """Extend each still-valid lease; a rejected pair never blocks the others.
 
     An optional third element is `activity_at` (stall visibility): clamped to
-    `<= tx.now`, never moved backwards, and clears `quiet_at` when it advances."""
+    `<= tx.now`, never moved backwards, and clears `quiet_at` when it advances.
+    An optional fourth is the host's `LeaseObservation` (3.7), stored with
+    `observation_at = tx.now`; it never renews, expires or clears anything."""
     renewed: list[RenewedLease] = []
     rejected: list[RejectedLease] = []
     for item in leases:
         task_id, attempt = item[0], item[1]
         activity_at = item[2] if len(item) > 2 else None
+        observation = item[3] if len(item) > 3 else None
         try:
             row = await _owned(tx, task_id, attempt, agent_id)
         except (LeaseConflictError, NotFoundError) as exc:
@@ -720,6 +732,14 @@ async def renew(
         )
         if activity_at is not None:
             await _record_activity(tx, task_id, row, activity_at)
+        if observation is not None:
+            # observation_at is this transaction's time, so it is never ahead of
+            # tx.now; an older write (a skewed clock) never replaces a newer one.
+            await tx.conn.execute(
+                "UPDATE tasks SET observation = ?, observation_at = ? WHERE id = ?"
+                " AND (observation_at IS NULL OR observation_at <= ?)",
+                (observation.model_dump_json(), ts(tx.now), task_id, ts(tx.now)),
+            )
         renewed.append(RenewedLease(task_id, attempt, deadline))
     return renewed, rejected
 
@@ -2097,6 +2117,43 @@ async def expire_agent_leases(tx: Tx, agent_id: str) -> list[str]:
 # Reaper interval is 10 s (reaper.REAP_INTERVAL_S); three missed passes.
 LATE_DETECT_AFTER_S = 30
 QUIET_CLAIM_S = 1200  # default; reaper may pass Settings.quiet_claim_s
+# Three heartbeat intervals (agents.service.HEARTBEAT_INTERVAL_S = 30): an older
+# observation says nothing about now (3.7).
+OBSERVATION_STALE_S = 90
+
+
+def stall_cause(
+    now: datetime,
+    observation: str | None,
+    observation_at: str | None,
+    claimed_at: str | None = None,
+) -> tuple[StallCause, str | None]:
+    """Why a claim is silent, from the host's newest observation (3.7), with the
+    observation time. Absent, stale (older than three heartbeats) or from before
+    this attempt's claim: `unknown`. Descriptive only: no decision reads it."""
+    if observation is None or observation_at is None:
+        return "unknown", None
+    at = datetime.fromisoformat(observation_at)
+    if (now - at).total_seconds() > OBSERVATION_STALE_S or (
+        claimed_at is not None and at < datetime.fromisoformat(claimed_at)
+    ):
+        return "unknown", observation_at
+    seen = LeaseObservation.model_validate_json(observation)
+    if seen.workspace == "missing":
+        return "workspace_missing", observation_at
+    if seen.session == "gone":
+        return "session_gone", observation_at
+    if seen.delegate == "active":
+        return "silent_delegate_active", observation_at
+    if (seen.workspace, seen.session, seen.delegate) == ("ok", "running", "silent"):
+        return "no_progress", observation_at
+    return "unknown", observation_at
+
+
+def _stall_cause(tx: Tx, row: aiosqlite.Row) -> tuple[StallCause, str | None]:
+    return stall_cause(
+        tx.now, row["observation"], row["observation_at"], row["claimed_at"]
+    )
 
 
 def last_signal(
@@ -2141,6 +2198,7 @@ def _expiry_error(
     last_signal_at: datetime | None = None,
     last_signal_source: str | None = None,
     detected_late_s: int | None = None,
+    cause: StallCause = "unknown",
 ) -> str:
     holder = row["assignee_agent_id"]
     match reason:
@@ -2154,6 +2212,8 @@ def _expiry_error(
             base = f"holder {holder} ended; its lease was released"
     if last_signal_at is not None and last_signal_source is not None:
         base += f"; last signal {last_signal_source} at {ts(last_signal_at)}"
+    if reason == "stalled" or cause != "unknown":
+        base += f"; stall cause: {cause.replace('_', ' ')}"
     if detected_late_s is not None and detected_late_s > 0:
         mins = max(1, round(detected_late_s / 60))
         base += f"; detected {mins} min late (Argus was not running)"
@@ -2185,6 +2245,7 @@ async def flag_quiet(
         last_at, source = _last_signal(row, claimed_at=row["claimed_at"])
         if last_at is None or last_at > cutoff:
             continue
+        cause, observed_at = _stall_cause(tx, row)
         try:
             async with tx.savepoint():
                 await tx.conn.execute(
@@ -2202,6 +2263,8 @@ async def flag_quiet(
                         "agent_id": row["assignee_agent_id"],
                         "last_signal_at": ts(last_at),
                         "last_signal_source": source,
+                        "stall_cause": cause,
+                        "observation_at": observed_at,
                     },
                 )
         except Exception:
@@ -2242,17 +2305,21 @@ async def _expire_where(
             "timeout": row["timeout_at"],
         }.get(reason)
         late = _detected_late_s(tx, deadline)
+        cause, observed_at = _stall_cause(tx, row)
         error = _expiry_error(
             row,
             reason,
             last_signal_at=last_at,
             last_signal_source=source,
             detected_late_s=late,
+            cause=cause,
         )
         data: dict[str, Any] = {
             "agent_id": row["assignee_agent_id"],
             "reason": reason,
             "error": error,
+            "stall_cause": cause,
+            "observation_at": observed_at,
         }
         if last_at is not None:
             data["last_signal_at"] = ts(last_at)
@@ -2277,6 +2344,8 @@ async def _expire_where(
                         "progress_percent": None,
                         "quiet_at": None,
                         "activity_at": None,
+                        "observation": None,
+                        "observation_at": None,
                     },
                     data=data,
                 )

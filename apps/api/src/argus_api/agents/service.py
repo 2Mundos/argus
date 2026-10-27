@@ -221,7 +221,7 @@ class Heartbeat:
 async def heartbeat(
     tx: Tx,
     agent_id: str,
-    leases: list[tuple[str, int] | tuple[str, int, datetime | None]],
+    leases: list[tasks.Lease],
     runtime: AgentRuntime | None = None,
     steer_acks: list[str] | None = None,
     *,
@@ -230,7 +230,8 @@ async def heartbeat(
     """Refresh the agent and renew the leases it lists, in one transaction. A
     reported `runtime` replaces the last one; without it the last one stays.
 
-    Each lease is `(task_id, attempt)` or `(task_id, attempt, activity_at)`.
+    Each lease is `(task_id, attempt)`, `(task_id, attempt, activity_at)` or
+    `(task_id, attempt, activity_at, observation)`.
     `steer_acks` are steers the worker has injected. Pending steers are returned
     only for leases renewed here (task steering spec 3.4)."""
     state = await _live_state(tx.conn, agent_id)

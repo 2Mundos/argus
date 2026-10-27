@@ -7245,6 +7245,24 @@
             ],
             "title": "Project"
           },
+          "stall_cause": {
+            "anyOf": [
+              {
+                "enum": [
+                  "workspace_missing",
+                  "session_gone",
+                  "silent_delegate_active",
+                  "no_progress",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stall Cause"
+          },
           "state": {
             "anyOf": [
               {
@@ -8313,6 +8331,43 @@
         "title": "LayerState",
         "type": "object"
       },
+      "LeaseObservation": {
+        "description": "What the worker host saw for a claimed lease on one heartbeat (stall\nvisibility 3.7). Each part is a closed enum; `unknown` means not observed.",
+        "properties": {
+          "delegate": {
+            "default": "unknown",
+            "enum": [
+              "active",
+              "silent",
+              "unknown"
+            ],
+            "title": "Delegate",
+            "type": "string"
+          },
+          "session": {
+            "default": "unknown",
+            "enum": [
+              "running",
+              "gone",
+              "unknown"
+            ],
+            "title": "Session",
+            "type": "string"
+          },
+          "workspace": {
+            "default": "unknown",
+            "enum": [
+              "ok",
+              "missing",
+              "unknown"
+            ],
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "title": "LeaseObservation",
+        "type": "object"
+      },
       "LeaseRef": {
         "properties": {
           "activity_at": {
@@ -8330,6 +8385,16 @@
           "attempt": {
             "title": "Attempt",
             "type": "integer"
+          },
+          "observation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LeaseObservation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "task_id": {
             "title": "Task Id",

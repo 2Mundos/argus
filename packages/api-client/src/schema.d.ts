@@ -4822,6 +4822,8 @@ export interface components {
             last_signal_source?: string | null;
             /** Project */
             project: string | null;
+            /** Stall Cause */
+            stall_cause?: ("workspace_missing" | "session_gone" | "silent_delegate_active" | "no_progress" | "unknown") | null;
             state: components["schemas"]["TaskState"] | null;
             /** Subject Id */
             subject_id: string;
@@ -5179,12 +5181,38 @@ export interface components {
              */
             usable: boolean;
         };
+        /**
+         * LeaseObservation
+         * @description What the worker host saw for a claimed lease on one heartbeat (stall
+         *     visibility 3.7). Each part is a closed enum; `unknown` means not observed.
+         */
+        LeaseObservation: {
+            /**
+             * Delegate
+             * @default unknown
+             * @enum {string}
+             */
+            delegate?: "active" | "silent" | "unknown";
+            /**
+             * Session
+             * @default unknown
+             * @enum {string}
+             */
+            session?: "running" | "gone" | "unknown";
+            /**
+             * Workspace
+             * @default unknown
+             * @enum {string}
+             */
+            workspace?: "ok" | "missing" | "unknown";
+        };
         /** LeaseRef */
         LeaseRef: {
             /** Activity At */
             activity_at?: string | null;
             /** Attempt */
             attempt: number;
+            observation?: components["schemas"]["LeaseObservation"] | null;
             /** Task Id */
             task_id: string;
         };

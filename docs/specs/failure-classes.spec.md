@@ -82,6 +82,9 @@ task. No model session starts and no attempt is spent.
 | The repository lease is taken and applied (today's step) | `env_repository_unavailable` |
 | A read of the repository through the OneCLI gateway (the Gitea API, with the applied credential) answers within 20 s | `env_repository_unreachable` |
 
+- `env_workspace_missing` is not a preflight check: the channel blocks with it
+  when the agent group directory stays missing on the host for 90 s while the
+  task is claimed ([stall visibility](stall-visibility.spec.md) 3.7).
 - `env_executor_auth` is reserved for an executor credential check. It is not run
   yet: `argus-delegate` only runs inside the session container, which does not
   exist at preflight time (4). Until then a worker whose executor cannot log in

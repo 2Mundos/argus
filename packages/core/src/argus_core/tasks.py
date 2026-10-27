@@ -253,6 +253,7 @@ ENV_BLOCK_REASONS = frozenset(
         "env_repository_unavailable",
         "env_repository_unreachable",
         "env_executor_auth",
+        "env_workspace_missing",
         "worker_env",
     }
 )
@@ -280,6 +281,24 @@ def retry_class(reason: str | None) -> RetryClass:
 def retry_delay_s(failures: int) -> int:
     """Backoff before a transient failure's retry; `failures` counts this one."""
     return min(60 * 2 ** max(failures - 1, 0), 900)
+
+
+class LeaseObservation(BaseModel):
+    """What the worker host saw for a claimed lease on one heartbeat (stall
+    visibility 3.7). Each part is a closed enum; `unknown` means not observed."""
+
+    workspace: Literal["ok", "missing", "unknown"] = "unknown"
+    session: Literal["running", "gone", "unknown"] = "unknown"
+    delegate: Literal["active", "silent", "unknown"] = "unknown"
+
+
+StallCause = Literal[
+    "workspace_missing",
+    "session_gone",
+    "silent_delegate_active",
+    "no_progress",
+    "unknown",
+]
 
 
 class InvalidTransitionError(Exception):
