@@ -16,6 +16,15 @@ def test_parse_pr_merge_keeps_title_and_number() -> None:
     assert c == Change("a" * 40, "feat", "accounts: usage per account", 14, False)
 
 
+def test_parse_github_pr_merge_takes_title_from_body() -> None:
+    c = parse(
+        "a" * 40,
+        "Merge pull request #14 from 2Mundos/feat/account-usage",
+        "feat(accounts)!: usage per account\n",
+    )
+    assert c == Change("a" * 40, "feat", "accounts: usage per account", 14, True)
+
+
 def test_parse_skips_other_merges_and_keeps_plain_subjects() -> None:
     assert parse("s", "Merge main into feat/x", "") is None
     assert parse("s", "Tidy things", "") == Change("s", "", "Tidy things", None, False)

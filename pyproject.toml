@@ -39,7 +39,7 @@ ignore = ["B008", "S101"]
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["ASYNC", "S"]
 "scripts/**" = ["ASYNC", "S"]
-".gitea/scripts/**" = ["S"]
+".github/scripts/**" = ["S"]
 
 [tool.ty.src]
 include = ["apps/api/src", "packages/core/src"]
