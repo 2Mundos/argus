@@ -173,6 +173,39 @@ def test_a_worker_blocks_only_for_the_environment(
     assert (res.json()["state"], res.json()["error"]) == ("blocked", "x")
 
 
+WORKSPACE_REASONS = [
+    "env_workspace_unconfigured",
+    "env_workspace_permission",
+    "env_workspace_invalid",
+    "env_workspace_remote_mismatch",
+    "env_workspace_branch_mismatch",
+    "env_workspace_limit",
+]
+
+
+@pytest.mark.parametrize("reason", WORKSPACE_REASONS)
+def test_a_worker_blocks_for_a_broken_task_workspace(
+    client: TestClient, agent: dict[str, str], reason: str
+) -> None:
+    task = client.post("/api/tasks", json={"project": "global", "title": "x"}).json()
+    claimed = client.post("/api/tasks/claim", json={}, headers=agent).json()
+    res = client.post(
+        f"/api/tasks/{task['id']}/block",
+        json={
+            "attempt": claimed["attempt"],
+            "reason": reason,
+            "error": "origin is not set",
+        },
+        headers=agent,
+    )
+    body = res.json()
+    assert (body["state"], body["block_reason"], body["failures"]) == (
+        "blocked",
+        reason,
+        0,
+    )
+
+
 def _fail_once(client: TestClient, agent: dict[str, str], **body: object) -> dict:
     """Create a task, claim it, and fail it; with max_attempts=1 it ends `failed`."""
     task = client.post(

@@ -75,6 +75,7 @@ import {
   writeLocalHarnessFile,
 } from "./argus-local-harness.js";
 import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
+import { prepareTaskWorkspace, type WorkspaceResult } from "./argus-workspace.js";
 import { registerChannelAdapter } from "./channel-registry.js";
 import {
   loadPolicy,
@@ -234,6 +235,11 @@ export interface ArgusConfig {
    * the channel reads the repository through the OneCLI gateway.
    */
   probeRepository?: (repositoryUrl: string, allowlist: readonly string[]) => Promise<void>;
+  /**
+   * The agent group directory that holds the per-task workspaces (task workspace spec).
+   * Default: `argusGroupDir`; tests inject a temporary directory.
+   */
+  workspaceRoot?: () => Promise<string | null>;
   url: string;
   bootstrapToken?: string;
   agentToken?: string;
@@ -429,9 +435,20 @@ export function taskAuthorizesMerge(task: ArgusTask): boolean {
   return (delivery as Record<string, unknown>).allow_merge === true;
 }
 
-function repositoryTaskLines(task: ArgusTask): string[] {
+/** The prepared task workspace the prompt points the model at (task workspace spec). */
+export interface TaskWorkspace {
+  containerPath: string;
+  branch: string;
+}
+
+function repositoryTaskLines(task: ArgusTask, workspace?: TaskWorkspace | null): string[] {
   const lines = [
     `Repository (allowlisted): ${task.repository_url}`,
+    ...(workspace
+      ? [
+          `Workspace: ${workspace.containerPath}, branch ${workspace.branch}, remote origin ${task.repository_url}; run git fetch and work in this directory; do not create another checkout. It may already hold work from an earlier attempt of this task: keep it.`,
+        ]
+      : []),
     "Use /usr/local/bin/argus-gitea-api for repository API access; do not handle credentials or add auth headers yourself. Commands: get = pull request by number; issue-get = issue tracker item; list-prs = paginated PR list with --state; status = commit statuses for the PR head SHA; create = open a pull request; update = edit a pull request. Newer images add repo-get, default-branch, branch-get, issue-list/create/update/close/reopen, label-list/add/remove, comment-list/get/create/edit/delete (issues and PRs; comment-create --idempotency-key K), pr-commits, pr-files, pr-diff, pr-review-list/get/comments/create, statuses --sha, run-list/get, job-list, job-logs, artifact-list/download, and review-findings --pr N (agentic review for the exact head SHA; finding_count null means unknown, never zero). Run argus-gitea-api --help first: it lists the commands and exit codes your image supports.",
     `To open a PR (you can; push your branch first, then): argus-gitea-api create --repository ${task.repository_url} --title "<title>" --head <branch> --base <base-branch> --body "<text>"   (a long body may use --body-file <path> or --body-stdin when --help lists them; older images silently ignore unsupported options, so check the returned PR body). create is idempotent: if an open PR for the same head and base exists it is returned instead of a duplicate. To edit one: argus-gitea-api update --repository ${task.repository_url} --number <N> [--title T] [--body-file PATH | --body TEXT] [--base B] [--state open|closed]. Both print the PR JSON (number, html_url, head.sha).`,
   ];
@@ -901,7 +918,12 @@ export function renderTask(
   task: ArgusTask,
   pages: Map<string, string>,
   preferredExecutor?: string | null,
-  opts: { localHarness?: boolean; customHarness?: boolean; runtime?: RuntimeSelection | null } = {},
+  opts: {
+    localHarness?: boolean;
+    customHarness?: boolean;
+    runtime?: RuntimeSelection | null;
+    workspace?: TaskWorkspace | null;
+  } = {},
 ): string {
   const pinned = task.executor_model;
   // The leased executor is authoritative; a pin overrides it, trivial only names the leased Cursor.
@@ -939,7 +961,7 @@ export function renderTask(
   };
   const lines = [
     `[Argus task] Task: ${task.id} · Project: ${task.project} · Attempt: ${task.attempt}`,
-    ...(task.repository_url ? repositoryTaskLines(task) : []),
+    ...(task.repository_url ? repositoryTaskLines(task, opts.workspace) : []),
     ...(opts.runtime ? runtimeTaskLines(opts.runtime) : []),
     "",
     UNTRUSTED_TASK_DATA_RULES,
@@ -2307,6 +2329,25 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     return null;
   }
 
+  /**
+   * The task's stable workspace (task workspace spec), prepared or checked after the
+   * repository preflight succeeded. Null for a task without `repository:write`.
+   */
+  async function workspacePreflight(task: ArgusTask): Promise<WorkspaceResult | null> {
+    if (!task.required_capabilities?.includes("repository:write")) return null;
+    let groupDir: string | null;
+    try {
+      groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
+    } catch (err) {
+      return {
+        ok: false,
+        reason: "env_workspace_unconfigured",
+        error: `the agent group directory could not be resolved: ${String(err)}`,
+      };
+    }
+    return prepareTaskWorkspace({ groupDir, taskId: task.id, repositoryUrl: task.repository_url });
+  }
+
   async function runTask(task: ArgusTask): Promise<void> {
     current = Object.freeze({
       id: task.id,
@@ -2376,11 +2417,22 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     };
     await reportHarness(task, "running");
     try {
-      const envBlock = await repositoryPreflight(task);
+      let envBlock: { reason: string; error: string } | null = await repositoryPreflight(task);
+      let workspace: TaskWorkspace | null = null;
+      if (!envBlock) {
+        step = "task workspace";
+        const prepared = await workspacePreflight(task);
+        if (prepared?.ok) workspace = prepared;
+        else if (prepared) envBlock = prepared;
+      }
       if (envBlock) {
         // The environment is broken, not the task: a retry would hit the same wall,
         // so block it with a typed reason instead of spending an attempt.
-        log.warn("Repository preflight failed; blocking the task", { task: task.id, ...envBlock });
+        log.warn("Environment preflight failed; blocking the task", {
+          task: task.id,
+          reason: envBlock.reason,
+          error: envBlock.error,
+        });
         await client
           .call("POST", `/tasks/${task.id}/block`, {
             attempt: task.attempt,
@@ -2406,6 +2458,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           localHarness: account?.provider === "local",
           customHarness: account?.provider === "custom",
           runtime: runtimeSelection,
+          workspace,
         });
       currentText = renderCurrent();
       sessionCarriesTask = true;
