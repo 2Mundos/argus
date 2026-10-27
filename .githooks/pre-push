@@ -13,6 +13,7 @@ head="$(git rev-parse HEAD)"
 need=0
 while read -r _ sha _ _; do
   [ "$sha" = "$zero" ] && continue # deleting a remote branch
+  sha="$(git rev-parse "$sha^{commit}")" # an annotated tag counts as its commit
   if [ "$sha" != "$head" ] || [ -n "$(git status --porcelain)" ]; then
     echo "pre-push: checks run on the working tree; check out the pushed commit with a clean tree, or push with --no-verify" >&2
     exit 1
