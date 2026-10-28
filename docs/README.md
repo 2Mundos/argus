@@ -83,6 +83,8 @@ every new dependency is judged against it.
   feed, agent drawer with its current work and container output
 - [Gitea helper for workers](specs/gitea-helper.spec.md) — `argus-gitea-api`
   command matrix, exit codes, security model, and the review-findings gate
+- [GitHub repositories](specs/github-repositories.spec.md) — `github` repository
+  accounts, OneCLI injection for github.com, and `argus-github-api`
 - [Progress milestones](specs/progress-milestones.spec.md) — structured progress
   signals (commit, PR, CI, gate) on task cards and a no-signal indicator
 - [Stall visibility](specs/stall-visibility.spec.md) — fail a vanished session

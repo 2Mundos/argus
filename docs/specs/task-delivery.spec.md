@@ -75,7 +75,7 @@ and orchestrator rules apply unchanged and pending QA cannot be discarded.
 
 - Persisting the observed state through `observe` (so it survives a forge outage and
   appears on lists/inbox) is deferred until the read-time view proves insufficient.
-- Other forges: only Gitea is read.
+- Other forges: only Gitea and GitHub are read ([GitHub repositories](github-repositories.spec.md)).
 
 # 5. Constraints
 
