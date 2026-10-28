@@ -10,6 +10,7 @@ from argus_core.agents import (
     BootstrapTokenCreate,
 )
 from argus_core.model_trace import Execution, LayerModels
+from argus_core.tasks import LeaseObservation
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field, StringConstraints
 
@@ -40,6 +41,8 @@ class LeaseRef(BaseModel):
     attempt: int
     # Newest session/progress/log signal the worker saw for this lease (optional).
     activity_at: datetime | None = None
+    # What the host saw for this lease (stall visibility 3.7); unknown keys ignored.
+    observation: LeaseObservation | None = None
 
 
 class HeartbeatRequest(BaseModel):
@@ -171,7 +174,7 @@ async def heartbeat(
             tx,
             agent_id,
             [
-                (lease.task_id, lease.attempt, lease.activity_at)
+                (lease.task_id, lease.attempt, lease.activity_at, lease.observation)
                 for lease in body.leases
             ],
             body.runtime,

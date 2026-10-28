@@ -164,6 +164,41 @@ describe("Inbox blocked tasks", () => {
   });
 });
 
+describe("Inbox quiet claims", () => {
+  function quiet(id: string, stall_cause: string | null) {
+    const { decision: _, ...base } = item(id, "question", "", null);
+    return {
+      ...base,
+      title: `Task ${id}`,
+      state: "claimed",
+      decision_id: null,
+      decision_kind: null,
+      age_s: 1500,
+      last_signal_at: null,
+      last_signal_source: null,
+      stall_cause,
+    };
+  }
+
+  it("names the likely stall cause, and nothing when it is unknown", async () => {
+    net.inbox = {
+      items: [quiet("q1", "workspace_missing"), quiet("q2", "unknown")],
+      groups: [group("q1", 0), group("q2", 0)],
+      total: 2,
+      has_more: false,
+    };
+    render(<Inbox />);
+    expect(
+      await screen.findByText(/is quiet\s+for 25m; likely cause: workspace missing on the host\./),
+    ).toBeTruthy();
+    const rows = [...document.querySelectorAll("article.quiet-claim > p:first-child")];
+    expect(rows.map((p) => p.textContent?.replace(/\s+/g, " "))).toEqual([
+      "Alpha - Task q1 is quiet for 25m; likely cause: workspace missing on the host.",
+      "Alpha - Task q2 is quiet for 25m.",
+    ]);
+  });
+});
+
 describe("Inbox batch answers", () => {
   it("confirms each answer, shows per-item results and retries with the same request_id", async () => {
     seed();

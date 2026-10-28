@@ -87,7 +87,7 @@ every new dependency is judged against it.
   signals (commit, PR, CI, gate) on task cards and a no-signal indicator
 - [Stall visibility](specs/stall-visibility.spec.md) — fail a vanished session
   (`session_lost`), flag quiet claimed tasks in the inbox and worker rail, and
-  explain late lease/agent expiry
+  explain late lease/agent expiry and the likely stall cause
 - [Task live log](specs/task-live-log.spec.md) — a redacted ring of an attempt's
   output, streamed as `task.log`; the Live panel and MCP `get_task_log`
 - [Task steering](specs/task-steering.spec.md) — a manager sends a message to the

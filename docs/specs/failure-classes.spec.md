@@ -91,6 +91,9 @@ task. No model session starts and no attempt is spent.
 - The workspace checks run only for `repository:write` tasks, after the
   repository checks; [task workspace](task-workspace.spec.md) 3.4 defines them.
 
+- `env_workspace_missing` is not a preflight check: the channel blocks with it
+  when the agent group directory stays missing on the host for 90 s while the
+  task is claimed ([stall visibility](stall-visibility.spec.md) 3.7).
 - `env_executor_auth` is reserved for an executor credential check. It is not run
   yet: `argus-delegate` only runs inside the session container, which does not
   exist at preflight time (4). Until then a worker whose executor cannot log in
