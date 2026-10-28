@@ -14,8 +14,10 @@ from argus_api.errors import (
 from argus_api.tasks import service
 from argus_core.auth import Scope
 from argus_core.tasks import (
+    FAILURE_CLASS,
     InvalidTransitionError,
     PromptTrust,
+    RetryClass,
     Review,
     Task,
     TaskCreate,
@@ -352,6 +354,31 @@ async def test_an_environment_block_keeps_its_error_and_spends_nothing(
         )
     assert (after.state, after.block_reason) == (S.BLOCKED, "env_executor_auth")
     assert (after.failures, after.error) == (0, "codex: not logged in")
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "env_workspace_unconfigured",
+        "env_workspace_permission",
+        "env_workspace_invalid",
+        "env_workspace_remote_mismatch",
+        "env_workspace_branch_mismatch",
+        "env_workspace_limit",
+    ],
+)
+async def test_a_task_workspace_block_is_environment_and_spends_nothing(
+    db: Database, reason: str
+) -> None:
+    assert FAILURE_CLASS[reason] is RetryClass.ENVIRONMENT
+    task = await create(db)
+    c = await claim(db)
+    assert c is not None
+    async with db.write() as tx:
+        after = await service.block(
+            tx, A, task.id, c.attempt, reason, "origin is not set"
+        )
+    assert (after.state, after.block_reason, after.failures) == (S.BLOCKED, reason, 0)
 
 
 async def test_expire_leases_counts_as_failure(db: Database, clock: FakeClock) -> None:

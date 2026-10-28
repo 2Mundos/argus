@@ -1,6 +1,7 @@
 import {
   appendFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -266,6 +267,7 @@ function world(opts: {
   const calls: Call[] = [];
   const leases = [...opts.leases];
   const tasks = [...(opts.tasks ?? [])];
+  let claimedId = "t1";
   const onecli = {
     agents: [] as Array<{
       id: string;
@@ -335,7 +337,7 @@ function world(opts: {
       return json(200, {
         state: "active",
         renewed: [],
-        rejected: opts.rejectHeartbeat ? [{ task_id: "t1" }] : [],
+        rejected: opts.rejectHeartbeat ? [{ task_id: claimedId }] : [],
       });
     if (path === "/agents/me/leave") return json(200, {});
     if (path === "/accounts/lease") {
@@ -365,7 +367,10 @@ function world(opts: {
     }
     if (path === "/tasks/claim") {
       const t = tasks.shift();
-      if (t) return json(200, t);
+      if (t) {
+        claimedId = t.id;
+        return json(200, t);
+      }
       if (opts.idleClaimMs !== undefined) {
         await new Promise((r) => setTimeout(r, opts.idleClaimMs));
         return new Response(null, { status: 204 });
@@ -393,6 +398,15 @@ const task = () => ({
   knowledge_refs: [],
 });
 
+// A repository task gets a workspace keyed by its id, which must be a canonical UUID.
+const REPO_ID = "5e1f0c2a-7b3d-4e8f-9a6b-1c2d3e4f5a6b";
+const repoTask = () => ({ ...task(), id: REPO_ID, required_capabilities: ["repository:write"] });
+
+const groupDirs: string[] = [];
+afterEach(() => {
+  for (const d of groupDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
+
 function harness(
   w: ReturnType<typeof world>,
   withAccounts = true,
@@ -411,6 +425,8 @@ function harness(
     onMetadata: vi.fn(),
     onAction: vi.fn(),
   } as unknown as ChannelSetup;
+  const groupDir = mkdtempSync(path.join(os.tmpdir(), "argus-group-"));
+  groupDirs.push(groupDir);
   const adapter = createArgusAdapter({
     url: "http://argus.test",
     bootstrapToken: "boot",
@@ -419,6 +435,7 @@ function harness(
     fetch: w.fetchImpl,
     claimWaitS: 1,
     probeRepository: async () => {}, // offline: no OneCLI gateway
+    workspaceRoot: async () => groupDir,
     ...top,
     accounts: withAccounts
       ? {
@@ -429,7 +446,7 @@ function harness(
         }
       : undefined,
   });
-  return { adapter, setup, inbound, thread: () => thread };
+  return { adapter, setup, inbound, thread: () => thread, groupDir };
 }
 
 const isRepositoryRelease = (c: Call) =>
@@ -1414,7 +1431,7 @@ describe("task-scoped repository auth", () => {
         role: "repository",
         credential: { username: "service-user", token: "dummy-gitea-token" },
       });
-      const codeTask = { ...task(), required_capabilities: ["repository:write"] };
+      const codeTask = repoTask();
       const w = world({
         leases: [lease("engine", "dummy-engine-key"), repoLease],
         tasks: [codeTask],
@@ -1432,17 +1449,17 @@ describe("task-scoped repository auth", () => {
       expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
         {
           runtime_providers: ["anthropic", "openai", "local", "custom"],
-          task_id: "t1",
+          task_id: REPO_ID,
           attempt: 1,
         },
         {
           role: "executor",
           runtime_providers: ["anthropic", "openai", "local", "custom", "cursor"],
           reuse_held: true,
-          task_id: "t1",
+          task_id: REPO_ID,
           attempt: 1,
         },
-        { role: "repository", runtime_providers: ["gitea"], task_id: "t1", attempt: 1 },
+        { role: "repository", runtime_providers: ["gitea"], task_id: REPO_ID, attempt: 1 },
       ]);
       await h.adapter.deliver("local", h.thread(), {
         kind: "chat",
@@ -1459,7 +1476,7 @@ describe("task-scoped repository auth", () => {
           })}`,
         },
       });
-      const completed = w.calls.find((c) => c.path === "/tasks/t1/complete")!;
+      const completed = w.calls.find((c) => c.path === `/tasks/${REPO_ID}/complete`)!;
       expect(completed.body.result.data.delivery.head_sha).toBe("head-1");
       await until(() => w.calls.some((c) => isRepositoryRelease(c)));
       expect(w.calls.filter((c) => isRepositoryRelease(c))).toHaveLength(1);
@@ -1479,8 +1496,8 @@ describe("task-scoped repository auth", () => {
   });
 
   it.each([
-    ["FAIL: cannot continue", "/tasks/t1/fail"],
-    ["ASK: need a decision", "/tasks/t1/ask"],
+    ["FAIL: cannot continue", `/tasks/${REPO_ID}/fail`],
+    ["ASK: need a decision", `/tasks/${REPO_ID}/ask`],
   ])("releases repository access after %s", async (reply, endpoint) => {
     const w = world({
       leases: [
@@ -1491,7 +1508,7 @@ describe("task-scoped repository auth", () => {
           credential: { username: "service-user", token: "dummy-gitea-token" },
         }),
       ],
-      tasks: [{ ...task(), required_capabilities: ["repository:write"] }],
+      tasks: [repoTask()],
     });
     const h = harness(w, true, { repositories: { global: "https://git.example.test/org/repo" } });
     live.push(h.adapter);
@@ -1512,7 +1529,7 @@ describe("task-scoped repository auth", () => {
           credential: { username: "service-user", token: "dummy-gitea-token" },
         }),
       ],
-      tasks: [{ ...task(), required_capabilities: ["repository:write"] }],
+      tasks: [repoTask()],
       heartbeatIntervalS: 1,
       rejectHeartbeat: true,
     });
@@ -1578,7 +1595,7 @@ describe("task-scoped repository auth", () => {
           credential: { username: "service-user", token: "dummy-gitea-token" },
         }),
       ],
-      tasks: [{ ...task(), required_capabilities: ["repository:write"] }],
+      tasks: [repoTask()],
     });
 
   it("blocks a task whose project has no repository before any model work", async () => {
@@ -1586,8 +1603,8 @@ describe("task-scoped repository auth", () => {
     const h = harness(w, true, { repositories: {} });
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
-    await until(() => w.calls.some((call) => call.path === "/tasks/t1/block"));
-    expect(w.calls.find((call) => call.path === "/tasks/t1/block")!.body).toMatchObject({
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
       reason: "env_repository_unconfigured",
       error: "no repository is configured for project global",
     });
@@ -1608,13 +1625,13 @@ describe("task-scoped repository auth", () => {
     );
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
-    await until(() => w.calls.some((call) => call.path === "/tasks/t1/block"));
-    expect(w.calls.find((call) => call.path === "/tasks/t1/block")!.body).toMatchObject({
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
       reason: "env_repository_unreachable",
       error: "Error: Gitea API GET failed with HTTP 502",
     });
     await until(() => w.calls.some((call) => isRepositoryRelease(call)));
-    expect(w.calls.some((call) => call.path === "/tasks/t1/fail")).toBe(false);
+    expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
     expect(h.inbound).toHaveLength(0);
   });
 
@@ -1629,12 +1646,125 @@ describe("task-scoped repository auth", () => {
       kind: "chat",
       content: { text: "FAIL (environment): no checkout in /workspace" },
     });
-    await until(() => w.calls.some((call) => call.path === "/tasks/t1/block"));
-    expect(w.calls.find((call) => call.path === "/tasks/t1/block")!.body).toMatchObject({
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
       reason: "worker_env",
       error: "no checkout in /workspace",
     });
-    expect(w.calls.some((call) => call.path === "/tasks/t1/fail")).toBe(false);
+    expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
+  });
+
+  it("prepares the task workspace after the repository preflight and before the model", async () => {
+    const order: string[] = [];
+    const w = world({
+      leases: [
+        lease("engine", "dummy-engine-key"),
+        lease("repo", "dummy-gitea-token", {
+          provider: "gitea",
+          role: "repository",
+          credential: { username: "service-user", token: "dummy-gitea-token" },
+        }),
+      ],
+      tasks: [
+        {
+          ...repoTask(),
+          // A phase past "implement" makes the continuation preflight run.
+          continuation: {
+            revision: 1,
+            phase: "qa",
+            artifacts: [],
+            checklist: [],
+            checklist_state: "unstructured",
+            pending: [],
+            decisions: [],
+            environment: [],
+            reconciliation: [],
+            gaps: [],
+          },
+        },
+      ],
+    });
+    let groupDir = "";
+    const h = harness(
+      w,
+      true,
+      { repositories: { global: "https://git.example.test/org/repo" } },
+      {
+        probeRepository: async () => {
+          order.push("repository");
+        },
+        workspaceRoot: async () => {
+          order.push("workspace");
+          return groupDir;
+        },
+        observe: async () => {
+          const ws = path.join(groupDir, "task-workspaces", REPO_ID, ".git");
+          order.push(existsSync(ws) ? "continuation (workspace ready)" : "continuation");
+          return null;
+        },
+      },
+    );
+    groupDir = h.groupDir;
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    expect(order).toEqual(["repository", "workspace", "continuation (workspace ready)"]);
+    const text = h.inbound[0].content.text as string;
+    expect(text).toContain(
+      `Workspace: /workspace/agent/task-workspaces/${REPO_ID}, branch argus/task-5e1f0c2a, remote origin https://git.example.test/org/repo.git`,
+    );
+    expect(text).toContain("do not create another checkout");
+  });
+
+  it("blocks with the workspace reason before any model work, and releases its access", async () => {
+    const w = repoWorld();
+    const h = harness(w, true, { repositories: { global: "https://git.example.test/org/repo" } });
+    // A plain directory where the workspace belongs: not a git repository.
+    const ws = path.join(h.groupDir, "task-workspaces", REPO_ID);
+    mkdirSync(ws, { recursive: true });
+    writeFileSync(path.join(ws, "notes.txt"), "work in progress");
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
+      reason: "env_workspace_invalid",
+      error: "the workspace is not a git repository",
+    });
+    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
+    expect(h.inbound).toHaveLength(0);
+    expect(readFileSync(path.join(ws, "notes.txt"), "utf8")).toBe("work in progress");
+  });
+
+  it("blocks as unconfigured when the agent group directory is unknown", async () => {
+    const w = repoWorld();
+    const h = harness(
+      w,
+      true,
+      { repositories: { global: "https://git.example.test/org/repo" } },
+      { workspaceRoot: async () => null },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
+      reason: "env_workspace_unconfigured",
+    });
+    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
+    expect(h.inbound).toHaveLength(0);
+  });
+
+  it("leaves the workspace root alone for a task without repository:write", async () => {
+    const w = world({ leases: [lease("engine", "dummy-engine-key")], tasks: [task()] });
+    const workspaceRoot = vi.fn(async () => null);
+    const h = harness(w, true, {}, { workspaceRoot });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    expect(workspaceRoot).not.toHaveBeenCalled();
+    expect(existsSync(path.join(h.groupDir, "task-workspaces"))).toBe(false);
+    expect(h.inbound[0].content.text).not.toContain("Workspace:");
   });
 });
 

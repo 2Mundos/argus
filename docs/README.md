@@ -76,6 +76,9 @@ every new dependency is judged against it.
 - [Workspace cleanup](specs/workspace-cleanup.spec.md) — opt-in, dry-run-first
   deletion of terminated NanoClaw instance directories after their unpublished git
   work is archived and verified
+- [Task workspace](specs/task-workspace.spec.md) — a stable git workspace per
+  `repository:write` task, keyed by task id, created and checked read-only
+  before the model, blocking with a typed `env_workspace_*` reason
 - [Live work](specs/live-work.spec.md) — what an agent is doing now: task activity
   feed, agent drawer with its current work and container output
 - [Gitea helper for workers](specs/gitea-helper.spec.md) — `argus-gitea-api`
