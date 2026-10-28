@@ -3847,10 +3847,7 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
     let snapshot = hostSnapshot;
     if (task.model_policy) {
       const claimed = policySnapshot(task.model_policy);
-      if (
-        task.model_policy_revision &&
-        claimed.revision !== task.model_policy_revision
-      ) {
+      if (task.model_policy_revision && claimed.revision !== task.model_policy_revision) {
         throw new Error(
           `model policy revision mismatch: claim ${task.model_policy_revision} vs ${claimed.revision}`,
         );
