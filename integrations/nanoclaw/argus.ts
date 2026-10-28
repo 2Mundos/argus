@@ -74,6 +74,13 @@ import {
   removeLocalHarnessFile,
   writeLocalHarnessFile,
 } from "./argus-local-harness.js";
+import {
+  nanoclawPreflightRunner,
+  nanoclawStartupReady,
+  PREFLIGHT_TOTAL_MS,
+  safeText,
+  sessionRepositoryProbe,
+} from "./argus-repo-preflight.js";
 import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
 import { prepareTaskWorkspace, type WorkspaceResult } from "./argus-workspace.js";
 import { registerChannelAdapter } from "./channel-registry.js";
@@ -123,16 +130,10 @@ const DELEGATE_ACTIVE_MS = 5 * 60_000;
 const SESSION_LOG_TAIL_BYTES = 2 * 1024;
 const SESSION_LOG_TAIL_LINES = 40;
 
-const REPOSITORY_PROBE_MS = 20_000; // failure classes 3.3
-
-/** Read the repository through the OneCLI gateway with the applied credential. */
-async function defaultProbeRepository(
-  repositoryUrl: string,
-  allowlist: readonly string[],
-): Promise<void> {
-  const { repositoryClient } = await import("./github-api.mjs");
-  await repositoryClient(repositoryUrl, [...allowlist]).getRepository();
-}
+// Failure classes 3.3. The preflight is bounded inside (every step has its own bound, so it
+// ends within PREFLIGHT_TOTAL_MS including teardown). This outer mark only logs: a task is
+// never blocked, and its leases never released, while the preflight session may still exist.
+const REPOSITORY_PROBE_BACKSTOP_MS = PREFLIGHT_TOTAL_MS + 30_000;
 
 function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -144,12 +145,17 @@ function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<
 
 /** Best-effort credential scrub for fail-error log excerpts (stall visibility). */
 function redactSessionTail(text: string): string {
-  return text
-    .replace(/\b(?:bearer\s+|sk-|eyJ)[A-Za-z0-9._~+/=-]{8,}/gi, "[redacted]")
-    .replace(
-      /((?:token|secret|password|passwd|pwd|api[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;]+/gi,
-      "$1[redacted]",
-    );
+  return (
+    text
+      // A URL's userinfo (OneCLI's session proxy URL carries its agent token) and proxy variables.
+      .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]*@/gi, "$1[redacted]@")
+      .replace(/\b((?:https?|all|no)_proxy\s*[=:]\s*)\S+/gi, "$1[redacted]")
+      .replace(/\b(?:bearer\s+|sk-|eyJ|ghp_|github_pat_)[A-Za-z0-9._~+/=-]{8,}/gi, "[redacted]")
+      .replace(
+        /((?:token|secret|password|passwd|pwd|api[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;]+/gi,
+        "$1[redacted]",
+      )
+  );
 }
 
 /** The accounts held when a task's models are chosen (null: not leased). */
@@ -237,15 +243,32 @@ export interface LeaseObservation {
 
 export interface ArgusConfig {
   /**
-   * Override the default read-only Gitea preflight (after a repository lease). When
-   * omitted, the channel observes PR artifacts through the scoped allowlist + OneCLI proxy.
+   * Override the default continuation observation (after a repository lease). When omitted,
+   * the channel observes PR artifacts through the scoped allowlist + OneCLI proxy.
    */
   observe?: (task: ArgusTask) => Promise<Observation | null>;
   /**
-   * Override the repository reachability probe (failure classes 3.3). When omitted,
-   * the channel reads the repository through the OneCLI gateway.
+   * The repository preflight (failure classes 3.3), run after the repository lease is
+   * applied and before any model session: it must prove an authenticated write
+   * credential for exactly this repository, from inside a session container (the host
+   * has no OneCLI proxy). `provider` is the applied lease's provider. Absent: the
+   * preflight fails closed; `fromEnv` wires the ephemeral-session probe.
    */
-  probeRepository?: (repositoryUrl: string, allowlist: readonly string[]) => Promise<void>;
+  probeRepository?: (
+    repositoryUrl: string,
+    allowlist: readonly string[],
+    provider: string,
+  ) => Promise<void>;
+  /**
+   * Settles when the host may start work: NanoClaw's startup adoption has finished
+   * successfully. The claim loop claims nothing before it (adoption stops any session
+   * without a database row, which a preflight session is). When the hook export is missing,
+   * claiming proceeds after a warning; when adoption fails, claiming stays blocked. Absent:
+   * no wait (test adapters).
+   */
+  startupReady?: () => Promise<void>;
+  /** Test seam: when the log-only mark for a preflight that outlives its bounds fires. */
+  repositoryProbeBackstopMs?: number;
   /**
    * The agent group directory that holds the per-task workspaces (task workspace spec).
    * Default: `argusGroupDir`; tests inject a temporary directory.
@@ -2391,14 +2414,24 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       return { reason: "env_repository_unavailable", error: String(err) };
     }
     try {
-      await withTimeout(
-        (cfg.probeRepository ?? defaultProbeRepository)(
-          task.repository_url,
-          activeRepositoryAllowlist,
-        ),
-        REPOSITORY_PROBE_MS,
-        "the repository did not answer within 20 s",
+      if (!cfg.probeRepository) throw new Error("no repository preflight session is configured");
+      const probe = cfg.probeRepository(
+        task.repository_url,
+        activeRepositoryAllowlist,
+        activeRepositoryLease?.provider ?? "",
       );
+      const mark = setTimeout(
+        () =>
+          log.error("The repository preflight is past its bounds; waiting for its teardown", {
+            task: task.id,
+          }),
+        cfg.repositoryProbeBackstopMs ?? REPOSITORY_PROBE_BACKSTOP_MS,
+      );
+      try {
+        await probe;
+      } finally {
+        clearTimeout(mark);
+      }
     } catch (err) {
       return { reason: "env_repository_unreachable", error: String(err) };
     }
@@ -2507,7 +2540,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         log.warn("Environment preflight failed; blocking the task", {
           task: task.id,
           reason: envBlock.reason,
-          error: envBlock.error,
+          error: redactSessionTail(envBlock.error).slice(0, 1500),
         });
         await client
           .call("POST", `/tasks/${task.id}/block`, {
@@ -2852,9 +2885,51 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
+  const STARTUP_ADOPTION_HOOK_MISSING = /does not export startupAdoptionDone/;
+  const STARTUP_ADOPTION_VISIBILITY_MS = 30_000;
+
   async function claimLoop(): Promise<void> {
     let backoff = 1000;
+    let mayClaim = true;
+    let nextVisibility = Date.now() + STARTUP_ADOPTION_VISIBILITY_MS;
+    if (cfg.startupReady) {
+      let settled = false;
+      nextVisibility = Date.now() + STARTUP_ADOPTION_VISIBILITY_MS;
+      cfg
+        .startupReady()
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (STARTUP_ADOPTION_HOOK_MISSING.test(msg)) {
+            log.warn("Startup adoption is not observable; claiming anyway", {
+              err: safeText(msg),
+            });
+            return;
+          }
+          mayClaim = false;
+          log.error("Startup adoption failed; the claim loop will not claim tasks", {
+            err: safeText(msg),
+          });
+        })
+        .finally(() => {
+          settled = true;
+        });
+      while (!stopped && !settled) {
+        if (Date.now() >= nextVisibility) {
+          log.warn("Still waiting for NanoClaw startup adoption", {});
+          nextVisibility = Date.now() + STARTUP_ADOPTION_VISIBILITY_MS;
+        }
+        await sleep(250);
+      }
+    }
     while (!stopped) {
+      if (!mayClaim) {
+        if (Date.now() >= nextVisibility) {
+          log.error("Startup adoption did not succeed; claiming remains blocked", {});
+          nextVisibility = Date.now() + STARTUP_ADOPTION_VISIBILITY_MS;
+        }
+        await sleep(1000);
+        continue;
+      }
       if (draining) {
         // A draining agent never claims again: it leaves once idle and its
         // instance is stopped, so a pending recycle is not needed here.
@@ -3730,15 +3805,19 @@ export function runtimeFromEnv(): RuntimeHooks | undefined {
   };
 }
 
-/** The Argus agent group's directory on the host (what the container mounts as its workspace). */
-export async function argusGroupDir(): Promise<string | null> {
+async function argusGroup(): Promise<{ id: string; name: string; folder: string } | null> {
   const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
     "../db/messaging-groups.js"
   );
   const { getAgentGroup } = await import("../db/agent-groups.js");
   const mg = await getMessagingGroupByPlatform(CHANNEL_TYPE, PLATFORM_ID);
   const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
-  const group = wiring ? await getAgentGroup(wiring.agent_group_id) : undefined;
+  return (wiring ? await getAgentGroup(wiring.agent_group_id) : undefined) ?? null;
+}
+
+/** The Argus agent group's directory on the host (what the container mounts as its workspace). */
+export async function argusGroupDir(): Promise<string | null> {
+  const group = await argusGroup();
   return group ? path.resolve("groups", group.folder) : null;
 }
 
@@ -3863,6 +3942,8 @@ export function fromEnv(): ChannelAdapter | null {
     name: process.env.ARGUS_AGENT_NAME?.trim() || "nanoclaw",
     workerVersion: nanoclawVersion(),
     accounts: accountsFromEnv(),
+    probeRepository: sessionRepositoryProbe(nanoclawPreflightRunner(argusGroup)),
+    startupReady: nanoclawStartupReady,
     runtime,
     closeSession: closeSessionFromEnv,
     agentLogTail:

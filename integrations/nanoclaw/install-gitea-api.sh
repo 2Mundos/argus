@@ -2,7 +2,7 @@
 # Place argus-gitea-api and argus-github-api from integrations/nanoclaw/{gitea,github}-api.mjs.
 # github-api.mjs imports ./gitea-api.mjs, so both modules always land side by side.
 # Shared by install.sh, engines/install-engines.sh, apply-tools-layer.sh, and offline tests.
-#   install-gitea-api.sh copy-nanoclaw TARGET        → TARGET/container + TARGET/src/channels
+#   install-gitea-api.sh copy-nanoclaw TARGET        → TARGET/container + TARGET/{src,dist}/channels
 #   install-gitea-api.sh patch-nanoclaw-dockerfile T → patch T/container/Dockerfile (install -m)
 #   install-gitea-api.sh stage-engines TARGET        → TARGET/container/{gitea,github}-api.mjs only
 #   install-gitea-api.sh stage-tools-ctx CTX         → CTX/{gitea,github}-api.mjs (tools-layer context)
@@ -22,10 +22,12 @@ dest="${2:?usage: install-gitea-api.sh $cmd DEST}"
 
 case "$cmd" in
   copy-nanoclaw)
-    mkdir -p "$dest/container" "$dest/src/channels"
+    mkdir -p "$dest/container" "$dest/src/channels" "$dest/dist/channels"
     cp -p "$src" "$dest/container/gitea-api.mjs"
     cp -p "$gh_src" "$dest/container/github-api.mjs"
     cp -p "$src" "$types" "$gh_src" "$gh_types" "$dest/src/channels/"
+    # argus.ts imports ./github-api.mjs at runtime from dist/; tsc does not copy .mjs.
+    cp -p "$src" "$gh_src" "$dest/dist/channels/"
     ;;
   patch-nanoclaw-dockerfile)
     # Same block install.sh used to inline; keeps Dockerfile install -m in one place.

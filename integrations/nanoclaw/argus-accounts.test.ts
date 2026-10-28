@@ -33,6 +33,7 @@ import {
   runtimeProviders,
   sanitizeNotice,
 } from "./argus-accounts.js";
+import { sessionRepositoryProbe } from "./argus-repo-preflight.js";
 
 // NanoClaw's own modules are replaced, so the real `recycleRuntime` runs against a
 // fake registry of containers, not NanoClaw's database or a real container runtime.
@@ -1633,6 +1634,230 @@ describe("task-scoped repository auth", () => {
     await until(() => w.calls.some((call) => isRepositoryRelease(call)));
     expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
     expect(h.inbound).toHaveLength(0);
+  });
+
+  it("runs the preflight with the applied lease's provider and exact allowlist before the task is injected", async () => {
+    const w = repoWorld();
+    const seen: Array<{
+      url: string;
+      allowlist: readonly string[];
+      provider: string;
+      injected: number;
+    }> = [];
+    const h = harness(
+      w,
+      true,
+      { repositories: { global: "https://git.example.test/org/repo" } },
+      {
+        probeRepository: async (url, allowlist, provider) => {
+          seen.push({ url, allowlist, provider, injected: h.inbound.length });
+        },
+      },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    expect(seen).toEqual([
+      {
+        url: "https://git.example.test/org/repo.git",
+        allowlist: ["https://git.example.test/org/repo"],
+        provider: "gitea",
+        injected: 0,
+      },
+    ]);
+  });
+
+  it("fails closed when no preflight session is configured", async () => {
+    const w = repoWorld();
+    const h = harness(
+      w,
+      true,
+      { repositories: { global: "https://git.example.test/org/repo" } },
+      { probeRepository: undefined },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
+      reason: "env_repository_unreachable",
+      error: "Error: no repository preflight session is configured",
+    });
+    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
+    expect(h.inbound).toHaveLength(0);
+  });
+
+  it("blocks, keeps the task and releases access when the preflight session is denied", async () => {
+    const w = repoWorld();
+    const run = vi.fn(async () => ({
+      exitCode: 13,
+      verdict: { ok: false, error: { code: "policy_denied", message: "not authenticated" } },
+    }));
+    const h = harness(
+      w,
+      true,
+      { repositories: { global: "https://git.example.test/org/repo" } },
+      { probeRepository: sessionRepositoryProbe(run) },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        helper: "argus-gitea-api",
+        repositoryUrl: "https://git.example.test/org/repo.git",
+      }),
+    );
+    expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
+      reason: "env_repository_unreachable",
+    });
+    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
+    expect(h.inbound).toHaveLength(0);
+  });
+
+  it("blocks a GitHub repository when only a Gitea lease was issued, without any session", async () => {
+    const w = repoWorld();
+    const run = vi.fn();
+    const h = harness(
+      w,
+      true,
+      { repositories: { global: "https://github.com/org/repo" } },
+      { probeRepository: sessionRepositoryProbe(run) },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
+      reason: "env_repository_unavailable",
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(h.inbound).toHaveLength(0);
+  });
+
+  it("claims nothing until startup adoption has finished, and claims anyway only when the hook is missing", async () => {
+    const claims = (w: ReturnType<typeof repoWorld>) =>
+      w.calls.filter((call) => call.path === "/tasks/claim").length;
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const w = repoWorld();
+    const h = harness(w, true, { repositories: {} }, { startupReady: () => gate });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await new Promise((r) => setTimeout(r, 600));
+    expect(w.calls.some((call) => call.path === "/agents/register")).toBe(true);
+    expect(claims(w)).toBe(0);
+    open();
+    await until(() => claims(w) > 0);
+
+    const w2 = repoWorld();
+    const h2 = harness(
+      w2,
+      true,
+      { repositories: {} },
+      {
+        startupReady: async () => {
+          throw new Error(
+            "container-runner does not export startupAdoptionDone: run install.sh and rebuild NanoClaw",
+          );
+        },
+      },
+    );
+    live.push(h2.adapter);
+    await h2.adapter.setup(h2.setup);
+    await until(() => claims(w2) > 0);
+  });
+
+  it("does not claim when startup adoption failed", async () => {
+    const claimCount = (w: ReturnType<typeof repoWorld>) =>
+      w.calls.filter((call) => call.path === "/tasks/claim").length;
+    const w = repoWorld();
+    const h = harness(
+      w,
+      true,
+      { repositories: {} },
+      {
+        startupReady: async () => {
+          throw new Error("listSessions exploded");
+        },
+      },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await new Promise((r) => setTimeout(r, 800));
+    expect(claimCount(w)).toBe(0);
+  });
+
+  it("a teardown while waiting for startup adoption ends the claim loop without claiming", async () => {
+    const w = repoWorld();
+    const h = harness(
+      w,
+      true,
+      { repositories: {} },
+      { startupReady: () => new Promise(() => undefined) },
+    );
+    await h.adapter.setup(h.setup);
+    await h.adapter.teardown();
+    await new Promise((r) => setTimeout(r, 400));
+    expect(w.calls.some((call) => call.path === "/tasks/claim")).toBe(false);
+  });
+
+  it("never blocks the task or releases its lease while the preflight session may still exist", async () => {
+    const w = repoWorld();
+    let tornDown = false;
+    const order: string[] = [];
+    const h = harness(
+      w,
+      true,
+      { repositories: { global: "https://git.example.test/org/repo" } },
+      {
+        // Slower than the log-only mark below: the session is still being torn down when it fires.
+        probeRepository: async () => {
+          await new Promise((r) => setTimeout(r, 400));
+          tornDown = true;
+          order.push("teardown concluded");
+          throw new Error(
+            "the repository preflight session was not torn down (stop: stop did not finish)",
+          );
+        },
+        repositoryProbeBackstopMs: 50,
+      },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await new Promise((r) => setTimeout(r, 250));
+    expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`)).toBe(false);
+    expect(w.calls.some((call) => isRepositoryRelease(call))).toBe(false);
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    expect(tornDown).toBe(true);
+    expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
+      reason: "env_repository_unreachable",
+    });
+  });
+
+  it("redacts a proxy URL's userinfo from the blocked task's error", async () => {
+    const w = repoWorld();
+    const h = harness(
+      w,
+      true,
+      { repositories: { global: "https://git.example.test/org/repo" } },
+      {
+        probeRepository: async () => {
+          throw new Error(
+            "failed: -e HTTPS_PROXY=http://agent:s3cr3t-agent-token@host.docker.internal:10255",
+          );
+        },
+      },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    const body = JSON.stringify(
+      w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body,
+    );
+    expect(body).not.toContain("s3cr3t-agent-token");
   });
 
   it("blocks instead of failing when the worker reports a broken environment", async () => {

@@ -1351,6 +1351,70 @@ export function parseArgs(args, spec) {
   return options;
 }
 
+const PREFLIGHT_DIR = "/preflight/";
+
+/** Write the verdict where the host reads it; exclusive create, so a stale file is never reused. */
+function writePreflightResult(file, verdict) {
+  if (!file.startsWith(PREFLIGHT_DIR) || resolve(file) !== file)
+    throw usage(`--result-file must be an absolute path under ${PREFLIGHT_DIR}`);
+  const fd = openSync(file, "wx", 0o600);
+  try {
+    writeSync(fd, `${JSON.stringify(verdict)}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Host preflight, run in a short-lived session container behind the same OneCLI proxy
+ * as the worker. A public repository answers an anonymous GET, so a 200 proves nothing:
+ * `permissions.push` on the repository GET is the forge's effective write bit for the
+ * credential on that request (not proof of OAuth scope or fine-grained token rights; a
+ * user with write access can still yield push:true while a narrower scoped token would not
+ * be distinguished here). Anonymous callers cannot get push:true. Then the allowlist must
+ * refuse another host and a sibling repository (no network).
+ */
+async function repoPreflight(api, resultFile) {
+  const { origin, owner, repo } = api.repository;
+  const fullName = `${owner}/${repo}`;
+  let verdict;
+  try {
+    const data = await api.getRepository();
+    if (String(data?.full_name).toLowerCase() !== fullName.toLowerCase())
+      throw new GiteaError("bad_response", "the response names a different repository");
+    if (data.permissions?.push !== true)
+      throw policy("the credential is not authenticated with write access to the repository");
+    const allowed = [`${origin}/${fullName}`];
+    for (const other of [
+      `https://preflight-denied.invalid/${fullName}`,
+      `${origin}/${owner}/${repo}-preflight-denied`,
+    ]) {
+      try {
+        allowlistedRepository(other, allowed);
+      } catch (error) {
+        if (error instanceof GiteaError && error.code === "policy_denied") continue;
+        throw error;
+      }
+      throw new GiteaError("internal_error", "the allowlist accepted a repository it must refuse");
+    }
+    verdict = {
+      ok: true,
+      provider: api.product.toLowerCase(),
+      repository: `${origin}/${fullName}`,
+      authenticated: true,
+      write: true,
+      allowlist_refuses_other_host: true,
+      allowlist_refuses_sibling: true,
+    };
+  } catch (error) {
+    if (resultFile) writePreflightResult(resultFile, { ok: false, error: errorPayload(error) });
+    throw error;
+  }
+  if (resultFile) writePreflightResult(resultFile, verdict);
+  return verdict;
+}
+
 const pageOptions = (o) => ({
   page: o.page,
   limit: o.limit,
@@ -1461,6 +1525,11 @@ const COMMANDS = {
     summary: "the repository (includes default_branch)",
     options: {},
     run: (api) => api.getRepository(),
+  },
+  "repo-preflight": {
+    summary: "prove this session is authenticated with write access to the repository",
+    options: { "result-file": "string" },
+    run: (api, o) => repoPreflight(api, o["result-file"]),
   },
   "default-branch": {
     summary: "{default_branch, sha}",

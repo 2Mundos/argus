@@ -100,8 +100,10 @@ Authorized merges use `PUT /pulls/{n}/merge` with the head `sha` through
 ## 3.5 Callers pick the client by host
 
 `github-api.mjs` exports `repositoryClient(url, allowlist, fetch?)`, which returns a
-`GitHubApi` or a `GiteaApi` per 3.1. The host preflight, the continuation observer and
-the `argus-delegate` CI probe use it. Both clients expose `ciStatuses(sha)`: Gitea
+`GitHubApi` or a `GiteaApi` per 3.1. The continuation observer and the
+`argus-delegate` CI probe use it. The host preflight does not: the host has no OneCLI
+proxy, so it runs `argus-github-api repo-preflight` (or the Gitea helper, by host) in
+an ephemeral session container ([failure classes](failure-classes.spec.md) 3.3.1). Both clients expose `ciStatuses(sha)`: Gitea
 returns its statuses as before; GitHub returns statuses plus check runs mapped to
 `{id, context, state}`, so `milestones.mjs` reduces either without knowing the forge.
 

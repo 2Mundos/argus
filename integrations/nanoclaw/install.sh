@@ -23,6 +23,9 @@ cp "$here/argus-usage-relay.ts" "$target/src/channels/argus-usage-relay.ts"
 cp "$here/argus-usage-relay.test.ts" "$target/src/channels/argus-usage-relay.test.ts"
 cp "$here/argus-workspace.ts" "$target/src/channels/argus-workspace.ts"
 cp "$here/argus-workspace.test.ts" "$target/src/channels/argus-workspace.test.ts"
+cp "$here/argus-repo-preflight.ts" "$target/src/channels/argus-repo-preflight.ts"
+cp "$here/argus-repo-preflight.test.ts" "$target/src/channels/argus-repo-preflight.test.ts"
+cp "$here/argus-repo-preflight.docker.test.ts" "$target/src/channels/argus-repo-preflight.docker.test.ts"
 cp "$here/argus.test.ts" "$target/src/channels/argus.test.ts"
 cp "$here/argus-accounts.test.ts" "$target/src/channels/argus-accounts.test.ts"
 cp "$here/argus-runtime.test.ts" "$target/src/channels/argus-runtime.test.ts"
@@ -76,6 +79,8 @@ done
 printf '%s\n' "export * from '../channels/argus-local-forward.js';" > "$target/src/gateway-providers/argus-local-forward.ts"
 cp "$here/argus-onecli-git-ca.ts" "$target/src/gateway-providers/argus-onecli-git-ca.ts"
 cp "$here/argus-onecli-git-ca.test.ts" "$target/src/gateway-providers/argus-onecli-git-ca.test.ts"
+cp "$here/argus-startup-order.test.ts" "$target/src/channels/argus-startup-order.test.ts"
+cp "$here/argus-onecli-preflight-lease.test.ts" "$target/src/gateway-providers/argus-onecli-preflight-lease.test.ts"
 cp "$here/onecli-path-match.ts" "$target/src/gateway-providers/onecli-path-match.ts"
 mkdir -p "$target/src/gateway-providers/fixtures"
 cp -r "$here/fixtures/cursor-gateway" "$target/src/gateway-providers/fixtures/"
@@ -524,6 +529,11 @@ python3 "$here/patch-codex-sandbox.py" "$target"
 cp "$here/overlays/docker-stop-removal.ts" "$here/overlays/docker-stop-removal.test.ts" \
   "$here/overlays/docker-driver-teardown.test.ts" "$target/src/drivers/"
 python3 "$here/patch-docker-teardown.py" "$target"
+
+# The repository preflight session takes its gateway lease through the worker path's admission gate.
+python3 "$here/patch-gateway-session-export.py" "$target"
+# Claims and preflight sessions wait for startup adoption, which stops any session without a database row.
+python3 "$here/patch-startup-adoption-gate.py" "$target"
 
 # No blanket running-session ceiling (reconcile-session.ts): only a stale message claim kills.
 python3 "$here/patch-no-session-ceiling.py" "$target"
