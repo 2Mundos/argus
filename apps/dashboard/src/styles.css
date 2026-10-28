@@ -256,6 +256,25 @@ nav a[aria-current="page"] {
   color: var(--text);
   background: var(--surface-2);
 }
+.subnav {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  margin: 0 0 0.85rem;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid var(--border);
+}
+.subnav a {
+  color: var(--muted);
+  text-decoration: none;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.92rem;
+}
+.subnav a[aria-current="page"] {
+  color: var(--text);
+  background: var(--surface-2);
+}
 .header-end {
   display: flex;
   flex-direction: column;
