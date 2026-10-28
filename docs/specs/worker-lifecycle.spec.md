@@ -654,6 +654,18 @@ After the task, NanoClaw unassigns both OneCLI repository secrets and releases
 the task-scoped `repository` lease. Tasks without this capability do not
 acquire the credential and retain existing behavior.
 
+Before the task is injected, the host proves the credential works in an ephemeral,
+model-free preflight session of the same agent group, driver, image and gateway lease as a
+worker session ([failure classes](failure-classes.spec.md) 3.3.1); the host process has no
+OneCLI proxy and probes nothing itself. Installing or upgrading a host (`install.sh`)
+copies `argus-repo-preflight.ts` (and its tests), exports `ensureGatewaySession` and `startupAdoptionDone` (`patch-gateway-session-export.py`, `patch-startup-adoption-gate.py`, both fail-closed on an upstream change), wires it in `fromEnv` (the host must be rebuilt: a `container-runner.js` without either export makes every preflight fail closed with an instruction to reinstall and rebuild), and places `gitea-api.mjs` and
+`github-api.mjs` in both `src/channels` and `dist/channels` (`tsc` copies no `.mjs`).
+The agent image must carry a helper that has `repo-preflight`, so a rollout rebuilds the
+image or tools layer first. Canary on one worker before the rest, with a real repository
+and a real OneCLI account: a task for the allowlisted repository must pass the preflight,
+a revoked or read-only credential must block with `env_repository_unreachable`, and no
+`preflight-*` container may remain (`docker ps -a --filter label=argus-preflight=1`).
+
 Least privilege is preferred: use a dedicated Gitea bot/service identity with
 permissions limited upstream to the configured repository when one is
 available. For the accepted deployment, the operator cannot create a bot

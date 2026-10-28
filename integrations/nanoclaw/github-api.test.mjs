@@ -41,6 +41,74 @@ const client = (routes) => {
   return { api: new GitHubApi(REPO, [REPO], fetch, { sleep: async () => {} }), calls };
 };
 
+describe("repo-preflight (offline logic; production proof is the session child)", () => {
+  const repo = (extra = {}) => ({
+    "GET ": { full_name: "Acme/Widget", permissions: { pull: true, push: true }, ...extra },
+  });
+
+  it("passes only for a credential with write access and checks the allowlist denials", async () => {
+    const r = await run(["repo-preflight"], repo());
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(r.json(), {
+      ok: true,
+      provider: "github",
+      repository: REPO,
+      authenticated: true,
+      write: true,
+      allowlist_refuses_other_host: true,
+      allowlist_refuses_sibling: true,
+    });
+    assert.deepEqual(
+      r.calls.map((c) => c.url),
+      [API],
+    );
+  });
+
+  it("refuses a response an anonymous caller could get (no push permission)", async () => {
+    for (const permissions of [{ pull: true, push: false }, { pull: true }, undefined]) {
+      const r = await run(["repo-preflight"], repo({ permissions }));
+      assert.equal(r.code, 13, r.out);
+      assert.match(JSON.parse(r.err).error.message, /not authenticated with write access/);
+    }
+  });
+
+  it("uses only permissions.push on the repository GET as the write signal (not scope headers)", async () => {
+    const r = await run(["repo-preflight"], {
+      "GET ": { full_name: "Acme/Widget", permissions: { pull: true, push: false } },
+    });
+    assert.equal(r.code, 13);
+    assert.equal(r.calls.length, 1);
+  });
+
+  it("refuses a different repository, an HTTP error and a result file outside /preflight", async () => {
+    assert.equal((await run(["repo-preflight"], repo({ full_name: "evil/other" }))).code, 15);
+    assert.equal(
+      (await run(["repo-preflight"], { "GET ": new Response("{}", { status: 401 }) })).code,
+      3,
+    );
+    const bad = await run(["repo-preflight", "--result-file", "/tmp/x"], repo());
+    assert.equal(bad.code, 2);
+    assert.equal(bad.calls.length, 1);
+  });
+
+  it("is refused on another host by the GitHub client", async () => {
+    const other = "https://git.example.test/acme/widget";
+    let err = "";
+    const code = await main(
+      ["repo-preflight", "--repository", other],
+      {
+        ARGUS_REPOSITORIES_JSON: JSON.stringify({ widget: other }),
+      },
+      {
+        fetch: async () => Response.json({}),
+        stdout: { write() {} },
+        stderr: { write: (c) => (err += c) },
+      },
+    );
+    assert.equal(code, 13, err);
+  });
+});
+
 describe("credential-free GitHub API helper", () => {
   it("serves github.com only, and callers pick the client by host", () => {
     assert.equal(repositoryProvider(REPO), "github");

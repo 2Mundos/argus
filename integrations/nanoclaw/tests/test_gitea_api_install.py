@@ -397,3 +397,50 @@ def test_github_helper_installs_beside_the_gitea_module(tmp_path: Path) -> None:
         in (engines / "patch-engines-dockerfile.py").read_text()
     )
     assert "Argus GitHub API helper" in script.read_text()
+
+
+def test_copy_nanoclaw_places_runtime_modules_in_dist_channels(tmp_path: Path) -> None:
+    """argus.ts runs from dist/channels and imports ./github-api.mjs (which imports
+    ./gitea-api.mjs); tsc never copies .mjs, so the installer must (ERR_MODULE_NOT_FOUND)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    env = _isolated_env(home)
+    root = tmp_path / "nc"
+    _minimal_nanoclaw_stub(root)
+    copy = _run(["bash", str(HELPER), "copy-nanoclaw", str(root)], env=env)
+    assert copy.returncode == 0, copy.stderr or copy.stdout
+    dist = root / "dist" / "channels"
+    for name, source in (
+        ("gitea-api.mjs", SOURCE),
+        ("github-api.mjs", NANOCLAW / "github-api.mjs"),
+    ):
+        assert filecmp.cmp(dist / name, source, shallow=False), name
+    # Import the installed artifact the way the compiled channel does.
+    probe = _run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            "const m = await import(process.argv[1]); "
+            "if (typeof m.repositoryClient !== 'function') process.exit(3);",
+            (dist / "github-api.mjs").as_uri(),
+        ],
+        env=env,
+        cwd=tmp_path,
+    )
+    assert probe.returncode == 0, probe.stderr or probe.stdout
+
+
+def test_install_sh_wires_the_preflight_session_files() -> None:
+    """A fresh install copies the preflight module and its tests, and exports the gateway lease."""
+    script = (NANOCLAW / "install.sh").read_text()
+    for name in (
+        "argus-repo-preflight.ts",
+        "argus-repo-preflight.test.ts",
+        "argus-repo-preflight.docker.test.ts",
+        "argus-onecli-preflight-lease.test.ts",
+        "patch-gateway-session-export.py",
+    ):
+        assert name in script, name
+        assert (NANOCLAW / name).is_file() or name.startswith("argus-onecli"), name
+    assert (NANOCLAW / "argus-onecli-preflight-lease.test.ts").is_file()
