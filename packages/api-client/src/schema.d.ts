@@ -1678,6 +1678,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{slug}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Project Settings
+         * @description Effective values for a project, with `source` per key.
+         */
+        get: operations["get_project_settings_api_projects__slug__settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{slug}/settings/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put Project Setting */
+        put: operations["put_project_setting_api_projects__slug__settings__key__put"];
+        post?: never;
+        /**
+         * Delete Project Setting
+         * @description Remove the project override so the global/default value is inherited.
+         */
+        delete: operations["delete_project_setting_api_projects__slug__settings__key__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{slug}/settings/{key}/override": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Project Override
+         * @description The stored project override alone (null value means inherit). Used by the
+         *     Settings tab when editing a partial `models` override.
+         */
+        get: operations["get_project_override_api_projects__slug__settings__key__override_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runtime/catalog": {
         parameters: {
             query?: never;
@@ -1772,6 +1834,67 @@ export interface paths {
         /** Used */
         post: operations["used_api_runtime_used_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Global Settings
+         * @description Global values with `source` per key (env | global | default).
+         */
+        get: operations["get_global_settings_api_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/registry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Registry
+         * @description Every known setting key, its schema, default, scopes and description.
+         */
+        get: operations["get_registry_api_settings_registry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put Global Setting */
+        put: operations["put_global_setting_api_settings__key__put"];
+        post?: never;
+        /**
+         * Delete Global Setting
+         * @description Remove the global row (or the model-policy file) so the default applies.
+         */
+        delete: operations["delete_global_setting_api_settings__key__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3381,6 +3504,14 @@ export interface components {
             lease_ttl_s: number;
             /** Max Attempts */
             max_attempts: number;
+            /** Model Policy */
+            model_policy?: {
+                [key: string]: {
+                    [key: string]: string[];
+                };
+            } | null;
+            /** Model Policy Revision */
+            model_policy_revision?: string | null;
             /**
              * @default {
              *       "executions": 0,
@@ -6775,6 +6906,53 @@ export interface components {
             name: string;
             /** Provider */
             provider: string;
+        };
+        /** SettingDefinition */
+        SettingDefinition: {
+            /** Default */
+            default: unknown;
+            /** Description */
+            description: string;
+            /** Key */
+            key: string;
+            /** Schema */
+            schema: {
+                [key: string]: unknown;
+            };
+            /** Scopes */
+            scopes: ("global" | "project")[];
+        };
+        /** SettingValue */
+        SettingValue: {
+            /** Key */
+            key: string;
+            /** Notice */
+            notice?: string | null;
+            /** Revision */
+            revision?: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "project" | "global" | "default" | "env" | "file";
+            /** Updated At */
+            updated_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
+            /** Value */
+            value: unknown;
+        };
+        /** SettingWrite */
+        SettingWrite: {
+            /** Value */
+            value: unknown;
+        };
+        /** SettingsResponse */
+        SettingsResponse: {
+            /** Scope */
+            scope: string;
+            /** Settings */
+            settings: components["schemas"]["SettingValue"][];
         };
         /**
          * Source
@@ -11143,6 +11321,139 @@ export interface operations {
             };
         };
     };
+    get_project_settings_api_projects__slug__settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_project_setting_api_projects__slug__settings__key__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingValue"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_project_setting_api_projects__slug__settings__key__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingValue"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_override_api_projects__slug__settings__key__override_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     catalog_api_runtime_catalog_get: {
         parameters: {
             query?: never;
@@ -11282,6 +11593,112 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UsedResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_global_settings_api_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+        };
+    };
+    get_registry_api_settings_registry_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingDefinition"][];
+                };
+            };
+        };
+    };
+    put_global_setting_api_settings__key__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingValue"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_global_setting_api_settings__key__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingValue"];
                 };
             };
             /** @description Validation Error */

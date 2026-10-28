@@ -52,6 +52,7 @@ from argus_api.runtime.docker import CliDocker
 from argus_api.runtime.routes import router as runtime_router
 from argus_api.runtime.service import RuntimeManager
 from argus_api.secrets import open_store
+from argus_api.settings.routes import router as settings_router
 from argus_api.tasks.delivery import PrChecker
 from argus_api.tasks.routes import router as tasks_router
 
@@ -236,6 +237,7 @@ for router in (
     fleet_router,
     engines_router,
     models_router,
+    settings_router,
     ops_router,
     runtime_router,
 ):

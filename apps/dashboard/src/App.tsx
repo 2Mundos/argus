@@ -18,6 +18,7 @@ const Fleet = lazy(() => import("./views/Fleet").then((m) => ({ default: m.Fleet
 const Inbox = lazy(() => import("./views/Inbox").then((m) => ({ default: m.Inbox })));
 const Knowledge = lazy(() => import("./views/Knowledge").then((m) => ({ default: m.Knowledge })));
 const Pools = lazy(() => import("./views/Pools").then((m) => ({ default: m.Pools })));
+const Settings = lazy(() => import("./views/Settings").then((m) => ({ default: m.Settings })));
 const Tasks = lazy(() => import("./views/Tasks").then((m) => ({ default: m.Tasks })));
 
 const TABS = {
@@ -31,6 +32,7 @@ const TABS = {
   accounts: "Accounts",
   cost: "Cost",
   engines: "Engines",
+  settings: "Settings",
   events: "Events",
 } as const;
 type Tab = keyof typeof TABS;
@@ -112,6 +114,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
               {tab === "accounts" && <Accounts />}
               {tab === "cost" && <Cost />}
               {tab === "engines" && <Engines />}
+              {tab === "settings" && <Settings />}
               {tab === "events" && <Events />}
             </>
           )}

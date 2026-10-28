@@ -534,3 +534,7 @@ class ClaimedTask(Task):
     # The engine account reserved in the claim's own transaction, when the claimer
     # held none: the worker applies it instead of leasing again.
     engine_lease: AccountLease | None = None
+    # Effective model policy for the task's project at claim (settings.spec.md 3.4).
+    # The channel prefers these over the host file; revision fences a stale snapshot.
+    model_policy: dict[str, dict[str, list[str]]] | None = None
+    model_policy_revision: str | None = None

@@ -87,7 +87,13 @@ defaults; when the env var is set it wins and the response says so. The NanoClaw
 host reads the file named by `ARGUS_MODEL_POLICY_PATH`. The API checks the shape of
 a model ID only, never its availability. The revision is computed identically by
 the API and `model-policy.mjs`; `model-policy.fixture.json` is read by both test
-suites. The Engines view edits chains through these routes.
+suites. The Settings tab edits chains through these routes (and through
+[settings](settings.spec.md) for per-project overrides); the Engines view links
+there. A project override is a partial policy stored under the `models` setting:
+per map and per engine it replaces the global chain; anything omitted is inherited.
+The effective (merged) policy is resolved at claim and sent as `model_policy` /
+`model_policy_revision` on the claim payload. `ARGUS_MODEL_POLICY` still wins over
+project overrides.
 
 # 5. Constraints
 

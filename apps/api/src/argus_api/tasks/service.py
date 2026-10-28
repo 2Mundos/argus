@@ -9,6 +9,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -759,10 +760,23 @@ async def _record_activity(
 
 
 async def complete(
-    tx: Tx, agent_id: str, task_id: str, attempt: int, result: TaskResult
+    tx: Tx,
+    agent_id: str,
+    task_id: str,
+    attempt: int,
+    result: TaskResult,
+    *,
+    model_policy_path: Path | None = None,
 ) -> Task:
     """Complete with the result envelope; `data` must match the kind's result
-    schema and every listed artifact must belong to this task (3.11)."""
+    schema and every listed artifact must belong to this task (3.11).
+
+    When `review.independent` is on for the project and the task delivers code,
+    completion moves it to `in_review` and spawns a `code_review` child instead
+    of succeeding (settings.spec.md 3.5)."""
+    from argus_api.settings import service as settings_svc
+    from argus_api.tasks import independent_review as indep
+
     row = await _owned(tx, task_id, attempt, agent_id)
     kind = await kinds.get_kind(tx.conn, row["kind"])
     kinds.validate(kind.result_schema, result.data, "result.data")
@@ -802,11 +816,46 @@ async def complete(
         # Continued work whose criteria Argus never held: nothing proves them, so the
         # result is reviewed (assisted reconciliation) instead of auto-accepted.
         open_items = ["acceptance_not_structured"]
+
+    actor = f"agent:{agent_id}"
+    path = model_policy_path or Path("data/model-policy.json")
+    review_setting = await settings_svc.get_review(tx.conn, path, row["project"])
+    policy, _ = await settings_svc.effective_model_policy(tx.conn, path, row["project"])
+
+    # Child code_review completion drives the parent's independent-review gate.
+    if row["kind"] == indep.CODE_REVIEW_KIND and row["parent_id"]:
+        await _apply(
+            tx,
+            row,
+            Action.COMPLETE,
+            actor,
+            set_={"result": result.model_dump_json(exclude_none=True)},
+        )
+        await indep.on_review_child_complete(
+            tx,
+            await _row(tx.conn, task_id),
+            result,
+            setting=review_setting,
+            policy=policy,
+            actor=actor,
+        )
+        return await get_task(tx.conn, task_id)
+
+    if await indep.on_parent_complete(
+        tx,
+        row,
+        result,
+        setting=review_setting,
+        policy=policy,
+        actor=actor,
+    ):
+        return await get_task(tx.conn, task_id)
+
     await _apply(
         tx,
         row,
         Action.COMPLETE,
-        f"agent:{agent_id}",
+        actor,
         set_={"result": result.model_dump_json(exclude_none=True)},
         data={"acceptance_open": open_items} if open_items else None,
         review=Review.ORCHESTRATOR
@@ -2427,12 +2476,15 @@ async def _apply(
     counts_failure: bool = True,
     event: str | None = None,
     review: Review | None = None,
+    open_review_decision: bool = True,
 ) -> TaskState:
     """Validate and persist one transition, its event (`task.<action>` unless
     `event` names it), and its knock-on effects.
 
     `counts_failure=False` evaluates a fail/expire as if no failure had counted, so it
-    can never exhaust the attempts (the caller leaves `failures` unchanged)."""
+    can never exhaust the attempts (the caller leaves `failures` unchanged).
+    `open_review_decision=False` enters `in_review` without a human/orchestrator
+    decision (independent code review gate; settings.spec.md 3.5)."""
     old = S(row["state"])
     ctx = TransitionContext(
         failures=row["failures"] if counts_failure else -1,
@@ -2487,7 +2539,7 @@ async def _apply(
             str((data or {}).get("error") or (data or {}).get("reason") or "") or None,
             actor,
         )
-    if new is S.IN_REVIEW:
+    if new is S.IN_REVIEW and open_review_decision:
         review = review or Review(row["review"])
         await decisions.open_decision(
             tx,
