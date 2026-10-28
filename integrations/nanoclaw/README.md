@@ -39,18 +39,24 @@ pnpm exec tsx scripts/init-argus-agent.ts --agent-name "Worker"   # agent group 
 The install hook also patches the OneCLI gateway contribution so agent containers receive
 `GIT_SSL_CAINFO` pointing at the same trusted CA bundle as `SSL_CERT_FILE` (Git ignores the
 latter), and extends the Codex env allowlist so spawned shells keep `GIT_HTTP_PROXY_AUTHMETHOD=basic`
-and `GIT_TERMINAL_PROMPT=0` with the proxy/CA (provider secrets stay blocked). Gitea repository
-leases use OneCLI path `/{owner}/{repo}.git/*` for smart-HTTP injection while the lease is held.
+and `GIT_TERMINAL_PROMPT=0` with the proxy/CA (provider secrets stay blocked). Repository
+leases (Gitea, or GitHub for github.com) use OneCLI path `/{owner}/{repo}.git/*` for smart-HTTP
+injection while the lease is held.
 Operator `docker exec` Git probes do not substitute for a full native worker checkout under
 Codex; see [worker lifecycle spec 3.8](../../docs/specs/worker-lifecycle.spec.md).
 
-Workers reach the Gitea REST API only through `gitea-api.mjs`, installed as
-`/usr/local/bin/argus-gitea-api`. It is credential-free (OneCLI injects auth), limited to
-the allowlisted repository, and has no merge command. It covers PRs, issues, labels,
-comments, reviews, statuses, Actions logs and artifacts, and `review-findings`. The
-commands, exit codes and the operator canary are in
-[the Gitea helper spec](../../docs/specs/gitea-helper.spec.md). Its offline tests run with
-`node --test integrations/nanoclaw/gitea-api.test.mjs` (also part of `pnpm test`).
+Workers reach the forge REST API only through a credential-free helper (OneCLI injects
+auth), limited to the allowlisted repository and with no merge command:
+`/usr/local/bin/argus-gitea-api` (`gitea-api.mjs`) for Gitea and
+`/usr/local/bin/argus-github-api` (`github-api.mjs`, built on `gitea-api.mjs`) for
+github.com repositories. Both cover PRs, issues, labels, comments, reviews, statuses (on
+GitHub also check runs), Actions logs and artifacts, and `review-findings`; the task prompt
+names the one that matches the repository. The commands, exit codes and the operator canary
+are in [the Gitea helper spec](../../docs/specs/gitea-helper.spec.md), and the GitHub
+differences, token permissions and rollout in
+[GitHub repositories](../../docs/specs/github-repositories.spec.md). Their offline tests run
+with `node --test integrations/nanoclaw/gitea-api.test.mjs integrations/nanoclaw/github-api.test.mjs`
+(also part of `pnpm test`).
 
 ### Codex sandbox profile (default on for Codex agents)
 
@@ -104,7 +110,7 @@ pnpm exec vitest run src/channels/
 
 Rebuild the agent image (`provision.sh`, `ARGUS_NANOCLAW_ENGINES=1` on an engines
 node) only when the image's own inputs change (`container/Dockerfile`, CLI tools,
-`argus-delegate`, `gitea-api.mjs`). Then recreate the worker instances: running
+`argus-delegate`, `gitea-api.mjs`, `github-api.mjs`). Then recreate the worker instances: running
 hosts keep the old channel and running agent containers the old runner. The
 runner hooks' own tests run with the image's Bun:
 `cd container/agent-runner && bun test src/providers/claude-rate-limit.test.ts

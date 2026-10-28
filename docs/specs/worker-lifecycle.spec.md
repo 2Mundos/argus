@@ -670,6 +670,9 @@ and keeps only the `sops:` reference in the database row. The dashboard's
 Add account dialog offers `gitea` with username and token fields (the token is a
 password input and is never shown again). Configure the
 matching project URL in the NanoClaw pool's `nanoclaw.repositories` map.
+A github.com repository instead uses a `github` account (a fine-grained token, no
+username), injected as Bearer on `api.github.com` and Basic on `github.com` Git; see
+[GitHub repositories](github-repositories.spec.md).
 The NanoClaw host writes two `generic` secrets to OneCLI 1.42, both scoped to the exact Gitea host:
 the REST secret matches only `/api/v1/repos/{owner}/{repository}/*` and injects
 `Authorization: token <PAT>`; the Git smart-HTTP secret matches only
