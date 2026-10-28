@@ -112,6 +112,11 @@ it beyond this host. Exposure is the `-p` / Compose `ports` address.
 - Provider accounts: mount an age key so Argus can read/write its SOPS file:
   `-v ./age-key.txt:/keys/age.txt:ro -e SOPS_AGE_KEY_FILE=/keys/age.txt`
   `-e SOPS_AGE_RECIPIENTS=age1…` (`age-keygen -o age-key.txt`).
+- Workers: `-e ARGUS_PUBLIC_URL=<url>` is the address workers use to call this
+  Argus. Until it is set, Argus starts no worker and the Agents page says
+  so; the dashboard and API work without it. Local Docker pools use
+  `http://host.docker.internal:8000` (the Compose files set it, see below);
+  remote hosts and Kubernetes use the URL of the TLS proxy in front of Argus.
 - Local Docker pools on Linux: merge the overlay to mount the socket and publish
   the API on Docker's bridge gateway, where workers reach it through
   `host.docker.internal`. The dashboard remains available on loopback:

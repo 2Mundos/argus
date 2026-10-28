@@ -67,7 +67,10 @@ export function GuidedWorkerForm(props: {
   return (
     <form className="guided" onSubmit={submit}>
       {!catalog.public_url_configured && (
-        <p className="error small">ARGUS_PUBLIC_URL is not set: no worker can reach Argus.</p>
+        <p className="error small">
+          ARGUS_PUBLIC_URL is not set: no worker can reach Argus. Set it to the address workers use
+          to reach this Argus (README, Run with Docker).
+        </p>
       )}
       <fieldset className="choices">
         <legend>1. What kind of worker?</legend>
