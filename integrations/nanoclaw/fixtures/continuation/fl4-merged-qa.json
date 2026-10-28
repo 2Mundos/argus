@@ -100,6 +100,8 @@
   "lease_expires_at": "<volatile>",
   "lease_ttl_s": 120,
   "max_attempts": 3,
+  "model_policy": null,
+  "model_policy_revision": null,
   "models": {
     "delegate": null,
     "executions": 0,
