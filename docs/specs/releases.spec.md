@@ -10,10 +10,10 @@ the tag builds and publishes everything else.
   history since the last tag, writes `docs/releases/YYYY-MM-DD.vX-Y-Z.ref.md`,
   commits it, and creates an annotated tag on that commit. `ARGS=--push` pushes
   `main` and the tag in one atomic push; `ARGS=--dry-run` only prints.
-- `.gitea/workflows/release.yaml` runs on a `v*` tag push (or by hand for an
+- `.github/workflows/release.yaml` runs on a `v*` tag push (or by hand for an
   existing tag). It builds `deploy/Dockerfile.api` with the version baked in,
-  pushes `<registry>/<owner>/argus:vX.Y.Z` to the Gitea container registry, and
-  creates the Gitea release with the notes as its body. Quality CI also builds
+  pushes `ghcr.io/<owner>/argus:vX.Y.Z` to the GitHub container registry, and
+  creates the GitHub release with the notes as its body. Quality CI also builds
   (without publishing) the NanoClaw host and echo-worker images so those
   Dockerfiles cannot rot; only the control-plane image is a release artifact.
 - The running process reports that version: `argus_build_info{version}`,
@@ -47,9 +47,10 @@ cut deliberately with `--version v1.0.0`. `--version` always overrides inference
 
 ## 3.2 Notes are built from the first-parent history
 
-Work lands on `main` as Gitea PR merges plus the occasional direct commit. The
-notes list first-parent entries only: a PR appears once, under its title, with
-`(#N)`; the commits inside it (formatting fixes, review rounds) do not. Other
+Work lands on `main` as PR merge commits plus the occasional direct commit. A
+merge commit carries the PR title in its subject (Gitea) or as the first body
+line (GitHub). The notes list first-parent entries only: a PR appears once,
+under its title, with `(#N)`; the commits inside it (formatting fixes, review rounds) do not. Other
 merge commits (`Merge main into …`) are skipped. Entries are grouped by
 Conventional Commit type into Features (`feat`), Fixes (`fix`) and Maintenance
 (everything else), with the scope kept as a prefix (`accounts: …`).
@@ -92,8 +93,6 @@ requires files there to be named `YYYY-MM-DD.vX-Y-Z.ref.md`.
 1. Multi-arch images. The Dockerfile already selects `sops` per architecture,
    but the runner has not been verified with QEMU/buildx; the workflow builds
    `linux/amd64` only.
-2. Whether the automatic workflow token may create Gitea releases on this
-   instance, or a dedicated `RELEASE_TOKEN` secret is needed.
 
 # 5. Constraints
 
@@ -101,14 +100,15 @@ requires files there to be named `YYYY-MM-DD.vX-Y-Z.ref.md`.
   `scripts/validate_docs.py`, so it runs without `make setup`.
 - The release commit touches only the new notes file; the tag points at it, so
   the image contains its own notes.
-- Registry credentials come from the `REGISTRY_USER` and `REGISTRY_WRITE_TOKEN`
-  secrets; nothing else in the repository changes per release.
+- The workflow's own `GITHUB_TOKEN` (`contents: write`, `packages: write`)
+  pushes the image and creates the release; no repository secrets are needed,
+  and nothing else in the repository changes per release.
 
 # 6. Implementation Consequences
 
 - `scripts/release.py`, `scripts/test_release.py` (unit tests plus one run
   against a throwaway repository with a bare remote), `make release`.
-- `.gitea/workflows/release.yaml`.
+- `.github/workflows/release.yaml`.
 - `deploy/Dockerfile.api`: `ARG`/`ENV ARGUS_VERSION` and OCI labels.
 - `argus_api.ops.VERSION` reads `ARGUS_VERSION`.
 - `scripts/validate_docs.py`: the `releases/` naming rule and series link.

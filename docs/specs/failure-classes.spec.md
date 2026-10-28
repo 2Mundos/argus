@@ -81,6 +81,15 @@ task. No model session starts and no attempt is spent.
 | The task needs `repository:write` and its project has a repository URL | `env_repository_unconfigured` |
 | The repository lease is taken and applied (today's step) | `env_repository_unavailable` |
 | A read of the repository through the OneCLI gateway (the Gitea API, with the applied credential) answers within 20 s | `env_repository_unreachable` |
+| The task workspace has a place: the agent group dir is known and the task has a repository URL | `env_workspace_unconfigured` |
+| The task workspace can be created and read (no `EACCES`, `EPERM` or `EROFS`) | `env_workspace_permission` |
+| The task workspace is a real directory under the workspaces root and a git repository | `env_workspace_invalid` |
+| Its `origin` is the task's repository URL, without credentials | `env_workspace_remote_mismatch` |
+| Its HEAD is the task branch | `env_workspace_branch_mismatch` |
+| A new workspace stays within `ARGUS_TASK_WORKSPACE_MAX` | `env_workspace_limit` |
+
+- The workspace checks run only for `repository:write` tasks, after the
+  repository checks; [task workspace](task-workspace.spec.md) 3.4 defines them.
 
 - `env_workspace_missing` is not a preflight check: the channel blocks with it
   when the agent group directory stays missing on the host for 90 s while the

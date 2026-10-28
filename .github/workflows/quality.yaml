@@ -10,28 +10,26 @@ concurrency:
   group: quality-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   python:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install uv
-        run: |
-          command -v uv >/dev/null || { curl -LsSf https://astral.sh/uv/install.sh | sh; echo "$HOME/.local/bin" >> "$GITHUB_PATH"; }
-      - uses: actions/cache@v4
+      - uses: astral-sh/setup-uv@v6
         with:
-          path: ~/.cache/uv
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: ${{ runner.os }}-uv-
+          enable-cache: true
       - run: uv sync --all-packages --group dev --frozen
       - name: Install sops and age (secret store tests)
         run: |
-          curl -sSfL -o /usr/local/bin/sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
-          echo "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b  /usr/local/bin/sops" | sha256sum -c -
-          chmod +x /usr/local/bin/sops
+          curl -sSfL -o /tmp/sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+          echo "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b  /tmp/sops" | sha256sum -c -
+          sudo install -m 755 /tmp/sops /usr/local/bin/
           curl -sSfL -o /tmp/age.tgz https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
           echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  /tmp/age.tgz" | sha256sum -c -
-          tar -xzf /tmp/age.tgz -C /tmp && install -m 755 /tmp/age/age /tmp/age/age-keygen /usr/local/bin/
+          tar -xzf /tmp/age.tgz -C /tmp && sudo install -m 755 /tmp/age/age /tmp/age/age-keygen /usr/local/bin/
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run ty check
@@ -79,7 +77,7 @@ jobs:
           git fetch --no-tags --depth=1 origin "$BASE"
           # Paths copied by deploy/Dockerfile.api (or that change its context).
           # Compose overlays are docs for operators; they do not change the image.
-          pattern='^(deploy/Dockerfile\.api$|deploy/entrypoint\.sh$|deploy/litestream\.yml$|\.dockerignore$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.npmrc$|tsconfig\.base\.json$|packages/api-client/|apps/dashboard/|pyproject\.toml$|uv\.lock$|apps/api/|packages/core/|integrations/nanoclaw/engines/model-policy\.defaults\.json$|\.gitea/workflows/quality\.yaml$)'
+          pattern='^(deploy/Dockerfile\.api$|deploy/entrypoint\.sh$|deploy/litestream\.yml$|\.dockerignore$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.npmrc$|tsconfig\.base\.json$|packages/api-client/|apps/dashboard/|pyproject\.toml$|uv\.lock$|apps/api/|packages/core/|integrations/nanoclaw/engines/model-policy\.defaults\.json$|\.github/workflows/quality\.yaml$)'
           if git diff --name-only "$BASE" HEAD | grep -E "$pattern" >/dev/null; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
@@ -119,8 +117,7 @@ jobs:
           set -euo pipefail
           docker rm -f argus-ci >/dev/null 2>&1 || true
           docker volume rm argus-ci-data >/dev/null 2>&1 || true
-          # No host port publish: act job containers cannot reliably reach
-          # 127.0.0.1-published ports. Probe inside the image instead.
+          # Probe inside the image: no host port to publish or collide with.
           docker run -d --name argus-ci \
             -v argus-ci-data:/data \
             argus:ci
@@ -131,7 +128,7 @@ jobs:
               "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8000/$1', timeout=2); sys.exit(0 if b'\"status\"' in r.read() else 1)" \
               2>/dev/null
           }
-          # Cold import has taken ~31–90s on the self-hosted runner.
+          # Cold import has taken ~31–90s on CI runners.
           for i in $(seq 1 180); do
             if probe healthz; then
               break
@@ -170,7 +167,7 @@ jobs:
             exit 0
           fi
           git fetch --no-tags --depth=1 origin "$BASE"
-          if git diff --name-only "$BASE" HEAD | grep -E '^(deploy/nanoclaw-host/|examples/echo-worker/|\.gitea/workflows/quality\.yaml$)' >/dev/null; then
+          if git diff --name-only "$BASE" HEAD | grep -E '^(deploy/nanoclaw-host/|examples/echo-worker/|\.github/workflows/quality\.yaml$)' >/dev/null; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "build=false" >> "$GITHUB_OUTPUT"
@@ -211,7 +208,7 @@ jobs:
             exit 0
           fi
           git fetch --no-tags --depth=1 origin "$BASE"
-          if git diff --name-only "$BASE" HEAD | grep -E '^(integrations/nanoclaw/|\.gitea/workflows/quality\.yaml$)' >/dev/null; then
+          if git diff --name-only "$BASE" HEAD | grep -E '^(integrations/nanoclaw/|\.github/workflows/quality\.yaml$)' >/dev/null; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "build=false" >> "$GITHUB_OUTPUT"
@@ -262,7 +259,7 @@ jobs:
             exit 0
           fi
           git fetch --no-tags --depth=1 origin "$BASE"
-          if git diff --name-only "$BASE" HEAD | grep -E '^(integrations/nanoclaw/|\.gitea/workflows/quality\.yaml$)' >/dev/null; then
+          if git diff --name-only "$BASE" HEAD | grep -E '^(integrations/nanoclaw/|\.github/workflows/quality\.yaml$)' >/dev/null; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -292,13 +289,13 @@ jobs:
         run: rm -rf "/tmp/argus-nc-ci-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
 
   # Real Docker: Argus starts echo-worker containers that must reach it back via
-  # host.docker.internal. Manual until verified on the runner's network layout.
+  # host.docker.internal. Manual until verified on GitHub-hosted runners.
   docker-integration:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
-      - run: command -v uv >/dev/null || { curl -LsSf https://astral.sh/uv/install.sh | sh; echo "$HOME/.local/bin" >> "$GITHUB_PATH"; }
+      - uses: astral-sh/setup-uv@v6
       - run: uv sync --all-packages --group dev --frozen
       - run: make test-docker
 
@@ -310,13 +307,13 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
-      - run: command -v uv >/dev/null || { curl -LsSf https://astral.sh/uv/install.sh | sh; echo "$HOME/.local/bin" >> "$GITHUB_PATH"; }
+      - uses: astral-sh/setup-uv@v6
       - run: uv sync --all-packages --group dev --frozen
       - name: Install kind (checksum pinned)
         run: |
-          curl -sSfL -o /usr/local/bin/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
-          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  /usr/local/bin/kind" | sha256sum -c -
-          chmod +x /usr/local/bin/kind
+          curl -sSfL -o /tmp/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  /tmp/kind" | sha256sum -c -
+          sudo install -m 755 /tmp/kind /usr/local/bin/
       - run: kind create cluster --name argus-it --wait 180s
       - name: Run the Kubernetes integration test
         run: |
@@ -341,7 +338,7 @@ jobs:
       - name: Install gitleaks
         run: |
           v=8.30.1
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" | tar -xz -C /usr/local/bin gitleaks
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
       - name: Scan
         env:
           SECRET_SCAN_RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '' }}
@@ -356,7 +353,7 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 10.0.0
-      - run: command -v uv >/dev/null || { curl -LsSf https://astral.sh/uv/install.sh | sh; echo "$HOME/.local/bin" >> "$GITHUB_PATH"; }
+      - uses: astral-sh/setup-uv@v6
       - run: uv sync --all-packages --group dev --frozen
       - run: pnpm install --frozen-lockfile
       - run: make audit

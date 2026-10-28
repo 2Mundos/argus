@@ -21,6 +21,8 @@ cp "$here/argus-local-forward.test.ts" "$target/src/channels/argus-local-forward
 cp "$here/argus-accounts.ts" "$target/src/channels/argus-accounts.ts"
 cp "$here/argus-usage-relay.ts" "$target/src/channels/argus-usage-relay.ts"
 cp "$here/argus-usage-relay.test.ts" "$target/src/channels/argus-usage-relay.test.ts"
+cp "$here/argus-workspace.ts" "$target/src/channels/argus-workspace.ts"
+cp "$here/argus-workspace.test.ts" "$target/src/channels/argus-workspace.test.ts"
 cp "$here/argus.test.ts" "$target/src/channels/argus.test.ts"
 cp "$here/argus-accounts.test.ts" "$target/src/channels/argus-accounts.test.ts"
 cp "$here/argus-runtime.test.ts" "$target/src/channels/argus-runtime.test.ts"
