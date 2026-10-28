@@ -116,7 +116,7 @@ export function attention(input: {
           human: false,
           count: 1,
           text: `Pool "${pool.name}" is ${pool.status}.`,
-          href: "#pools",
+          href: "#workers/pools",
         });
       } else if (pool.desired > 0 && pool.running < pool.desired) {
         add({
@@ -125,7 +125,7 @@ export function attention(input: {
           human: false,
           count: 1,
           text: `Pool "${pool.name}" has ${pool.running} of ${pool.desired} desired instances running.`,
-          href: "#pools",
+          href: "#workers/pools",
         });
       }
     }
@@ -138,7 +138,7 @@ export function attention(input: {
           human: false,
           count: 1,
           text: `No available account for provider "${provider}".`,
-          href: "#accounts",
+          href: "#setup/accounts",
         });
       } else if ((c.exhausted ?? 0) > 0) {
         const exhausted = c.exhausted ?? 0;
@@ -148,7 +148,7 @@ export function attention(input: {
           human: false,
           count: exhausted,
           text: `${plural(exhausted, "account")} exhausted for provider "${provider}".`,
-          href: "#accounts",
+          href: "#setup/accounts",
         });
       }
     }
@@ -158,7 +158,7 @@ export function attention(input: {
       human: false,
       count: o.agents.lost_on_unfinished_instance,
       text: `${plural(o.agents.lost_on_unfinished_instance, "lost agent")} on instances not yet replaced.`,
-      href: "#agents",
+      href: "#workers/agents",
     });
     add({
       id: "lost-holding-claims",
@@ -166,7 +166,7 @@ export function attention(input: {
       human: false,
       count: o.agents.lost_holding_claims,
       text: `${plural(o.agents.lost_holding_claims, "lost agent")} still hold a claimed task.`,
-      href: "#agents",
+      href: "#workers/agents",
     });
     {
       const spike = o.agents.lost_spike;
@@ -176,7 +176,7 @@ export function attention(input: {
         human: false,
         count: spike.triggered ? spike.current : 0,
         text: `${spike.current} agents lost in the last ${spike.window_hours}h, up from ${spike.previous} in the window before.`,
-        href: "#agents",
+        href: "#workers/agents",
       });
     }
     add({
@@ -227,7 +227,7 @@ export function attention(input: {
       human: false,
       count: o.instances.by_state.terminating ?? 0,
       text: `${plural(o.instances.by_state.terminating ?? 0, "instance")} terminating.`,
-      href: "#pools",
+      href: "#workers/pools",
     });
     add({
       id: "proposals-open",

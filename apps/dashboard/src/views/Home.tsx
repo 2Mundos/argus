@@ -77,14 +77,14 @@ export function Home() {
             <Stat label="In review" value={o.tasks.in_review} />
             <Stat label="Failed" value={o.tasks.failed} />
           </Group>
-          <Group title="Agents" href="#agents">
+          <Group title="Agents" href="#workers/agents">
             <Stat label="Active" value={o.agents.by_state.active} />
             <Stat label="Draining" value={o.agents.by_state.draining} />
             <Stat label="Lost" value={o.agents.by_state.lost} />
             <Stat label="Holding claims" value={o.agents.holding_claims} />
             <Stat label="Lost holding claims" value={o.agents.lost_holding_claims} />
           </Group>
-          <Group title="Pools" href="#pools">
+          <Group title="Pools" href="#workers/pools">
             <Stat label="Pools" value={o.pools.total} />
             <Stat label="Running" value={`${o.pools.running} / ${o.pools.desired}`} />
             <Stat label="Live" value={`${o.pools.live} / ${o.pools.max}`} />
@@ -93,7 +93,7 @@ export function Home() {
             <Stat label="Open decisions" value={o.decisions.by_state.open} />
             <Stat label="Open proposals" value={o.knowledge.proposals_by_state.open} />
           </Group>
-          <Group title="Accounts" href="#accounts">
+          <Group title="Accounts" href="#setup/accounts">
             <Stat label="Available" value={o.accounts.by_state.available} />
             <Stat label="Exhausted" value={o.accounts.by_state.exhausted} />
             <Stat label="Total" value={o.accounts.total} />
@@ -119,7 +119,7 @@ export function Home() {
         <p className="muted">Loading activity…</p>
       )}
       <p className="small">
-        <a href="#events">All events</a>
+        <a href="#setup/events">All events</a>
       </p>
 
       {system.data === undefined ? (

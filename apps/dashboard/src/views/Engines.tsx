@@ -16,7 +16,7 @@ export function Engines() {
       <p className="muted small">
         Model provider, harness, executor CLI and account auth are separate. Installed does not mean
         authenticated; the host login does not prove a container is ready. Edit model chains in{" "}
-        <a href="#settings">Settings</a>.
+        <a href="#setup/settings">Settings</a>.
       </p>
       {error && <p className="error">{error.message}</p>}
       {catalog?.local && (
