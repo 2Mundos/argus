@@ -82,7 +82,7 @@ export function describe({ kind, data }) {
   }
 }
 
-/** Reduce Gitea commit statuses (newest per context wins) to one CI state. */
+/** Reduce commit statuses (Gitea, or GitHub statuses and check runs; newest per context wins) to one CI state. */
 export function ciState(statuses) {
   if (!Array.isArray(statuses) || statuses.length === 0) return null;
   const latest = new Map();

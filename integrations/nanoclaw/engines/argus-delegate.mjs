@@ -58,7 +58,7 @@ const readTail = (file) => {
   }
 };
 
-/** CI statuses for a commit through the credential-free Gitea client, or undefined when not configured. */
+/** CI statuses for a commit through the credential-free forge client, or undefined when not configured. */
 export async function giteaCiProbe(e) {
   const repository = (e.ARGUS_REPOSITORY_URL ?? "").trim();
   if (!repository || !e.ARGUS_REPOSITORIES_JSON) return undefined;
@@ -66,13 +66,14 @@ export async function giteaCiProbe(e) {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const mod = await import(
       pathToFileURL(
-        [path.join(here, "gitea-api.mjs"), path.join(here, "..", "gitea-api.mjs")].find((f) =>
+        [path.join(here, "github-api.mjs"), path.join(here, "..", "github-api.mjs")].find((f) =>
           fs.existsSync(f),
         ),
       ).href
     );
-    const api = new mod.GiteaApi(repository, Object.values(JSON.parse(e.ARGUS_REPOSITORIES_JSON)));
-    return (sha) => api.request(`/statuses/${encodeURIComponent(sha)}`);
+    const allowlist = Object.values(JSON.parse(e.ARGUS_REPOSITORIES_JSON));
+    const api = mod.repositoryClient(repository, allowlist);
+    return (sha) => api.ciStatuses(sha);
   } catch {
     return undefined;
   }

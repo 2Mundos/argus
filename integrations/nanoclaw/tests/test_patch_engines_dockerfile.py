@@ -18,6 +18,7 @@ STAGE = "/tmp/argus-engines/"
 REQUIRED = {
     "/usr/local/bin/argus-delegate",
     "/usr/local/bin/argus-gitea-api",
+    "/usr/local/bin/argus-github-api",
     "/tmp/argus-engines/account-settings.mjs",
     "/tmp/argus-engines/anthropic-redirect.mjs",
     "/tmp/argus-engines/milestones.mjs",
@@ -30,6 +31,7 @@ UPGRADES = [
     "oct21-milestones-not-copied",
     "oct21-usage-not-copied",
     "oct21-account-settings-not-copied",
+    "oct27-no-github-helper",
 ]
 
 
@@ -87,7 +89,7 @@ def test_pristine_gets_the_whole_block_once(tmp_path: Path) -> None:
     first = patch(p)
     assert first.returncode == 0, first.stderr
     assert_buildable(p.read_text())
-    # What a fresh install produced before this script existed (worker host, 2026-10-21).
+    # What a fresh install produces (2026-10-21 worker host, plus the GitHub helper).
     assert p.read_text() == (FIXTURES / "patched.Dockerfile").read_text()
     again = patch(p)
     assert (again.returncode, again.stdout) == (0, "")
@@ -119,7 +121,7 @@ def test_earlier_layouts_upgrade_to_a_buildable_block(
     assert p.read_text() == after
 
 
-@pytest.mark.parametrize("name", UPGRADES[1:])
+@pytest.mark.parametrize("name", UPGRADES[1:-1])
 def test_fixtures_reproduce_the_build_failure(name: str) -> None:
     """The broken states really are broken: a step reads a file the COPY never staged."""
     sources, run = argus_block((FIXTURES / f"{name}.Dockerfile").read_text())
@@ -151,6 +153,7 @@ def test_install_engines_uses_the_patcher() -> None:
     shipped = re.search(r'^cp ("\$here/[^\n]*) "\$target/container/"$', install, re.M)
     assert shipped
     names = {Path(w.strip('"')).name for w in shipped[1].split()}
-    names.add("gitea-api.mjs")  # copied from ../ on its own line
+    # Staged from ../ by install-gitea-api.sh.
+    names |= {"gitea-api.mjs", "github-api.mjs"}
     sources, _ = argus_block((FIXTURES / "patched.Dockerfile").read_text())
     assert set(sources) <= names

@@ -351,6 +351,24 @@ describe("renderTask", () => {
     expect(text).toContain('"COMPLETE:"');
   });
 
+  it("names argus-github-api and check runs for a github.com repository", () => {
+    const repoTask = task({ repository_url: "https://github.com/acme/widget.git" });
+    const text = renderTask(repoTask as any, new Map());
+    expect(text).toContain("Use /usr/local/bin/argus-github-api");
+    expect(text).toContain(
+      "argus-github-api create --repository https://github.com/acme/widget.git",
+    );
+    expect(text).toContain("check runs (GitHub Actions)");
+    expect(text).not.toContain("argus-gitea-api");
+    const merging = task({
+      repository_url: "https://github.com/acme/widget.git",
+      input: { delivery: { allow_merge: true } },
+    });
+    const merge = renderTask(merging as any, new Map());
+    expect(merge).toContain("PUT /pulls/N/merge");
+    expect(merge).toContain("GitHubApi.request");
+  });
+
   it("denies merge by default on repository tasks and documents status reads", () => {
     const repoTask = task({
       repository_url: "https://git.example.test/org/repo.git",

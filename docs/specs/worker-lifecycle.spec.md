@@ -648,7 +648,8 @@ Repository access is separate from engine and executor accounts. A distinct
 Argus `repository` account lease is requested only for tasks requiring the
 `repository:write` capability. Pools configure a project-to-HTTPS
 `owner/repository` allowlist; NanoClaw rejects an unconfigured project, host,
-or repository before applying the lease. The account provider is `gitea`.
+or repository before applying the lease. The account provider is `gitea`, or
+`github` for a github.com repository ([GitHub repositories](github-repositories.spec.md)).
 After the task, NanoClaw unassigns both OneCLI repository secrets and releases
 the task-scoped `repository` lease. Tasks without this capability do not
 acquire the credential and retain existing behavior.

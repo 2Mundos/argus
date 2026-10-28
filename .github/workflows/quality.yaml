@@ -232,7 +232,7 @@ jobs:
             for m in account-settings model-policy milestones livelog usage anthropic-redirect; do
               node -e "import(\"/usr/local/bin/$m.mjs\")" || exit 1
             done
-            for b in ssh rsync git python3 uv make argus-gitea-api; do command -v "$b" >/dev/null || { echo "missing $b"; exit 1; }; done'
+            for b in ssh rsync git python3 uv make argus-gitea-api argus-github-api; do command -v "$b" >/dev/null || { echo "missing $b"; exit 1; }; done'
       - name: Remove the CI images
         if: always() && steps.need.outputs.build == 'true'
         run: docker rmi -f argus-tools-layer:ci argus-tools-layer-ci-base >/dev/null 2>&1 || true
