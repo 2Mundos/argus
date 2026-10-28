@@ -425,10 +425,9 @@ class RuntimeManager:
             removed = await self.docker.remove_owned_containers()
             if removed:
                 log.warning("removed %d orphaned runtime probe containers", removed)
-        except DockerError:
-            log.warning(
-                "could not clean orphaned runtime probe containers", exc_info=True
-            )
+        except DockerError as e:
+            # Expected when Docker is not mounted (it is optional): one line, no trace.
+            log.warning("could not clean orphaned runtime probe containers: %s", e)
         while True:
             try:
                 async with self.db.write() as tx:
