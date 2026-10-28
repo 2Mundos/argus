@@ -290,4 +290,14 @@ describe("account row actions", () => {
       expect(mock.puts[0]?.credential).toEqual({ username: "pedro", token: "tok" }),
     );
   });
+
+  it("uses a single token field to replace a github credential", async () => {
+    mock.list = [account({ provider: "github" })];
+    render(<Accounts />);
+    fireEvent.click(await screen.findByRole("button", { name: "Replace credential of work" }));
+    expect(screen.queryByLabelText("Gitea username")).toBeNull();
+    fireEvent.change(screen.getByLabelText("GitHub token"), { target: { value: "tok" } });
+    fireEvent.click(screen.getByRole("button", { name: "Replace credential" }));
+    await waitFor(() => expect(mock.puts[0]?.credential).toEqual({ token: "tok" }));
+  });
 });

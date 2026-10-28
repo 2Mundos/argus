@@ -9,8 +9,9 @@ type AccountProviderOption = {
   authMethods: string[];
 };
 
-/** Not an engine: a service credential workers use for repository access. */
+/** Not engines: service credentials workers use for repository access. */
 export const GITEA_PROVIDER = "gitea";
+export const GITHUB_PROVIDER = "github";
 
 const PROVIDER_ID = /^[a-z0-9_-]{1,50}$/;
 
@@ -35,6 +36,13 @@ export function providerOptionsFromCatalog(catalog: EngineCatalog): AccountProvi
     out.push({
       id: GITEA_PROVIDER,
       label: "gitea (repository access) — username + personal access token",
+      authMethods: ["personal-access-token"],
+    });
+  }
+  if (!seen.has(GITHUB_PROVIDER)) {
+    out.push({
+      id: GITHUB_PROVIDER,
+      label: "github (repository access) — fine-grained personal access token",
       authMethods: ["personal-access-token"],
     });
   }
@@ -68,6 +76,14 @@ export function nativeAuthNotice(providerId: string): string | undefined {
     return (
       "A Gitea account is a username and personal access token for repository access. " +
       "It is leased only to the repository role and injected by the proxy, never given to the model."
+    );
+  }
+  if (providerId === GITHUB_PROVIDER) {
+    return (
+      "A GitHub account is a fine-grained personal access token limited to the allowlisted " +
+      "repositories (contents, pull requests and issues read/write; commit statuses, checks " +
+      "and actions read). It is used for github.com repositories, leased only to the " +
+      "repository role and injected by the proxy, never given to the model."
     );
   }
   return undefined;
