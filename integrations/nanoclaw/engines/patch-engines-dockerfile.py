@@ -31,6 +31,7 @@ SHIPPED = (
     "livelog.mjs",
     "usage.mjs",
     "gitea-api.mjs",
+    "github-api.mjs",
 )
 MARKER = "# ---- ncl CLI wrapper"
 BLOCK = f"""# ---- Argus specialist CLIs ---------------------------------------------------
@@ -47,6 +48,8 @@ RUN sh /tmp/argus-engines/install-cursor-agent.sh \\
  && install -m 0644 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/gitea-api.mjs \\
  && npm install --prefix /usr/local/lib/argus-gitea --omit=dev --no-audit --no-fund undici@8.12.2 \\
  && install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api \\
+ && install -m 0644 /tmp/argus-engines/github-api.mjs /usr/local/bin/github-api.mjs \\
+ && install -m 0755 /tmp/argus-engines/github-api.mjs /usr/local/bin/argus-github-api \\
  && rm -rf /tmp/argus-engines \\
  && claude --version && codex --version && opencode --version && agent --version
 
@@ -87,6 +90,11 @@ STEPS = (
         "/usr/local/bin/argus-gitea-api",
         " && npm install --prefix /usr/local/lib/argus-gitea --omit=dev --no-audit --no-fund undici@8.12.2 \\\n"
         " && install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api \\\n",
+    ),
+    (
+        "/usr/local/bin/argus-github-api",
+        " && install -m 0644 /tmp/argus-engines/github-api.mjs /usr/local/bin/github-api.mjs \\\n"
+        " && install -m 0755 /tmp/argus-engines/github-api.mjs /usr/local/bin/argus-github-api \\\n",
     ),
 )
 

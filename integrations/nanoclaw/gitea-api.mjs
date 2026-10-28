@@ -299,8 +299,11 @@ function httpErrorCode(status) {
   return "http_error";
 }
 
-async function httpError(response, method, path) {
-  const code = httpErrorCode(response.status);
+async function httpError(response, method, path, product = "Gitea") {
+  const code =
+    response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0"
+      ? "rate_limited"
+      : httpErrorCode(response.status);
   let detail = "";
   // 401/403 bodies come from the gateway or auth layer; never echo them.
   if (code !== "unauthorized" && code !== "forbidden") {
@@ -312,11 +315,15 @@ async function httpError(response, method, path) {
       // Non-JSON body: report only the status.
     }
   } else await discard(response);
-  return new GiteaError(code, `Gitea API ${method} failed with HTTP ${response.status}${detail}`, {
-    status: response.status,
-    method,
-    path,
-  });
+  return new GiteaError(
+    code,
+    `${product} API ${method} failed with HTTP ${response.status}${detail}`,
+    {
+      status: response.status,
+      method,
+      path,
+    },
+  );
 }
 
 async function discard(response) {
@@ -547,6 +554,31 @@ export class GiteaApi {
     this.now = options.now ?? Date.now;
   }
 
+  // Forge hooks, overridden by GitHubApi (github-api.mjs).
+  get product() {
+    return "Gitea";
+  }
+
+  get pageParam() {
+    return "limit";
+  }
+
+  get headers() {
+    return {};
+  }
+
+  redirectAllowed(next, evidence) {
+    return isAuthorizedDownloadRedirect(next, this.repository, evidence);
+  }
+
+  labelKey(label) {
+    return label.id;
+  }
+
+  inlineComment(comment) {
+    return comment;
+  }
+
   get base() {
     return `${this.repository.origin}/api/v1/repos/${encodeURIComponent(this.repository.owner)}/${encodeURIComponent(this.repository.repo)}`;
   }
@@ -574,6 +606,7 @@ export class GiteaApi {
           redirect,
           headers: {
             Accept: accept,
+            ...(url ? {} : this.headers),
             ...(body === undefined ? {} : { "Content-Type": "application/json" }),
           },
           body: body === undefined ? undefined : JSON.stringify(body),
@@ -598,7 +631,7 @@ export class GiteaApi {
         await this.sleep(this.backoff(attempt, hint));
         continue;
       }
-      throw await httpError(response, method, errorPath);
+      throw await httpError(response, method, errorPath, this.product);
     }
   }
 
@@ -622,7 +655,11 @@ export class GiteaApi {
     let capped = false;
     let hasNext = false;
     for (;;) {
-      const qs = new URLSearchParams({ ...query, page: String(current), limit: String(limit) });
+      const qs = new URLSearchParams({
+        ...query,
+        page: String(current),
+        [this.pageParam]: String(limit),
+      });
       const response = await this.exchange(`${path}?${qs}`);
       const data = parseJson(await response.text(), "GET", path);
       const batch = key ? data?.[key] : data;
@@ -699,8 +736,8 @@ export class GiteaApi {
    * `/storage/…` blob tied to that artifact id. Follow requests send Accept only
    * (no Authorization/Cookie). Other hosts or repos → policy_denied.
    */
-  async download(path, { maxBytes, sink, timeoutMs, evidence = null } = {}) {
-    let response = await this.exchange(path, { accept: "*/*", redirect: "manual", timeoutMs });
+  async download(path, { maxBytes, sink, timeoutMs, evidence = null, accept = "*/*" } = {}) {
+    let response = await this.exchange(path, { accept, redirect: "manual", timeoutMs });
     let current = `${this.base}${path}`;
     for (let hops = 0; isRedirect(response.status); hops++) {
       const location = response.headers.get("location");
@@ -712,7 +749,7 @@ export class GiteaApi {
       } catch {
         throw new GiteaError("bad_response", "redirect without a valid location");
       }
-      if (!isAuthorizedDownloadRedirect(next, this.repository, evidence))
+      if (!this.redirectAllowed(next, evidence))
         throw policy(
           "redirect outside the allowlisted repository namespace (host/owner/repo) refused",
         );
@@ -827,7 +864,7 @@ export class GiteaApi {
     const branch = await this.request(`/branches/${refPath(name)}`);
     return {
       branch: branch?.name ?? name,
-      sha: branch?.commit?.id ?? null,
+      sha: branch?.commit?.id ?? branch?.commit?.sha ?? null,
       protected: branch?.protected ?? null,
       commit: branch?.commit ?? null,
     };
@@ -917,7 +954,9 @@ export class GiteaApi {
       { method: "POST", body: { labels: ids } },
       async () => {
         const current = await readback();
-        return ids.every((id) => current.some((l) => l.id === id)) ? current : undefined;
+        return ids.every((id) => current.some((l) => this.labelKey(l) === id))
+          ? current
+          : undefined;
       },
     );
     return { labels: await readback(), reconciled };
@@ -934,7 +973,7 @@ export class GiteaApi {
         { method: "DELETE" },
         async () => {
           const current = await readback();
-          return current.some((l) => l.id === id) ? undefined : current;
+          return current.some((l) => this.labelKey(l) === id) ? undefined : current;
         },
       );
       reconciled ||= result.reconciled;
@@ -1057,7 +1096,7 @@ export class GiteaApi {
     if (event === "APPROVED" || event === "APPROVE")
       throw policy("approving reviews is not allowed for workers; use COMMENT or REQUEST_CHANGES");
     token(event, "event", /^(COMMENT|REQUEST_CHANGES)$/);
-    const inline = reviewComments(comments);
+    const inline = reviewComments(comments).map((c) => this.inlineComment(c));
     if (!body && !inline.length) throw usage("a review needs a body or inline comments");
     const commit_id =
       commitId === undefined
@@ -1094,6 +1133,16 @@ export class GiteaApi {
     const combined = await this.request(`/commits/${ref}/status?limit=1`);
     const list = await this.paginate(`/commits/${ref}/statuses`, query, page);
     return { sha: commitSha(sha), combined_state: combined?.state ?? null, ...list };
+  }
+
+  /** Status-shaped CI entries for a commit ({id, context, state|status}); argus-delegate's probe. */
+  ciStatuses(sha) {
+    return this.request(`/statuses/${encodeURIComponent(sha)}`);
+  }
+
+  /** Status-shaped entries the review gate searches for the agentic review. */
+  async reviewSignals(sha) {
+    return (await this.listStatuses(sha, { all: true, limit: 50 })).items;
   }
 
   // -- Actions --
@@ -1164,7 +1213,7 @@ export class GiteaApi {
       )
       .map((c) => ({ comment: c, parsed: parseReviewComment(c.body) }))
       .sort((a, b) => byNewest(a.comment, b.comment));
-    const statuses = (await this.listStatuses(head, { all: true, limit: 50 })).items
+    const statuses = (await this.reviewSignals(head))
       .filter((s) => AGENTIC_REVIEW.test(s.context ?? ""))
       .sort(byNewest);
     const status = statuses[0]
@@ -1766,14 +1815,14 @@ const ERROR_LINES = Object.entries(EXIT_CODES)
   .map(([code, exit]) => `  ${String(exit).padStart(2)}  ${code}`)
   .join("\n");
 
-function usageText() {
+function usageText({ name, product, notes }) {
   const width = Math.max(...Object.keys(COMMANDS).map((c) => c.length));
   const lines = Object.entries(COMMANDS).map(
     ([name, c]) => `  ${name.padEnd(width)}  ${c.summary}`,
   );
-  return `usage: argus-gitea-api <command> [--repository URL] [options]
+  return `usage: ${name} <command> [--repository URL] [options]
 
-Credential-free Gitea client for the allowlisted repository (ARGUS_REPOSITORY_URL or
+Credential-free ${product} client for the allowlisted repository (ARGUS_REPOSITORY_URL or
 --repository, checked against ARGUS_REPOSITORIES_JSON). The OneCLI HTTPS proxy injects
 credentials; this helper never takes a token. There is no merge, approve, admin, user,
 token, secret or repository-delete command, and no arbitrary-HTTP command.
@@ -1791,11 +1840,11 @@ Errors are one JSON line on stderr: {"error":{"code","status","method","path","m
 Exit codes:
    0  ok
 ${ERROR_LINES}
-Run argus-gitea-api <command> --help for its options.
+${notes ? `\n${notes}\n` : ""}Run ${name} <command> --help for its options.
 `;
 }
 
-function commandHelp(name) {
+function commandHelp(name, binary) {
   const c = COMMANDS[name];
   const required = new Set(c.required ?? []);
   const flags = Object.entries(c.options).map(([flag, kind]) => {
@@ -1803,7 +1852,7 @@ function commandHelp(name) {
       kind === "bool" ? `--${flag}` : kind === "list" ? `--${flag} VALUE...` : `--${flag} VALUE`;
     return required.has(flag) ? text : `[${text}]`;
   });
-  return `usage: argus-gitea-api ${name} ${flags.join(" ")}\n\n${c.summary}\n`;
+  return `usage: ${binary} ${name} ${flags.join(" ")}\n\n${c.summary}\n`;
 }
 
 const TEXT_KEYS = [
@@ -1877,21 +1926,23 @@ function allowlistFrom(env) {
   return values.filter((v) => typeof v === "string");
 }
 
-/** CLI entry point; injectable for tests. Returns the exit code. */
-export async function main(argv, env = process.env, io = {}) {
+const GITEA_CLI = { Api: GiteaApi, name: "argus-gitea-api", product: "Gitea" };
+
+/** CLI entry point; injectable for tests. Returns the exit code. `cli` picks the forge client (argus-github-api). */
+export async function main(argv, env = process.env, io = {}, cli = GITEA_CLI) {
   const stdout = io.stdout ?? process.stdout;
   const stderr = io.stderr ?? process.stderr;
   try {
     const [command, ...rest] = argv;
     if (!command || ["help", "--help", "-h"].includes(command)) {
-      stdout.write(usageText());
+      stdout.write(usageText(cli));
       return 0;
     }
     const definition = Object.hasOwn(COMMANDS, command) ? COMMANDS[command] : null;
-    if (!definition) throw usage("unknown command; run argus-gitea-api --help");
+    if (!definition) throw usage(`unknown command; run ${cli.name} --help`);
     const options = parseArgs(rest, { ...GLOBAL_OPTIONS, ...definition.options });
     if (options.help) {
-      stdout.write(commandHelp(command));
+      stdout.write(commandHelp(command, cli.name));
       return 0;
     }
     const format = options.json ? "json" : (options.format ?? "json");
@@ -1909,7 +1960,7 @@ export async function main(argv, env = process.env, io = {}) {
     allowlistedRepository(repository, allowed);
     const fetchImpl =
       io.fetch ?? createGatewayFetch({ proxy: env.HTTPS_PROXY ?? env.https_proxy ?? "" });
-    const api = new GiteaApi(repository, allowed, fetchImpl, {
+    const api = new cli.Api(repository, allowed, fetchImpl, {
       timeoutMs,
       sleep: io.sleep,
       random: io.random,
@@ -1930,6 +1981,20 @@ export async function main(argv, env = process.env, io = {}) {
     return exitCodeFor(error);
   }
 }
+
+/** Validators and parsers github-api.mjs builds on; not a stable API. */
+export const internals = {
+  usage,
+  policy,
+  positiveNumber,
+  commitSha,
+  listState,
+  listLimit,
+  plainText,
+  token,
+  timestamp,
+  byNewest,
+};
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   main(process.argv.slice(2)).then((code) => {

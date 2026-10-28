@@ -13,8 +13,10 @@ COPY .graft-stage/graft /usr/local/lib/graft
 RUN printf '%s\n' '#!/bin/sh' 'exec node /usr/local/lib/graft/dist/cli.js "$@"' > /usr/local/bin/graft \
  && chmod 0755 /usr/local/bin/graft \
  && graft --version
-# Refresh the Gitea helper when the project layer is rebuilt (no full agent rebuild).
+# Refresh the forge helpers when the project layer is rebuilt (no full agent rebuild).
 COPY --chmod=0755 gitea-api.mjs /usr/local/bin/argus-gitea-api
+COPY --chmod=0644 gitea-api.mjs github-api.mjs /usr/local/bin/
+COPY --chmod=0755 github-api.mjs /usr/local/bin/argus-github-api
 # Runtime libraries only, no -dev: every compiled dependency of the lock ships a
 # manylinux wheel. The exception is weasyprint (pure Python), which loads pango,
 # harfbuzz and fontconfig-backed fonts at import time; this is the subset of the

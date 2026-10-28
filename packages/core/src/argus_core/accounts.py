@@ -14,9 +14,10 @@ from argus_core.custom_accounts import CustomConfig, LeaseSettings
 LeaseRole = Literal["engine", "executor", "repository"]
 
 # Technical facts, not operator policy (account selection spec 3): the account
-# provider of repository access, and the one provider that only a delegated CLI
+# providers of repository access, and the one provider that only a delegated CLI
 # (never a NanoClaw harness) can run on.
-REPOSITORY_PROVIDER = "gitea"
+GITHUB_HOST = "github.com"
+REPOSITORY_PROVIDERS = frozenset({"gitea", "github"})
 EXECUTOR_ONLY = frozenset({"cursor"})
 # The node's own model, served on loopback (local harness spec): a harness, never
 # a delegated CLI, holding no credential and no quota of its own.
@@ -38,12 +39,18 @@ def role_accepts(
     if runtime_providers is None or provider not in runtime_providers:
         return False
     if role == "repository":
-        return provider == REPOSITORY_PROVIDER
-    if provider == REPOSITORY_PROVIDER:
+        return provider in REPOSITORY_PROVIDERS
+    if provider in REPOSITORY_PROVIDERS:
         return False
     if role == "engine" and provider in EXECUTOR_ONLY:
         return False
     return not (role != "engine" and provider in ENGINE_ONLY)
+
+
+def repository_provider(host: str) -> str:
+    """The repository provider of a forge host: github.com is GitHub, every other
+    host Gitea (GitHub repositories spec 3.1)."""
+    return "github" if host.lower() == GITHUB_HOST else "gitea"
 
 
 def fallback_tier(provider: str, *, prefer_local: bool = False) -> int:

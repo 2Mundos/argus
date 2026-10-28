@@ -1,8 +1,8 @@
 """Pull-request state of a task's delivery (docs/specs/task-delivery.spec.md).
 
 Read-only. References are taken only from structured artifacts and unambiguous
-text; a bare number needs the repository the project proves. The Gitea call uses the
-registered repository account, is bounded by a short timeout, is coalesced per PR and
+text; a bare number needs the repository the project proves. The forge call (Gitea, or
+GitHub for github.com) uses the registered account of that provider, is bounded by a short timeout, is coalesced per PR and
 never runs inside a write transaction. Any failure reads as `unknown`, never `open`.
 """
 
@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 
 import aiosqlite
 import httpx2 as httpx
-from argus_core.accounts import REPOSITORY_PROVIDER
+from argus_core.accounts import repository_provider
 from argus_core.continuation import ArtifactKind, ContinuationArtifact
 from argus_core.delivery import MERGED_PENDING_REVIEW, AcceptBlocked, Delivery, PrState
 from argus_core.tasks import Task, TaskState
@@ -47,8 +47,13 @@ class PrRef:
     number: int
 
     @property
+    def provider(self) -> str:
+        return repository_provider(self.host)
+
+    @property
     def url(self) -> str:
-        return f"https://{self.host}/{self.owner}/{self.repo}/pulls/{self.number}"
+        pulls = "pull" if self.provider == "github" else "pulls"
+        return f"https://{self.host}/{self.owner}/{self.repo}/{pulls}/{self.number}"
 
 
 def parse_repository(url: str) -> tuple[str, str, str] | None:
@@ -141,7 +146,7 @@ async def reference(conn: aiosqlite.Connection, task: Task) -> PrRef | None:
 
 
 class PrChecker:
-    """Reads one PR from Gitea. Concurrent reads of the same PR share one request and a
+    """Reads one PR from its forge. Concurrent reads of the same PR share one request and a
     result is reused for CACHE_S seconds, so a polling dashboard cannot hammer the forge."""
 
     def __init__(
@@ -160,7 +165,9 @@ class PrChecker:
         hit = self._cache.get(ref)
         if hit and time.monotonic() - hit[0] < CACHE_S:
             return hit[1], hit[2], hit[3]
-        login = await self._token(conn)  # read before any await that may be shared
+        login = await self._token(
+            conn, ref.provider
+        )  # read before any await that may be shared
         flight = self._flight.get(ref)
         if flight is None:
             flight = asyncio.create_task(self._fetch(ref, login))
@@ -174,11 +181,13 @@ class PrChecker:
         self._cache[ref] = (time.monotonic(), state, merged_at, checked_at)
         return state, merged_at, checked_at
 
-    async def _token(self, conn: aiosqlite.Connection) -> tuple[str, str] | None:
+    async def _token(
+        self, conn: aiosqlite.Connection, provider: str
+    ) -> tuple[str, str] | None:
         async with conn.execute(
             "SELECT secret_ref FROM accounts WHERE provider = ? AND state != 'disabled'"
             " ORDER BY priority DESC, name",
-            (REPOSITORY_PROVIDER,),
+            (provider,),
         ) as cur:
             rows = await cur.fetchall()
         for (secret_ref,) in rows:
@@ -193,14 +202,20 @@ class PrChecker:
     ) -> tuple[PrState, datetime | None]:
         if login is None:
             return PrState.UNKNOWN, None
+        path = f"repos/{ref.owner}/{ref.repo}/pulls/{ref.number}"
+        github = ref.provider == "github"
         url = (
-            f"https://{ref.host}/api/v1/repos/{ref.owner}/{ref.repo}/pulls/{ref.number}"
+            f"https://api.github.com/{path}"
+            if github
+            else f"https://{ref.host}/api/v1/{path}"
         )
+        headers = {"Authorization": f"Bearer {login[1]}"} if github else None
+        basic = None if github else httpx.BasicAuth(*login)
         try:
             async with httpx.AsyncClient(
                 transport=self.transport, timeout=TIMEOUT_S, follow_redirects=False
             ) as client:
-                res = await client.get(url, auth=httpx.BasicAuth(*login))
+                res = await client.get(url, headers=headers, auth=basic)
             if res.status_code != 200:
                 return PrState.UNKNOWN, None
             body = res.json()

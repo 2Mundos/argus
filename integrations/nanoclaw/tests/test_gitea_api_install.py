@@ -358,3 +358,42 @@ def test_real_stage_engines_and_tools_ctx(tmp_path: Path) -> None:
     )
     _assert_identical_to_source(bindir / "argus-gitea-api", bindir / "gitea-api.mjs")
     _assert_help_and_no_proxy(bindir / "argus-gitea-api")
+
+
+def test_github_helper_installs_beside_the_gitea_module(tmp_path: Path) -> None:
+    """argus-github-api imports ./gitea-api.mjs: every install places both modules."""
+    github_source = SOURCE.with_name("github-api.mjs")
+    env = _strip_proxy(os.environ.copy())
+    script = SOURCE.with_name("install-gitea-api.sh")
+    assert (
+        _run(["bash", str(script), "install-bin", str(tmp_path)], env=env).returncode
+        == 0
+    )
+    bindir = tmp_path / "usr" / "local" / "bin"
+    for name in ("argus-github-api", "github-api.mjs"):
+        assert filecmp.cmp(bindir / name, github_source, shallow=False), name
+    _assert_identical_to_source(bindir / "gitea-api.mjs")
+    installed = bindir / "argus-github-api"
+    help_run = _run([str(installed), "--help"], env=env)
+    assert help_run.returncode == 0, help_run.stderr
+    assert help_run.stdout.startswith("usage: argus-github-api ")
+    no_proxy = _run(
+        [str(installed), "repo-get"],
+        env={
+            **env,
+            "ARGUS_REPOSITORY_URL": "https://github.com/team/project",
+            "ARGUS_REPOSITORIES_JSON": '{"p":"https://github.com/team/project"}',
+        },
+    )
+    assert no_proxy.returncode == POLICY_DENIED, no_proxy.stderr
+    assert "proxy" in no_proxy.stderr.lower()
+    engines = SOURCE.parent / "engines"
+    assert (
+        "COPY --chmod=0755 github-api.mjs /usr/local/bin/argus-github-api"
+        in (engines / "Dockerfile.tools-layer").read_text()
+    )
+    assert (
+        "/usr/local/bin/argus-github-api"
+        in (engines / "patch-engines-dockerfile.py").read_text()
+    )
+    assert "Argus GitHub API helper" in script.read_text()

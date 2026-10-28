@@ -89,10 +89,14 @@ function customCredentialProblem(credential: Record<string, unknown>): string | 
 }
 
 export interface NormalizedRepositoryUrl {
+  /** github.com is GitHub; every other host is Gitea (GitHub repositories spec 3.1). */
+  provider: "gitea" | "github";
   origin: string;
   host: string;
   owner: string;
   repo: string;
+  /** Host of the REST API: the forge itself for Gitea, api.github.com for GitHub. */
+  apiHost: string;
   apiPath: string;
   gitPathPattern: string;
   cloneUrl: string;
@@ -121,13 +125,16 @@ export function normalizeRepositoryUrl(raw: string): NormalizedRepositoryUrl {
   const [owner, rawRepo] = parts;
   const repo = rawRepo.endsWith(".git") ? rawRepo.slice(0, -4) : rawRepo;
   if (!repo) throw new Error("repository name must not be empty");
-  const apiPath = `/api/v1/repos/${owner}/${repo}`;
+  const github = url.host === "github.com";
+  const apiPath = github ? `/repos/${owner}/${repo}` : `/api/v1/repos/${owner}/${repo}`;
   const gitPath = `/${owner}/${repo}.git`;
   return {
+    provider: github ? "github" : "gitea",
     origin: url.origin,
     host: url.host,
     owner,
     repo,
+    apiHost: github ? "api.github.com" : url.host,
     apiPath,
     gitPathPattern: `${gitPath}/*`,
     cloneUrl: `${url.origin}${gitPath}`,
@@ -499,9 +506,11 @@ export async function applyRepositoryLease(
   allowedRepositories: string[],
   activeLeases: AccountLease[],
 ): Promise<void> {
-  if (lease.role !== "repository" || lease.provider !== "gitea")
-    throw new Error("repository lease must use the gitea provider and repository role");
   const repository = normalizeRepositoryUrl(repositoryUrl);
+  if (lease.role !== "repository" || lease.provider !== repository.provider)
+    throw new Error(
+      `repository lease must use the ${repository.provider} provider and repository role`,
+    );
   const key = `${repository.origin}/${repository.owner}/${repository.repo}`;
   const allowed = allowedRepositories.some((raw) => {
     try {
@@ -513,10 +522,12 @@ export async function applyRepositoryLease(
   });
   if (!allowed) throw new Error("repository URL is not in the configured allowlist");
   const token = text(lease.credential.token) ?? text(lease.credential.access_token);
-  if (!token) throw new Error("gitea account has no token field");
-  const username = text(lease.credential.username);
+  if (!token) throw new Error(`${repository.provider} account has no token field`);
+  // GitHub takes any Git username with a token; x-access-token is the documented one.
+  const username =
+    repository.provider === "github" ? "x-access-token" : text(lease.credential.username);
   if (!username || /[:\r\n]/.test(username) || /[\r\n]/.test(token))
-    throw new Error("gitea account requires a valid username and token");
+    throw new Error(`${repository.provider} account requires a valid username and token`);
   try {
     const agents: Array<{ id: string; identifier: string }> = await onecli.call("GET", "/agents");
     let agent = agents.find((a) => a.identifier === target.identifier);
@@ -529,13 +540,16 @@ export async function applyRepositoryLease(
       {
         name: `argus-${target.identifier}-repository-rest`,
         value: token,
-        hostPattern: repository.host,
+        hostPattern: repository.apiHost,
         pathPattern: `${repository.apiPath}/*`,
-        injectionConfig: { headerName: "Authorization", valueFormat: "token {value}" },
+        injectionConfig: {
+          headerName: "Authorization",
+          valueFormat: repository.provider === "github" ? "Bearer {value}" : "token {value}",
+        },
       },
       {
         name: `argus-${target.identifier}-repository-git`,
-        // Gitea smart-HTTP uses Basic auth. Build this only in the trusted host;
+        // Smart-HTTP uses Basic auth on both forges. Build this only in the trusted host;
         // OneCLI persists it in its encrypted secret store.
         value: Buffer.from(`${username}:${token}`, "utf8").toString("base64"),
         hostPattern: repository.host,

@@ -83,6 +83,19 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
                     "invalid gitea credential: required valid field username"
                 )
             return "api_key", "token"
+        elif provider == "github":
+            token = credential.get("token")
+            if (
+                set(credential) != {"token"}
+                or not isinstance(token, str)
+                or not token.strip()
+                or "\r" in token
+                or "\n" in token
+            ):
+                raise ValidationFailedError(
+                    "invalid github credential: required field token, and no other field"
+                )
+            return "api_key", "token"
         else:
             if not credential:
                 raise ValidationFailedError(
@@ -168,6 +181,10 @@ async def create_account(
     if body.provider == "gitea" and body.credential is None:
         raise ValidationFailedError(
             "invalid gitea credential: username and token must be validated at registration"
+        )
+    if body.provider == "github" and body.credential is None:
+        raise ValidationFailedError(
+            "invalid github credential: the token must be validated at registration"
         )
     if body.provider == custom_accounts.PROVIDER and body.credential is None:
         raise ValidationFailedError(

@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from "react";
-import { GITEA_PROVIDER } from "../accountProviders";
+import { GITEA_PROVIDER, GITHUB_PROVIDER } from "../accountProviders";
 import { type Account, api, call } from "../api";
 import { parseTokenLimits, TOKEN_LIMIT_PERIODS } from "../usage";
 
@@ -224,6 +224,7 @@ export function ReplaceCredential({
   onDone: (message: string) => void;
 }) {
   const isGitea = account.provider === GITEA_PROVIDER;
+  const isGithub = account.provider === GITHUB_PROVIDER;
   const [text, setText] = useState("");
   const [username, setUsername] = useState("");
   const [token, setToken] = useState("");
@@ -246,6 +247,8 @@ export function ReplaceCredential({
     let credential: Record<string, unknown>;
     if (isGitea) {
       credential = { username: username.trim(), token };
+    } else if (isGithub) {
+      credential = { token };
     } else {
       try {
         const parsed: unknown = JSON.parse(text);
@@ -290,22 +293,24 @@ export function ReplaceCredential({
           login document the provider's client writes, not a settings file without tokens: Argus
           stores it but cannot tell here whether it signs in.
         </p>
-        {isGitea ? (
+        {isGitea || isGithub ? (
           <div className="row">
+            {isGitea && (
+              <label>
+                Gitea username
+                <input
+                  aria-label="Gitea username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoComplete="off"
+                />
+              </label>
+            )}
             <label>
-              Gitea username
-              <input
-                aria-label="Gitea username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoComplete="off"
-              />
-            </label>
-            <label>
-              Gitea token
+              {isGitea ? "Gitea" : "GitHub"} token
               <input
                 type="password"
-                aria-label="Gitea token"
+                aria-label={isGitea ? "Gitea token" : "GitHub token"}
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 autoComplete="off"

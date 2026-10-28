@@ -81,6 +81,67 @@ describe("dedicated Gitea repository lease", () => {
     }
   });
 
+  it("injects a GitHub token on api.github.com (Bearer) and github.com Git (Basic), never a Gitea lease", async () => {
+    const secrets: any[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      const path = new URL(url).pathname.replace(/^\/api/, "");
+      const body = init.body ? JSON.parse(init.body as string) : undefined;
+      if (path === "/agents" && init.method === "GET")
+        return Response.json([{ id: "agent", identifier: "worker" }]);
+      if (path === "/secrets" && init.method === "GET") return Response.json(secrets);
+      if (path === "/secrets" && init.method === "POST") {
+        const secret = { id: `secret-${secrets.length}`, ...body };
+        secrets.push(secret);
+        return Response.json(secret);
+      }
+      return Response.json({ success: true });
+    }) as typeof globalThis.fetch;
+    const repository = "https://github.com/acme/widget";
+    const normalized = normalizeRepositoryUrl(repository);
+    expect(normalized).toMatchObject({
+      provider: "github",
+      apiHost: "api.github.com",
+      apiPath: "/repos/acme/widget",
+      cloneUrl: "https://github.com/acme/widget.git",
+    });
+    const lease = {
+      lease_id: "repository-lease",
+      account_id: "repository-account",
+      name: "gh",
+      provider: "github",
+      kind: "api_key",
+      role: "repository",
+      credential: { token: "dummy-gh-token" },
+    } as AccountLease;
+    const onecli = new OneCliClient("http://127.0.0.1:10254", fetchImpl);
+    const target = { identifier: "worker", name: "worker" };
+    await expect(
+      applyRepositoryLease(
+        onecli,
+        target,
+        { ...lease, provider: "gitea" },
+        repository,
+        [repository],
+        [],
+      ),
+    ).rejects.toThrow(/github provider/);
+    await applyRepositoryLease(onecli, target, lease, repository, [repository], []);
+    const rest = secrets.find((secret) => secret.name.endsWith("-rest"));
+    const git = secrets.find((secret) => secret.name.endsWith("-git"));
+    expect(rest).toMatchObject({
+      hostPattern: "api.github.com",
+      pathPattern: "/repos/acme/widget/*",
+      value: "dummy-gh-token",
+      injectionConfig: { headerName: "Authorization", valueFormat: "Bearer {value}" },
+    });
+    expect(git).toMatchObject({
+      hostPattern: "github.com",
+      pathPattern: "/acme/widget.git/*",
+      value: Buffer.from("x-access-token:dummy-gh-token").toString("base64"),
+      injectionConfig: { headerName: "Authorization", valueFormat: "Basic {value}" },
+    });
+  });
+
   it("writes a generic Authorization secret for the configured host and removes the assignment on release", async () => {
     const calls: Array<{ method: string; path: string; body?: any }> = [];
     const agents: any[] = [{ id: "ag-1", identifier: "group-1" }];

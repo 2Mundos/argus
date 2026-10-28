@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import aiosqlite
-from argus_core.accounts import REPOSITORY_PROVIDER
+from argus_core.accounts import REPOSITORY_PROVIDERS
 from argus_core.cost import (
     AccountCost,
     CostFigures,
@@ -151,7 +151,7 @@ async def report(
     accounts = [
         a
         for a in await service.list_accounts(conn, now)
-        if a.provider != REPOSITORY_PROVIDER
+        if a.provider not in REPOSITORY_PROVIDERS
     ]
     ident = lambda k: k  # noqa: E731
     by_acc = await _group(conn, "u.account_id", start, now, table, ident)

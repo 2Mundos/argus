@@ -1,6 +1,7 @@
 /**
- * Read-only Gitea preflight for the task continuation contract (spec 3.3).
- * Uses the same allowlisted GiteaApi + OneCLI HTTPS proxy as argus-gitea-api in the
+ * Read-only forge preflight for the task continuation contract (spec 3.3).
+ * Uses the same allowlisted client (GiteaApi, or GitHubApi on github.com) + OneCLI HTTPS
+ * proxy as argus-gitea-api / argus-github-api in the
  * agent image; runs on the NanoClaw host after the repository lease is applied.
  */
 import type { ArgusTask, Observation } from "./argus.js";
@@ -65,9 +66,8 @@ export async function observeContinuationViaGitea(
   const prArtifacts = c.artifacts.filter((a) => a.kind === "pr");
   if (prArtifacts.length === 0) return null;
 
-  const { GiteaApi, createGatewayFetch } = await import("./gitea-api.mjs");
-  const fetchImpl = ctx.fetchImpl ?? createGatewayFetch();
-  const api = new GiteaApi(task.repository_url, [...ctx.allowlist], fetchImpl);
+  const { repositoryClient } = await import("./github-api.mjs");
+  const api = repositoryClient(task.repository_url, [...ctx.allowlist], ctx.fetchImpl);
 
   const artifacts: NonNullable<Observation["artifacts"]> = [];
   for (const recorded of prArtifacts) {

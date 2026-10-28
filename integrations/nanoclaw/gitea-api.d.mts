@@ -127,6 +127,8 @@ export class GiteaApi {
     options?: PageOptions & { state?: string; sort?: string },
   ): Promise<Page<Json> & { sha: string; combined_state: string | null }>;
   reviewFindings(number: number, options?: { author?: string }): Promise<ReviewFindings>;
+  /** Status-shaped CI entries for a commit (GitHub adds its check runs). */
+  ciStatuses(sha: string): Promise<unknown>;
 }
 
 export function parseReviewComment(body: string): {

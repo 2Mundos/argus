@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import {
   CUSTOM_PROVIDER_PATTERN,
   GITEA_PROVIDER,
+  GITHUB_PROVIDER,
   localBrokerNotice,
   nativeAuthNotice,
   PROVIDER_PICK_CUSTOM,
@@ -353,8 +354,8 @@ function AddAccount({ onClose }: { onClose: () => void }) {
     priority: 0,
     maxLeases: "",
     credential: '{\n  "api_key": ""\n}',
-    giteaUsername: "",
-    giteaToken: "",
+    repoUsername: "",
+    repoToken: "",
   });
   const [error, setError] = useState<string>();
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
@@ -370,6 +371,7 @@ function AddAccount({ onClose }: { onClose: () => void }) {
     providerPick === PROVIDER_PICK_CUSTOM ? customProvider.trim() : providerPick;
   const authNotice = nativeAuthNotice(resolvedProvider);
   const isGitea = resolvedProvider === GITEA_PROVIDER;
+  const isGithub = resolvedProvider === GITHUB_PROVIDER;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -385,7 +387,9 @@ function AddAccount({ onClose }: { onClose: () => void }) {
     }
     let credential: Record<string, unknown>;
     if (isGitea) {
-      credential = { username: form.giteaUsername.trim(), token: form.giteaToken };
+      credential = { username: form.repoUsername.trim(), token: form.repoToken };
+    } else if (isGithub) {
+      credential = { token: form.repoToken };
     } else {
       try {
         credential = JSON.parse(form.credential);
@@ -501,25 +505,27 @@ function AddAccount({ onClose }: { onClose: () => void }) {
             should see exhaustion.
           </p>
         )}
-        {isGitea ? (
+        {isGitea || isGithub ? (
           <div className="row">
+            {isGitea && (
+              <label>
+                Gitea username
+                <input
+                  aria-label="Gitea username"
+                  value={form.repoUsername}
+                  onChange={(e) => set("repoUsername", e.target.value)}
+                  autoComplete="off"
+                  required
+                />
+              </label>
+            )}
             <label>
-              Gitea username
-              <input
-                aria-label="Gitea username"
-                value={form.giteaUsername}
-                onChange={(e) => set("giteaUsername", e.target.value)}
-                autoComplete="off"
-                required
-              />
-            </label>
-            <label>
-              Gitea token (stored encrypted, never shown again)
+              {isGitea ? "Gitea" : "GitHub"} token (stored encrypted, never shown again)
               <input
                 type="password"
-                aria-label="Gitea token"
-                value={form.giteaToken}
-                onChange={(e) => set("giteaToken", e.target.value)}
+                aria-label={isGitea ? "Gitea token" : "GitHub token"}
+                value={form.repoToken}
+                onChange={(e) => set("repoToken", e.target.value)}
                 autoComplete="off"
                 required
               />

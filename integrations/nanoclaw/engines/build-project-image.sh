@@ -18,7 +18,8 @@ tag="argus-nanoclaw-agent:$project-$suffix"
 gitea_src="$here/../gitea-api.mjs"
 [[ -f "$gitea_src" ]] || { echo "missing Gitea helper: $gitea_src" >&2; exit 2; }
 cp "$gitea_src" "$here/gitea-api.mjs"
-cleanup() { rm -f "$here/gitea-api.mjs"; rm -rf "$here/.graft-stage"; }
+cp "$here/../github-api.mjs" "$here/github-api.mjs"
+cleanup() { rm -f "$here/gitea-api.mjs" "$here/github-api.mjs"; rm -rf "$here/.graft-stage"; }
 trap cleanup EXIT
 if [ "$project" = radar ]; then
   graft_src="${GRAFT_COPY_FROM:-$HOME/.hermes/node/lib/node_modules/@nanonets/graft}"
