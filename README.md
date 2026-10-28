@@ -41,7 +41,7 @@ one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md)
 
 ```bash
 docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data \
-  ghcr.io/2mundos/argus:vX.Y.Z   # a version from the releases page
+  ghcr.io/2mundos/argus:latest   # newest release; pin vX.Y.Z for a deployment
 until docker exec argus test -s /data/admin-token 2>/dev/null; do sleep 1; done   # first start takes a while
 docker exec argus cat /data/admin-token   # sign in at http://127.0.0.1:8000
 ```
@@ -79,9 +79,12 @@ make check        # lint + typecheck + test (what CI runs)
 
 One process, one volume ([single-node](docs/specs/single-node.spec.md)): the
 same port serves the dashboard at `/` and the API under `/api`. Every release
-publishes the image to `ghcr.io/2mundos/argus:vX.Y.Z` (no `latest` tag; versions
-are on the [releases page](https://github.com/2Mundos/argus/releases), see
-[releases](docs/specs/releases.spec.md)):
+publishes the image to `ghcr.io/2mundos/argus:vX.Y.Z` and moves `latest` to the
+newest one (versions are on the [releases
+page](https://github.com/2Mundos/argus/releases), see
+[releases](docs/specs/releases.spec.md)). `latest` is fine for trying Argus; a
+deployment pins a version and upgrades on purpose, after reading the release
+notes: a release with a migration cannot be rolled back by switching images.
 
 ```bash
 docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data \
