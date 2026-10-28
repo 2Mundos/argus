@@ -93,9 +93,15 @@ docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data argus
 docker exec argus cat /data/admin-token
 ```
 
-A release tag also publishes the image to this repo's container registry
-([releases](docs/specs/releases.spec.md)); pull `…/argus:vX.Y.Z` instead of
-building when you have registry access.
+A release tag also publishes the image to the GitHub container registry
+([releases](docs/specs/releases.spec.md)), so you can pull it instead of building:
+
+```bash
+docker pull ghcr.io/2mundos/argus:vX.Y.Z
+```
+
+While the package is private, log in first with a token that has `read:packages`:
+`echo "$TOKEN" | docker login ghcr.io -u <github-user> --password-stdin`.
 
 Publish on loopback as above: Argus serves plain HTTP and ships no reverse
 proxy, so TLS must terminate at a proxy you run in front of it before exposing
