@@ -46,6 +46,7 @@ from argus_api.errors import ValidationFailedError
 from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
 from argus_api.paging import DEFAULT_LIMIT, View
+from argus_api.settings import service as settings_svc
 from argus_api.tasks import delivery, log, service, steers, views
 from argus_api.tasks.views import TaskPage
 
@@ -244,10 +245,17 @@ async def claim_task(
                         now=utcnow(),
                         stale_after=timedelta(days=settings.knowledge_stale_days),
                     )
+                    policy, revision = await settings_svc.effective_model_policy(
+                        conn, settings.model_policy_path, task.project
+                    )
                 if engine_lease is not None:
                     engine_lease = await with_local_context(request, engine_lease)
                 return ClaimedTask(
-                    **task.model_dump(), knowledge_refs=refs, engine_lease=engine_lease
+                    **task.model_dump(),
+                    knowledge_refs=refs,
+                    engine_lease=engine_lease,
+                    model_policy=policy,
+                    model_policy_revision=revision,
                 )
             remaining = deadline - loop.time()
             try:
@@ -287,10 +295,21 @@ async def get_delivery(
 
 @router.post("/{task_id}/complete")
 async def complete_task(
-    task_id: str, body: CompleteRequest, db: DbDep, agent_id: AgentDep
+    task_id: str,
+    body: CompleteRequest,
+    db: DbDep,
+    agent_id: AgentDep,
+    settings: SettingsDep,
 ) -> Task:
     async with db.write() as tx:
-        return await service.complete(tx, agent_id, task_id, body.attempt, body.result)
+        return await service.complete(
+            tx,
+            agent_id,
+            task_id,
+            body.attempt,
+            body.result,
+            model_policy_path=settings.model_policy_path,
+        )
 
 
 @router.post("/{task_id}/progress")

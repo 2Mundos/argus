@@ -56,8 +56,6 @@ vi.mock("../engines", () => ({
     f.ok === true ? "yes" : f.ok === false ? "no" : "unknown",
 }));
 
-vi.mock("./ModelPreferences", () => ({ ModelPreferences: () => <p>model preferences</p> }));
-
 vi.mock("../live", async () => {
   const { useEffect, useState } = await import("react");
   return {
@@ -79,7 +77,7 @@ describe("Engines", () => {
     expect(await screen.findByText("Codex (OpenAI)")).toBeTruthy();
     expect(screen.getAllByText("openai")).toHaveLength(2);
     expect(screen.getAllByText("codex").length).toBeGreaterThan(0);
-    expect(screen.getByText("model preferences")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Settings" }).getAttribute("href")).toBe("#settings");
     expect(screen.getAllByText("no").length).toBeGreaterThan(0);
     // Harness and executor are separate rows with their own readiness.
     expect(screen.getByText("harness", { selector: "td" })).toBeTruthy();

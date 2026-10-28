@@ -27,7 +27,7 @@ const TITLES: Record<Scope, string> = {
   hard_implementation: "Hard tasks: implementation (argus-delegate)",
 };
 
-/** Ordered model chains per engine, from GET/PUT/DELETE /api/models. */
+/** Ordered model chains per engine, from GET/PUT/DELETE /api/models (global). */
 export function ModelPreferences() {
   const { data, error, reload } = useLiveData((signal) => fetchModelPolicy(signal), []);
   const [policy, setPolicy] = useState<ModelPolicy>();
@@ -111,20 +111,7 @@ export function ModelPreferences() {
               )}
             </p>
           )}
-          {scopesOf(draft).map((scope) => (
-            <ScopeEditor
-              key={scope}
-              scope={scope}
-              chains={draft[scope] ?? {}}
-              onChange={(engine, chain) => setDraft(withChain(draft, scope, engine, chain))}
-            />
-          ))}
-          {empties.length > 0 && (
-            <p className="muted small">
-              Empty chains ({empties.join(", ")}) need a model before they are kept; they are
-              omitted on save.
-            </p>
-          )}
+          <ModelPreferencesEditor draft={draft} onChange={setDraft} empties={empties} />
           <div className="toolbar">
             <button
               type="button"
@@ -160,6 +147,33 @@ export function ModelPreferences() {
         </>
       )}
     </section>
+  );
+}
+
+/** Shared chain editors used by the global ModelPreferences and the Settings project override. */
+export function ModelPreferencesEditor(props: {
+  draft: Draft;
+  onChange: (d: Draft) => void;
+  empties: string[];
+}) {
+  const { draft, onChange, empties } = props;
+  return (
+    <>
+      {scopesOf(draft).map((scope) => (
+        <ScopeEditor
+          key={scope}
+          scope={scope}
+          chains={draft[scope] ?? {}}
+          onChange={(engine, chain) => onChange(withChain(draft, scope, engine, chain))}
+        />
+      ))}
+      {empties.length > 0 && (
+        <p className="muted small">
+          Empty chains ({empties.join(", ")}) need a model before they are kept; they are omitted on
+          save.
+        </p>
+      )}
+    </>
   );
 }
 

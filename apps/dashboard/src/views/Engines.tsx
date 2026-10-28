@@ -1,6 +1,5 @@
 import { type EngineEntry, fetchEngineCatalog, readinessLabel } from "../engines";
 import { useLiveData } from "../live";
-import { ModelPreferences } from "./ModelPreferences";
 
 /** Engines, executors and the local model — from GET /api/engines (read-only). */
 export function Engines() {
@@ -16,7 +15,8 @@ export function Engines() {
       </div>
       <p className="muted small">
         Model provider, harness, executor CLI and account auth are separate. Installed does not mean
-        authenticated; the host login does not prove a container is ready.
+        authenticated; the host login does not prove a container is ready. Edit model chains in{" "}
+        <a href="#settings">Settings</a>.
       </p>
       {error && <p className="error">{error.message}</p>}
       {catalog?.local && (
@@ -54,7 +54,6 @@ export function Engines() {
           )}
         </tbody>
       </table>
-      <ModelPreferences />
     </section>
   );
 }

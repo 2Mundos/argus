@@ -129,6 +129,16 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   decision. Acceptance moves it to `succeeded`; rejection returns it to `ready`
   with the reviewer's notes appended to `spec`, without counting a failed
   attempt toward `max_attempts`.
+- When [independent code review](settings.spec.md) 3.5 is on for the project and
+  the task delivers code (a PR or commit), completion instead moves the task to
+  `in_review` without opening a human/orchestrator decision yet and creates a
+  child `code_review` task pinned to a non-author model. An `approve` verdict
+  then opens the task's own `review` decision if it has one (or checklist items
+  remain), else `succeeded`; `request_changes` returns the parent to `ready`
+  with findings under **Review findings**, without counting a failure. After
+  `max_rounds` of `request_changes`, a human `review` decision is opened. A
+  missing eligible reviewer leaves the task `in_review` with
+  `block_reason: no_independent_reviewer` (visible in the inbox).
 - Two counters, deliberately separate: `attempt` is bumped on every claim and
   never decreases, because it fences stale writers (3.3); `failures` counts only
   `fail` and lease expiry, and is what `max_attempts` limits. A task whose

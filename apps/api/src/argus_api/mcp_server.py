@@ -1470,6 +1470,38 @@ async def run_workspace_cleanup(
     )
 
 
+# -- settings ---------------------------------------------------------------------------
+
+
+@tool(ANYONE)
+async def get_settings(ctx: Context, project: str | None = None) -> dict:
+    """Typed settings: global values, or effective values for a project (override, else
+    global, else default). Each entry has `key`, `value`, `source` (project | global |
+    default | env | file). `models` is the effective model policy; `review.independent`
+    gates code delivery with a different-model review."""
+    path = f"/projects/{project}/settings" if project else "/settings"
+    return await _call(ctx, "GET", path)
+
+
+@tool(ADMINS)
+async def set_setting(
+    ctx: Context, key: str, value: Any, project: str | None = None
+) -> dict:
+    """Set a typed setting (admin only). `project` writes a project override; omit it
+    for the global value. Unknown keys and values that fail the key's schema are 422;
+    a key not settable at that scope is 422 scope_not_allowed."""
+    path = f"/projects/{project}/settings/{key}" if project else f"/settings/{key}"
+    return await _call(ctx, "PUT", path, json={"value": value})
+
+
+@tool(ADMINS)
+async def reset_setting(ctx: Context, key: str, project: str | None = None) -> dict:
+    """Remove a stored setting so the inherited value applies (admin only). For global
+    `models` this restores the repository defaults; for a project it drops the override."""
+    path = f"/projects/{project}/settings/{key}" if project else f"/settings/{key}"
+    return await _call(ctx, "DELETE", path)
+
+
 # -- preferred models -------------------------------------------------------------------
 
 

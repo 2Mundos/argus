@@ -387,6 +387,9 @@ export interface ArgusTask {
   harness_account?: string | null;
   /** Continuation contract (task continuation spec); missing on older servers. */
   continuation?: ContinuationContract | null;
+  /** Effective model policy for the task's project at claim (settings.spec.md 3.4). */
+  model_policy?: Record<string, Record<string, string[]>> | null;
+  model_policy_revision?: string | null;
 }
 
 export type ContinuationPhase = "implement" | "resume" | "reconcile" | "qa" | "close_evidence";
@@ -3822,8 +3825,8 @@ export async function argusGroupDir(): Promise<string | null> {
 }
 
 export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
-  // Validate once at host startup. A pool update cannot mutate an in-flight policy.
-  const snapshot = loadPolicy();
+  // Host startup policy is the fallback for older APIs that omit claim fields.
+  const hostSnapshot = loadPolicy();
   return async (task, held = { engine: null, executor: null }) => {
     const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
       "../db/messaging-groups.js"
@@ -3840,6 +3843,17 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
     if (!group) throw new Error("no Argus group for model policy");
     const config = await getContainerConfig(group.id);
     if (!config) throw new Error("no container config for model policy");
+    // Prefer the project's effective policy from the claim (settings.spec.md 3.4).
+    let snapshot = hostSnapshot;
+    if (task.model_policy) {
+      const claimed = policySnapshot(task.model_policy);
+      if (task.model_policy_revision && claimed.revision !== task.model_policy_revision) {
+        throw new Error(
+          `model policy revision mismatch: claim ${task.model_policy_revision} vs ${claimed.revision}`,
+        );
+      }
+      snapshot = claimed;
+    }
     const engine = (config.provider || "claude").toLowerCase();
     const selection = selectHarnessModel(snapshot, engine, task);
     if (held.engine && !selection.configured_model) {

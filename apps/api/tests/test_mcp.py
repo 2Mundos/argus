@@ -99,6 +99,8 @@ def test_tools_are_listed_by_scope(client: TestClient) -> None:
         "update_pool",
         "set_model_policy",
         "reset_model_policy",
+        "set_setting",
+        "reset_setting",
         "set_project_runtime",
         "rebuild_project_runtime",
         "archive_agents",

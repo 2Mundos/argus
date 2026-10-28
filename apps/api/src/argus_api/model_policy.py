@@ -34,6 +34,26 @@ DEFAULTS_REL = "integrations/nanoclaw/engines/model-policy.defaults.json"
 Policy = dict[str, dict[str, list[str]]]
 
 
+def _validate_map(scope: str, raw: Any) -> dict[str, list[str]]:
+    if not isinstance(raw, dict):
+        raise ValidationFailedError(f"invalid {scope} map")
+    out: dict[str, list[str]] = {}
+    for name in sorted(raw):
+        chain = raw[name]
+        if (
+            name not in ENGINES
+            or not isinstance(chain, list)
+            or not 1 <= len(chain) <= 10
+            or not all(
+                isinstance(m, str) and _MODEL.fullmatch(m) is not None for m in chain
+            )
+            or len(set(chain)) != len(chain)
+        ):
+            raise ValidationFailedError(f"invalid model chain: {scope}.{name}")
+        out[name] = list(chain)
+    return out
+
+
 def validate(raw: Any) -> Policy:
     if (
         not isinstance(raw, dict)
@@ -46,24 +66,37 @@ def validate(raw: Any) -> Policy:
         )
     policy: Policy = {}
     for scope in (*SCOPES, *(s for s in OPTIONAL_SCOPES if s in raw)):
-        if not isinstance(raw[scope], dict):
-            raise ValidationFailedError(f"invalid {scope} map")
-        policy[scope] = {}
-        for name in sorted(raw[scope]):
-            chain = raw[scope][name]
-            if (
-                name not in ENGINES
-                or not isinstance(chain, list)
-                or not 1 <= len(chain) <= 10
-                or not all(
-                    isinstance(m, str) and _MODEL.fullmatch(m) is not None
-                    for m in chain
-                )
-                or len(set(chain)) != len(chain)
-            ):
-                raise ValidationFailedError(f"invalid model chain: {scope}.{name}")
-            policy[scope][name] = list(chain)
+        policy[scope] = _validate_map(scope, raw[scope])
     return policy
+
+
+def validate_partial(raw: Any) -> Policy:
+    """A project override: any subset of the known maps; each chain still fully valid.
+    An empty object is allowed (means "inherit everything")."""
+    if not isinstance(raw, dict) or not raw.keys() <= {*SCOPES, *OPTIONAL_SCOPES}:
+        raise ValidationFailedError(
+            "model policy override allows only harness, implementation,"
+            " trivial, hard_harness and hard_implementation maps"
+        )
+    return {scope: _validate_map(scope, raw[scope]) for scope in raw}
+
+
+def merge_policy(base: Policy, override: Policy) -> Policy:
+    """Project chains per (map, engine) replace the base; anything omitted is inherited."""
+    merged: Policy = {
+        scope: {eng: list(chain) for eng, chain in engines.items()}
+        for scope, engines in base.items()
+    }
+    for scope, engines in override.items():
+        merged.setdefault(scope, {})
+        for eng, chain in engines.items():
+            merged[scope][eng] = list(chain)
+    # Drop empty optional maps so the revision matches a policy without them.
+    return {
+        scope: engines
+        for scope, engines in merged.items()
+        if scope in SCOPES or engines
+    }
 
 
 def canonical(policy: Policy) -> str:
