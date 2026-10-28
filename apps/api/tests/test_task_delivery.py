@@ -165,6 +165,35 @@ async def test_states_are_read_with_the_repository_credential(body, want) -> Non
     assert req.headers["authorization"].startswith("Basic ")
 
 
+async def test_github_pr_is_read_from_the_github_api_with_the_github_account() -> None:
+    class ByProvider(Conn):
+        def execute(self, sql, params):
+            self.rows = [("sops:g",)] if params == ("github",) else []
+            return super().execute()
+
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"state": "open", "merged": False})
+
+    ref = PrRef("github.com", "2mundos", "argus", 3)
+    assert ref.url == "https://github.com/2mundos/argus/pull/3"
+    state, _, _ = await checker(handler).check(ByProvider([]), ref)  # ty: ignore[invalid-argument-type]
+    assert state is PrState.OPEN
+    [req] = seen
+    assert str(req.url) == "https://api.github.com/repos/2mundos/argus/pulls/3"
+    assert req.headers["authorization"] == "Bearer dummy-token"
+
+
+def test_github_pull_url_is_a_reference() -> None:
+    repo = ("github.com", "2mundos", "argus")
+    ref = delivery.extract(
+        ["https://github.com/2Mundos/argus/pull/3"], [], None, {repo}
+    )
+    assert ref == PrRef(*repo, 3)
+
+
 @pytest.mark.parametrize("status", [401, 403, 404, 500])
 async def test_http_failure_is_unknown_never_open(status) -> None:
     c = checker(lambda r: httpx.Response(status, json={"state": "open"}))

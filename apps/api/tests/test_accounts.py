@@ -828,6 +828,50 @@ def test_gitea_service_credential_is_sops_backed_and_leased_only_to_repository_r
 
 
 @pytest.mark.parametrize(
+    "credential",
+    [None, {}, {"token": ""}, {"token": "a\nb"}, {"token": "t", "username": "u"}],
+)
+def test_github_credential_is_a_single_token(client: TestClient, credential) -> None:
+    body = {"name": "gh", "provider": "github", "credential": credential}
+    assert client.post("/api/accounts", json=body, headers=ADMIN).status_code == 422
+
+
+def test_github_token_is_leased_only_for_a_github_repository_lease(
+    client: TestClient,
+) -> None:
+    token = "dummy-github-fine-grained-token"
+    created = client.post(
+        "/api/accounts",
+        json={
+            "name": "gh-writer",
+            "provider": "github",
+            "credential": {"token": token},
+        },
+        headers=ADMIN,
+    )
+    assert created.status_code == 201
+    assert token not in created.text
+    worker = register(client)
+    task = claimed_task(client, worker)
+    for runtime, role in ((["gitea"], "repository"), (["github"], "engine")):
+        refused = client.post(
+            "/api/accounts/lease",
+            json=lease_payload(task, runtime, role=role),
+            headers=worker,
+        )
+        assert refused.status_code != 200
+        assert token not in refused.text
+    leased = client.post(
+        "/api/accounts/lease",
+        json=lease_payload(task, ["github"], role="repository"),
+        headers=worker,
+    )
+    assert leased.status_code == 200
+    assert leased.json()["provider"] == "github"
+    assert leased.json()["credential"] == {"token": token}
+
+
+@pytest.mark.parametrize(
     "credential", [{"token": "dummy"}, {"username": "bad:user", "token": "dummy"}]
 )
 def test_gitea_account_requires_valid_basic_auth_username(
