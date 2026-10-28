@@ -14,7 +14,7 @@ instances (containers) on request from the orchestrator or a user.
 
 **Lightweight and single-node first.** Argus is one process with one SQLite
 database (continuously backed up by Litestream) and no required external
-services: `docker run -v argus-data:/data argus` is a full deployment. The fleet
+services: `docker run -v argus-data:/data ghcr.io/2mundos/argus:vX.Y.Z` is a full deployment. The fleet
 it manages can live on remote Docker hosts or Kubernetes; Argus itself stays on
 one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md).
 
@@ -40,12 +40,12 @@ one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md)
 ## Quickstart
 
 ```bash
-docker build -f deploy/Dockerfile.api -t argus .
-docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data argus
+docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data \
+  ghcr.io/2mundos/argus:vX.Y.Z   # a version from the releases page
 docker exec argus cat /data/admin-token   # sign in at http://127.0.0.1:8000
 ```
 
-Configuration, Compose, Docker pools and backups are under
+Configuration, building from source, Compose, Docker pools and backups are under
 [Run with Docker](#run-with-docker).
 
 ## Layout
@@ -76,32 +76,32 @@ make check        # lint + typecheck + test (what CI runs)
 
 ## Run with Docker
 
-One process, one volume ([single-node](docs/specs/single-node.spec.md)). From a
-clone:
+One process, one volume ([single-node](docs/specs/single-node.spec.md)): the
+same port serves the dashboard at `/` and the API under `/api`. Every release
+publishes the image to `ghcr.io/2mundos/argus:vX.Y.Z` (no `latest` tag; versions
+are on the [releases page](https://github.com/2Mundos/argus/releases), see
+[releases](docs/specs/releases.spec.md)):
+
+```bash
+docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data \
+  ghcr.io/2mundos/argus:vX.Y.Z
+docker exec argus cat /data/admin-token   # sign in with this
+# Dashboard: http://127.0.0.1:8000
+```
+
+`-p` publishes the port on this host only and `-v` keeps the database, the
+admin token and artifacts across restarts and upgrades; without them the
+dashboard is unreachable and the state is lost with the container.
+
+To build from a clone instead:
 
 ```bash
 docker compose -f deploy/compose.yaml up --build
-# Dashboard: http://127.0.0.1:8000
 docker compose -f deploy/compose.yaml exec argus cat /data/admin-token
 ```
 
-Or without Compose:
-
-```bash
-docker build -f deploy/Dockerfile.api -t argus .
-docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data argus
-docker exec argus cat /data/admin-token
-```
-
-A release tag also publishes the image to the GitHub container registry
-([releases](docs/specs/releases.spec.md)), so you can pull it instead of building:
-
-```bash
-docker pull ghcr.io/2mundos/argus:vX.Y.Z
-```
-
-While the package is private, log in first with a token that has `read:packages`:
-`echo "$TOKEN" | docker login ghcr.io -u <github-user> --password-stdin`.
+or without Compose, `docker build -f deploy/Dockerfile.api -t argus .` and the
+`docker run` above with `argus` as the image.
 
 Publish on loopback as above: Argus serves plain HTTP and ships no reverse
 proxy, so TLS must terminate at a proxy you run in front of it before exposing
