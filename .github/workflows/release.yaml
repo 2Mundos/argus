@@ -63,6 +63,14 @@ jobs:
             --label org.opencontainers.image.source="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             -t "$IMAGE:$TAG" .
           docker push "$IMAGE:$TAG"
+          # latest follows the newest release only: rebuilding an older tag leaves it.
+          newest=$(git tag -l 'v*.*.*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          if [ "$TAG" = "$newest" ]; then
+            docker tag "$IMAGE:$TAG" "$IMAGE:latest"
+            docker push "$IMAGE:latest"
+          else
+            echo "Not tagging latest: $TAG is older than $newest"
+          fi
 
       - name: Create the GitHub release
         env:

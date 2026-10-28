@@ -12,7 +12,8 @@ the tag builds and publishes everything else.
   `main` and the tag in one atomic push; `ARGS=--dry-run` only prints.
 - `.github/workflows/release.yaml` runs on a `v*` tag push (or by hand for an
   existing tag). It builds `deploy/Dockerfile.api` with the version baked in,
-  pushes `ghcr.io/<owner>/argus:vX.Y.Z` to the GitHub container registry, and
+  pushes `ghcr.io/<owner>/argus:vX.Y.Z` (and moves `latest` to it, 3.7) to the
+  GitHub container registry, and
   creates the GitHub release with the notes as its body. Quality CI also builds
   (without publishing) the NanoClaw host and echo-worker images so those
   Dockerfiles cannot rot; only the control-plane image is a release artifact.
@@ -23,7 +24,8 @@ the tag builds and publishes everything else.
 
 - No deploy step. Argus is single-node and self-hosted: the operator pulls the
   image and restarts. The notes say whether that is reversible.
-- No floating `latest` or `vX.Y` image tags. A tag names one build.
+- No floating `vX.Y` image tags. `vX.Y.Z` names one build; `latest` is the only
+  moving tag (3.7).
 - No version numbers in `pyproject.toml` or `package.json`. The tag is the only
   source of the version; nothing in the tree is bumped.
 - No release branches or backports. A fix ships as the next patch from `main`.
@@ -87,6 +89,14 @@ argument (local, CI) report `0.0.0+dev`. The image also carries the OCI
 
 `docs/README.md` links `releases/` once instead of every file. The docs check
 requires files there to be named `YYYY-MM-DD.vX-Y-Z.ref.md`.
+
+## 3.7 `latest` follows the newest release
+
+The workflow also tags the image `latest` when the tag it builds is the highest
+`vX.Y.Z` in the repository, so a dispatch rebuild of an older tag never moves
+`latest` backwards. `latest` is for trying Argus; a deployment pins `vX.Y.Z`,
+because pulling `latest` can apply migrations that make the upgrade one-way (3.3)
+without the operator reading the notes first. The README says so.
 
 # 4. Open Questions
 
