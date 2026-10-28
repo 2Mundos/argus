@@ -1490,9 +1490,7 @@ async def set_setting(
     """Set a typed setting (admin only). `project` writes a project override; omit it
     for the global value. Unknown keys and values that fail the key's schema are 422;
     a key not settable at that scope is 422 scope_not_allowed."""
-    path = (
-        f"/projects/{project}/settings/{key}" if project else f"/settings/{key}"
-    )
+    path = f"/projects/{project}/settings/{key}" if project else f"/settings/{key}"
     return await _call(ctx, "PUT", path, json={"value": value})
 
 
@@ -1500,9 +1498,7 @@ async def set_setting(
 async def reset_setting(ctx: Context, key: str, project: str | None = None) -> dict:
     """Remove a stored setting so the inherited value applies (admin only). For global
     `models` this restores the repository defaults; for a project it drops the override."""
-    path = (
-        f"/projects/{project}/settings/{key}" if project else f"/settings/{key}"
-    )
+    path = f"/projects/{project}/settings/{key}" if project else f"/settings/{key}"
     return await _call(ctx, "DELETE", path)
 
 
