@@ -42,6 +42,7 @@ one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md)
 ```bash
 docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data \
   ghcr.io/2mundos/argus:vX.Y.Z   # a version from the releases page
+until docker exec argus test -s /data/admin-token 2>/dev/null; do sleep 1; done   # first start takes a while
 docker exec argus cat /data/admin-token   # sign in at http://127.0.0.1:8000
 ```
 
@@ -85,6 +86,7 @@ are on the [releases page](https://github.com/2Mundos/argus/releases), see
 ```bash
 docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data \
   ghcr.io/2mundos/argus:vX.Y.Z
+until docker exec argus test -s /data/admin-token 2>/dev/null; do sleep 1; done   # first start takes a while
 docker exec argus cat /data/admin-token   # sign in with this
 # Dashboard: http://127.0.0.1:8000
 ```
