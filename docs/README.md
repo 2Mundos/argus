@@ -79,6 +79,9 @@ every new dependency is judged against it.
 - [Task workspace](specs/task-workspace.spec.md) — a stable git workspace per
   `repository:write` task, keyed by task id, created and checked read-only
   before the model, blocking with a typed `env_workspace_*` reason
+- [Task checkpoint](specs/task-checkpoint.spec.md) — hash-verified, node-local
+  preservation of a task's unpublished work and its restore by the next attempt,
+  or a typed `env_checkpoint_*` block
 - [Live work](specs/live-work.spec.md) — what an agent is doing now: task activity
   feed, agent drawer with its current work and container output
 - [Gitea helper for workers](specs/gitea-helper.spec.md) — `argus-gitea-api`
