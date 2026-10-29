@@ -101,8 +101,10 @@ dead-session recovery coverage and latency.
   the P5 goal; it does not show that the 5-minute median is met.
 
   *Query cost and limits.* The cohort is read through `events_kind_at`
-  (`kind = 'task.fail'` and an `at` range). That scan visits every `task.fail` in
-  the window, including other reasons, and filters by `json_extract(data,
+  (`kind = 'task.fail'` and an `at` range). That scan visits every `task.fail`
+  newer than the cohort's oldest fail (the 5000th newest `session_lost`),
+  including other reasons; when the window has fewer than 5000 `session_lost`
+  fails it is every `task.fail` in the window. It filters by `json_extract(data,
   '$.reason') = 'session_lost'`; the `lost` CTE then applies `ORDER BY at DESC,
   id DESC LIMIT ?` after that predicate, so the cohort is the newest 5000
   `session_lost` fails, materialized once. Each fail
@@ -129,9 +131,10 @@ dead-session recovery coverage and latency.
 
   The 5000 cap (`MAX_ROWS`) limits how many `session_lost` fails are processed:
   when the window holds more, the newest 5000 are processed, older ones are not,
-  and `truncated` is set. It is a processing and result limit. It bounds neither
-  the `task.fail` scan (other reasons are visited and filtered before the limit)
-  nor the work per task history, which is the `f` walk above.
+  and `truncated` is set. It also bounds the `task.fail` scan, which stops at the
+  5000th match; other-reason rows newer than that position are still visited and
+  filtered. It does not bound the work per task history, which is the `f` walk
+  above.
 
   *Measured (evidence, not a bound).* `apps/api/bench/dead_session_recovery_bench.py`
   builds a disposable in-memory SQLite DB from the real migrations, seeds 1000
@@ -160,7 +163,9 @@ dead-session recovery coverage and latency.
   (`reason` `channel_error`) in the window. They are scanned through
   `events_kind_at` and rejected by the reason predicate, so they are not in the
   cohort but still cost time (1000 `session_lost` fails, 0 post-claim, 1000 rows
-  returned in every row):
+  returned in every row). The bench stamps its other-reason fails at NOW, newer
+  than every cohort fail, so this control is the worst case for the scan; it is a
+  worst-case control for the cap scenario, not a typical window:
 
   | other-reason fails in window | median ms |
   | --- | --- |
@@ -181,8 +186,9 @@ dead-session recovery coverage and latency.
 - **Bounded reads.** No full scan of `tasks` or `events`: migration
   `0021_fleet_health_indexes.sql` adds `tasks_finished` and `events_kind_at`; per-task
   claim lookups use `events_subject`. Each fetch keeps at most 5000 newest rows and
-  sets `truncated` when it hits that. For dead-session recovery the cap applies
-  to `session_lost` fails processed, not to the `task.fail` scan behind them.
+  sets `truncated` when it hits that. For dead-session recovery the cap bounds
+  the scan to the newer-than-cutoff range; other-reason fails in that range still
+  cost time.
 
 # 4. Open Questions
 
