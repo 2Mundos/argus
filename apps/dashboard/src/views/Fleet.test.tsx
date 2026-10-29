@@ -126,6 +126,8 @@ function health(over: Record<string, unknown> = {}) {
       denominator: 2,
       measured: 2,
       pending: 0,
+      pending_overdue: 0,
+      ended_unclaimed: 0,
       not_requeued: 0,
       anomalous: 0,
       coverage: null,
@@ -215,6 +217,35 @@ describe("Fleet", () => {
     expect(card?.textContent).toContain("measured 2 of 2");
     expect(card?.textContent).toContain("observed lost, not death time");
     expect(card?.textContent).toContain("outliers (≥ 5.0 min) 0");
+  });
+
+  it("shows pending, overdue pending and ended-unclaimed recovery counts", async () => {
+    const base = health().dead_session_recovery;
+    mock.health = health({
+      dead_session_recovery: { ...base, pending: 3, pending_overdue: 2, ended_unclaimed: 1 },
+    });
+    render(<Fleet />);
+    const card = (await screen.findByRole("heading", { name: "session_lost → next claim" }))
+      .parentElement;
+    expect(card?.textContent).toContain("pending 3 (waiting ≥ 5.0 min: 2)");
+    expect(card?.textContent).toContain("ended unclaimed 1");
+    expect(card?.textContent).toContain("p50 no data"); // pending never becomes a latency
+  });
+
+  it("shows the truncation note when only the recovery fetch was truncated", async () => {
+    const base = health().dead_session_recovery;
+    mock.health = health({ dead_session_recovery: { ...base, truncated: true } });
+    render(<Fleet />);
+    expect(await screen.findByText("Showing the newest 5000 rows only.")).toBeTruthy();
+  });
+
+  it("hides the truncation note when nothing was truncated", async () => {
+    mock.health = health();
+    render(<Fleet />);
+    const card = (await screen.findByRole("heading", { name: "session_lost → next claim" }))
+      .parentElement;
+    expect(card?.textContent).toContain("pending 0 (waiting ≥ 5.0 min: 0)");
+    expect(screen.queryByText("Showing the newest 5000 rows only.")).toBeNull();
   });
 
   it("shows rates when known", async () => {

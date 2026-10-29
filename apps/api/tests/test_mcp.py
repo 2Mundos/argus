@@ -564,6 +564,22 @@ def test_fleet_tools_forward_and_redact(client: TestClient) -> None:
     )
 
 
+def test_dead_session_recovery_tool_matches_rest(client: TestClient) -> None:
+    from test_dead_session_recovery import seed_pending
+
+    seed_pending(client)
+    orchestrator = register(client, "orchestrator")
+    got = tool(client, orchestrator, "get_dead_session_recovery", window_hours=24)
+    rest = client.get(
+        "/api/fleet/health", headers={"Authorization": f"Bearer {ADMIN_TOKEN}"}
+    ).json()["dead_session_recovery"]
+    assert got == rest
+    assert (got["pending"], got["pending_overdue"], got["ended_unclaimed"]) == (2, 1, 1)
+    assert "error" in tool(
+        client, register(client), "get_dead_session_recovery", window_hours=24
+    )
+
+
 def test_model_policy_tools_match_rest(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

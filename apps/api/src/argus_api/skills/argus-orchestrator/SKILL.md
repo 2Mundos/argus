@@ -167,8 +167,10 @@ pass `base_revision_id` when editing).
   `get_agent_models`, `get_task_models`.
 - `get_fleet_yield(window_hours)` and `get_dead_session_recovery(window_hours)`:
   read-only slices of Fleet health. Recovery latency starts at each observed
-  `session_lost` fail (not a death timestamp) and ends at the next claim;
-  percentiles stay null until enough measured samples exist.
+  `session_lost` fail (not a death timestamp) and ends at the task's next claim
+  (by event id); percentiles stay null until enough measured samples exist.
+  `pending_overdue` counts requeued tasks still unclaimed after the 5 min target
+  (a lower bound, not a latency).
 
 ## Errors
 

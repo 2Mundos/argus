@@ -906,10 +906,14 @@ async def get_fleet_yield(ctx: Context, window_hours: int = 24) -> dict:
 @tool(MANAGERS)
 async def get_dead_session_recovery(ctx: Context, window_hours: int = 24) -> dict:
     """Dead-session recovery latency over `window_hours` (1-720): from each
-    `session_lost` fail (observed lost; not a death timestamp) to the next
-    `task.claim` after a requeue. Coverage, denominator, outliers vs the 5 min
-    target, and percentiles only when enough measured samples exist (never a
-    fabricated median). The `dead_session_recovery` block of GET /api/fleet/health."""
+    `session_lost` fail (observed lost; not a death timestamp) to the task's next
+    `task.claim` by event id after a requeue. Coverage, denominator, outliers vs
+    the 5 min target, and percentiles only when enough measured samples exist
+    (never a fabricated median). `pending` (still waiting) and `pending_overdue`
+    (waiting at least the target; a lower bound, never in the percentiles) are
+    censored; `ended_unclaimed` were requeued but the task ended without a claim;
+    `anomalous` includes clock rollback. The `dead_session_recovery` block of
+    GET /api/fleet/health."""
     health = await _call(ctx, "GET", "/fleet/health", params={"window": window_hours})
     return health.get("dead_session_recovery", health)
 
