@@ -16,6 +16,7 @@ import {
   link,
   lstat,
   mkdir,
+  mkdtemp,
   open,
   readdir,
   readFile,
@@ -540,16 +541,7 @@ export async function checkpointTaskWorkspace(opts: CheckpointOpts): Promise<Che
       await chmod(path.join(tmp, "work.bundle"), 0o600);
       await record("work.bundle");
     }
-    const patch = [
-      "diff",
-      "--binary",
-      "--no-ext-diff",
-      "--no-textconv",
-      "--no-color",
-      "--no-renames",
-      "--src-prefix=a/",
-      "--dst-prefix=b/",
-    ];
+    const patch = PATCH_ARGS;
     const staged = seen.staged.filter((p) => !isSensitive(p));
     const unstaged = seen.unstaged.filter((p) => !isSensitive(p));
     for (const [label, extra, names] of [
@@ -884,7 +876,10 @@ export async function restoreTaskWorkspace(opts: RestoreOpts): Promise<RestoreRe
       });
       await assertInertGit(ctx as WorkspaceCtx, git);
       const here = await observe(ctx as WorkspaceCtx, git);
-      if (matchesManifest(here, m, await localHeadsMatch(ctx as WorkspaceCtx, git, m)))
+      if (
+        matchesManifest(here, m, await localHeadsMatch(ctx as WorkspaceCtx, git, m)) &&
+        (await contentMatches(ctx as WorkspaceCtx, m, realRoot))
+      )
         return { ok: true, restored: false, reason: "already_present" };
       if (
         here.head ||
@@ -916,7 +911,10 @@ export async function restoreTaskWorkspace(opts: RestoreOpts): Promise<RestoreRe
     if (m.unstaged.length) await g(["apply", "--binary", path.join(cdir, "unstaged.patch")]);
     for (const u of m.untracked) await restoreUntracked(tmp, cdir, u);
     const after = await observe({ ws: tmp, ceiling: realRoot }, git);
-    if (!matchesManifest(after, m, true))
+    if (
+      !matchesManifest(after, m, true) ||
+      !(await contentMatches({ ws: tmp, ceiling: realRoot }, m, realRoot))
+    )
       throw new Failure(
         "env_checkpoint_invalid",
         "the restored workspace differs from the manifest",
@@ -964,7 +962,61 @@ function sameSet(a: string[], b: string[]): boolean {
   return a.length === b.length && [...a].sort().every((v, i) => v === [...b].sort()[i]);
 }
 
-/** True when the observed workspace is exactly the checkpointed work. */
+const PATCH_ARGS = [
+  "diff",
+  "--binary",
+  "--no-ext-diff",
+  "--no-textconv",
+  "--no-color",
+  "--no-renames",
+  "--src-prefix=a/",
+  "--dst-prefix=b/",
+];
+
+/**
+ * True when the workspace content equals the manifest: the staged and unstaged patches
+ * regenerate to the recorded hashes and every untracked file or link is identical.
+ * Names alone are not enough: the same paths can hold different bytes.
+ */
+async function contentMatches(
+  ctx: WorkspaceCtx,
+  m: CheckpointManifest,
+  scratchRoot: string,
+): Promise<boolean> {
+  const scratch = await mkdtemp(path.join(scratchRoot, ".tmp-compare-"));
+  try {
+    for (const [label, extra] of [
+      ["staged", ["--cached"]],
+      ["unstaged", []],
+    ] as const) {
+      if (!m[label].length) continue;
+      const want = m.files.find((f) => f.name === `${label}.patch`)?.sha256;
+      const file = path.join(scratch, `${label}.patch`);
+      await gitToFile(
+        [...PATCH_ARGS, ...extra, "--", ".", ...pathspecExcludes()],
+        ctx.ws,
+        ctx.ceiling,
+        file,
+      );
+      if ((await hashFile(file)).sha256 !== want) return false;
+    }
+    for (const u of m.untracked) {
+      const full = path.join(ctx.ws, u.path);
+      const st = await lstat(full).catch(() => null);
+      if (!st) return false;
+      if (u.type === "symlink") {
+        if (!st.isSymbolicLink() || (await readlink(full)) !== u.target) return false;
+      } else if (!st.isFile() || (await hashFile(full)).sha256 !== u.sha256) {
+        return false;
+      }
+    }
+    return true;
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+/** True when the observed workspace is exactly the checkpointed work (names and HEAD only). */
 function matchesManifest(o: Observed, m: CheckpointManifest, headOk: boolean): boolean {
   if (!headOk || o.head !== m.head) return false;
   const tracked = (names: string[]) => names.filter((p) => !isSensitive(p));
