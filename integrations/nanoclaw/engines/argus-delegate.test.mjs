@@ -1579,40 +1579,16 @@ env > ${JSON.stringify(dump)}`,
   assert.equal(child.includes(BRIDGE_KEY), false);
 });
 
-test("a cursor agent run streams progress while running and keeps the final result and usage", async (t) => {
+/** A fake Cursor `agent` whose body is `script({ e, relay, dir })`, with auth, policy and relay. */
+function agentRun(t, script) {
   const s = sandbox(t);
   const e = (o) => `echo '${JSON.stringify(o)}'`;
-  const marker = path.join(s.dir, "progress-seen");
   const relay = path.join(s.dir, "argus-task-log.jsonl");
   s.fake(
     "agent",
     [
       'if [ "$1" = "--version" ]; then echo v; exit 0; fi',
-      e({ type: "system", subtype: "init", model: "Composer" }),
-      e({
-        type: "user",
-        message: {
-          content: [{ type: "text", text: "SECRET-PROMPT https://github.com/o/r/pull/99" }],
-        },
-      }),
-      e({ type: "thinking", subtype: "delta", text: "hidden thoughts" }),
-      e({
-        type: "tool_call",
-        subtype: "started",
-        call_id: "1",
-        tool_call: { readToolCall: { args: { path: "/w/a.py" } } },
-      }),
-      // wait until the delegate's live log has shown the progress, then finish
-      `i=0; while [ $i -lt 100 ] && ! grep -q 'read /w/a.py' ${relay} 2>/dev/null; do sleep 0.1; i=$((i+1)); done`,
-      `grep -q 'read /w/a.py' ${relay} && touch ${marker}`,
-      e({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        result: "all done",
-        usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 2, cacheWriteTokens: 0 },
-      }),
-      e({ type: "system", subtype: "task_notification", status: "done" }),
+      ...script({ e, relay, dir: s.dir }),
     ].join("\n"),
   );
   const cursor = path.join(s.home, ".config", "cursor");
@@ -1630,10 +1606,56 @@ test("a cursor agent run streams progress while running and keeps the final resu
     ARGUS_LIVELOG_TICK_S: "0.05",
     ARGUS_LIVELOG_FLUSH_S: "0.1",
   };
-  const { code, report } = await run(
-    ["agent", "--cwd", s.work, "--out", path.join(s.dir, "out"), "--timeout", "30"],
-    { env },
-  );
+  const start = (timeout) =>
+    run(["agent", "--cwd", s.work, "--out", path.join(s.dir, "out"), "--timeout", timeout], {
+      env,
+    });
+  const lines = () =>
+    fs
+      .readFileSync(relay, "utf8")
+      .trim()
+      .split("\n")
+      .flatMap((l) => JSON.parse(l).lines ?? []);
+  return { s, relay, start, lines };
+}
+
+const AGENT_INIT = { type: "system", subtype: "init", model: "Composer" };
+const AGENT_READ = {
+  type: "tool_call",
+  subtype: "started",
+  call_id: "1",
+  tool_call: { readToolCall: { args: { path: "/w/a.py" } } },
+};
+const AGENT_RESULT = {
+  type: "result",
+  subtype: "success",
+  is_error: false,
+  result: "all done",
+  usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 2, cacheWriteTokens: 0 },
+};
+
+test("a cursor agent run streams progress while running and keeps the final result and usage", async (t) => {
+  let marker;
+  const a = agentRun(t, ({ e, relay, dir }) => {
+    marker = path.join(dir, "progress-seen");
+    return [
+      e(AGENT_INIT),
+      e({
+        type: "user",
+        message: {
+          content: [{ type: "text", text: "SECRET-PROMPT https://github.com/o/r/pull/99" }],
+        },
+      }),
+      e({ type: "thinking", subtype: "delta", text: "hidden thoughts" }),
+      e(AGENT_READ),
+      // wait until the delegate's live log has shown the progress, then finish
+      `i=0; while [ $i -lt 100 ] && ! grep -q 'read /w/a.py' ${relay} 2>/dev/null; do sleep 0.1; i=$((i+1)); done`,
+      `grep -q 'read /w/a.py' ${relay} && touch ${marker}`,
+      e(AGENT_RESULT),
+      e({ type: "system", subtype: "task_notification", status: "done" }),
+    ];
+  });
+  const { code, report } = await a.start("30");
   assert.equal(code, 0);
   assert.equal(fs.existsSync(marker), true, "progress was not relayed before the run ended");
   assert.equal(report.executor_error, undefined);
@@ -1643,15 +1665,58 @@ test("a cursor agent run streams progress while running and keeps the final resu
     [10, 5, 2],
   );
   assert.match(report.tail, /"result":"all done"/);
-  const lines = fs
-    .readFileSync(relay, "utf8")
-    .trim()
-    .split("\n")
-    .flatMap((l) => JSON.parse(l).lines ?? []);
+  const lines = a.lines();
   assert.deepEqual(lines.slice(0, 2), ["agent started (Composer)", "▸ read /w/a.py"]);
   assert.equal(lines.at(-1), "agent finished");
   const relayed = lines.join("\n");
   assert.equal(/SECRET-PROMPT|hidden thoughts/.test(relayed), false);
+});
+
+test("a cursor agent that hangs mid-stream times out with 124, progress relayed and its tree killed", async (t) => {
+  let pidFile;
+  const a = agentRun(t, ({ e, dir }) => {
+    pidFile = path.join(dir, "grandchild.pid");
+    return [e(AGENT_INIT), e(AGENT_READ), `sleep 30 &\necho $! > ${pidFile}\nwait`];
+  });
+  const started = Date.now();
+  const { code, report } = await a.start("1");
+  assert.equal(code, 124);
+  assert.equal(report.timed_out, true);
+  assert.ok(Date.now() - started < 15000);
+  const lines = a.lines();
+  assert.deepEqual(lines.slice(0, 2), ["agent started (Composer)", "▸ read /w/a.py"]);
+  assert.equal(lines.includes("agent finished"), false);
+  const pid = Number(fs.readFileSync(pidFile, "utf8"));
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "the grandchild must be dead");
+});
+
+test("a cursor agent that crashes before its result event is a failure with its exit code", async (t) => {
+  const a = agentRun(t, ({ e }) => [e(AGENT_INIT), e(AGENT_READ), "exit 3"]);
+  const { code, report } = await a.start("30");
+  assert.notEqual(code, 0);
+  assert.equal(report.exit_code, 3);
+  assert.equal(report.timed_out, false);
+  const lines = a.lines();
+  assert.deepEqual(lines.slice(0, 2), ["agent started (Composer)", "▸ read /w/a.py"]);
+  assert.equal(lines.includes("agent finished"), false);
+});
+
+test("a cursor agent that lingers after its result event still times out, keeping the result", async (t) => {
+  // The delegate waits for the process, not the result event: a CLI that reports its result and
+  // then lingers is killed at --timeout and exits 124. The live log has already relayed "agent
+  // finished", and the raw stream (artifact, tail, usage) keeps the result event.
+  const a = agentRun(t, ({ e }) => [e(AGENT_INIT), e(AGENT_RESULT), "sleep 30"]);
+  const started = Date.now();
+  const { code, report } = await a.start("2");
+  assert.equal(code, 124);
+  assert.equal(report.timed_out, true);
+  assert.ok(Date.now() - started < 15000);
+  assert.equal(a.lines().includes("agent finished"), true);
+  const out = fs.readFileSync(report.artifacts[0], "utf8").trim().split("\n");
+  assert.equal(JSON.parse(out.at(-1)).type, "result");
+  assert.match(report.tail, /"result":"all done"/);
+  assert.equal(report.usage.measurement, "measured");
+  assert.deepEqual([report.usage.input_tokens, report.usage.output_tokens], [10, 5]);
 });
 
 test("executorJsonFailure reads the result event of an agent stream", () => {
