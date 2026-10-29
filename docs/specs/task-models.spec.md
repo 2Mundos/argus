@@ -7,10 +7,14 @@ the global [model policy](model-selection.spec.md) today, which affects every
 task. This spec adds **optional per-task pins**, set at creation and editable while
 the task is queued:
 
-- `harness_model`: the engine that runs the worker loop and its model;
+- `harness_model`: the preferred engine that runs the worker loop and its model;
 - `executor_model`: the delegated coding CLI and its model;
-- `harness_account`: the one account the engine lease may use, e.g. the local
+- `harness_account`: the preferred account for the engine lease, e.g. the local
   Strata account or one custom (OpenRouter) account (3.4).
+
+The two harness pins are **preferences**: they win while they can be served and
+yield to the other allowed providers when they cannot (3.2). The executor pin is
+unchanged and stays strict.
 
 Scope: the task fields (REST, MCP, dashboard), the lease narrowing they imply,
 the harness model the NanoClaw channel configures at claim, and the model
@@ -51,10 +55,20 @@ the attempt snapshot keeps them.
 
 ## 3.2 Leases
 
-- **Engine.** A harness pin narrows the engine role to its provider, on top of
-  `account_providers`: the claim gate, `awaiting_quota` parking and waking, and
-  the engine lease all use the narrowed set. A task whose provider has no free
-  account waits as `awaiting_quota`, never runs on another engine.
+- **Engine.** A harness pin is a preference for the engine role, on top of
+  `account_providers`. While the pinned provider has any **usable** account (not
+  disabled, not exhausted before its reset, credential present, below
+  `max_leases`, or already held by the caller) the claim gate, `awaiting_quota`
+  parking and waking, and the engine lease all use that provider alone, and the
+  pin is kept on any of its usable accounts. Only when the pinned provider has
+  no usable account (exhausted, disabled or offline) does the engine role fall
+  back to the other engine providers `account_providers` allows (all engine
+  providers when unrestricted), ranked as usual. `awaiting_quota` applies only
+  when every allowed provider is exhausted or leased out; the pinned provider
+  alone being spent no longer parks the task. One function decides the
+  effective provider set for the claim gate, waking, lease, exhaustion and
+  failover alike, so they never disagree. Codex-thread and Claude identity
+  rules are unchanged.
 - **Executor.** An executor pin narrows the executor lease to its provider. The
   executor stays outside the claim gate, as today ([account
   selection](account-selection.spec.md) 3): when no account of that provider is
@@ -63,11 +77,25 @@ the attempt snapshot keeps them.
 
 ## 3.3 Models
 
-A pin is a fixed choice, like `--model`: no fallback chain, the same model on
-every attempt, failures and review rejections included.
+An executor pin is a fixed choice, like `--model`: no fallback chain, the same
+model on every attempt, failures and review rejections included. A harness pin
+is the same while its provider is served, and a preference otherwise.
 
-- **Harness.** At claim the channel configures `harness_model.model` instead of
-  the policy chain; the attempt artifact reports `policy_map: task`.
+- **Harness.** While the engine lease is on the pinned provider the channel
+  configures `harness_model.model` instead of the policy chain; the attempt
+  artifact reports `policy_map: task`. When the lease fell back to another
+  provider (3.2) the pinned model is **dropped for that attempt** and the
+  channel uses the default policy model of the harness map for the leased
+  engine provider (`policy_map: policy`); it never uses a different explicit
+  user-chosen model. The pin stays stored, so a later attempt returns to it once
+  its provider is usable again.
+- **Model-switch event.** Every fallback is recorded, never silent: a
+  `task.model_switched` event on the task audit trail with `from` and `to`
+  (`{provider, model}`; account ids and names only, no secret), `reason` (the
+  pinned provider or account was `exhausted`, `disabled` or `offline`) and
+  `attempt`. The attempt snapshot carries the same record (`model_switch`) and
+  `argus-delegate` reports it in its output, so reviewers and the dashboard task
+  detail show it beside the serving account.
 - **Executor.** The pinned snapshot carries `executor_model` and names its
   `executor` as `preferred_executor` (over the leased executor).
   `argus-delegate` precedence becomes `--model`, the task pin (only for the
@@ -92,20 +120,26 @@ win on priority: the Strata local account (`strata-local`) or one custom account
   `agent` (the Strata harness only orchestrates and delegates to Cursor, [local
   harness](local-harness.spec.md)). A disabled account is accepted: the task
   waits until it is enabled.
-- **Leases.** The pin narrows the engine role to that one account, on top of 3.2:
-  the claim gate starts the task only when the caller holds an engine lease on
-  that account or the account is usable (available or past its reset, below
-  `max_leases`) and its provider is in the caller's `runtime_providers`; the
-  engine lease and the failover candidate after an exhaustion consider only that
-  account. When it cannot serve, the task waits as `awaiting_quota` (no attempt,
-  no failure) and never runs on another account, of the same provider or not;
-  `wake_waiting` wakes it only for a free slot of that account (enabling or
-  refilling the account wakes it). The executor role is not narrowed by it.
-- **Channel.** A worker that still holds an engine account the task does not
-  allow (another account than the pinned one, a provider outside
-  `account_providers`, or another engine than `harness_model`'s) leases afresh at
-  claim instead of waiting for the periodic re-evaluation, stopping the old
-  runtime first.
+- **Leases.** The pin is a preference for that one account, on top of 3.2: while
+  the caller holds an engine lease on it or it is usable (available or past its
+  reset, below `max_leases`, credential present) and its provider is in the
+  caller's `runtime_providers`, the claim gate, the engine lease and the
+  failover candidate after an exhaustion consider only that account. When it is
+  exhausted, disabled or offline, the task falls back to the other accounts its
+  `account_providers` allows (any engine account when unrestricted), ranked as
+  usual, and the fallback is recorded as in 3.3 (`task.model_switched`, with the
+  account ids). The model rule of 3.3 applies: the model of a `harness_model`
+  is dropped for that attempt. The task waits as `awaiting_quota` (no attempt,
+  no failure) only when no allowed account can serve; `wake_waiting` wakes it
+  for a free slot of the pinned account or of any allowed one (enabling or
+  refilling an account wakes it), and a later claim returns to the pinned
+  account once it is usable. The executor role is not narrowed by it.
+- **Channel.** A worker that holds an engine account the task does not allow (a
+  provider outside `account_providers`), or a pinned account or provider that is
+  usable while the held one is a fallback, leases afresh at claim instead of
+  waiting for the periodic re-evaluation, stopping the old runtime first. A held
+  account that is a valid fallback (the pin is unusable) is kept, not
+  re-leased.
 - The pin is in the attempt snapshot and the audit diff (`{from, to}` ids). A
   deleted account leaves a pinned task waiting until the pin is edited or
   cleared.
@@ -114,6 +148,10 @@ win on priority: the Strata local account (`strata-local`) or one custom account
 
 - Whether to pin only the engine or executor (policy model) without a model.
 - Whether an executor pin should gate the claim like the engine.
+- Whether an operator or admin override should reject a dangerous substitution
+  on fallback (for example a low-context model taking over a long task), either
+  per task (a strict pin that waits instead of falling back) or fleet-wide. Not
+  in this change: every fallback is allowed and recorded (3.3).
 
 # 5. Constraints
 
@@ -136,3 +174,12 @@ win on priority: the Strata local account (`strata-local`) or one custom account
 6. Harness account (3.4): the column, validation, claim gate, wake, lease and
    failover narrowing, the channel's re-lease on an unfit held account, MCP and
    REST arguments, and an account select on the dashboard create and edit forms.
+7. Pin preference (3.2-3.4): `tasks.service` `engine_restriction` and the
+   account `_narrowed`, `_pinned_account` and `_only` become a preference that
+   falls back when the pinned provider or account has no usable account; the
+   `task.model_switched` event and snapshot field; NanoClaw `heldAccountFits`
+   and the harness model choice (pin kept only on the pinned provider, policy
+   default otherwise); `argus-delegate` report; dashboard task detail. Tests:
+   fallback on exhausted, disabled and offline, pin kept on any usable account,
+   `awaiting_quota` only when all allowed providers are spent, the event on
+   every fallback, executor pin unchanged.
