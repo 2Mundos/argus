@@ -55,8 +55,9 @@ scope (orchestrator, admin), as `GET /api/accounts` is. The MCP tools `list_acco
 - `account_usage` keeps one row per report, kept forever and aggregated on read.
   It gains `cached_input_tokens`, `model`, `engine` and `role`
   (`engine | executor`), and `attempt`: the task attempt the run belongs to
-  (null when unknown). `account_id` is null only on an attempt placeholder that
-  no account can be attributed to (§3.10).
+  (null when unknown). `account_id` is null on an attempt placeholder that no
+  account can be attributed to (§3.10), and on rows detached when their account
+  is deleted (kept as unattributed; never erased).
 - `account_quota` keeps the latest snapshot per (account, window). The fields:
   - `window`: `"<minutes>m"` for timed windows, or a pool name such as
     `cursor` or `third_party`;
@@ -399,6 +400,7 @@ reason). Unknown cost is never counted as zero
   attempt has no usage row yet, the API writes one `not_reported` row:
   - `run_key` `a1:<task_id>:<attempt>:<claim id>`, unique (index
     `account_usage_attempt_outcome`), so a repeated finish adds nothing;
+    claim id `0` means no recorded `task_attempts` row for that attempt;
   - `unmeasured_reason`: `no_report` (complete, fail, block), `lost` (lease
     expired, agent ended), `timeout`, `stalled`, `released`, `requeued`,
     `cancelled`;
@@ -413,10 +415,10 @@ reason). Unknown cost is never counted as zero
   placeholder (`a1:` key) turns that row into the measured one, in place,
   in one statement under `Database.write()`: figures, account, role, model,
   engine, `run_key`, `at`. Never the reverse: a `not_reported` report for an
-  attempt that already has a placeholder adds nothing, and a measured row is
-  never rewritten. A duplicate `run_key` is still a no-op, so a replayed report
-  neither double counts nor overwrites the first figures. A late report still
-  needs an active lease (§3.2).
+  attempt that already has a placeholder or any measured row adds nothing, and
+  a measured row is never rewritten. A duplicate `run_key` is still a no-op, so
+  a replayed report neither double counts nor overwrites the first figures. A
+  late report still needs an active lease (§3.2).
 - **Coverage.** Read models count attempts: an attempt is measured when any of
   its rows is, else not reported. Token and cost sums cover measured rows only.
 

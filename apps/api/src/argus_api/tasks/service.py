@@ -2695,22 +2695,24 @@ async def _states_of(
 async def _ensure_usage_outcome(
     tx: Tx, row: aiosqlite.Row, action: Action, data: dict[str, Any]
 ) -> None:
-    """Every leave-claimed write leaves a usage outcome (account usage 3.10)."""
+    """Every leave-claimed write leaves a usage outcome (account usage 3.10).
+
+    When no `task_attempts` row exists, claim id 0 is used (deterministic run_key
+    `a1:<task>:<attempt>:0`); 0 means no recorded claim.
+    """
     async with tx.conn.execute(
         "SELECT id, claimed_at, agent_id FROM task_attempts"
         " WHERE task_id = ? AND attempt = ? ORDER BY id DESC LIMIT 1",
         (row["id"], row["attempt"]),
     ) as cur:
         claim = await cur.fetchone()
-    if claim is None:
-        return
     await ensure_attempt_outcome(
         tx,
         task_id=row["id"],
         attempt=row["attempt"],
-        agent_id=row["assignee_agent_id"] or claim["agent_id"],
-        claim_id=claim["id"],
-        claimed_at=claim["claimed_at"],
+        agent_id=row["assignee_agent_id"] or (claim["agent_id"] if claim else None),
+        claim_id=claim["id"] if claim else 0,
+        claimed_at=claim["claimed_at"] if claim else None,
         reason=_usage_outcome_reason(action, data),
     )
 

@@ -72,7 +72,10 @@ ATTEMPTS_SQL = (
 # come from distinct (task, attempt) pairs with any usage row (account usage 3.10).
 USAGE_SQL = (
     "SELECT u.task_id,"
+    # Tokens only when a measured row actually reported some; cost-only measured
+    # (legal: tokens OR cost) must stay NULL, never coalesce into an invented 0.
     " sum(CASE WHEN u.measurement = 'measured'"
+    "     AND (u.input_tokens IS NOT NULL OR u.output_tokens IS NOT NULL)"
     "     THEN coalesce(u.input_tokens, 0) + coalesce(u.output_tokens, 0) END)"
     " AS tokens,"
     " sum(CASE WHEN u.measurement = 'measured' THEN u.cost_usd END) AS cost,"
