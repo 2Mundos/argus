@@ -223,6 +223,8 @@ every new dependency is judged against it.
 - [Auth health investigation](research/2026-10-29.auth-health.research.md) —
   derivability of the last-accepted and last-rejected timestamps, Claude's stream auth-failure signal (2.1.296),
   Codex `auth_expired` path, and the spec-update plan
+- [Agent shell command guard](research/2026-10-29.command-guard.research.md) —
+  Claude/Codex hook registration, Codex pin, failure class, event, setting, rule list
 
 - [Preferred models](specs/model-selection.spec.md)
 - [Task difficulty, executor routing and escalation](specs/task-difficulty.spec.md) — trivial tasks prefer
