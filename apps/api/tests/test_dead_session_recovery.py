@@ -290,7 +290,7 @@ def test_classify_unreadable_payload_is_anomalous() -> None:
 
 @pytest.mark.parametrize("state", ["ready", "pending", "blocked"])
 async def test_overdue_counts_every_waiting_state(db: Database, state: str) -> None:
-    """Each waiting state is pending; age counts unclaimed queue wait, not work."""
+    """Each waiting state is pending; age counts time unclaimed, not work."""
     await session_lost(db, f"old-{state}", at(1), state=state)
     await session_lost(db, f"young-{state}", NOW - timedelta(seconds=10), state=state)
     r = await recovery(db)
@@ -356,12 +356,18 @@ EXPECTED_EVENT_INDEXES = frozenset(
 )
 
 
+# `SCAN e`, `SEARCH e USING ...`; older SQLite also prints `SCAN TABLE events`.
+PLAN_NODE = re.compile(r"(SCAN|SEARCH) (?:TABLE )?(\w+)")
+
+
 def event_scans(plan: list[str]) -> list[str]:
     """Full reads of events under any alias (a covering index scan counts too)."""
     return [
         line
         for line in plan
-        if line.startswith("SCAN ") and line.split()[1] in EVENT_ALIASES
+        if (node := PLAN_NODE.match(line))
+        and node.group(1) == "SCAN"
+        and node.group(2) in EVENT_ALIASES
     ]
 
 
@@ -370,8 +376,14 @@ def event_searches(plan: list[str]) -> set[tuple[str, str]]:
     found = set()
     for line in plan:
         index = re.search(r"USING (?:COVERING )?INDEX (\w+)", line)
-        if line.startswith("SEARCH ") and index and line.split()[1] in EVENT_ALIASES:
-            found.add((line.split()[1], index.group(1)))
+        node = PLAN_NODE.match(line)
+        if (
+            node
+            and node.group(1) == "SEARCH"
+            and index
+            and node.group(2) in EVENT_ALIASES
+        ):
+            found.add((node.group(2), index.group(1)))
     return found
 
 

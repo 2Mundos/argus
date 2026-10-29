@@ -216,7 +216,7 @@ describe("Fleet", () => {
     expect(card?.textContent).toContain("p50 no data");
     expect(card?.textContent).toContain("measured 2 of 2");
     expect(card?.textContent).toContain("observed lost, not death time");
-    expect(card?.textContent).toContain("the age is queue wait, not worker speed");
+    expect(card?.textContent).toContain("the age is time unclaimed, not worker speed");
     expect(card?.textContent).toContain("outliers (≥ 5.0 min) 0");
   });
 

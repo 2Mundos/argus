@@ -209,7 +209,7 @@ function Body({ h }: { h: FleetHealth }) {
             ended unclaimed {d.ended_unclaimed} · not requeued {d.not_requeued} · anomalous{" "}
             {d.anomalous}
             {" · "}
-            observed lost, not death time; the age is queue wait, not worker speed
+            observed lost, not death time; the age is time unclaimed, not worker speed
           </p>
           <Caption window={d.window_hours} source={d.source} />
         </Card>
