@@ -15,6 +15,7 @@ import { EventList } from "./EventList";
 import { TaskChanges } from "./TaskChanges";
 import { TaskEditForm } from "./TaskEditForm";
 import { TaskLog } from "./TaskLog";
+import { TaskSteers } from "./TaskSteers";
 
 export function TaskDetail({
   taskId,
@@ -31,6 +32,7 @@ export function TaskDetail({
   const [agentId, setAgentId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [picked, setPicked] = useState<number | null>(null);
+  const [steerOpen, setSteerOpen] = useState(false);
   const { data, reload } = useLiveData(
     (signal) =>
       Promise.all([
@@ -73,8 +75,33 @@ export function TaskDetail({
   const [task, artifacts, events, delivery, modelTrace, attemptList] = data ?? [];
   const current = task?.attempt ?? 0;
   // A new current attempt (or another task) re-selects the current one.
-  useEffect(() => setPicked(null), [taskId, current]);
+  useEffect(() => {
+    setPicked(null);
+    setSteerOpen(false);
+  }, [taskId, current]);
   const attemptNumbers = Array.isArray(attemptList) ? attemptList.map((a) => a.attempt) : [];
+  const steerable = task?.state === "claimed" && current > 0;
+  const assigneeId = task?.assignee_agent_id ?? null;
+  const { data: assignee, error: assigneeError } = useLiveData(
+    async (signal) =>
+      steerable && assigneeId
+        ? call(
+            api.GET("/api/agents/{agent_id}", {
+              params: { path: { agent_id: assigneeId } },
+              signal,
+            }),
+          )
+        : null,
+    [steerable, assigneeId],
+  );
+  // Unknown until the assignee loads; a failed lookup counts as unsupported.
+  const supportsSteer = !steerable
+    ? undefined
+    : assignee
+      ? (assignee.runtime?.features?.includes("steer") ?? false)
+      : assigneeError
+        ? false
+        : undefined;
   const selected = picked !== null && attemptNumbers.includes(picked) ? picked : current;
   const modelAttempts = [...new Set(modelTrace?.executions.map((run) => run.attempt) ?? [])].sort(
     (a, b) => b - a,
@@ -314,12 +341,33 @@ export function TaskDetail({
                   Archive
                 </button>
               ))}
+            {steerable && selected === task.attempt && supportsSteer !== false && (
+              <button
+                type="button"
+                aria-expanded={steerOpen}
+                onClick={() => setSteerOpen((open) => !open)}
+              >
+                {steerOpen ? "Close steer" : "Steer"}
+              </button>
+            )}
             {!ARCHIVABLE.includes(task.state) && (
               <button type="button" className="danger" onClick={() => act("cancel")}>
                 Cancel task
               </button>
             )}
           </div>
+          {steerable && selected === task.attempt && supportsSteer !== false && (
+            <TaskSteers
+              taskId={taskId}
+              attempt={task.attempt}
+              claimed
+              assigneeId={assigneeId}
+              supportsSteer={supportsSteer}
+              composerOpen={steerOpen}
+              onComposerOpenChange={setSteerOpen}
+              showList={false}
+            />
+          )}
           {error && <p className="error">{error}</p>}
           {task.error && <p className="error">Last error: {task.error}</p>}
           {editing ? (
@@ -345,7 +393,7 @@ export function TaskDetail({
               attempt={selected}
               steer={
                 selected === task.attempt
-                  ? { claimed: task.state === "claimed", assigneeId: task.assignee_agent_id }
+                  ? { claimed: task.state === "claimed", assigneeId, supportsSteer }
                   : undefined
               }
             />

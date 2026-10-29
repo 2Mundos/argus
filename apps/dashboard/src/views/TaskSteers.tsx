@@ -6,7 +6,7 @@ import { useNow } from "./Activity";
 
 /**
  * Steers for the attempt in flight (task steering spec 3.9). The composer opens
- * from the terminal's Steer button; the message is text, never HTML.
+ * from the terminal's or the actions row's Steer button; the message is text, never HTML.
  */
 export function TaskSteers({
   taskId,
@@ -16,6 +16,7 @@ export function TaskSteers({
   supportsSteer,
   composerOpen,
   onComposerOpenChange,
+  showList = true,
 }: {
   taskId: string;
   attempt: number;
@@ -24,6 +25,8 @@ export function TaskSteers({
   supportsSteer?: boolean;
   composerOpen: boolean;
   onComposerOpenChange: (open: boolean) => void;
+  /** False for the composer in the task actions row: the Live panel owns the list. */
+  showList?: boolean;
 }) {
   const now = useNow();
   const [draft, setDraft] = useState("");
@@ -54,7 +57,7 @@ export function TaskSteers({
   const can = supportsSteer ?? assignee?.runtime?.features?.includes("steer") ?? false;
   const known =
     supportsSteer !== undefined || !needsLookup || assignee !== undefined || !!lookupError;
-  const items = page?.items ?? [];
+  const items = showList ? (page?.items ?? []) : [];
 
   useEffect(() => {
     if (composerOpen) box.current?.focus();
