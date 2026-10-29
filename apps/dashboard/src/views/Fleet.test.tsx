@@ -216,6 +216,7 @@ describe("Fleet", () => {
     expect(card?.textContent).toContain("p50 no data");
     expect(card?.textContent).toContain("measured 2 of 2");
     expect(card?.textContent).toContain("observed lost, not death time");
+    expect(card?.textContent).toContain("the age is queue wait, not worker speed");
     expect(card?.textContent).toContain("outliers (≥ 5.0 min) 0");
   });
 
@@ -227,7 +228,7 @@ describe("Fleet", () => {
     render(<Fleet />);
     const card = (await screen.findByRole("heading", { name: "session_lost → next claim" }))
       .parentElement;
-    expect(card?.textContent).toContain("pending 3 (waiting ≥ 5.0 min: 2)");
+    expect(card?.textContent).toContain("pending 3 (unclaimed ≥ 5.0 min since loss: 2)");
     expect(card?.textContent).toContain("ended unclaimed 1");
     expect(card?.textContent).toContain("p50 no data"); // pending never becomes a latency
   });
@@ -244,7 +245,7 @@ describe("Fleet", () => {
     render(<Fleet />);
     const card = (await screen.findByRole("heading", { name: "session_lost → next claim" }))
       .parentElement;
-    expect(card?.textContent).toContain("pending 0 (waiting ≥ 5.0 min: 0)");
+    expect(card?.textContent).toContain("pending 0 (unclaimed ≥ 5.0 min since loss: 0)");
     expect(screen.queryByText("Showing the newest 5000 rows only.")).toBeNull();
   });
 
