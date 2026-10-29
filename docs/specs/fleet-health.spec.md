@@ -122,10 +122,10 @@ dead-session recovery coverage and latency.
   asserts timing, so these figures are not reproducible from the repo. Hardware and
   production numbers differ.
   - 1000 fails, 3k events total: 2.7 ms. 1000 fails with 200k unrelated events: 2.7 ms,
-    so unrelated history does not slow the query.
+    so in that run unrelated history did not slow the query.
   - Same 1000 fails, with 100 / 1000 / 5000 `task.progress` events of each task
     between its fail and claim: 21 / 171 / 802 ms. The per-task walk, not the table,
-    is the cost, and it grows roughly linearly with those later events.
+    is the cost; in that run it grew roughly linearly with those later events.
   - 5000 fails (3600 in window), 215k events: about 10 ms.
   - Regression contrast, 1000 fails with 200k unrelated events: dropping
     `events_kind_at` gives `SCAN e` at 9.0 ms; dropping `events_subject` gives
