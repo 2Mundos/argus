@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Pool, TemplateCatalog } from "../api";
 import { catalog, nanoclawCatalog } from "../catalogFixture";
-import { PoolEditor } from "./PoolEditor";
+import { PoolEditor, resetSessionCatalogForTests } from "./PoolEditor";
 
 const net = vi.hoisted(() => {
   const net = { handler: (_: Request): Response | Promise<Response> => new Response("{}") };
@@ -21,7 +21,10 @@ const net = vi.hoisted(() => {
   return net;
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetSessionCatalogForTests();
+});
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -198,6 +201,30 @@ describe("PoolEditor images", () => {
     expect(writes(seen)).toHaveLength(0);
   });
 
+  it("still refuses a host/agent mix-up when the catalog is in error, using a previously loaded catalog", async () => {
+    serve(nanoclawCatalog());
+    open();
+    await screen.findByRole("option", { name: "argus-nanoclaw-host:dev" });
+    cleanup();
+    // Session keeps the last successful catalog; a fresh mount that fails to load still uses it
+    // for cross-role checks (and does not show the unverified-roles hint).
+    const seen = serve(json({ detail: "boom" }, 500));
+    open();
+    expect(await screen.findAllByText(/image catalog could not be loaded/)).toHaveLength(2);
+    expect(
+      screen.queryByText(/role names cannot be verified against configured images/),
+    ).toBeNull();
+    const host = screen.getByLabelText("Host image") as HTMLInputElement;
+    await userEvent.clear(host);
+    await userEvent.type(host, "nc-agent:1");
+    const agent = screen.getByLabelText("NanoClaw agent image") as HTMLInputElement;
+    await userEvent.clear(agent);
+    await userEvent.type(agent, "nc-agent:2");
+    await save();
+    expect(await screen.findByText(/is the NanoClaw agent image/)).toBeTruthy();
+    expect(writes(seen)).toHaveLength(0);
+  });
+
   it("rejects an invalid typed reference before sending", async () => {
     const seen = serve(nanoclawCatalog());
     open();
@@ -317,6 +344,64 @@ describe("PoolEditor concurrency and server errors", () => {
     );
     await waitFor(() =>
       expect((screen.getByLabelText(/Max replicas/) as HTMLInputElement).value).toBe("9"),
+    );
+  });
+
+  it("after Discard, the agent-image control matches the restored catalog value, not a stale Other input", async () => {
+    const latest = {
+      ...pool,
+      version: "v2",
+      nanoclaw: { ...pool.nanoclaw, agent_image: "nc-agent:1" },
+    } as Pool;
+    serve(nanoclawCatalog(), (req) => (req.method === "PATCH" ? stale() : json(latest)));
+    open();
+    await ready();
+    await userEvent.selectOptions(
+      screen.getByLabelText("NanoClaw agent image"),
+      "Other: type a reference…",
+    );
+    const typed = screen.getByLabelText("NanoClaw agent image (typed reference)");
+    await userEvent.clear(typed);
+    await userEvent.type(typed, "custom-agent:9");
+    await save();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Discard my edits and reload" }),
+    );
+    await waitFor(() => {
+      const agent = screen.getByLabelText("NanoClaw agent image") as HTMLSelectElement;
+      expect(agent.tagName).toBe("SELECT");
+      expect(agent.value).toBe("nc-agent:1");
+    });
+    expect(screen.queryByLabelText("NanoClaw agent image (typed reference)")).toBeNull();
+  });
+
+  it("after Keep, a genuinely custom typed agent image stays in the Other input", async () => {
+    const latest = {
+      ...pool,
+      version: "v2",
+      max_replicas: 9,
+      nanoclaw: { ...pool.nanoclaw, agent_image: "nc-agent:1" },
+    } as Pool;
+    serve(nanoclawCatalog(), (req) => (req.method === "PATCH" ? stale() : json(latest)));
+    open();
+    await ready();
+    await userEvent.selectOptions(
+      screen.getByLabelText("NanoClaw agent image"),
+      "Other: type a reference…",
+    );
+    const typed = screen.getByLabelText("NanoClaw agent image (typed reference)");
+    await userEvent.clear(typed);
+    await userEvent.type(typed, "custom-agent:9");
+    await save();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Keep my edits on the latest version" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(
+      (screen.getByLabelText("NanoClaw agent image (typed reference)") as HTMLInputElement).value,
+    ).toBe("custom-agent:9");
+    expect((screen.getByLabelText("NanoClaw agent image") as HTMLSelectElement).value).toBe(
+      "\u0000custom",
     );
   });
 
