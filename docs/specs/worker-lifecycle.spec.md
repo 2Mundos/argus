@@ -913,10 +913,12 @@ database never holds a secret.
   disabled account stays disabled. A document is only stored, never treated as
   proof of authentication.
   Disabling is reversible and is not deletion.
-  `DELETE /api/accounts/{id}?confirm_name=<name>` removes the registry row, its
-  usage history and its ended leases, and the `account-*` secret Argus generated
-  unless another account still references it (operator-managed refs are never
-  removed). `confirm_name` must equal the current name (`409 name_mismatch`:
+  `DELETE /api/accounts/{id}?confirm_name=<name>` removes the registry row and
+  its ended leases; usage rows are detached from the account (`account_id` and
+  `role` cleared) and kept as unattributed so finished attempts keep their
+  outcome ([account usage](account-usage.spec.md) 3.10). The `account-*` secret
+  Argus generated is removed unless another account still references it
+  (operator-managed refs are never removed). `confirm_name` must equal the current name (`409 name_mismatch`:
   a renamed or wrong target is refused) and an account with an active lease is
   refused (`409 account_in_use`); disabled accounts can be deleted.
   **The SOPS file and SQLite do not share a transaction.** The secret is removed

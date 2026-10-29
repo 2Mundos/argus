@@ -102,7 +102,7 @@ async def insert_usage(
 
     A measured report for an attempt whose only row is an `a1:` placeholder upgrades
     that row in place (account usage 3.10). A not_reported report never downgrades
-    a placeholder or a measured row.
+    a placeholder or a measured row: if the attempt already has either, it is a no-op.
     """
     unmeasured = reason if measurement == "not_reported" else None
     at = ts(tx.now)
@@ -132,9 +132,12 @@ async def insert_usage(
         measurement == "not_reported"
         and task_id is not None
         and attempt is not None
-        and await _attempt_has_placeholder(tx.conn, task_id, attempt)
+        and (
+            await _attempt_has_placeholder(tx.conn, task_id, attempt)
+            or await _attempt_has_measured(tx.conn, task_id, attempt)
+        )
     ):
-        return  # never add a second not_reported over the API's own placeholder
+        return  # never add not_reported over a placeholder or a measured row
     await tx.conn.execute(
         "INSERT INTO account_usage (account_id, agent_id, task_id, attempt,"
         " input_tokens, output_tokens, cached_input_tokens, cost_usd, model, engine,"
@@ -169,6 +172,17 @@ async def _attempt_has_placeholder(
         " AND measurement = 'not_reported' AND substr(run_key, 1, 3) = ?"
         " LIMIT 1",
         (task_id, attempt, PLACEHOLDER_PREFIX),
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
+async def _attempt_has_measured(
+    conn: aiosqlite.Connection, task_id: str, attempt: int
+) -> bool:
+    async with conn.execute(
+        "SELECT 1 FROM account_usage WHERE task_id = ? AND attempt = ?"
+        " AND measurement = 'measured' LIMIT 1",
+        (task_id, attempt),
     ) as cur:
         return await cur.fetchone() is not None
 

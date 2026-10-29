@@ -161,6 +161,51 @@ async def test_expire_maps_lost_timeout_stalled(
     assert (await usage_rows(db, task.id))[0]["unmeasured_reason"] == "lost"
 
 
+async def test_expire_timeouts_writes_timeout_reason(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    acc = await add_account(db, store)
+    async with db.write() as tx:
+        await tasks.create_task(
+            tx,
+            TaskCreate(project="global", title="timeout usage", timeout_s=60),
+            "admin:test",
+        )
+        task = await tasks.claim(tx, A, [])
+        assert task is not None
+        await accounts.lease(
+            tx,
+            A,
+            ["openai"],
+            store,
+            "engine",
+            task_id=task.id,
+            attempt=task.attempt,
+        )
+    clock.advance(61)
+    async with db.write() as tx:
+        assert await tasks.expire_timeouts(tx) == [task.id]
+    rows = await usage_rows(db, task.id)
+    assert rows[0]["unmeasured_reason"] == "timeout"
+    assert rows[0]["account_id"] == acc
+
+
+async def test_expire_stalled_writes_stalled_reason(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    acc = await add_account(db, store)
+    task = await claim_with_lease(db, store, acc)
+    async with db.write() as tx:
+        # Flag quiet so expire_stalled will consider it; last signal is claim time.
+        await tx.conn.execute(
+            "UPDATE tasks SET quiet_at = ? WHERE id = ?", (ts(tx.now), task.id)
+        )
+    clock.advance(100)
+    async with db.write() as tx:
+        assert await tasks.expire_stalled(tx, stall_after_s=60) == [task.id]
+    assert (await usage_rows(db, task.id))[0]["unmeasured_reason"] == "stalled"
+
+
 async def test_no_engine_lease_leaves_null_account(
     db: Database, store: MemorySecretStore
 ) -> None:
@@ -268,6 +313,42 @@ async def test_not_reported_after_placeholder_adds_nothing(
             ),
         )
     assert len(await usage_rows(db, task.id)) == 1
+
+
+async def test_not_reported_after_measured_adds_nothing(
+    db: Database, store: MemorySecretStore
+) -> None:
+    acc = await add_account(db, store)
+    task = await claim_with_lease(db, store, acc)
+    async with db.write() as tx:
+        await accounts.record_usage(
+            tx,
+            acc,
+            A,
+            UsageReport(
+                task_id=task.id,
+                attempt=task.attempt,
+                input_tokens=3,
+                run_key="r1:measured",
+            ),
+        )
+        await accounts.record_usage(
+            tx,
+            acc,
+            A,
+            UsageReport(
+                task_id=task.id,
+                attempt=task.attempt,
+                measurement="not_reported",
+                reason="no_usage_in_output",
+                run_key="r1:late-nr",
+            ),
+        )
+        await tasks.complete(tx, A, task.id, task.attempt, DONE)
+    rows = await usage_rows(db, task.id)
+    assert len(rows) == 1
+    assert rows[0]["measurement"] == "measured"
+    assert rows[0]["run_key"] == "r1:measured"
 
 
 async def test_duplicate_finish_and_duplicate_run_key_are_noop(
@@ -385,6 +466,48 @@ async def test_concurrent_placeholder_writers(
         == f"{PLACEHOLDER_PREFIX}{task.id}:{task.attempt}:{claim['id']}"
     )
     assert rows[0]["account_id"] == acc
+
+
+async def test_ensure_outcome_without_claim_row_uses_claim_id_zero(
+    db: Database, store: MemorySecretStore
+) -> None:
+    """Leave-claimed with no task_attempts row still writes a1:…:0."""
+    async with db.write() as tx:
+        await tasks.create_task(
+            tx, TaskCreate(project="global", title="no claim row"), "admin:test"
+        )
+        task = await tasks.claim(tx, A, [])
+        assert task is not None
+        await tx.conn.execute(
+            "DELETE FROM task_attempts WHERE task_id = ? AND attempt = ?",
+            (task.id, task.attempt),
+        )
+        await tasks.complete(tx, A, task.id, task.attempt, DONE)
+    rows = await usage_rows(db, task.id)
+    assert len(rows) == 1
+    assert rows[0]["run_key"] == f"{PLACEHOLDER_PREFIX}{task.id}:{task.attempt}:0"
+    assert rows[0]["measurement"] == "not_reported"
+
+
+async def test_delete_account_detaches_usage_keeps_attempt_outcome(
+    db: Database, store: MemorySecretStore
+) -> None:
+    acc = await add_account(db, store, name="doomed")
+    task = await claim_with_lease(db, store, acc)
+    async with db.write() as tx:
+        await tasks.complete(tx, A, task.id, task.attempt, DONE)
+        await accounts.release(tx, A, "test")
+    before = (await usage_rows(db, task.id))[0]
+    assert before["account_id"] == acc
+    async with db.write() as tx:
+        await accounts.delete_account(tx, acc, "doomed", "admin:test")
+    after = (await usage_rows(db, task.id))[0]
+    assert after["account_id"] is None
+    assert after["role"] is None
+    assert after["measurement"] == before["measurement"]
+    assert after["attempt"] == before["attempt"]
+    assert after["run_key"] == before["run_key"]
+    assert after["unmeasured_reason"] == before["unmeasured_reason"]
 
 
 async def test_cost_unattributed_and_attempt_coverage(

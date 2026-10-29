@@ -193,9 +193,11 @@ async def update_account(
 async def delete_account(
     tx: Tx, account_id: str, confirm_name: str, actor: str
 ) -> str | None:
-    """Remove an account, its usage history and its ended leases. `confirm_name`
-    must be the account's current name, so a stale or wrong target is refused;
-    an account with an active lease is refused.
+    """Remove an account and its ended leases. Usage rows are detached
+    (`account_id` and `role` cleared) so finished attempts keep their outcome
+    (account usage 3.10) and show in Cost as unattributed. `confirm_name` must
+    be the account's current name, so a stale or wrong target is refused; an
+    account with an active lease is refused.
 
     Returns the name of the Argus-generated secret that is now unreferenced and
     should be removed by the caller, or None. The secret store is not part of
@@ -216,8 +218,10 @@ async def delete_account(
             f"account has {active} active lease(s); wait for release or disable it",
             code="account_in_use",
         )
+    # Detach, do not delete: attempt outcomes stay for coverage and Cost.
     await tx.conn.execute(
-        "DELETE FROM account_usage WHERE account_id = ?", (account_id,)
+        "UPDATE account_usage SET account_id = NULL, role = NULL WHERE account_id = ?",
+        (account_id,),
     )
     await tx.conn.execute(
         "DELETE FROM account_leases WHERE account_id = ?", (account_id,)
