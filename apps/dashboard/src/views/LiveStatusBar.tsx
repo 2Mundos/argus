@@ -4,7 +4,7 @@ import { describeEvent, isTransientEvent } from "../eventLine";
 import { relative, shortId } from "../format";
 import { useLive } from "../live";
 import { useNow } from "./Activity";
-import { EventList } from "./Events";
+import { EventList } from "./EventList";
 
 const SEED_LIMIT = 100;
 const MAX = 100;

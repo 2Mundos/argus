@@ -13,7 +13,7 @@ import {
   type Verdict,
   verdict,
 } from "../overview";
-import { EventList } from "./Events";
+import { EventList } from "./EventList";
 import { SystemWidgets } from "./SystemWidgets";
 
 function useSource<T>(

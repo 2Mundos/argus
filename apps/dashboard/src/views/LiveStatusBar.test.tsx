@@ -65,9 +65,7 @@ afterEach(() => {
 
 describe("LiveStatusBar", () => {
   it("seeds from history and expands on click", async () => {
-    mock.history = [
-      event({ id: 1, kind: "task.claim", data: { from: "ready", to: "claimed" } }),
-    ];
+    mock.history = [event({ id: 1, kind: "task.claim", data: { from: "ready", to: "claimed" } })];
     render(<LiveStatusBar />);
     const strip = await screen.findByRole("button", { name: "Live status" });
     expect(strip.getAttribute("aria-expanded")).toBe("false");

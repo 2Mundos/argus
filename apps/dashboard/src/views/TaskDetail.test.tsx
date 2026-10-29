@@ -37,7 +37,7 @@ vi.mock("../live", async () => {
 });
 vi.mock("./Activity", () => ({ Activity: () => null }));
 vi.mock("./AgentDetail", () => ({ AgentDetail: () => null }));
-vi.mock("./Events", () => ({ EventList: () => null }));
+vi.mock("./EventList", () => ({ EventList: () => null }));
 vi.mock("./TaskEditForm", () => ({ TaskEditForm: () => null }));
 vi.mock("./TaskLog", () => ({ TaskLog: () => null }));
 vi.mock("../delivery", () => ({ TaskDelivery: () => null }));

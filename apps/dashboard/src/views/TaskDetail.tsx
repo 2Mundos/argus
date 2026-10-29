@@ -10,7 +10,7 @@ import { TaskLabel } from "../TaskLabel";
 import { pinText } from "../taskEdit";
 import { Activity } from "./Activity";
 import { AgentDetail } from "./AgentDetail";
-import { EventList } from "./Events";
+import { EventList } from "./EventList";
 import { TaskChanges } from "./TaskChanges";
 import { TaskEditForm } from "./TaskEditForm";
 import { TaskLog } from "./TaskLog";
