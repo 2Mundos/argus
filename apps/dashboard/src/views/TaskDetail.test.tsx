@@ -8,6 +8,7 @@ const mock = vi.hoisted(() => ({
   task: {} as Record<string, unknown>,
   trace: {} as Record<string, unknown>,
   artifacts: [] as Record<string, unknown>[],
+  events: [] as Record<string, unknown>[],
 }));
 vi.mock("../api", () => ({
   api: { GET: (path: string) => path },
@@ -19,7 +20,7 @@ vi.mock("../api", () => ({
         : path.includes("artifacts")
           ? mock.artifacts
           : path.includes("events")
-            ? []
+            ? mock.events
             : mock.task,
   download: vi.fn(),
 }));
@@ -37,7 +38,15 @@ vi.mock("../live", async () => {
 });
 vi.mock("./Activity", () => ({ Activity: () => null }));
 vi.mock("./AgentDetail", () => ({ AgentDetail: () => null }));
-vi.mock("./EventList", () => ({ EventList: () => null }));
+vi.mock("./EventList", () => ({
+  EventList: ({ events }: { events: { id: string; kind: string }[] }) => (
+    <ul aria-label="History events">
+      {events.map((e) => (
+        <li key={e.id}>{e.kind}</li>
+      ))}
+    </ul>
+  ),
+}));
 vi.mock("./TaskEditForm", () => ({ TaskEditForm: () => null }));
 vi.mock("./TaskLog", () => ({ TaskLog: () => null }));
 vi.mock("../delivery", () => ({ TaskDelivery: () => null }));
@@ -67,6 +76,7 @@ const base = {
 afterEach(() => {
   cleanup();
   mock.artifacts = [];
+  mock.events = [];
 });
 describe("TaskDetail model trace", () => {
   it("renders attempt grouped harness and delegate executions, evidence, accounts, usage and switches", async () => {
@@ -156,5 +166,37 @@ describe("TaskDetail artifacts", () => {
       screen.getByText("shot.png").click();
     });
     expect(download).toHaveBeenCalledWith("/api/artifacts/a1/content", "shot.png");
+  });
+});
+
+describe("TaskDetail history window", () => {
+  const event = (i: number, kind: string) => ({ id: `e${i}`, kind, attempt: 1 });
+  const truncation = /Only the newest 50 events are shown\. Older events are not listed\./;
+  async function open() {
+    mock.task = base;
+    mock.trace = { executions: [], timeline: [] };
+    await act(async () => {
+      render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    });
+  }
+
+  it("lists a prior attempt's events that are inside the page", async () => {
+    mock.events = [event(2, "task.retried"), event(1, "task.failed")];
+    await open();
+    const list = screen.getByRole("list", { name: "History events" });
+    expect(list.textContent).toContain("task.retried");
+    expect(list.textContent).toContain("task.failed");
+  });
+
+  it("says older events are not listed when the page is full", async () => {
+    mock.events = Array.from({ length: 50 }, (_, i) => event(i, "task.progress"));
+    await open();
+    expect(screen.getByText(truncation)).toBeTruthy();
+  });
+
+  it("shows no truncation line for a shorter page", async () => {
+    mock.events = Array.from({ length: 49 }, (_, i) => event(i, "task.progress"));
+    await open();
+    expect(screen.queryByText(truncation)).toBeNull();
   });
 });

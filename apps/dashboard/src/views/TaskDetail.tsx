@@ -16,6 +16,9 @@ import { TaskChanges } from "./TaskChanges";
 import { TaskEditForm } from "./TaskEditForm";
 import { TaskLog } from "./TaskLog";
 
+/** Size of the History page; a full page may hide older events. */
+const HISTORY_LIMIT = 50;
+
 export function TaskDetail({
   taskId,
   onClose,
@@ -43,7 +46,7 @@ export function TaskDetail({
         ),
         call(
           api.GET("/api/events", {
-            params: { query: { subject_id: taskId, limit: 50 } },
+            params: { query: { subject_id: taskId, limit: HISTORY_LIMIT } },
             signal,
           }),
         ),
@@ -388,6 +391,11 @@ export function TaskDetail({
             </>
           )}
           <h3>History</h3>
+          {events?.length === HISTORY_LIMIT && (
+            <p className="muted small">
+              Only the newest {HISTORY_LIMIT} events are shown. Older events are not listed.
+            </p>
+          )}
           <EventList events={events ?? []} />
         </>
       )}

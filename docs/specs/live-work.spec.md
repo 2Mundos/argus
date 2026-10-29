@@ -107,6 +107,22 @@ The sources are:
   (newest first) in a scrollable feed and links to `#events` for the full tab.
   Click the strip again or press Escape to collapse. No new API or table.
 
+## 3.5 Task history window
+
+- The task detail's **History** lists the events of the task (`subject_id` =
+  the task) from `GET /api/events?subject_id={id}&limit=50`, newest first. The
+  API returns no total, so the page is the only bound.
+- **No silent omission.** When the page holds 50 events, the History section
+  shows the line "Only the newest 50 events are shown. Older events are not
+  listed." above the table. A shorter page shows no such line, because it is the
+  whole history.
+- Events from earlier attempts are part of the same task history, so a prior
+  attempt's entries show here while they are inside the newest 50. Scoping
+  History to the attempt selected in the shared attempt strip (task-detail
+  gap 3) is a later change; this window is the fallback until it lands.
+- Artifacts and Models come from their own endpoints and are not part of this
+  window.
+
 # 4. Open Questions
 
 - Whether NanoClaw should send a progress note when the agent starts a tool or a
