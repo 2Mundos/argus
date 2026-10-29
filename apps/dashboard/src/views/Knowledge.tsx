@@ -68,6 +68,7 @@ export function Knowledge() {
           New page
         </button>
       </div>
+      <p className="page-lead">Pages the fleet can read, and the body of the one you open.</p>
       <div className="split">
         <ul className="page-list">
           {list.map((item) => (

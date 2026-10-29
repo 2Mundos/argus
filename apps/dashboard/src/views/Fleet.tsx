@@ -61,6 +61,7 @@ export function Fleet() {
           </select>
         </label>
       </div>
+      <p className="page-lead">The fleet numbers this page already computes.</p>
       {error !== undefined && (
         <p className="error" role="alert">
           Fleet health failed to load: {error.message}{" "}

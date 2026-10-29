@@ -87,7 +87,7 @@ A quiet container that is still running is never failed this way.
 - Inbox: quiet row copy "Quiet for N min; last signal: &lt;source&gt; at &lt;time&gt;",
   with the existing release and steer actions.
 - Worker rail: a busy chip with `quiet_since` shows state `quiet` and its age;
-  workers that ended in the last hour stay listed (dimmed) with `end_reason`.
+  the newest ended workers stay listed, at most eight, dimmed, with `end_reason`.
 
 ## 3.6 Stalled claims
 

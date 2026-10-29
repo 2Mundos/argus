@@ -107,7 +107,7 @@ export function Accounts() {
           Add account
         </button>
       </div>
-      <p className="muted small">
+      <p className="page-lead">
         Provider accounts agents lease. Credentials live encrypted in the SOPS file and are never
         shown here. When an account hits its quota, agents fall back to the next one.
       </p>

@@ -188,6 +188,10 @@ export function Agents() {
     }
   }
 
+  if (opened) {
+    return <AgentDetail agentId={opened} onClose={() => setOpened(null)} variant="panel" />;
+  }
+
   return (
     <section>
       <div className="toolbar">
@@ -210,6 +214,7 @@ export function Agents() {
           Archive old identities…
         </button>
       </div>
+      <p className="page-lead">Registered agents, their role and the last heartbeat.</p>
       {error && <p className="error">{error}</p>}
       <CreateWorker onError={setError} />
       {issued && (
@@ -289,7 +294,6 @@ export function Agents() {
           )}
         </tbody>
       </table>
-      {opened && <AgentDetail agentId={opened} onClose={() => setOpened(null)} />}
     </section>
   );
 }

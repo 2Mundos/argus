@@ -134,15 +134,18 @@ Findings outside the gap list:
     decision, `oldest_age_s` is the age of the group's oldest row, and
     `stalled_tasks` is the number of distinct tasks in the group's `blocks`.
     Groups follow the requested order (`impact`: `stalled_tasks` desc, then age).
-  - The dashboard Inbox reads `/api/inbox` (detail view), shows project headings
-    over these groups, and lets the manager tick up to 20 open decisions (the
-    `answers` batch limit). Each ticked decision carries its own answer (choice
-    and/or text). A confirmation step lists every decision with the answer that
-    will be sent, and sends `POST /api/decisions/answers` only on confirm; nothing
-    is answered automatically. The result of each item is shown (`ok`, `replayed`,
-    or the error message). Retrying failed items resends them with the
-    `request_id` first generated for that item, so a retry never duplicates an
-    answer. Accept/reject and audience rules are unchanged.
+  - The dashboard Inbox reads `/api/inbox` (detail view) and splits the rows by
+    `decision_kind` (`question`, `approval`, `review`, `knowledge`, `policy`,
+    then `none` for a row with no open decision). Each kind is a section with
+    its count. Project headings and task groups stay inside that section. The
+    manager can tick up to 20 open decisions (the `answers` batch limit). Each
+    ticked decision carries its own answer (choice and/or text). A confirmation
+    step lists every decision with the answer that will be sent, and sends
+    `POST /api/decisions/answers` only on confirm; nothing is answered
+    automatically. The result of each item is shown (`ok`, `replayed`, or the
+    error message). Retrying failed items resends them with the `request_id`
+    first generated for that item, so a retry never duplicates an answer.
+    Accept/reject and audience rules are unchanged.
 - **`GET /api/tasks`** gains `project`, `kind`, repeated `state`, `view` and
   `cursor`. It always returns the page envelope. The dashboard moves to the new
   shape in the same PR, so the generated client keeps a single response type.

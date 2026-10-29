@@ -17,6 +17,46 @@ const dur = (s: number) =>
         ? `${Math.floor(s / 3600)}h`
         : `${Math.floor(s / 86_400)}d`;
 
+const KIND_ORDER = ["question", "approval", "review", "knowledge", "policy", "none"] as const;
+
+function itemKind(item: InboxItem): string {
+  return item.decision_kind ?? "none";
+}
+
+function kindLabel(kind: string): string {
+  if (kind === "none") return "No decision";
+  return kind.charAt(0).toUpperCase() + kind.slice(1);
+}
+
+function kindSections(
+  groups: InboxGroup[],
+  byGroup: Map<string, InboxItem[]>,
+  totals: Record<string, number> | undefined,
+) {
+  const byKind = new Map<string, Map<string, InboxGroup[]>>();
+  for (const group of groups) {
+    const present = new Set((byGroup.get(group.key) ?? []).map(itemKind));
+    for (const kind of present) {
+      const projects = byKind.get(kind) ?? new Map<string, InboxGroup[]>();
+      const name = group.project ?? "Pools";
+      const list = projects.get(name) ?? [];
+      list.push(group);
+      projects.set(name, list);
+      byKind.set(kind, projects);
+    }
+  }
+  const rank = new Map<string, number>(KIND_ORDER.map((kind, index) => [kind, index]));
+  return [...byKind.keys()]
+    .sort((a, b) => (rank.get(a) ?? 99) - (rank.get(b) ?? 99) || a.localeCompare(b))
+    .map((kind) => ({
+      kind,
+      count:
+        totals?.[kind] ??
+        [...byGroup.values()].flat().filter((item) => itemKind(item) === kind).length,
+      projects: [...(byKind.get(kind) ?? [])],
+    }));
+}
+
 export function Inbox() {
   const [order, setOrder] = useState<"age" | "impact">("age");
   const [blockingOnly, setBlockingOnly] = useState(false);
@@ -41,17 +81,12 @@ export function Inbox() {
   const byGroup = new Map<string, InboxItem[]>();
   for (const item of page?.items ?? [])
     byGroup.set(item.group, [...(byGroup.get(item.group) ?? []), item]);
-  // Project headings over the page's groups, in the requested order.
-  const projects = new Map<string, InboxGroup[]>();
-  for (const g of page?.groups ?? []) {
-    const name = g.project ?? "Pools";
-    projects.set(name, [...(projects.get(name) ?? []), g]);
-  }
   const entries: Entry[] = selected.flatMap((id) => {
     const decision = page?.items.find((i) => i.decision?.id === id)?.decision;
     return decision ? [{ decision, draft: draftOf(id) }] : [];
   });
   const ready = entries.length > 0 && entries.every(isAnswerable);
+  const kinds = kindSections(page?.groups ?? [], byGroup, page?.totals_by_decision_kind);
   return (
     <section>
       <div className="toolbar">
@@ -72,8 +107,11 @@ export function Inbox() {
           Blocking only
         </label>
       </div>
+      <p className="page-lead">Decisions waiting for an answer.</p>
       {error && <p className="error">{error.message}</p>}
-      {page?.items.length === 0 && <p className="muted">Nothing waiting for a decision.</p>}
+      {page?.items.length === 0 && (
+        <p className="muted empty-state">Nothing waiting for a decision.</p>
+      )}
       {page && page.total > page.items.length && (
         <p className="muted small">
           Showing the first {page.items.length} of {page.total} rows.
@@ -107,53 +145,65 @@ export function Inbox() {
           </div>
         )
       )}
-      {[...projects].map(([project, groups]) => (
-        <div key={project} className="inbox-project">
-          <h3>{project}</h3>
-          {groups.map((g) => (
-            <div key={g.key} className="inbox-group">
-              <h4>
-                {g.title ?? g.subject_type.replace("knowledge_", "")}{" "}
-                <span className="muted small">
-                  {g.open_decisions} open · oldest {dur(g.oldest_age_s)} · {g.stalled_tasks} stalled
-                  task
-                  {g.stalled_tasks === 1 ? "" : "s"}
-                </span>
-              </h4>
-              {(byGroup.get(g.key) ?? []).map((item) =>
-                item.decision ? (
-                  <DecisionCard
-                    key={item.decision.id}
-                    decision={item.decision}
-                    item={item}
-                    draft={draftOf(item.decision.id)}
-                    onDraft={(d) => setDrafts((prev) => ({ ...prev, [item.decision!.id]: d }))}
-                    selected={selected.includes(item.decision.id)}
-                    canSelect={selected.length < MAX_BATCH && !confirming}
-                    onSelect={(on) => {
-                      const id = item.decision!.id;
-                      setSelected((prev) => (on ? [...prev, id] : prev.filter((x) => x !== id)));
-                    }}
-                  />
-                ) : item.state === "claimed" ? (
-                  <QuietClaimCard
-                    key={item.subject_id}
-                    item={item}
-                    onOpenTask={() => setTaskDrawer(item.subject_id)}
-                  />
-                ) : item.failed_dependencies.length > 0 ? (
-                  <p key={item.subject_id} className="muted small">
-                    {item.title ?? shortId(item.subject_id)} is stalled behind{" "}
-                    {item.failed_dependencies.map(shortId).join(", ")}.
-                  </p>
-                ) : (
-                  <BlockedCard
-                    key={item.subject_id}
-                    item={item}
-                    onOpenTask={() => setTaskDrawer(item.subject_id)}
-                  />
-                ),
-              )}
+      {kinds.map(({ kind, count, projects: kindProjects }) => (
+        <div key={kind} className="inbox-kind">
+          <h3>
+            {kindLabel(kind)} <span className="nav-count">{count}</span>
+          </h3>
+          {kindProjects.map(([project, groups]) => (
+            <div key={project} className="inbox-project">
+              <h3>{project}</h3>
+              {groups.map((g) => (
+                <div key={g.key} className="inbox-group">
+                  <h4>
+                    {g.title ?? g.subject_type.replace("knowledge_", "")}{" "}
+                    <span className="muted small">
+                      {g.open_decisions} open · oldest {dur(g.oldest_age_s)} ·{" "}
+                      {g.stalled_tasks} stalled task{g.stalled_tasks === 1 ? "" : "s"}
+                    </span>
+                  </h4>
+                  {(byGroup.get(g.key) ?? [])
+                    .filter((item) => itemKind(item) === kind)
+                    .map((item) =>
+                      item.decision ? (
+                        <DecisionCard
+                          key={item.decision.id}
+                          decision={item.decision}
+                          item={item}
+                          draft={draftOf(item.decision.id)}
+                          onDraft={(d) =>
+                            setDrafts((prev) => ({ ...prev, [item.decision!.id]: d }))
+                          }
+                          selected={selected.includes(item.decision.id)}
+                          canSelect={selected.length < MAX_BATCH && !confirming}
+                          onSelect={(on) => {
+                            const id = item.decision!.id;
+                            setSelected((prev) =>
+                              on ? [...prev, id] : prev.filter((x) => x !== id),
+                            );
+                          }}
+                        />
+                      ) : item.state === "claimed" ? (
+                        <QuietClaimCard
+                          key={item.subject_id}
+                          item={item}
+                          onOpenTask={() => setTaskDrawer(item.subject_id)}
+                        />
+                      ) : item.failed_dependencies.length > 0 ? (
+                        <p key={item.subject_id} className="muted small">
+                          {item.title ?? shortId(item.subject_id)} is stalled behind{" "}
+                          {item.failed_dependencies.map(shortId).join(", ")}.
+                        </p>
+                      ) : (
+                        <BlockedCard
+                          key={item.subject_id}
+                          item={item}
+                          onOpenTask={() => setTaskDrawer(item.subject_id)}
+                        />
+                      ),
+                    )}
+                </div>
+              ))}
             </div>
           ))}
         </div>

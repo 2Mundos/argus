@@ -1,9 +1,9 @@
-import { type Agent, api, call } from "./api";
-import { shortId } from "./format";
+import { type Agent, type ArgusEvent, api, call } from "./api";
+import { clock } from "./format";
 import { useLiveData } from "./live";
 import { useNow } from "./views/Activity";
 
-const RECENTLY_ENDED_MS = 60 * 60 * 1000;
+const ENDED_LIMIT = 8;
 
 function liveWorkers(agents: Agent[] | undefined): Agent[] {
   return (agents ?? []).filter(
@@ -11,17 +11,15 @@ function liveWorkers(agents: Agent[] | undefined): Agent[] {
   );
 }
 
-/** Workers that ended in the last hour (lost/gone), newest first. */
-function recentlyEnded(agents: Agent[] | undefined, now: number): Agent[] {
+/** Newest ended workers (lost/gone), so a quiet hour does not empty the rail. */
+function recentlyEnded(agents: Agent[] | undefined): Agent[] {
   return (agents ?? [])
     .filter(
       (a) =>
-        a.role === "worker" &&
-        (a.state === "lost" || a.state === "gone") &&
-        a.ended_at != null &&
-        now - new Date(a.ended_at).getTime() <= RECENTLY_ENDED_MS,
+        a.role === "worker" && (a.state === "lost" || a.state === "gone") && a.ended_at != null,
     )
-    .sort((a, b) => new Date(b.ended_at!).getTime() - new Date(a.ended_at!).getTime());
+    .sort((a, b) => new Date(b.ended_at!).getTime() - new Date(a.ended_at!).getTime())
+    .slice(0, ENDED_LIMIT);
 }
 
 /** Compact age: "12s", "3m", "2h". */
@@ -46,42 +44,8 @@ function shortName(name: string): string {
   return tail && /^[a-f0-9]{6,}$/i.test(tail) ? tail.slice(0, 8) : name.slice(0, 14);
 }
 
-type EngineKind = "claude" | "codex" | "cursor" | "other";
-
-function engineKind(agent: Agent): EngineKind {
-  const raw = `${agent.runtime?.engine ?? ""} ${agent.runtime?.executor ?? ""}`.toLowerCase();
-  if (/\b(claude|anthropic)\b/.test(raw)) return "claude";
-  if (/\b(codex|openai)\b/.test(raw)) return "codex";
-  if (/\b(cursor|agent)\b/.test(raw)) return "cursor";
-  return "other";
-}
-
 function engineLabel(agent: Agent): string {
   return agent.runtime?.engine ?? agent.runtime?.executor ?? "unknown";
-}
-
-/** Engine glyph for the rail; falls back to a letter. */
-function WorkerMark({ agent }: { agent: Agent }) {
-  const kind = engineKind(agent);
-  const label = engineLabel(agent);
-  if (kind === "other") {
-    return (
-      <span className="worker-mark letter" aria-hidden="true">
-        {label.charAt(0).toUpperCase() || "?"}
-      </span>
-    );
-  }
-  const path =
-    kind === "claude"
-      ? "M13.6 4h3.1L22 20h-3.1ZM7.3 4h3.2L15.8 20h-3.2l-1.1-3.4H6.1L5 20H1.9Zm-.3 9.9h3.5L8.8 8.4Z"
-      : kind === "codex"
-        ? "M12 2.5a4.5 4.5 0 0 1 4.3 3.1 4.5 4.5 0 0 1 4.4 6.8 4.5 4.5 0 0 1-3 7.1 4.5 4.5 0 0 1-7.4 1.9 4.5 4.5 0 0 1-6.9-3.4 4.5 4.5 0 0 1-1.5-7.6A4.5 4.5 0 0 1 8 3.6a4.5 4.5 0 0 1 4-1.1Zm0 5.5-3.5 2v4L12 16l3.5-2v-4Z"
-        : "M12 2 21 7v10l-9 5-9-5V7Zm0 2.3L5.2 8 12 11.8 18.8 8Zm-7 5.4v6.2l6 3.4v-6.3Zm14 0-6 3.3v6.3l6-3.4Z";
-  return (
-    <svg className={`worker-mark engine-${kind}`} viewBox="0 0 24 24" aria-hidden="true">
-      <path d={path} fill="currentColor" fillRule="evenodd" />
-    </svg>
-  );
 }
 
 /** Full-height rail of live workers; selection drives the main worker panel. */
@@ -98,7 +62,7 @@ export function WorkersSidebar({
     [],
   );
   const workers = liveWorkers(agents);
-  const ended = recentlyEnded(agents, now);
+  const ended = recentlyEnded(agents);
   const busy = workers.filter((a) => a.claimed_tasks > 0).length;
   const quiet = workers.filter((a) => a.quiet_since).length;
   const listed = [...workers, ...ended];
@@ -106,7 +70,10 @@ export function WorkersSidebar({
   return (
     <aside className="workers-rail" aria-label="Running workers">
       <header className="workers-rail-head">
-        <p className="workers-rail-label">Workers</p>
+        <div className="rail-title">
+          <p className="workers-rail-label">Workers</p>
+          <a href="#workers/agents">View all</a>
+        </div>
         {agents !== undefined && (
           <p className="workers-rail-summary muted small">
             {workers.length} live
@@ -121,74 +88,31 @@ export function WorkersSidebar({
       ) : listed.length === 0 ? (
         <p className="workers-rail-empty muted small">None live</p>
       ) : (
-        <ul>
+        <ul className="workers-list">
           {listed.map((a) => {
             const kind = status(a);
             const eng = engineLabel(a);
-            const exec = a.runtime?.executor;
-            const caps = a.capabilities;
             const selected = a.id === selectedId;
             return (
               <li key={a.id}>
                 <button
                   type="button"
                   className={`worker-chip worker-${kind}${selected ? " selected" : ""}`}
-                  title={a.end_reason ? `${a.name}: ${a.end_reason}` : a.name}
+                  title={[a.name, eng, a.end_reason].filter(Boolean).join(" · ")}
                   aria-current={selected ? "true" : undefined}
                   onClick={() => onSelect(a.id)}
                 >
-                  <span className="worker-chip-top">
-                    <WorkerMark agent={a} />
-                    <span className={`worker-state worker-state-${kind}`}>{kind}</span>
-                  </span>
+                  <span className={`worker-dot worker-state-${kind}`} />
                   <span className="worker-name">{shortName(a.name)}</span>
-                  <span className="worker-stats">
-                    {kind === "ended" ? (
-                      <>
-                        <span>
-                          <span className="muted">ended</span>{" "}
-                          {a.ended_at ? age(a.ended_at, now) : "—"}
-                        </span>
-                        {a.end_reason && (
-                          <span className="worker-end-reason" title={a.end_reason}>
-                            {a.end_reason}
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <span>
-                          <span className="muted">tasks</span> {a.claimed_tasks}
-                        </span>
-                        <span>
-                          <span className="muted">hb</span> {age(a.last_heartbeat_at, now)}
-                        </span>
-                        {a.quiet_since && (
-                          <span>
-                            <span className="muted">quiet</span> {age(a.quiet_since, now)}
-                          </span>
-                        )}
-                        <span>
-                          <span className="muted">up</span> {age(a.created_at, now)}
-                        </span>
-                        <span
-                          className="worker-engine"
-                          title={[eng, exec].filter(Boolean).join(" · ")}
-                        >
-                          {eng}
-                          {exec && exec !== eng ? ` · ${exec}` : ""}
-                        </span>
-                        {caps.length > 0 && (
-                          <span className="worker-caps muted" title={caps.join(", ")}>
-                            {caps.length} cap{caps.length === 1 ? "" : "s"}
-                            {a.instance_id ? ` · ${shortId(a.instance_id)}` : ""}
-                          </span>
-                        )}
-                        {caps.length === 0 && a.instance_id && (
-                          <span className="worker-caps muted">{shortId(a.instance_id)}</span>
-                        )}
-                      </>
-                    )}
+                  <span className="muted small worker-age">
+                    {kind === "ended"
+                      ? a.ended_at
+                        ? age(a.ended_at, now)
+                        : "—"
+                      : age(a.last_heartbeat_at, now)}
+                  </span>
+                  <span className={`worker-state worker-state-${kind}`}>
+                    {kind === "busy" ? "running" : kind}
                   </span>
                 </button>
               </li>
@@ -196,6 +120,56 @@ export function WorkersSidebar({
           })}
         </ul>
       )}
+      <RailLog />
     </aside>
   );
+}
+
+function RailLog() {
+  const { data } = useLiveData(
+    (signal) => call(api.GET("/api/events", { params: { query: { limit: 8 } }, signal })),
+    [],
+  );
+  const events: ArgusEvent[] = Array.isArray(data) ? data.slice(0, 8) : [];
+  return (
+    <div className="rail-log">
+      <div className="rail-log-head">
+        <p className="workers-rail-label">Live log</p>
+        <a href="#setup/events">View all</a>
+      </div>
+      {data === undefined ? (
+        <p className="muted small">…</p>
+      ) : events.length === 0 ? (
+        <p className="muted small">No events.</p>
+      ) : (
+        <ul>
+          {events.map((event) => (
+            <li key={event.id}>
+              <time dateTime={event.at}>{clock(event.at)}</time>
+              <span className={`badge ${logTone(event.kind)}`}>{logLabel(event.kind)}</span>
+              <span>{kindText(event.kind)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function logTone(kind: string): string {
+  if (/fail|error|lost|cancel/.test(kind)) return "state-failed";
+  if (/warn|degrad|block|expir/.test(kind)) return "state-blocked";
+  return "state-succeeded";
+}
+
+function logLabel(kind: string): string {
+  if (/fail|error|lost|cancel/.test(kind)) return "error";
+  if (/warn|degrad|block|expir/.test(kind)) return "warn";
+  return "info";
+}
+
+/** `agent.lost` → "Agent lost". */
+function kindText(kind: string): string {
+  const text = kind.replaceAll(/[._]/g, " ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
