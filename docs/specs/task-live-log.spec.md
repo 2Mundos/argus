@@ -132,6 +132,16 @@ run. URL schemes are bounded to 16 characters; names, URL users and passwords ar
   before its `\r`/newline split as well as per line, as in 3.1), and are batched
   every ~3 s. After ~30 s of silence it adds `delegate alive, Ns since last
   output`, so No signal reflects a live process.
+- `argus-delegate agent` (Cursor) runs `--output-format stream-json` (plain `json`
+  prints nothing until the final result, so the log stayed silent) and follows its
+  stdout the same way. Shown: the assistant's text, `▸ tool arg` for each tool call,
+  failed tool results, retry/connection notices, and the final status. Never shown:
+  the echoed prompt (`user`), `thinking`, successful tool output. A partial-delta
+  stream is shown line by line and not repeated when the whole text follows. After the
+  last turn the CLI waits for running background shells before it prints its result, so
+  the delegate passes `--background-shell-timeout` (120 s, `ARGUS_AGENT_BG_SHELL_TIMEOUT_S`
+  to change) to bound that wait. The final report, usage and exit status are read from
+  the stream's `result` event.
 - The batches are appended as JSON lines `{v, task_id, attempt, at, lines}` to
   `argus-task-log.jsonl` in the agent group directory (beside the model-policy
   snapshot, no new mount). The file is capped at 8 MiB per run; a relay failure is

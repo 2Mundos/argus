@@ -362,6 +362,12 @@ test("commands are non-interactive, scoped to the cwd, and read-only on request"
   assert.ok(claudeWrite.args.includes("--allowed-tools"));
   assert.ok(claudeWrite.args.join(" ").includes("Bash"));
   const agentWrite = buildCommand("agent", { cwd: "/w", readOnly: false });
+  assert.equal(agentWrite.args[agentWrite.args.indexOf("--output-format") + 1], "stream-json");
+  assert.equal(agentWrite.args[agentWrite.args.indexOf("--background-shell-timeout") + 1], "120");
+  const bounded = buildCommand("agent", { cwd: "/w" }, { ARGUS_AGENT_BG_SHELL_TIMEOUT_S: "30" });
+  assert.equal(bounded.args[bounded.args.indexOf("--background-shell-timeout") + 1], "30");
+  const junk = buildCommand("agent", { cwd: "/w" }, { ARGUS_AGENT_BG_SHELL_TIMEOUT_S: "-5" });
+  assert.equal(junk.args[junk.args.indexOf("--background-shell-timeout") + 1], "120");
   assert.ok(agentWrite.args.includes("--trust"));
   assert.ok(agentWrite.args.includes("--force"));
   assert.equal(agentWrite.args.indexOf("--trust"), agentWrite.args.indexOf("--workspace") + 2);
@@ -1571,4 +1577,107 @@ env > ${JSON.stringify(dump)}`,
   ])
     assert.equal(new RegExp(`^${name}=`, "m").test(child), false, name);
   assert.equal(child.includes(BRIDGE_KEY), false);
+});
+
+test("a cursor agent run streams progress while running and keeps the final result and usage", async (t) => {
+  const s = sandbox(t);
+  const e = (o) => `echo '${JSON.stringify(o)}'`;
+  const marker = path.join(s.dir, "progress-seen");
+  const relay = path.join(s.dir, "argus-task-log.jsonl");
+  s.fake(
+    "agent",
+    [
+      'if [ "$1" = "--version" ]; then echo v; exit 0; fi',
+      e({ type: "system", subtype: "init", model: "Composer" }),
+      e({
+        type: "user",
+        message: {
+          content: [{ type: "text", text: "SECRET-PROMPT https://github.com/o/r/pull/99" }],
+        },
+      }),
+      e({ type: "thinking", subtype: "delta", text: "hidden thoughts" }),
+      e({
+        type: "tool_call",
+        subtype: "started",
+        call_id: "1",
+        tool_call: { readToolCall: { args: { path: "/w/a.py" } } },
+      }),
+      // wait until the delegate's live log has shown the progress, then finish
+      `i=0; while [ $i -lt 100 ] && ! grep -q 'read /w/a.py' ${relay} 2>/dev/null; do sleep 0.1; i=$((i+1)); done`,
+      `grep -q 'read /w/a.py' ${relay} && touch ${marker}`,
+      e({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "all done",
+        usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 2, cacheWriteTokens: 0 },
+      }),
+      e({ type: "system", subtype: "task_notification", status: "done" }),
+    ].join("\n"),
+  );
+  const cursor = path.join(s.home, ".config", "cursor");
+  fs.mkdirSync(cursor, { recursive: true });
+  fs.writeFileSync(path.join(cursor, "auth.json"), '{"accessToken":"sentinel"}');
+  const policy = JSON.parse(
+    fs.readFileSync(new URL("./model-policy.defaults.json", import.meta.url), "utf8"),
+  );
+  const file = path.join(s.dir, "argus-model-policy.json");
+  fs.writeFileSync(file, JSON.stringify(policySnapshot(policy, { task_id: "t1", attempt: 1 })));
+  const env = {
+    ...s.env,
+    ARGUS_MODEL_POLICY_FILE: file,
+    ARGUS_TASK_LOG_FILE: relay,
+    ARGUS_LIVELOG_TICK_S: "0.05",
+    ARGUS_LIVELOG_FLUSH_S: "0.1",
+  };
+  const { code, report } = await run(
+    ["agent", "--cwd", s.work, "--out", path.join(s.dir, "out"), "--timeout", "30"],
+    { env },
+  );
+  assert.equal(code, 0);
+  assert.equal(fs.existsSync(marker), true, "progress was not relayed before the run ended");
+  assert.equal(report.executor_error, undefined);
+  assert.equal(report.usage.measurement, "measured");
+  assert.deepEqual(
+    [report.usage.input_tokens, report.usage.output_tokens, report.usage.cached_input_tokens],
+    [10, 5, 2],
+  );
+  assert.match(report.tail, /"result":"all done"/);
+  const lines = fs
+    .readFileSync(relay, "utf8")
+    .trim()
+    .split("\n")
+    .flatMap((l) => JSON.parse(l).lines ?? []);
+  assert.deepEqual(lines.slice(0, 2), ["agent started (Composer)", "▸ read /w/a.py"]);
+  assert.equal(lines.at(-1), "agent finished");
+  const relayed = lines.join("\n");
+  assert.equal(/SECRET-PROMPT|hidden thoughts/.test(relayed), false);
+});
+
+test("executorJsonFailure reads the result event of an agent stream", () => {
+  const row = (o) => JSON.stringify(o);
+  const stream = (result, after = "") =>
+    [row({ type: "system", subtype: "init" }), row(result), after].filter(Boolean).join("\n");
+  assert.equal(
+    executorJsonFailure(
+      "agent",
+      stream(
+        { type: "result", is_error: false, result: "ok" },
+        row({ type: "system", subtype: "task_notification" }),
+      ),
+    ),
+    null,
+  );
+  assert.equal(
+    executorJsonFailure(
+      "agent",
+      stream({ type: "result", is_error: true, result: "quota" }, row({ type: "system" })),
+    )?.kind,
+    "is_error",
+  );
+  assert.equal(
+    executorJsonFailure("agent", stream({ type: "result", is_error: false, result: "  " }))?.kind,
+    "empty_result",
+  );
+  assert.equal(executorJsonFailure("agent", "")?.kind, "empty_stdout");
 });

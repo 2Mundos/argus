@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  agentEventLines,
   claudeEventLines,
   createBatcher,
   createFileRelay,
@@ -330,4 +331,169 @@ test("the live log module never touches the Argus token or the network", () => {
     "utf8",
   );
   assert.doesNotMatch(src, /ARGUS_AGENT_TOKEN|fetch\(|node:http|Authorization:/);
+});
+
+const cursorTool = (subtype, tool_call, extra = {}) => ({
+  type: "tool_call",
+  subtype,
+  call_id: "c1",
+  tool_call,
+  model_call_id: "m1",
+  ...extra,
+});
+
+test("cursor agent stream events become short readable lines without prompt or thinking", () => {
+  const lines = (e) => agentEventLines(e);
+  assert.deepEqual(lines({ type: "system", subtype: "init", model: "Composer 2.5" }), [
+    "agent started (Composer 2.5)",
+  ]);
+  assert.deepEqual(
+    lines({ type: "user", message: { content: [{ type: "text", text: "PROMPT" }] } }),
+    [],
+  );
+  assert.deepEqual(lines({ type: "thinking", subtype: "delta", text: "secret plan" }), []);
+  assert.deepEqual(
+    lines({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "Reading\n\nthe spec" }] },
+    }),
+    ["Reading", "the spec"],
+  );
+  assert.deepEqual(lines(cursorTool("started", { readToolCall: { args: { path: "/w/a.py" } } })), [
+    "▸ read /w/a.py",
+  ]);
+  assert.deepEqual(
+    lines(cursorTool("started", { shellToolCall: { args: { command: "npm   test\n-- x" } } })),
+    ["▸ shell npm test -- x"],
+  );
+  // successes stay quiet (their output is not shown); failures say so
+  assert.deepEqual(
+    lines(
+      cursorTool("completed", {
+        shellToolCall: { args: {}, result: { success: { stdout: "huge" } } },
+      }),
+    ),
+    [],
+  );
+  assert.deepEqual(
+    lines(
+      cursorTool("completed", {
+        editToolCall: { args: {}, result: { error: { message: "no such file" } } },
+      }),
+    ),
+    ["  ✗ edit: no such file"],
+  );
+  assert.deepEqual(lines({ type: "result", subtype: "success", is_error: false, result: "x" }), [
+    "agent finished",
+  ]);
+  assert.match(
+    lines({ type: "result", is_error: true, result: "quota exceeded" })[0],
+    /^agent finished with an error: quota/,
+  );
+  assert.deepEqual(
+    lines({
+      type: "system",
+      subtype: "background_shell_timeout",
+      aborted_count: 2,
+      timeout_ms: 120000,
+    }),
+    ["agent aborted 2 background shell(s) after 120s"],
+  );
+  for (const junk of [
+    null,
+    3,
+    "x",
+    [],
+    {},
+    { type: "tool_call" },
+    { type: "tool_call", tool_call: {} },
+    { type: "assistant" },
+    { type: "assistant", message: { content: [{ type: "text", text: "" }] } },
+  ])
+    assert.deepEqual(lines(junk), []);
+});
+
+test("cursor agent: duplicate segment text and partial deltas show each line once", () => {
+  const state = { seen: new Set(), partial: "" };
+  const delta = (text) => ({
+    type: "assistant",
+    message: { content: [{ type: "text", text }] },
+    timestamp_ms: 1,
+  });
+  const out = [];
+  for (const d of ["Hel", "lo wor", "ld\nsecond li", "ne"])
+    out.push(...agentEventLines(delta(d), [], state));
+  assert.deepEqual(out, ["Hello world"]);
+  // the whole segment follows at the next tool call: only the unseen tail is new
+  const whole = {
+    type: "assistant",
+    message: { content: [{ type: "text", text: "Hello world\nsecond line" }] },
+    timestamp_ms: 2,
+    model_call_id: "m1",
+  };
+  assert.deepEqual(agentEventLines(whole, [], state), ["second line"]);
+  assert.deepEqual(agentEventLines(whole, [], state), []);
+  // an unfinished delta tail is shown before the tool call that ends its segment
+  const s2 = { seen: new Set(), partial: "" };
+  agentEventLines(delta("tail without newline"), [], s2);
+  assert.deepEqual(
+    agentEventLines(cursorTool("started", { globToolCall: { args: { pattern: "*.ts" } } }), [], s2),
+    ["tail without newline", "▸ glob *.ts"],
+  );
+});
+
+test("cursor agent stream parser: fragmented chunks, malformed, empty and secret lines", () => {
+  const got = [];
+  const p = createStreamParser({
+    executor: "agent",
+    onLines: (l) => got.push(...l),
+    secrets: ["opensesame-2026"],
+  });
+  const line = ev({
+    type: "assistant",
+    message: {
+      content: [
+        { type: "text", text: "key opensesame-2026 and ghp_abcdefghijklmnopqrstuvwxyz0123" },
+      ],
+    },
+  });
+  const cutAt = 37;
+  p.push(line.slice(0, cutAt));
+  assert.deepEqual(got, []);
+  p.push(`${line.slice(cutAt)}\n\n   \nnot json at all\n{"type":"assistant","mess`);
+  assert.deepEqual(got, ["key [redacted] and [redacted]"]);
+  p.push('age":{"content":[{"type":"text","text":"unterminated');
+  p.end(); // a truncated last event is dropped, not shown half-parsed
+  assert.equal(got.length, 1);
+  const tool = ev(
+    cursorTool("started", {
+      shellToolCall: { args: { command: "curl -H 'Authorization: Bearer abcdef1234567890xyz' x" } },
+    }),
+  );
+  p.push(tool);
+  assert.ok(got.at(-1).startsWith("▸ shell curl") && !got.at(-1).includes("abcdef1234567890"));
+});
+
+test("cursor agent: progress reaches the relay before the process ends", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlive-"));
+  try {
+    const out = path.join(dir, "out");
+    fs.writeFileSync(out, "");
+    const sent = [];
+    const live = startLiveLog({
+      stdoutFile: out,
+      executor: "agent",
+      send: (l) => sent.push(...l),
+      intervalMs: 10,
+      flushMs: 10,
+    });
+    fs.appendFileSync(out, ev({ type: "system", subtype: "init", model: "m" }));
+    await new Promise((r) => setTimeout(r, 120));
+    assert.deepEqual(sent, ["agent started (m)"]); // before any result exists
+    fs.appendFileSync(out, ev({ type: "result", is_error: false, result: "ok" }));
+    live.stop();
+    assert.equal(sent.at(-1), "agent finished");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
