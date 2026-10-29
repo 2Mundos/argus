@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { type ArgusEvent, api, call } from "../api";
+import { describeEvent, isTransientEvent } from "../eventLine";
 import { actor, relative, shortId } from "../format";
 import { useLive } from "../live";
 
@@ -15,8 +16,7 @@ export function Events() {
     const early: ArgusEvent[] = [];
     // Subscribe first, then load history, so nothing slips in between.
     const unsubscribe = subscribe((event) => {
-      // transient output, not history
-      if (event.kind === "task.log" || event.kind === "task.changes") return;
+      if (isTransientEvent(event)) return;
       if (!loaded) early.push(event);
       else setEvents((list) => [event, ...list].slice(0, MAX));
     });
@@ -61,19 +61,10 @@ export function EventList({ events }: { events: ArgusEvent[] }) {
           <span className="small">
             {e.subject_type} {shortId(e.subject_id)}
           </span>
-          <span className="muted small">{describe(e)}</span>
+          <span className="muted small">{describeEvent(e)}</span>
           <span className="muted small actor">{actor(e.actor)}</span>
         </li>
       ))}
     </ol>
   );
-}
-
-function describe(e: ArgusEvent): string {
-  const d = e.data as Record<string, unknown>;
-  if (typeof d.from === "string" && typeof d.to === "string") return `${d.from} → ${d.to}`;
-  if (typeof d.message === "string") return d.message;
-  if (typeof d.reason === "string") return d.reason;
-  if (typeof d.to === "string") return `→ ${d.to}`;
-  return "";
 }
