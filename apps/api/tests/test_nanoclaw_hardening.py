@@ -114,6 +114,116 @@ def test_pool_upsert_model_rejects_runtime_socket_conflict() -> None:
         )
 
 
+def test_pool_upsert_model_rejects_equal_host_and_agent_images() -> None:
+    with pytest.raises(ValidationError, match=r"image and nanoclaw.agent_image"):
+        PoolUpsert(
+            runtime="nanoclaw",
+            image="same:1",
+            max_replicas=1,
+            docker=DockerOptions(runtime="sysbox-runc"),
+            nanoclaw=NanoclawOptions(
+                install_dir="/opt/nc",
+                instances_root="/srv/i",
+                agent_image="same:1",
+                agent_image_archive="/srv/a.tar",
+            ),
+        )
+
+
+def test_put_rejects_equal_host_and_agent_images(client: TestClient) -> None:
+    body = {
+        "runtime": "nanoclaw",
+        "image": "same:1",
+        "desired_replicas": 0,
+        "max_replicas": 1,
+        "docker": {"runtime": "sysbox-runc"},
+        "nanoclaw": {
+            "install_dir": "/opt/nanoclaw",
+            "instances_root": "/srv/nc-i",
+            "agent_image": "same:1",
+            "agent_image_archive": "/srv/agent.tar",
+        },
+    }
+    res = client.put("/api/pools/nc-eq", json=body, headers=ADMIN)
+    assert res.status_code == 422, res.text
+    assert "image" in res.text and "nanoclaw.agent_image" in res.text
+
+
+def test_patch_rejects_equal_host_and_agent_images_as_invalid_pool(
+    client: TestClient,
+) -> None:
+    body = {
+        "runtime": "nanoclaw",
+        "image": "argus-nanoclaw-host:dev",
+        "desired_replicas": 0,
+        "max_replicas": 1,
+        "docker": {"runtime": "sysbox-runc"},
+        "nanoclaw": {
+            "install_dir": "/opt/nanoclaw",
+            "instances_root": "/srv/nc-i",
+            "agent_image": "nanoclaw-agent:1",
+            "agent_image_archive": "/srv/agent.tar",
+        },
+    }
+    assert (
+        client.put("/api/pools/nc-eq-patch", json=body, headers=ADMIN).status_code
+        == 200
+    )
+    version = client.get("/api/pools/nc-eq-patch", headers=ADMIN).json()["version"]
+    res = client.patch(
+        "/api/pools/nc-eq-patch",
+        json={"expected_version": version, "image": "nanoclaw-agent:1"},
+        headers=ADMIN,
+    )
+    assert res.status_code == 422, res.text
+    detail = res.json()["detail"]
+    assert detail["code"] == "invalid_pool"
+    assert "image" in detail["message"] and "nanoclaw.agent_image" in detail["message"]
+
+
+def test_put_rejects_swapping_configured_host_and_agent_images(
+    client: TestClient,
+) -> None:
+    from dataclasses import replace
+
+    client.app.state.settings = replace(
+        client.app.state.settings,
+        nanoclaw_host_image="argus-nanoclaw-host:dev",
+        nanoclaw_agent_image="nc-agent:1",
+    )
+    as_host = {
+        "runtime": "nanoclaw",
+        "image": "nc-agent:1",
+        "desired_replicas": 0,
+        "max_replicas": 1,
+        "docker": {"runtime": "sysbox-runc"},
+        "nanoclaw": {
+            "install_dir": "/opt/nanoclaw",
+            "instances_root": "/srv/nc-i",
+            "agent_image": "custom-agent:2",
+            "agent_image_archive": "/srv/agent.tar",
+        },
+    }
+    res = client.put("/api/pools/nc-swap-host", json=as_host, headers=ADMIN)
+    assert res.status_code == 422, res.text
+    assert res.json()["detail"]["code"] == "invalid_pool"
+    assert "image" in res.json()["detail"]["message"]
+    assert "nanoclaw.agent_image" in res.json()["detail"]["message"]
+
+    as_agent = {
+        **as_host,
+        "image": "custom-host:2",
+        "nanoclaw": {
+            **as_host["nanoclaw"],
+            "agent_image": "argus-nanoclaw-host:dev",
+        },
+    }
+    res = client.put("/api/pools/nc-swap-agent", json=as_agent, headers=ADMIN)
+    assert res.status_code == 422, res.text
+    assert res.json()["detail"]["code"] == "invalid_pool"
+    assert "nanoclaw.agent_image" in res.json()["detail"]["message"]
+
+
 def test_prepare_dir_uses_host_side_on_local_daemon(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

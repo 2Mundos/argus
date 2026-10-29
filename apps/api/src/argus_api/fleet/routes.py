@@ -102,6 +102,7 @@ async def create_worker(
     # Probed before the write: no target call inside a write transaction.
     cat = await templates.catalog(settings, pools, request.app.state.targets)
     name, upsert = templates.build_pool(settings, cat, body, pools)
+    policy.enforce_nanoclaw_image_roles(upsert, settings)
     policy.enforce_nanoclaw_socket_policy(upsert, settings)
     async with db.write() as tx:
         pool = await service.create_pool(tx, name, upsert, caller.actor)
@@ -142,6 +143,7 @@ async def upsert_pool(
     """Create or replace a pool definition, including its replica cap (admin only).
     The reconciler converges instances to it within seconds. This replaces `env`
     whole; PATCH changes single variables without resending the others."""
+    policy.enforce_nanoclaw_image_roles(body, settings)
     policy.enforce_nanoclaw_socket_policy(body, settings)
     async with db.write() as tx:
         return service.redact(await service.upsert_pool(tx, name, body, caller.actor))

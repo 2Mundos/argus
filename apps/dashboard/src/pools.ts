@@ -287,7 +287,9 @@ export interface Built {
  * editor opened it); nested options are merged over the stored ones, so the options the form
  * does not show (nanoclaw paths, runtime, kubernetes extras, …) travel unchanged. Env values
  * are write-only: *** is never sent. Image roles are checked: a changed host image must not be
- * the catalog's agent image, nor the reverse.
+ * the catalog's agent image, nor the reverse. Pass the last successfully loaded catalog when
+ * the live fetch failed so those checks still run; when `catalog` is absent, only the
+ * host≠agent equality check applies.
  */
 export function buildPool(
   base: Pool | undefined,

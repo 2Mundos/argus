@@ -160,6 +160,26 @@ describe("buildPool (edit)", () => {
     expect(same.errors.agentImage).toMatch(/different images/);
   });
 
+  it("uses a last-known catalog for cross-role checks when the live catalog is absent", () => {
+    const lastKnown = nanoclawCatalog();
+    // Without any catalog, a distinct agent-image reference as host is not caught (only equality).
+    const blind = buildPool(nanoclawPool, {
+      ...toForm(nanoclawPool),
+      image: "nc-agent:1",
+      agentImage: "nc-agent:2",
+    });
+    expect(blind.errors.image).toBeUndefined();
+    expect(blind.body).toMatchObject({ image: "nc-agent:1" });
+    // The editor passes the last successfully loaded catalog so the mix-up is still refused.
+    const withLast = buildPool(
+      nanoclawPool,
+      { ...toForm(nanoclawPool), image: "nc-agent:1", agentImage: "nc-agent:2" },
+      lastKnown,
+    );
+    expect(withLast.body).toBeUndefined();
+    expect(withLast.errors.image).toMatch(/agent image/);
+  });
+
   it("checks numbers", () => {
     const built = buildPool(nanoclawPool, { ...toForm(nanoclawPool), desired: "9", max: "3" });
     expect(built.errors.desired).toMatch(/cannot exceed/);

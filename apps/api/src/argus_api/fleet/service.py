@@ -126,6 +126,7 @@ async def patch_pool(
     except ValueError as exc:  # a consistency rule across fields
         raise ValidationFailedError(str(exc), code="invalid_pool") from exc
     if settings is not None:
+        policy.enforce_nanoclaw_image_roles(upsert, settings)
         policy.enforce_nanoclaw_socket_policy(upsert, settings)
     await upsert_pool(tx, name, upsert, actor)
     await record(

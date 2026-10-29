@@ -576,6 +576,85 @@ def test_readiness_names_the_host_and_agent_images_separately(
     assert readiness(client, "nanoclaw-socket")["host_image"]["present"] is False
 
 
+@BOTH
+def test_put_and_patch_reject_nanoclaw_host_agent_image_role_mixups(
+    client: TestClient, target: FakeTarget, extra_env: dict
+) -> None:
+    """image == nanoclaw.agent_image, or a swap vs configured role images, is invalid_pool."""
+    ready_node(target)
+    created = create(client, template="nanoclaw-sandbox", name="roles").json()["pool"]
+    version = created["version"]
+    # Equal host and agent images (PATCH merge → invalid_pool).
+    equal = client.patch(
+        f"/api/pools/{created['name']}",
+        json={"expected_version": version, "image": created["nanoclaw"]["agent_image"]},
+        headers=ADMIN,
+    )
+    assert equal.status_code == 422, equal.text
+    assert equal.json()["detail"]["code"] == "invalid_pool"
+    assert "image" in equal.json()["detail"]["message"]
+    assert "nanoclaw.agent_image" in equal.json()["detail"]["message"]
+
+    # PUT with equal images is refused at validation (names both fields).
+    put_eq = client.put(
+        "/api/pools/roles-eq",
+        json={
+            "runtime": "nanoclaw",
+            "image": "same:1",
+            "desired_replicas": 0,
+            "max_replicas": 1,
+            "docker": {"runtime": extra_env["ARGUS_NANOCLAW_DOCKER_RUNTIME"]},
+            "nanoclaw": {
+                "install_dir": extra_env["ARGUS_NANOCLAW_INSTALL_DIR"],
+                "instances_root": extra_env["ARGUS_NANOCLAW_INSTANCES_ROOT"],
+                "agent_image": "same:1",
+                "agent_image_archive": extra_env["ARGUS_NANOCLAW_AGENT_IMAGE_ARCHIVE"],
+            },
+        },
+        headers=ADMIN,
+    )
+    assert put_eq.status_code == 422, put_eq.text
+    assert "image" in put_eq.text and "nanoclaw.agent_image" in put_eq.text
+
+    # Configured agent image must not be stored as the host image.
+    swap_host = client.put(
+        "/api/pools/roles-swap-host",
+        json={
+            "runtime": "nanoclaw",
+            "image": extra_env["ARGUS_NANOCLAW_AGENT_IMAGE"],
+            "desired_replicas": 0,
+            "max_replicas": 1,
+            "docker": {"runtime": extra_env["ARGUS_NANOCLAW_DOCKER_RUNTIME"]},
+            "nanoclaw": {
+                "install_dir": extra_env["ARGUS_NANOCLAW_INSTALL_DIR"],
+                "instances_root": extra_env["ARGUS_NANOCLAW_INSTANCES_ROOT"],
+                "agent_image": "custom-agent:2",
+                "agent_image_archive": extra_env["ARGUS_NANOCLAW_AGENT_IMAGE_ARCHIVE"],
+            },
+        },
+        headers=ADMIN,
+    )
+    assert swap_host.status_code == 422, swap_host.text
+    assert swap_host.json()["detail"]["code"] == "invalid_pool"
+    assert "image" in swap_host.json()["detail"]["message"]
+    assert "nanoclaw.agent_image" in swap_host.json()["detail"]["message"]
+
+    # Configured host image must not be stored as the agent image.
+    host_image = client.app.state.settings.nanoclaw_host_image
+    swap_agent = client.patch(
+        f"/api/pools/{created['name']}",
+        json={
+            "expected_version": version,
+            "nanoclaw": {**created["nanoclaw"], "agent_image": host_image},
+        },
+        headers=ADMIN,
+    )
+    assert swap_agent.status_code == 422, swap_agent.text
+    assert swap_agent.json()["detail"]["code"] == "invalid_pool"
+    assert "nanoclaw.agent_image" in swap_agent.json()["detail"]["message"]
+    assert "image" in swap_agent.json()["detail"]["message"]
+
+
 def test_unconfigured_nanoclaw_offers_no_agent_image_and_workers_no_nanoclaw_images(
     client: TestClient, target: FakeTarget
 ) -> None:

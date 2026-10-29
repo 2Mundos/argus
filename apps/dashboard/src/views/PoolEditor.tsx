@@ -25,8 +25,14 @@ type CatalogState =
   | { status: "ready"; catalog: TemplateCatalog }
   | { status: "error"; message: string };
 
-function useImageCatalog(): [CatalogState, () => void] {
+/** Last catalog that loaded successfully in this page session. Survives a later failed
+ * reload and a remount of the editor so host/agent cross-role checks keep configured names. */
+let sessionCatalog: TemplateCatalog | undefined;
+
+/** Live catalog state, a retry, and the last successfully loaded catalog (session + mount). */
+function useImageCatalog(): [CatalogState, () => void, TemplateCatalog | undefined] {
   const [state, setState] = useState<CatalogState>({ status: "loading" });
+  const [lastKnown, setLastKnown] = useState<TemplateCatalog | undefined>(sessionCatalog);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
@@ -36,6 +42,8 @@ function useImageCatalog(): [CatalogState, () => void] {
         if (!Array.isArray(catalog?.nodes) || !Array.isArray(catalog?.templates)) {
           throw new Error("unexpected response");
         }
+        sessionCatalog = catalog;
+        setLastKnown(catalog);
         setState({ status: "ready", catalog });
       })
       .catch((err: Error) => {
@@ -43,7 +51,12 @@ function useImageCatalog(): [CatalogState, () => void] {
       });
     return () => controller.abort();
   }, [attempt]);
-  return [state, () => setAttempt((n) => n + 1)];
+  return [state, () => setAttempt((n) => n + 1), lastKnown];
+}
+
+/** Test-only: clear the session catalog between cases that must start with no prior load. */
+export function resetSessionCatalogForTests(): void {
+  sessionCatalog = undefined;
 }
 
 function Field(props: {
@@ -179,13 +192,18 @@ export function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void
   const [errors, setErrors] = useState<FieldErrors>({});
   const [conflict, setConflict] = useState<string>();
   const [saving, setSaving] = useState(false);
-  const [catalog, reloadCatalog] = useImageCatalog();
+  /** Bumped on Discard/Keep so ImageField remounts and its "Other" local state matches the form. */
+  const [rebaseKey, setRebaseKey] = useState(0);
+  const [catalog, reloadCatalog, lastKnownCatalog] = useImageCatalog();
   const set = <K extends keyof PoolForm>(key: K, value: PoolForm[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
   const id = (name: string) => `${uid}-${name}`;
   const nanoclaw = base?.runtime === "nanoclaw";
   const runtime = base?.runtime ?? "plain";
-  const loaded = catalog.status === "ready" ? catalog.catalog : undefined;
+  // Prefer the live catalog; if a reload failed, keep using the last successful one for
+  // host/agent cross-role checks so a catalog outage cannot skip that guard.
+  const roleCatalog = catalog.status === "ready" ? catalog.catalog : lastKnownCatalog;
+  const rolesUnverified = nanoclaw && catalog.status !== "loading" && roleCatalog === undefined;
 
   function choices(role: ImageRole) {
     if (catalog.status === "loading") return { kind: "loading" } as const;
@@ -201,7 +219,7 @@ export function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void
     e.preventDefault();
     if (saving) return;
     setConflict(undefined);
-    const built = buildPool(base, form, loaded);
+    const built = buildPool(base, form, roleCatalog);
     setErrors(built.errors);
     if (!built.body) return;
     if (built.unchanged) return onClose();
@@ -248,6 +266,7 @@ export function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void
     setForm(toForm(fresh));
     setConflict(undefined);
     setErrors({});
+    setRebaseKey((n) => n + 1);
   }
 
   /** The operator's own edits win; every field they did not touch takes the latest value. */
@@ -262,6 +281,7 @@ export function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void
     setForm(merged as unknown as PoolForm);
     setConflict(undefined);
     setErrors({});
+    setRebaseKey((n) => n + 1);
   }
 
   const isDocker = form.target === "docker";
@@ -329,7 +349,16 @@ export function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void
 
         <fieldset>
           <legend>Images</legend>
+          {rolesUnverified && (
+            <p className="hint" role="status">
+              The image catalog is unavailable, so host and agent role names cannot be verified
+              against configured images. The two fields must still differ; the server also rejects
+              equal or swapped role images. Retry loading the catalog to verify before saving when
+              you can.
+            </p>
+          )}
           <ImageField
+            key={`image-${rebaseKey}`}
             id={id("image")}
             label="Host image"
             role="host"
@@ -347,6 +376,7 @@ export function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void
           />
           {nanoclaw && (
             <ImageField
+              key={`agentImage-${rebaseKey}`}
               id={id("agentImage")}
               label="NanoClaw agent image"
               role="agent"

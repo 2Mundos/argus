@@ -271,6 +271,12 @@ class PoolUpsert(BaseModel):
                 raise ValueError("the nanoclaw runtime needs the `nanoclaw` options")
             if self.agents_per_instance != 1:
                 raise ValueError("the nanoclaw runtime runs one agent per instance")
+            if self.image == self.nanoclaw.agent_image:
+                raise ValueError(
+                    "image and nanoclaw.agent_image must differ: "
+                    f"image={self.image!r} equals nanoclaw.agent_image "
+                    "(host image vs NanoClaw agent image)"
+                )
             if self.docker.runtime:
                 if self.nanoclaw.user or self.nanoclaw.group_add:
                     raise ValueError(

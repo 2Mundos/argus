@@ -65,6 +65,21 @@ Authorization of the catalog is unchanged (manager only; a worker token gets
 - A changed image is validated as a Docker reference (max 500 characters).
   A stored value that was not changed is never validated or re-sent.
 
+## 3.3a Host/agent role invariant (server and degraded catalog)
+
+NanoClaw pools keep host (`image`) and agent (`nanoclaw.agent_image`) distinct:
+
+- **Server**: `PoolUpsert` rejects `image == nanoclaw.agent_image`
+  (`invalid_pool` on PATCH merge; request validation on PUT). When
+  `ARGUS_NANOCLAW_HOST_IMAGE` / `ARGUS_NANOCLAW_AGENT_IMAGE` are set, the API
+  also refuses putting the configured agent image in `image` or the configured
+  host image in `nanoclaw.agent_image` (settings only; no network call).
+- **Editor, catalog degraded**: the editor keeps the last successfully loaded
+  catalog for cross-role checks even if a later reload fails. When no catalog
+  has ever loaded, it still requires the two typed values to differ and shows
+  an explicit hint that role names cannot be verified until the catalog is
+  available — it does not treat an unverified value as verified.
+
 ## 3.4 What a save sends
 
 Edit sends **only changed fields** plus `expected_version`.
@@ -81,7 +96,9 @@ Edit sends **only changed fields** plus `expected_version`.
 
 - `409 stale_version` keeps the draft and offers "Keep my edits on the latest
   version" (re-base: the user's changed fields win, others take the latest
-  values) or "Discard my edits and reload".
+  values) or "Discard my edits and reload". After either action, each image
+  field's control matches the current value (no stale "Other: type a
+  reference…" local state from before the rebase).
 - `422` validation paths are mapped to the field they belong to and shown next
   to it; unmapped errors show on the form. The draft is kept for every error.
 

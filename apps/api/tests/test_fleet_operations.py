@@ -270,3 +270,53 @@ def test_patch_refuses_fixed_fields_and_inconsistent_results(
         "/api/pools/web", json={"expected_version": version}, headers=orch
     )
     assert res.status_code == 403
+
+
+def test_nanoclaw_pool_rejects_equal_or_swapped_host_and_agent_images(
+    client: TestClient,
+) -> None:
+    from dataclasses import replace
+
+    client.app.state.settings = replace(
+        client.app.state.settings,
+        nanoclaw_host_image="argus-nanoclaw-host:dev",
+        nanoclaw_agent_image="nc-agent:1",
+    )
+    body = {
+        "runtime": "nanoclaw",
+        "image": "argus-nanoclaw-host:dev",
+        "desired_replicas": 0,
+        "max_replicas": 1,
+        "docker": {"runtime": "sysbox-runc"},
+        "nanoclaw": {
+            "install_dir": "/opt/nanoclaw",
+            "instances_root": "/srv/nc-i",
+            "agent_image": "nc-agent:2",
+            "agent_image_archive": "/srv/agent.tar",
+        },
+    }
+    assert (
+        client.put("/api/pools/nc-roles", json=body, headers=ADMIN).status_code == 200
+    )
+    version = client.get("/api/pools/nc-roles", headers=ADMIN).json()["version"]
+    equal = client.patch(
+        "/api/pools/nc-roles",
+        json={"expected_version": version, "image": "nc-agent:2"},
+        headers=ADMIN,
+    )
+    assert equal.json()["detail"]["code"] == "invalid_pool"
+    assert "image" in equal.json()["detail"]["message"]
+    assert "nanoclaw.agent_image" in equal.json()["detail"]["message"]
+
+    swapped = client.put(
+        "/api/pools/nc-roles-swap",
+        json={
+            **body,
+            "image": "nc-agent:1",
+            "nanoclaw": {**body["nanoclaw"], "agent_image": "custom:1"},
+        },
+        headers=ADMIN,
+    )
+    assert swapped.json()["detail"]["code"] == "invalid_pool"
+    assert "image" in swapped.json()["detail"]["message"]
+    assert "nanoclaw.agent_image" in swapped.json()["detail"]["message"]
