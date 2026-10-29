@@ -188,6 +188,8 @@ every new dependency is judged against it.
 
 - [Task workspace ownership visibility](research/2026-10-29.workspace-ownership.research.md) —
   task detail view: owner, location kind, changes/checkpoint availability (draft §4)
+- [Focused task detail view](research/2026-10-29.task-detail-view.research.md) —
+  journey map, gaps, stream filtering, recommendations
 
 - [Preferred models](specs/model-selection.spec.md)
 - [Task difficulty, executor routing and escalation](specs/task-difficulty.spec.md) — trivial tasks prefer
