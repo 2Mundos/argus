@@ -125,6 +125,12 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
 - `blocked` means the worker needs something it cannot get (an answer, an
   account, credentials). The lease is released; the task returns to `ready`
   when unblocked.
+- **The reason is shown in the task detail.** A `blocked` task's `block_reason`
+  is rendered in the task detail facts as the same sentence the inbox blocked
+  card shows (the `BLOCK_COPY` mapping of the dashboard; an unknown reason shows
+  as-is). A task with no `block_reason` shows no reason line. The sentence is
+  display only: it changes no state, no attempt, and no field, and the reason is
+  read through the same task read as every other fact.
 - With `review` set, completion moves the task to `in_review` and opens a
   decision. Acceptance moves it to `succeeded`; rejection returns it to `ready`
   with the reviewer's notes appended to `spec`, without counting a failed

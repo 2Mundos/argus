@@ -52,7 +52,9 @@ event or history, and the structural ones `project`, `parent_id`, `kind`
 (and `id`). Naming any of them (or any unknown key) in `changes` is
 `422 immutable_field`, nothing is written, and `details` lists the offending
 keys. They are not options of the MCP tool or of the dashboard form; the
-schema documents only the editable fields. State changes go through their own
+schema documents only the editable fields. `block_reason` is read-only in the
+task detail facts too: it is shown as the inbox blocked card's sentence (worker
+lifecycle 3.2) and never edited there. State changes go through their own
 operations (approve, cancel, retry, …).
 
 ## 3.2 Patch semantics
