@@ -1,17 +1,26 @@
 """Dead-session recovery latency: session_lost → next claim (fleet health P5)."""
 
 import json
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
+from api_support import FakeClock
 from argus_api import fleet_health
-from argus_api.db import Database, ts
+from argus_api.agents import service as agents
+from argus_api.db import Database, ts, utcnow
 from argus_api.fleet_health import (
     MIN_SAMPLES,
     RECOVERY_TARGET_S,
     SESSION_LOST_SQL,
     classify_recovery_row,
 )
+from argus_api.main import app
+from argus_api.tasks import service as tasks
+from argus_core.agents import AgentRegister, BootstrapTokenCreate
+from argus_core.tasks import TaskCreate
+from fastapi.testclient import TestClient
 
 NOW = datetime(2026, 3, 1, tzinfo=UTC)
 
@@ -38,6 +47,18 @@ async def event(
     return event_id
 
 
+async def task_row(conn, task: str, state: str) -> None:
+    """A minimal synthetic task row (its current state decides pending)."""
+    await conn.execute(
+        "INSERT OR REPLACE INTO tasks (id, kind, title, spec, acceptance, input,"
+        " required_capabilities, priority, state, requires_approval, review,"
+        " lease_ttl_s, max_attempts, created_by, created_at, updated_at, project)"
+        " VALUES (?, 'generic', ?, '', '[]', '{}', '[]', 0, ?, 0, 'none',"
+        " 60, 3, 'test', ?, ?, 'global')",
+        (task, f"title {task}", state, ts(NOW), ts(NOW)),
+    )
+
+
 async def session_lost(
     db: Database,
     task: str,
@@ -47,9 +68,12 @@ async def session_lost(
     attempt: int = 1,
     next_claim_at: datetime | None = None,
     claim_attempt: int | None = None,
+    state: str | None = None,
 ) -> None:
     """Synthetic session_lost fail (and optional next claim) — no production data."""
     async with db.write() as tx:
+        default = "succeeded" if next_claim_at else ("ready" if to == "ready" else to)
+        await task_row(tx.conn, task, state or default)
         await event(
             tx.conn,
             task,
@@ -193,6 +217,7 @@ async def test_exhausted_attempts_are_not_requeued(db: Database) -> None:
 async def test_claim_before_fail_is_not_paired_as_next(db: Database) -> None:
     lost = at(1)
     async with db.write() as tx:
+        await task_row(tx.conn, "order", "ready")
         await event(
             tx.conn, "order", "task.claim", lost - timedelta(seconds=30), attempt=1
         )
@@ -238,8 +263,10 @@ def test_classify_negative_latency_is_anomalous() -> None:
         "at": ts(NOW),
         "subject_id": "clock",
         "data": json.dumps({"reason": "session_lost", "to": "ready"}),
+        "next_end_id": None,
         "next_claim_id": 2,
         "next_claim_at": ts(NOW - timedelta(seconds=5)),
+        "task_state": "succeeded",
     }
     sample = classify_recovery_row(row)
     assert sample.outcome == "anomalous"
@@ -252,8 +279,10 @@ def test_classify_unreadable_payload_is_anomalous() -> None:
         "at": ts(NOW),
         "subject_id": "bad",
         "data": "{not-json",
+        "next_end_id": None,
         "next_claim_id": None,
         "next_claim_at": None,
+        "task_state": "ready",
     }
     assert classify_recovery_row(row).outcome == "anomalous"
 
@@ -292,3 +321,288 @@ async def test_session_lost_query_uses_kind_at_index(db: Database) -> None:
     assert any("events_kind_at" in line for line in plan)
     for line in plan:
         assert not (line.startswith("SCAN") and "events" in line), plan
+
+
+# -- real service paths (tasks.service via db.write, FakeClock as tx.now) ----------------
+
+
+async def worker(db: Database) -> str:
+    async with db.write() as tx:
+        issued = await agents.create_bootstrap_token(
+            tx, BootstrapTokenCreate(), "human:test"
+        )
+    async with db.write() as tx:
+        reg = await agents.register(tx, AgentRegister(bootstrap_token=issued.token))
+    return reg.agent.id
+
+
+async def new_task(db: Database, title: str = "recover-me", **kw) -> str:
+    async with db.write() as tx:
+        task = await tasks.create_task(
+            tx, TaskCreate(project="global", title=title, **kw), "human:test"
+        )
+    return task.id
+
+
+async def claim(db: Database, agent_id: str) -> tuple[str, int]:
+    async with db.write() as tx:
+        task = await tasks.claim(tx, agent_id, [])
+    assert task is not None
+    return task.id, task.attempt
+
+
+async def lose(db: Database, agent_id: str, task_id: str, attempt: int) -> None:
+    async with db.write() as tx:
+        await tasks.fail(
+            tx, agent_id, task_id, attempt, "container gone", reason="session_lost"
+        )
+
+
+async def report(db: Database, clock: FakeClock) -> fleet_health.DeadSessionRecovery:
+    return (
+        await fleet_health.fleet_health(db, 24, now=clock.now)
+    ).dead_session_recovery
+
+
+@pytest.mark.parametrize("step_back_s", [0, 5])
+async def test_clock_rollback_claim_with_later_id_is_anomalous(
+    db: Database, clock: FakeClock, step_back_s: int
+) -> None:
+    """Positive (0: forward clock) and negative (5 s rollback) control on the real
+    claim/fail path: the claim always has the higher id; only its `at` moves."""
+    agent = await worker(db)
+    await new_task(db)
+    task_id, attempt = await claim(db, agent)
+    clock.advance(60)
+    await lose(db, agent, task_id, attempt)
+    lost_at = clock.now
+    clock.now = lost_at + timedelta(seconds=30 if step_back_s == 0 else -step_back_s)
+    await claim(db, agent)
+    clock.now = lost_at + timedelta(minutes=1)
+    r = await report(db, clock)
+    assert r.denominator == 1 and r.pending == 0  # the claim is found either way
+    if step_back_s == 0:
+        assert (r.measured, r.anomalous) == (1, 0)
+        assert r.examples[0].latency_s == pytest.approx(30)
+    else:
+        assert (r.measured, r.anomalous) == (0, 1)
+        assert r.examples == []  # a negative latency never enters the distribution
+
+
+async def test_pending_overdue_vs_fresh(db: Database, clock: FakeClock) -> None:
+    agent = await worker(db)
+    await new_task(db)
+    task_id, attempt = await claim(db, agent)
+    await lose(db, agent, task_id, attempt)
+    lost_at = clock.now
+    clock.now = lost_at + timedelta(seconds=RECOVERY_TARGET_S - 1)
+    fresh = await report(db, clock)
+    assert (fresh.pending, fresh.pending_overdue, fresh.measured) == (1, 0, 0)
+    clock.now = lost_at + timedelta(seconds=RECOVERY_TARGET_S)
+    overdue = await report(db, clock)
+    assert (overdue.pending, overdue.pending_overdue) == (1, 1)
+    # Censored: the age is no latency, so nothing is reported as one.
+    assert overdue.n == 0 and overdue.outliers == 0
+    assert (overdue.p50, overdue.p90, overdue.mean) == (None, None, None)
+
+
+async def test_cancelled_after_fail_ended_unclaimed(
+    db: Database, clock: FakeClock
+) -> None:
+    agent = await worker(db)
+    await new_task(db)
+    task_id, attempt = await claim(db, agent)
+    await lose(db, agent, task_id, attempt)
+    clock.advance(RECOVERY_TARGET_S * 2)
+    async with db.write() as tx:
+        await tasks.cancel(tx, task_id, "human:test")
+    r = await report(db, clock)
+    assert (r.ended_unclaimed, r.pending, r.pending_overdue, r.measured) == (1, 0, 0, 0)
+    assert r.coverage == 0.0
+
+
+async def test_retry_sequence_pairs_each_fail_with_its_own_claim(
+    db: Database, clock: FakeClock
+) -> None:
+    agent = await worker(db)
+    await new_task(db, max_attempts=5)
+    task_id, attempt = await claim(db, agent)
+    for gap in (20, 40):
+        clock.advance(10)
+        await lose(db, agent, task_id, attempt)
+        clock.advance(gap)
+        _, attempt = await claim(db, agent)
+    clock.advance(10)
+    await lose(db, agent, task_id, attempt)  # third loss: not claimed again yet
+    r = await report(db, clock)
+    assert (r.denominator, r.measured, r.pending, r.anomalous) == (3, 2, 1, 0)
+    assert sorted(s.latency_s for s in r.examples) == [20.0, 40.0]
+    assert len({s.claim_event_id for s in r.examples}) == 2
+
+
+async def test_exhausted_then_operator_retry_is_not_requeued(
+    db: Database, clock: FakeClock
+) -> None:
+    agent = await worker(db)
+    await new_task(db, max_attempts=1)
+    task_id, attempt = await claim(db, agent)
+    await lose(db, agent, task_id, attempt)
+    async with db.write() as tx:
+        await tasks.retry(tx, task_id, "human:test")
+    clock.advance(5)
+    await claim(db, agent)
+    r = await report(db, clock)
+    assert (r.not_requeued, r.measured, r.pending) == (1, 0, 0)
+
+
+async def test_later_fail_before_any_claim_does_not_steal_the_pairing(
+    db: Database,
+) -> None:
+    """Two fails, then one claim: only the second fail owns it (synthetic, since a
+    real fail needs a claim first)."""
+    lost = at(1)
+    async with db.write() as tx:
+        await task_row(tx.conn, "steal", "succeeded")
+        for event_id, seconds in ((10, 0), (11, 30)):
+            await event(
+                tx.conn,
+                "steal",
+                "task.fail",
+                lost + timedelta(seconds=seconds),
+                event_id=event_id,
+                reason="session_lost",
+                **{"from": "claimed", "to": "ready"},
+            )
+        await event(
+            tx.conn, "steal", "task.claim", lost + timedelta(seconds=50), event_id=12
+        )
+    r = await recovery(db)
+    assert (r.denominator, r.measured, r.anomalous) == (2, 1, 1)
+    assert r.examples[0].fail_event_id == 11 and r.examples[0].latency_s == 20.0
+
+
+async def test_expire_bounds_the_pairing_too(db: Database) -> None:
+    lost = at(1)
+    async with db.write() as tx:
+        await task_row(tx.conn, "exp", "ready")
+        await event(
+            tx.conn,
+            "exp",
+            "task.fail",
+            lost,
+            event_id=20,
+            reason="session_lost",
+            **{"from": "claimed", "to": "ready"},
+        )
+        await event(
+            tx.conn, "exp", "task.expire", lost + timedelta(seconds=5), event_id=21
+        )
+        await event(
+            tx.conn, "exp", "task.claim", lost + timedelta(seconds=9), event_id=22
+        )
+    r = await recovery(db)
+    assert (r.measured, r.anomalous) == (0, 1)
+
+
+@pytest.mark.parametrize("state", ["claimed", "in_review", None])
+def test_no_paired_claim_with_running_or_missing_task_is_anomalous(
+    state: str | None,
+) -> None:
+    row = {
+        "id": 1,
+        "at": ts(NOW),
+        "subject_id": "gone",
+        "data": json.dumps({"reason": "session_lost", "to": "ready"}),
+        "next_end_id": None,
+        "next_claim_id": None,
+        "next_claim_at": None,
+        "task_state": state,
+    }
+    assert classify_recovery_row(row).outcome == "anomalous"
+
+
+@pytest.mark.parametrize(
+    ("lost_at", "claim_at"),
+    [
+        ("not-a-time", None),
+        (None, None),
+        ("2026-03-01T00:00:00", None),  # no zone: cannot be compared
+        (ts(NOW), "garbage"),
+    ],
+)
+def test_unknown_or_unreadable_time_is_anomalous(
+    lost_at: str | None, claim_at: str | None
+) -> None:
+    row = {
+        "id": 1,
+        "at": lost_at,
+        "subject_id": "t",
+        "data": json.dumps({"reason": "session_lost", "to": "ready"}),
+        "next_end_id": None,
+        "next_claim_id": 2 if claim_at else None,
+        "next_claim_at": claim_at,
+        "task_state": "ready",
+    }
+    sample = classify_recovery_row(row)
+    assert sample.outcome == "anomalous" and sample.latency_s is None
+
+
+async def test_truncation_is_flagged(
+    db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for i in range(3):
+        await session_lost(db, f"many{i}", at(1, seconds=i))
+    monkeypatch.setattr(fleet_health, "MAX_ROWS", 2)
+    r = await recovery(db)
+    assert r.truncated and r.denominator == 2
+    monkeypatch.setattr(fleet_health, "MAX_ROWS", 3 + 1)
+    assert not (await recovery(db)).truncated
+
+
+# -- HTTP route ------------------------------------------------------------------------
+
+ADMIN_TOKEN = "dead-session-admin-token-" + "r" * 32
+
+
+@pytest.fixture
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
+    monkeypatch.setenv("ARGUS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", ADMIN_TOKEN)
+    with TestClient(app) as c:
+        yield c
+
+
+def seed_pending(client: TestClient) -> None:
+    """One overdue and one fresh pending fail, one cancelled after its fail."""
+
+    async def seed() -> None:
+        now = utcnow()
+        async with client.app.state.db.write() as tx:
+            for task, state, ago in (
+                ("overdue", "ready", RECOVERY_TARGET_S + 60),
+                ("fresh", "ready", 10),
+                ("dropped", "cancelled", 600),
+            ):
+                await task_row(tx.conn, task, state)
+                await event(
+                    tx.conn,
+                    task,
+                    "task.fail",
+                    now - timedelta(seconds=ago),
+                    reason="session_lost",
+                    **{"from": "claimed", "to": "ready"},
+                )
+
+    client.portal.call(seed)
+
+
+def test_route_reports_pending_overdue_and_ended_unclaimed(client: TestClient) -> None:
+    seed_pending(client)
+    res = client.get(
+        "/api/fleet/health", headers={"Authorization": f"Bearer {ADMIN_TOKEN}"}
+    )
+    assert res.status_code == 200
+    d = res.json()["dead_session_recovery"]
+    assert (d["denominator"], d["pending"], d["pending_overdue"]) == (3, 2, 1)
+    assert (d["ended_unclaimed"], d["measured"], d["truncated"]) == (1, 0, False)
+    assert d["p50"] is None and d["outliers"] == 0

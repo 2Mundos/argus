@@ -68,18 +68,49 @@ dead-session recovery coverage and latency.
   container being gone ([stall visibility](stall-visibility.spec.md) 3.1), and the
   fail's `at` is `observed_lost_at`. Fail and requeue are the same event when
   `data.to = ready` (latency fail→ready is always 0 by construction); recovery
-  latency is therefore `observed_lost_at` → the next `task.claim` for that task
-  with `at` after the fail (or the same `at` and a higher event id). Outcomes per
-  synthetic sample: `measured` (requeued and a later claim), `pending` (requeued,
-  no later claim yet), `not_requeued` (`to` is not `ready`), `anomalous`
-  (unreadable payload or negative latency). `denominator` is the bounded fail
-  count; `coverage` is `measured / denominator` (`null` when the denominator is
-  0). `p50` / `p90` / `mean` need `MIN_SAMPLES` measured latencies, else `null`
-  (never a fabricated median). `outliers` counts measured samples with latency
-  ≥ `target_s` (300 s, the draft P5 target); outliers stay in the distribution.
-  Examples (up to 5 newest measured) carry fail and claim event ids for audit.
-  MCP `get_dead_session_recovery(window_hours)` (managers) returns this block.
-  No scheduling, timeout, or `ARGUS_STALL_FAIL_S` change.
+  latency is therefore `observed_lost_at` → `at` of the paired claim.
+  **Pairing is by event id**, the one monotonic order (an `at` can step back with
+  the clock): a fail pairs with the first `task.claim` of the same task whose id
+  is above the fail's and below the task's next `task.fail` / `task.expire` (if
+  any), so a later attempt end never steals or shares a claim. Outcomes per
+  synthetic sample:
+  - `measured`: requeued and paired with a claim, latency ≥ 0.
+  - `pending`: requeued, no paired claim, and the task is still waiting
+    (`ready`, `pending` or `blocked`) in the same snapshot.
+  - `ended_unclaimed`: requeued, no paired claim, and the task is now terminal
+    (`cancelled`, `failed`, `succeeded`), e.g. cancelled while waiting. It never
+    recovered, and it is not a latency.
+  - `not_requeued`: `to` is not `ready` (attempts exhausted or unexpected `to`).
+  - `anomalous`: unreadable payload or time, negative latency (the paired claim's
+    `at` is before the fail's: clock rollback), an attempt end with no claim
+    between, or no paired claim while the task row is missing or in any other
+    state (`claimed`, `in_review`: a claim event must exist).
+
+  `denominator` is the bounded fail count; `coverage` is `measured / denominator`
+  (`null` when the denominator is 0). `p50` / `p90` / `mean` need `MIN_SAMPLES`
+  measured latencies, else `null` (never a fabricated median). `outliers` counts
+  measured samples with latency ≥ `target_s` (300 s, the draft P5 target);
+  outliers stay in the distribution. **Censored samples:** `pending_overdue` counts
+  pending samples whose age, request `now` − `observed_lost_at`, is ≥ `target_s`.
+  The age is a lower bound of a latency not yet known, so it never enters
+  percentiles, mean or outliers and is not a death time. A pending sample younger
+  than the target may still recover in time. Examples (up to 5 newest measured)
+  carry fail and claim event ids for audit. MCP
+  `get_dead_session_recovery(window_hours)` (managers) returns this block. No
+  scheduling, timeout, requeue or `ARGUS_STALL_FAIL_S` change. This block measures
+  the P5 goal; it does not show that the 5-minute median is met.
+
+  *Query cost and limits.* The cohort is read through `events_kind_at` (newest
+  5000 fails in the window, `truncated` when hit) and materialized once. Each
+  fail then does two `events_subject` range lookups (`subject_id = ?`,
+  `id > fail id`, first match by id: next attempt end, then the claim below it),
+  a primary-key lookup of the claim's `at` and a unique-key lookup of the task's
+  state; the final order is one sort of at most 5000 rows. The cost grows with
+  each task's own later events, never with the events table (asserted by
+  `EXPLAIN QUERY PLAN` in the tests: no `SCAN` of `events`). Window membership still
+  uses the fail's `at`, so a fail whose `at` was written during a clock rollback
+  may fall outside the window. `pending` and `ended_unclaimed` read the task's
+  *current* state; the window does not freeze it.
 - **Bounded reads.** No full scan of `tasks` or `events`: migration
   `0021_fleet_health_indexes.sql` adds `tasks_finished` and `events_kind_at`; per-task
   claim lookups use `events_subject`. Each fetch keeps at most 5000 newest rows and

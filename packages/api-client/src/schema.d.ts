@@ -4156,8 +4156,9 @@ export interface components {
          * @description session_lost observed → next claim (worker efficiency draft, P5 measure).
          *
          *     Death time is not in events. Fail and requeue are the same `task.fail` when
-         *     `to=ready`. Latency is therefore observation → next claim, never a fabricated
-         *     death→requeue delta. Percentiles need `MIN_SAMPLES` measured rows.
+         *     `to=ready`. Latency is therefore observation → the claim paired by event id,
+         *     never a fabricated death→requeue delta. Percentiles need `MIN_SAMPLES`
+         *     measured rows.
          */
         DeadSessionRecovery: {
             /** Anomalous */
@@ -4166,6 +4167,8 @@ export interface components {
             coverage: number | null;
             /** Denominator */
             denominator: number;
+            /** Ended Unclaimed */
+            ended_unclaimed: number;
             /** Examples */
             examples: components["schemas"]["RecoveryExample"][];
             /**
@@ -4189,6 +4192,8 @@ export interface components {
             p90: number | null;
             /** Pending */
             pending: number;
+            /** Pending Overdue */
+            pending_overdue: number;
             /**
              * Reason
              * @default session_lost

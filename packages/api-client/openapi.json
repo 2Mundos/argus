@@ -4556,7 +4556,7 @@
         "type": "object"
       },
       "DeadSessionRecovery": {
-        "description": "session_lost observed \u2192 next claim (worker efficiency draft, P5 measure).\n\nDeath time is not in events. Fail and requeue are the same `task.fail` when\n`to=ready`. Latency is therefore observation \u2192 next claim, never a fabricated\ndeath\u2192requeue delta. Percentiles need `MIN_SAMPLES` measured rows.",
+        "description": "session_lost observed \u2192 next claim (worker efficiency draft, P5 measure).\n\nDeath time is not in events. Fail and requeue are the same `task.fail` when\n`to=ready`. Latency is therefore observation \u2192 the claim paired by event id,\nnever a fabricated death\u2192requeue delta. Percentiles need `MIN_SAMPLES`\nmeasured rows.",
         "properties": {
           "anomalous": {
             "title": "Anomalous",
@@ -4575,6 +4575,10 @@
           },
           "denominator": {
             "title": "Denominator",
+            "type": "integer"
+          },
+          "ended_unclaimed": {
+            "title": "Ended Unclaimed",
             "type": "integer"
           },
           "examples": {
@@ -4642,6 +4646,10 @@
             "title": "Pending",
             "type": "integer"
           },
+          "pending_overdue": {
+            "title": "Pending Overdue",
+            "type": "integer"
+          },
           "reason": {
             "default": "session_lost",
             "title": "Reason",
@@ -4671,6 +4679,8 @@
           "denominator",
           "measured",
           "pending",
+          "pending_overdue",
+          "ended_unclaimed",
           "not_requeued",
           "anomalous",
           "coverage",
