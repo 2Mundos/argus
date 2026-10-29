@@ -178,6 +178,11 @@ WORKSPACE_REASONS = [
     "env_workspace_permission",
     "env_workspace_invalid",
     "env_workspace_remote_mismatch",
+    "env_checkpoint_unavailable",
+    "env_checkpoint_invalid",
+    "env_checkpoint_conflict",
+    "env_checkpoint_busy",
+    "env_checkpoint_limit",
     "env_workspace_branch_mismatch",
     "env_workspace_limit",
 ]

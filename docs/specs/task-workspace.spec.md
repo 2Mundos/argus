@@ -23,8 +23,8 @@ its call in `runTask`) and the new block reasons in Argus.
   deleted. Whatever it holds is the task's work in progress.
 - No canonical host checkout is mounted, and PR operations do not move to the
   orchestrator.
-- No resume of an interrupted attempt (P4). The workspace makes a resume
-  possible; how the worker uses it is not specified here.
+- No resume of an interrupted attempt (P4); see
+  [task checkpoint](task-checkpoint.spec.md).
 - No executor credential probe. `env_executor_auth` stays reserved (failure
   classes 3.3).
 - No retention, no byte quota and no cleanup of workspaces.
@@ -124,9 +124,8 @@ step does not run then. An existing origin URL with userinfo is reported as
   limit per workspace or per group?
 - Executor probe: `env_executor_auth` still needs a check that can run before the
   session container exists.
-- P4: how an interrupted attempt resumes from the workspace, and what happens
-  when the next attempt lands on another instance, which does not have the
-  workspace.
+- P4: answered for one node by [task checkpoint](task-checkpoint.spec.md); the
+  cross-node case stays open there.
 
 # 5. Constraints
 

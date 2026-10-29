@@ -58,7 +58,7 @@ export function taskBranch(taskId: string): string {
  * Host git, hardened against a workspace the worker controls: no hooks, no fsmonitor,
  * no inherited GIT_* redirection, no discovery above the workspaces root.
  */
-const defaultGit: GitRunner = async (args, cwd, ceiling) => {
+export const defaultGit: GitRunner = async (args, cwd, ceiling) => {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) env[k] = v;
   Object.assign(env, {
@@ -85,7 +85,7 @@ const code = (err: unknown) => (err as NodeJS.ErrnoException | null)?.code;
 const isPermission = (err: unknown) => ["EACCES", "EPERM", "EROFS"].includes(code(err) ?? "");
 
 /** True when the URL carries userinfo (a credential must never reach .git/config). */
-function hasCredentials(url: string): boolean {
+export function hasCredentials(url: string): boolean {
   try {
     const u = new URL(url);
     return !!(u.username || u.password);

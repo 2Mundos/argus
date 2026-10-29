@@ -62,6 +62,12 @@ import {
   runtimeProviders,
 } from "./argus-accounts.js";
 import { CHANGES_RELAY_FILE, createChangesRelay } from "./argus-changes-relay.js";
+import {
+  type CheckpointFailure,
+  checkpointTaskWorkspace,
+  maxCheckpointBytesFromEnv,
+  restoreTaskWorkspace,
+} from "./argus-checkpoint.js";
 import { defaultContinuationObserve } from "./argus-continuation-observe.js";
 import { syncCustomHarnessBridge } from "./argus-custom-bridge.js";
 import {
@@ -275,6 +281,11 @@ export interface ArgusConfig {
    * Default: `argusGroupDir`; tests inject a temporary directory.
    */
   workspaceRoot?: () => Promise<string | null>;
+  /**
+   * Node-local checkpoint store for unpublished task work (task checkpoint spec).
+   * Default: `ARGUS_CHECKPOINT_DIR`; unset disables checkpoints (nothing is saved or restored).
+   */
+  checkpointRoot?: string;
   url: string;
   bootstrapToken?: string;
   agentToken?: string;
@@ -1592,6 +1603,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   // Why `ensureAccount` returned false: `quota` when no account is usable, else a
   // lease/apply error that is not a provider limit (both leave the attempt unspent).
   let admissionFailure: "quota" | "account_unavailable" = "quota";
+  let completedAttempt: string | null = null; // "<task>:<attempt>" once Argus accepted the result
   let recycleOnLease = false; // the runtime must stop before the next claim/lease writes another account
   let engineInUse: string | null = null; // the harness the leased account selected
   let runtimeSelection: RuntimeSelection | null = null; // the project image selected for the task in flight
@@ -2476,7 +2488,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
    * The task's stable workspace (task workspace spec), prepared or checked after the
    * repository preflight succeeded. Null for a task without `repository:write`.
    */
-  async function workspacePreflight(task: ArgusTask): Promise<WorkspaceResult | null> {
+  async function workspacePreflight(
+    task: ArgusTask,
+  ): Promise<WorkspaceResult | CheckpointFailure | null> {
     if (!task.required_capabilities?.includes("repository:write")) return null;
     let groupDir: string | null;
     try {
@@ -2488,7 +2502,46 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         error: `the agent group directory could not be resolved: ${String(err)}`,
       };
     }
+    const storeRoot = cfg.checkpointRoot ?? process.env.ARGUS_CHECKPOINT_DIR?.trim();
+    if (storeRoot && task.attempt > 1) {
+      // A retry resumes the previous attempt's unpublished work before anything else
+      // touches the workspace; an untrusted checkpoint blocks instead of being ignored.
+      const restored = await restoreTaskWorkspace({
+        groupDir,
+        storeRoot,
+        taskId: task.id,
+        repositoryUrl: task.repository_url,
+        attempt: task.attempt,
+      });
+      if (!restored.ok) return restored;
+      if (restored.restored)
+        log.info("Restored checkpointed work", { task: task.id, checkpoint: restored.id });
+    }
     return prepareTaskWorkspace({ groupDir, taskId: task.id, repositoryUrl: task.repository_url });
+  }
+
+  /** Save the task's unpublished work after an attempt that did not complete. Best effort. */
+  async function checkpointAfterAttempt(task: ArgusTask): Promise<void> {
+    const storeRoot = cfg.checkpointRoot ?? process.env.ARGUS_CHECKPOINT_DIR?.trim();
+    if (!storeRoot || completedAttempt === `${task.id}:${task.attempt}`) return;
+    if (!task.required_capabilities?.includes("repository:write")) return;
+    try {
+      const groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
+      if (!groupDir) return;
+      const saved = await checkpointTaskWorkspace({
+        groupDir,
+        storeRoot,
+        taskId: task.id,
+        attempt: task.attempt,
+        repositoryUrl: task.repository_url,
+        maxBytes: maxCheckpointBytesFromEnv(),
+      });
+      if (!saved.ok) log.warn("Could not checkpoint the task's work", { task: task.id, ...saved });
+      else if (!saved.empty)
+        log.info("Checkpointed the task's work", { task: task.id, ref: saved.ref });
+    } catch (err) {
+      log.warn("Could not checkpoint the task's work", { task: task.id, err });
+    }
   }
 
   async function runTask(task: ArgusTask): Promise<void> {
@@ -3005,6 +3058,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             await runTask(task);
           } finally {
             await closeAttemptSession(task);
+            await checkpointAfterAttempt(task);
           }
         }
       } catch (err) {
@@ -3042,6 +3096,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     checklist?: ChecklistReport[],
   ): Promise<void> {
     await reportHarness(t, "succeeded");
+    completedAttempt = `${t.id}:${t.attempt}`;
     const extra = [...attached.keys()];
     const missing = attachFailures.length ? `\n\n[Not stored: ${attachFailures.join("; ")}]` : "";
     if (chars(text + missing).length <= SUMMARY_MAX_CHARS) {
