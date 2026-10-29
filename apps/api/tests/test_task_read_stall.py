@@ -86,6 +86,7 @@ def test_task_read_and_inbox_share_quiet_facts(client: TestClient) -> None:
     row = next(i for i in inbox_res.json()["items"] if i["subject_id"] == quiet["id"])
     assert row["stall_cause"] == body["stall_cause"]
     assert row["last_signal_at"] == body["last_signal_at"]
+    assert row["last_signal_source"] == body["last_signal_source"]
 
     busy_res = client.get(f"/api/tasks/{busy['id']}").json()
     assert busy_res["quiet_at"] is None
