@@ -121,7 +121,7 @@ export function TaskSignal({ task, now }: { task: Signal; now: number }) {
               <span style={{ width: `${task.progress_percent}%` }} />
             </span>
           )}
-          <span className="small">
+          <span className="small" title={task.progress_message ?? undefined}>
             {quiet && "Last note: "}
             {task.progress_message}
           </span>
