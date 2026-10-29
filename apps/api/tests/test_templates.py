@@ -551,6 +551,49 @@ def test_socket_template_needs_the_agent_image_on_the_node(
 
 
 @BOTH
+def test_readiness_names_the_host_and_agent_images_separately(
+    client: TestClient, target: FakeTarget, extra_env: dict
+) -> None:
+    ready_node(target, images=False)
+    target.images = {"argus-nanoclaw-host:dev", "nc-agent:1"}
+    sock = readiness(client, "nanoclaw-socket")
+    assert sock["host_image"] == {
+        "image": "argus-nanoclaw-host:dev",
+        "source": "config",
+        "setting": "ARGUS_NANOCLAW_HOST_IMAGE",
+        "present": True,
+        "detail": sock["host_image"]["detail"],
+    }
+    assert sock["agent_image"]["image"] == "nc-agent:1"
+    assert sock["agent_image"]["setting"] == "ARGUS_NANOCLAW_AGENT_IMAGE"
+    assert sock["agent_image"]["present"] is True
+    # The sandbox loads the agent image from an archive: not checkable here.
+    box = readiness(client, "nanoclaw-sandbox")
+    assert box["agent_image"]["image"] == "nc-agent:1"
+    assert box["agent_image"]["present"] is None
+    # A missing image is reported absent, not hidden.
+    target.images = {"nc-agent:1"}
+    assert readiness(client, "nanoclaw-socket")["host_image"]["present"] is False
+
+
+def test_unconfigured_nanoclaw_offers_no_agent_image_and_workers_no_nanoclaw_images(
+    client: TestClient, target: FakeTarget
+) -> None:
+    target.labeled = {"echo:1": ECHO}
+    cat = templates(client)
+    assert cat["nanoclaw-socket"]["readiness"][0]["agent_image"] is None
+    worker = cat["argus-worker"]["readiness"][0]
+    assert worker["host_image"] is None and worker["agent_image"] is None
+
+
+def test_image_catalog_stays_manager_only(
+    client: TestClient, target: FakeTarget
+) -> None:
+    worker = bearer(agent_token(client, "worker"))
+    assert client.get("/api/fleet/templates", headers=worker).status_code == 403
+
+
+@BOTH
 def test_nothing_is_verified_on_a_remote_or_vm_daemon(
     client: TestClient, target: FakeTarget, extra_env: dict
 ) -> None:

@@ -113,3 +113,28 @@ export function catalog(
     ],
   } as TemplateCatalog;
 }
+
+/** The catalog with both NanoClaw templates reporting their configured host and agent images. */
+export function nanoclawCatalog(): TemplateCatalog {
+  const cat = catalog({ nanoclaw: true, socket: true });
+  for (const t of cat.templates) {
+    if (t.runtime !== "nanoclaw") continue;
+    for (const r of t.readiness) {
+      r.host_image = {
+        image: "argus-nanoclaw-host:dev",
+        source: "config",
+        setting: "ARGUS_NANOCLAW_HOST_IMAGE",
+        present: true,
+        detail: "present",
+      };
+      r.agent_image = {
+        image: "nc-agent:1",
+        source: "config",
+        setting: "ARGUS_NANOCLAW_AGENT_IMAGE",
+        present: t.id === "nanoclaw-socket" ? true : null,
+        detail: "",
+      };
+    }
+  }
+  return cat;
+}

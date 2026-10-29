@@ -22,6 +22,8 @@ export type SearchHit = components["schemas"]["SearchHit"];
 export type Account = components["schemas"]["Account"];
 export type ClaudeLogin = components["schemas"]["ClaudeLogin"];
 export type Pool = components["schemas"]["Pool"];
+export type PoolPatch = components["schemas"]["PoolPatch"];
+export type PoolUpsert = components["schemas"]["PoolUpsert"];
 export type SystemSummary = components["schemas"]["SystemSummary"];
 export type Instance = components["schemas"]["Instance"];
 export type FleetCapabilities = components["schemas"]["FleetCapabilities"];
@@ -91,7 +93,10 @@ export class ApiError extends Error {
 }
 
 interface ErrorBody {
-  detail?: { code?: string; message?: string; details?: string[] } | string;
+  detail?:
+    | { code?: string; message?: string; details?: string[] }
+    | { loc?: (string | number)[]; msg?: string }[]
+    | string;
 }
 
 /** Unwrap an openapi-fetch result: return data or throw an ApiError. */
@@ -102,6 +107,13 @@ export async function call<T>(
   if (response.status === 401) onUnauthorized();
   if (error !== undefined || !response.ok) {
     const detail = (error as ErrorBody | undefined)?.detail;
+    if (Array.isArray(detail)) {
+      // FastAPI's own 422: one `<field path>: <why>` detail per rejected field.
+      const details = detail.map(
+        (d) => `${(d.loc ?? []).filter((x) => x !== "body").join(".")}: ${d.msg ?? "invalid"}`,
+      );
+      throw new ApiError(response.status, "validation_error", "The request was rejected", details);
+    }
     if (typeof detail === "object" && detail !== null) {
       throw new ApiError(
         response.status,

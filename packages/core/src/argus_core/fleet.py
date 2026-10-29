@@ -483,12 +483,27 @@ class ImageChoice(BaseModel):
     source: str  # "label" (on the node's daemon) or "config" (operator list)
 
 
+class RuntimeImage(BaseModel):
+    """An image the operator configured for a NanoClaw template, with what was
+    measured about it on the node. `present` is None when it cannot be checked."""
+
+    image: str
+    source: str  # "config": the ARGUS_NANOCLAW_* setting named in `setting`
+    setting: str
+    present: bool | None
+    detail: str
+
+
 class Readiness(BaseModel):
     node: str
     ready: bool
     checks: list[Check]
     missing: list[str]  # what to fix, for every check that is not verified true
     images: list[ImageChoice]  # argus-worker only: the offered images
+    # NanoClaw templates only: the Docker image of the runtime host, and the
+    # NanoClaw agent image the host starts. Two different images; None if unset.
+    host_image: RuntimeImage | None = None
+    agent_image: RuntimeImage | None = None
 
 
 class TemplateDefaults(BaseModel):

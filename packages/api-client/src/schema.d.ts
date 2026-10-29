@@ -7003,6 +7003,23 @@ export interface components {
             quantizations?: string[];
         };
         /**
+         * RuntimeImage
+         * @description An image the operator configured for a NanoClaw template, with what was
+         *     measured about it on the node. `present` is None when it cannot be checked.
+         */
+        RuntimeImage: {
+            /** Detail */
+            detail: string;
+            /** Image */
+            image: string;
+            /** Present */
+            present: boolean | null;
+            /** Setting */
+            setting: string;
+            /** Source */
+            source: string;
+        };
+        /**
          * RuntimeKind
          * @enum {string}
          */
@@ -8617,8 +8634,10 @@ export interface components {
         };
         /** Readiness */
         argus_core__fleet__Readiness: {
+            agent_image?: components["schemas"]["RuntimeImage"] | null;
             /** Checks */
             checks: components["schemas"]["Check"][];
+            host_image?: components["schemas"]["RuntimeImage"] | null;
             /** Images */
             images: components["schemas"]["ImageChoice"][];
             /** Missing */
