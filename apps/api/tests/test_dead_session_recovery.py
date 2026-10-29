@@ -356,8 +356,12 @@ EXPECTED_EVENT_INDEXES = frozenset(
 )
 
 
-# `SCAN e`, `SEARCH e USING ...`; older SQLite also prints `SCAN TABLE events`.
-PLAN_NODE = re.compile(r"(SCAN|SEARCH) (?:TABLE )?(\w+)")
+# `SCAN e`, `SEARCH e USING ...`; older SQLite prints `SEARCH TABLE events AS e`.
+PLAN_NODE = re.compile(r"(SCAN|SEARCH) (?:TABLE )?(\w+)(?: AS (\w+))?")
+
+
+def plan_alias(node: re.Match[str]) -> str:
+    return node.group(3) or node.group(2)
 
 
 def event_scans(plan: list[str]) -> list[str]:
@@ -367,7 +371,7 @@ def event_scans(plan: list[str]) -> list[str]:
         for line in plan
         if (node := PLAN_NODE.match(line))
         and node.group(1) == "SCAN"
-        and node.group(2) in EVENT_ALIASES
+        and plan_alias(node) in EVENT_ALIASES
     ]
 
 
@@ -381,9 +385,9 @@ def event_searches(plan: list[str]) -> set[tuple[str, str]]:
             node
             and node.group(1) == "SEARCH"
             and index
-            and node.group(2) in EVENT_ALIASES
+            and plan_alias(node) in EVENT_ALIASES
         ):
-            found.add((node.group(2), index.group(1)))
+            found.add((plan_alias(node), index.group(1)))
     return found
 
 
