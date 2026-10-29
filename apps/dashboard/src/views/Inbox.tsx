@@ -3,19 +3,11 @@ import { api, call, type DecisionDetail, type InboxGroup, type InboxItem } from 
 import { actor, relative, shortId } from "../format";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
+import { dur, quietFacts } from "../stall";
 import { TaskLabel } from "../TaskLabel";
 import { BatchPanel, type Draft, type Entry, isAnswerable, MAX_BATCH } from "./InboxBatch";
 import { TaskDetail } from "./TaskDetail";
 import { TaskSteers } from "./TaskSteers";
-
-const dur = (s: number) =>
-  s < 60
-    ? `${s}s`
-    : s < 3600
-      ? `${Math.floor(s / 60)}m`
-      : s < 86_400
-        ? `${Math.floor(s / 3600)}h`
-        : `${Math.floor(s / 86_400)}d`;
 
 const KIND_ORDER = ["question", "approval", "review", "knowledge", "policy", "none"] as const;
 
@@ -260,13 +252,6 @@ function BlockedCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () => 
 }
 
 /** What the worker host last saw for a quiet claim (stall visibility 3.7). */
-const STALL_CAUSE_COPY: Record<string, string> = {
-  workspace_missing: "workspace missing on the host",
-  session_gone: "session container gone",
-  silent_delegate_active: "delegate busy but silent",
-  no_progress: "session running, no progress",
-};
-
 function QuietClaimCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () => void }) {
   const [steerOpen, setSteerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -275,16 +260,12 @@ function QuietClaimCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () 
   const attempt = item.attempt ?? task?.attempt ?? 1;
   const assigneeId = task?.assignee_agent_id ?? null;
 
-  const signalLine =
-    item.last_signal_at && item.last_signal_source
-      ? `; last signal: ${item.last_signal_source} at ${relative(item.last_signal_at)}`
-      : item.last_signal_at
-        ? `; last signal at ${relative(item.last_signal_at)}`
-        : "";
-  const cause =
-    item.stall_cause && item.stall_cause !== "unknown"
-      ? `; likely cause: ${STALL_CAUSE_COPY[item.stall_cause]}`
-      : "";
+  const quietLine = quietFacts({
+    age_s: item.age_s,
+    last_signal_at: item.last_signal_at,
+    last_signal_source: item.last_signal_source,
+    stall_cause: item.stall_cause,
+  });
 
   async function release() {
     setBusy(true);
@@ -306,10 +287,8 @@ function QuietClaimCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () 
   return (
     <article className="card quiet-claim">
       <p>
-        <TaskLabel title={item.title ?? shortId(item.subject_id)} project={item.project} /> is quiet
-        for {dur(item.age_s)}
-        {signalLine}
-        {cause}.
+        <TaskLabel title={item.title ?? shortId(item.subject_id)} project={item.project} /> is{" "}
+        {quietLine}
       </p>
       {error && <p className="error">{error}</p>}
       <div className="actions left">
