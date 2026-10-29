@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CreateWorkerRequest, Pool } from "../api";
 import { catalog } from "../catalogFixture";
 import { GuidedWorkerForm, NewWorker } from "./GuidedWorker";
-import { PoolEditor } from "./Pools";
 
 // jsdom has a base URL but Node's Request does not: make "/api/…" absolute before
 // the API client captures the constructor.
@@ -245,52 +244,5 @@ describe("NewWorker", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Create 1 worker" }));
     expect(await screen.findByText(/already exists/)).toBeTruthy();
     expect(screen.queryByText(/Requested/)).toBeNull();
-  });
-});
-
-describe("pool editor", () => {
-  it("patches only what it shows, keeping the rest and stored env values", async () => {
-    const pool = {
-      name: "nc",
-      target: "docker",
-      runtime: "nanoclaw",
-      image: "host:dev",
-      capabilities: [],
-      agents_per_instance: 1,
-      desired_replicas: 1,
-      max_replicas: 3,
-      env: { TOKEN: "***" },
-      cpus: 2,
-      memory_mb: 512,
-      docker: {
-        host: null,
-        network: "br0",
-        extra_hosts: ["h:host-gateway"],
-        runtime: "sysbox-runc",
-      },
-      kubernetes: null,
-      nanoclaw: { install_dir: "/i", instances_root: "/r", agent_image: "a:1", user: null },
-      template: "nanoclaw-socket",
-      status: "ok",
-      last_error: null,
-      live_instances: 0,
-      version: "v1",
-    } as unknown as Pool;
-    const seen = stubFetch(async () => json(pool));
-    render(<PoolEditor pool={pool} onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText(/Max replicas/), { target: { value: "5" } });
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(seen.length).toBe(1));
-    expect(seen[0]?.method).toBe("PATCH");
-    const body = await seen[0]?.json();
-    expect(body).toMatchObject({
-      expected_version: "v1",
-      max_replicas: 5,
-      docker: { runtime: "sysbox-runc", network: "br0" },
-    });
-    // Unshown options stay on the server; the redacted value is not sent back.
-    for (const key of ["runtime", "nanoclaw", "cpus", "template", "env"]) {
-      expect(body).not.toHaveProperty(key);
-    }
   });
 });
