@@ -206,7 +206,7 @@ function Body({ h }: { h: FleetHealth }) {
           </p>
           <p className="muted small">
             pending {d.pending} (unclaimed ≥ {seconds(d.target_s)} since loss: {d.pending_overdue})
-              ended unclaimed {d.ended_unclaimed} · not requeued {d.not_requeued} · anomalous{" "}
+            ended unclaimed {d.ended_unclaimed} · not requeued {d.not_requeued} · anomalous{" "}
             {d.anomalous}
             {" · "}
             observed lost, not death time; the age is queue wait, not worker speed
