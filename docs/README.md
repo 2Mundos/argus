@@ -136,7 +136,8 @@ every new dependency is judged against it.
   and [runbook](../integrations/nanoclaw/security/RUNBOOK.md)
 - [Security hardening (2026-10-20 medium/low)](specs/security-hardening.spec.md) —
   response headers and CSP, docs off by default, sessionStorage tokens, pod and
-  container hardening, OneCLI URL rules, task/artifact caps, agent token expiry
+  container hardening, OneCLI URL rules, task/artifact caps, agent token expiry;
+  reporting a vulnerability: [SECURITY.md](../SECURITY.md)
 
 - [Settings](specs/settings.spec.md) — typed global settings with per-project
   overrides; model preferences move there; optional review by a different model
