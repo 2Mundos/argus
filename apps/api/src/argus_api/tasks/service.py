@@ -64,7 +64,10 @@ from pydantic import ValidationError
 
 from argus_api.access import record_lease_grant
 from argus_api.accounts.eligibility import engine_pool
-from argus_api.accounts.usage import insert_usage
+from argus_api.accounts.usage import (
+    ensure_attempt_outcome,
+    insert_usage,
+)
 from argus_api.db import Snapshot, Tx, ts
 from argus_api.decisions import store as decisions
 from argus_api.errors import (
@@ -794,7 +797,7 @@ async def complete(
             code="checklist_mismatch",
             details=[f"unknown checklist item {i}" for i in foreign],
         )
-    await _record_result_usage(tx, agent_id, task_id, result)
+    await _record_result_usage(tx, agent_id, task_id, attempt, result)
     # A completion claims; only evidenced items count as done. Anything still open
     # sends the result to review instead of success (continuation spec 3.5).
     items = cont.apply_reports(
@@ -2525,6 +2528,7 @@ async def _apply(
     if leaving_claim:
         # Pending steers belong to this attempt only (task steering spec 3.3).
         await steers.expire_attempt(tx, row["id"], row["attempt"])
+        await _ensure_usage_outcome(tx, row, action, data or {})
     # Decisions that waited on the old state are moot once the task leaves it
     # (an answered decision is already closed before its transition runs).
     if new in TERMINAL:
@@ -2688,8 +2692,50 @@ async def _states_of(
         return {r["id"]: r["state"] for r in await cur.fetchall()}
 
 
+async def _ensure_usage_outcome(
+    tx: Tx, row: aiosqlite.Row, action: Action, data: dict[str, Any]
+) -> None:
+    """Every leave-claimed write leaves a usage outcome (account usage 3.10)."""
+    async with tx.conn.execute(
+        "SELECT id, claimed_at, agent_id FROM task_attempts"
+        " WHERE task_id = ? AND attempt = ? ORDER BY id DESC LIMIT 1",
+        (row["id"], row["attempt"]),
+    ) as cur:
+        claim = await cur.fetchone()
+    if claim is None:
+        return
+    await ensure_attempt_outcome(
+        tx,
+        task_id=row["id"],
+        attempt=row["attempt"],
+        agent_id=row["assignee_agent_id"] or claim["agent_id"],
+        claim_id=claim["id"],
+        claimed_at=claim["claimed_at"],
+        reason=_usage_outcome_reason(action, data),
+    )
+
+
+def _usage_outcome_reason(action: Action, data: dict[str, Any]) -> str:
+    if action is Action.RELEASE:
+        return "released"
+    if action is Action.REQUEUE:
+        return "requeued"
+    if action is Action.CANCEL:
+        return "cancelled"
+    if action is Action.EXPIRE:
+        why = str(data.get("reason") or "")
+        if why in ("timeout", "stalled"):
+            return why
+        return "lost"  # lease_expired, agent_ended, and unknown expiry
+    return "no_report"  # complete, fail, block
+
+
 async def _record_result_usage(
-    tx: Tx, agent_id: str, task_id: str, result: TaskResult
+    tx: Tx,
+    agent_id: str,
+    task_id: str,
+    attempt: int,
+    result: TaskResult,
 ) -> None:
     """Usage reported in the result counts against its account (recorded only)."""
     usage = result.usage
@@ -2708,6 +2754,7 @@ async def _record_result_usage(
         usage.account_id,
         agent_id,
         task_id,
+        attempt=attempt,
         **usage.model_dump(exclude={"account_id"}),
     )
 

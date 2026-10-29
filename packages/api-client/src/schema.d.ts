@@ -2652,16 +2652,31 @@ export interface components {
         AccountCost: {
             /** Account Id */
             account_id: string;
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
             input_tokens: number | null;
+            /**
+             * Measured Attempts
+             * @default 0
+             */
+            measured_attempts?: number;
             /** Measured Runs */
             measured_runs: number;
             /** Name */
             name: string;
+            /**
+             * Not Reported Attempts
+             * @default 0
+             */
+            not_reported_attempts?: number;
             /** Not Reported Runs */
             not_reported_runs: number;
             /** Output Tokens */
@@ -3922,16 +3937,33 @@ export interface components {
          * CostFigures
          * @description What one group spent. `runs = measured_runs + not_reported_runs`. A token
          *     field is null when no measured run carried it, never 0 (cost view 3.1).
+         *     Attempt coverage counts distinct (task, attempt) pairs among the group's rows
+         *     (account usage 3.10); rows with no attempt count only in `runs`.
          */
         CostFigures: {
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
             input_tokens: number | null;
+            /**
+             * Measured Attempts
+             * @default 0
+             */
+            measured_attempts?: number;
             /** Measured Runs */
             measured_runs: number;
+            /**
+             * Not Reported Attempts
+             * @default 0
+             */
+            not_reported_attempts?: number;
             /** Not Reported Runs */
             not_reported_runs: number;
             /** Output Tokens */
@@ -3965,6 +3997,7 @@ export interface components {
             totals: components["schemas"]["CostFigures"];
             /** Tz */
             tz: string;
+            unattributed: components["schemas"]["CostFigures"];
             /**
              * Window
              * @enum {string}
@@ -4079,14 +4112,29 @@ export interface components {
         };
         /** DayCost */
         DayCost: {
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
             input_tokens: number | null;
+            /**
+             * Measured Attempts
+             * @default 0
+             */
+            measured_attempts?: number;
             /** Measured Runs */
             measured_runs: number;
+            /**
+             * Not Reported Attempts
+             * @default 0
+             */
+            not_reported_attempts?: number;
             /** Not Reported Runs */
             not_reported_runs: number;
             /** Output Tokens */
@@ -6444,14 +6492,29 @@ export interface components {
         };
         /** ProjectCost */
         ProjectCost: {
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
             input_tokens: number | null;
+            /**
+             * Measured Attempts
+             * @default 0
+             */
+            measured_attempts?: number;
             /** Measured Runs */
             measured_runs: number;
+            /**
+             * Not Reported Attempts
+             * @default 0
+             */
+            not_reported_attempts?: number;
             /** Not Reported Runs */
             not_reported_runs: number;
             /** Output Tokens */
@@ -7994,6 +8057,8 @@ export interface components {
          * @description One engine run on one held account (account usage 3.2).
          */
         UsageReport: {
+            /** Attempt */
+            attempt?: number | null;
             /** Cached Input Tokens */
             cached_input_tokens?: number | null;
             /** Cost Usd */
@@ -8313,6 +8378,21 @@ export interface components {
             cost_per_succeeded: number | null;
             /** Finished Tasks */
             finished_tasks: number;
+            /**
+             * Measured Attempts
+             * @default 0
+             */
+            measured_attempts?: number;
+            /**
+             * Measured Tasks
+             * @default 0
+             */
+            measured_tasks?: number;
+            /**
+             * Not Reported Attempts
+             * @default 0
+             */
+            not_reported_attempts?: number;
             /** Source */
             source: string;
             /** Tokens Per Failed */

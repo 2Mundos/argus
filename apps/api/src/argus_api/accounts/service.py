@@ -835,16 +835,21 @@ async def release_waiting_tasks(tx: Tx) -> list[str]:
 async def record_usage(
     tx: Tx, account_id: str, agent_id: str, report: UsageReport
 ) -> None:
-    """One engine run on an account the agent holds (account usage 3.2)."""
+    """One engine run on an account the agent holds (account usage 3.2 / 3.10)."""
     await _row(tx.conn, account_id)
     if await _lease_on(tx.conn, agent_id, account_id) is None:
         raise ForbiddenError("only an agent holding a lease may report its usage")
+    attempt = await usage.resolve_attempt(
+        tx.conn, agent_id, report.task_id, report.attempt
+    )
+    fields = report.model_dump(exclude={"task_id", "rate_limits", "attempt"})
     await usage.insert_usage(
         tx,
         account_id,
         agent_id,
         report.task_id,
-        **report.model_dump(exclude={"task_id", "rate_limits"}),
+        attempt=attempt,
+        **fields,
     )
     if report.rate_limits:
         await usage.upsert_quota(

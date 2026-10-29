@@ -50,6 +50,19 @@ _SLOT = (
     "substr(u.at, 1, 14) || printf('%02d', CAST(substr(u.at, 15, 2) AS INTEGER)"
     " / 15 * 15)"
 )
+# Distinct (task, attempt) coverage inside a group: measured when any row is.
+_ATTEMPTS = (
+    "SELECT grp, count(*) AS attempts,"
+    " coalesce(sum(has_measured), 0) AS measured_attempts,"
+    " coalesce(sum(NOT has_measured), 0) AS not_reported_attempts"
+    " FROM ("
+    "  SELECT {key} AS grp, u.task_id, u.attempt,"
+    "   max(u.measurement = 'measured') AS has_measured"
+    "  FROM account_usage u LEFT JOIN tasks t ON t.id = u.task_id"
+    "  WHERE u.at > ? AND u.at <= ? AND u.attempt IS NOT NULL {extra}"
+    "  GROUP BY 1, u.task_id, u.attempt"
+    ") GROUP BY grp"
+)
 
 
 class _Acc:
@@ -57,6 +70,7 @@ class _Acc:
 
     def __init__(self) -> None:
         self.runs = self.measured = self.not_reported = self.unpriced = 0
+        self.attempts = self.measured_attempts = self.not_reported_attempts = 0
         self.unpriced_models: set[str] = set()
         self.tokens: list[int | None] = [None, None, None]
         self.estimated: float | None = None
@@ -81,10 +95,18 @@ class _Acc:
         else:
             self.estimated = (self.estimated or 0.0) + cost
 
+    def set_attempts(self, attempts: int, measured: int, not_reported: int) -> None:
+        self.attempts = attempts
+        self.measured_attempts = measured
+        self.not_reported_attempts = not_reported
+
     def merge(self, other: "_Acc") -> None:
         self.runs += other.runs
         self.measured += other.measured
         self.not_reported += other.not_reported
+        self.attempts += other.attempts
+        self.measured_attempts += other.measured_attempts
+        self.not_reported_attempts += other.not_reported_attempts
         self.unpriced += other.unpriced
         self.unpriced_models |= other.unpriced_models
         for k, v in enumerate(other.tokens):
@@ -100,6 +122,9 @@ class _Acc:
             runs=self.runs,
             measured_runs=self.measured,
             not_reported_runs=self.not_reported,
+            attempts=self.attempts,
+            measured_attempts=self.measured_attempts,
+            not_reported_attempts=self.not_reported_attempts,
             input_tokens=self.tokens[0],
             output_tokens=self.tokens[1],
             cached_input_tokens=self.tokens[2],
@@ -116,15 +141,38 @@ async def _group[K](
     end: datetime,
     table: PriceTable,
     bucket: Callable[[str | None], K],
+    *,
+    extra: str = "",
 ) -> dict[K, _Acc]:
     groups: dict[K, _Acc] = {}
     async with conn.execute(
-        f"SELECT {key_sql}, {_FIGURES}{_WINDOW} GROUP BY 1, u.model",
+        f"SELECT {key_sql}, {_FIGURES}{_WINDOW}{extra} GROUP BY 1, u.model",
         (ts(start), ts(end)),
     ) as cur:
         async for key, *rest in cur:
             groups.setdefault(bucket(key), _Acc()).add(table, rest)
+    await _attach_attempts(conn, key_sql, start, end, groups, bucket, extra=extra)
     return groups
+
+
+async def _attach_attempts[K](
+    conn: aiosqlite.Connection,
+    key_sql: str,
+    start: datetime,
+    end: datetime,
+    groups: dict[K, _Acc],
+    bucket: Callable[[str | None], K],
+    *,
+    extra: str = "",
+) -> None:
+    async with conn.execute(
+        _ATTEMPTS.format(key=key_sql, extra=extra),
+        (ts(start), ts(end)),
+    ) as cur:
+        async for key, attempts, measured, nr in cur:
+            groups.setdefault(bucket(key), _Acc()).set_attempts(
+                int(attempts), int(measured), int(nr)
+            )
 
 
 def _order(name: str, f: CostFigures) -> tuple:
@@ -154,7 +202,26 @@ async def report(
         if a.provider not in REPOSITORY_PROVIDERS
     ]
     ident = lambda k: k  # noqa: E731
-    by_acc = await _group(conn, "u.account_id", start, now, table, ident)
+    by_acc = await _group(
+        conn,
+        "u.account_id",
+        start,
+        now,
+        table,
+        ident,
+        extra=" AND u.account_id IS NOT NULL",
+    )
+    unattributed = (
+        await _group(
+            conn,
+            "NULL",
+            start,
+            now,
+            table,
+            lambda _k: None,
+            extra=" AND u.account_id IS NULL",
+        )
+    ).get(None) or _Acc()
     by_proj = await _group(conn, "t.project", start, now, table, ident)
     per_day = await _group(
         conn,
@@ -165,8 +232,9 @@ async def report(
         lambda slot: usage.floor(datetime.fromisoformat(f"{slot}+00:00"), "day", zone),
     )
 
-    # Totals are the sum of the listed accounts, so they match the table.
+    # Totals are by_account plus unattributed, so the tables add up (cost view 3.3).
     totals = _Acc()
+    totals.merge(unattributed)
     by_account = []
     for a in accounts:
         acc = by_acc.get(a.id) or _Acc()
@@ -204,6 +272,7 @@ async def report(
             unpriced_models=sorted(totals.unpriced_models),
         ),
         totals=totals.figures(),
+        unattributed=unattributed.figures(),
         by_account=by_account,
         by_project=by_project,
         daily=daily,

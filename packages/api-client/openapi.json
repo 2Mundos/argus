@@ -176,6 +176,11 @@
             "title": "Account Id",
             "type": "string"
           },
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
           "cached_input_tokens": {
             "anyOf": [
               {
@@ -209,6 +214,11 @@
             ],
             "title": "Input Tokens"
           },
+          "measured_attempts": {
+            "default": 0,
+            "title": "Measured Attempts",
+            "type": "integer"
+          },
           "measured_runs": {
             "title": "Measured Runs",
             "type": "integer"
@@ -216,6 +226,11 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "not_reported_attempts": {
+            "default": 0,
+            "title": "Not Reported Attempts",
+            "type": "integer"
           },
           "not_reported_runs": {
             "title": "Not Reported Runs",
@@ -3985,8 +4000,13 @@
         "type": "object"
       },
       "CostFigures": {
-        "description": "What one group spent. `runs = measured_runs + not_reported_runs`. A token\nfield is null when no measured run carried it, never 0 (cost view 3.1).",
+        "description": "What one group spent. `runs = measured_runs + not_reported_runs`. A token\nfield is null when no measured run carried it, never 0 (cost view 3.1).\nAttempt coverage counts distinct (task, attempt) pairs among the group's rows\n(account usage 3.10); rows with no attempt count only in `runs`.",
         "properties": {
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
           "cached_input_tokens": {
             "anyOf": [
               {
@@ -4020,8 +4040,18 @@
             ],
             "title": "Input Tokens"
           },
+          "measured_attempts": {
+            "default": 0,
+            "title": "Measured Attempts",
+            "type": "integer"
+          },
           "measured_runs": {
             "title": "Measured Runs",
+            "type": "integer"
+          },
+          "not_reported_attempts": {
+            "default": 0,
+            "title": "Not Reported Attempts",
             "type": "integer"
           },
           "not_reported_runs": {
@@ -4116,6 +4146,9 @@
             "title": "Tz",
             "type": "string"
           },
+          "unattributed": {
+            "$ref": "#/components/schemas/CostFigures"
+          },
           "window": {
             "enum": [
               "24h",
@@ -4133,6 +4166,7 @@
           "tz",
           "pricing",
           "totals",
+          "unattributed",
           "by_account",
           "by_project",
           "daily"
@@ -4414,6 +4448,11 @@
       },
       "DayCost": {
         "properties": {
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
           "cached_input_tokens": {
             "anyOf": [
               {
@@ -4447,8 +4486,18 @@
             ],
             "title": "Input Tokens"
           },
+          "measured_attempts": {
+            "default": 0,
+            "title": "Measured Attempts",
+            "type": "integer"
+          },
           "measured_runs": {
             "title": "Measured Runs",
+            "type": "integer"
+          },
+          "not_reported_attempts": {
+            "default": 0,
+            "title": "Not Reported Attempts",
             "type": "integer"
           },
           "not_reported_runs": {
@@ -11309,6 +11358,11 @@
       },
       "ProjectCost": {
         "properties": {
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
           "cached_input_tokens": {
             "anyOf": [
               {
@@ -11342,8 +11396,18 @@
             ],
             "title": "Input Tokens"
           },
+          "measured_attempts": {
+            "default": 0,
+            "title": "Measured Attempts",
+            "type": "integer"
+          },
           "measured_runs": {
             "title": "Measured Runs",
+            "type": "integer"
+          },
+          "not_reported_attempts": {
+            "default": 0,
+            "title": "Not Reported Attempts",
             "type": "integer"
           },
           "not_reported_runs": {
@@ -16114,6 +16178,18 @@
       "UsageReport": {
         "description": "One engine run on one held account (account usage 3.2).",
         "properties": {
+          "attempt": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
+          },
           "cached_input_tokens": {
             "anyOf": [
               {
@@ -17086,6 +17162,21 @@
           },
           "finished_tasks": {
             "title": "Finished Tasks",
+            "type": "integer"
+          },
+          "measured_attempts": {
+            "default": 0,
+            "title": "Measured Attempts",
+            "type": "integer"
+          },
+          "measured_tasks": {
+            "default": 0,
+            "title": "Measured Tasks",
+            "type": "integer"
+          },
+          "not_reported_attempts": {
+            "default": 0,
+            "title": "Not Reported Attempts",
             "type": "integer"
           },
           "source": {

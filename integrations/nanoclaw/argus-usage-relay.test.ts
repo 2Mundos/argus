@@ -48,6 +48,7 @@ describe("checkUsageRecord", () => {
       accountId: "acc-exec",
       body: {
         task_id: "t1",
+        attempt: 2,
         model: "m",
         engine: "claude",
         role: "executor",

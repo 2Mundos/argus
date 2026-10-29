@@ -855,10 +855,12 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
 }
 
 /** The body of POST /api/accounts/{id}/usage: identifiers and figures only, never a credential. */
-export function usagePayload({ taskId, model, engine, role, usage, key }) {
+export function usagePayload({ taskId, attempt, model, engine, role, usage, key }) {
   const measured = usage.measurement === "measured";
+  const attemptN = Number(attempt);
   return {
     task_id: taskId ?? null,
+    ...(Number.isSafeInteger(attemptN) && attemptN >= 1 ? { attempt: attemptN } : {}),
     model: model ? String(model).slice(0, 100) : null,
     engine: engine ? String(engine).slice(0, 50) : null,
     role,
@@ -1137,6 +1139,7 @@ async function runAttempt(
   const accountId = accountIdEarly;
   const payload = usagePayload({
     taskId,
+    attempt: attemptEarly,
     model: usage.model ?? selection.configured_model,
     engine: executor,
     role: "executor",
