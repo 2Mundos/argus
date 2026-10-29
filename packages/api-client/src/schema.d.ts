@@ -7892,6 +7892,138 @@ export interface components {
             total: number;
         };
         /**
+         * TaskRead
+         * @description The single-task read (stall visibility 3.4): the task plus its quiet facts.
+         */
+        TaskRead: {
+            /** Acceptance */
+            acceptance: string[];
+            /** Account Providers */
+            account_providers?: string[] | null;
+            /** Archived At */
+            archived_at: string | null;
+            /** Assignee Agent Id */
+            assignee_agent_id: string | null;
+            /** Attempt */
+            attempt: number;
+            /** Block Reason */
+            block_reason: string | null;
+            /**
+             * Complexity
+             * @description The pre-difficulty three-level view, for clients that still read it:
+             *     `simple` is `trivial` there, as both prefer the cheap executor.
+             * @enum {string}
+             */
+            readonly complexity: "trivial" | "standard" | "hard";
+            continuation?: components["schemas"]["EffectiveContinuation"] | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Depends On */
+            depends_on: string[];
+            /** @default standard */
+            difficulty?: components["schemas"]["Difficulty"];
+            /** @default inferred */
+            difficulty_source?: components["schemas"]["DifficultySource"];
+            /**
+             * Editable Fields
+             * @default []
+             */
+            editable_fields?: string[];
+            /** Error */
+            error: string | null;
+            executor_model?: components["schemas"]["ExecutorModel"] | null;
+            failover?: components["schemas"]["Failover"] | null;
+            /** Failure Class */
+            failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
+            /** Failures */
+            failures: number;
+            /** Harness Account */
+            harness_account?: string | null;
+            harness_model?: components["schemas"]["HarnessModel"] | null;
+            /** Id */
+            id: string;
+            /** Input */
+            input: {
+                [key: string]: unknown;
+            };
+            /** Kind */
+            kind: string;
+            /** Knowledge */
+            knowledge: string[];
+            /** Last Signal At */
+            last_signal_at?: string | null;
+            /** Last Signal Source */
+            last_signal_source?: string | null;
+            /** Lease Expires At */
+            lease_expires_at: string | null;
+            /** Lease Ttl S */
+            lease_ttl_s: number;
+            /** Max Attempts */
+            max_attempts: number;
+            /**
+             * @default {
+             *       "executions": 0,
+             *       "switches": 0,
+             *       "used": []
+             *     }
+             */
+            models?: components["schemas"]["ModelsSummary"];
+            /** Output At */
+            output_at?: string | null;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Priority */
+            priority: number;
+            /** Progress At */
+            progress_at: string | null;
+            /** Progress Data */
+            progress_data?: {
+                [key: string]: unknown;
+            } | null;
+            progress_kind?: components["schemas"]["ProgressKind"] | null;
+            /** Progress Message */
+            progress_message: string | null;
+            /** Progress Percent */
+            progress_percent: number | null;
+            /** Project */
+            project: string;
+            prompt_trust: components["schemas"]["PromptTrust"];
+            /** Quiet At */
+            quiet_at?: string | null;
+            /** Refill At */
+            refill_at?: string | null;
+            /** Required Capabilities */
+            required_capabilities: string[];
+            /** Requires Approval */
+            requires_approval: boolean;
+            result: components["schemas"]["TaskResult-Output"] | null;
+            review: components["schemas"]["Review"];
+            serving_account?: components["schemas"]["ServingAccount"] | null;
+            /** Spec */
+            spec: string;
+            /** Stall Cause */
+            stall_cause?: ("workspace_missing" | "session_gone" | "silent_delegate_active" | "no_progress" | "unknown") | null;
+            state: components["schemas"]["TaskState"];
+            /** Timeout At */
+            timeout_at: string | null;
+            /** Timeout S */
+            timeout_s: number | null;
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Version */
+            version: string;
+        };
+        /**
          * TaskResult
          * @description The one result envelope every task completes with (3.11).
          */
@@ -12320,7 +12452,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Task"];
+                    "application/json": components["schemas"]["TaskRead"];
                 };
             };
             /** @description Validation Error */

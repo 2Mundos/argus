@@ -354,35 +354,15 @@ async def _failed_dependencies(
 
 async def _quiet_last_signals(
     snap: Snapshot, task_ids: list[str]
-) -> dict[str, tuple[datetime | None, str | None, StallCause]]:
+) -> dict[str, tuple[datetime | None, str | None, StallCause | None]]:
     if not task_ids:
         return {}
-    marks = ",".join("?" * len(task_ids))
-    sql = f"{_QUIET_SIGNALS} WHERE t.id IN ({marks})"
-    async with snap.conn.execute(sql, task_ids) as cur:
-        rows = await cur.fetchall()
+    facts = await tasks_service.quiet_facts_for(snap.conn, task_ids, snap.now)
     return {
-        r["id"]: (
-            *tasks_service.last_signal(
-                activity_at=r["activity_at"],
-                progress_at=r["progress_at"],
-                output_at=r["output_at"],
-                claimed_at=r["claimed_at"],
-            ),
-            tasks_service.stall_cause(
-                snap.now, r["observation"], r["observation_at"], r["claimed_at"]
-            )[0],
-        )
-        for r in rows
+        task_id: (f.last_signal_at, f.last_signal_source, f.stall_cause)
+        for task_id, f in facts.items()
     }
 
-
-_QUIET_SIGNALS = (
-    "SELECT t.id, t.activity_at, t.progress_at, t.output_at, a.claimed_at,"
-    " t.observation, t.observation_at"
-    " FROM tasks t"
-    " LEFT JOIN task_attempts a ON a.task_id = t.id AND a.attempt = t.attempt"
-)
 
 _FAILED_DEPS = (
     "SELECT d.task_id, u.id FROM task_deps d JOIN tasks u ON u.id = d.depends_on_id"

@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import uuid4
 
 import aiosqlite
@@ -2207,6 +2207,70 @@ def _stall_cause(tx: Tx, row: aiosqlite.Row) -> tuple[StallCause, str | None]:
     return stall_cause(
         tx.now, row["observation"], row["observation_at"], row["claimed_at"]
     )
+
+
+_QUIET_SIGNALS = (
+    "SELECT t.id, t.quiet_at, t.activity_at, t.progress_at, t.output_at, a.claimed_at,"
+    " t.observation, t.observation_at, t.state"
+    " FROM tasks t"
+    " LEFT JOIN task_attempts a ON a.task_id = t.id AND a.attempt = t.attempt"
+)
+
+
+class QuietFacts(NamedTuple):
+    quiet_at: datetime | None
+    last_signal_at: datetime | None
+    last_signal_source: str | None
+    stall_cause: StallCause | None
+
+
+def quiet_facts_from_row(row: aiosqlite.Row | None, now: datetime) -> QuietFacts:
+    """Quiet facts exist only while the task is claimed."""
+    if row is None:
+        return QuietFacts(None, None, None, None)
+    claimed = row["state"] == "claimed"
+    quiet_at = (
+        datetime.fromisoformat(row["quiet_at"])
+        if claimed and row["quiet_at"] is not None
+        else None
+    )
+    last_at: datetime | None = None
+    last_source: str | None = None
+    if claimed:
+        last_at, last_source = last_signal(
+            activity_at=row["activity_at"],
+            progress_at=row["progress_at"],
+            output_at=row["output_at"],
+            claimed_at=row["claimed_at"],
+        )
+    stall: StallCause | None = None
+    if quiet_at is not None:
+        stall = stall_cause(
+            now, row["observation"], row["observation_at"], row["claimed_at"]
+        )[0]
+    return QuietFacts(quiet_at, last_at, last_source, stall)
+
+
+async def quiet_facts(
+    conn: aiosqlite.Connection, task_id: str, now: datetime
+) -> QuietFacts:
+    async with conn.execute(f"{_QUIET_SIGNALS} WHERE t.id = ?", (task_id,)) as cur:
+        row = await cur.fetchone()
+    return quiet_facts_from_row(row, now)
+
+
+async def quiet_facts_for(
+    conn: aiosqlite.Connection, task_ids: list[str], now: datetime
+) -> dict[str, QuietFacts]:
+    """Quiet facts for many tasks in one query; ids with no row are absent."""
+    if not task_ids:
+        return {}
+    marks = ",".join("?" * len(task_ids))
+    async with conn.execute(
+        f"{_QUIET_SIGNALS} WHERE t.id IN ({marks})", task_ids
+    ) as cur:
+        rows = await cur.fetchall()
+    return {r["id"]: quiet_facts_from_row(r, now) for r in rows}
 
 
 def last_signal(

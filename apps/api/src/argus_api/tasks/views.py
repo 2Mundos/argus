@@ -11,7 +11,7 @@ from typing import Any
 
 import aiosqlite
 from argus_core.model_trace import ModelsSummary
-from argus_core.tasks import ProgressKind, Review, Task, TaskState
+from argus_core.tasks import ProgressKind, Review, StallCause, Task, TaskState
 from pydantic import BaseModel, Field
 
 from argus_api.db import Snapshot
@@ -66,6 +66,29 @@ class TaskSummary(Refs):
 
 class TaskDetail(Task, TaskSummary):
     pass
+
+
+class TaskRead(Task):
+    """The single-task read (stall visibility 3.4): the task plus its quiet facts."""
+
+    quiet_at: datetime | None = None
+    last_signal_at: datetime | None = None
+    last_signal_source: str | None = None
+    stall_cause: StallCause | None = None
+
+
+async def read_task(
+    conn: aiosqlite.Connection, task_id: str, now: datetime
+) -> TaskRead:
+    task = await service.get_task(conn, task_id)
+    facts = await service.quiet_facts(conn, task_id, now)
+    return TaskRead(
+        **task.model_dump(),
+        quiet_at=facts.quiet_at,
+        last_signal_at=facts.last_signal_at,
+        last_signal_source=facts.last_signal_source,
+        stall_cause=facts.stall_cause,
+    )
 
 
 class TaskPage(PageInfo):
