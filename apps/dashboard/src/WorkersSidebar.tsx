@@ -1,5 +1,4 @@
-import { type Agent, type ArgusEvent, api, call } from "./api";
-import { clock } from "./format";
+import { type Agent, api, call } from "./api";
 import { useLiveData } from "./live";
 import { useNow } from "./views/Activity";
 
@@ -120,56 +119,6 @@ export function WorkersSidebar({
           })}
         </ul>
       )}
-      <RailLog />
     </aside>
   );
-}
-
-function RailLog() {
-  const { data } = useLiveData(
-    (signal) => call(api.GET("/api/events", { params: { query: { limit: 8 } }, signal })),
-    [],
-  );
-  const events: ArgusEvent[] = Array.isArray(data) ? data.slice(0, 8) : [];
-  return (
-    <div className="rail-log">
-      <div className="rail-log-head">
-        <p className="workers-rail-label">Live log</p>
-        <a href="#setup/events">View all</a>
-      </div>
-      {data === undefined ? (
-        <p className="muted small">…</p>
-      ) : events.length === 0 ? (
-        <p className="muted small">No events.</p>
-      ) : (
-        <ul>
-          {events.map((event) => (
-            <li key={event.id}>
-              <time dateTime={event.at}>{clock(event.at)}</time>
-              <span className={`badge ${logTone(event.kind)}`}>{logLabel(event.kind)}</span>
-              <span>{kindText(event.kind)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function logTone(kind: string): string {
-  if (/fail|error|lost|cancel/.test(kind)) return "state-failed";
-  if (/warn|degrad|block|expir/.test(kind)) return "state-blocked";
-  return "state-succeeded";
-}
-
-function logLabel(kind: string): string {
-  if (/fail|error|lost|cancel/.test(kind)) return "error";
-  if (/warn|degrad|block|expir/.test(kind)) return "warn";
-  return "info";
-}
-
-/** `agent.lost` → "Agent lost". */
-function kindText(kind: string): string {
-  const text = kind.replaceAll(/[._]/g, " ");
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
