@@ -274,10 +274,10 @@ def _became_ready(event: Event) -> bool:
 
 
 @router.get("/{task_id}")
-async def get_task(task_id: str, db: DbDep, caller: CallerDep) -> Task:
+async def get_task(task_id: str, db: DbDep, caller: CallerDep) -> views.TaskRead:
     async with db.read() as conn:
         await require_task_readable(conn, caller, task_id)
-        return await service.get_task(conn, task_id)
+        return await views.read_task(conn, task_id, utcnow())
 
 
 @router.get("/{task_id}/delivery")

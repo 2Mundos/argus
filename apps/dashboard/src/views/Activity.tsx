@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import type { ArgusEvent, Task } from "../api";
+import type { ArgusEvent, Task, TaskRead } from "../api";
 import { relative } from "../format";
 import { MilestoneLine, NoSignal } from "../milestones";
+import { quietFacts } from "../stall";
 
 /** The current time, re-read every `ms`, so "N s ago" keeps counting between events. */
 export function useNow(ms = 1000): number {
@@ -24,7 +25,8 @@ type Progress = Pick<
   | "progress_kind"
   | "progress_data"
   | "lease_expires_at"
->;
+> &
+  Pick<TaskRead, "quiet_at" | "last_signal_at" | "last_signal_source" | "stall_cause">;
 
 /** Progress notes of the task's current attempt, newest first. */
 export function attemptNotes(task: Progress, events: ArgusEvent[]): ArgusEvent[] {
@@ -40,9 +42,26 @@ export function attemptNotes(task: Progress, events: ArgusEvent[]): ArgusEvent[]
 export function Activity({ task, events }: { task: Progress; events: ArgusEvent[] }) {
   const now = useNow();
   const notes = attemptNotes(task, events);
-  if (task.state !== "claimed" && notes.length === 0) return null;
+  const quietLine =
+    task.state === "claimed" && task.quiet_at
+      ? quietFacts(
+          {
+            age_s: Math.max(0, Math.floor((now - Date.parse(task.quiet_at)) / 1000)),
+            last_signal_at: task.last_signal_at,
+            last_signal_source: task.last_signal_source,
+            stall_cause: task.stall_cause,
+          },
+          now,
+        )
+      : null;
+  if (task.state !== "claimed" && notes.length === 0 && !quietLine) return null;
   return (
     <div className="activity">
+      {quietLine && (
+        <p className="quiet-claim" role="status">
+          {quietLine.charAt(0).toUpperCase() + quietLine.slice(1)}
+        </p>
+      )}
       <div className="progress">
         {task.progress_percent != null && (
           <span className="bar">

@@ -15,6 +15,15 @@ FIELDS = {
     "required_capabilities": ["a", "b"],
 }
 
+# GET /api/tasks/{id} is TaskRead (stall visibility 3.4); writes still return Task.
+_TASK_READ_EXTRA = frozenset(
+    {"quiet_at", "last_signal_at", "last_signal_source", "stall_cause"}
+)
+
+
+def without_quiet_fields(body: dict) -> dict:
+    return {k: v for k, v in body.items() if k not in _TASK_READ_EXTRA}
+
 
 def bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
@@ -71,8 +80,8 @@ def test_rest_and_mcp_edits_give_the_same_task_and_readback(client: TestClient) 
         assert {k: edited[k] for k in patch} == patch
         assert edited["state"] == "pending"
     # readback through both surfaces matches what the edit returned
-    assert read_rest(client, via_rest["id"]) == rest.json()
-    assert read_rest(client, via_mcp["id"]) == mcp
+    assert without_quiet_fields(read_rest(client, via_rest["id"])) == rest.json()
+    assert without_quiet_fields(read_rest(client, via_mcp["id"])) == mcp
     for mine in (via_rest, via_mcp):
         got = read_mcp(client, mine["id"])
         assert got["version"] == read_rest(client, mine["id"])["version"]
@@ -142,7 +151,7 @@ def test_immutable_fields_give_the_same_error_on_both_surfaces(
     assert (detail["code"], detail["details"]) == ("immutable_field", [field])
     mcp = mcp_edit(client, ADMIN_TOKEN, task, **{field: "x"})
     assert "422 immutable_field" in mcp["error"] and field in mcp["error"]
-    assert read_rest(client, task["id"]) == task
+    assert without_quiet_fields(read_rest(client, task["id"])) == task
 
 
 def test_stale_and_state_errors_are_structured_on_both_surfaces(
@@ -187,7 +196,7 @@ def test_validation_errors_match_and_write_nothing(client: TestClient) -> None:
         assert needle in rest.text
         mcp = mcp_edit(client, ADMIN_TOKEN, a, priority=9, **changes)
         assert status in mcp["error"] and needle in mcp["error"]
-    assert read_rest(client, a["id"]) == a
+    assert without_quiet_fields(read_rest(client, a["id"])) == a
 
 
 def test_editable_fields_come_from_one_source_in_task_and_tool_text(
@@ -288,7 +297,7 @@ def test_pins_edit_alike_and_never_cross_projects_on_both_surfaces(
     assert "422 validation_failed" in error and foreign in error
     for text in (refused.text, error):
         assert "other-project-secret" not in text
-    assert read_rest(client, via_rest["id"]) == rest
+    assert without_quiet_fields(read_rest(client, via_rest["id"])) == rest
 
     unpinned = mcp_edit(client, ADMIN_TOKEN, mcp, knowledge=None)
     assert unpinned["knowledge"] == []

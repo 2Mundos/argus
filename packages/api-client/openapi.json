@@ -15696,6 +15696,517 @@
         "title": "TaskPage",
         "type": "object"
       },
+      "TaskRead": {
+        "description": "The single-task read (stall visibility 3.4): the task plus its quiet facts.",
+        "properties": {
+          "acceptance": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Acceptance",
+            "type": "array"
+          },
+          "account_providers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Providers"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "assignee_agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Agent Id"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "block_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Reason"
+          },
+          "complexity": {
+            "description": "The pre-difficulty three-level view, for clients that still read it:\n`simple` is `trivial` there, as both prefer the cheap executor.",
+            "enum": [
+              "trivial",
+              "standard",
+              "hard"
+            ],
+            "readOnly": true,
+            "title": "Complexity",
+            "type": "string"
+          },
+          "continuation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EffectiveContinuation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "difficulty": {
+            "$ref": "#/components/schemas/Difficulty",
+            "default": "standard"
+          },
+          "difficulty_source": {
+            "$ref": "#/components/schemas/DifficultySource",
+            "default": "inferred"
+          },
+          "editable_fields": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Editable Fields",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "executor_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutorModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failover": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Failover"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failure_class": {
+            "anyOf": [
+              {
+                "enum": [
+                  "quota_exhausted",
+                  "auth_expired",
+                  "network_unavailable",
+                  "runtime_switch_failed",
+                  "implementation"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Class"
+          },
+          "failures": {
+            "title": "Failures",
+            "type": "integer"
+          },
+          "harness_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Account"
+          },
+          "harness_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HarnessModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input": {
+            "additionalProperties": true,
+            "title": "Input",
+            "type": "object"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "knowledge": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Knowledge",
+            "type": "array"
+          },
+          "last_signal_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Signal At"
+          },
+          "last_signal_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Signal Source"
+          },
+          "lease_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Expires At"
+          },
+          "lease_ttl_s": {
+            "title": "Lease Ttl S",
+            "type": "integer"
+          },
+          "max_attempts": {
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "models": {
+            "$ref": "#/components/schemas/ModelsSummary",
+            "default": {
+              "executions": 0,
+              "switches": 0,
+              "used": []
+            }
+          },
+          "output_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output At"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "progress_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress At"
+          },
+          "progress_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Data"
+          },
+          "progress_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProgressKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "progress_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Message"
+          },
+          "progress_percent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Percent"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "prompt_trust": {
+            "$ref": "#/components/schemas/PromptTrust"
+          },
+          "quiet_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quiet At"
+          },
+          "refill_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refill At"
+          },
+          "required_capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Capabilities",
+            "type": "array"
+          },
+          "requires_approval": {
+            "title": "Requires Approval",
+            "type": "boolean"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskResult-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review": {
+            "$ref": "#/components/schemas/Review"
+          },
+          "serving_account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ServingAccount"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spec": {
+            "title": "Spec",
+            "type": "string"
+          },
+          "stall_cause": {
+            "anyOf": [
+              {
+                "enum": [
+                  "workspace_missing",
+                  "session_gone",
+                  "silent_delegate_active",
+                  "no_progress",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stall Cause"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "timeout_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout At"
+          },
+          "timeout_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout S"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "parent_id",
+          "kind",
+          "title",
+          "spec",
+          "acceptance",
+          "input",
+          "required_capabilities",
+          "priority",
+          "state",
+          "requires_approval",
+          "review",
+          "prompt_trust",
+          "assignee_agent_id",
+          "lease_expires_at",
+          "lease_ttl_s",
+          "timeout_s",
+          "timeout_at",
+          "attempt",
+          "failures",
+          "max_attempts",
+          "result",
+          "error",
+          "block_reason",
+          "progress_message",
+          "progress_percent",
+          "progress_at",
+          "depends_on",
+          "project",
+          "knowledge",
+          "created_by",
+          "created_at",
+          "updated_at",
+          "archived_at",
+          "version",
+          "complexity"
+        ],
+        "title": "TaskRead",
+        "type": "object"
+      },
       "TaskResult-Input": {
         "description": "The one result envelope every task completes with (3.11).",
         "properties": {
@@ -24282,7 +24793,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Task"
+                  "$ref": "#/components/schemas/TaskRead"
                 }
               }
             },
