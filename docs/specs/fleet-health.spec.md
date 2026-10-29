@@ -100,8 +100,12 @@ dead-session recovery coverage and latency.
   scheduling, timeout, requeue or `ARGUS_STALL_FAIL_S` change. This block measures
   the P5 goal; it does not show that the 5-minute median is met.
 
-  *Query cost and limits.* The cohort is read through `events_kind_at` (the newest
-  5000 fails in the window by `at DESC, id DESC`) and materialized once. Each fail
+  *Query cost and limits.* The cohort is read through `events_kind_at`
+  (`kind = 'task.fail'` and an `at` range). That scan visits every `task.fail` in
+  the window, including other reasons, and filters by `json_extract(data,
+  '$.reason') = 'session_lost'`; the `lost` CTE then applies `ORDER BY at DESC,
+  id DESC LIMIT ?` after that predicate, so the cohort is the newest 5000
+  `session_lost` fails, materialized once. Each fail
   then does two `events_subject` range lookups (`subject_id = ?`, `id > fail id`,
   first match by id): `f`, the next `task.fail`/`task.expire`, and `c`, the claim
   below that end. Only `c` is bounded by the next end (`c.id < next_end_id`). `f`
@@ -109,7 +113,8 @@ dead-session recovery coverage and latency.
   including post-claim `task.progress`, until its next end or its last event.
   The rest is a primary-key lookup of the claim's `at`, a unique-key lookup of the
   task's state, and one sort of at most 5000 rows. The cost grows with each task's
-  own later events, not with unrelated history. The tests assert plan shape via
+  own later events and with other-reason `task.fail` events in the window, not
+  with unrelated non-fail history. The tests assert plan shape via
   `EXPLAIN QUERY PLAN`: no `SCAN` of `events` under any alias, `SCAN e` included,
   and each lookup uses its expected index, so a kind-only lookup fails. They assert
   no timing. Bounding `f` by the next claim is a possible follow-up, not
@@ -122,36 +127,62 @@ dead-session recovery coverage and latency.
   i.e. time unclaimed, not worker speed. A negative age (fail stamped after `now`)
   is never overdue.
 
-  The 5000 cap (`MAX_ROWS`) limits how many fails are processed: when the window
-  holds more, the newest 5000 are processed, older ones are not, and `truncated`
-  is set. It is a processing and result limit, not a bound on the work per task
-  history, which is the `f` walk above.
+  The 5000 cap (`MAX_ROWS`) limits how many `session_lost` fails are processed:
+  when the window holds more, the newest 5000 are processed, older ones are not,
+  and `truncated` is set. It is a processing and result limit. It bounds neither
+  the `task.fail` scan (other reasons are visited and filtered before the limit)
+  nor the work per task history, which is the `f` walk above.
 
   *Measured (evidence, not a bound).* `apps/api/bench/dead_session_recovery_bench.py`
   builds a disposable in-memory SQLite DB from the real migrations, seeds 1000
   `session_lost` fails each followed by a re-claim and N `task.progress` events,
   and times `SESSION_LOST_SQL` (median of 3 runs, `MAX_ROWS` 5000, 1000 rows
-  returned). Two runs of the default sweep, both Intel i9-12900KF, 24 cores, 64 GB,
-  Linux 6.17:
+  returned). One run of the default sweep (median of 3 per point) on an Intel
+  Core i9-12900KF (12th Gen), 24 cores, 62.6 GB RAM, Linux 6.17.0-41-generic,
+  Python 3.13.17, SQLite 3.53.1:
 
-  | post-claim events per task | SQLite 3.40.1, Python 3.11.2 | SQLite 3.53.1, Python 3.13 |
-  | --- | --- | --- |
-  | 0 | 2.9 ms | 2.2 ms |
-  | 100 | 11.5 ms | 8.7 ms |
-  | 1000 | 88.3 ms | 63.6 ms |
-  | 5000 | 416.8 ms | 277.1 ms |
+  | post-claim events per task | median ms |
+  | --- | --- |
+  | 0 | 2.1 |
+  | 100 | 8.4 |
+  | 1000 | 59.7 |
+  | 5000 | 270.4 |
+
+  Command: `uv run python apps/api/bench/dead_session_recovery_bench.py --out /tmp/default.json`
 
   The plan is `SEARCH f USING INDEX events_subject (subject_type=? AND subject_id=?
   AND id>?)` with no `id` upper bound, so cost grows roughly linearly with a task's
-  later events. With 200k unrelated events added, 0 post-claim stayed at 2.3 ms:
-  unrelated history did not slow the query.
+  later events. With 200k unrelated (non-fail) events added, 0 post-claim measured
+  2.3 ms (vs 2.1 ms without), so unrelated history did not slow the query:
+  `uv run python apps/api/bench/dead_session_recovery_bench.py --post-claim 0 --unrelated 200000`
+
+  Control for other-reason fails: `--other-fails N` adds N `task.fail` events
+  (`reason` `channel_error`) in the window. They are scanned through
+  `events_kind_at` and rejected by the reason predicate, so they are not in the
+  cohort but still cost time (1000 `session_lost` fails, 0 post-claim, 1000 rows
+  returned in every row):
+
+  | other-reason fails in window | median ms |
+  | --- | --- |
+  | 0 | 2.2 |
+  | 10000 | 3.5 |
+  | 100000 | 19.0 |
+  | 300000 | 53.7 |
+
+  Commands, one per row, with `N` = 0, 10000, 100000, 300000:
+  `uv run python apps/api/bench/dead_session_recovery_bench.py --post-claim 0 --fails 1000 --other-fails N`
+
+  Combined: `--post-claim 1000 --other-fails 100000` measured 73.7 ms (59.7 ms
+  with `--other-fails 0` in the default sweep).
+
   Coverage: a synthetic fixture on one machine; no production numbers, no timing
   assertion, and production event volume per task and disk are unmeasured. The
   query is not constant time.
 - **Bounded reads.** No full scan of `tasks` or `events`: migration
   `0021_fleet_health_indexes.sql` adds `tasks_finished` and `events_kind_at`; per-task
   claim lookups use `events_subject`. Each fetch keeps at most 5000 newest rows and
-  sets `truncated` when it hits that.
+  sets `truncated` when it hits that. For dead-session recovery the cap applies
+  to `session_lost` fails processed, not to the `task.fail` scan behind them.
 
 # 4. Open Questions
 

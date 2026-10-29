@@ -3,8 +3,9 @@
 Builds a throwaway in-memory SQLite database from the real migrations, seeds N
 `session_lost` fails of N tasks, each followed by a re-claim and then a
 configurable number of post-claim `task.progress` events (optionally plus
-unrelated events of other tasks), and times `SESSION_LOST_SQL` with the real
-`MAX_ROWS`. The plan from `EXPLAIN QUERY PLAN` is captured next to the timing.
+unrelated events and non-`session_lost` `task.fail` events of other tasks), and
+times `SESSION_LOST_SQL` with the real `MAX_ROWS`. The plan from
+`EXPLAIN QUERY PLAN` is captured next to the timing.
 
 The subquery `f` (next `task.fail`/`task.expire`) has no upper bound from the next
 claim, so it visits a task's own post-claim events until its next end or last
@@ -12,8 +13,8 @@ event; this harness measures that. Synthetic fixture, one machine: the figures
 are not a bound and not production numbers. Nothing here asserts timing.
 
     uv run python apps/api/bench/dead_session_recovery_bench.py \
-        [--fails 1000] [--post-claim 0 100 1000 5000] [--unrelated 0] [--runs 3] \
-        [--out FILE]
+        [--fails 1000] [--post-claim 0 100 1000 5000] [--unrelated 0] [--other-fails 0] \
+        [--runs 3] [--out FILE]
 """
 
 import argparse
@@ -33,7 +34,9 @@ NOW = datetime(2026, 3, 1, tzinfo=UTC)
 STAMP = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
-def build(fails: int, post_claim: int, unrelated: int) -> sqlite3.Connection:
+def build(
+    fails: int, post_claim: int, unrelated: int, other_fails: int
+) -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     for m in load_migrations():
         conn.executescript(m.sql)
@@ -61,6 +64,11 @@ def build(fails: int, post_claim: int, unrelated: int) -> sqlite3.Connection:
         event_sql,
         [(stamp, f"other{i % 50}", "task.progress", "{}") for i in range(unrelated)],
     )
+    other = json.dumps({"reason": "channel_error", "from": "claimed", "to": "ready"})
+    conn.executemany(
+        event_sql,
+        [(stamp, f"other{i % 50}", "task.fail", other) for i in range(other_fails)],
+    )
     conn.commit()
     return conn
 
@@ -84,8 +92,10 @@ def ram_gb() -> float | None:
         return None
 
 
-def measure(fails: int, post_claim: int, unrelated: int, runs: int) -> dict:
-    conn = build(fails, post_claim, unrelated)
+def measure(
+    fails: int, post_claim: int, unrelated: int, other_fails: int, runs: int
+) -> dict:
+    conn = build(fails, post_claim, unrelated, other_fails)
     since = (NOW - timedelta(days=1)).strftime(STAMP)
     until = (NOW + timedelta(days=1)).strftime(STAMP)
     args = (since, until, MAX_ROWS)
@@ -113,6 +123,7 @@ def main() -> None:
     p.add_argument("--fails", type=int, default=1000)
     p.add_argument("--post-claim", type=int, nargs="+", default=[0, 100, 1000, 5000])
     p.add_argument("--unrelated", type=int, default=0)
+    p.add_argument("--other-fails", type=int, default=0)
     p.add_argument("--runs", type=int, default=3)
     p.add_argument("--out", type=Path)
     a = p.parse_args()
@@ -126,8 +137,12 @@ def main() -> None:
         "fails": a.fails,
         "runs": a.runs,
         "unrelated_events": a.unrelated,
+        "other_fails": a.other_fails,
         "limits": {"MAX_ROWS": MAX_ROWS},
-        "results": [measure(a.fails, n, a.unrelated, a.runs) for n in a.post_claim],
+        "results": [
+            measure(a.fails, n, a.unrelated, a.other_fails, a.runs)
+            for n in a.post_claim
+        ],
     }
     text = json.dumps(report, indent=2)
     if a.out:
