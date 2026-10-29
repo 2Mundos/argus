@@ -188,10 +188,29 @@ async def scale(
     return await get_pool(tx.conn, name), None
 
 
+def require_launch_precondition(
+    expected_desired: int | None, unconditional: bool
+) -> None:
+    """A launch names exactly one of a compare-and-set value or `unconditional`
+    (worker launch 3); checked before anything is probed or written."""
+    if expected_desired is None and not unconditional:
+        raise ValidationFailedError(
+            "a launch needs expected_desired_replicas (the pool's current"
+            " desired_replicas) or unconditional=true",
+            code="precondition_required",
+        )
+    if expected_desired is not None and unconditional:
+        raise ValidationFailedError(
+            "pass expected_desired_replicas or unconditional=true, not both",
+            code="precondition_conflict",
+        )
+
+
 async def launch(tx: Tx, name: str, expected_desired: int | None, actor: str) -> Pool:
     """Ask for one more instance (worker launch 3). Only desired state changes;
-    the reconciler starts it. Bounded by the cap and, when given, guarded by the
-    caller's view of `desired_replicas` so a repeated submit adds one worker."""
+    the reconciler starts it. Bounded by the cap and, unless unconditional
+    (`expected_desired` None), guarded by the caller's view of `desired_replicas`
+    so a repeated submit adds one worker."""
     pool = await get_pool(tx.conn, name)
     if expected_desired is not None and pool.desired_replicas != expected_desired:
         raise ConflictError(

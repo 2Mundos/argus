@@ -1411,17 +1411,25 @@ async def get_fleet_capabilities(ctx: Context) -> dict:
 
 @tool(MANAGERS)
 async def launch_worker(
-    ctx: Context, pool: str, expected_desired_replicas: int | None = None
+    ctx: Context,
+    pool: str,
+    expected_desired_replicas: int | None = None,
+    unconditional: bool = False,
 ) -> dict:
     """Request one more worker from a pool (adds 1 to its desired replicas, up to
     its cap). The result means *requested*, not running: poll list_pools or
-    get_fleet_capabilities. Pass the pool's current desired_replicas as
-    expected_desired_replicas so a retry cannot launch twice (409 stale_pool)."""
+    get_fleet_capabilities. Required: the pool's current desired_replicas as
+    expected_desired_replicas; a retry with the same value cannot launch twice
+    (409 stale_pool). unconditional=true instead skips that check and a retry can
+    add another worker. Neither, or both, is 422 and changes nothing."""
     return await _call(
         ctx,
         "POST",
         f"/pools/{pool}/launch",
-        json={"expected_desired_replicas": expected_desired_replicas},
+        json={
+            "expected_desired_replicas": expected_desired_replicas,
+            "unconditional": unconditional,
+        },
     )
 
 

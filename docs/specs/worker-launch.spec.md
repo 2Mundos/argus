@@ -56,12 +56,39 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
 - **Scopes.** `admin` and `orchestrator` may read capabilities and launch;
   `worker` gets `403`. Launch is bounded by `max_replicas` for both (`409
   pool_at_capacity`); unlike `scale`, an admin does not raise the cap implicitly.
-- **No duplicate submissions.** `expected_desired_replicas` is an optional
-  compare-and-set: the launch applies only if the pool's `desired_replicas`
-  still equals it, else `409 stale_pool`. The dashboard always sends it and
-  disables the button while a request is in flight, so a double click or two
-  tabs create one worker. Omitting it is allowed (orchestrators) and always adds
-  one.
+- **No duplicate submissions: a launch needs a precondition.** Exactly one of
+  these is required:
+  - `expected_desired_replicas`: a compare-and-set. The launch applies only if the
+    pool's `desired_replicas` still equals it, else `409 stale_pool`.
+  - `unconditional: true`: an explicit opt-in to no compare-and-set, always adds
+    one. For callers that accept the duplicate risk; a retry of it can add another
+    worker.
+
+  Neither is `422 precondition_required`; both is `422 precondition_conflict`.
+  Both are refused before the pool is probed or anything is written. The dashboard
+  always sends `expected_desired_replicas` and disables the button while a request
+  is in flight, so a double click or two tabs create one worker. Orchestrators
+  (MCP) must pass it too.
+- **Acknowledgment and retries.** `200` means the desired-state write committed
+  exactly once. If the response is lost, the caller repeats the same request with
+  the same `expected_desired_replicas`: it now gets `409 stale_pool` and creates
+  nothing. (It cannot tell its own committed launch from someone else's change by
+  the code alone; it reads the pool to see `desired_replicas`.) `desired_replicas`
+  is in the database, so this holds across a process restart: a retry after a
+  restart sees the committed value.
+- **Non-repeatable effects.** Launch itself starts nothing; it only changes
+  `desired_replicas`, so repeating it cannot start a container. A container is
+  started only by the reconciler, from desired versus existing instances. It
+  commits an `instance` row in state `reserved` (with its container name derived
+  from the instance id) before calling the target, and one pass sees at most one
+  start per reserved instance. After a crash between reserve and start, the next
+  pass observes the pool's containers: a `reserved` instance whose container is
+  running is marked `running`, one that exited is terminated, and one with no
+  container is started again under the same name (a name conflict from the
+  daemon or Kubernetes is treated as "already created", not an error). A failed
+  or ambiguous start leaves it `reserved` with `last_error` and `start_attempts`
+  visible and is retried with backoff. This is reconciliation by deterministic
+  name, not a transactional guarantee between the database and the target.
 - **Discovery is measured, never configured.** A check is `ok: true`,
   `ok: false`, or `ok: null` (could not be verified, with why); only `false`
   blocks. Docker targets report reachability, engine version, OCI runtimes,
@@ -180,6 +207,14 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
 
 - Should a launch for a pool at its cap let an orchestrator open a decision
   like `scale_pool` does? Today it is refused; `scale_pool` is the path.
+- Crash between reserve and start: the reconciler's behaviour above is read from
+  the code and covered only by the fake target. Is a crash after the container is
+  created but before the instance is marked `running` (or a target that creates
+  and then errors) proven never to yield two containers for one instance, on both
+  Docker and Kubernetes? Untested against a real daemon.
+- Should a lost-response retry be distinguishable from a foreign change (e.g. an
+  idempotency key echoed in the result), instead of reading `desired_replicas`
+  after `stale_pool`?
 - Registry reachability and image pullability are not probed, so a template image
   must already be on the node.
 - Should an orchestrator be allowed to create a *new* pool (from a template only)?

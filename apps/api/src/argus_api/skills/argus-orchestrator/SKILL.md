@@ -154,7 +154,8 @@ pass `base_revision_id` when editing).
   `unknown`.
 - `get_fleet_capabilities` before launching: per pool `launchable` and
   `blockers`.
-- More workers: `launch_worker(pool, expected_desired_replicas=<current>)` or
+- More workers: `launch_worker(pool, expected_desired_replicas=<current>)` (the
+  value is required; a retry with the same one is `409 stale_pool`) or
   `scale_pool`. Above the cap, a human is asked (you get a `decision_id`).
   New pools: `list_worker_templates`, then `create_worker` from a `ready`
   template. The `name` is the idempotency key.

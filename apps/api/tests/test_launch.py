@@ -15,6 +15,7 @@ from test_mcp import rpc, tool
 ADMIN_TOKEN = "test-admin-token-" + "l" * 32
 ADMIN = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
 POOL = {"image": "worker:1", "max_replicas": 2, "capabilities": ["python"]}
+FIRST = {"expected_desired_replicas": 0}  # launch precondition for a fresh pool
 
 
 @pytest.fixture
@@ -103,8 +104,9 @@ def test_admin_and_orchestrator_can_launch(client: TestClient) -> None:
     make_pool(client, max_replicas=3)
     orch = bearer(agent_token(client, "orchestrator"))
     assert client.get("/api/fleet/capabilities", headers=orch).status_code == 200
-    for headers in (ADMIN, orch):
-        res = client.post("/api/pools/web/launch", json={}, headers=headers)
+    for expected, headers in enumerate((ADMIN, orch)):
+        body = {"expected_desired_replicas": expected}
+        res = client.post("/api/pools/web/launch", json=body, headers=headers)
         assert res.status_code == 200, res.text
     assert client.get("/api/pools/web", headers=ADMIN).json()["desired_replicas"] == 2
 
@@ -176,7 +178,8 @@ def test_nanoclaw_local_paths_are_checked(
     assert not pool["launchable"]
     assert len(pool["blockers"]) == 2  # instances_root and docker socket
     assert (
-        client.post("/api/pools/nc/launch", json={}, headers=ADMIN).status_code == 409
+        client.post("/api/pools/nc/launch", json=FIRST, headers=ADMIN).status_code
+        == 409
     )
 
 
@@ -211,7 +214,7 @@ def test_launch_starts_and_tracks_an_instance(
     client: TestClient, target: FakeTarget
 ) -> None:
     make_pool(client)
-    res = client.post("/api/pools/web/launch", json={}, headers=ADMIN)
+    res = client.post("/api/pools/web/launch", json=FIRST, headers=ADMIN)
     assert res.status_code == 200
     assert res.json()["requested"] and res.json()["desired_replicas"] == 1
     inst = wait_for(
@@ -234,7 +237,8 @@ def test_launch_failure_is_visible_not_success(
     make_pool(client)
     target.fail_start = True
     assert (
-        client.post("/api/pools/web/launch", json={}, headers=ADMIN).status_code == 200
+        client.post("/api/pools/web/launch", json=FIRST, headers=ADMIN).status_code
+        == 200
     )
     pool = wait_for(
         lambda: (
@@ -251,13 +255,14 @@ def test_launch_failure_is_visible_not_success(
 def test_launch_refused_changes_nothing(client: TestClient, target: FakeTarget) -> None:
     make_pool(client)
     target.reachable = False
-    res = client.post("/api/pools/web/launch", json={}, headers=ADMIN)
+    res = client.post("/api/pools/web/launch", json=FIRST, headers=ADMIN)
     assert res.status_code == 409
     assert res.json()["detail"]["code"] == "not_launchable"
     assert "unreachable" in res.json()["detail"]["details"][0]
     assert client.get("/api/pools/web", headers=ADMIN).json()["desired_replicas"] == 0
     assert (
-        client.post("/api/pools/nope/launch", json={}, headers=ADMIN).status_code == 404
+        client.post("/api/pools/nope/launch", json=FIRST, headers=ADMIN).status_code
+        == 404
     )
 
 
@@ -270,9 +275,96 @@ def test_launch_respects_cap_and_is_not_double_submitted(client: TestClient) -> 
     )
     again = client.post("/api/pools/web/launch", json=body, headers=ADMIN)
     assert again.status_code == 409 and again.json()["detail"]["code"] == "stale_pool"
-    over = client.post("/api/pools/web/launch", json={}, headers=ADMIN)
+    over_body = {"expected_desired_replicas": 1}
+    over = client.post("/api/pools/web/launch", json=over_body, headers=ADMIN)
     assert over.json()["detail"]["code"] == "pool_at_capacity"
     assert client.get("/api/pools/web", headers=ADMIN).json()["desired_replicas"] == 1
+
+
+def desired(client: TestClient) -> int:
+    return client.get("/api/pools/web", headers=ADMIN).json()["desired_replicas"]
+
+
+def test_retried_launch_with_same_precondition_creates_one_worker(
+    client: TestClient,
+) -> None:
+    make_pool(client)
+    assert (
+        client.post("/api/pools/web/launch", json=FIRST, headers=ADMIN).status_code
+        == 200
+    )
+    retry = client.post(
+        "/api/pools/web/launch", json=FIRST, headers=ADMIN
+    )  # lost response
+    assert retry.status_code == 409 and retry.json()["detail"]["code"] == "stale_pool"
+    assert desired(client) == 1
+
+
+def test_retried_mcp_launch_creates_one_worker(client: TestClient) -> None:
+    make_pool(client)
+    orch = agent_token(client, "orchestrator")
+    first = tool(client, orch, "launch_worker", pool="web", expected_desired_replicas=0)
+    assert first["desired_replicas"] == 1
+    retry = tool(client, orch, "launch_worker", pool="web", expected_desired_replicas=0)
+    assert retry["error"].startswith("409 stale_pool:")
+    assert desired(client) == 1
+
+
+def test_launch_without_precondition_is_refused_and_changes_nothing(
+    client: TestClient,
+) -> None:
+    make_pool(client)
+    for body, code in (
+        ({}, "precondition_required"),
+        ({"unconditional": False}, "precondition_required"),
+        (
+            {"expected_desired_replicas": 0, "unconditional": True},
+            "precondition_conflict",
+        ),
+    ):
+        res = client.post("/api/pools/web/launch", json=body, headers=ADMIN)
+        assert res.status_code == 422, res.text
+        assert res.json()["detail"]["code"] == code
+    orch = agent_token(client, "orchestrator")
+    refused = tool(client, orch, "launch_worker", pool="web")
+    assert refused["error"].startswith("422 precondition_required:")
+    assert desired(client) == 0
+
+
+def test_unconditional_launch_is_an_explicit_opt_in_that_adds_one(
+    client: TestClient,
+) -> None:
+    make_pool(client, max_replicas=3)
+    body = {"unconditional": True}
+    for want in (1, 2):
+        res = client.post("/api/pools/web/launch", json=body, headers=ADMIN)
+        assert res.status_code == 200 and res.json()["desired_replicas"] == want
+    orch = agent_token(client, "orchestrator")
+    assert (
+        tool(client, orch, "launch_worker", pool="web", unconditional=True)[
+            "desired_replicas"
+        ]
+        == 3
+    )
+
+
+def test_launch_precondition_survives_a_restart(
+    client: TestClient, target: FakeTarget
+) -> None:
+    make_pool(client)
+    assert (
+        client.post("/api/pools/web/launch", json=FIRST, headers=ADMIN).status_code
+        == 200
+    )
+    client.__exit__(None, None, None)  # stop the process, release the data dir
+    with TestClient(app) as again:  # same ARGUS_DATA_DIR: a restarted process
+        app.state.targets.override("docker", None, target)
+        assert desired(again) == 1
+        retry = again.post("/api/pools/web/launch", json=FIRST, headers=ADMIN)
+        assert (
+            retry.status_code == 409 and retry.json()["detail"]["code"] == "stale_pool"
+        )
+        assert desired(again) == 1
 
 
 @pytest.mark.parametrize("public_url", [None])
@@ -280,7 +372,7 @@ def test_no_public_url_blocks_launch(client: TestClient) -> None:
     make_pool(client)
     caps = client.get("/api/fleet/capabilities", headers=ADMIN).json()
     assert caps["public_url_configured"] is False
-    res = client.post("/api/pools/web/launch", json={}, headers=ADMIN)
+    res = client.post("/api/pools/web/launch", json=FIRST, headers=ADMIN)
     assert res.status_code == 409
     assert "ARGUS_PUBLIC_URL" in res.json()["detail"]["details"][0]
 

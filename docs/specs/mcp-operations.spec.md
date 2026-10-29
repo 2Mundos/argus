@@ -35,7 +35,7 @@ admin, about 18.7 KB of schema. The largest are `create_task` (1.4 KB),
 | Answer | `POST /decisions/{id}/answer` | `answer_decision` | a retry fails with `409 decision_not_open` (no idempotent replay); one at a time |
 | Artifacts | `GET /tasks/{id}/artifacts`, `GET /artifacts/{id}/content` | upload only | list and read **not exposed**; no range read; no integrity check |
 | Agents | `GET /agents`, `/agents/{id}`, `POST /agents/{id}/drain` | `list_agents` | get and drain **not exposed** |
-| Pools | `GET/PUT /pools/{name}`, scale, launch | `list_pools`, `scale_pool`, `launch_worker` | `PUT` replaces the whole pool and has no precondition |
+| Pools | `GET/PUT /pools/{name}`, scale, launch | `list_pools`, `scale_pool`, `launch_worker` | `PUT` replaces the whole pool and has no precondition; `launch_worker` requires `expected_desired_replicas` or `unconditional` ([worker launch 3](worker-launch.spec.md)) |
 | Instances | `GET /instances`, `/{id}`, `/{id}/logs`, terminate | — | **not exposed**; no observed image digest or version |
 | Events | `GET /events?before`, SSE stream | — | **not exposed**; no bounded wait |
 | Totals | `GET /overview` | — | **not exposed** |

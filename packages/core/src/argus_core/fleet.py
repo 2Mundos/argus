@@ -454,8 +454,11 @@ class FleetCapabilities(BaseModel):
 
 
 class LaunchRequest(BaseModel):
-    # Compare-and-set against the pool's desired_replicas: guards double submits.
+    # Exactly one of these is required (worker launch 3). The first is a
+    # compare-and-set against desired_replicas that guards double submits; the
+    # second opts out of it and accepts the duplicate risk.
     expected_desired_replicas: int | None = Field(default=None, ge=0)
+    unconditional: bool = False
 
 
 class LaunchResult(BaseModel):
