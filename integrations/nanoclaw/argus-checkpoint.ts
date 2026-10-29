@@ -91,6 +91,7 @@ export interface CheckpointManifest {
   unstaged: string[];
   untracked: UntrackedEntry[];
   skipped_sensitive: string[];
+  skipped_nested?: string[]; // nested repositories, by directory
   sensitive_in_commits: string[];
 }
 
@@ -253,14 +254,17 @@ interface LeaseBody {
 }
 
 /**
- * A lease on the task's checkpoint directory: created exclusively, expires after a TTL,
- * and an expired one is replaced by atomic rename so two racers cannot both win.
+ * A lease on the task's checkpoint directory: created exclusively, expires after a TTL.
+ * An expired one is taken over by whoever first creates the takeover token named after
+ * it, and replaced by an atomic rename: the lease file never goes missing, so neither a
+ * late taker nor a newcomer can slip in. `beforeTakeover` lets tests interleave racers.
  */
-async function acquireLease(
+export async function acquireLease(
   dir: string,
   owner: string,
   now: () => number,
   ttlMs: number,
+  beforeTakeover?: () => Promise<void>,
 ): Promise<() => Promise<void>> {
   const file = path.join(dir, LEASE_FILE);
   const body: LeaseBody = {
@@ -269,41 +273,57 @@ async function acquireLease(
     expires_at: now() + ttlMs,
   };
   const text = JSON.stringify(body);
-  const tryCreate = async () => {
-    const tmp = path.join(dir, `.lease-${body.nonce}`);
-    await writeFile(tmp, text, { mode: 0o600, flag: "wx" });
+  const tmp = path.join(dir, `.lease-${body.nonce}`);
+  await writeFile(tmp, text, { mode: 0o600, flag: "wx" });
+  try {
     try {
       await link(tmp, file); // fails with EEXIST when another holder exists
-      return true;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
-      throw err;
-    } finally {
-      await unlink(tmp).catch(() => undefined);
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      const expired = (s: string | null) => {
+        try {
+          return s !== null && (JSON.parse(s) as LeaseBody).expires_at <= now();
+        } catch {
+          return false; // unreadable: fail closed
+        }
+      };
+      const seen = await readFile(file, "utf8").catch(() => null);
+      if (!expired(seen))
+        throw new Failure("env_checkpoint_busy", "another holder has the task's checkpoint lease");
+      await beforeTakeover?.();
+      // A token left by a taker that died is expired too, and taken over the same way.
+      const dead: string[] = [];
+      let token = path.join(dir, `.lease-takeover-${sha256Of(seen as string).slice(0, 16)}`);
+      for (;;) {
+        try {
+          await writeFile(token, text, { mode: 0o600, flag: "wx" });
+          break;
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+          const held = await readFile(token, "utf8").catch(() => null);
+          if (dead.length >= 3 || !expired(held))
+            throw new Failure(
+              "env_checkpoint_busy",
+              "another holder is taking over the expired lease",
+            );
+          dead.push(token);
+          token = `${token}-${sha256Of(held as string).slice(0, 8)}`;
+        }
+      }
+      try {
+        if ((await readFile(file, "utf8").catch(() => null)) !== seen)
+          throw new Failure(
+            "env_checkpoint_busy",
+            "the checkpoint lease changed while taking it over",
+          );
+        await rename(tmp, file);
+      } finally {
+        // Every token here names the lease just replaced (or changed): none guards anything now.
+        for (const t of [token, ...dead]) await unlink(t).catch(() => undefined);
+      }
     }
-  };
-  if (!(await tryCreate())) {
-    const seen = await readFile(file, "utf8").catch(() => null);
-    let expired = false;
-    try {
-      expired = seen !== null && (JSON.parse(seen) as LeaseBody).expires_at <= now();
-    } catch {
-      expired = false; // unreadable: fail closed
-    }
-    if (!expired)
-      throw new Failure("env_checkpoint_busy", "another holder has the task's checkpoint lease");
-    const aside = path.join(dir, `.lease-stale-${body.nonce}`);
-    await rename(file, aside).catch(() => undefined);
-    const moved = await readFile(aside, "utf8").catch(() => null);
-    if (moved !== seen) {
-      // We moved someone else's fresh lease: put it back if the slot is free.
-      if (moved !== null) await link(aside, file).catch(() => undefined);
-      await unlink(aside).catch(() => undefined);
-      throw new Failure("env_checkpoint_busy", "the checkpoint lease changed while taking it over");
-    }
-    await unlink(aside).catch(() => undefined);
-    if (!(await tryCreate()))
-      throw new Failure("env_checkpoint_busy", "another holder took the checkpoint lease");
+  } finally {
+    await unlink(tmp).catch(() => undefined);
   }
   return async () => {
     const cur = await readFile(file, "utf8").catch(() => null);
@@ -350,6 +370,41 @@ async function openWorkspace(
   if (head !== `refs/heads/${taskBranch(taskId)}`)
     throw new Failure("env_checkpoint_invalid", "the workspace is not on the task branch");
   return { ws, ceiling };
+}
+
+// The workspace's own git config is written by the worker, yet git runs on the host here:
+// `diff` runs `filter.*.clean`, `log` runs `gpg.program` under `log.showSignature`,
+// `core.worktree` points git at host files. Only keys known to be inert are accepted.
+const INERT_CONFIG = [
+  /^core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks|autocrlf|eol|safecrlf|quotepath|checkstat|trustctime|untrackedcache)$/,
+  /^remote\..+\.(url|pushurl|fetch|push|tagopt|prune)$/,
+  /^branch\..+\.(remote|merge|rebase|pushremote|description)$/,
+  /^(user|author|committer|init|pull|push|fetch|commit|tag|rebase|color|advice|status|gc|index|pack|feature)\.[^.]+$/,
+  /^extensions\.objectformat$/,
+];
+
+/** Fails closed unless the workspace's git setup can neither run a program nor read elsewhere. */
+async function assertInertGit(ctx: WorkspaceCtx, git: GitRunner): Promise<void> {
+  const dotGit = path.join(ctx.ws, ".git");
+  for (const redirect of ["commondir", "objects/info/alternates", "objects/info/http-alternates"])
+    if (await lstat(path.join(dotGit, redirect)).catch(() => null))
+      throw new Failure("env_checkpoint_invalid", `the workspace git directory has ${redirect}`);
+  // --file reads only this file and follows no include; an unreadable config fails closed.
+  const listed = await git(
+    ["config", "--file", path.join(dotGit, "config"), "--list", "-z"],
+    ctx.ws,
+    ctx.ceiling,
+  ).catch(() => {
+    throw new Failure("env_checkpoint_invalid", "the workspace git config is unreadable");
+  });
+  for (const entry of z(listed)) {
+    const key = entry.split("\n", 1)[0];
+    if (!INERT_CONFIG.some((re) => re.test(key)))
+      throw new Failure(
+        "env_checkpoint_invalid",
+        `the workspace git config sets ${key.slice(0, 100)}, which git could act on`,
+      );
+  }
 }
 
 const z = (s: string) => s.split("\0").filter(Boolean);
@@ -444,6 +499,7 @@ export async function checkpointTaskWorkspace(opts: CheckpointOpts): Promise<Che
   try {
     const ctx = await openWorkspace(groupDir, taskId, repositoryUrl, git);
     if (!ctx) return { ok: true, empty: true };
+    await assertInertGit(ctx, git);
     const seen = await observe(ctx, git);
     if (
       !seen.localCommits &&
@@ -513,9 +569,14 @@ export async function checkpointTaskWorkspace(opts: CheckpointOpts): Promise<Che
       [...seen.staged, ...seen.unstaged, ...seen.untracked].filter(isSensitive),
     );
     const untracked: UntrackedEntry[] = [];
+    const nested: string[] = [];
     let n = 0;
     for (const rel of seen.untracked) {
       if (isSensitive(rel)) continue;
+      if (rel.endsWith("/")) {
+        nested.push(rel); // git lists a nested repository as its directory: named, not copied
+        continue;
+      }
       if (!safeRel(rel)) throw new Failure("env_checkpoint_invalid", "an untracked path is unsafe");
       const full = path.join(ctx.ws, rel);
       const st = await lstat(full);
@@ -529,7 +590,7 @@ export async function checkpointTaskWorkspace(opts: CheckpointOpts): Promise<Che
         untracked.push({ path: rel, type: "symlink", mode: st.mode & 0o777, target });
         continue;
       }
-      if (!st.isFile()) continue; // nested repositories and special files are not copied
+      if (!st.isFile()) continue; // special files are not copied
       const stored = `untracked-${n++}`;
       await copyFile(full, path.join(tmp, stored), constants.COPYFILE_EXCL);
       await chmod(path.join(tmp, stored), 0o600);
@@ -558,6 +619,7 @@ export async function checkpointTaskWorkspace(opts: CheckpointOpts): Promise<Che
       unstaged,
       untracked,
       skipped_sensitive: [...skipped].sort(),
+      skipped_nested: nested.sort(),
       sensitive_in_commits: seen.sensitiveInCommits,
     };
     const text = JSON.stringify(manifest, null, 2);
@@ -585,9 +647,12 @@ export async function checkpointTaskWorkspace(opts: CheckpointOpts): Promise<Che
 
 function toFailure(err: unknown, fallback: CheckpointFailureReason): CheckpointFailure {
   if (err instanceof Failure) return fail(err.reason, err.message);
-  const code = (err as NodeJS.ErrnoException | null)?.code;
-  if (code === "ENOSPC" || code === "EDQUOT")
-    return fail("env_checkpoint_limit", `no space: ${code}`);
+  const e = err as (NodeJS.ErrnoException & { killed?: boolean }) | null;
+  if (e?.code === "ENOSPC" || e?.code === "EDQUOT")
+    return fail("env_checkpoint_limit", `no space: ${e.code}`);
+  // A git step past its timeout (a large history to bundle) or its output bound.
+  if (e?.killed || e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
+    return fail("env_checkpoint_limit", "a git step exceeded its time or output limit");
   return fail(fallback, String(err instanceof Error ? err.message : err).slice(0, 300));
 }
 
@@ -817,6 +882,7 @@ export async function restoreTaskWorkspace(opts: RestoreOpts): Promise<RestoreRe
       const ctx = await openWorkspace(groupDir, taskId, repositoryUrl, git).catch((err) => {
         throw err instanceof Failure ? new Failure("env_checkpoint_conflict", err.message) : err;
       });
+      await assertInertGit(ctx as WorkspaceCtx, git);
       const here = await observe(ctx as WorkspaceCtx, git);
       if (matchesManifest(here, m, await localHeadsMatch(ctx as WorkspaceCtx, git, m)))
         return { ok: true, restored: false, reason: "already_present" };
@@ -906,7 +972,7 @@ function matchesManifest(o: Observed, m: CheckpointManifest, headOk: boolean): b
     sameSet(tracked(o.staged), m.staged) &&
     sameSet(tracked(o.unstaged), m.unstaged) &&
     sameSet(
-      o.untracked.filter((p) => !isSensitive(p)),
+      o.untracked.filter((p) => !isSensitive(p) && !p.endsWith("/")),
       m.untracked.map((u) => u.path),
     )
   );

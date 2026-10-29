@@ -3096,7 +3096,6 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     checklist?: ChecklistReport[],
   ): Promise<void> {
     await reportHarness(t, "succeeded");
-    completedAttempt = `${t.id}:${t.attempt}`;
     const extra = [...attached.keys()];
     const missing = attachFailures.length ? `\n\n[Not stored: ${attachFailures.join("; ")}]` : "";
     if (chars(text + missing).length <= SUMMARY_MAX_CHARS) {
@@ -3109,6 +3108,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           ...(extra.length ? { artifacts: extra } : {}),
         },
       });
+      completedAttempt = `${t.id}:${t.attempt}`;
       return;
     }
     const bytes = new TextEncoder().encode(text);
@@ -3128,6 +3128,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         artifacts: [...new Set([artifactId, ...extra])],
       },
     });
+    completedAttempt = `${t.id}:${t.attempt}`;
   }
 
   async function reportHarness(

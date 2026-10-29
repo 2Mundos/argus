@@ -355,6 +355,25 @@ the host's `package.json`, the engine the leased account selected, and the
 executor lease's provider. Parts it does not know are sent as null and shown as
 `unknown`.
 
+## Task checkpoints (off by default)
+
+The channel can save a `repository:write` task's unpushed work after a failed
+attempt and restore it into the next attempt
+([spec](../../docs/specs/task-checkpoint.spec.md)). It is off unless the host
+process sees `ARGUS_CHECKPOINT_DIR`; neither `provision.sh` nor `install.sh` sets
+it. A pool's `env` can set it. A checkpoint is restored only by a host that reads
+the same store with the same node id (`ARGUS_NODE_ID`, else the hostname).
+
+Under the `nanoclaw` runtime each host container mounts only its own instance
+directory. Argus sets no hostname, so the hostname is the container id, which
+changes whenever the container is recreated. A store and node id set through the
+pool's `env` are therefore per instance: put the store under the instance
+directory, or it does not survive the container, and set `ARGUS_NODE_ID`, or a
+recreated container refuses its own checkpoints as foreign
+(`env_checkpoint_unavailable`). A retry on another instance finds no checkpoint.
+Argus provides no shared store mount, so sharing checkpoints between instances is
+not supported yet.
+
 ## Not done yet
 
 - No token usage is reported back (NanoClaw does not expose it to the channel).
