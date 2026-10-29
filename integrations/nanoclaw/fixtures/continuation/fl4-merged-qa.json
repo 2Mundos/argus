@@ -102,6 +102,7 @@
   "max_attempts": 3,
   "model_policy": null,
   "model_policy_revision": null,
+  "model_switch": null,
   "models": {
     "delegate": null,
     "executions": 0,

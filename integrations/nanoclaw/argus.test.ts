@@ -225,6 +225,32 @@ describe("heldAccountFits", () => {
   });
 });
 
+describe("heldAccountFits with a fallen-back pin", () => {
+  const codex = { id: "a-codex", provider: "openai" };
+  const pin = { engine: "claude", model: "claude-opus-5-5" };
+  const switched = (account_id: string) => ({
+    to: { provider: "openai", account_id },
+    reason: "exhausted",
+  });
+  it("keeps a held account the claim reports as the valid fallback", () => {
+    expect(heldAccountFits(codex, { harness_model: pin, model_switch: switched("a-codex") })).toBe(
+      true,
+    );
+    expect(
+      heldAccountFits(codex, {
+        harness_account: "a-claude",
+        model_switch: switched("a-codex"),
+      }),
+    ).toBe(true);
+  });
+  it("re-leases when the pin holds or the fallback is another account", () => {
+    expect(heldAccountFits(codex, { harness_model: pin })).toBe(false);
+    expect(heldAccountFits(codex, { harness_model: pin, model_switch: switched("a-other") })).toBe(
+      false,
+    );
+  });
+});
+
 describe("renderTask", () => {
   it("names Cursor for a trivial task only when Cursor is the leased executor", () => {
     const standard = renderTask(task() as any, new Map(), "agent");

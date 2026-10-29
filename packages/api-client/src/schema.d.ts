@@ -3657,6 +3657,10 @@ export interface components {
             } | null;
             /** Model Policy Revision */
             model_policy_revision?: string | null;
+            /** Model Switch */
+            model_switch?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * @default {
              *       "executions": 0,

@@ -31,6 +31,21 @@ test("a task's harness pin is fixed for its engine and ignored for another", () 
   assert.equal(selectHarnessModel(snap, "codex", task).configured_model, "sol");
 });
 
+test("a harness pin is dropped when the lease fell back to another provider", () => {
+  const snap = policySnapshot(policy);
+  const task = {
+    spec: "",
+    failures: 0,
+    harness_model: { engine: "claude", model: "claude-opus-5-5" },
+  };
+  const kept = selectHarnessModel(snap, "claude", task, "anthropic");
+  assert.deepEqual([kept.configured_model, kept.policy_map], ["claude-opus-5-5", "task"]);
+  // a Claude-engine harness on a custom account is not the pinned provider
+  const fell = selectHarnessModel(snap, "claude", task, "custom");
+  assert.deepEqual([fell.configured_model, fell.policy_map], ["sonnet", "harness"]);
+  assert.equal(selectHarnessModel(snap, "codex", task, "openai").configured_model, "luna");
+});
+
 test("separate scopes, stable content hash, bounded fallback and pinned override", () => {
   const a = policySnapshot(policy);
   const b = policySnapshot({

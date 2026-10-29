@@ -25,6 +25,8 @@ export interface PolicySnapshot {
     complexity?: string | null;
     /** The task's pinned executor and model (task models spec); null follows the policy. */
     executor_model?: { executor: string; model: string } | null;
+    /** The harness pin fell back for this attempt (task models spec 3.3); null: it held. */
+    model_switch?: object | null;
   } | null;
 }
 export interface ModelSelection {
@@ -57,4 +59,6 @@ export function selectHarnessModel(
     failures?: number;
     harness_model?: { engine: string; model: string } | null;
   },
+  /** Provider of the leased engine account; the pin holds only on its own provider. */
+  accountProvider?: string | null,
 ): ModelSelection;

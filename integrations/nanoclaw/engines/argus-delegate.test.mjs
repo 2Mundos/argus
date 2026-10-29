@@ -145,6 +145,36 @@ test("a task's executor pin sets the model for that executor only, with no chain
   assert.equal(pinnedModel(snapshot, "codex"), undefined);
 });
 
+test("the report carries the harness model switch of the attempt", async (t) => {
+  const s = sandbox(t);
+  s.fake(
+    "claude",
+    'if [ "$1" = "--version" ]; then echo "9.9.9 (Claude Code)"; exit 0; fi\ncat >/dev/null; echo \'{"result":"hi"}\'',
+  );
+  const policy = JSON.parse(
+    fs.readFileSync(new URL("./model-policy.defaults.json", import.meta.url), "utf8"),
+  );
+  const model_switch = {
+    from: { provider: "anthropic", model: "claude-opus-5-5", account_id: null },
+    to: { provider: "openai", model: null, account_id: "acc-codex", account_name: "codex" },
+    reason: "exhausted",
+    attempt: 1,
+  };
+  const snapshot = policySnapshot(policy, {
+    task_id: "t1",
+    attempt: 1,
+    engine: "codex",
+    preferred_executor: "claude",
+    model_switch,
+  });
+  const file = path.join(s.dir, "argus-model-policy.json");
+  fs.writeFileSync(file, JSON.stringify(snapshot));
+  const env = { ...s.env, ANTHROPIC_API_KEY: "placeholder", ARGUS_MODEL_POLICY_FILE: file };
+  const { code, report } = await run(["claude", "--cwd", s.work, "--timeout", "20"], { env });
+  assert.equal(code, 0);
+  assert.deepEqual(report.model_switch, model_switch);
+});
+
 test("missing credentials block with 78 and run nothing, with no fallback", async (t) => {
   const s = sandbox(t);
   const marker = path.join(s.dir, "ran");

@@ -398,6 +398,8 @@ export interface ArgusTask {
   account_providers?: string[] | null;
   /** The one account its engine lease may use (task models spec 3.4); null: any. */
   harness_account?: string | null;
+  /** Set when a harness pin fell back for this attempt (task models spec 3.3). */
+  model_switch?: { to: { provider: string; account_id: string }; reason: string } | null;
   /** Continuation contract (task continuation spec); missing on older servers. */
   continuation?: ContinuationContract | null;
   /** Effective model policy for the task's project at claim (settings.spec.md 3.4). */
@@ -463,12 +465,15 @@ const PIN_PROVIDERS: Record<string, string> = { claude: "anthropic", codex: "ope
 /**
  * Does the engine account the worker holds fit what the task allows (harness account
  * pin, `account_providers`, harness engine pin)? When not, the claim leases afresh at
- * once instead of keeping the account until the next re-evaluation.
+ * once instead of keeping the account until the next re-evaluation. The pins are
+ * preferences (task models spec 3.2-3.4): when the claim says the pin fell back
+ * (`model_switch`) onto the held account, that account is a valid fallback and is kept.
  */
 export function heldAccountFits(
   held: { id: string; provider: string },
-  task: Pick<ArgusTask, "harness_account" | "account_providers" | "harness_model">,
+  task: Pick<ArgusTask, "harness_account" | "account_providers" | "harness_model" | "model_switch">,
 ): boolean {
+  if (task.model_switch?.to.account_id === held.id) return true;
   if (task.harness_account && held.id !== task.harness_account) return false;
   if (task.account_providers?.length && !task.account_providers.includes(held.provider))
     return false;
@@ -3947,7 +3952,7 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
       snapshot = claimed;
     }
     const engine = (config.provider || "claude").toLowerCase();
-    const selection = selectHarnessModel(snapshot, engine, task);
+    const selection = selectHarnessModel(snapshot, engine, task, held.engine?.provider);
     if (held.engine && !selection.configured_model) {
       // Never leave the previous engine's model configured for the leased account's.
       throw new Error(`model policy has no harness chain for engine ${engine}`);
@@ -3970,6 +3975,8 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
       preferred_executor:
         task.executor_model?.executor ?? preferredExecutorForLease(held.engine, held.executor),
       executor_model: task.executor_model ?? null,
+      // A harness pin that fell back for this attempt (task models spec 3.3).
+      model_switch: task.model_switch ?? null,
       complexity: task.complexity ?? "standard",
       engine_settings: held.engine_settings ?? null,
       executor_settings: held.executor_settings ?? null,
