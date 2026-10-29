@@ -50,6 +50,19 @@ The sources are:
 - The feed lists the `task.progress` events of the current attempt, newest first,
   from the events the drawer already reads (the latest 50 for the task); the
   stream refetches them when a new one arrives.
+- **Attempt selection.** In the task view the feed and the Live panel follow the
+  one shared attempt selection of [task changes](task-changes.spec.md) 3.7,
+  which also drives the Changes panel. It defaults to the current attempt and
+  then behaves as above, reconnect and backfill included. Choosing a prior
+  attempt shows that attempt's own rows only: its `task.progress` notes from the
+  events already read, and its log tail from `GET /api/tasks/{id}/log?attempt=`.
+  Rows of different attempts are never mixed, and `seq` is read per attempt and
+  never merged across attempts: switching attempts discards the lines held and
+  reads the chosen attempt afresh. A prior attempt is read once, with no
+  stream-driven refresh. An attempt with no rows shows an explicit empty state
+  ("No output yet.", "No progress notes for this attempt."), never another
+  attempt's rows. The header (latest note, bar, lease) describes the current
+  attempt and is hidden while a prior one is selected.
 
 ## 3.2 Agent drawer
 

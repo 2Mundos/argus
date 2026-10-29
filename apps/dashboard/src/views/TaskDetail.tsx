@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, call, download } from "../api";
 import { ARCHIVABLE } from "../archive";
 import { TaskDelivery } from "../delivery";
@@ -10,6 +10,7 @@ import { TaskLabel } from "../TaskLabel";
 import { pinText } from "../taskEdit";
 import { Activity } from "./Activity";
 import { AgentDetail } from "./AgentDetail";
+import { AttemptStrip } from "./AttemptStrip";
 import { EventList } from "./EventList";
 import { TaskChanges } from "./TaskChanges";
 import { TaskEditForm } from "./TaskEditForm";
@@ -29,6 +30,7 @@ export function TaskDetail({
   const [confirmingRetry, setConfirmingRetry] = useState(false);
   const [agentId, setAgentId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  const [picked, setPicked] = useState<number | null>(null);
   const { data, reload } = useLiveData(
     (signal) =>
       Promise.all([
@@ -58,10 +60,22 @@ export function TaskDetail({
             signal,
           }),
         ),
+        // The strip is an aid: without it the current attempt stays selected.
+        call(
+          api.GET("/api/tasks/{task_id}/attempts", {
+            params: { path: { task_id: taskId } },
+            signal,
+          }),
+        ).catch(() => []),
       ]),
     [taskId],
   );
-  const [task, artifacts, events, delivery, modelTrace] = data ?? [];
+  const [task, artifacts, events, delivery, modelTrace, attemptList] = data ?? [];
+  const current = task?.attempt ?? 0;
+  // A new current attempt (or another task) re-selects the current one.
+  useEffect(() => setPicked(null), [taskId, current]);
+  const attemptNumbers = Array.isArray(attemptList) ? attemptList.map((a) => a.attempt) : [];
+  const selected = picked !== null && attemptNumbers.includes(picked) ? picked : current;
   const modelAttempts = [...new Set(modelTrace?.executions.map((run) => run.attempt) ?? [])].sort(
     (a, b) => b - a,
   );
@@ -103,7 +117,13 @@ export function TaskDetail({
     <>
       {task && (
         <>
-          <Activity task={task} events={events ?? []} />
+          <AttemptStrip
+            attempts={attemptNumbers}
+            current={current}
+            selected={selected}
+            onSelect={setPicked}
+          />
+          <Activity task={task} events={events ?? []} selected={selected} />
           {delivery && <TaskDelivery delivery={delivery} onChanged={reload} />}
           <h3>Models</h3>
           {modelTrace?.executions.length ? (
@@ -320,16 +340,23 @@ export function TaskDetail({
           )}
           {task.attempt > 0 && (
             <TaskLog
+              key={`log-${selected}`}
               taskId={taskId}
-              attempt={task.attempt}
-              steer={{
-                claimed: task.state === "claimed",
-                assigneeId: task.assignee_agent_id,
-              }}
+              attempt={selected}
+              steer={
+                selected === task.attempt
+                  ? { claimed: task.state === "claimed", assigneeId: task.assignee_agent_id }
+                  : undefined
+              }
             />
           )}
           {task.attempt > 0 && task.required_capabilities.includes("repository:write") && (
-            <TaskChanges taskId={taskId} attempt={task.attempt} />
+            <TaskChanges
+              key={`changes-${selected}`}
+              taskId={taskId}
+              attempt={task.attempt}
+              selected={selected}
+            />
           )}
           {task.result && (
             <>

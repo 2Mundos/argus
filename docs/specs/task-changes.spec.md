@@ -153,8 +153,18 @@ read scope](worker-read-scope.spec.md).
 - It loads with 3.6 and refreshes on `task.changes` for that task and attempt. A
   "cut" banner shows when any `truncated` flag is set; untracked files list with
   "not in the diff".
-- An attempt selector shows the previous attempts' last snapshots, so the work an
-  expired or failed attempt left is visible.
+- The **attempt strip** shows the previous attempts' last snapshots, so the work an
+  expired or failed attempt left is visible. It is rendered once at the top of
+  the task view from `GET /api/tasks/{id}/attempts` (one chip per attempt, oldest
+  first; hidden while the task has a single attempt) and holds the **shared
+  selection** that drives both **Live** ([live work](live-work.spec.md) 3.1) and
+  **Changes**. The default is the current attempt, and a new current attempt
+  re-selects it. Selecting another attempt loads that attempt's snapshot with
+  3.6 (`?attempt=`) and its own Live rows; neither panel keeps the previous
+  attempt's content. An attempt with no snapshot (never reported, or older than
+  the three kept, 3.4) shows "No changes reported for this attempt yet." and
+  never another attempt's snapshot. The strip adds no endpoint and does not
+  change the reconnect or backfill of the current attempt's Live panel.
 - Everything is rendered as text, never HTML. Paths are not links.
 
 # 4. Open Questions
