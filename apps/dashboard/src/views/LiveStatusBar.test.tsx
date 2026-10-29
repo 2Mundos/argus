@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ArgusEvent } from "../api";
 import { LiveStatusBar } from "./LiveStatusBar";
@@ -22,8 +22,9 @@ const mock = vi.hoisted(() => {
 
 vi.mock("../api", () => ({
   api: { GET: (path: string) => path },
+  // Snapshot history at call time so a later afterEach clear cannot empty a pending seed.
   call: async (path: string) => {
-    if (path === "/api/events") return mock.history;
+    if (path === "/api/events") return [...mock.history];
     throw new Error(`unexpected ${path}`);
   },
 }));
@@ -56,6 +57,14 @@ function push(e: ArgusEvent) {
   for (const listener of mock.listeners) listener(e);
 }
 
+async function stripMatching(re: RegExp) {
+  const strip = await screen.findByRole("button", { name: "Live status" });
+  await waitFor(() => {
+    expect(strip.textContent).toMatch(re);
+  });
+  return strip;
+}
+
 afterEach(() => {
   cleanup();
   mock.history = [];
@@ -67,9 +76,8 @@ describe("LiveStatusBar", () => {
   it("seeds from history and expands on click", async () => {
     mock.history = [event({ id: 1, kind: "task.claim", data: { from: "ready", to: "claimed" } })];
     render(<LiveStatusBar />);
-    const strip = await screen.findByRole("button", { name: "Live status" });
+    const strip = await stripMatching(/task\.claim/);
     expect(strip.getAttribute("aria-expanded")).toBe("false");
-    expect(strip.textContent).toMatch(/task\.claim/);
     expect(strip.textContent).toMatch(/ready → claimed/);
     expect(strip.textContent).toMatch(/live/);
 
@@ -83,7 +91,7 @@ describe("LiveStatusBar", () => {
   it("collapses on Escape", async () => {
     mock.history = [event({ id: 10, kind: "task.created", data: { to: "pending" } })];
     render(<LiveStatusBar />);
-    const strip = await screen.findByRole("button", { name: "Live status" });
+    const strip = await stripMatching(/task\.created/);
     fireEvent.click(strip);
     expect(strip.getAttribute("aria-expanded")).toBe("true");
     fireEvent.keyDown(window, { key: "Escape" });
@@ -96,8 +104,7 @@ describe("LiveStatusBar", () => {
       event({ id: 3, kind: "task.progress", data: { message: "running tests" } }),
     ];
     render(<LiveStatusBar />);
-    const strip = await screen.findByRole("button", { name: "Live status" });
-    expect(strip.textContent).toMatch(/running tests/);
+    const strip = await stripMatching(/running tests/);
     expect(strip.textContent).not.toMatch(/noise/);
 
     await act(() => {
@@ -110,8 +117,7 @@ describe("LiveStatusBar", () => {
   it("updates when a non-transient event arrives on the stream", async () => {
     mock.history = [event({ id: 5, kind: "task.created", data: { to: "pending" } })];
     render(<LiveStatusBar />);
-    const strip = await screen.findByRole("button", { name: "Live status" });
-    expect(strip.textContent).toMatch(/task\.created/);
+    const strip = await stripMatching(/task\.created/);
 
     await act(() => {
       push(
@@ -135,7 +141,7 @@ describe("LiveStatusBar", () => {
       event({ id: 8, kind: "task.created", data: { to: "pending" } }),
     ];
     render(<LiveStatusBar />);
-    const strip = await screen.findByRole("button", { name: "Live status" });
+    const strip = await stripMatching(/task\.complete/);
     fireEvent.click(strip);
     const feed = screen.getByRole("region", { name: "Recent events" });
     expect(feed.textContent).toMatch(/task\.complete/);
