@@ -921,6 +921,18 @@ def _create(client: TestClient, name: str) -> dict:
     return res.json()
 
 
+async def _usage_for_task(task_id: str) -> list[dict]:
+    async with (
+        app.state.db.read() as conn,
+        conn.execute(
+            "SELECT account_id, input_tokens, measurement FROM account_usage"
+            " WHERE task_id = ?",
+            (task_id,),
+        ) as cur,
+    ):
+        return [dict(r) for r in await cur.fetchall()]
+
+
 def test_rest_lease_is_global_and_the_retired_provider_list_restricts_nothing(
     client: TestClient,
 ) -> None:
@@ -1027,7 +1039,7 @@ def test_delete_refuses_active_lease_then_succeeds_once_released(
     )
 
 
-def test_delete_removes_usage_leases_and_secret_but_not_other_accounts(
+def test_delete_detaches_usage_removes_leases_and_secret_but_not_other_accounts(
     client: TestClient,
 ) -> None:
     gone, kept = _create(client, "gone"), _create(client, "kept")
@@ -1038,7 +1050,13 @@ def test_delete_removes_usage_leases_and_secret_but_not_other_accounts(
     ).json()
     client.post(
         f"/api/accounts/{leased['account_id']}/usage",
-        json={"input_tokens": 3, "output_tokens": 4, "cost_usd": 0.1},
+        json={
+            "input_tokens": 3,
+            "output_tokens": 4,
+            "cost_usd": 0.1,
+            "task_id": task["id"],
+            "attempt": task["attempt"],
+        },
         headers=worker,
     )
     client.post("/api/accounts/release", headers=worker)
@@ -1057,6 +1075,11 @@ def test_delete_removes_usage_leases_and_secret_but_not_other_accounts(
     assert f"account-{kept['id']}" in secrets.names()
     names = [a["name"] for a in client.get("/api/accounts", headers=ADMIN).json()]
     assert names == ["kept"]
+    # Usage is detached (null account), not erased — attempt outcome remains.
+    rows = asyncio.run(_usage_for_task(task["id"]))
+    assert len(rows) == 1
+    assert rows[0]["account_id"] is None
+    assert rows[0]["input_tokens"] == 3
 
 
 def test_delete_rolls_back_when_the_secret_store_fails(client: TestClient) -> None:
