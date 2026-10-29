@@ -106,11 +106,33 @@ dead-session recovery coverage and latency.
   `id > fail id`, first match by id: next attempt end, then the claim below it),
   a primary-key lookup of the claim's `at` and a unique-key lookup of the task's
   state; the final order is one sort of at most 5000 rows. The cost grows with
-  each task's own later events, never with the events table (asserted by
-  `EXPLAIN QUERY PLAN` in the tests: no `SCAN` of `events`). Window membership still
-  uses the fail's `at`, so a fail whose `at` was written during a clock rollback
-  may fall outside the window. `pending` and `ended_unclaimed` read the task's
-  *current* state; the window does not freeze it.
+  each task's own later events, not with unrelated history (measured below; asserted by
+  `EXPLAIN QUERY PLAN` in the tests: no `SCAN` of `events` under any alias, `SCAN e`
+  included, and each lookup uses its expected index, so a kind-only lookup fails).
+  Window membership still uses the fail's `at`, so a fail whose `at` was written
+  during a clock rollback may fall outside the window (pinned by a test).
+  `pending` and `ended_unclaimed` read the task's *current* state; the window does
+  not freeze it. `pending` covers `ready`, `pending` and `blocked`; `pending_overdue`
+  is the age of those samples since the observed loss, i.e. time unclaimed,
+  not worker speed. A negative age (fail stamped after `now`) is never overdue.
+
+  *Measured (evidence, not a bound).* One local run: isolated SQLite 3.40.1 in a
+  sandbox, disposable DB built from the real migrations, median of 3 runs of
+  `SESSION_LOST_SQL` with `MAX_ROWS` 5000. The harness is not committed and no test
+  asserts timing, so these figures are not reproducible from the repo. Hardware and
+  production numbers differ.
+  - 1000 fails, 3k events total: 2.7 ms. 1000 fails with 200k unrelated events: 2.7 ms,
+    so in that run unrelated history did not slow the query.
+  - Same 1000 fails, with 100 / 1000 / 5000 `task.progress` events of each task
+    between its fail and claim: 21 / 171 / 802 ms. The per-task walk, not the table,
+    is the cost; in that run it grew roughly linearly with those later events.
+  - 5000 fails (3600 in window), 215k events: about 10 ms.
+  - Regression contrast, 1000 fails with 200k unrelated events: dropping
+    `events_kind_at` gives `SCAN e` at 9.0 ms; dropping `events_subject` gives
+    kind-only correlated lookups at 376 ms.
+  - Hypotheses, not measured: the production event volume per task, and cost on the
+    production disk. The query is not constant time; the bounds are the 5000-fail cap
+    and each task's later events before its next end or claim.
 - **Bounded reads.** No full scan of `tasks` or `events`: migration
   `0021_fleet_health_indexes.sql` adds `tasks_finished` and `events_kind_at`; per-task
   claim lookups use `events_subject`. Each fetch keeps at most 5000 newest rows and

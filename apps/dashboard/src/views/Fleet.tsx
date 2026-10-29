@@ -205,10 +205,11 @@ function Body({ h }: { h: FleetHealth }) {
             outliers (≥ {seconds(d.target_s)}) {d.outliers}
           </p>
           <p className="muted small">
-            pending {d.pending} (waiting ≥ {seconds(d.target_s)}: {d.pending_overdue}) · ended
-            unclaimed {d.ended_unclaimed} · not requeued {d.not_requeued} · anomalous {d.anomalous}
+            pending {d.pending} (unclaimed ≥ {seconds(d.target_s)} since loss: {d.pending_overdue})
+            ended unclaimed {d.ended_unclaimed} · not requeued {d.not_requeued} · anomalous{" "}
+            {d.anomalous}
             {" · "}
-            observed lost, not death time
+            observed lost, not death time; the age is time unclaimed, not worker speed
           </p>
           <Caption window={d.window_hours} source={d.source} />
         </Card>

@@ -1,6 +1,7 @@
 """Dead-session recovery latency: session_lost → next claim (fleet health P5)."""
 
 import json
+import re
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -287,6 +288,40 @@ def test_classify_unreadable_payload_is_anomalous() -> None:
     assert classify_recovery_row(row).outcome == "anomalous"
 
 
+@pytest.mark.parametrize("state", ["ready", "pending", "blocked"])
+async def test_overdue_counts_every_waiting_state(db: Database, state: str) -> None:
+    """Each waiting state is pending; age counts time unclaimed, not work."""
+    await session_lost(db, f"old-{state}", at(1), state=state)
+    await session_lost(db, f"young-{state}", NOW - timedelta(seconds=10), state=state)
+    r = await recovery(db)
+    assert (r.pending, r.pending_overdue, r.measured, r.ended_unclaimed) == (2, 1, 0, 0)
+    assert (r.p50, r.outliers) == (None, 0)
+
+
+def test_pending_age_from_a_future_fail_is_not_overdue() -> None:
+    """A clock rollback can leave a fail stamped after `now`: its age is negative."""
+    row = {
+        "id": 1,
+        "at": ts(NOW + timedelta(seconds=RECOVERY_TARGET_S * 2)),
+        "subject_id": "ahead",
+        "data": json.dumps({"reason": "session_lost", "to": "ready"}),
+        "next_end_id": None,
+        "next_claim_id": None,
+        "next_claim_at": None,
+        "task_state": "ready",
+    }
+    r = fleet_health._dead_session_recovery([row], 24, NOW)
+    assert (r.pending, r.pending_overdue, r.anomalous) == (1, 0, 0)
+
+
+async def test_fail_stamped_after_now_leaves_the_window(db: Database) -> None:
+    """Pinned limit (spec 3): the window reads the fail's `at`, so a fail written
+    ahead of `now` during a clock rollback is excluded, not reported."""
+    await session_lost(db, "ahead", NOW + timedelta(seconds=30))
+    r = await recovery(db)
+    assert (r.denominator, r.pending, r.anomalous) == (0, 0, 0)
+
+
 async def test_outliers_count_at_or_above_target_and_still_enter_median(
     db: Database,
 ) -> None:
@@ -309,7 +344,59 @@ async def test_window_excludes_old_session_lost(db: Database) -> None:
     assert r.denominator == 1 and r.examples[0].task_id == "new"
 
 
-async def test_session_lost_query_uses_kind_at_index(db: Database) -> None:
+# SQLite names a scan by the alias it was given (`SCAN e`, not `SCAN events`), so the
+# guard matches every alias of events in the query, not only the table name.
+EVENT_ALIASES = frozenset(
+    {"events", *re.findall(r"\b(?:FROM|JOIN) events (\w+)", SESSION_LOST_SQL)}
+)
+# Each events lookup and the index it must use: the kind+at window, then the
+# per-task correlated lookups (next end, claim). A kind-only lookup is a regression.
+EXPECTED_EVENT_INDEXES = frozenset(
+    {("e", "events_kind_at"), ("f", "events_subject"), ("c", "events_subject")}
+)
+
+
+# `SCAN e`, `SEARCH e USING ...`; older SQLite prints `SEARCH TABLE events AS e`.
+PLAN_NODE = re.compile(r"(SCAN|SEARCH) (?:TABLE )?(\w+)(?: AS (\w+))?")
+
+
+def plan_alias(node: re.Match[str]) -> str:
+    return node.group(3) or node.group(2)
+
+
+def event_scans(plan: list[str]) -> list[str]:
+    """Full reads of events under any alias (a covering index scan counts too)."""
+    return [
+        line
+        for line in plan
+        if (node := PLAN_NODE.match(line))
+        and node.group(1) == "SCAN"
+        and plan_alias(node) in EVENT_ALIASES
+    ]
+
+
+def event_searches(plan: list[str]) -> set[tuple[str, str]]:
+    """(alias, index) for each indexed SEARCH of events."""
+    found = set()
+    for line in plan:
+        index = re.search(r"USING (?:COVERING )?INDEX (\w+)", line)
+        node = PLAN_NODE.match(line)
+        if (
+            node
+            and node.group(1) == "SEARCH"
+            and index
+            and plan_alias(node) in EVENT_ALIASES
+        ):
+            found.add((plan_alias(node), index.group(1)))
+    return found
+
+
+def plan_regressions(plan: list[str]) -> list[str]:
+    missing = sorted(EXPECTED_EVENT_INDEXES - event_searches(plan))
+    return [*event_scans(plan), *(f"no {a} via {i}" for a, i in missing)]
+
+
+async def query_plan(db: Database) -> list[str]:
     since, until = ts(at(24)), ts(NOW)
     async with (
         db.read() as conn,
@@ -317,10 +404,30 @@ async def test_session_lost_query_uses_kind_at_index(db: Database) -> None:
             "EXPLAIN QUERY PLAN " + SESSION_LOST_SQL, (since, until, 10)
         ) as cur,
     ):
-        plan = [r["detail"] for r in await cur.fetchall()]
-    assert any("events_kind_at" in line for line in plan)
-    for line in plan:
-        assert not (line.startswith("SCAN") and "events" in line), plan
+        return [r["detail"] for r in await cur.fetchall()]
+
+
+def test_plan_guard_flags_aliased_event_scans() -> None:
+    """Synthetic plan lines: the old `"events" in line` check missed `SCAN e`."""
+    assert event_scans(["SCAN e USING INDEX events_kind_at"]) == [
+        "SCAN e USING INDEX events_kind_at"
+    ]
+    assert event_scans(["SCAN events"]) == ["SCAN events"]
+    assert event_scans(["SCAN l", "SEARCH e USING INDEX events_kind_at (kind=?)"]) == []
+
+
+async def test_session_lost_query_plan_uses_event_indexes(db: Database) -> None:
+    plan = await query_plan(db)
+    assert plan_regressions(plan) == [], plan
+
+
+@pytest.mark.parametrize("dropped", ["events_kind_at", "events_subject"])
+async def test_missing_event_index_is_detected(db: Database, dropped: str) -> None:
+    """Negative control: with the index gone, the same guard must fail."""
+    async with db.write() as tx:
+        await tx.conn.execute(f"DROP INDEX {dropped}")
+    plan = await query_plan(db)
+    assert plan_regressions(plan), plan
 
 
 # -- real service paths (tasks.service via db.write, FakeClock as tx.now) ----------------
