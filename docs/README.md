@@ -192,6 +192,9 @@ every new dependency is judged against it.
 
 ### Reports
 
+- [Disk guard investigation (2026-10-29)](reports/2026-10-29.disk-guard-investigation.ref.md) —
+  who runs the loop, `io.stat` vs `docker ps --size`, cleanup dry run on warn,
+  pause vs leases and stall detection; spec-update plan for the disk-guard draft
 - [Workspace cleanup exact-head review (task f9a048fa)](reports/2026-10-24.workspace-cleanup-review.ref.md) —
   independent P1–P3 review of the merged cleanup feature; non-git state and
   committed secrets explicitly not total preservation
