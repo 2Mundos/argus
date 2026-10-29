@@ -4555,6 +4555,136 @@
         "title": "DayCost",
         "type": "object"
       },
+      "DeadSessionRecovery": {
+        "description": "session_lost observed \u2192 next claim (worker efficiency draft, P5 measure).\n\nDeath time is not in events. Fail and requeue are the same `task.fail` when\n`to=ready`. Latency is therefore observation \u2192 next claim, never a fabricated\ndeath\u2192requeue delta. Percentiles need `MIN_SAMPLES` measured rows.",
+        "properties": {
+          "anomalous": {
+            "title": "Anomalous",
+            "type": "integer"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "denominator": {
+            "title": "Denominator",
+            "type": "integer"
+          },
+          "examples": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryExample"
+            },
+            "title": "Examples",
+            "type": "array"
+          },
+          "failure_class": {
+            "default": "session",
+            "title": "Failure Class",
+            "type": "string"
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "measured": {
+            "title": "Measured",
+            "type": "integer"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "not_requeued": {
+            "title": "Not Requeued",
+            "type": "integer"
+          },
+          "outliers": {
+            "title": "Outliers",
+            "type": "integer"
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p90": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P90"
+          },
+          "pending": {
+            "title": "Pending",
+            "type": "integer"
+          },
+          "reason": {
+            "default": "session_lost",
+            "title": "Reason",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "target_s": {
+            "default": 300.0,
+            "title": "Target S",
+            "type": "number"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "source",
+          "denominator",
+          "measured",
+          "pending",
+          "not_requeued",
+          "anomalous",
+          "coverage",
+          "n",
+          "p50",
+          "p90",
+          "mean",
+          "outliers",
+          "truncated",
+          "examples"
+        ],
+        "title": "DeadSessionRecovery",
+        "type": "object"
+      },
       "Decision": {
         "properties": {
           "answer_choice": {
@@ -7115,6 +7245,9 @@
             "title": "As Of",
             "type": "string"
           },
+          "dead_session_recovery": {
+            "$ref": "#/components/schemas/DeadSessionRecovery"
+          },
           "failures": {
             "$ref": "#/components/schemas/Failures"
           },
@@ -7159,6 +7292,7 @@
           "outcomes",
           "failures",
           "yield",
+          "dead_session_recovery",
           "truncated"
         ],
         "title": "FleetHealth",
@@ -12101,6 +12235,73 @@
           "checks"
         ],
         "title": "ReadinessOut",
+        "type": "object"
+      },
+      "RecoveryExample": {
+        "description": "One auditable synthetic sample: source fail (+ claim) event ids.",
+        "properties": {
+          "claim_event_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Event Id"
+          },
+          "fail_event_id": {
+            "title": "Fail Event Id",
+            "type": "integer"
+          },
+          "latency_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency S"
+          },
+          "next_claim_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Claim At"
+          },
+          "observed_lost_at": {
+            "format": "date-time",
+            "title": "Observed Lost At",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "fail_event_id",
+          "claim_event_id",
+          "observed_lost_at",
+          "next_claim_at",
+          "latency_s",
+          "outcome"
+        ],
+        "title": "RecoveryExample",
         "type": "object"
       },
       "RecycleRequest": {
@@ -20729,7 +20930,7 @@
     },
     "/api/fleet/health": {
       "get": {
-        "description": "Pool, queue, run-time, outcome and failure health over `window` hours.",
+        "description": "Pool, queue, run-time, outcome, yield and dead-session recovery over `window` hours.",
         "operationId": "fleet_health_api_fleet_health_get",
         "parameters": [
           {

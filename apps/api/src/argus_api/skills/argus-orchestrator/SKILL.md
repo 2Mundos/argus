@@ -165,6 +165,10 @@ pass `base_revision_id` when editing).
   `drain_agent` stops one agent from claiming more.
 - Diagnose: `get_instance`, `get_instance_logs(id, tail)`,
   `get_agent_models`, `get_task_models`.
+- `get_fleet_yield(window_hours)` and `get_dead_session_recovery(window_hours)`:
+  read-only slices of Fleet health. Recovery latency starts at each observed
+  `session_lost` fail (not a death timestamp) and ends at the next claim;
+  percentiles stay null until enough measured samples exist.
 
 ## Errors
 
