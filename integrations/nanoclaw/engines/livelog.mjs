@@ -150,9 +150,106 @@ export function claudeEventLines(ev, secrets = []) {
   return lines;
 }
 
+/** `readToolCall` -> `read`; anything else keeps its key. */
+const cursorToolName = (key) => key.replace(/ToolCall$/, "") || "tool";
+
+const CURSOR_FAILURE_KEYS = ["error", "failure", "rejected", "rejectedError", "timeout"];
+
+/**
+ * Readable lines for one Cursor `agent --output-format stream-json` event. Only the
+ * assistant's own text, tool names with their most telling argument, failed tool
+ * results, and the final status are shown: never the echoed prompt (`user`), the
+ * model's thinking, or tool output. `state` carries the lines already shown in the
+ * current text segment (a partial delta stream is followed by the same text whole) and
+ * the unfinished tail of a delta stream; create it with `{ seen: new Set(), partial: "" }`.
+ */
+export function agentEventLines(ev, secrets = [], state = { seen: new Set(), partial: "" }) {
+  if (!isObject(ev)) return [];
+  const lines = [];
+  const text = (raw) => {
+    for (const l of textLines(raw, secrets)) {
+      if (!l.trim() || state.seen.has(l)) continue;
+      state.seen.add(l);
+      lines.push(l);
+    }
+  };
+  const flushPartial = () => {
+    if (state.partial) text(state.partial);
+    state.partial = "";
+  };
+  switch (ev.type) {
+    case "system":
+      if (ev.subtype === "init")
+        lines.push(
+          `agent started${typeof ev.model === "string" ? ` (${cut(oneLine(ev.model), 80)})` : ""}`,
+        );
+      else if (ev.subtype === "background_shell_timeout")
+        lines.push(
+          `agent aborted ${Number(ev.aborted_count) || 0} background shell(s) after ${Number(ev.timeout_ms) / 1000 || 0}s`,
+        );
+      break;
+    case "assistant": {
+      const blocks = Array.isArray(ev.message?.content) ? ev.message.content : [];
+      const body = blocks
+        .map((b) => (b?.type === "text" && typeof b.text === "string" ? b.text : ""))
+        .join("");
+      if (!body) break;
+      if (typeof ev.timestamp_ms === "number" && ev.model_call_id === undefined) {
+        // A delta: show only the lines it completes.
+        state.partial += body;
+        const cutAt = state.partial.lastIndexOf("\n");
+        if (cutAt >= 0) {
+          text(state.partial.slice(0, cutAt));
+          state.partial = state.partial.slice(cutAt + 1);
+        }
+      } else {
+        state.partial = "";
+        text(body);
+      }
+      break;
+    }
+    case "tool_call": {
+      const key = isObject(ev.tool_call) ? Object.keys(ev.tool_call)[0] : undefined;
+      if (!key) break;
+      const call = ev.tool_call[key];
+      if (ev.subtype === "started") {
+        flushPartial();
+        state.seen.clear();
+        const args = toolArgs(call?.args);
+        lines.push(`▸ ${cut(cursorToolName(key), 60)}${args ? ` ${args}` : ""}`);
+      } else if (ev.subtype === "completed" && isObject(call?.result)) {
+        const bad = CURSOR_FAILURE_KEYS.find((k) => call.result[k] !== undefined);
+        if (bad) {
+          const detail = call.result[bad];
+          const msg =
+            typeof detail === "string" ? detail : (detail?.error ?? detail?.message ?? bad);
+          lines.push(`  ✗ ${cut(cursorToolName(key), 60)}: ${cut(oneLine(msg), RESULT_MAX)}`);
+        }
+      }
+      break;
+    }
+    case "retry":
+    case "connection":
+      if (typeof ev.subtype === "string")
+        lines.push(`agent ${ev.type}: ${cut(oneLine(ev.subtype), 60)}`);
+      break;
+    case "result":
+      flushPartial();
+      lines.push(
+        ev.is_error
+          ? `agent finished with an error: ${cut(oneLine(ev.result ?? ev.subtype ?? ""), RESULT_MAX)}`
+          : "agent finished",
+      );
+      break;
+    default:
+  }
+  return lines;
+}
+
 /** Feed it stdout chunks; calls `onLines` with the readable lines of each complete event. */
 export function createStreamParser({ executor, onLines, secrets = [] }) {
   let rest = "";
+  const agentState = { seen: new Set(), partial: "" };
   const handle = (raw) => {
     const line = raw.trim();
     if (!line) return;
@@ -162,6 +259,12 @@ export function createStreamParser({ executor, onLines, secrets = [] }) {
         lines = claudeEventLines(JSON.parse(line), secrets);
       } catch {
         return; // not a stream event (a plain JSON report, or noise)
+      }
+    } else if (executor === "agent") {
+      try {
+        lines = agentEventLines(JSON.parse(line), secrets, agentState);
+      } catch {
+        return;
       }
     }
     lines = lines.map((l) => cut(redactText(l, secrets), LINE_MAX)).filter(Boolean);

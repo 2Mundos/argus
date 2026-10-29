@@ -325,6 +325,14 @@ export function applySettingsEnv(executor, e, settings, model) {
   };
 }
 
+const BG_SHELL_TIMEOUT_S = 120;
+
+/** ARGUS_AGENT_BG_SHELL_TIMEOUT_S when it is a whole number of seconds >= 1, else the default. */
+function backgroundShellTimeoutS(e) {
+  const n = Number(e.ARGUS_AGENT_BG_SHELL_TIMEOUT_S);
+  return Number.isInteger(n) && n >= 1 ? n : BG_SHELL_TIMEOUT_S;
+}
+
 /** The exact argv for one non-interactive run. `prompt` is passed on stdin or as an argument. */
 export function buildCommand(
   executor,
@@ -390,11 +398,16 @@ export function buildCommand(
         bin: "agent",
         args: [
           "-p",
+          // stream-json prints events as they happen; plain json prints nothing until the end.
           "--output-format",
-          "json",
+          "stream-json",
           "--workspace",
           cwd,
           "--trust",
+          // After the final turn the CLI waits for running background shells before it prints
+          // its result; without a bound a forgotten `sleep`/server holds the run open.
+          "--background-shell-timeout",
+          String(backgroundShellTimeoutS(e)),
           ...(readOnly ? [] : ["--force"]),
           ...(model ? ["--model", model] : []),
         ],
@@ -655,13 +668,26 @@ function reportBlocked(e, snapshot, selection, executor, errorCode) {
   });
 }
 
+/** The agent stream echoes the prompt as a `user` event; its URLs are not progress. */
+function scannable(executor, text) {
+  if (executor !== "agent") return text;
+  return text
+    .split("\n")
+    .filter((r) => !/^\{\s*"type"\s*:\s*"(?:user|thinking)"/.test(r))
+    .join("\n");
+}
+
 /** Exit 0 with is_error in JSON is still a failure (quota/auth/etc.). */
 export function executorJsonFailure(executor, stdoutText) {
   const trimmed = stdoutText.trim();
   if (!trimmed) return { kind: "empty_stdout", detail: "executor produced no stdout" };
   let parsed;
   try {
-    parsed = JSON.parse(trimmed.split("\n").filter(Boolean).at(-1) ?? trimmed);
+    const rows = trimmed.split("\n").filter(Boolean);
+    // A stream's answer is its `result` event; a system line may follow it.
+    const resultRow =
+      executor === "agent" ? rows.findLast((r) => /^\{\s*"type"\s*:\s*"result"/.test(r)) : null;
+    parsed = JSON.parse(resultRow ?? rows.at(-1) ?? trimmed);
   } catch {
     return null;
   }
@@ -1066,7 +1092,7 @@ async function runAttempt(
     repository: (e.ARGUS_REPOSITORY_URL ?? "").trim() || undefined,
     probes: {
       head: () => gitHead(cwd),
-      output: () => `${readTail(stdoutFile)}\n${readTail(stderrFile)}`,
+      output: () => `${scannable(executor, readTail(stdoutFile))}\n${readTail(stderrFile)}`,
       ci: await giteaCiProbe(e),
     },
     emit: (m) => pending.push(sink(m)),
