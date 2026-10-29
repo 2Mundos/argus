@@ -6,16 +6,48 @@ Home is the first dashboard tab (`#home`) and the default for an empty or invali
 hash. It answers three questions without opening another tab: what needs a person
 or an operator now, how big is each part of the fleet, and what happened lately.
 
-It shows, in order:
+The authenticated dashboard is a three-column shell on every route: a left
+navigation, the page, and a right rail of live workers plus the latest event
+lines. The stream status and sign-out sit in the page top bar. A server-status
+box sits at the bottom of the left navigation. It starts collapsed, showing
+only the verdict, and a button expands it to every readiness check. Navigation
+reaches every existing tab (Home, Tasks, Inbox, Agents, Pools, Accounts, and
+the remaining Knowledge, Fleet, Engines, Cost, Events and Settings links).
+There is no workspace switcher and no time-range control.
 
-1. a status bar (readiness verdict, event stream, age of the totals);
-2. a prioritized **Needs attention** list;
-3. compact summary groups (Tasks, Agents, Pools, Inbox, Accounts), each linking to
-   its existing tab;
-4. **Recent activity** (the latest 10 events, link to Events);
-5. the **System** widgets (readiness checks, background loops, work, agents, pools,
-   storage and build version), formerly the System tab;
-6. an expandable **All states** section: every state of every core enum, zeros included.
+The top bar jumps to an existing page. It is not a search of task text and it
+is not a time-range control. At the bottom of the left navigation, a collapsed
+server-status box shows the verdict from `GET /api/system` (ready when every
+readiness check is ok, degraded or failing when a check says so, unknown while
+that read is missing). A button expands it to one row per check, with its
+status and detail, plus version and uptime.
+
+Home splits that into two panels on the same page. It does not repeat the
+Tasks list; that list lives on the Tasks tab.
+
+1. **Overview** — five larger summary cards (Tasks, Agents, Pools, Inbox and
+   Accounts), each listing every state in that group (zeros included) plus the
+   total and linking to its existing tab (no chart). The card header is an icon,
+   the label, and the total at the end of that row. The Accounts card says
+   quota is not measured by Argus. A **Needs attention** card appears
+   only when an item exists or a source could not be read (a fully loaded empty
+   fleet does not claim an all-clear sentence). The card starts collapsed and
+   shows a count per severity (critical, attention, info). A button expands the
+   item list. **Recent activity** is a table of
+   the latest events (time, type, detail, status, actor) with a link to Events;
+   and navigation-only shortcuts to create a task, open Agents, open Pools,
+   open Inbox and open Events.
+2. **System** — cards from `GET /api/system`, not another copy of the Overview
+   counts. Background loops sit in one card, with the sentence that heartbeats
+   prove a process is alive. Beside it, a card lists the oldest ready task, open
+   decisions and events written, and a storage card lists database size, WAL size
+   and disk free bytes (not a percentage). A pools card lists each pool's live,
+   desired and cap. Task and agent state counts stay on Overview and inside **All
+   states**. Version and uptime stay in the navigation box. **All states** starts
+   open: every state of every core enum, zeros included, and it can still be
+   collapsed. The readiness checks themselves live in the collapsed navigation box.
+
+Heartbeats and `running` still prove only that a process is alive. Home says so.
 
 Totals come from one read-only endpoint, `GET /api/overview`, readable by the
 manager, orchestrator and admin scopes (never workers). The dashboard uses the API
@@ -105,8 +137,8 @@ knowledge: {pages_by_state, proposals_by_state}
 
 - Backend: `apps/api/src/argus_api/overview.py`, route in `ops_routes.py`, tests in
   `apps/api/tests/test_overview.py`.
-- Frontend: `views/Home.tsx`, `overview.ts` (types and attention rules), `getJson`
-  in `api.ts`, `home` first in the `App.tsx` tabs.
+- Frontend: `views/Home.tsx`, `overview.ts` (types and attention rules), the
+  shell in `App.tsx` (left navigation, top bar, right rail on every route).
 - After `make openapi` and regenerating `packages/api-client/src/schema.d.ts`,
   replace the local `Overview` types with `components["schemas"]["Overview"]` and
   drop `getJson`.

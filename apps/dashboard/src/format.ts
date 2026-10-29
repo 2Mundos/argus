@@ -8,6 +8,19 @@ const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
 // English to match the rest of the UI, whatever the browser locale.
 const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
 
+/** Clock time, "14:32:10", from an event timestamp. */
+export function clock(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
 /** "3 minutes ago" / "in 40 seconds", relative to `now`. */
 export function relative(iso: string | null | undefined, now: number = Date.now()): string {
   if (!iso) return "—";

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Home } from "./Home";
 
@@ -108,9 +108,12 @@ describe("Home", () => {
       knowledge: { pages_by_state: {}, proposals_by_state: zeros("open") },
     };
     render(<Home />);
-    expect(await screen.findByText("Nothing needs attention right now.")).toBeTruthy();
+    expect(await screen.findByText("Awaiting approval")).toBeTruthy();
     expect(screen.getByText("Quota is not measured by Argus.")).toBeTruthy();
+    expect(screen.queryByText("All states")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "System" }));
     expect(screen.getByText("All states")).toBeTruthy();
+    expect(screen.queryByText("Nothing needs attention right now.")).toBeNull();
   });
 
   it("does not claim all-clear or show zeros when totals fail", async () => {

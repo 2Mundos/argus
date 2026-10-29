@@ -13,7 +13,7 @@ export function Engines() {
           Re-check
         </button>
       </div>
-      <p className="muted small">
+      <p className="page-lead">
         Model provider, harness, executor CLI and account auth are separate. Installed does not mean
         authenticated; the host login does not prove a container is ready. Edit model chains in{" "}
         <a href="#setup/settings">Settings</a>.

@@ -24,6 +24,7 @@ export function Pools() {
           New pool (advanced)
         </button>
       </div>
+      <p className="page-lead">Desired and running workers, and the last error from each pool.</p>
       {error && <p className="error">{error.message}</p>}
       {(guided || pools?.length === 0) && (
         <NewWorker onCancel={guided ? () => setGuided(false) : undefined} />

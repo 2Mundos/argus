@@ -131,7 +131,9 @@ describe("Inbox groups", () => {
   it("shows project, task group, count, oldest age, type and impact; passes filters", async () => {
     seed();
     render(<Inbox />);
-    expect(await screen.findByRole("heading", { name: "alpha" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: /Approval/ })).toBeTruthy();
+    expect(screen.getAllByRole("heading", { name: "alpha" })).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: /Question/ })).toBeTruthy();
     expect(screen.getByText(/1 open · oldest 2h · 2 stalled tasks/)).toBeTruthy();
     expect(screen.getByText(/Blocks 2 tasks: Dependent 0, Dependent 1/)).toBeTruthy();
     expect(screen.getByText("Blocks no tasks")).toBeTruthy();
@@ -213,7 +215,7 @@ describe("Inbox batch answers", () => {
     fireEvent.change(screen.getByLabelText(/Batch answer for Ship it\?/), {
       target: { value: "approve" },
     });
-    fireEvent.change(screen.getAllByRole("textbox")[1] as HTMLElement, {
+    fireEvent.change(screen.getByRole("textbox", { name: "Answer" }), {
       target: { value: "eu-west" },
     });
     expect(review.disabled).toBe(false);
@@ -238,8 +240,8 @@ describe("Inbox batch answers", () => {
     expect(await within(panel).findByText("Error: decision is not open")).toBeTruthy();
     expect(within(panel).getByText("ok")).toBeTruthy();
     expect(sent(0)).toEqual([
-      { decision_id: "d1", choice: "approve", text: "", request_id: expect.any(String) },
       { decision_id: "d2", choice: null, text: "eu-west", request_id: expect.any(String) },
+      { decision_id: "d1", choice: "approve", text: "", request_id: expect.any(String) },
     ]);
     expect(sent(0)[0]?.request_id).not.toBe(sent(0)[1]?.request_id);
 
@@ -250,7 +252,7 @@ describe("Inbox batch answers", () => {
         decision_id: "d2",
         choice: null,
         text: "eu-west",
-        request_id: sent(0)[1]?.request_id,
+        request_id: sent(0)[0]?.request_id,
       },
     ]);
   });

@@ -43,6 +43,7 @@ export function Events() {
           <option value="task_kind">Task kinds</option>
         </select>
       </div>
+      <p className="page-lead">The latest changes, newest first.</p>
       <EventList events={shown} />
     </section>
   );

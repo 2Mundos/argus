@@ -44,6 +44,7 @@ export function Cost() {
           ))}
         </div>
       </div>
+      <p className="page-lead">Tokens and estimated cost for the selected window.</p>
       {error && <p className="error">{error.message}</p>}
       {data ? <Report report={data} tz={tz} /> : !error && <p className="muted">Loading…</p>}
     </section>

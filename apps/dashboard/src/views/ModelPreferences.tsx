@@ -83,20 +83,17 @@ export function ModelPreferences() {
       <p className="muted small">
         Requested model IDs in order of preference; a later one is tried after a failure or a
         rejected review. Availability at the provider is not verified, so use IDs your CLI accepts.
-        Changes apply to new instances.
+        Changes apply to new instances. Running instances keep the policy they started with.
       </p>
       {error && <p className="error">{error.message}</p>}
       {!policy && !error && <p className="muted">Loading…</p>}
       {policy && draft && (
         <>
           <p className="small">
-            Source: <strong>{sourceLabel(policy.source)}</strong> · revision{" "}
+            Effective policy: <strong>{sourceLabel(policy.source)}</strong> · revision{" "}
             <code title={policy.revision}>{policy.revision.slice(0, 8)}</code>
             {policy.source === "defaults" && " · repository defaults, no file saved"}
             {policy.source === "file" && <span className="muted"> · {policy.path}</span>}
-          </p>
-          <p className="small muted">
-            Instances get the policy when they start; running instances keep theirs until replaced.
           </p>
           {policy.env_overrides && (
             <p className="error" role="alert">
@@ -112,7 +109,7 @@ export function ModelPreferences() {
             </p>
           )}
           <ModelPreferencesEditor draft={draft} onChange={setDraft} empties={empties} />
-          <div className="toolbar">
+          <div className="toolbar model-actions">
             <button
               type="button"
               disabled={busy || !dirty}
@@ -150,6 +147,11 @@ export function ModelPreferences() {
   );
 }
 
+const GROUPS: { title: string; scopes: Scope[] }[] = [
+  { title: "Standard chains", scopes: ["harness", "implementation", "trivial"] },
+  { title: "Hard tasks", scopes: ["hard_harness", "hard_implementation"] },
+];
+
 /** Shared chain editors used by the global ModelPreferences and the Settings project override. */
 export function ModelPreferencesEditor(props: {
   draft: Draft;
@@ -157,15 +159,27 @@ export function ModelPreferencesEditor(props: {
   empties: string[];
 }) {
   const { draft, onChange, empties } = props;
+  const present = new Set(scopesOf(draft));
+  const groups = GROUPS.map((group) => ({
+    ...group,
+    scopes: group.scopes.filter((scope) => present.has(scope)),
+  })).filter((group) => group.scopes.length > 0);
   return (
-    <>
-      {scopesOf(draft).map((scope) => (
-        <ScopeEditor
-          key={scope}
-          scope={scope}
-          chains={draft[scope] ?? {}}
-          onChange={(engine, chain) => onChange(withChain(draft, scope, engine, chain))}
-        />
+    <div className="model-groups">
+      {groups.map((group) => (
+        <section key={group.title} className="model-group">
+          <h4>{group.title}</h4>
+          <div className="model-scopes">
+            {group.scopes.map((scope) => (
+              <ScopeEditor
+                key={scope}
+                scope={scope}
+                chains={draft[scope] ?? {}}
+                onChange={(engine, chain) => onChange(withChain(draft, scope, engine, chain))}
+              />
+            ))}
+          </div>
+        </section>
       ))}
       {empties.length > 0 && (
         <p className="muted small">
@@ -173,7 +187,7 @@ export function ModelPreferencesEditor(props: {
           save.
         </p>
       )}
-    </>
+    </div>
   );
 }
 
@@ -188,33 +202,35 @@ function ScopeEditor(props: {
   return (
     <fieldset>
       <legend>{TITLES[scope]}</legend>
-      {engines.length === 0 && (
-        <p className="muted small">No chains: every engine keeps its native default.</p>
-      )}
-      {engines.map((engine) => (
-        <Chain
-          key={engine}
-          label={`${scope} ${engine}`}
-          engine={engine}
-          chain={chains[engine] ?? []}
-          onChange={(chain) => onChange(engine, chain)}
-        />
-      ))}
-      {missing.length > 0 && (
-        <p className="small">
-          Add engine:{" "}
-          {missing.map((e) => (
-            <button
-              type="button"
-              key={e}
-              aria-label={`add ${scope} ${e}`}
-              onClick={() => onChange(e, [])}
-            >
-              {engineLabel(e)}
-            </button>
-          ))}
-        </p>
-      )}
+      <div className="model-scope-body">
+        {engines.length === 0 && (
+          <p className="muted small">No chains: every engine keeps its native default.</p>
+        )}
+        {engines.map((engine) => (
+          <Chain
+            key={engine}
+            label={`${scope} ${engine}`}
+            engine={engine}
+            chain={chains[engine] ?? []}
+            onChange={(chain) => onChange(engine, chain)}
+          />
+        ))}
+        {missing.length > 0 && (
+          <p className="model-add-engines small">
+            Add engine:{" "}
+            {missing.map((e) => (
+              <button
+                type="button"
+                key={e}
+                aria-label={`add ${scope} ${e}`}
+                onClick={() => onChange(e, [])}
+              >
+                {engineLabel(e)}
+              </button>
+            ))}
+          </p>
+        )}
+      </div>
     </fieldset>
   );
 }
@@ -233,9 +249,11 @@ function Chain(props: {
     setText("");
   };
   return (
-    <div>
-      <strong>{engineLabel(engine)}</strong>
-      {chain.length === 0 && <span className="muted small"> empty: add a model before saving</span>}
+    <div className="model-chain">
+      <div className="model-chain-head">
+        <strong>{engineLabel(engine)}</strong>
+        {chain.length === 0 && <span className="muted small">Add a model before saving</span>}
+      </div>
       <ol>
         {chain.map((model, i) => (
           <li key={model}>
@@ -269,24 +287,26 @@ function Chain(props: {
           </li>
         ))}
       </ol>
-      <input
-        aria-label={`new model for ${label}`}
-        value={text}
-        placeholder="model id"
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && text.trim() && !problem) add();
-        }}
-      />{" "}
-      <button
-        type="button"
-        aria-label={`add model to ${label}`}
-        disabled={!text.trim() || !!problem}
-        onClick={add}
-      >
-        Add
-      </button>
-      {problem && <span className="error small"> {problem}</span>}
+      <div className="model-chain-add">
+        <input
+          aria-label={`new model for ${label}`}
+          value={text}
+          placeholder="model id"
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && text.trim() && !problem) add();
+          }}
+        />
+        <button
+          type="button"
+          aria-label={`add model to ${label}`}
+          disabled={!text.trim() || !!problem}
+          onClick={add}
+        >
+          Add
+        </button>
+        {problem && <span className="error small">{problem}</span>}
+      </div>
     </div>
   );
 }

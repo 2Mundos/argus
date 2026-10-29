@@ -1,7 +1,8 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import { handleUnauthorized, setToken, token } from "./api";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { api, call, handleUnauthorized, type SystemSummary, setToken, token } from "./api";
 import { Brand } from "./Brand";
-import { LiveProvider, useLive } from "./live";
+import { LiveProvider, useLive, useLiveData } from "./live";
+import { verdict } from "./overview";
 import { Home } from "./views/Home";
 import { LiveStatusBar } from "./views/LiveStatusBar";
 import { Login } from "./views/Login";
@@ -113,10 +114,199 @@ export function App() {
   );
 }
 
+const PAGES: { href: string; label: string }[] = [
+  { href: "#home", label: "Home" },
+  { href: "#tasks", label: "Tasks" },
+  { href: "#inbox", label: "Inbox" },
+  { href: "#workers/agents", label: "Agents" },
+  { href: "#workers/pools", label: "Pools" },
+  { href: "#setup/accounts", label: "Accounts" },
+  { href: "#knowledge", label: "Knowledge" },
+  { href: "#workers/fleet", label: "Fleet" },
+  { href: "#setup/engines", label: "Engines" },
+  { href: "#setup/cost", label: "Cost" },
+  { href: "#setup/events", label: "Events" },
+  { href: "#setup/settings", label: "Settings" },
+];
+
+function PageSearch() {
+  const input = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const hits = PAGES.filter((page) =>
+    page.label.toLowerCase().includes(query.trim().toLowerCase()),
+  );
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        input.current?.focus();
+        setOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  return (
+    <form
+      className="page-search"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const target = hits[0];
+        if (!target) return;
+        window.location.hash = target.href.slice(1);
+        setQuery("");
+        setOpen(false);
+        input.current?.blur();
+      }}
+    >
+      <input
+        ref={input}
+        type="search"
+        placeholder="Search tasks, agents, inbox…"
+        aria-label="Go to a page"
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+      />
+      <kbd>Ctrl K</kbd>
+      {open && query.trim() !== "" && (
+        <ul className="page-hits" onMouseDown={(event) => event.preventDefault()}>
+          {hits.length === 0 ? (
+            <li className="muted small">No page</li>
+          ) : (
+            hits.map((page) => (
+              <li key={page.href}>
+                <a
+                  href={page.href}
+                  onClick={() => {
+                    setQuery("");
+                    setOpen(false);
+                  }}
+                >
+                  {page.label}
+                </a>
+              </li>
+            ))
+          )}
+        </ul>
+      )}
+    </form>
+  );
+}
+
+function isCurrent(href: string, route: Route): boolean {
+  if (href === "#home") return route.tab === "home";
+  if (href === "#tasks") return route.tab === "tasks";
+  if (href === "#inbox") return route.tab === "inbox";
+  if (href === "#knowledge") return route.tab === "knowledge";
+  if (href === "#workers/agents") return route.tab === "workers" && route.sub === "agents";
+  if (href === "#workers/pools") return route.tab === "workers" && route.sub === "pools";
+  if (href === "#workers/fleet") return route.tab === "workers" && route.sub === "fleet";
+  if (href === "#setup/accounts") return route.tab === "setup" && route.sub === "accounts";
+  if (href === "#setup/settings") return route.tab === "setup" && route.sub === "settings";
+  if (href === "#setup/engines") return route.tab === "setup" && route.sub === "engines";
+  if (href === "#setup/cost") return route.tab === "setup" && route.sub === "cost";
+  if (href === "#setup/events") return route.tab === "setup" && route.sub === "events";
+  return false;
+}
+
+function uptime(seconds: number): string {
+  if (seconds < 90) return `${Math.round(seconds)}s`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)}m`;
+  return `${(seconds / 3600).toFixed(1)}h`;
+}
+
+function checkBadge(status: string): string {
+  if (status === "ok") return "state-succeeded";
+  if (status === "degraded") return "state-blocked";
+  return "state-failed";
+}
+
+function ServerBox({ system }: { system: SystemSummary | undefined }) {
+  const [open, setOpen] = useState(false);
+  const tone = verdict(system);
+  const label =
+    tone === "ok"
+      ? "Server ready"
+      : tone === "degraded"
+        ? "Server degraded"
+        : tone === "failing"
+          ? "Server failing"
+          : "Server status unknown";
+  const dot =
+    tone === "ok"
+      ? "worker-state-busy"
+      : tone === "failing"
+        ? "server-dot-fail"
+        : tone === "degraded"
+          ? "worker-state-draining"
+          : "";
+  const checks = system ? Object.entries(system.readiness.checks) : [];
+  return (
+    <section className={`server-box${open ? " is-open" : ""}`} aria-label="Server status">
+      <header>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls="server-checks"
+          onClick={() => setOpen((value) => !value)}
+        >
+          <span className={`worker-dot ${dot}`} />
+          <strong>{label}</strong>
+          <svg className="server-caret" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M9 6l6 6-6 6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      </header>
+      {open && (
+        <div id="server-checks">
+          {system === undefined ? (
+            <p className="muted small">Loading…</p>
+          ) : checks.length === 0 ? (
+            <p className="muted small">No checks.</p>
+          ) : (
+            <ul>
+              {checks.map(([name, check]) => (
+                <li key={name}>
+                  <span>{name}</span>
+                  <span className={`badge ${checkBadge(check.status)}`}>{check.status}</span>
+                  {check.detail ? <span className="muted small">{check.detail}</span> : null}
+                </li>
+              ))}
+            </ul>
+          )}
+          {system !== undefined && (
+            <p className="muted small">
+              v{system.version} · up {uptime(system.uptime_s)}
+            </p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function Shell({ onSignOut }: { onSignOut: () => void }) {
   const [route, setRoute] = useState<Route>(parseRoute);
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
   const { status } = useLive();
+  const { data: overview } = useLiveData(
+    (signal) => call(api.GET("/api/overview", { signal })),
+    [],
+  );
+  const { data: system } = useLiveData((signal) => call(api.GET("/api/system", { signal })), []);
   useEffect(() => {
     const onHash = () => {
       setRoute(parseRoute());
@@ -126,83 +316,161 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const tab = route.tab;
+  const openDecisions = overview?.decisions.by_state.open;
+  const awaiting = overview?.tasks.awaiting_approval;
 
   return (
     <div className={`shell${selectedWorker ? " shell-worker" : ""}`}>
-      <header>
+      <aside className="nav-side">
         <Brand as="strong" />
         <nav aria-label="Primary">
-          {(Object.keys(TABS) as Tab[]).map((key) => (
-            <a
-              key={key}
-              href={
-                key === "workers"
-                  ? "#workers/agents"
-                  : key === "setup"
-                    ? "#setup/settings"
-                    : `#${key}`
-              }
-              aria-current={tab === key ? "page" : undefined}
-            >
-              {TABS[key]}
-            </a>
-          ))}
+          <NavLink href="#home" current={isCurrent("#home", route)} label="Home" />
+          <NavLink
+            href="#tasks"
+            current={isCurrent("#tasks", route)}
+            label="Tasks"
+            count={awaiting}
+          />
+          <NavLink
+            href="#inbox"
+            current={isCurrent("#inbox", route)}
+            label="Inbox"
+            count={openDecisions}
+          />
+          <NavLink
+            href="#workers/agents"
+            current={isCurrent("#workers/agents", route)}
+            label="Agents"
+          />
+          <NavLink
+            href="#workers/pools"
+            current={isCurrent("#workers/pools", route)}
+            label="Pools"
+          />
+          <NavLink
+            href="#setup/accounts"
+            current={isCurrent("#setup/accounts", route)}
+            label="Accounts"
+          />
         </nav>
-        <div className="header-end">
-          <span className={`status status-${status}`} title={`Event stream: ${status}`}>
-            {status}
-          </span>
-          <button type="button" className="link" onClick={onSignOut}>
-            Sign out
-          </button>
-        </div>
-      </header>
-      <main>
-        {!selectedWorker && route.tab === "workers" && (
-          <SubNav label="Workers" base="workers" items={WORKERS_SUB} current={route.sub} />
-        )}
-        {!selectedWorker && route.tab === "setup" && (
-          <SubNav label="Setup" base="setup" items={SETUP_SUB} current={route.sub} />
-        )}
-        <Suspense fallback={<p className="muted">Loading…</p>}>
-          {selectedWorker ? (
-            <AgentDetail
-              key={selectedWorker}
-              agentId={selectedWorker}
-              onClose={() => setSelectedWorker(null)}
-              variant="panel"
-            />
-          ) : (
-            <RouteView route={route} />
-          )}
-        </Suspense>
-      </main>
+        <p className="nav-label">More</p>
+        <nav aria-label="More">
+          <NavLink href="#knowledge" current={isCurrent("#knowledge", route)} label="Knowledge" />
+          <NavLink
+            href="#workers/fleet"
+            current={isCurrent("#workers/fleet", route)}
+            label="Fleet"
+          />
+          <NavLink
+            href="#setup/engines"
+            current={isCurrent("#setup/engines", route)}
+            label="Engines"
+          />
+          <NavLink href="#setup/cost" current={isCurrent("#setup/cost", route)} label="Cost" />
+          <NavLink
+            href="#setup/events"
+            current={isCurrent("#setup/events", route)}
+            label="Events"
+          />
+          <NavLink
+            href="#setup/settings"
+            current={isCurrent("#setup/settings", route)}
+            label="Settings"
+          />
+        </nav>
+        <ServerBox system={system} />
+      </aside>
+      <div className="workspace">
+        <header className="topbar">
+          <PageSearch />
+          <div className="topbar-end">
+            <span className={`status status-${status}`} title={`Event stream: ${status}`}>
+              {status === "live" ? "Live" : status}
+            </span>
+            <a className="bell" href="#inbox" aria-label="Inbox">
+              <Icon d={iconFor("#inbox")} />
+              {openDecisions !== undefined && openDecisions > 0 && (
+                <span className="nav-count">{openDecisions}</span>
+              )}
+            </a>
+            <button type="button" className="link" onClick={onSignOut}>
+              Sign out
+            </button>
+          </div>
+        </header>
+        <main>
+          <Suspense fallback={<p className="muted">Loading…</p>}>
+            {selectedWorker ? (
+              <AgentDetail
+                key={selectedWorker}
+                agentId={selectedWorker}
+                onClose={() => setSelectedWorker(null)}
+                variant="panel"
+              />
+            ) : (
+              <RouteView route={route} />
+            )}
+          </Suspense>
+        </main>
+      </div>
       <WorkersSidebar selectedId={selectedWorker} onSelect={setSelectedWorker} />
       <LiveStatusBar />
     </div>
   );
 }
 
-function SubNav<K extends string>({
+const NAV_ICON: Record<string, string> = {
+  "#home": "M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z",
+  "#tasks": "M9 6h11M9 12h11M9 18h11M5 6h.01M5 12h.01M5 18h.01",
+  "#inbox": "M4 5h16v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM4 5l8 6 8-6",
+  "#workers/agents":
+    "M16 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9.5 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6M20 19v-1a3.5 3.5 0 0 0-2.5-3.3M16.5 5.2a3 3 0 0 1 0 5.6",
+  "#workers/pools": "M12 3 4 7l8 4 8-4zM4 12l8 4 8-4M4 17l8 4 8-4",
+  "#setup/accounts": "M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0M5 19a6 6 0 0 1 14 0",
+  "#knowledge": "M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 0-3 3zM5 4v16",
+  "#workers/fleet": "M4 5h7v7H4zM13 5h7v7h-7zM4 14h7v5H4zM13 14h7v5h-7z",
+  "#setup/engines": "M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3M7 7h10v10H7z",
+  "#setup/cost": "M4 19V5M4 19h16M8 16v-5M12 16V8M16 16v-3",
+  "#setup/events": "M4 6h16M4 12h10M4 18h13",
+  "#setup/settings": "M4 7h16M4 12h16M4 17h16M8 7v.01M14 12v.01M10 17v.01",
+};
+
+function iconFor(href: string): string {
+  return NAV_ICON[href] ?? "M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z";
+}
+
+function Icon({ d }: { d: string }) {
+  return (
+    <svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d={d}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function NavLink({
+  href,
   label,
-  base,
-  items,
   current,
+  count,
 }: {
+  href: string;
   label: string;
-  base: string;
-  items: Record<K, string>;
-  current: K;
+  current: boolean;
+  count?: number;
 }) {
   return (
-    <nav className="subnav" aria-label={label}>
-      {(Object.keys(items) as K[]).map((key) => (
-        <a key={key} href={`#${base}/${key}`} aria-current={current === key ? "page" : undefined}>
-          {items[key]}
-        </a>
-      ))}
-    </nav>
+    <a href={href} aria-current={current ? "page" : undefined}>
+      <Icon d={iconFor(href)} />
+      <span>{label}</span>
+      {count !== undefined && count > 0 && <span className="nav-count">{count}</span>}
+    </a>
   );
 }
 

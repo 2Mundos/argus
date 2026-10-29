@@ -9,138 +9,121 @@ function duration(seconds: number | null | undefined): string {
 }
 
 export function SystemWidgets({ data }: { data: SystemSummary }) {
-  const ready = data.readiness.status === "ready";
   return (
     <section className="system">
-      <div className="toolbar">
-        <h3>System</h3>
-        <span className={`badge ${ready ? "state-succeeded" : "state-failed"}`}>
-          {ready ? "ready" : "not ready"}
-        </span>
-        <span className="muted small">
-          v{data.version} · up {duration(data.uptime_s)}
-        </span>
-      </div>
-
-      <h4>Checks</h4>
-      <table>
-        <tbody>
-          {Object.entries(data.readiness.checks).map(([name, check]) => (
-            <tr key={name}>
-              <td>{name}</td>
-              <td>
-                <span
-                  className={`badge ${
-                    check.status === "ok"
-                      ? "state-succeeded"
-                      : check.status === "degraded"
-                        ? "state-blocked"
-                        : "state-failed"
-                  }`}
-                >
-                  {check.status}
-                </span>
-              </td>
-              <td className="muted small">{check.detail ?? ""}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <h4>Background loops</h4>
-      <table>
-        <thead>
-          <tr>
-            <th>Loop</th>
-            <th>Status</th>
-            <th>Last pass</th>
-            <th>Took</th>
-            <th>Passes</th>
-            <th>Errors</th>
-          </tr>
-        </thead>
-        <tbody>
-          {Object.entries(data.loops).map(([name, l]) => (
-            <tr key={name}>
-              <td>{name}</td>
-              <td>
-                <span className={`badge ${l.status === "ok" ? "state-succeeded" : "state-failed"}`}>
-                  {l.status}
-                </span>
-              </td>
-              <td>
-                {l.last_success_age_s == null ? "—" : `${duration(l.last_success_age_s)} ago`}
-              </td>
-              <td>
-                {l.last_duration_s == null ? "—" : `${(l.last_duration_s * 1000).toFixed(0)} ms`}
-              </td>
-              <td>{l.passes_total}</td>
-              <td>{l.errors_total}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <h4>Work</h4>
-      <div className="stats">
-        {Object.entries(data.tasks).map(([state, n]) => (
-          <div className="stat" key={state}>
-            <span className="n">{n}</span>
-            <span className="muted small">{state.replace("_", " ")}</span>
-          </div>
-        ))}
-      </div>
-      <p className="small">
-        Oldest ready task waiting: <strong>{duration(data.oldest_ready_age_s)}</strong> · open
-        decisions: <strong>{data.decisions_open}</strong> · events written:{" "}
-        <strong>{data.events_total}</strong>
-      </p>
-
-      <h4>Agents</h4>
-      <div className="stats">
-        {Object.entries(data.agents).map(([state, n]) => (
-          <div className="stat" key={state}>
-            <span className="n">{n}</span>
-            <span className="muted small">{state}</span>
-          </div>
-        ))}
-      </div>
-
-      <h4>Pools</h4>
-      {data.pools.length === 0 ? (
-        <p className="muted small">No pools.</p>
-      ) : (
+      <div className="card">
+        <h3>Background loops</h3>
         <table>
           <thead>
             <tr>
-              <th>Pool</th>
+              <th>Loop</th>
               <th>Status</th>
-              <th>Live / desired</th>
-              <th>Cap</th>
+              <th>Last pass</th>
+              <th>Took</th>
+              <th>Passes</th>
+              <th>Errors</th>
             </tr>
           </thead>
           <tbody>
-            {data.pools.map((p) => (
-              <tr key={p.name}>
-                <td>{p.name}</td>
+            {Object.entries(data.loops).map(([name, loop]) => (
+              <tr key={name}>
+                <td>{name}</td>
                 <td>
-                  <span className={`badge pool-${p.status}`}>{p.status}</span>
+                  <span
+                    className={`badge ${loop.status === "ok" ? "state-succeeded" : "state-failed"}`}
+                  >
+                    {loop.status}
+                  </span>
                 </td>
                 <td>
-                  {p.live} / {p.desired}
+                  {loop.last_success_age_s == null
+                    ? "—"
+                    : `${duration(loop.last_success_age_s)} ago`}
                 </td>
-                <td>{p.max}</td>
+                <td>
+                  {loop.last_duration_s == null
+                    ? "—"
+                    : `${(loop.last_duration_s * 1000).toFixed(0)} ms`}
+                </td>
+                <td>{loop.passes_total}</td>
+                <td>{loop.errors_total}</td>
               </tr>
             ))}
           </tbody>
         </table>
-      )}
+        <p className="muted small">
+          Heartbeats and running state show that processes are alive, not that a model answers.
+        </p>
+      </div>
 
-      <h4>Storage</h4>
-      <p className="small">
-        Database {bytes(data.database.main_bytes)} (WAL {bytes(data.database.wal_bytes)}) · disk
-        free {bytes(data.disk_free_bytes)}
-      </p>
+      <div className="system-facts">
+        <div className="card">
+          <h3>Right now</h3>
+          <dl className="counts">
+            <div>
+              <dt>Oldest ready task</dt>
+              <dd>{duration(data.oldest_ready_age_s)}</dd>
+            </div>
+            <div>
+              <dt>Open decisions</dt>
+              <dd>{data.decisions_open}</dd>
+            </div>
+            <div>
+              <dt>Events written</dt>
+              <dd>{data.events_total}</dd>
+            </div>
+          </dl>
+        </div>
+        <div className="card">
+          <h3>Storage</h3>
+          <dl className="counts">
+            <div>
+              <dt>Database</dt>
+              <dd>{bytes(data.database.main_bytes)}</dd>
+            </div>
+            <div>
+              <dt>WAL</dt>
+              <dd>{bytes(data.database.wal_bytes)}</dd>
+            </div>
+            <div>
+              <dt>Disk free</dt>
+              <dd>{bytes(data.disk_free_bytes)}</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+
+      <div className="card system-span">
+        <h3>Pools</h3>
+        {data.pools.length === 0 ? (
+          <p className="muted small">No pools.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Pool</th>
+                <th>Status</th>
+                <th>Live / desired</th>
+                <th>Cap</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.pools.map((pool) => (
+                <tr key={pool.name}>
+                  <td>{pool.name}</td>
+                  <td>
+                    <span className={`badge pool-${pool.status}`}>{pool.status}</span>
+                  </td>
+                  <td>
+                    {pool.live} / {pool.desired}
+                  </td>
+                  <td>{pool.max}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </section>
   );
 }

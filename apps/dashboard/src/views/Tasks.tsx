@@ -53,7 +53,7 @@ export function Tasks() {
   }
 
   return (
-    <section>
+    <section className={selected ? "tasks-open" : "tasks-page"}>
       <div className="toolbar">
         <h2>Tasks</h2>
         <label className="check">
@@ -73,6 +73,7 @@ export function Tasks() {
           New task
         </button>
       </div>
+      <p className="page-lead">Work waiting, running and finished.</p>
       {archived && <p className="muted small">Showing archived tasks only.</p>}
       {error && <p className="error">{error.message}</p>}
       {data && data.total > data.items.length && (
@@ -88,9 +89,12 @@ export function Tasks() {
               <h3>
                 {column.title} <span className="count">{items.length}</span>
               </h3>
-              {items.map((task) => (
-                <TaskCard key={task.id} task={task} onOpen={() => setSelected(task.id)} />
-              ))}
+              <div className="column-body">
+                {items.length === 0 && <p className="muted small">None</p>}
+                {items.map((task) => (
+                  <TaskCard key={task.id} task={task} onOpen={() => setSelected(task.id)} />
+                ))}
+              </div>
             </div>
           );
         })}

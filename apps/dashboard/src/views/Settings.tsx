@@ -26,40 +26,48 @@ export function Settings() {
   const models = byKey.get("models");
 
   return (
-    <section>
+    <section className="settings-page">
       <div className="toolbar">
         <h2>Settings</h2>
+        <label>
+          Scope{" "}
+          <select
+            aria-label="settings scope"
+            value={scope}
+            onChange={(e) => setScope(e.target.value)}
+          >
+            <option value="global">Global</option>
+            {(projects ?? [])
+              .filter((p) => p.slug !== "global")
+              .map((p) => (
+                <option key={p.slug} value={p.slug}>
+                  {p.name} ({p.slug})
+                </option>
+              ))}
+          </select>
+        </label>
         <button type="button" onClick={() => reload()}>
           Reload
         </button>
       </div>
-      <p className="muted small">
+      <p className="page-lead">
         Operator choices with per-project overrides. An override replaces the global value for that
         project; Reset restores inheritance.
       </p>
-      <label className="small">
-        Scope{" "}
-        <select
-          aria-label="settings scope"
-          value={scope}
-          onChange={(e) => setScope(e.target.value)}
-        >
-          <option value="global">Global</option>
-          {(projects ?? [])
-            .filter((p) => p.slug !== "global")
-            .map((p) => (
-              <option key={p.slug} value={p.slug}>
-                {p.name} ({p.slug})
-              </option>
-            ))}
-        </select>
-      </label>
       {error && <p className="error">{error.message}</p>}
       {!data && !error && <p className="muted">Loading…</p>}
       {data && (
         <>
-          <ModelsSection project={project} setting={models} onChanged={() => reload()} />
-          <IndependentReviewSection project={project} setting={review} onChanged={() => reload()} />
+          <div className="card">
+            <ModelsSection project={project} setting={models} onChanged={() => reload()} />
+          </div>
+          <div className="card">
+            <IndependentReviewSection
+              project={project}
+              setting={review}
+              onChanged={() => reload()}
+            />
+          </div>
         </>
       )}
     </section>
@@ -74,23 +82,14 @@ function ModelsSection(props: {
   const { project, setting, onChanged } = props;
   if (project === null) {
     return (
-      <section>
-        <p className="small">
-          Source: <strong>{setting ? sourceLabel(setting.source) : "…"}</strong>
-          {setting?.revision && (
-            <>
-              {" "}
-              · revision <code title={setting.revision}>{setting.revision.slice(0, 8)}</code>
-            </>
-          )}
-        </p>
+      <>
         {setting?.notice && (
           <p className="error" role="alert">
             {setting.notice}
           </p>
         )}
         <ModelPreferences />
-      </section>
+      </>
     );
   }
   return <ProjectModelsEditor project={project} setting={setting} onChanged={onChanged} />;
@@ -176,7 +175,7 @@ function ProjectModelsEditor(props: {
         )}
       </p>
       <ModelPreferencesEditor draft={draft} onChange={setDraft} empties={emptyChains(draft)} />
-      <div className="toolbar">
+      <div className="toolbar model-actions">
         <button type="button" disabled={busy} onClick={() => void save()}>
           Save override
         </button>
@@ -252,35 +251,37 @@ function IndependentReviewSection(props: {
         <h3>Independent code review</h3>
       </div>
       <p className="muted small">
-        Require review by a different model before a code task succeeds. Source:{" "}
+        Require review by a different model before a code task succeeds. Stored setting:{" "}
         <strong>{setting ? sourceLabel(setting.source) : "…"}</strong>
       </p>
-      <label className="small">
-        Mode{" "}
-        <select
-          aria-label="independent review mode"
-          value={mode}
-          onChange={(e) => setMode(e.target.value as ReviewMode)}
-        >
-          <option value="off">Off</option>
-          <option value="different_model">Require review by a different model</option>
-          <option value="different_provider">
-            Require review by a different model from a different provider
-          </option>
-        </select>
-      </label>{" "}
-      <label className="small">
-        Max rounds{" "}
-        <input
-          aria-label="independent review max rounds"
-          type="number"
-          min={1}
-          max={20}
-          value={rounds}
-          onChange={(e) => setRounds(Number(e.target.value) || 1)}
-        />
-      </label>
-      <div className="toolbar">
+      <div className="review-fields">
+        <label>
+          Mode
+          <select
+            aria-label="independent review mode"
+            value={mode}
+            onChange={(e) => setMode(e.target.value as ReviewMode)}
+          >
+            <option value="off">Off</option>
+            <option value="different_model">Require review by a different model</option>
+            <option value="different_provider">
+              Require review by a different model from a different provider
+            </option>
+          </select>
+        </label>
+        <label>
+          Max rounds
+          <input
+            aria-label="independent review max rounds"
+            type="number"
+            min={1}
+            max={20}
+            value={rounds}
+            onChange={(e) => setRounds(Number(e.target.value) || 1)}
+          />
+        </label>
+      </div>
+      <div className="toolbar model-actions">
         <button type="button" disabled={busy} onClick={() => void save()}>
           Save
         </button>
