@@ -210,6 +210,8 @@ every new dependency is judged against it.
   task detail view: owner, location kind, changes/checkpoint availability (draft §4)
 - [Focused task detail view](research/2026-10-29.task-detail-view.research.md) —
   journey map, gaps, stream filtering, recommendations
+- [Agent resource hygiene investigation](research/2026-10-29.agent-resource-hygiene.research.md) —
+  session container inheritance of pool limits, oom_score_adj and CPU shims, OOM detection, spec-update plan
 
 - [Preferred models](specs/model-selection.spec.md)
 - [Task difficulty, executor routing and escalation](specs/task-difficulty.spec.md) — trivial tasks prefer
