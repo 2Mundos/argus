@@ -162,6 +162,26 @@ every new dependency is judged against it.
   proposals: claim reserves the account, owned workspace, one task per session,
   resumable attempts, progress-based liveness, failure classes, single-layer run;
   P1, P3, P6 and P8 shipped, P2/P5 partly (P5 recovery latency now readable on Fleet)
+- [Command guard](drafts/2026-10-29.command-guard.draft.md) — a `PreToolUse`
+  hook that blocks catastrophic shell commands (root/home deletion, disk wipes,
+  repository deletion, fork bombs); accident prevention, not a sandbox
+- [Disk guard](drafts/2026-10-29.disk-guard.draft.md) — warn, refuse claims,
+  pause session containers, then stop the heaviest writer, in hysteresis bands
+  before SQLite's 64 MiB limit
+- [Agent resource hygiene](drafts/2026-10-29.agent-resource-hygiene.draft.md) —
+  agent commands die before the harness on OOM, CPU counts match the quota,
+  OOM kills classified as `env_oom`
+- [Quota resume](drafts/2026-10-29.quota-resume.draft.md) — after a quota pause,
+  resume the same native conversation under the new account; a slice of
+  worker-efficiency P4
+- [Account auth health](drafts/2026-10-29.auth-health.draft.md) — credential
+  state and last accepted/rejected request per account, kept separate
+- [Harness stderr tail](drafts/2026-10-29.harness-stderr-tail.draft.md) — a
+  bounded, redacted stderr artifact on every attempt exit, with truncation flags
+- [Bounded recovery](drafts/2026-10-29.bounded-recovery.draft.md) — throttled
+  session starts, one recovery per unexpected exit, uncertain work never resent
+- [Verification boundary](drafts/2026-10-29.verification-boundary.draft.md) — a
+  spec subsection stating what was verified, at which level and versions
 
 ### Runbooks
 
