@@ -229,11 +229,17 @@ async function taskDir(root: string, taskId: string, create: boolean): Promise<s
   if (!UUID.test(taskId)) throw new Failure("env_checkpoint_invalid", "malformed task id");
   const real = await checkStore(root);
   const dir = path.join(real, taskId);
-  const st = await lstat(dir).catch(() => null);
+  let st = await lstat(dir).catch(() => null);
   if (!st) {
     if (!create) return null;
-    await mkdir(dir, { mode: 0o700 });
-    return dir;
+    try {
+      await mkdir(dir, { mode: 0o700 });
+      return dir;
+    } catch (err) {
+      // A concurrent holder created it first: validate theirs like any existing directory.
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      st = await lstat(dir);
+    }
   }
   if (st.isSymbolicLink() || !st.isDirectory() || (st.mode & 0o077) !== 0)
     throw new Failure("env_checkpoint_invalid", "the task checkpoint directory is not private");

@@ -63,6 +63,7 @@ import {
 } from "./argus-accounts.js";
 import { CHANGES_RELAY_FILE, createChangesRelay } from "./argus-changes-relay.js";
 import {
+  type CheckpointFailure,
   checkpointTaskWorkspace,
   maxCheckpointBytesFromEnv,
   restoreTaskWorkspace,
@@ -2487,7 +2488,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
    * The task's stable workspace (task workspace spec), prepared or checked after the
    * repository preflight succeeded. Null for a task without `repository:write`.
    */
-  async function workspacePreflight(task: ArgusTask): Promise<WorkspaceResult | null> {
+  async function workspacePreflight(
+    task: ArgusTask,
+  ): Promise<WorkspaceResult | CheckpointFailure | null> {
     if (!task.required_capabilities?.includes("repository:write")) return null;
     let groupDir: string | null;
     try {
