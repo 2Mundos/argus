@@ -186,6 +186,8 @@ every new dependency is judged against it.
 - [NanoClaw integration spike](research/2026-10-14.nanoclaw-integration.research.md) —
   channels, credentials, drivers
 
+- [Task workspace ownership visibility](research/2026-10-29.workspace-ownership.research.md) —
+  task detail view: owner, location kind, changes/checkpoint availability (draft §4)
 - [Focused task detail view](research/2026-10-29.task-detail-view.research.md) —
   journey map, gaps, stream filtering, recommendations
 
