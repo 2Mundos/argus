@@ -67,11 +67,26 @@ ATTEMPTS_SQL = (
     "SELECT kind, count(*) FROM events WHERE kind IN ('task.claim', 'task.complete')"
     " AND at >= ? AND at <= ? GROUP BY kind"
 )
-# Tokens and cost reported for a set of tasks (JSON array of ids), per task.
+# Measured tokens/cost and attempt coverage for a set of tasks (JSON array of ids).
+# Unknown is never zero: token/cost sums cover measured rows only; attempt counts
+# come from distinct (task, attempt) pairs with any usage row (account usage 3.10).
 USAGE_SQL = (
-    "SELECT task_id, coalesce(sum(input_tokens), 0) + coalesce(sum(output_tokens), 0)"
-    " AS tokens, coalesce(sum(cost_usd), 0.0) AS cost FROM account_usage"
-    " WHERE task_id IN (SELECT value FROM json_each(?)) GROUP BY task_id"
+    "SELECT u.task_id,"
+    " sum(CASE WHEN u.measurement = 'measured'"
+    "     THEN coalesce(u.input_tokens, 0) + coalesce(u.output_tokens, 0) END)"
+    " AS tokens,"
+    " sum(CASE WHEN u.measurement = 'measured' THEN u.cost_usd END) AS cost,"
+    " (SELECT count(*) FROM ("
+    "   SELECT attempt FROM account_usage a"
+    "   WHERE a.task_id = u.task_id AND a.attempt IS NOT NULL GROUP BY a.attempt"
+    " )) AS attempts,"
+    " (SELECT count(*) FROM ("
+    "   SELECT attempt FROM account_usage a"
+    "   WHERE a.task_id = u.task_id AND a.attempt IS NOT NULL"
+    "   GROUP BY a.attempt HAVING max(a.measurement = 'measured')"
+    " )) AS measured_attempts"
+    " FROM account_usage u"
+    " WHERE u.task_id IN (SELECT value FROM json_each(?)) GROUP BY u.task_id"
 )
 HEARTBEAT_SQL = (
     "SELECT i.pool, max(a.last_heartbeat_at) FROM agents a"
@@ -142,11 +157,14 @@ class Yield(Provenance):
     attempt_success_rate: float | None
     finished_tasks: int
     attempts_per_finished_task: float | None
-    # Tokens (input + output) and cost reported by the tasks that finished in the
-    # window, split by outcome. `usage_tasks` of `finished_tasks` had any row; the
-    # means are `None` under MIN_SAMPLES covered tasks and never count a task
-    # without usage as zero.
+    # Coverage over the finished cohort's attempts with a usage row (account usage
+    # 3.10). `usage_tasks` had any row; `measured_tasks` have every attempt
+    # measured. Token/cost means use measured tasks only and never count unknown
+    # as zero (`None` under MIN_SAMPLES).
     usage_tasks: int
+    measured_tasks: int = 0
+    measured_attempts: int = 0
+    not_reported_attempts: int = 0
     tokens_per_succeeded: float | None
     tokens_per_failed: float | None
     cost_per_succeeded: float | None
@@ -254,7 +272,7 @@ async def fleet_health(
             failures = await rows(FAILURES_SQL, since, until, MAX_ROWS)
             attempt_counts = dict(await rows(ATTEMPTS_SQL, since, until))
             usage = {
-                r[0]: (r[1], r[2])
+                r[0]: (r[1], r[2], r[3], r[4])
                 for r in await rows(USAGE_SQL, json.dumps([r["id"] for r in finished]))
             }
         finally:
@@ -316,23 +334,38 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if len(values) >= MIN_SAMPLES else None
 
 
+def _fully_measured(row: tuple[int | None, float | None, int, int]) -> bool:
+    """True when the task has measured figures and no not_reported attempt."""
+    tokens, cost, attempts, measured = row
+    if attempts > measured:
+        return False
+    return tokens is not None or cost is not None or measured > 0
+
+
 def _yield(
     window: int,
     counts: dict[str, int],
     finished: list[Any],
-    usage: dict[str, tuple[int, float]],
+    usage: dict[str, tuple[int | None, float | None, int, int]],
 ) -> Yield:
     attempts, completions = counts.get("task.claim", 0), counts.get("task.complete", 0)
+    # Means only over fully measured tasks (never count an unreported attempt as 0).
     ok = [
         usage[r["id"]]
         for r in finished
-        if r["state"] == "succeeded" and r["id"] in usage
+        if r["state"] == "succeeded"
+        and r["id"] in usage
+        and _fully_measured(usage[r["id"]])
     ]
     bad = [
         usage[r["id"]]
         for r in finished
-        if r["state"] != "succeeded" and r["id"] in usage
+        if r["state"] != "succeeded"
+        and r["id"] in usage
+        and _fully_measured(usage[r["id"]])
     ]
+    measured_attempts = sum(u[3] for u in usage.values())
+    attempt_rows = sum(u[2] for u in usage.values())
     return Yield(
         window_hours=window,
         source="events task.claim, task.complete; tasks; account_usage",
@@ -343,10 +376,13 @@ def _yield(
         attempts_per_finished_task=(
             attempts / len(finished) if len(finished) >= MIN_SAMPLES else None
         ),
-        usage_tasks=len(ok) + len(bad),
-        tokens_per_succeeded=_mean([float(t) for t, _ in ok]),
-        tokens_per_failed=_mean([float(t) for t, _ in bad]),
-        cost_per_succeeded=_mean([c for _, c in ok]),
+        usage_tasks=sum(1 for r in finished if r["id"] in usage),
+        measured_tasks=len(ok) + len(bad),
+        measured_attempts=measured_attempts,
+        not_reported_attempts=max(0, attempt_rows - measured_attempts),
+        tokens_per_succeeded=_mean([float(t) for t, _, _, _ in ok if t is not None]),
+        tokens_per_failed=_mean([float(t) for t, _, _, _ in bad if t is not None]),
+        cost_per_succeeded=_mean([c for _, c, _, _ in ok if c is not None]),
     )
 
 

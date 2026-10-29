@@ -895,6 +895,15 @@ async def write_knowledge(
 
 
 @tool(MANAGERS)
+async def get_fleet_yield(ctx: Context, window_hours: int = 24) -> dict:
+    """Fleet yield over `window_hours` (1-720): attempt success rate, measured vs
+    not-reported attempt coverage, and tokens/cost per succeeded task. Unknown
+    usage is never zero. The `yield` block of GET /api/fleet/health."""
+    health = await _call(ctx, "GET", "/fleet/health", params={"window": window_hours})
+    return health.get("yield", health)
+
+
+@tool(MANAGERS)
 async def list_accounts(ctx: Context) -> dict:
     """Provider accounts with what each reports about its quota. Per account:
     `quota` (provider windows: used_percent is the share USED, with reset and

@@ -39,10 +39,10 @@ This spec adds two things:
   `estimated_cost_usd`, `reported_cost_usd`, `unpriced_runs`, with the same price
   table and the same rules. A `not_reported` or unpriced run is never 0; a task with
   such runs is marked **partial**.
-- **Per attempt.** `account_usage` gains a nullable `attempt`. The relay already knows
-  it (it validates `task_id` and `attempt`, account usage 3.9) and passes it in the
-  body; a direct delegate POST takes it from the pinned task context. Rows from
-  before this change have `attempt = null` and count only in the total.
+- **Per attempt.** `account_usage.attempt` ships with [account usage](account-usage.spec.md)
+  3.10 (migration `0053_attempt_usage.sql`): the relay passes it in the body and the
+  API resolves it against the agent's claims. Rows it could not attribute have
+  `attempt = null` and count only in the total.
 - One `GROUP BY attempt, model` over the existing index `account_usage_task`, priced
   in Python as the Cost tab is (cost view 5). No stored total: the rows are the truth.
 
@@ -79,9 +79,8 @@ This spec adds two things:
 - [Settings](settings.spec.md): `task_default_budget_usd` (global, per-project
   override; default unset) fills `budget_usd` for a new task that omits it. An
   explicit `null` in the request keeps "no budget".
-- Migration `0053_task_budget.sql`: `tasks.budget_usd` (nullable real),
-  `tasks.budget_steered_attempt` (nullable integer, 3.5), `account_usage.attempt`
-  (nullable integer).
+- Migration `NNNN_task_budget.sql` (the next free number): `tasks.budget_usd`
+  (nullable real), `tasks.budget_steered_attempt` (nullable integer, 3.5).
 
 ## 3.5 Crossing the budget during an attempt
 
@@ -148,14 +147,14 @@ This spec adds two things:
 
 # 6. Implementation Consequences
 
-- API: this spec and its index link; migration `0053`; `attempt` through the usage
-  ingest (`accounts/usage.py`, `record_usage`); `tasks/cost.py` reusing
+- API: this spec and its index link; the budget migration; `tasks/cost.py` reusing
   `accounts/pricing.py` and the cost view's group math; the route, `task.cost`
   event, budget checks in the requeue, release, expiry and claim paths; the steer
   with actor `system:budget`; `budget_usd` in `TaskCreate`, task edit, routines and
   settings; MCP `get_task_cost`; regenerated `openapi.json` and `schema.d.ts`;
   tests for partial figures, the once-per-attempt steer, the block and its unblock.
-- Worker: the relay and the delegate pass `attempt` in the usage body.
+- Worker: the delegate passes `attempt` in a direct usage POST (the relay already
+  does, account usage 3.10).
 - Dashboard: the Cost tile, the per-attempt table, the budget field, the inbox
   actions.
 - [Cost view](cost-view.spec.md) 2 ("No … budget enforcement") is narrowed to the

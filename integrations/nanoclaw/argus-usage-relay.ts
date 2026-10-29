@@ -41,6 +41,7 @@ export interface HeldAccountIds {
 
 export interface UsageBody {
   task_id: string;
+  attempt: number;
   model: string | null;
   engine: string | null;
   role: Role;
@@ -98,6 +99,7 @@ export function checkUsageRecord(raw: unknown, task: UsageTask, held: HeldAccoun
   const figures = [input, output, cached, cost] as (number | null)[];
   const body: UsageBody = {
     task_id: task.id,
+    attempt: task.attempt,
     model: label(p.model, 100),
     engine: label(p.engine, 50),
     role,

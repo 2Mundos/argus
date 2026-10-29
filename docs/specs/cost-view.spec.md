@@ -34,6 +34,10 @@ task that produced the run) and a cross-account **window** with a daily series.
 - Every group states `runs`, `measured_runs` and `not_reported_runs`;
   `runs = measured_runs + not_reported_runs`. An account with `runs = 0` had no
   activity in the window, which is different from a measured zero.
+- Every group also states attempt coverage ([account usage](account-usage.spec.md)
+  3.10): `attempts`, `measured_attempts` and `not_reported_attempts`, over the
+  distinct task attempts among its rows (an attempt is measured when any of its
+  rows in the group is). Rows with no attempt count only in `runs`.
 - **Reported vs estimated cost never mix.** `reported_cost_usd` is the sum of
   the `cost_usd` the engine reported (null when none did). `estimated_cost_usd`
   is computed from tokens and the price table (3.2). They are separate
@@ -72,9 +76,12 @@ manager scope. The window is `(now − window, now]`. Response:
 - `pricing`: `{currency, as_of, version, source, estimate: true,
   unpriced_models}`; `source` is the file path in force or
   `argus_api/accounts/pricing.json` for the shipped one;
-- `totals`, and `by_account`, `by_project`, `daily`: all carry the figures of
-  3.1 (`runs`, `measured_runs`, `not_reported_runs`, the three token fields,
-  `estimated_cost_usd`, `reported_cost_usd`, `unpriced_runs`);
+- `totals`, `unattributed`, and `by_account`, `by_project`, `daily`: all carry
+  the figures of 3.1 (`runs`, `measured_runs`, `not_reported_runs`, the attempt
+  counts, the three token fields, `estimated_cost_usd`, `reported_cost_usd`,
+  `unpriced_runs`);
+- `unattributed` is the attempt placeholders with no account (account usage
+  3.10); `totals` is `by_account` plus `unattributed`, so the tables add up;
 - `by_account` has one entry for **every** model account (not `gitea`), with
   `account_id`, `name`, `provider` and the same `quota_status` as
   `GET /api/accounts` (the same function; account usage 3.5);
@@ -92,7 +99,8 @@ manager scope. The window is `(now − window, now]`. Response:
 
 - **Cost** tab: a 24h / 7d / 30d filter; tiles for input, output and cached
   tokens and the estimated cost with its currency, labelled "estimate";
-  a "not reported" count when any run lacked figures; per-account and
+  a "not reported" count when any run lacked figures, and the attempts
+  measured of attempts; per-account and
   per-project tables with a bar and the top five; a daily bar chart; each
   account's quota status through the Accounts screen's component.
 - A group with `null` tokens renders "—", never 0. An unpriced group renders

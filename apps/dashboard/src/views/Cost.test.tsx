@@ -8,6 +8,9 @@ const none: CostFigures = {
   runs: 0,
   measured_runs: 0,
   not_reported_runs: 0,
+  attempts: 0,
+  measured_attempts: 0,
+  not_reported_attempts: 0,
   input_tokens: null,
   output_tokens: null,
   cached_input_tokens: null,
@@ -44,7 +47,8 @@ const REPORT: CostReport = {
     estimate: true,
     unpriced_models: ["mystery-1"],
   },
-  totals: { ...used, runs: 6, not_reported_runs: 4 },
+  totals: { ...used, runs: 6, not_reported_runs: 4, attempts: 3, measured_attempts: 2 },
+  unattributed: { ...none },
   by_account: [
     {
       ...used,

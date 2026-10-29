@@ -182,6 +182,9 @@ function Body({ h }: { h: FleetHealth }) {
             cost per succeeded{" "}
             {y.cost_per_succeeded === null ? NO_DATA : `$${y.cost_per_succeeded.toFixed(2)}`} ·
             usage reported for {y.usage_tasks} of {y.finished_tasks} finished tasks
+            {" · "}
+            {y.measured_attempts ?? 0} of{" "}
+            {(y.measured_attempts ?? 0) + (y.not_reported_attempts ?? 0)} attempts measured
           </p>
           <Caption window={y.window_hours} source={y.source} />
         </Card>

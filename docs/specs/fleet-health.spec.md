@@ -49,10 +49,15 @@ failures grouped by reason with up to 5 recent examples each.
   `attempt_success_rate` is their ratio. Each failure group carries `lost_seconds`:
   the time its failed or expired attempts held a claim (last `task.claim` before
   the event), `null` when none has one. Tokens (input plus output) and cost come
-  from `account_usage` rows of the tasks in the finished cohort, split by outcome;
-  `usage_tasks` of `finished_tasks` is the coverage, a task without a row is never
-  counted as zero, and a mean needs `MIN_SAMPLES` covered tasks (else `null`).
-  Migration `0046` indexes `account_usage.task_id`.
+  from the measured `account_usage` rows of the tasks in the finished cohort,
+  split by outcome. Coverage counts attempts ([account usage](account-usage.spec.md)
+  3.10): `measured_attempts` and `not_reported_attempts` over the cohort's
+  attempts with a usage row; `usage_tasks` is tasks with any row and
+  `measured_tasks` tasks whose every attempt is measured. Only measured tasks
+  enter the token and cost means, so an unreported attempt is never counted as
+  zero; a mean needs `MIN_SAMPLES` measured tasks (else `null`). Migration
+  `0046` indexes `account_usage.task_id`. The MCP tool `get_fleet_yield(window_hours)`
+  (managers) returns this `yield` block.
 - **Bounded reads.** No full scan of `tasks` or `events`: migration
   `0020_fleet_health_indexes.sql` adds `tasks_finished` and `events_kind_at`; per-task
   claim lookups use `events_subject`. Each fetch keeps at most 5000 newest rows and
