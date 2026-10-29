@@ -174,6 +174,9 @@ every new dependency is judged against it.
 - [Quota resume](drafts/2026-10-29.quota-resume.draft.md) — after a quota pause,
   resume the same native conversation under the new account; a slice of
   worker-efficiency P4
+- [Quota resume research](research/2026-10-29.quota-resume.research.md) — credential
+  swap is a container recreate today; session validity and Codex resume left open;
+  spec-update plan folding into P4
 - [Account auth health](drafts/2026-10-29.auth-health.draft.md) — credential
   state and last accepted/rejected request per account, kept separate
 - [Harness stderr tail](drafts/2026-10-29.harness-stderr-tail.draft.md) — a
