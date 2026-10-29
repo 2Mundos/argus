@@ -225,6 +225,8 @@ every new dependency is judged against it.
   Codex `auth_expired` path, and the spec-update plan
 - [Agent shell command guard](research/2026-10-29.command-guard.research.md) —
   Claude/Codex hook registration, Codex pin, failure class, event, setting, rule list
+- [Bounded startup and recovery](research/2026-10-29.bounded-recovery.research.md) —
+  start throttle location, one-resume rule, unknown outcome audit (draft bounded-recovery)
 
 - [Preferred models](specs/model-selection.spec.md)
 - [Task difficulty, executor routing and escalation](specs/task-difficulty.spec.md) — trivial tasks prefer
