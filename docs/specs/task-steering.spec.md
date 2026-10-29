@@ -184,6 +184,15 @@ edit](task-edit.spec.md).
   (under the bar when non-empty) shows state: `pending` (with Cancel),
   `delivered` (with the time), `cancelled`, `expired`. Steers also appear in the
   task's event timeline. With no claimed task, no Steer button.
+- **Task actions row** (task view): a **Steer** toggle next to Edit and Cancel when
+  `task.state` is `claimed` and the attempt shown is the current one (attempt > 0),
+  so an operator can steer without opening the Live panel. It opens the same
+  composer ("Steer this attempt…", Enter sends, Shift+Enter breaks a line, Escape
+  closes). It is not shown for attempt 0, for any other state, for a past attempt,
+  or when the assignee is known to lack `steer`. The steers list stays under the
+  Live bar. Both surfaces read the same list for the attempt, and the dashboard
+  reloads it on every task event, so a steer sent or cancelled on either surface
+  shows on both.
 - The composer is disabled with the reason when the assignee lacks `steer` (3.5),
   and shows the server's refusal otherwise (`too_many_pending`, `rate_limited`).
 - The message is rendered as text, never as HTML.
