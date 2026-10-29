@@ -9,7 +9,10 @@ import { AccountPin } from "./AccountPin";
 import { useNow } from "./Activity";
 import { ArchiveTasks } from "./ArchiveTasks";
 import { ModelPin } from "./ModelPin";
+import { ConfiguredIcon, ProviderMark, providerForTool } from "./providerIcons";
 import { TaskDetail } from "./TaskDetail";
+
+type UsedModel = NonNullable<NonNullable<TaskSummary["models"]>["used"]>[number];
 
 const COLUMNS: { title: string; states: TaskState[] }[] = [
   { title: "Waiting", states: ["awaiting_approval", "pending", "blocked"] },
@@ -92,6 +95,21 @@ export function Tasks() {
   );
 }
 
+/** Compact chip: engine mark + model id; gear means configured, not yet observed. */
+function ModelChip({ item }: { item: UsedModel }) {
+  const tool = item.tool ?? item.layer;
+  const model = item.model ?? "?";
+  const configured = !item.observed && !!item.model;
+  const title = `${tool} · ${model}${configured ? " · configured" : ""}`;
+  return (
+    <span className="badge model-chip" title={title}>
+      <ProviderMark provider={providerForTool(item.tool ?? item.layer)} />
+      <span className="model-chip-id">{model}</span>
+      {configured ? <ConfiguredIcon /> : null}
+    </span>
+  );
+}
+
 function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
   const now = useNow(30_000);
   return (
@@ -106,10 +124,7 @@ function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
       {task.models?.used?.length ? (
         <span className="meta" aria-label="Models used">
           {task.models.used.map((item) => (
-            <span className="badge" key={`${item.layer}-${item.tool}-${item.model}`}>
-              {item.tool ?? item.layer} · {item.model ?? "?"}
-              {!item.observed && item.model ? " · configured" : ""}
-            </span>
+            <ModelChip key={`${item.layer}-${item.tool}-${item.model}`} item={item} />
           ))}
         </span>
       ) : null}

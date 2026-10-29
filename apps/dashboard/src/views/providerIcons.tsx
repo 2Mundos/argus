@@ -24,6 +24,19 @@ const MARKS: Record<string, { label: string; path: string }> = {
   },
 };
 
+/** Map a tool / engine / executor name onto a provider mark key. */
+export function providerForTool(name: string | null | undefined): string {
+  const raw = (name ?? "").trim().toLowerCase();
+  if (!raw) return "unknown";
+  if (raw === "claude" || raw === "anthropic" || /\b(claude|anthropic)\b/.test(raw)) {
+    return "anthropic";
+  }
+  if (raw === "codex" || raw === "openai" || /\b(codex|openai)\b/.test(raw)) return "openai";
+  if (raw === "cursor" || /\b(cursor)\b/.test(raw)) return "cursor";
+  if (raw === "gitea") return "gitea";
+  return raw;
+}
+
 export function ProviderMark(props: { provider: string }) {
   const mark = MARKS[props.provider];
   if (!mark) {
@@ -36,6 +49,19 @@ export function ProviderMark(props: { provider: string }) {
   return (
     <svg className="provider-mark" viewBox="0 0 24 24" role="img" aria-label={mark.label}>
       <path d={mark.path} fill="currentColor" fillRule="evenodd" />
+    </svg>
+  );
+}
+
+/** Gear: model was configured by policy but not yet observed in a run. */
+export function ConfiguredIcon() {
+  return (
+    <svg className="configured-icon" viewBox="0 0 24 24" role="img" aria-label="configured">
+      <path
+        d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Zm8.9 2.2-1.9-.3a6.8 6.8 0 0 0-.6-1.4l1.2-1.5-1.7-1.7-1.5 1.2a6.8 6.8 0 0 0-1.4-.6l-.3-1.9h-2.4l-.3 1.9a6.8 6.8 0 0 0-1.4.6L8.1 5.8 6.4 7.5l1.2 1.5a6.8 6.8 0 0 0-.6 1.4l-1.9.3v2.4l1.9.3c.1.5.3 1 .6 1.4l-1.2 1.5 1.7 1.7 1.5-1.2c.4.3.9.5 1.4.6l.3 1.9h2.4l.3-1.9c.5-.1 1-.3 1.4-.6l1.5 1.2 1.7-1.7-1.2-1.5c.3-.4.5-.9.6-1.4l1.9-.3v-2.4Z"
+        fill="currentColor"
+        fillRule="evenodd"
+      />
     </svg>
   );
 }
