@@ -29,6 +29,7 @@ SHIPPED = (
     "model-policy.defaults.json",
     "milestones.mjs",
     "livelog.mjs",
+    "changes.mjs",
     "usage.mjs",
     "gitea-api.mjs",
     "github-api.mjs",
@@ -44,7 +45,7 @@ COPY {" ".join(SHIPPED)} {STAGE}
 RUN sh /tmp/argus-engines/install-cursor-agent.sh \\
  && install -m 0644 /tmp/argus-engines/anthropic-redirect.mjs /usr/local/bin/anthropic-redirect.mjs \\
  && install -m 0755 /tmp/argus-engines/argus-delegate.mjs /usr/local/bin/argus-delegate \\
- && install -m 0644 /tmp/argus-engines/account-settings.mjs /tmp/argus-engines/model-policy.mjs /tmp/argus-engines/model-policy.defaults.json /tmp/argus-engines/milestones.mjs /tmp/argus-engines/livelog.mjs /tmp/argus-engines/usage.mjs /usr/local/bin/ \\
+ && install -m 0644 /tmp/argus-engines/account-settings.mjs /tmp/argus-engines/model-policy.mjs /tmp/argus-engines/model-policy.defaults.json /tmp/argus-engines/milestones.mjs /tmp/argus-engines/livelog.mjs /tmp/argus-engines/changes.mjs /tmp/argus-engines/usage.mjs /usr/local/bin/ \\
  && install -m 0644 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/gitea-api.mjs \\
  && npm install --prefix /usr/local/lib/argus-gitea --omit=dev --no-audit --no-fund undici@8.12.2 \\
  && install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api \\
@@ -73,6 +74,10 @@ STEPS = (
     (
         f"{STAGE}livelog.mjs",
         " && install -m 0644 /tmp/argus-engines/livelog.mjs /usr/local/bin/ \\\n",
+    ),
+    (
+        f"{STAGE}changes.mjs",
+        " && install -m 0644 /tmp/argus-engines/changes.mjs /usr/local/bin/ \\\n",
     ),
     (
         f"{STAGE}usage.mjs",

@@ -484,10 +484,16 @@ class FallbackResult(BaseModel):
     task_blocked: bool = False
 
 
+# The API's own attempt placeholder key (account usage 3.10); never a client's.
+PLACEHOLDER_PREFIX = "a1:"
+
+
 class UsageReport(BaseModel):
     """One engine run on one held account (account usage 3.2)."""
 
     task_id: str | None = None
+    # The task attempt of the run (3.10); without it, the agent's latest claim.
+    attempt: int | None = Field(default=None, ge=1)
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     cached_input_tokens: int | None = Field(default=None, ge=0)
@@ -519,6 +525,8 @@ class UsageReport(BaseModel):
             raise ValueError(
                 "a measured run needs tokens or cost; use measurement=not_reported"
             )
+        if self.run_key is not None and self.run_key.startswith(PLACEHOLDER_PREFIX):
+            raise ValueError(f"run_key prefix {PLACEHOLDER_PREFIX!r} is reserved")
         return self
 
 

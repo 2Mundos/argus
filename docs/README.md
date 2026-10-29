@@ -79,8 +79,12 @@ every new dependency is judged against it.
 - [Task workspace](specs/task-workspace.spec.md) — a stable git workspace per
   `repository:write` task, keyed by task id, created and checked read-only
   before the model, blocking with a typed `env_workspace_*` reason
+- [Task checkpoint](specs/task-checkpoint.spec.md) — hash-verified, node-local
+  preservation of a task's unpublished work and its restore by the next attempt,
+  or a typed `env_checkpoint_*` block
 - [Live work](specs/live-work.spec.md) — what an agent is doing now: task activity
-  feed, agent drawer with its current work and container output
+  feed, agent drawer with its current work and container output, and a fixed
+  live status bar (expandable recent-event feed)
 - [Gitea helper for workers](specs/gitea-helper.spec.md) — `argus-gitea-api`
   command matrix, exit codes, security model, and the review-findings gate
 - [GitHub repositories](specs/github-repositories.spec.md) — `github` repository
@@ -92,6 +96,10 @@ every new dependency is judged against it.
   explain late lease/agent expiry and the likely stall cause
 - [Task live log](specs/task-live-log.spec.md) — a redacted ring of an attempt's
   output, streamed as `task.log`; the Live panel and MCP `get_task_log`
+- [Task changes](specs/task-changes.spec.md) — a bounded, redacted diff of the task
+  workspace, computed in the container and shown in a Changes panel beside Live
+- [Task cost and budget](specs/task-cost.spec.md) — estimated spend per task and
+  attempt, live; an optional `budget_usd` steers the attempt to wrap up and blocks new attempts
 - [Task steering](specs/task-steering.spec.md) — a manager sends a message to the
   attempt in flight; delivered on heartbeat, injected into the NanoClaw session as a
   framed operator instruction; expires with the attempt
@@ -129,7 +137,8 @@ every new dependency is judged against it.
   and [runbook](../integrations/nanoclaw/security/RUNBOOK.md)
 - [Security hardening (2026-10-20 medium/low)](specs/security-hardening.spec.md) —
   response headers and CSP, docs off by default, sessionStorage tokens, pod and
-  container hardening, OneCLI URL rules, task/artifact caps, agent token expiry
+  container hardening, OneCLI URL rules, task/artifact caps, agent token expiry;
+  reporting a vulnerability: [SECURITY.md](../SECURITY.md)
 
 - [Settings](specs/settings.spec.md) — typed global settings with per-project
   overrides; model preferences move there; optional review by a different model
@@ -147,7 +156,7 @@ every new dependency is judged against it.
   interrupted and tokens wasted (baseline numbers, root causes), and eight ordered
   proposals: claim reserves the account, owned workspace, one task per session,
   resumable attempts, progress-based liveness, failure classes, single-layer run;
-  P1, P3 and P6 shipped, P2/P5/P8 partly
+  P1, P3, P6 and P8 shipped, P2/P5 partly (P5 recovery latency now readable on Fleet)
 
 ### Runbooks
 

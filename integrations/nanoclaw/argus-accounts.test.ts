@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -1991,6 +1992,48 @@ describe("task-scoped repository auth", () => {
     expect(existsSync(path.join(h.groupDir, "task-workspaces"))).toBe(false);
     expect(h.inbound[0].content.text).not.toContain("Workspace:");
   });
+
+  // Task checkpoint spec 3.3: only a completion Argus accepted skips the checkpoint.
+  for (const [label, status, saved] of [
+    ["a completion Argus refused (409)", 409, true],
+    ["an accepted completion", 200, false],
+  ] as const) {
+    it(`checkpoints the workspace after ${label}: ${saved}`, async () => {
+      const w = repoWorld();
+      const inner = w.fetchImpl;
+      w.fetchImpl = (async (url: string, init: RequestInit) =>
+        status !== 200 && new URL(url).pathname.endsWith("/complete")
+          ? new Response(
+              JSON.stringify({ detail: { code: "stale_attempt", message: "superseded" } }),
+              { status },
+            )
+          : inner(url, init)) as unknown as typeof fetch;
+      const store = mkdtempSync(path.join(os.tmpdir(), "argus-ckpt-store-"));
+      groupDirs.push(store);
+      const h = harness(
+        w,
+        true,
+        { repositories: { global: "https://git.example.test/org/repo" } },
+        { checkpointRoot: store },
+      );
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length > 0);
+      const ws = path.join(h.groupDir, "task-workspaces", REPO_ID);
+      writeFileSync(path.join(ws, "draft.md"), "unpublished work");
+      await h.adapter.deliver("local", h.thread(), {
+        kind: "chat",
+        content: { text: "COMPLETE: done" },
+      });
+      await until(() => w.calls.filter((c) => c.path === "/tasks/claim").length >= 2);
+      const checkpoints = () =>
+        existsSync(path.join(store, REPO_ID))
+          ? readdirSync(path.join(store, REPO_ID)).filter((n) => /^[0-9]{14}-/.test(n))
+          : [];
+      if (saved) await until(() => checkpoints().length === 1);
+      else expect(checkpoints()).toEqual([]);
+    });
+  }
 });
 
 describe("runtime recycling on an account rotation", () => {

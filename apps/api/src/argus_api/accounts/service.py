@@ -193,9 +193,11 @@ async def update_account(
 async def delete_account(
     tx: Tx, account_id: str, confirm_name: str, actor: str
 ) -> str | None:
-    """Remove an account, its usage history and its ended leases. `confirm_name`
-    must be the account's current name, so a stale or wrong target is refused;
-    an account with an active lease is refused.
+    """Remove an account and its ended leases. Usage rows are detached
+    (`account_id` and `role` cleared) so finished attempts keep their outcome
+    (account usage 3.10) and show in Cost as unattributed. `confirm_name` must
+    be the account's current name, so a stale or wrong target is refused; an
+    account with an active lease is refused.
 
     Returns the name of the Argus-generated secret that is now unreferenced and
     should be removed by the caller, or None. The secret store is not part of
@@ -216,8 +218,10 @@ async def delete_account(
             f"account has {active} active lease(s); wait for release or disable it",
             code="account_in_use",
         )
+    # Detach, do not delete: attempt outcomes stay for coverage and Cost.
     await tx.conn.execute(
-        "DELETE FROM account_usage WHERE account_id = ?", (account_id,)
+        "UPDATE account_usage SET account_id = NULL, role = NULL WHERE account_id = ?",
+        (account_id,),
     )
     await tx.conn.execute(
         "DELETE FROM account_leases WHERE account_id = ?", (account_id,)
@@ -835,16 +839,21 @@ async def release_waiting_tasks(tx: Tx) -> list[str]:
 async def record_usage(
     tx: Tx, account_id: str, agent_id: str, report: UsageReport
 ) -> None:
-    """One engine run on an account the agent holds (account usage 3.2)."""
+    """One engine run on an account the agent holds (account usage 3.2 / 3.10)."""
     await _row(tx.conn, account_id)
     if await _lease_on(tx.conn, agent_id, account_id) is None:
         raise ForbiddenError("only an agent holding a lease may report its usage")
+    attempt = await usage.resolve_attempt(
+        tx.conn, agent_id, report.task_id, report.attempt
+    )
+    fields = report.model_dump(exclude={"task_id", "rate_limits", "attempt"})
     await usage.insert_usage(
         tx,
         account_id,
         agent_id,
         report.task_id,
-        **report.model_dump(exclude={"task_id", "rate_limits"}),
+        attempt=attempt,
+        **fields,
     )
     if report.rate_limits:
         await usage.upsert_quota(

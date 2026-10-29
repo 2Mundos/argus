@@ -24,9 +24,11 @@ Instructions for AI agents working in this repo.
 - **Ruff is the formatting authority** for Python, Biome for TS. `make format` fixes both.
 - TypeScript is `strict`; no `any` without a written justification.
 - The dashboard talks to the API only; never to workers or the database directly.
-- **English only.** UI copy, docs, specs, comments, identifiers, tests, and
-  commits are English. Do not add or leave Portuguese (or other languages) in
-  the repo, including classifier synonyms and sample fixtures.
+- **English only.** UI copy, docs, specs, comments, identifiers, tests,
+  commits, pull request titles and descriptions, review comments, and issues
+  are English, even when the task text is in another language. Do not add or
+  leave Portuguese (or other languages) in the repo, including classifier
+  synonyms and sample fixtures.
 - Never commit secrets (gitleaks runs in CI and pre-push).
 
 ## Commands

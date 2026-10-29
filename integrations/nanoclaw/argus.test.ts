@@ -1705,6 +1705,40 @@ describe("delegate live log relay", () => {
     expect(fs.readFileSync(file, "utf8")).not.toContain("argus_agent_x");
     fs.rmSync(dir, { recursive: true });
   });
+
+  it("the adapter puts the delegate's changes snapshot, never one left from a previous run", async () => {
+    const { dir, file } = tmp();
+    const changesFile = path.join(dir, "argus-task-changes.json");
+    const snapshot = (at: string) =>
+      JSON.stringify({
+        v: 1,
+        task_id: "t1",
+        attempt: 1,
+        at,
+        branch: "argus/task-t1",
+        base: null,
+        head: null,
+        commits: [],
+        files: [{ path: "a.txt", status: "A", added: 1, deleted: 0, binary: false }],
+        untracked: [],
+        patch: "+a\n",
+        truncated: { files: false, patch: false },
+      });
+    fs.writeFileSync(changesFile, snapshot("stale"));
+    const fake = fakeArgus({ tasks: [task()] });
+    const h = harness(fake, { delegateLogFile: async () => file, logPollMs: 20 });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    expect(fs.readFileSync(changesFile, "utf8")).toBe(""); // reset at task start
+    fs.writeFileSync(changesFile, snapshot("2026-10-29T12:00:00.000Z"));
+    await until(() => fake.calls.some((c) => c.path === "/tasks/t1/changes"));
+    const put = fake.calls.find((c) => c.path === "/tasks/t1/changes")!;
+    expect(put.method).toBe("PUT");
+    expect(put.body).toMatchObject({ attempt: 1, at: "2026-10-29T12:00:00.000Z", patch: "+a\n" });
+    expect(put.body).not.toHaveProperty("task_id");
+    fs.rmSync(dir, { recursive: true });
+  });
 });
 
 describe("steers", () => {

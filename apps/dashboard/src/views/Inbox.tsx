@@ -87,6 +87,13 @@ export function Inbox() {
   });
   const ready = entries.length > 0 && entries.every(isAnswerable);
   const kinds = kindSections(page?.groups ?? [], byGroup, page?.totals_by_decision_kind);
+  if (taskDrawer) {
+    return (
+      <section className="task-panel-page">
+        <TaskDetail taskId={taskDrawer} variant="panel" onClose={() => setTaskDrawer(null)} />
+      </section>
+    );
+  }
   return (
     <section>
       <div className="toolbar">
@@ -158,8 +165,8 @@ export function Inbox() {
                   <h4>
                     {g.title ?? g.subject_type.replace("knowledge_", "")}{" "}
                     <span className="muted small">
-                      {g.open_decisions} open · oldest {dur(g.oldest_age_s)} ·{" "}
-                      {g.stalled_tasks} stalled task{g.stalled_tasks === 1 ? "" : "s"}
+                      {g.open_decisions} open · oldest {dur(g.oldest_age_s)} · {g.stalled_tasks}{" "}
+                      stalled task{g.stalled_tasks === 1 ? "" : "s"}
                     </span>
                   </h4>
                   {(byGroup.get(g.key) ?? [])
@@ -208,7 +215,6 @@ export function Inbox() {
           ))}
         </div>
       ))}
-      {taskDrawer && <TaskDetail taskId={taskDrawer} onClose={() => setTaskDrawer(null)} />}
     </section>
   );
 }
@@ -222,6 +228,11 @@ const BLOCK_COPY: Record<string, string> = {
   env_workspace_permission: "the worker cannot write the task workspace",
   env_workspace_invalid: "the task workspace is not a usable git repository",
   env_workspace_remote_mismatch: "the task workspace points at another repository",
+  env_checkpoint_unavailable: "its saved work is not on this worker",
+  env_checkpoint_invalid: "its saved work failed validation",
+  env_checkpoint_conflict: "the workspace holds different work than the saved one",
+  env_checkpoint_busy: "another worker holds the saved work",
+  env_checkpoint_limit: "its saved work exceeds the size limit",
   env_workspace_branch_mismatch: "the task workspace is on another branch",
   env_workspace_limit: "the worker holds too many task workspaces",
   env_executor_auth: "the executor could not log in",

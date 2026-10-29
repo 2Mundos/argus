@@ -126,11 +126,11 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 # worker uses to hand work to any of the four. The smoke fails the build if a CLI
 # does not run, so "in the image" is proven, not assumed. Authentication is NOT
 # part of the image: each worker logs in with the vendor client.
-COPY install-cursor-agent.sh argus-delegate.mjs account-settings.mjs anthropic-redirect.mjs model-policy.mjs model-policy.defaults.json milestones.mjs livelog.mjs usage.mjs gitea-api.mjs github-api.mjs /tmp/argus-engines/
+COPY install-cursor-agent.sh argus-delegate.mjs account-settings.mjs anthropic-redirect.mjs model-policy.mjs model-policy.defaults.json milestones.mjs livelog.mjs changes.mjs usage.mjs gitea-api.mjs github-api.mjs /tmp/argus-engines/
 RUN sh /tmp/argus-engines/install-cursor-agent.sh \
  && install -m 0644 /tmp/argus-engines/anthropic-redirect.mjs /usr/local/bin/anthropic-redirect.mjs \
  && install -m 0755 /tmp/argus-engines/argus-delegate.mjs /usr/local/bin/argus-delegate \
- && install -m 0644 /tmp/argus-engines/account-settings.mjs /tmp/argus-engines/model-policy.mjs /tmp/argus-engines/model-policy.defaults.json /tmp/argus-engines/milestones.mjs /tmp/argus-engines/livelog.mjs /tmp/argus-engines/usage.mjs /usr/local/bin/ \
+ && install -m 0644 /tmp/argus-engines/account-settings.mjs /tmp/argus-engines/model-policy.mjs /tmp/argus-engines/model-policy.defaults.json /tmp/argus-engines/milestones.mjs /tmp/argus-engines/livelog.mjs /tmp/argus-engines/changes.mjs /tmp/argus-engines/usage.mjs /usr/local/bin/ \
  && install -m 0644 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/gitea-api.mjs \
  && npm install --prefix /usr/local/lib/argus-gitea --omit=dev --no-audit --no-fund undici@8.12.2 \
  && install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api \

@@ -14,6 +14,7 @@ import aiosqlite
 from argus_core import claude_auth, codex_auth, cursor_auth
 from argus_core.accounts import (
     PERIOD_HOURS,
+    PLACEHOLDER_PREFIX,
     AccountCredit,
     AccountUsage,
     QuotaCollector,
@@ -53,12 +54,39 @@ class CreditReading:
 Bucket = Literal["hour", "day"]
 
 
+async def resolve_attempt(
+    conn: aiosqlite.Connection,
+    agent_id: str,
+    task_id: str | None,
+    attempt: int | None,
+) -> int | None:
+    """The attempt this report belongs to (account usage 3.10), or None."""
+    if task_id is None:
+        return None
+    if attempt is not None:
+        # An attempt the agent did not claim here is not attributed to another.
+        async with conn.execute(
+            "SELECT 1 FROM task_attempts WHERE task_id = ? AND attempt = ?"
+            " AND agent_id = ?",
+            (task_id, attempt, agent_id),
+        ) as cur:
+            return attempt if await cur.fetchone() else None
+    async with conn.execute(
+        "SELECT attempt FROM task_attempts WHERE task_id = ? AND agent_id = ?"
+        " ORDER BY id DESC LIMIT 1",
+        (task_id, agent_id),
+    ) as cur:
+        row = await cur.fetchone()
+    return int(row[0]) if row else None
+
+
 async def insert_usage(
     tx: Tx,
-    account_id: str,
+    account_id: str | None,
     agent_id: str | None,
     task_id: str | None,
     *,
+    attempt: int | None = None,
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     cached_input_tokens: int | None = None,
@@ -70,17 +98,57 @@ async def insert_usage(
     measurement: str = "measured",
     reason: str | None = None,
 ) -> None:
-    """One row per report. A repeated `run_key` for the account adds nothing."""
+    """One row per report. A repeated `run_key` for the account adds nothing.
+
+    A measured report for an attempt whose only row is an `a1:` placeholder upgrades
+    that row in place (account usage 3.10). A not_reported report never downgrades
+    a placeholder or a measured row: if the attempt already has either, it is a no-op.
+    """
+    unmeasured = reason if measurement == "not_reported" else None
+    at = ts(tx.now)
+    if (
+        measurement == "measured"
+        and task_id is not None
+        and attempt is not None
+        and await _upgrade_placeholder(
+            tx,
+            account_id=account_id,
+            agent_id=agent_id,
+            task_id=task_id,
+            attempt=attempt,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_input_tokens=cached_input_tokens,
+            cost_usd=cost_usd,
+            model=model,
+            engine=engine,
+            role=role,
+            run_key=run_key,
+            at=at,
+        )
+    ):
+        return
+    if (
+        measurement == "not_reported"
+        and task_id is not None
+        and attempt is not None
+        and (
+            await _attempt_has_placeholder(tx.conn, task_id, attempt)
+            or await _attempt_has_measured(tx.conn, task_id, attempt)
+        )
+    ):
+        return  # never add not_reported over a placeholder or a measured row
     await tx.conn.execute(
-        "INSERT INTO account_usage (account_id, agent_id, task_id, input_tokens,"
-        " output_tokens, cached_input_tokens, cost_usd, model, engine, role, at,"
-        " run_key, measurement, unmeasured_reason)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO account_usage (account_id, agent_id, task_id, attempt,"
+        " input_tokens, output_tokens, cached_input_tokens, cost_usd, model, engine,"
+        " role, at, run_key, measurement, unmeasured_reason)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         " ON CONFLICT DO NOTHING",
         (
             account_id,
             agent_id,
             task_id,
+            attempt,
             input_tokens,
             output_tokens,
             cached_input_tokens,
@@ -88,11 +156,137 @@ async def insert_usage(
             model,
             engine,
             role,
-            ts(tx.now),
+            at,
             run_key,
             measurement,
-            reason if measurement == "not_reported" else None,
+            unmeasured,
         ),
+    )
+
+
+async def _attempt_has_placeholder(
+    conn: aiosqlite.Connection, task_id: str, attempt: int
+) -> bool:
+    async with conn.execute(
+        "SELECT 1 FROM account_usage WHERE task_id = ? AND attempt = ?"
+        " AND measurement = 'not_reported' AND substr(run_key, 1, 3) = ?"
+        " LIMIT 1",
+        (task_id, attempt, PLACEHOLDER_PREFIX),
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
+async def _attempt_has_measured(
+    conn: aiosqlite.Connection, task_id: str, attempt: int
+) -> bool:
+    async with conn.execute(
+        "SELECT 1 FROM account_usage WHERE task_id = ? AND attempt = ?"
+        " AND measurement = 'measured' LIMIT 1",
+        (task_id, attempt),
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
+async def _upgrade_placeholder(
+    tx: Tx,
+    *,
+    account_id: str | None,
+    agent_id: str | None,
+    task_id: str,
+    attempt: int,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cached_input_tokens: int | None,
+    cost_usd: float | None,
+    model: str | None,
+    engine: str | None,
+    role: str | None,
+    run_key: str | None,
+    at: str,
+) -> bool:
+    """Turn the attempt's sole `a1:` placeholder into this measured report.
+
+    Returns True when a row was upgraded (caller must not insert). A measured row
+    is never rewritten; a duplicate client `run_key` is handled by the INSERT.
+    """
+    cur = await tx.conn.execute(
+        "UPDATE account_usage SET account_id = ?, agent_id = ?, input_tokens = ?,"
+        " output_tokens = ?, cached_input_tokens = ?, cost_usd = ?, model = ?,"
+        " engine = ?, role = ?, at = ?, run_key = ?, measurement = 'measured',"
+        " unmeasured_reason = NULL"
+        " WHERE id = ("
+        "  SELECT u.id FROM account_usage u"
+        "  WHERE u.task_id = ? AND u.attempt = ?"
+        "   AND u.measurement = 'not_reported' AND substr(u.run_key, 1, 3) = ?"
+        "   AND (SELECT count(*) FROM account_usage x"
+        "        WHERE x.task_id = ? AND x.attempt = ?) = 1"
+        " )",
+        (
+            account_id,
+            agent_id,
+            input_tokens,
+            output_tokens,
+            cached_input_tokens,
+            cost_usd,
+            model,
+            engine,
+            role,
+            at,
+            run_key,
+            task_id,
+            attempt,
+            PLACEHOLDER_PREFIX,
+            task_id,
+            attempt,
+        ),
+    )
+    return cur.rowcount > 0
+
+
+async def ensure_attempt_outcome(
+    tx: Tx,
+    *,
+    task_id: str,
+    attempt: int,
+    agent_id: str | None,
+    claim_id: int,
+    claimed_at: str | None,
+    reason: str,
+) -> None:
+    """Write the attempt's `not_reported` placeholder when it has no usage row yet.
+
+    Same transaction that takes the attempt out of `claimed` (account usage 3.10).
+    """
+    async with tx.conn.execute(
+        "SELECT 1 FROM account_usage WHERE task_id = ? AND attempt = ? LIMIT 1",
+        (task_id, attempt),
+    ) as cur:
+        if await cur.fetchone() is not None:
+            return
+    account_id: str | None = None
+    role: str | None = None
+    if agent_id is not None:
+        end = ts(tx.now)
+        start = claimed_at or end
+        async with tx.conn.execute(
+            "SELECT account_id FROM account_leases"
+            " WHERE agent_id = ? AND role = 'engine' AND leased_at <= ?"
+            " AND (released_at IS NULL OR released_at >= ?)"
+            " ORDER BY leased_at DESC LIMIT 1",
+            (agent_id, end, start),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is not None:
+            account_id = row[0]
+            role = "engine"
+    run_key = f"{PLACEHOLDER_PREFIX}{task_id}:{attempt}:{claim_id}"
+    await tx.conn.execute(
+        "INSERT INTO account_usage (account_id, agent_id, task_id, attempt,"
+        " input_tokens, output_tokens, cached_input_tokens, cost_usd, model, engine,"
+        " role, at, run_key, measurement, unmeasured_reason)"
+        " VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, 'not_reported',"
+        " ?) ON CONFLICT DO NOTHING",
+        (account_id, agent_id, task_id, attempt, role, ts(tx.now), run_key, reason),
     )
 
 

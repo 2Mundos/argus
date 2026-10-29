@@ -422,6 +422,20 @@ async def get_task_log(
 
 
 @tool(ANYONE)
+async def get_task_changes(
+    ctx: Context, task_id: str, attempt: int | None = None
+) -> dict:
+    """Read what a task attempt (default: the current one) has changed in its
+    workspace, as the dashboard's Changes panel shows it: {branch, base, head,
+    commits, files: [{path, status, added, deleted, binary}], untracked, patch,
+    truncated, at}. 404 no_changes when the worker has posted none. Secrets are
+    redacted. Workers read leased tasks only."""
+    return await _call(
+        ctx, "GET", f"/tasks/{task_id}/changes", params={"attempt": attempt}
+    )
+
+
+@tool(ANYONE)
 async def get_tasks(ctx: Context, ids: list[str], view: ViewArg = "summary") -> dict:
     """Read up to 50 tasks in one call, in the order given; unknown ids come back in
     `missing`. view=detail adds spec and result (long text cut, see `truncated`)."""
@@ -878,6 +892,26 @@ async def write_knowledge(
 
 
 # -- provider accounts --------------------------------------------------------------------
+
+
+@tool(MANAGERS)
+async def get_fleet_yield(ctx: Context, window_hours: int = 24) -> dict:
+    """Fleet yield over `window_hours` (1-720): attempt success rate, measured vs
+    not-reported attempt coverage, and tokens/cost per succeeded task. Unknown
+    usage is never zero. The `yield` block of GET /api/fleet/health."""
+    health = await _call(ctx, "GET", "/fleet/health", params={"window": window_hours})
+    return health.get("yield", health)
+
+
+@tool(MANAGERS)
+async def get_dead_session_recovery(ctx: Context, window_hours: int = 24) -> dict:
+    """Dead-session recovery latency over `window_hours` (1-720): from each
+    `session_lost` fail (observed lost; not a death timestamp) to the next
+    `task.claim` after a requeue. Coverage, denominator, outliers vs the 5 min
+    target, and percentiles only when enough measured samples exist (never a
+    fabricated median). The `dead_session_recovery` block of GET /api/fleet/health."""
+    health = await _call(ctx, "GET", "/fleet/health", params={"window": window_hours})
+    return health.get("dead_session_recovery", health)
 
 
 @tool(MANAGERS)

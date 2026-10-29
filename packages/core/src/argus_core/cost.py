@@ -12,11 +12,16 @@ CostWindow = Literal["24h", "7d", "30d"]
 
 class CostFigures(BaseModel):
     """What one group spent. `runs = measured_runs + not_reported_runs`. A token
-    field is null when no measured run carried it, never 0 (cost view 3.1)."""
+    field is null when no measured run carried it, never 0 (cost view 3.1).
+    Attempt coverage counts distinct (task, attempt) pairs among the group's rows
+    (account usage 3.10); rows with no attempt count only in `runs`."""
 
     runs: int
     measured_runs: int
     not_reported_runs: int
+    attempts: int = 0
+    measured_attempts: int = 0
+    not_reported_attempts: int = 0
     input_tokens: int | None
     output_tokens: int | None
     cached_input_tokens: int | None
@@ -57,6 +62,7 @@ class CostReport(BaseModel):
     tz: str
     pricing: PricingInfo
     totals: CostFigures
+    unattributed: CostFigures  # attempt placeholders with no account (3.10)
     by_account: list[AccountCost]
     by_project: list[ProjectCost]
     daily: list[DayCost]

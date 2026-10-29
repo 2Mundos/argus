@@ -986,7 +986,7 @@ export interface paths {
         };
         /**
          * Fleet Health
-         * @description Pool, queue, run-time, outcome and failure health over `window` hours.
+         * @description Pool, queue, run-time, outcome, yield and dead-session recovery over `window` hours.
          */
         get: operations["fleet_health_api_fleet_health_get"];
         put?: never;
@@ -2206,6 +2206,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Changes
+         * @description The diff snapshot of an attempt (default: the current one); 404 `no_changes`
+         *     when it has none. Workers only read tasks they have leased.
+         */
+        get: operations["get_changes_api_tasks__task_id__changes_get"];
+        /**
+         * Put Changes
+         * @description Replace the diff snapshot of the attempt you hold (agent token), computed in
+         *     the container against the workspace's merge base. At most 384 KiB, 500 files and
+         *     a 256 KiB patch (longer is cut), one snapshot per 5 s. Secrets are redacted
+         *     before storing; the summary is published as a `task.changes` event. Fenced like
+         *     the live log: a stale attempt is 409 `stale_attempt`.
+         */
+        put: operations["put_changes_api_tasks__task_id__changes_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/complete": {
         parameters: {
             query?: never;
@@ -2623,16 +2652,31 @@ export interface components {
         AccountCost: {
             /** Account Id */
             account_id: string;
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
             input_tokens: number | null;
+            /**
+             * Measured Attempts
+             * @default 0
+             */
+            measured_attempts?: number;
             /** Measured Runs */
             measured_runs: number;
             /** Name */
             name: string;
+            /**
+             * Not Reported Attempts
+             * @default 0
+             */
+            not_reported_attempts?: number;
             /** Not Reported Runs */
             not_reported_runs: number;
             /** Output Tokens */
@@ -3280,6 +3324,13 @@ export interface components {
             /** Model Provider */
             model_provider: string;
         };
+        /** BaseRef */
+        BaseRef: {
+            /** Ref */
+            ref: string;
+            /** Sha */
+            sha: string;
+        };
         /** BlockRequest */
         BlockRequest: {
             /** Attempt */
@@ -3349,6 +3400,100 @@ export interface components {
             count: number;
             /** Dry Run */
             dry_run: boolean;
+        };
+        /** ChangedFile */
+        ChangedFile: {
+            /** Added */
+            added?: number | null;
+            /**
+             * Binary
+             * @default false
+             */
+            binary?: boolean;
+            /** Deleted */
+            deleted?: number | null;
+            /** Path */
+            path: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "A" | "M" | "D" | "R" | "C" | "T" | "U" | "X";
+        };
+        /** Changes */
+        Changes: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Attempt */
+            attempt: number;
+            base?: components["schemas"]["BaseRef"] | null;
+            /** Branch */
+            branch: string;
+            /** Commits */
+            commits?: components["schemas"]["Commit"][];
+            /** Files */
+            files?: components["schemas"]["ChangedFile"][];
+            /** Head */
+            head?: string | null;
+            /**
+             * Patch
+             * @default
+             */
+            patch?: string;
+            /**
+             * Received At
+             * Format: date-time
+             */
+            received_at: string;
+            /** Task Id */
+            task_id: string;
+            truncated?: components["schemas"]["Truncated"];
+            /** Untracked */
+            untracked?: components["schemas"]["UntrackedFile"][];
+        };
+        /** ChangesAccepted */
+        ChangesAccepted: {
+            /** Added */
+            added: number;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Deleted */
+            deleted: number;
+            /** Files */
+            files: number;
+        };
+        /** ChangesWrite */
+        ChangesWrite: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Attempt */
+            attempt: number;
+            base?: components["schemas"]["BaseRef"] | null;
+            /** Branch */
+            branch: string;
+            /** Commits */
+            commits?: components["schemas"]["Commit"][];
+            /** Files */
+            files?: components["schemas"]["ChangedFile"][];
+            /** Head */
+            head?: string | null;
+            /**
+             * Patch
+             * @default
+             */
+            patch?: string;
+            truncated?: components["schemas"]["Truncated"];
+            /** Untracked */
+            untracked?: components["schemas"]["UntrackedFile"][];
         };
         /**
          * Check
@@ -3634,6 +3779,13 @@ export interface components {
             /** Name */
             name?: string | null;
         };
+        /** Commit */
+        Commit: {
+            /** Sha */
+            sha: string;
+            /** Subject */
+            subject: string;
+        };
         /** CompleteRequest */
         CompleteRequest: {
             /** Attempt */
@@ -3785,16 +3937,33 @@ export interface components {
          * CostFigures
          * @description What one group spent. `runs = measured_runs + not_reported_runs`. A token
          *     field is null when no measured run carried it, never 0 (cost view 3.1).
+         *     Attempt coverage counts distinct (task, attempt) pairs among the group's rows
+         *     (account usage 3.10); rows with no attempt count only in `runs`.
          */
         CostFigures: {
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
             input_tokens: number | null;
+            /**
+             * Measured Attempts
+             * @default 0
+             */
+            measured_attempts?: number;
             /** Measured Runs */
             measured_runs: number;
+            /**
+             * Not Reported Attempts
+             * @default 0
+             */
+            not_reported_attempts?: number;
             /** Not Reported Runs */
             not_reported_runs: number;
             /** Output Tokens */
@@ -3828,6 +3997,7 @@ export interface components {
             totals: components["schemas"]["CostFigures"];
             /** Tz */
             tz: string;
+            unattributed: components["schemas"]["CostFigures"];
             /**
              * Window
              * @enum {string}
@@ -3942,14 +4112,29 @@ export interface components {
         };
         /** DayCost */
         DayCost: {
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
             input_tokens: number | null;
+            /**
+             * Measured Attempts
+             * @default 0
+             */
+            measured_attempts?: number;
             /** Measured Runs */
             measured_runs: number;
+            /**
+             * Not Reported Attempts
+             * @default 0
+             */
+            not_reported_attempts?: number;
             /** Not Reported Runs */
             not_reported_runs: number;
             /** Output Tokens */
@@ -3965,6 +4150,61 @@ export interface components {
             start: string;
             /** Unpriced Runs */
             unpriced_runs: number;
+        };
+        /**
+         * DeadSessionRecovery
+         * @description session_lost observed → next claim (worker efficiency draft, P5 measure).
+         *
+         *     Death time is not in events. Fail and requeue are the same `task.fail` when
+         *     `to=ready`. Latency is therefore observation → next claim, never a fabricated
+         *     death→requeue delta. Percentiles need `MIN_SAMPLES` measured rows.
+         */
+        DeadSessionRecovery: {
+            /** Anomalous */
+            anomalous: number;
+            /** Coverage */
+            coverage: number | null;
+            /** Denominator */
+            denominator: number;
+            /** Examples */
+            examples: components["schemas"]["RecoveryExample"][];
+            /**
+             * Failure Class
+             * @default session
+             */
+            failure_class?: string;
+            /** Mean */
+            mean: number | null;
+            /** Measured */
+            measured: number;
+            /** N */
+            n: number;
+            /** Not Requeued */
+            not_requeued: number;
+            /** Outliers */
+            outliers: number;
+            /** P50 */
+            p50: number | null;
+            /** P90 */
+            p90: number | null;
+            /** Pending */
+            pending: number;
+            /**
+             * Reason
+             * @default session_lost
+             */
+            reason?: string;
+            /** Source */
+            source: string;
+            /**
+             * Target S
+             * @default 300
+             */
+            target_s?: number;
+            /** Truncated */
+            truncated: boolean;
+            /** Window Hours */
+            window_hours: number;
         };
         /** Decision */
         Decision: {
@@ -4783,6 +5023,7 @@ export interface components {
              * Format: date-time
              */
             as_of: string;
+            dead_session_recovery: components["schemas"]["DeadSessionRecovery"];
             failures: components["schemas"]["Failures"];
             outcomes: components["schemas"]["Outcomes"];
             /** Pools */
@@ -6307,14 +6548,29 @@ export interface components {
         };
         /** ProjectCost */
         ProjectCost: {
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
             input_tokens: number | null;
+            /**
+             * Measured Attempts
+             * @default 0
+             */
+            measured_attempts?: number;
             /** Measured Runs */
             measured_runs: number;
+            /**
+             * Not Reported Attempts
+             * @default 0
+             */
+            not_reported_attempts?: number;
             /** Not Reported Runs */
             not_reported_runs: number;
             /** Output Tokens */
@@ -6521,6 +6777,29 @@ export interface components {
             };
             /** Status */
             status: string;
+        };
+        /**
+         * RecoveryExample
+         * @description One auditable synthetic sample: source fail (+ claim) event ids.
+         */
+        RecoveryExample: {
+            /** Claim Event Id */
+            claim_event_id: number | null;
+            /** Fail Event Id */
+            fail_event_id: number;
+            /** Latency S */
+            latency_s: number | null;
+            /** Next Claim At */
+            next_claim_at: string | null;
+            /**
+             * Observed Lost At
+             * Format: date-time
+             */
+            observed_lost_at: string;
+            /** Outcome */
+            outcome: string;
+            /** Task Id */
+            task_id: string;
         };
         /** RecycleRequest */
         RecycleRequest: {
@@ -7770,6 +8049,26 @@ export interface components {
          * @enum {string}
          */
         Tri: "yes" | "no" | "unknown";
+        /** Truncated */
+        Truncated: {
+            /**
+             * Files
+             * @default false
+             */
+            files?: boolean;
+            /**
+             * Patch
+             * @default false
+             */
+            patch?: boolean;
+        };
+        /** UntrackedFile */
+        UntrackedFile: {
+            /** Bytes */
+            bytes: number;
+            /** Path */
+            path: string;
+        };
         /**
          * Usage
          * @description What the work cost, as reported by the agent. Recorded, never enforced.
@@ -7837,6 +8136,8 @@ export interface components {
          * @description One engine run on one held account (account usage 3.2).
          */
         UsageReport: {
+            /** Attempt */
+            attempt?: number | null;
             /** Cached Input Tokens */
             cached_input_tokens?: number | null;
             /** Cost Usd */
@@ -8156,6 +8457,21 @@ export interface components {
             cost_per_succeeded: number | null;
             /** Finished Tasks */
             finished_tasks: number;
+            /**
+             * Measured Attempts
+             * @default 0
+             */
+            measured_attempts?: number;
+            /**
+             * Measured Tasks
+             * @default 0
+             */
+            measured_tasks?: number;
+            /**
+             * Not Reported Attempts
+             * @default 0
+             */
+            not_reported_attempts?: number;
             /** Source */
             source: string;
             /** Tokens Per Failed */
@@ -12290,6 +12606,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_changes_api_tasks__task_id__changes_get: {
+        parameters: {
+            query?: {
+                attempt?: number | null;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Changes"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_changes_api_tasks__task_id__changes_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangesWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangesAccepted"];
                 };
             };
             /** @description Validation Error */

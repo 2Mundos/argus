@@ -3,14 +3,16 @@
 # 1. Purpose and Scope
 
 Fleet is a dashboard tab (`#fleet`) that answers: are the pools alive, how long do
-tasks wait and run, how often do they succeed, and why do they fail. It is one
+tasks wait and run, how often do they succeed, why do they fail, and how long
+dead-session recovery takes after an observed `session_lost`. It is one
 read-only endpoint, `GET /api/fleet/health?window=<hours>`, readable by the
 orchestrator and admin scopes (never workers). `window` defaults to 24, must be
 1..720 (30 days); anything else is a validation error (422).
 
 It shows pools (status, `live`/`desired`, `running`, last heartbeat), a count per
-`TaskState`, queue and run time (p50, p90, mean), success and failure rate, and
-failures grouped by reason with up to 5 recent examples each.
+`TaskState`, queue and run time (p50, p90, mean), success and failure rate,
+failures grouped by reason with up to 5 recent examples each, yield, and
+dead-session recovery coverage and latency.
 
 # 2. Non-Goals
 
@@ -49,12 +51,37 @@ failures grouped by reason with up to 5 recent examples each.
   `attempt_success_rate` is their ratio. Each failure group carries `lost_seconds`:
   the time its failed or expired attempts held a claim (last `task.claim` before
   the event), `null` when none has one. Tokens (input plus output) and cost come
-  from `account_usage` rows of the tasks in the finished cohort, split by outcome;
-  `usage_tasks` of `finished_tasks` is the coverage, a task without a row is never
-  counted as zero, and a mean needs `MIN_SAMPLES` covered tasks (else `null`).
-  Migration `0046` indexes `account_usage.task_id`.
+  from the measured `account_usage` rows of the tasks in the finished cohort,
+  split by outcome. Coverage counts attempts ([account usage](account-usage.spec.md)
+  3.10): `measured_attempts` and `not_reported_attempts` over the cohort's
+  attempts with a usage row; `usage_tasks` is tasks with any row and
+  `measured_tasks` tasks whose every attempt is measured. Only measured tasks
+  enter the token and cost means, so an unreported attempt is never counted as
+  zero; a mean needs `MIN_SAMPLES` measured tasks (else `null`). Migration
+  `0046` indexes `account_usage.task_id`. The MCP tool `get_fleet_yield(window_hours)`
+  (managers) returns this `yield` block.
+- **Dead-session recovery (P5 measure).** `dead_session_recovery` answers how long
+  after a vanished session is *observed* until the task is claimed again. Cohort:
+  `task.fail` events in the window with `data.reason = session_lost` (failure class
+  `session` only; `stalled` / `lease_expired` / other reasons are out). There is
+  **no death timestamp** in events: the channel fails after up to 90 s of a seen
+  container being gone ([stall visibility](stall-visibility.spec.md) 3.1), and the
+  fail's `at` is `observed_lost_at`. Fail and requeue are the same event when
+  `data.to = ready` (latency fail→ready is always 0 by construction); recovery
+  latency is therefore `observed_lost_at` → the next `task.claim` for that task
+  with `at` after the fail (or the same `at` and a higher event id). Outcomes per
+  synthetic sample: `measured` (requeued and a later claim), `pending` (requeued,
+  no later claim yet), `not_requeued` (`to` is not `ready`), `anomalous`
+  (unreadable payload or negative latency). `denominator` is the bounded fail
+  count; `coverage` is `measured / denominator` (`null` when the denominator is
+  0). `p50` / `p90` / `mean` need `MIN_SAMPLES` measured latencies, else `null`
+  (never a fabricated median). `outliers` counts measured samples with latency
+  ≥ `target_s` (300 s, the draft P5 target); outliers stay in the distribution.
+  Examples (up to 5 newest measured) carry fail and claim event ids for audit.
+  MCP `get_dead_session_recovery(window_hours)` (managers) returns this block.
+  No scheduling, timeout, or `ARGUS_STALL_FAIL_S` change.
 - **Bounded reads.** No full scan of `tasks` or `events`: migration
-  `0020_fleet_health_indexes.sql` adds `tasks_finished` and `events_kind_at`; per-task
+  `0021_fleet_health_indexes.sql` adds `tasks_finished` and `events_kind_at`; per-task
   claim lookups use `events_subject`. Each fetch keeps at most 5000 newest rows and
   sets `truncated` when it hits that.
 
@@ -62,6 +89,8 @@ failures grouped by reason with up to 5 recent examples each.
 
 - Should reasons `channel_error` and `provider_failure` be emitted by workers
   explicitly? Today they only appear if a worker sends them as the fail reason.
+- Should `stalled` (and other session-class expires) join this recovery report as
+  a separate series, or stay out so the P5 dead-session path stays pure?
 
 # 5. Constraints
 
@@ -71,7 +100,8 @@ failures grouped by reason with up to 5 recent examples each.
 # 6. Implementation Consequences
 
 - Backend: `apps/api/src/argus_api/fleet_health.py`, route in `ops_routes.py`,
-  tests in `apps/api/tests/test_fleet_health.py`.
+  MCP `get_dead_session_recovery`; tests in `apps/api/tests/test_fleet_health.py`
+  and `apps/api/tests/test_dead_session_recovery.py`.
 - Frontend: `views/Fleet.tsx`, Fleet tab (`#fleet`) in `App.tsx`; `#tasks/<id>` opens that
   task's detail in the Tasks tab.
 - Regenerate with `make openapi`.

@@ -326,7 +326,16 @@ def test_scopes_window_validation_and_cap(client: TestClient) -> None:
         assert r.status_code == 422, bad
 
 
-async def add_usage(db: Database, task: str, tokens: int, cost: float) -> None:
+async def add_usage(
+    db: Database,
+    task: str,
+    tokens: int | None,
+    cost: float | None,
+    *,
+    attempt: int | None = 1,
+    measurement: str = "measured",
+    reason: str | None = None,
+) -> None:
     async with db.write() as tx:
         await tx.conn.execute(
             "INSERT INTO accounts (id, name, provider, kind, secret_ref, priority,"
@@ -336,9 +345,20 @@ async def add_usage(db: Database, task: str, tokens: int, cost: float) -> None:
             (ts(NOW), ts(NOW)),
         )
         await tx.conn.execute(
-            "INSERT INTO account_usage (account_id, task_id, input_tokens,"
-            " output_tokens, cost_usd, at) VALUES ('acc', ?, ?, 0, ?, ?)",
-            (task, tokens, cost, ts(NOW)),
+            "INSERT INTO account_usage (account_id, task_id, attempt, input_tokens,"
+            " output_tokens, cost_usd, at, measurement, unmeasured_reason, run_key)"
+            " VALUES ('acc', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                task,
+                attempt,
+                tokens,
+                None if tokens is None else 0,
+                cost,
+                ts(NOW),
+                measurement,
+                reason,
+                f"r1:{task}",
+            ),
         )
 
 
@@ -363,6 +383,38 @@ async def test_yield_counts_attempts_tokens_per_outcome_and_lost_time(
     (group,) = [g for g in h.failures.groups if g.reason == "lease_expired"]
     assert group.lost_seconds == 20.0 * MIN_SAMPLES
     assert h.model_dump(by_alias=True)["yield"]["attempts"] == 2 * MIN_SAMPLES
+
+
+async def test_yield_cost_only_measured_does_not_invent_zero_tokens(
+    db: Database,
+) -> None:
+    """A measured row with only cost_usd is legal; tokens stay unknown (NULL)."""
+    cost_ids = [f"cost{i}" for i in range(MIN_SAMPLES)]
+    for n in cost_ids:
+        await add_finished(db, n, "succeeded")
+        await add_usage(db, n, tokens=None, cost=0.25)
+    for i in range(MIN_SAMPLES):
+        await add_finished(db, f"tok{i}", "succeeded")
+        await add_usage(db, f"tok{i}", tokens=1000, cost=0.5)
+    await add_finished(db, "nr0", "succeeded")
+    await add_usage(
+        db,
+        "nr0",
+        tokens=None,
+        cost=None,
+        measurement="not_reported",
+        reason="no_report",
+    )
+    async with (
+        db.read() as conn,
+        conn.execute(USAGE_SQL, (json.dumps(cost_ids),)) as cur,
+    ):
+        cost_rows = list(await cur.fetchall())
+    assert all(r["tokens"] is None and r["cost"] == 0.25 for r in cost_rows)
+    y = (await health(db)).yield_
+    # Cost-only tasks count for cost means; they never inject a 0.0 token sample.
+    assert y.cost_per_succeeded == 0.375  # mean of five 0.25 and five 0.5
+    assert y.tokens_per_succeeded == 1000.0  # only the five token-measured tasks
 
 
 def test_classify_failure_tolerates_spaces_and_hyphens() -> None:

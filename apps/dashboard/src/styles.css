@@ -178,8 +178,12 @@ label.check input {
   height: 100vh;
   max-height: 100vh;
   overflow: hidden;
+  /* Room under main/rail so a fixed live-status bar never covers the last lines. */
+  padding-bottom: 2.25rem;
+  box-sizing: border-box;
 }
-.shell-worker {
+.shell-worker,
+.shell:has(.task-panel) {
   height: 100vh;
   max-height: 100vh;
   overflow: hidden;
@@ -442,6 +446,92 @@ nav a {
 .status-offline::before {
   background: var(--danger);
 }
+.live-status {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  height: 2.25rem;
+  overflow: hidden;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  transition: height 0.28s ease;
+}
+.live-status.open {
+  height: 50vh;
+}
+.live-status-feed {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0.5rem 0.85rem 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+.live-status:not(.open) .live-status-feed {
+  overflow: hidden;
+  border-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.live-status-feed-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+}
+.live-status-feed-head a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.live-status-feed-head a:hover {
+  color: var(--text);
+}
+.live-status-feed .events {
+  margin: 0;
+}
+.live-status-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 2.25rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.25rem 0.85rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.live-status-strip:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+.live-status .status {
+  flex: 0 0 auto;
+}
+.live-status-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-status {
+    transition: none;
+  }
+}
 .workspace > main {
   padding: 1.1rem 1.25rem 1.25rem;
   overflow: auto;
@@ -470,6 +560,7 @@ main > section:not(.home) > .page-lead {
   grid-column: 3;
   grid-row: 1;
   align-self: stretch;
+  min-width: 0;
   min-height: 0;
   height: 100%;
   overflow: hidden;
@@ -519,6 +610,8 @@ main > section:not(.home) > .page-lead {
   align-items: center;
   gap: 0.4rem;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding: 0.3rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -526,6 +619,7 @@ main > section:not(.home) > .page-lead {
   color: var(--text);
   text-align: left;
   cursor: pointer;
+  overflow: hidden;
 }
 .worker-chip:hover {
   border-color: var(--accent);
@@ -535,13 +629,82 @@ main > section:not(.home) > .page-lead {
   box-shadow: inset 0 0 0 1px var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
 }
-.shell-worker .workspace > main {
+.shell-worker .workspace > main,
+.shell:has(.task-panel) .workspace > main {
   padding: 0.5rem 0.35rem 0.5rem 0.5rem;
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
   background: var(--bg);
+}
+.task-panel-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+/* Full-width task view; warm tint so it reads apart from the blue worker panel. */
+.task-panel {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 28%, transparent);
+}
+.drawer.task-drawer {
+  width: min(100%, 100vw);
+  max-width: none;
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface));
+}
+/* Sticky bar so Close stays on screen while the panel or drawer scrolls. */
+.panel-titlebar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 2.5rem;
+  padding: 0.45rem 0.5rem 0.45rem 1.15rem;
+  border-bottom: 1px solid var(--border);
+}
+.panel-titlebar h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 1.1rem;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.65rem 1.25rem 1rem;
+}
+.worker-panel > .panel-titlebar {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+.task-panel > .panel-titlebar {
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface));
+}
+.drawer > .panel-titlebar {
+  background: var(--surface);
+}
+.drawer.task-drawer > .panel-titlebar {
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface));
 }
 .shell-worker .workers-rail {
   min-height: 0;
@@ -558,21 +721,17 @@ main > section:not(.home) > .page-lead {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  /* Right gutter keeps the close control clear of scrollbars. */
-  padding: 0.65rem 2.15rem 1rem 1.25rem;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
+  gap: 0;
   border: 1px solid var(--accent);
   border-radius: 10px;
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 .icon-close {
-  position: absolute;
-  top: 0.35rem;
-  right: 0.2rem;
-  z-index: 1;
+  flex: 0 0 auto;
   width: 1.75rem;
   height: 1.75rem;
   margin: 0;
@@ -594,6 +753,7 @@ main > section:not(.home) > .page-lead {
   flex: 0 0 28%;
   min-height: 3.5rem;
   overflow: auto;
+  padding: 0.65rem 1.25rem 0;
 }
 .worker-panel-meta .facts {
   grid-template-columns: repeat(3, max-content minmax(0, 1fr));
@@ -640,7 +800,7 @@ main > section:not(.home) > .page-lead {
 }
 .worker-split {
   flex: 0 0 auto;
-  margin: 0;
+  margin: 0 1.25rem;
   border: none;
   height: 7px;
   cursor: row-resize;
@@ -666,6 +826,7 @@ main > section:not(.home) > .page-lead {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  padding: 0 1.25rem 1rem;
 }
 .worker-panel .term {
   flex: 1 1 auto;
@@ -678,8 +839,10 @@ main > section:not(.home) > .page-lead {
   align-items: center;
   justify-content: space-between;
   gap: 0.35rem;
+  min-width: 0;
 }
 .worker-mark {
+  box-sizing: content-box;
   display: grid;
   place-items: center;
   width: 1.45rem;
@@ -689,11 +852,14 @@ main > section:not(.home) > .page-lead {
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text);
+  flex-shrink: 0;
 }
 .worker-mark.letter {
-  font-size: 0.85rem;
+  display: grid;
+  place-items: center;
+  font-size: 0.8rem;
   font-weight: 700;
-  padding: 0;
+  line-height: 1;
 }
 .worker-busy .worker-mark {
   border-color: color-mix(in srgb, var(--ok) 55%, var(--border));
@@ -717,6 +883,7 @@ main > section:not(.home) > .page-lead {
   color: #8bb4ff;
 }
 .worker-state {
+  flex-shrink: 0;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -899,13 +1066,66 @@ main > section:not(.home) > .page-lead {
   border-radius: 8px;
   padding: 0.4rem 0.5rem;
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   overflow-wrap: anywhere;
+  appearance: none;
+}
+.task-card > * {
+  /* Grid items default to min-width:auto; long nowrap badges then spill past the card. */
+  min-width: 0;
+  max-width: 100%;
 }
 .task-card .title {
   font-weight: 500;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.task-card .badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Two classes so this beats `.badge { display: inline-block }`. */
+.badge.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  padding: 0.12rem 0.45rem 0.12rem 0.28rem;
+  line-height: 1.25;
+  vertical-align: middle;
+}
+.model-chip .provider-mark,
+.model-chip .configured-icon {
+  display: block;
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  vertical-align: unset;
+}
+.model-chip .provider-mark.letter {
+  width: 12px;
+  height: 12px;
+  font-size: 9px;
+  line-height: 1;
+}
+.model-chip-id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.configured-icon {
+  color: var(--muted);
+  opacity: 0.85;
+}
+.task-card .progress > .small {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
   overflow: hidden;
 }
 .meta {
@@ -918,6 +1138,7 @@ main > section:not(.home) > .page-lead {
 .progress {
   display: grid;
   gap: 0.25rem;
+  min-width: 0;
 }
 .bar {
   height: 4px;
@@ -991,14 +1212,12 @@ main > section:not(.home) > .page-lead {
   position: relative;
   width: min(720px, 100%);
   height: 100%;
-  overflow: auto;
+  overflow: hidden;
   background: var(--surface);
-  padding: 1.25rem 2.35rem 1.25rem 1.25rem;
+  padding: 0;
   box-shadow: var(--shadow);
-}
-.drawer > .icon-close {
-  top: 0.65rem;
-  right: 0.35rem;
+  display: flex;
+  flex-direction: column;
 }
 .facts {
   display: grid;
@@ -1011,9 +1230,6 @@ main > section:not(.home) > .page-lead {
 }
 .facts dd {
   margin: 0;
-}
-.spec {
-  max-height: 360px;
 }
 ul.plain {
   list-style: none;
@@ -1803,8 +2019,18 @@ th {
   background: var(--surface-2);
   border-radius: var(--radius);
   padding: 0.75rem 1rem;
-  max-height: 420px;
-  overflow: auto;
+  /* Grow with the text; the panel scrolls. A nested max-height + flex shrink
+     crushed this into a one-line scrollbar. */
+  overflow: visible;
+}
+.spec .markdown {
+  margin: 0;
+}
+.spec .markdown > :first-child {
+  margin-top: 0;
+}
+.spec .markdown > :last-child {
+  margin-bottom: 0;
 }
 .spec .markdown pre {
   background: var(--surface);
@@ -2064,6 +2290,52 @@ label.check input {
 }
 .term-empty {
   color: #6b778a;
+}
+.task-changes {
+  margin-top: 0.75rem;
+}
+.changes-body {
+  white-space: normal;
+}
+.changes-body p {
+  margin: 0 0 0.4rem;
+}
+.changes-cut {
+  color: #e2b24f;
+}
+.changes-commits,
+.changes-files {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+}
+.changes-status {
+  display: inline-block;
+  width: 1.2em;
+  color: #8b95a8;
+  font-weight: 700;
+}
+.changes-patch summary {
+  cursor: pointer;
+  color: #e6edf3;
+  padding: 0.15rem 0;
+}
+.changes-patch pre {
+  margin: 0.2rem 0 0.6rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-add {
+  color: #3fb950;
+}
+.diff-del {
+  color: #ff7b72;
+}
+.diff-hunk {
+  color: #39c5cf;
+}
+.diff-meta {
+  color: #6b7385;
 }
 .term-error {
   margin: 0;
@@ -2380,9 +2652,10 @@ label.check input {
   font-size: 12px;
 }
 .provider-mark {
-  width: 1.1em;
-  height: 1.1em;
-  vertical-align: -0.2em;
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
 }
 .provider-mark.letter {
   display: inline-grid;
@@ -2390,13 +2663,15 @@ label.check input {
   border-radius: 4px;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  font-size: 0.75em;
+  font-size: 0.7em;
   font-weight: 600;
+  line-height: 1;
 }
 .state-icon {
-  width: 0.95em;
-  height: 0.95em;
-  vertical-align: -0.15em;
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
 }
 button.link.account-name {
   font-weight: 600;

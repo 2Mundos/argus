@@ -64,8 +64,13 @@ describe("Tasks model chips", () => {
       },
     ];
     render(<Tasks />);
-    expect(await screen.findByText("codex · gpt-6")).toBeTruthy();
-    expect(screen.getByText("claude · sonnet · configured")).toBeTruthy();
+    expect(await screen.findByText("gpt-6")).toBeTruthy();
+    expect(screen.getByTitle("codex · gpt-6")).toBeTruthy();
+    expect(screen.getByText("sonnet")).toBeTruthy();
+    expect(screen.getByTitle("claude · sonnet · configured")).toBeTruthy();
+    expect(screen.getByLabelText("configured")).toBeTruthy();
+    expect(screen.getByLabelText("OpenAI")).toBeTruthy();
+    expect(screen.getByLabelText("Anthropic")).toBeTruthy();
     const card = screen.getByRole("button", { name: /No model/ });
     expect(card.querySelector('[aria-label="Models used"]')).toBeNull();
   });

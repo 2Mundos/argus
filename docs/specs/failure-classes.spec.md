@@ -85,6 +85,11 @@ task. No model session starts and no attempt is spent.
 | The task workspace can be created and read (no `EACCES`, `EPERM` or `EROFS`) | `env_workspace_permission` |
 | The task workspace is a real directory under the workspaces root and a git repository | `env_workspace_invalid` |
 | Its `origin` is the task's repository URL, without credentials | `env_workspace_remote_mismatch` |
+| A checkpoint is expected but missing, incomplete, or from another node (no proven transport) | `env_checkpoint_unavailable` |
+| A checkpoint's hashes, identity, paths or permissions fail validation | `env_checkpoint_invalid` |
+| The workspace already holds work that differs from the checkpoint | `env_checkpoint_conflict` |
+| Another holder has the task's checkpoint lease | `env_checkpoint_busy` |
+| The work exceeds the checkpoint size limit | `env_checkpoint_limit` |
 | Its HEAD is the task branch | `env_workspace_branch_mismatch` |
 | A new workspace stays within `ARGUS_TASK_WORKSPACE_MAX` | `env_workspace_limit` |
 

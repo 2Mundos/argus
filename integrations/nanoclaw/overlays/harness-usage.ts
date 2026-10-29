@@ -250,6 +250,7 @@ export function recordHarnessUsage(
     const measured = obs.kind === "measured";
     const payload = {
       task_id: ctx.task_id,
+      attempt: ctx.attempt,
       model: obs.model ? obs.model.slice(0, 100) : null,
       engine,
       role: "engine",

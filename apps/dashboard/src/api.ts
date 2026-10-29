@@ -1,6 +1,7 @@
 import { type components, createArgusClient } from "@argus/api-client";
 
 export type Task = components["schemas"]["Task"];
+export type TaskChanges = components["schemas"]["Changes"];
 export type TaskSummary = components["schemas"]["TaskSummary"];
 export type TaskState = components["schemas"]["TaskState"];
 export type Delivery = components["schemas"]["Delivery"];

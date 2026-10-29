@@ -4,6 +4,7 @@ import { Brand } from "./Brand";
 import { LiveProvider, useLive, useLiveData } from "./live";
 import { verdict } from "./overview";
 import { Home } from "./views/Home";
+import { LiveStatusBar } from "./views/LiveStatusBar";
 import { Login } from "./views/Login";
 import { WorkersSidebar } from "./WorkersSidebar";
 
@@ -413,6 +414,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
         </main>
       </div>
       <WorkersSidebar selectedId={selectedWorker} onSelect={setSelectedWorker} />
+      <LiveStatusBar />
     </div>
   );
 }

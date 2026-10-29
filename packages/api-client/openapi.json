@@ -176,6 +176,11 @@
             "title": "Account Id",
             "type": "string"
           },
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
           "cached_input_tokens": {
             "anyOf": [
               {
@@ -209,6 +214,11 @@
             ],
             "title": "Input Tokens"
           },
+          "measured_attempts": {
+            "default": 0,
+            "title": "Measured Attempts",
+            "type": "integer"
+          },
           "measured_runs": {
             "title": "Measured Runs",
             "type": "integer"
@@ -216,6 +226,11 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "not_reported_attempts": {
+            "default": 0,
+            "title": "Not Reported Attempts",
+            "type": "integer"
           },
           "not_reported_runs": {
             "title": "Not Reported Runs",
@@ -2149,6 +2164,27 @@
         "title": "Axes",
         "type": "object"
       },
+      "BaseRef": {
+        "properties": {
+          "ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Ref",
+            "type": "string"
+          },
+          "sha": {
+            "pattern": "^[0-9a-f]{4,64}$",
+            "title": "Sha",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "sha"
+        ],
+        "title": "BaseRef",
+        "type": "object"
+      },
       "BlockRequest": {
         "properties": {
           "attempt": {
@@ -2349,6 +2385,265 @@
           "dry_run"
         ],
         "title": "BulkArchiveResult",
+        "type": "object"
+      },
+      "ChangedFile": {
+        "properties": {
+          "added": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Added"
+          },
+          "binary": {
+            "default": false,
+            "title": "Binary",
+            "type": "boolean"
+          },
+          "deleted": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted"
+          },
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "A",
+              "M",
+              "D",
+              "R",
+              "C",
+              "T",
+              "U",
+              "X"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "status"
+        ],
+        "title": "ChangedFile",
+        "type": "object"
+      },
+      "Changes": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BaseRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branch": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Branch",
+            "type": "string"
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/Commit"
+            },
+            "maxItems": 50,
+            "title": "Commits",
+            "type": "array"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/ChangedFile"
+            },
+            "maxItems": 500,
+            "title": "Files",
+            "type": "array"
+          },
+          "head": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{4,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head"
+          },
+          "patch": {
+            "default": "",
+            "title": "Patch",
+            "type": "string"
+          },
+          "received_at": {
+            "format": "date-time",
+            "title": "Received At",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "truncated": {
+            "$ref": "#/components/schemas/Truncated"
+          },
+          "untracked": {
+            "items": {
+              "$ref": "#/components/schemas/UntrackedFile"
+            },
+            "maxItems": 200,
+            "title": "Untracked",
+            "type": "array"
+          }
+        },
+        "required": [
+          "at",
+          "branch",
+          "task_id",
+          "attempt",
+          "received_at"
+        ],
+        "title": "Changes",
+        "type": "object"
+      },
+      "ChangesAccepted": {
+        "properties": {
+          "added": {
+            "title": "Added",
+            "type": "integer"
+          },
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "deleted": {
+            "title": "Deleted",
+            "type": "integer"
+          },
+          "files": {
+            "title": "Files",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at",
+          "files",
+          "added",
+          "deleted"
+        ],
+        "title": "ChangesAccepted",
+        "type": "object"
+      },
+      "ChangesWrite": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BaseRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branch": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Branch",
+            "type": "string"
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/Commit"
+            },
+            "maxItems": 50,
+            "title": "Commits",
+            "type": "array"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/ChangedFile"
+            },
+            "maxItems": 500,
+            "title": "Files",
+            "type": "array"
+          },
+          "head": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{4,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head"
+          },
+          "patch": {
+            "default": "",
+            "title": "Patch",
+            "type": "string"
+          },
+          "truncated": {
+            "$ref": "#/components/schemas/Truncated"
+          },
+          "untracked": {
+            "items": {
+              "$ref": "#/components/schemas/UntrackedFile"
+            },
+            "maxItems": 200,
+            "title": "Untracked",
+            "type": "array"
+          }
+        },
+        "required": [
+          "at",
+          "branch",
+          "attempt"
+        ],
+        "title": "ChangesWrite",
         "type": "object"
       },
       "Check": {
@@ -3285,6 +3580,26 @@
         "title": "CodexLoginStart",
         "type": "object"
       },
+      "Commit": {
+        "properties": {
+          "sha": {
+            "pattern": "^[0-9a-f]{4,64}$",
+            "title": "Sha",
+            "type": "string"
+          },
+          "subject": {
+            "maxLength": 1000,
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "subject"
+        ],
+        "title": "Commit",
+        "type": "object"
+      },
       "CompleteRequest": {
         "properties": {
           "attempt": {
@@ -3685,8 +4000,13 @@
         "type": "object"
       },
       "CostFigures": {
-        "description": "What one group spent. `runs = measured_runs + not_reported_runs`. A token\nfield is null when no measured run carried it, never 0 (cost view 3.1).",
+        "description": "What one group spent. `runs = measured_runs + not_reported_runs`. A token\nfield is null when no measured run carried it, never 0 (cost view 3.1).\nAttempt coverage counts distinct (task, attempt) pairs among the group's rows\n(account usage 3.10); rows with no attempt count only in `runs`.",
         "properties": {
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
           "cached_input_tokens": {
             "anyOf": [
               {
@@ -3720,8 +4040,18 @@
             ],
             "title": "Input Tokens"
           },
+          "measured_attempts": {
+            "default": 0,
+            "title": "Measured Attempts",
+            "type": "integer"
+          },
           "measured_runs": {
             "title": "Measured Runs",
+            "type": "integer"
+          },
+          "not_reported_attempts": {
+            "default": 0,
+            "title": "Not Reported Attempts",
             "type": "integer"
           },
           "not_reported_runs": {
@@ -3816,6 +4146,9 @@
             "title": "Tz",
             "type": "string"
           },
+          "unattributed": {
+            "$ref": "#/components/schemas/CostFigures"
+          },
           "window": {
             "enum": [
               "24h",
@@ -3833,6 +4166,7 @@
           "tz",
           "pricing",
           "totals",
+          "unattributed",
           "by_account",
           "by_project",
           "daily"
@@ -4114,6 +4448,11 @@
       },
       "DayCost": {
         "properties": {
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
           "cached_input_tokens": {
             "anyOf": [
               {
@@ -4147,8 +4486,18 @@
             ],
             "title": "Input Tokens"
           },
+          "measured_attempts": {
+            "default": 0,
+            "title": "Measured Attempts",
+            "type": "integer"
+          },
           "measured_runs": {
             "title": "Measured Runs",
+            "type": "integer"
+          },
+          "not_reported_attempts": {
+            "default": 0,
+            "title": "Not Reported Attempts",
             "type": "integer"
           },
           "not_reported_runs": {
@@ -4204,6 +4553,136 @@
           "start"
         ],
         "title": "DayCost",
+        "type": "object"
+      },
+      "DeadSessionRecovery": {
+        "description": "session_lost observed \u2192 next claim (worker efficiency draft, P5 measure).\n\nDeath time is not in events. Fail and requeue are the same `task.fail` when\n`to=ready`. Latency is therefore observation \u2192 next claim, never a fabricated\ndeath\u2192requeue delta. Percentiles need `MIN_SAMPLES` measured rows.",
+        "properties": {
+          "anomalous": {
+            "title": "Anomalous",
+            "type": "integer"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "denominator": {
+            "title": "Denominator",
+            "type": "integer"
+          },
+          "examples": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryExample"
+            },
+            "title": "Examples",
+            "type": "array"
+          },
+          "failure_class": {
+            "default": "session",
+            "title": "Failure Class",
+            "type": "string"
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "measured": {
+            "title": "Measured",
+            "type": "integer"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "not_requeued": {
+            "title": "Not Requeued",
+            "type": "integer"
+          },
+          "outliers": {
+            "title": "Outliers",
+            "type": "integer"
+          },
+          "p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p90": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P90"
+          },
+          "pending": {
+            "title": "Pending",
+            "type": "integer"
+          },
+          "reason": {
+            "default": "session_lost",
+            "title": "Reason",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "target_s": {
+            "default": 300.0,
+            "title": "Target S",
+            "type": "number"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "source",
+          "denominator",
+          "measured",
+          "pending",
+          "not_requeued",
+          "anomalous",
+          "coverage",
+          "n",
+          "p50",
+          "p90",
+          "mean",
+          "outliers",
+          "truncated",
+          "examples"
+        ],
+        "title": "DeadSessionRecovery",
         "type": "object"
       },
       "Decision": {
@@ -6766,6 +7245,9 @@
             "title": "As Of",
             "type": "string"
           },
+          "dead_session_recovery": {
+            "$ref": "#/components/schemas/DeadSessionRecovery"
+          },
           "failures": {
             "$ref": "#/components/schemas/Failures"
           },
@@ -6810,6 +7292,7 @@
           "outcomes",
           "failures",
           "yield",
+          "dead_session_recovery",
           "truncated"
         ],
         "title": "FleetHealth",
@@ -11009,6 +11492,11 @@
       },
       "ProjectCost": {
         "properties": {
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
           "cached_input_tokens": {
             "anyOf": [
               {
@@ -11042,8 +11530,18 @@
             ],
             "title": "Input Tokens"
           },
+          "measured_attempts": {
+            "default": 0,
+            "title": "Measured Attempts",
+            "type": "integer"
+          },
           "measured_runs": {
             "title": "Measured Runs",
+            "type": "integer"
+          },
+          "not_reported_attempts": {
+            "default": 0,
+            "title": "Not Reported Attempts",
             "type": "integer"
           },
           "not_reported_runs": {
@@ -11737,6 +12235,73 @@
           "checks"
         ],
         "title": "ReadinessOut",
+        "type": "object"
+      },
+      "RecoveryExample": {
+        "description": "One auditable synthetic sample: source fail (+ claim) event ids.",
+        "properties": {
+          "claim_event_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Event Id"
+          },
+          "fail_event_id": {
+            "title": "Fail Event Id",
+            "type": "integer"
+          },
+          "latency_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency S"
+          },
+          "next_claim_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Claim At"
+          },
+          "observed_lost_at": {
+            "format": "date-time",
+            "title": "Observed Lost At",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "fail_event_id",
+          "claim_event_id",
+          "observed_lost_at",
+          "next_claim_at",
+          "latency_s",
+          "outcome"
+        ],
+        "title": "RecoveryExample",
         "type": "object"
       },
       "RecycleRequest": {
@@ -15585,6 +16150,43 @@
         "title": "Tri",
         "type": "string"
       },
+      "Truncated": {
+        "properties": {
+          "files": {
+            "default": false,
+            "title": "Files",
+            "type": "boolean"
+          },
+          "patch": {
+            "default": false,
+            "title": "Patch",
+            "type": "boolean"
+          }
+        },
+        "title": "Truncated",
+        "type": "object"
+      },
+      "UntrackedFile": {
+        "properties": {
+          "bytes": {
+            "minimum": 0.0,
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "bytes"
+        ],
+        "title": "UntrackedFile",
+        "type": "object"
+      },
       "Usage-Input": {
         "description": "What the work cost, as reported by the agent. Recorded, never enforced.",
         "properties": {
@@ -15777,6 +16379,18 @@
       "UsageReport": {
         "description": "One engine run on one held account (account usage 3.2).",
         "properties": {
+          "attempt": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
+          },
           "cached_input_tokens": {
             "anyOf": [
               {
@@ -16749,6 +17363,21 @@
           },
           "finished_tasks": {
             "title": "Finished Tasks",
+            "type": "integer"
+          },
+          "measured_attempts": {
+            "default": 0,
+            "title": "Measured Attempts",
+            "type": "integer"
+          },
+          "measured_tasks": {
+            "default": 0,
+            "title": "Measured Tasks",
+            "type": "integer"
+          },
+          "not_reported_attempts": {
+            "default": 0,
+            "title": "Not Reported Attempts",
             "type": "integer"
           },
           "source": {
@@ -20301,7 +20930,7 @@
     },
     "/api/fleet/health": {
       "get": {
-        "description": "Pool, queue, run-time, outcome and failure health over `window` hours.",
+        "description": "Pool, queue, run-time, outcome, yield and dead-session recovery over `window` hours.",
         "operationId": "fleet_health_api_fleet_health_get",
         "parameters": [
           {
@@ -24172,6 +24801,128 @@
           }
         ],
         "summary": "Cancel Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/changes": {
+      "get": {
+        "description": "The diff snapshot of an attempt (default: the current one); 404 `no_changes`\nwhen it has none. Workers only read tasks they have leased.",
+        "operationId": "get_changes_api_tasks__task_id__changes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "attempt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Attempt"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Changes"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Changes",
+        "tags": [
+          "tasks"
+        ]
+      },
+      "put": {
+        "description": "Replace the diff snapshot of the attempt you hold (agent token), computed in\nthe container against the workspace's merge base. At most 384 KiB, 500 files and\na 256 KiB patch (longer is cut), one snapshot per 5 s. Secrets are redacted\nbefore storing; the summary is published as a `task.changes` event. Fenced like\nthe live log: a stale attempt is 409 `stale_attempt`.",
+        "operationId": "put_changes_api_tasks__task_id__changes_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangesWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Changes",
         "tags": [
           "tasks"
         ]

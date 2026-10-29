@@ -64,6 +64,12 @@ export function Report({ report, tz }: { report: CostReport; tz: string }) {
         <Stat label={`Cost (estimate, ${currency})`} value={costLabel(totals, currency)} />
         <Stat label="Measured runs" value={String(totals.measured_runs)} />
         {missed && <Stat label="Runs without figures" value={missed} />}
+        {(totals.attempts ?? 0) > 0 && (
+          <Stat
+            label="Attempts measured"
+            value={`${totals.measured_attempts ?? 0} of ${totals.attempts ?? 0}`}
+          />
+        )}
       </div>
       {totals.reported_cost_usd != null && (
         <p className="muted small">

@@ -10,7 +10,7 @@ import {
   type Source,
   sum,
 } from "../overview";
-import { EventList } from "./Events";
+import { EventList } from "./EventList";
 import { SystemWidgets } from "./SystemWidgets";
 
 function useSource<T>(

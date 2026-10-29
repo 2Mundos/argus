@@ -54,7 +54,10 @@ scope (orchestrator, admin), as `GET /api/accounts` is. The MCP tools `list_acco
 
 - `account_usage` keeps one row per report, kept forever and aggregated on read.
   It gains `cached_input_tokens`, `model`, `engine` and `role`
-  (`engine | executor`).
+  (`engine | executor`), and `attempt`: the task attempt the run belongs to
+  (null when unknown). `account_id` is null on an attempt placeholder that no
+  account can be attributed to (§3.10), and on rows detached when their account
+  is deleted (kept as unattributed; never erased).
 - `account_quota` keeps the latest snapshot per (account, window). The fields:
   - `window`: `"<minutes>m"` for timed windows, or a pool name such as
     `cursor` or `third_party`;
@@ -87,6 +90,7 @@ scope (orchestrator, admin), as `GET /api/accounts` is. The MCP tools `list_acco
 - The body carries:
   - `input_tokens`, `output_tokens`, `cached_input_tokens`;
   - `model`, `engine`, `role`, `cost_usd`, `task_id`;
+  - optional `attempt` (≥ 1): the task attempt the run belongs to (§3.10);
   - optional `run_key` (at most 200 characters; the client builds it from
     task, agent, engine and start): a repeated report of the same key for the
     account returns `204` and adds no row. Without a key every report is a row;
@@ -209,7 +213,9 @@ account lease and must preserve the document structure and JSON value types.
 - `GET /api/accounts` gains `quota: [...]`, plus `cached_input_tokens`,
   `runs` and `unmeasured_runs` in its usage totals. `runs` counts every row,
   `unmeasured_runs` the `not_reported` ones; tokens and cost sum measured rows
-  only. The series totals and buckets carry the same two counts.
+  only. The series totals and buckets carry the same two counts. An attempt
+  placeholder (§3.10) is a `not_reported` row of its account like any other;
+  one with no account belongs to no account's series.
 - Accounts gain `token_limits` (create and update API): an optional object of
   positive integers under `5h`, `24h`, `7d`, the most total (input + output)
   tokens the account may spend in that rolling window. Null clears it.
@@ -369,14 +375,52 @@ the file for the claimed task:
   ends.
 - Posts `POST /api/accounts/{id}/usage` with the host's agent token.
 
-- At the end of an attempt for which it posted no usage at all, it posts one
-  `not_reported` row for the engine account with `reason: "no_usage_seen"` and
-  `run_key` `h0:<task>:<attempt>`, so every attempt has at least one row
-  ([worker efficiency](../drafts/2026-10-24.worker-efficiency.draft.md) P8).
+- Passes the record's `attempt` in the body. An attempt that ends with no usage
+  posted gets its `not_reported` row from the API itself (§3.10), not from the
+  host: a crashed host posts nothing.
 
 Idempotency is unchanged: `run_key` on the API deduplicates executor runs;
 harness keys deduplicate per turn. Measured stream totals use deltas so resume
 and cache accounting do not double-count.
+
+## 3.10 One outcome per attempt
+
+Every finished attempt has a usage outcome: **measured** (at least one
+`measured` row) or **not reported** (only `not_reported` rows, each with a
+reason). Unknown cost is never counted as zero
+([worker efficiency](../drafts/2026-10-24.worker-efficiency.draft.md) P8).
+
+- **Attribution.** A report's `attempt` must be one the reporting agent claimed
+  on that task (`task_attempts`); without one, the agent's latest claim of the
+  task is taken. A report with no matching claim keeps `attempt = null` (it counts
+  in totals, never in attempt coverage). `result.usage` takes the attempt being
+  completed.
+- **Placeholder.** In the same write transaction that takes an attempt out of
+  `claimed` (complete, fail, expiry, block, release, requeue, cancel), if the
+  attempt has no usage row yet, the API writes one `not_reported` row:
+  - `run_key` `a1:<task_id>:<attempt>:<claim id>`, unique (index
+    `account_usage_attempt_outcome`), so a repeated finish adds nothing;
+    claim id `0` means no recorded `task_attempts` row for that attempt;
+  - `unmeasured_reason`: `no_report` (complete, fail, block), `lost` (lease
+    expired, agent ended), `timeout`, `stalled`, `released`, `requeued`,
+    `cancelled`;
+  - `task_id`, `attempt`, `agent_id` (the assignee) and, through the task, its
+    project;
+  - `account_id`: the newest `engine` lease the agent held during the attempt,
+    with `role = engine`. When there is none (a crash before leasing, a local
+    model), `account_id` and `role` are **null**: the row counts in attempt
+    coverage and in the Cost view's `unattributed` group, never in an
+    account's figures.
+- **Late report.** A `measured` report for an attempt whose only outcome is a
+  placeholder (`a1:` key) turns that row into the measured one, in place,
+  in one statement under `Database.write()`: figures, account, role, model,
+  engine, `run_key`, `at`. Never the reverse: a `not_reported` report for an
+  attempt that already has a placeholder or any measured row adds nothing, and
+  a measured row is never rewritten. A duplicate `run_key` is still a no-op, so
+  a replayed report neither double counts nor overwrites the first figures. A
+  late report still needs an active lease (§3.2).
+- **Coverage.** Read models count attempts: an attempt is measured when any of
+  its rows is, else not reported. Token and cost sums cover measured rows only.
 
 # 4. Open Questions
 
@@ -413,7 +457,9 @@ usage row of the same run, `null` when none ([spec](model-observability.spec.md)
 - Migrations `0015_account_usage.sql`, `0019_account_usage_runs.sql`
   (`run_key` with a partial unique index, `measurement`, `token_limits`) and
   `0039_usage_telemetry.sql` (`unmeasured_reason`, `account_quota_probe`) and
-  `0042_quota_sources.sql` (probe `code`, `account_credit`). Core
+  `0042_quota_sources.sql` (probe `code`, `account_credit`) and
+  `0053_attempt_usage.sql` (rebuilds `account_usage`: nullable `account_id`,
+  `attempt` backfilled from `task_attempts`, the `a1:` unique index). Core
   models in `argus_core.accounts`.
 - `accounts/service.py` (ingest, quota upsert, aggregation),
   `accounts/quota_probe.py` (the probe and its loop), `accounts/quota_readers.py`

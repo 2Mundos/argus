@@ -8,7 +8,7 @@ unknown, and a statistic with fewer than `MIN_SAMPLES` samples is `None`.
 
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from argus_core.fleet import InstanceState
@@ -24,6 +24,9 @@ MAX_WINDOW_HOURS = 720  # 30 days
 MAX_ROWS = 5000  # newest rows per bounded fetch; `truncated` says when it bit
 EXAMPLES = 5
 EXCERPT_CHARS = 200
+# P5 draft target: median session_lost → next claim under 5 minutes. Samples at or
+# above this are counted as outliers; they still enter the median when n is enough.
+RECOVERY_TARGET_S = 300.0
 
 REASONS = (
     "auth_missing",
@@ -67,16 +70,52 @@ ATTEMPTS_SQL = (
     "SELECT kind, count(*) FROM events WHERE kind IN ('task.claim', 'task.complete')"
     " AND at >= ? AND at <= ? GROUP BY kind"
 )
-# Tokens and cost reported for a set of tasks (JSON array of ids), per task.
+# Measured tokens/cost and attempt coverage for a set of tasks (JSON array of ids).
+# Unknown is never zero: token/cost sums cover measured rows only; attempt counts
+# come from distinct (task, attempt) pairs with any usage row (account usage 3.10).
 USAGE_SQL = (
-    "SELECT task_id, coalesce(sum(input_tokens), 0) + coalesce(sum(output_tokens), 0)"
-    " AS tokens, coalesce(sum(cost_usd), 0.0) AS cost FROM account_usage"
-    " WHERE task_id IN (SELECT value FROM json_each(?)) GROUP BY task_id"
+    "SELECT u.task_id,"
+    # Tokens only when a measured row actually reported some; cost-only measured
+    # (legal: tokens OR cost) must stay NULL, never coalesce into an invented 0.
+    " sum(CASE WHEN u.measurement = 'measured'"
+    "     AND (u.input_tokens IS NOT NULL OR u.output_tokens IS NOT NULL)"
+    "     THEN coalesce(u.input_tokens, 0) + coalesce(u.output_tokens, 0) END)"
+    " AS tokens,"
+    " sum(CASE WHEN u.measurement = 'measured' THEN u.cost_usd END) AS cost,"
+    " (SELECT count(*) FROM ("
+    "   SELECT attempt FROM account_usage a"
+    "   WHERE a.task_id = u.task_id AND a.attempt IS NOT NULL GROUP BY a.attempt"
+    " )) AS attempts,"
+    " (SELECT count(*) FROM ("
+    "   SELECT attempt FROM account_usage a"
+    "   WHERE a.task_id = u.task_id AND a.attempt IS NOT NULL"
+    "   GROUP BY a.attempt HAVING max(a.measurement = 'measured')"
+    " )) AS measured_attempts"
+    " FROM account_usage u"
+    " WHERE u.task_id IN (SELECT value FROM json_each(?)) GROUP BY u.task_id"
 )
 HEARTBEAT_SQL = (
     "SELECT i.pool, max(a.last_heartbeat_at) FROM agents a"
     " JOIN instances i ON i.id = a.instance_id"
     " WHERE a.state IN ('active', 'draining') GROUP BY i.pool"
+)
+# session_lost fails in the window, with the next claim after each (if any).
+# Death time is not stored: start is the fail event's `at` (observed lost).
+# Requeue itself is the same event when data.to = 'ready' (failure classes 3.2).
+SESSION_LOST_SQL = (
+    "SELECT e.id, e.at, e.subject_id, e.data,"
+    " (SELECT c.id FROM events c WHERE c.subject_type = 'task'"
+    "   AND c.subject_id = e.subject_id AND c.kind = 'task.claim'"
+    "   AND (c.at > e.at OR (c.at = e.at AND c.id > e.id))"
+    "   ORDER BY c.at ASC, c.id ASC LIMIT 1) AS next_claim_id,"
+    " (SELECT c.at FROM events c WHERE c.subject_type = 'task'"
+    "   AND c.subject_id = e.subject_id AND c.kind = 'task.claim'"
+    "   AND (c.at > e.at OR (c.at = e.at AND c.id > e.id))"
+    "   ORDER BY c.at ASC, c.id ASC LIMIT 1) AS next_claim_at"
+    " FROM events e"
+    " WHERE e.kind = 'task.fail' AND e.at >= ? AND e.at <= ?"
+    " AND json_extract(e.data, '$.reason') = 'session_lost'"
+    " ORDER BY e.at DESC, e.id DESC LIMIT ?"
 )
 
 
@@ -142,14 +181,55 @@ class Yield(Provenance):
     attempt_success_rate: float | None
     finished_tasks: int
     attempts_per_finished_task: float | None
-    # Tokens (input + output) and cost reported by the tasks that finished in the
-    # window, split by outcome. `usage_tasks` of `finished_tasks` had any row; the
-    # means are `None` under MIN_SAMPLES covered tasks and never count a task
-    # without usage as zero.
+    # Coverage over the finished cohort's attempts with a usage row (account usage
+    # 3.10). `usage_tasks` had any row; `measured_tasks` have every attempt
+    # measured. Token/cost means use measured tasks only and never count unknown
+    # as zero (`None` under MIN_SAMPLES).
     usage_tasks: int
+    measured_tasks: int = 0
+    measured_attempts: int = 0
+    not_reported_attempts: int = 0
     tokens_per_succeeded: float | None
     tokens_per_failed: float | None
     cost_per_succeeded: float | None
+
+
+class RecoveryExample(BaseModel):
+    """One auditable synthetic sample: source fail (+ claim) event ids."""
+
+    task_id: str
+    fail_event_id: int
+    claim_event_id: int | None
+    observed_lost_at: datetime  # task.fail.at; not a death timestamp
+    next_claim_at: datetime | None
+    latency_s: float | None
+    outcome: str  # measured | pending | not_requeued | anomalous
+
+
+class DeadSessionRecovery(Provenance):
+    """session_lost observed → next claim (worker efficiency draft, P5 measure).
+
+    Death time is not in events. Fail and requeue are the same `task.fail` when
+    `to=ready`. Latency is therefore observation → next claim, never a fabricated
+    death→requeue delta. Percentiles need `MIN_SAMPLES` measured rows.
+    """
+
+    failure_class: str = "session"
+    reason: str = "session_lost"
+    denominator: int  # session_lost fails in the window (bounded fetch)
+    measured: int
+    pending: int  # requeued, no subsequent claim yet
+    not_requeued: int  # to=failed (attempts exhausted) or unexpected to
+    anomalous: int  # ordering / clock / unreadable
+    coverage: float | None  # measured / denominator; None when denominator is 0
+    n: int  # == measured; kept for Durations-shaped clients
+    p50: float | None
+    p90: float | None
+    mean: float | None
+    target_s: float = RECOVERY_TARGET_S
+    outliers: int  # measured with latency_s >= target_s
+    truncated: bool
+    examples: list[RecoveryExample]
 
 
 class TasksByState(BaseModel):
@@ -169,6 +249,7 @@ class FleetHealth(BaseModel):
     outcomes: Outcomes
     failures: Failures
     yield_: Yield = Field(alias="yield")
+    dead_session_recovery: DeadSessionRecovery
     truncated: bool  # the finished-task fetch hit MAX_ROWS (samples are the newest)
 
 
@@ -252,9 +333,10 @@ async def fleet_health(
             heartbeats = dict(await rows(HEARTBEAT_SQL))
             finished = await rows(FINISHED_SQL, since, until, MAX_ROWS)
             failures = await rows(FAILURES_SQL, since, until, MAX_ROWS)
+            session_lost = await rows(SESSION_LOST_SQL, since, until, MAX_ROWS)
             attempt_counts = dict(await rows(ATTEMPTS_SQL, since, until))
             usage = {
-                r[0]: (r[1], r[2])
+                r[0]: (r[1], r[2], r[3], r[4])
                 for r in await rows(USAGE_SQL, json.dumps([r["id"] for r in finished]))
             }
         finally:
@@ -308,6 +390,7 @@ async def fleet_health(
         ),
         failures=_group_failures(failures, window),
         yield_=_yield(window, attempt_counts, finished, usage),
+        dead_session_recovery=_dead_session_recovery(session_lost, window),
         truncated=total >= MAX_ROWS,
     )
 
@@ -316,23 +399,38 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if len(values) >= MIN_SAMPLES else None
 
 
+def _fully_measured(row: tuple[int | None, float | None, int, int]) -> bool:
+    """True when the task has measured figures and no not_reported attempt."""
+    tokens, cost, attempts, measured = row
+    if attempts > measured:
+        return False
+    return tokens is not None or cost is not None or measured > 0
+
+
 def _yield(
     window: int,
     counts: dict[str, int],
     finished: list[Any],
-    usage: dict[str, tuple[int, float]],
+    usage: dict[str, tuple[int | None, float | None, int, int]],
 ) -> Yield:
     attempts, completions = counts.get("task.claim", 0), counts.get("task.complete", 0)
+    # Means only over fully measured tasks (never count an unreported attempt as 0).
     ok = [
         usage[r["id"]]
         for r in finished
-        if r["state"] == "succeeded" and r["id"] in usage
+        if r["state"] == "succeeded"
+        and r["id"] in usage
+        and _fully_measured(usage[r["id"]])
     ]
     bad = [
         usage[r["id"]]
         for r in finished
-        if r["state"] != "succeeded" and r["id"] in usage
+        if r["state"] != "succeeded"
+        and r["id"] in usage
+        and _fully_measured(usage[r["id"]])
     ]
+    measured_attempts = sum(u[3] for u in usage.values())
+    attempt_rows = sum(u[2] for u in usage.values())
     return Yield(
         window_hours=window,
         source="events task.claim, task.complete; tasks; account_usage",
@@ -343,10 +441,13 @@ def _yield(
         attempts_per_finished_task=(
             attempts / len(finished) if len(finished) >= MIN_SAMPLES else None
         ),
-        usage_tasks=len(ok) + len(bad),
-        tokens_per_succeeded=_mean([float(t) for t, _ in ok]),
-        tokens_per_failed=_mean([float(t) for t, _ in bad]),
-        cost_per_succeeded=_mean([c for _, c in ok]),
+        usage_tasks=sum(1 for r in finished if r["id"] in usage),
+        measured_tasks=len(ok) + len(bad),
+        measured_attempts=measured_attempts,
+        not_reported_attempts=max(0, attempt_rows - measured_attempts),
+        tokens_per_succeeded=_mean([float(t) for t, _, _, _ in ok if t is not None]),
+        tokens_per_failed=_mean([float(t) for t, _, _, _ in bad if t is not None]),
+        cost_per_succeeded=_mean([c for _, c, _, _ in ok if c is not None]),
     )
 
 
@@ -385,4 +486,129 @@ def _group_failures(rows: list[Any], window: int) -> Failures:
             c: sum(g.count for g in ordered if g.retry_class is c) for c in RetryClass
         },
         truncated=len(rows) >= MAX_ROWS,
+    )
+
+
+def classify_recovery_row(row: Any) -> RecoveryExample:
+    """Build one synthetic recovery sample from a SESSION_LOST_SQL row.
+
+    Outcomes: measured (requeued and next claim after the fail), pending
+    (requeued, no later claim), not_requeued (terminal or unexpected `to`),
+    anomalous (unreadable payload, or claim at/before the fail).
+    """
+    task_id = str(row["subject_id"])
+    fail_id = int(row["id"])
+    try:
+        observed = datetime.fromisoformat(row["at"])
+        data = json.loads(row["data"] or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return RecoveryExample(
+            task_id=task_id,
+            fail_event_id=fail_id,
+            claim_event_id=None,
+            observed_lost_at=datetime.fromisoformat(row["at"])
+            if _iso_ok(row["at"])
+            else datetime.min.replace(tzinfo=UTC),
+            next_claim_at=None,
+            latency_s=None,
+            outcome="anomalous",
+        )
+    to_state = data.get("to")
+    claim_id = row["next_claim_id"]
+    claim_at_raw = row["next_claim_at"]
+    if to_state != "ready":
+        return RecoveryExample(
+            task_id=task_id,
+            fail_event_id=fail_id,
+            claim_event_id=int(claim_id) if claim_id is not None else None,
+            observed_lost_at=observed,
+            next_claim_at=(
+                datetime.fromisoformat(claim_at_raw) if claim_at_raw else None
+            ),
+            latency_s=None,
+            outcome="not_requeued",
+        )
+    if not claim_at_raw:
+        return RecoveryExample(
+            task_id=task_id,
+            fail_event_id=fail_id,
+            claim_event_id=None,
+            observed_lost_at=observed,
+            next_claim_at=None,
+            latency_s=None,
+            outcome="pending",
+        )
+    try:
+        next_claim = datetime.fromisoformat(claim_at_raw)
+        latency = (next_claim - observed).total_seconds()
+    except (TypeError, ValueError):
+        return RecoveryExample(
+            task_id=task_id,
+            fail_event_id=fail_id,
+            claim_event_id=int(claim_id) if claim_id is not None else None,
+            observed_lost_at=observed,
+            next_claim_at=None,
+            latency_s=None,
+            outcome="anomalous",
+        )
+    # Same-instant claim with a higher id is allowed (latency 0); earlier is not.
+    if latency < 0:
+        return RecoveryExample(
+            task_id=task_id,
+            fail_event_id=fail_id,
+            claim_event_id=int(claim_id) if claim_id is not None else None,
+            observed_lost_at=observed,
+            next_claim_at=next_claim,
+            latency_s=latency,
+            outcome="anomalous",
+        )
+    return RecoveryExample(
+        task_id=task_id,
+        fail_event_id=fail_id,
+        claim_event_id=int(claim_id) if claim_id is not None else None,
+        observed_lost_at=observed,
+        next_claim_at=next_claim,
+        latency_s=latency,
+        outcome="measured",
+    )
+
+
+def _iso_ok(value: Any) -> bool:
+    try:
+        datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _dead_session_recovery(rows: list[Any], window: int) -> DeadSessionRecovery:
+    samples = [classify_recovery_row(r) for r in rows]
+    measured = [s for s in samples if s.outcome == "measured"]
+    latencies = [s.latency_s for s in measured if s.latency_s is not None]
+    n = len(latencies)
+    denom = len(samples)
+    stats = _durations(
+        latencies,
+        window,
+        "events task.fail reason=session_lost → next task.claim",
+    )
+    return DeadSessionRecovery(
+        window_hours=window,
+        source=stats.source,
+        failure_class="session",
+        reason="session_lost",
+        denominator=denom,
+        measured=n,
+        pending=sum(1 for s in samples if s.outcome == "pending"),
+        not_requeued=sum(1 for s in samples if s.outcome == "not_requeued"),
+        anomalous=sum(1 for s in samples if s.outcome == "anomalous"),
+        coverage=(n / denom) if denom else None,
+        n=n,
+        p50=stats.p50,
+        p90=stats.p90,
+        mean=stats.mean,
+        target_s=RECOVERY_TARGET_S,
+        outliers=sum(1 for v in latencies if v >= RECOVERY_TARGET_S),
+        truncated=len(rows) >= MAX_ROWS,
+        examples=[s for s in samples if s.outcome == "measured"][:EXAMPLES],
     )

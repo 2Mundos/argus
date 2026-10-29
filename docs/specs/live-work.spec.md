@@ -78,6 +78,22 @@ The sources are:
   included. It combines with the other filters and is bound into the cursor like
   them. MCP `list_tasks` forwards it.
 
+## 3.4 Live status bar
+
+- A one-line bar fixed at the bottom of the dashboard shell (full width, under
+  the main column and the workers rail). Always visible while signed in.
+- Collapsed it shows the event-stream status (`live` / `connecting` /
+  `offline`) and the **latest** event from the shared SSE feed: relative time,
+  kind, short subject id, and a one-line description. Worker activity and
+  general events both appear; transient `task.log` and `task.changes` are
+  ignored (same filter as the Events tab).
+- On load it seeds from `GET /api/events`. While quiet it shows "Waiting for
+  events…".
+- Clicking the bar expands it to half the viewport height, animating upward
+  from the bottom. The expanded panel lists recent non-transient events
+  (newest first) in a scrollable feed and links to `#events` for the full tab.
+  Click the strip again or press Escape to collapse. No new API or table.
+
 # 4. Open Questions
 
 - Whether NanoClaw should send a progress note when the agent starts a tool or a
@@ -99,6 +115,7 @@ One PR:
 1. This spec and its index link.
 2. `assignee` on the task list (REST, MCP) with a test.
 3. Dashboard: a shared activity component, the task drawer using it, the agent
-   drawer (facts, current work, log panel), and the entry points. Tests for the
-   activity feed (current attempt only), the agent drawer's work and log polling
-   (stops when closed), and the missing-instance message.
+   drawer (facts, current work, log panel), the entry points, and the live
+   status bar (3.4). Tests for the activity feed (current attempt only), the
+   agent drawer's work and log polling (stops when closed), the
+   missing-instance message, and the status bar's filter and seed.
