@@ -11,6 +11,7 @@ from api_support import FakeClock
 from argus_api import fleet_health
 from argus_api.agents import service as agents
 from argus_api.db import Database, ts, utcnow
+from argus_api.errors import ConflictError
 from argus_api.fleet_health import (
     MIN_SAMPLES,
     RECOVERY_TARGET_S,
@@ -713,3 +714,36 @@ def test_route_reports_pending_overdue_and_ended_unclaimed(client: TestClient) -
     assert (d["denominator"], d["pending"], d["pending_overdue"]) == (3, 2, 1)
     assert (d["ended_unclaimed"], d["measured"], d["truncated"]) == (1, 0, False)
     assert d["p50"] is None and d["outliers"] == 0
+
+
+async def test_requeued_task_blocked_for_quota_counts_as_pending(
+    db: Database, clock: FakeClock
+) -> None:
+    """A requeued task can reach `blocked` with no claim (ready -> blocked, quota
+    wait), and `pending` then mixes it with tasks waiting for a worker."""
+    agent = await worker(db)
+    task = await new_task(db)
+    task_id, attempt = await claim(db, agent)
+    await lose(db, agent, task_id, attempt)
+    async with db.write() as tx:
+        assert await tasks.await_quota_ready(tx, agent, []) == [task]
+    clock.advance(RECOVERY_TARGET_S * 2)
+    async with db.read() as conn, conn.execute("SELECT state FROM tasks") as cur:
+        assert [r["state"] for r in await cur.fetchall()] == ["blocked"]
+    r = await report(db, clock)
+    assert (r.pending, r.pending_overdue, r.measured) == (1, 1, 0)
+
+
+async def test_cancelled_task_cannot_be_retried_into_a_pairing(
+    db: Database, clock: FakeClock
+) -> None:
+    agent = await worker(db)
+    await new_task(db)
+    task_id, attempt = await claim(db, agent)
+    await lose(db, agent, task_id, attempt)
+    async with db.write() as tx:
+        await tasks.cancel(tx, task_id, "human:test")
+    with pytest.raises(ConflictError, match="not failed"):
+        async with db.write() as tx:
+            await tasks.retry(tx, task_id, "human:test")
+    assert (await report(db, clock)).ended_unclaimed == 1
