@@ -167,5 +167,5 @@ async def fleet_health(
     _: ManagerDep,
     window: Annotated[int, Query(ge=1, le=MAX_WINDOW_HOURS)] = DEFAULT_WINDOW_HOURS,
 ) -> FleetHealth:
-    """Pool, queue, run-time, outcome and failure health over `window` hours."""
+    """Pool, queue, run-time, outcome, yield and dead-session recovery over `window` hours."""
     return await fleet_health_module.fleet_health(db, window)

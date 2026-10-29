@@ -152,7 +152,9 @@ been deleted, so sessions never started and each claim sat quiet until
 # 4. Open Questions
 
 - Should a final `failed` task with `reason=session_lost` also land in the inbox
-  for a short window, or is Fleet enough?
+  for a short window, or is Fleet enough? Fleet now reports dead-session recovery
+  latency from observed `session_lost` to the next claim
+  ([fleet health](fleet-health.spec.md)); that does not invent a death timestamp.
 
 # 5. Constraints
 

@@ -81,6 +81,7 @@ export function Fleet() {
 
 function Body({ h }: { h: FleetHealth }) {
   const { queue_time: q, run_time: r, outcomes: o, failures: f, yield: y } = h;
+  const d = h.dead_session_recovery;
   return (
     <>
       <h3>Pools</h3>
@@ -187,6 +188,27 @@ function Body({ h }: { h: FleetHealth }) {
             {(y.measured_attempts ?? 0) + (y.not_reported_attempts ?? 0)} attempts measured
           </p>
           <Caption window={y.window_hours} source={y.source} />
+        </Card>
+      </div>
+
+      <h3>Dead-session recovery</h3>
+      <div className="home-groups">
+        <Card title="session_lost → next claim">
+          <p>
+            p50 <strong>{seconds(d.p50)}</strong> · p90 <strong>{seconds(d.p90)}</strong>
+          </p>
+          <p className="muted small">
+            mean {seconds(d.mean)} · measured {d.measured} of {d.denominator}
+            {d.coverage === null || d.coverage === undefined ? "" : ` (${percent(d.coverage)})`}
+            {" · "}
+            outliers (≥ {seconds(d.target_s)}) {d.outliers}
+          </p>
+          <p className="muted small">
+            pending {d.pending} · not requeued {d.not_requeued} · anomalous {d.anomalous}
+            {" · "}
+            observed lost, not death time
+          </p>
+          <Caption window={d.window_hours} source={d.source} />
         </Card>
       </div>
 

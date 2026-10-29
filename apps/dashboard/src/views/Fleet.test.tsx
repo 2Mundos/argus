@@ -118,6 +118,26 @@ function health(over: Record<string, unknown> = {}) {
       tokens_per_failed: null,
       cost_per_succeeded: null,
     },
+    dead_session_recovery: {
+      window_hours: 24,
+      source: "events task.fail reason=session_lost → next task.claim",
+      failure_class: "session",
+      reason: "session_lost",
+      denominator: 2,
+      measured: 2,
+      pending: 0,
+      not_requeued: 0,
+      anomalous: 0,
+      coverage: null,
+      n: 2,
+      p50: null,
+      p90: null,
+      mean: null,
+      target_s: 300,
+      outliers: 0,
+      truncated: false,
+      examples: [],
+    },
     ...over,
   };
 }
@@ -184,6 +204,17 @@ describe("Fleet", () => {
     const attempts = screen.getByRole("heading", { name: "Attempts" }).parentElement;
     expect(attempts?.textContent).toContain("6 claimed");
     expect(attempts?.textContent).toContain("success per attempt 33%");
+  });
+
+  it("shows dead-session recovery with null median when sparse", async () => {
+    mock.health = health();
+    render(<Fleet />);
+    const card = (await screen.findByRole("heading", { name: "session_lost → next claim" }))
+      .parentElement;
+    expect(card?.textContent).toContain("p50 no data");
+    expect(card?.textContent).toContain("measured 2 of 2");
+    expect(card?.textContent).toContain("observed lost, not death time");
+    expect(card?.textContent).toContain("outliers (≥ 5.0 min) 0");
   });
 
   it("shows rates when known", async () => {

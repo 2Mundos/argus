@@ -986,7 +986,7 @@ export interface paths {
         };
         /**
          * Fleet Health
-         * @description Pool, queue, run-time, outcome and failure health over `window` hours.
+         * @description Pool, queue, run-time, outcome, yield and dead-session recovery over `window` hours.
          */
         get: operations["fleet_health_api_fleet_health_get"];
         put?: never;
@@ -4151,6 +4151,61 @@ export interface components {
             /** Unpriced Runs */
             unpriced_runs: number;
         };
+        /**
+         * DeadSessionRecovery
+         * @description session_lost observed → next claim (worker efficiency draft, P5 measure).
+         *
+         *     Death time is not in events. Fail and requeue are the same `task.fail` when
+         *     `to=ready`. Latency is therefore observation → next claim, never a fabricated
+         *     death→requeue delta. Percentiles need `MIN_SAMPLES` measured rows.
+         */
+        DeadSessionRecovery: {
+            /** Anomalous */
+            anomalous: number;
+            /** Coverage */
+            coverage: number | null;
+            /** Denominator */
+            denominator: number;
+            /** Examples */
+            examples: components["schemas"]["RecoveryExample"][];
+            /**
+             * Failure Class
+             * @default session
+             */
+            failure_class?: string;
+            /** Mean */
+            mean: number | null;
+            /** Measured */
+            measured: number;
+            /** N */
+            n: number;
+            /** Not Requeued */
+            not_requeued: number;
+            /** Outliers */
+            outliers: number;
+            /** P50 */
+            p50: number | null;
+            /** P90 */
+            p90: number | null;
+            /** Pending */
+            pending: number;
+            /**
+             * Reason
+             * @default session_lost
+             */
+            reason?: string;
+            /** Source */
+            source: string;
+            /**
+             * Target S
+             * @default 300
+             */
+            target_s?: number;
+            /** Truncated */
+            truncated: boolean;
+            /** Window Hours */
+            window_hours: number;
+        };
         /** Decision */
         Decision: {
             /** Answer Choice */
@@ -4968,6 +5023,7 @@ export interface components {
              * Format: date-time
              */
             as_of: string;
+            dead_session_recovery: components["schemas"]["DeadSessionRecovery"];
             failures: components["schemas"]["Failures"];
             outcomes: components["schemas"]["Outcomes"];
             /** Pools */
@@ -6721,6 +6777,29 @@ export interface components {
             };
             /** Status */
             status: string;
+        };
+        /**
+         * RecoveryExample
+         * @description One auditable synthetic sample: source fail (+ claim) event ids.
+         */
+        RecoveryExample: {
+            /** Claim Event Id */
+            claim_event_id: number | null;
+            /** Fail Event Id */
+            fail_event_id: number;
+            /** Latency S */
+            latency_s: number | null;
+            /** Next Claim At */
+            next_claim_at: string | null;
+            /**
+             * Observed Lost At
+             * Format: date-time
+             */
+            observed_lost_at: string;
+            /** Outcome */
+            outcome: string;
+            /** Task Id */
+            task_id: string;
         };
         /** RecycleRequest */
         RecycleRequest: {

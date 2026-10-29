@@ -155,7 +155,7 @@ every new dependency is judged against it.
   interrupted and tokens wasted (baseline numbers, root causes), and eight ordered
   proposals: claim reserves the account, owned workspace, one task per session,
   resumable attempts, progress-based liveness, failure classes, single-layer run;
-  P1, P3 and P6 shipped, P2/P5/P8 partly
+  P1, P3, P6 and P8 shipped, P2/P5 partly (P5 recovery latency now readable on Fleet)
 
 ### Runbooks
 
