@@ -5,6 +5,7 @@ import { useLiveData } from "../live";
 import { TaskLabel } from "../TaskLabel";
 import { renderTerminalText } from "../terminalLog";
 import { useNow } from "./Activity";
+import { TaskChanges } from "./TaskChanges";
 import { TaskLog } from "./TaskLog";
 
 const LOG_TAIL = 200;
@@ -216,15 +217,18 @@ export function AgentDetail({
   const output =
     agent &&
     (held && held.attempt > 0 ? (
-      <TaskLog
-        taskId={held.id}
-        attempt={held.attempt}
-        steer={{
-          claimed: held.state === "claimed",
-          assigneeId: held.assignee_agent_id ?? agent.id,
-          supportsSteer: agent.runtime?.features?.includes("steer") ?? false,
-        }}
-      />
+      <>
+        <TaskLog
+          taskId={held.id}
+          attempt={held.attempt}
+          steer={{
+            claimed: held.state === "claimed",
+            assigneeId: held.assignee_agent_id ?? agent.id,
+            supportsSteer: agent.runtime?.features?.includes("steer") ?? false,
+          }}
+        />
+        <TaskChanges taskId={held.id} attempt={held.attempt} hideWhenEmpty />
+      </>
     ) : agent.instance_id ? (
       <LogTail instanceId={agent.instance_id} tail={LOG_TAIL} />
     ) : (

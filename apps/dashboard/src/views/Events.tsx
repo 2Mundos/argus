@@ -15,7 +15,8 @@ export function Events() {
     const early: ArgusEvent[] = [];
     // Subscribe first, then load history, so nothing slips in between.
     const unsubscribe = subscribe((event) => {
-      if (event.kind === "task.log") return; // transient output, not history
+      // transient output, not history
+      if (event.kind === "task.log" || event.kind === "task.changes") return;
       if (!loaded) early.push(event);
       else setEvents((list) => [event, ...list].slice(0, MAX));
     });

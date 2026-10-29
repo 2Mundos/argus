@@ -11,6 +11,7 @@ import { pinText } from "../taskEdit";
 import { Activity } from "./Activity";
 import { AgentDetail } from "./AgentDetail";
 import { EventList } from "./Events";
+import { TaskChanges } from "./TaskChanges";
 import { TaskEditForm } from "./TaskEditForm";
 import { TaskLog } from "./TaskLog";
 
@@ -313,6 +314,9 @@ export function TaskDetail({ taskId, onClose }: { taskId: string; onClose: () =>
                     assigneeId: task.assignee_agent_id,
                   }}
                 />
+              )}
+              {task.attempt > 0 && task.required_capabilities.includes("repository:write") && (
+                <TaskChanges taskId={taskId} attempt={task.attempt} />
               )}
               {task.result && (
                 <>

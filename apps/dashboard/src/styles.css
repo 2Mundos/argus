@@ -1226,6 +1226,52 @@ label.check input {
 .term-empty {
   color: #6b778a;
 }
+.task-changes {
+  margin-top: 0.75rem;
+}
+.changes-body {
+  white-space: normal;
+}
+.changes-body p {
+  margin: 0 0 0.4rem;
+}
+.changes-cut {
+  color: #e2b24f;
+}
+.changes-commits,
+.changes-files {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+}
+.changes-status {
+  display: inline-block;
+  width: 1.2em;
+  color: #8b95a8;
+  font-weight: 700;
+}
+.changes-patch summary {
+  cursor: pointer;
+  color: #e6edf3;
+  padding: 0.15rem 0;
+}
+.changes-patch pre {
+  margin: 0.2rem 0 0.6rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-add {
+  color: #3fb950;
+}
+.diff-del {
+  color: #ff7b72;
+}
+.diff-hunk {
+  color: #39c5cf;
+}
+.diff-meta {
+  color: #6b7385;
+}
 .term-error {
   margin: 0;
   padding: 0.35rem 0.65rem;

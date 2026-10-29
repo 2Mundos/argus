@@ -92,6 +92,8 @@ every new dependency is judged against it.
   explain late lease/agent expiry and the likely stall cause
 - [Task live log](specs/task-live-log.spec.md) — a redacted ring of an attempt's
   output, streamed as `task.log`; the Live panel and MCP `get_task_log`
+- [Task changes](specs/task-changes.spec.md) — a bounded, redacted diff of the task
+  workspace, computed in the container and shown in a Changes panel beside Live
 - [Task steering](specs/task-steering.spec.md) — a manager sends a message to the
   attempt in flight; delivered on heartbeat, injected into the NanoClaw session as a
   framed operator instruction; expires with the attempt

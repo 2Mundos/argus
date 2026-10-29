@@ -155,6 +155,9 @@ Findings outside the gap list:
 - **Task log:** MCP `get_task_log(task_id, attempt?, after?, limit?)` reads the live
   log tail like `GET /api/tasks/{id}/log` ([task live log](task-live-log.spec.md) 3.5),
   with REST's permissions; it is listed to every scope.
+- **Task changes:** MCP `get_task_changes(task_id, attempt?)` reads the attempt's
+  workspace diff snapshot like `GET /api/tasks/{id}/changes` ([task
+  changes](task-changes.spec.md) 3.6), with REST's permissions; listed to every scope.
 - **Task steering:** MCP `steer_task(task_id, message)`, `list_task_steers(task_id,
   attempt?)` and `cancel_steer(task_id, steer_id)` wrap the steer routes
   ([task steering](task-steering.spec.md) 3.8). Listed to orchestrators and admins.
