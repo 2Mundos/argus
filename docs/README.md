@@ -150,6 +150,9 @@ every new dependency is judged against it.
 
 ### Drafts
 
+- [Task operations and reliability](drafts/2026-10-29.task-operations.draft.md) — task
+  detail view, command reliability, finalization, workspace ownership, checkpoints
+  and engine events; candidates for investigation and specification
 - [Knowledge](drafts/2026-10-14.knowledge.draft.md) — superseded by the spec
   above; kept as a record
 - [Worker lifecycle and task coordination](drafts/2026-10-14.worker-lifecycle.draft.md) —
