@@ -37,8 +37,38 @@ export function attemptNotes(task: Progress, events: ArgusEvent[]): ArgusEvent[]
 }
 
 /** What the agent says it is doing now (live work spec 3.1). */
-export function Activity({ task, events }: { task: Progress; events: ArgusEvent[] }) {
+export function Activity({
+  task,
+  events,
+  selected = task.attempt,
+}: {
+  task: Progress;
+  events: ArgusEvent[];
+  /** The attempt chosen in the attempt strip; a prior one shows only its own notes. */
+  selected?: number;
+}) {
   const now = useNow();
+  if (selected !== task.attempt) {
+    const prior = attemptNotes({ ...task, attempt: selected }, events);
+    return (
+      <div className="activity">
+        {prior.length === 0 ? (
+          <span className="muted small">No progress notes for this attempt.</span>
+        ) : (
+          <ol className="notes">
+            {prior.map((e) => (
+              <li key={e.id}>
+                <time dateTime={e.at} title={e.at} className="muted small">
+                  {relative(e.at, now)}
+                </time>{" "}
+                {(e.data as { message?: string }).message}
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    );
+  }
   const notes = attemptNotes(task, events);
   if (task.state !== "claimed" && notes.length === 0) return null;
   return (

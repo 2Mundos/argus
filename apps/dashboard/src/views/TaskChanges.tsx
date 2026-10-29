@@ -16,15 +16,19 @@ export function TaskChanges({
   taskId,
   attempt,
   hideWhenEmpty = false,
+  selected,
 }: {
   taskId: string;
   attempt: number;
+  /** The attempt chosen in the shared attempt strip; when set it replaces the own selector. */
+  selected?: number;
   /** Render nothing until the attempt has a snapshot (the agent drawer does not know
    * whether the task has a workspace). */
   hideWhenEmpty?: boolean;
 }) {
   const { subscribe, connection } = useLive();
-  const [shown, setShown] = useState(attempt);
+  const [own, setShown] = useState(attempt);
+  const shown = selected ?? own;
   const [changes, setChanges] = useState<Changes | null>(null);
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState<string>();
@@ -90,7 +94,7 @@ export function TaskChanges({
             ? `changes · ${changes.branch} @ ${shortSha(changes.head)} · ${relative(changes.at)}`
             : "changes"}
         </span>
-        {attempts.length > 1 && (
+        {selected === undefined && attempts.length > 1 && (
           <select
             className="term-filter"
             aria-label="Attempt"
