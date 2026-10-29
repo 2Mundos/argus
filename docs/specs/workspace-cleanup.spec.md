@@ -65,7 +65,9 @@ one audit status:
 - `blocked`: eligible, but a safety check stopped it. The directory is kept
   where it was (3.4–3.6). An unexpected error while the directory sits at its
   tombstone gives `internal_error`, and the directory is renamed back; one
-  directory's error never stops the rest of the run.
+  directory's error never stops the rest of the run. `permission_denied` means
+  Argus cannot read the tree or cannot empty or remove a directory in it as its
+  own uid (3.3); foreign-owned files do not cause it.
 - `cleaned`: deleted, after its WIP was archived if it had any.
 - `failed`: the deletion started and then hit an error. The tombstone (3.4) is
   kept and the next run finishes the deletion.
@@ -124,9 +126,23 @@ inside it.
 - Names containing `/`, or equal to `.` or `..`, are never produced by `scandir`,
   and are rejected when they come from git output.
 
-**Ownership pre-check.** If Argus does not run as root and a directory in the
-tree is owned by another uid, the instance is `blocked` with
-`permission_denied` before anything moves.
+**Ownership pre-check.** Owning a path is not the same as being allowed to
+delete it. Removing an entry needs write and search permission on its parent
+directory, and emptying a directory needs read, write and search on that
+directory. A foreign-owned file therefore never blocks a deletion. Argus blocks
+only a directory it cannot empty or remove as its own uid.
+
+A directory in the tree is removable by uid `U` when any of these holds:
+
+- `U` is 0;
+- the directory is owned by `U` (the deletion may `chmod` it);
+- its owner bits are exactly `rwx` and the bits of the class that applies to
+  `U` are `rwx`. That class is the group bits when the directory's gid is one of
+  the supplementary or effective groups of Argus, otherwise the other bits.
+
+If any directory fails this rule, the instance is `blocked` with
+`permission_denied` and the fixed error detail `dir_not_writable`, before
+anything moves. The check fails closed. No new reason code exists.
 
 ## 3.4 Locking, revalidation and races
 
@@ -392,7 +408,9 @@ fails is visible in its run row and events.
 textconv disabled, but clean/smudge filters configured by the repository
 still run while it computes diffs. An unprivileged Argus cannot see the cwd of
 other users' processes. Untracked files inside regenerable directories of a
-working tree are not archived.
+working tree are not archived. The removability check reads mode bits and group
+membership only; it ignores ACLs, immutable flags and read-only mounts, so a
+directory it accepts can still fail at delete time (`permission_denied`).
 
 # 4. Open Questions
 

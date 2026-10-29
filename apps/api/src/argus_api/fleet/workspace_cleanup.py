@@ -17,7 +17,7 @@ import os
 import re
 import stat
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -202,7 +202,22 @@ def _open_dir(
 @dataclass
 class Tree:
     bytes: int = 0
-    foreign_owner: bool = False
+    unremovable_dir: bool = False
+
+
+def _can_remove_dir(st: Any, uid: int, groups: Collection[int]) -> bool:
+    """Whether uid can empty and remove this directory (spec 3.3); fails closed.
+
+    A foreign directory cannot be chmod-ed, so it needs rwx for the owner and
+    for the class that applies to uid: group if st_gid is in groups, else other.
+    """
+    if uid == 0 or st.st_uid == uid:
+        return True
+    mode = stat.S_IMODE(st.st_mode)
+    if (mode >> 6) & 0o7 != 0o7:
+        return False
+    shift = 3 if st.st_gid in groups else 0
+    return (mode >> shift) & 0o7 == 0o7
 
 
 def measure(root: str, name: str, uid: int) -> Tree:
@@ -216,7 +231,7 @@ def measure(root: str, name: str, uid: int) -> Tree:
         if not stat.S_ISDIR(st.st_mode):
             raise Unsafe("path_changed")
         tree = Tree()
-        _measure(rfd, name, st, st.st_dev, uid, set(), tree, 0)
+        _measure(rfd, name, st, st.st_dev, uid, set(), tree, 0, os.getgroups())
         return tree
     except PermissionError as exc:
         raise Unsafe("permission_denied") from exc
@@ -233,6 +248,7 @@ def _measure(
     seen: set[tuple[int, int]],
     tree: Tree,
     depth: int,
+    groups: Collection[int] = (),
 ) -> None:
     if depth > MAX_TREE_DEPTH:
         raise Unsafe("scan_limit", "tree_depth")
@@ -244,8 +260,8 @@ def _measure(
         tree.bytes += st.st_blocks * 512
     if not stat.S_ISDIR(st.st_mode):
         return
-    if uid != 0 and st.st_uid != uid:
-        tree.foreign_owner = True
+    if not _can_remove_dir(st, uid, groups):
+        tree.unremovable_dir = True
     fd = _open_dir(name, parent_fd, st)
     try:
         with os.scandir(fd) as it:
@@ -260,6 +276,7 @@ def _measure(
                 seen,
                 tree,
                 depth + 1,
+                groups,
             )
     finally:
         os.close(fd)
@@ -798,8 +815,10 @@ class WorkspaceCleaner:
             return Outcome(S.BLOCKED, exc.code, error=exc.detail or None)
         except OSError as exc:
             return Outcome(S.BLOCKED, "permission_denied", error=wa.sanitize(exc))
-        if tree.foreign_owner:
-            return Outcome(S.BLOCKED, "permission_denied", tree.bytes)
+        if tree.unremovable_dir:
+            return Outcome(
+                S.BLOCKED, "permission_denied", tree.bytes, error="dir_not_writable"
+            )
         try:
             found = await asyncio.to_thread(wa.scan, Path(path), self.git)
         except wa.ArchiveError as exc:
@@ -824,8 +843,10 @@ class WorkspaceCleaner:
             return Outcome(S.BLOCKED, exc.code, error=exc.detail or None)
         except OSError as exc:
             return Outcome(S.BLOCKED, "permission_denied", error=wa.sanitize(exc))
-        if tree.foreign_owner:
-            return Outcome(S.BLOCKED, "permission_denied", tree.bytes)
+        if tree.unremovable_dir:
+            return Outcome(
+                S.BLOCKED, "permission_denied", tree.bytes, error="dir_not_writable"
+            )
         try:
             rfd = _open_dir(root, None)
         except OSError as exc:
@@ -881,8 +902,10 @@ class WorkspaceCleaner:
             return Outcome(S.BLOCKED, exc.code, error=exc.detail or None)
         except OSError as exc:
             return Outcome(S.BLOCKED, "permission_denied", error=wa.sanitize(exc))
-        if tree.foreign_owner:
-            return Outcome(S.BLOCKED, "permission_denied", tree.bytes)
+        if tree.unremovable_dir:
+            return Outcome(
+                S.BLOCKED, "permission_denied", tree.bytes, error="dir_not_writable"
+            )
         try:
             found = await asyncio.to_thread(wa.scan, Path(tomb_path), self.git)
         except wa.ArchiveError as exc:
