@@ -92,11 +92,18 @@ work is saved.
 For attempt 2 or later, before the workspace step, the channel restores the newest
 valid checkpoint of the task into `<group>/task-workspaces/<task id>`:
 
-- No checkpoint: nothing happens, the workspace step creates a fresh workspace.
-- The workspace already equals the checkpoint: no-op (idempotent).
+- No checkpoint: nothing happens, the workspace step creates a fresh workspace,
+  unless the continuation `wip.ref` names a `checkpoint:<id>:<sha256>`: that exact
+  checkpoint is then required (id and manifest digest) and a missing one is
+  `env_checkpoint_unavailable`, so a retry on another node blocks instead of
+  starting over.
+- The workspace already equals the checkpoint: no-op (idempotent). Equal means the
+  same HEAD and path sets and the same content: the staged and unstaged patches
+  regenerate to the recorded hashes and each untracked file or link is identical.
+  The same paths with different bytes are `env_checkpoint_conflict`.
 - The workspace is absent or pristine (no commits, no changes): the restored
   repository is built in a temporary directory, verified against the manifest
-  (HEAD, staged, unstaged and untracked sets) and renamed into place.
+  (HEAD, staged, unstaged and untracked sets, and their content hashes) and renamed into place.
 - The workspace holds different work, or is on another branch:
   `env_checkpoint_conflict`. Nothing is replaced, merged or reset.
 

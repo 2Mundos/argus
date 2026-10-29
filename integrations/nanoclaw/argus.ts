@@ -66,6 +66,7 @@ import {
   type CheckpointFailure,
   checkpointTaskWorkspace,
   maxCheckpointBytesFromEnv,
+  parseCheckpointRef,
   restoreTaskWorkspace,
 } from "./argus-checkpoint.js";
 import { defaultContinuationObserve } from "./argus-continuation-observe.js";
@@ -2511,6 +2512,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         storeRoot,
         taskId: task.id,
         repositoryUrl: task.repository_url,
+        // A checkpoint named by the continuation contract is required, not merely preferred.
+        expected: parseCheckpointRef(task.continuation?.wip?.ref),
         attempt: task.attempt,
       });
       if (!restored.ok) return restored;

@@ -459,6 +459,22 @@ describe("a checkpoint that cannot be trusted blocks the resume and never discar
     expect(snapshot(p.path, false)).toEqual(snap);
     expect(readdirSync(path.dirname(p.path)).filter((n) => n.startsWith("."))).toEqual([]);
   });
+
+  it.each([
+    ["an untracked file", "src/deep/new.ts", "export const x = 2;\n"],
+    ["an unstaged edit", "tracked.txt", "one\ntwo\nOTHER edit\n"],
+    ["a staged-only file", "staged-new.txt", "stagEd\n"],
+  ])(
+    "does not call same paths with different contents already present (%s)",
+    async (_n, rel, body) => {
+      const { w } = await ready();
+      expect(await restore(w)).toMatchObject({ ok: true, restored: true });
+      writeFileSync(path.join(wsB(w), rel), body);
+      const snap = snapshot(wsB(w), false);
+      expect(await restore(w)).toMatchObject({ ok: false, reason: "env_checkpoint_conflict" });
+      expect(snapshot(wsB(w), false)).toEqual(snap); // the diverging work is kept
+    },
+  );
 });
 
 describe("leases, concurrency and limits", () => {
