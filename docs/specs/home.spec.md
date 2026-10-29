@@ -7,8 +7,9 @@ hash. It answers three questions without opening another tab: what needs a perso
 or an operator now, how big is each part of the fleet, and what happened lately.
 
 The authenticated dashboard is a three-column shell on every route: a left
-navigation, the page, and a right rail of live workers plus the latest event
-lines. The stream status and sign-out sit in the page top bar. A server-status
+navigation, the page, and a right rail of live workers only. Recent non-transient
+events appear in the bottom live status bar ([live work](live-work.spec.md) 3.4),
+not in the rail. The stream status and sign-out sit in the page top bar. A server-status
 box sits at the bottom of the left navigation. It starts collapsed, showing
 only the verdict, and a button expands it to every readiness check. Navigation
 reaches every existing tab (Home, Tasks, Inbox, Agents, Pools, Accounts, and
@@ -138,7 +139,7 @@ knowledge: {pages_by_state, proposals_by_state}
 - Backend: `apps/api/src/argus_api/overview.py`, route in `ops_routes.py`, tests in
   `apps/api/tests/test_overview.py`.
 - Frontend: `views/Home.tsx`, `overview.ts` (types and attention rules), the
-  shell in `App.tsx` (left navigation, top bar, right rail on every route).
+  shell in `App.tsx` (left navigation, top bar, workers rail, live status bar).
 - After `make openapi` and regenerating `packages/api-client/src/schema.d.ts`,
   replace the local `Overview` types with `components["schemas"]["Overview"]` and
   drop `getJson`.
