@@ -19,12 +19,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
+  acquireLease,
   checkpointRef,
   checkpointTaskWorkspace,
   parseCheckpointRef,
   restoreTaskWorkspace,
 } from "./argus-checkpoint.js";
-import { prepareTaskWorkspace, TASK_WORKSPACES_DIR, taskWorkspacePath } from "./argus-workspace.js";
+import {
+  defaultGit,
+  type GitRunner,
+  prepareTaskWorkspace,
+  TASK_WORKSPACES_DIR,
+  taskWorkspacePath,
+} from "./argus-workspace.js";
 
 const REPO = "https://git.example.test/org/repo.git";
 const NODE = "node-a";
@@ -259,6 +266,22 @@ describe("checkpoint and restore across two isolated instances", () => {
     expect(await restore(w)).toMatchObject({ ok: true, restored: true, head: null });
     expect(git(wsB(w), "status", "--porcelain=v1")).toBe("A  a.txt\n?? b.txt");
   });
+
+  it("saves the rest of the work around a nested repository, which it names but does not copy", async () => {
+    const w = await world();
+    const nested = path.join(w.wsA, "vendor", "lib");
+    mkdirSync(nested, { recursive: true });
+    git(nested, "init", "-q");
+    writeFileSync(path.join(nested, "lib.txt"), "nested work\n");
+    const c = await ckpt(w);
+    expect(c).toMatchObject({ ok: true, empty: false });
+    const m = JSON.parse(readFileSync(path.join(checkpointDir(w), "manifest.json"), "utf8"));
+    expect(m.skipped_nested).toEqual(["vendor/lib/"]);
+    expect(m.untracked.map((u: { path: string }) => u.path)).not.toContain("vendor/lib/");
+    expect(await restore(w)).toMatchObject({ ok: true, restored: true });
+    expect(existsSync(path.join(wsB(w), "vendor"))).toBe(false);
+    expect(readFileSync(path.join(wsB(w), "staged-new.txt"), "utf8")).toBe("staged\n");
+  });
 });
 
 describe("a checkpoint that cannot be trusted blocks the resume and never discards work", () => {
@@ -474,6 +497,91 @@ describe("leases, concurrency and limits", () => {
     expect(git(wsB(w), "rev-parse", "HEAD")).toBe(git(w.wsA, "rev-parse", "HEAD"));
   });
 
+  it("lets exactly one of three racers take over an expired lease, never emptying the slot", async () => {
+    const w = await world();
+    const dir = taskStore(w);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const lease = path.join(dir, ".lease");
+    const stale = JSON.stringify({ owner: "x", nonce: "n", expires_at: Date.now() - 1 });
+    writeFileSync(lease, stale, { mode: 0o600 });
+    // All three read the expired lease, then are released one by one.
+    const gates = [0, 1, 2].map(() => {
+      let open = () => {};
+      const opened = new Promise<void>((r) => (open = r));
+      let reached = () => {};
+      const arrived = new Promise<void>((r) => (reached = r));
+      return { open, opened, reached, arrived };
+    });
+    const racers = gates.map((g, i) =>
+      acquireLease(dir, `racer-${i}`, Date.now, 60_000, async () => {
+        g.reached();
+        await g.opened;
+      }).then(
+        (release) => ({ ok: true as const, release }),
+        (err) => ({ ok: false as const, reason: (err as { reason?: string }).reason }),
+      ),
+    );
+    await Promise.all(gates.map((g) => g.arrived));
+    const outcomes = [];
+    for (const [i, g] of gates.entries()) {
+      g.open();
+      outcomes.push(await racers[i]);
+      expect(existsSync(lease)).toBe(true); // a late taker never moves the live lease aside
+      // a newcomer in between finds the slot taken
+      expect(await restore(w)).toMatchObject({ ok: false, reason: "env_checkpoint_busy" });
+    }
+    expect(outcomes.map((o) => o.ok)).toEqual([true, false, false]);
+    expect(outcomes.slice(1).map((o) => (o.ok ? null : o.reason))).toEqual([
+      "env_checkpoint_busy",
+      "env_checkpoint_busy",
+    ]);
+    expect(JSON.parse(readFileSync(lease, "utf8")).owner).toBe("racer-0");
+    if (outcomes[0].ok) await outcomes[0].release();
+    expect(existsSync(lease)).toBe(false);
+    expect(readdirSync(dir).filter((n) => n.startsWith(".lease"))).toEqual([]);
+  });
+
+  it("takes over an expired lease whose earlier taker died mid-takeover", async () => {
+    const w = await world();
+    const dir = taskStore(w);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const stale = JSON.stringify({ owner: "x", nonce: "n", expires_at: Date.now() - 2 });
+    writeFileSync(path.join(dir, ".lease"), stale, { mode: 0o600 });
+    // The dead taker's token: created, never removed, now expired itself.
+    const token = `.lease-takeover-${createHash("sha256").update(stale).digest("hex").slice(0, 16)}`;
+    const dead = JSON.stringify({ owner: "dead", nonce: "d", expires_at: Date.now() - 1 });
+    writeFileSync(path.join(dir, token), dead, { mode: 0o600 });
+    const live = JSON.stringify({ owner: "y", nonce: "l", expires_at: Date.now() + 60_000 });
+    // A token whose taker is still live keeps others out.
+    writeFileSync(path.join(dir, token), live, { mode: 0o600 });
+    await expect(acquireLease(dir, "z", Date.now, 60_000)).rejects.toMatchObject({
+      reason: "env_checkpoint_busy",
+    });
+    writeFileSync(path.join(dir, token), dead, { mode: 0o600 });
+    const release = await acquireLease(dir, "z", Date.now, 60_000);
+    expect(JSON.parse(readFileSync(path.join(dir, ".lease"), "utf8")).owner).toBe("z");
+    await release();
+    expect(readdirSync(dir).filter((n) => n.startsWith(".lease"))).toEqual([]);
+  });
+
+  it("reports a git step past its time limit as a limit, leaving no partial checkpoint", async () => {
+    const w = await world();
+    const timedOut: GitRunner = async (args, cwd, ceiling) => {
+      if (args[0] === "bundle")
+        throw Object.assign(new Error("Command failed: git bundle"), {
+          killed: true,
+          signal: "SIGTERM",
+          code: null,
+        });
+      return defaultGit(args, cwd, ceiling);
+    };
+    expect(await ckpt(w, { git: timedOut })).toMatchObject({
+      ok: false,
+      reason: "env_checkpoint_limit",
+    });
+    expect(readdirSync(taskStore(w))).toEqual([]);
+  });
+
   it("keeps the newest three checkpoints of a task and only that task's", async () => {
     const w = await world();
     const otherId = randomUUID();
@@ -537,6 +645,117 @@ describe("confidentiality", () => {
     // the store holds no credential and sits outside every instance directory
     expect(path.relative(w.groupA, w.store).startsWith("..")).toBe(true);
     expect(w.store.includes(TASK_WORKSPACES_DIR)).toBe(false);
+  });
+
+  it("excludes every name the spec lists, staged, unstaged or untracked, at any depth", async () => {
+    const w = await world();
+    const names = [
+      ".env.local",
+      "cert.pem",
+      "server.key",
+      "id_ed25519",
+      ".netrc",
+      ".git-credentials",
+      "auth.json",
+      "credentials.yml",
+      ".credentials.json",
+      ".ssh/config",
+      ".aws/config",
+      ".gnupg/pubring.kbx",
+      ".config/gh/hosts.yml",
+      ".docker/config.json",
+      "secrets/token.txt",
+      "sub/dir/.env",
+      "sub/secrets/b.txt",
+      "sub/id_rsa",
+    ];
+    const at = (rel: string, text: string) => {
+      mkdirSync(path.dirname(path.join(w.wsA, rel)), { recursive: true });
+      writeFileSync(path.join(w.wsA, rel), text);
+    };
+    // A third tracked and changed, a third staged new, a third untracked.
+    const tracked = names.filter((_, i) => i % 3 === 0);
+    for (const rel of tracked) at(rel, "placeholder\n");
+    git(w.wsA, "add", "-f", ...tracked);
+    git(w.wsA, "commit", "-q", "-m", "placeholders");
+    names.forEach((rel, i) => at(rel, `canary-${i}\n`));
+    git(w.wsA, "add", "-f", ...names.filter((_, i) => i % 3 === 1));
+    const c = await ckpt(w);
+    expect(c).toMatchObject({ ok: true, empty: false });
+    const dir = checkpointDir(w);
+    for (const name of readdirSync(dir).filter((n) => n !== "work.bundle"))
+      expect(readFileSync(path.join(dir, name), "utf8"), name).not.toContain("canary-");
+    const m = JSON.parse(readFileSync(path.join(dir, "manifest.json"), "utf8"));
+    expect(m.skipped_sensitive).toEqual(expect.arrayContaining(names));
+    // Committed names travel in the bundle (spec 3.8) and are reported by name.
+    expect(m.sensitive_in_commits).toEqual([...tracked].sort());
+  });
+});
+
+describe("git config written by the worker never runs on the host", () => {
+  const marker = (w: World) => path.join(w.store, "..", "host-ran-it");
+  const tracked = (w: World) => git(w.wsA, "rev-parse", "HEAD");
+
+  it("refuses a clean filter, a signature program, a worktree or a redirect", async () => {
+    const w = await world();
+    writeFileSync(path.join(w.wsA, ".gitattributes"), "* filter=x\n");
+    const hostile: Array<[string, string]> = [
+      ["filter.x.clean", `sh -c 'touch ${marker(w)}; cat'`],
+      ["filter.x.process", `sh -c 'touch ${marker(w)}'`],
+      ["gpg.program", `sh -c 'touch ${marker(w)}'`],
+      ["log.showSignature", "true"],
+      ["core.worktree", "/etc"],
+      ["core.pager", `sh -c 'touch ${marker(w)}'`],
+      ["include.path", "/etc/gitconfig"],
+      ["extensions.worktreeConfig", "true"],
+      ["remote.origin.promisor", "true"],
+    ];
+    for (const [key, value] of hostile) {
+      git(w.wsA, "config", key, value);
+      const r = await ckpt(w);
+      expect(r, key).toMatchObject({ ok: false, reason: "env_checkpoint_invalid" });
+      expect(r.ok ? "" : r.error, key).toContain(key.toLowerCase().replace(/\.[^.]*$/, ""));
+      git(w.wsA, "config", "--unset-all", key);
+    }
+    expect(existsSync(marker(w))).toBe(false);
+    for (const redirect of ["commondir", "objects/info/alternates"]) {
+      writeFileSync(path.join(w.wsA, ".git", redirect), "/elsewhere\n");
+      expect(await ckpt(w), redirect).toMatchObject({
+        ok: false,
+        reason: "env_checkpoint_invalid",
+      });
+      rmSync(path.join(w.wsA, ".git", redirect));
+    }
+    expect(existsSync(taskStore(w)) ? readdirSync(taskStore(w)) : []).toEqual([]);
+    // ordinary settings a worker makes are accepted
+    git(w.wsA, "config", "user.email", "worker@example.invalid");
+    git(w.wsA, "config", "pull.rebase", "true");
+    git(w.wsA, "config", "branch.main.remote", "origin");
+    expect(await ckpt(w)).toMatchObject({ ok: true, empty: false });
+    expect(tracked(w)).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("refuses to inspect a destination whose config would run a program", async () => {
+    const w = await world();
+    expect(await ckpt(w)).toMatchObject({ ok: true, empty: false });
+    const p = await prepareTaskWorkspace({
+      groupDir: w.groupB,
+      taskId: w.taskId,
+      repositoryUrl: REPO,
+    });
+    if (!p.ok) throw new Error(p.error);
+    // A tracked file with a change: inspecting it runs the clean filter.
+    writeFileSync(path.join(p.path, ".gitattributes"), "* filter=x\n");
+    writeFileSync(path.join(p.path, "a.txt"), "one\n");
+    git(p.path, "add", ".");
+    git(p.path, "commit", "-q", "-m", "local");
+    writeFileSync(path.join(p.path, "a.txt"), "two\n");
+    git(p.path, "config", "filter.x.clean", `sh -c 'touch ${marker(w)}; cat'`);
+    const before = snapshot(p.path, false);
+    const r = await restore(w);
+    expect(existsSync(marker(w))).toBe(false);
+    expect(r).toMatchObject({ ok: false, reason: "env_checkpoint_invalid" });
+    expect(snapshot(p.path, false)).toEqual(before);
   });
 });
 
