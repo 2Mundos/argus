@@ -52,6 +52,13 @@ export function Inbox() {
     return decision ? [{ decision, draft: draftOf(id) }] : [];
   });
   const ready = entries.length > 0 && entries.every(isAnswerable);
+  if (taskDrawer) {
+    return (
+      <section className="task-panel-page">
+        <TaskDetail taskId={taskDrawer} variant="panel" onClose={() => setTaskDrawer(null)} />
+      </section>
+    );
+  }
   return (
     <section>
       <div className="toolbar">
@@ -158,7 +165,6 @@ export function Inbox() {
           ))}
         </div>
       ))}
-      {taskDrawer && <TaskDetail taskId={taskDrawer} onClose={() => setTaskDrawer(null)} />}
     </section>
   );
 }

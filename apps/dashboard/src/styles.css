@@ -194,8 +194,12 @@ label.check input {
   grid-template-columns: minmax(0, 1fr) minmax(13.5rem, 13.5rem);
   grid-template-rows: auto 1fr;
   min-height: 100vh;
+  /* Room under main/rail so a fixed live-status bar never covers the last lines. */
+  padding-bottom: 2.25rem;
+  box-sizing: border-box;
 }
-.shell-worker {
+.shell-worker,
+.shell:has(.task-panel) {
   height: 100vh;
   max-height: 100vh;
   overflow: hidden;
@@ -306,6 +310,92 @@ nav a[aria-current="page"] {
 .status-offline::before {
   background: var(--danger);
 }
+.live-status {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  height: 2.25rem;
+  overflow: hidden;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  transition: height 0.28s ease;
+}
+.live-status.open {
+  height: 50vh;
+}
+.live-status-feed {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0.5rem 0.85rem 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+.live-status:not(.open) .live-status-feed {
+  overflow: hidden;
+  border-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.live-status-feed-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+}
+.live-status-feed-head a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.live-status-feed-head a:hover {
+  color: var(--text);
+}
+.live-status-feed .events {
+  margin: 0;
+}
+.live-status-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 2.25rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.25rem 0.85rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.live-status-strip:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+.live-status .status {
+  flex: 0 0 auto;
+}
+.live-status-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-status {
+    transition: none;
+  }
+}
 .shell > main {
   grid-column: 1;
   padding: 1rem;
@@ -387,13 +477,82 @@ nav a[aria-current="page"] {
   box-shadow: inset 0 0 0 1px var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
 }
-.shell-worker > main {
+.shell-worker > main,
+.shell:has(.task-panel) > main {
   padding: 0.5rem 0.35rem 0.5rem 0.5rem;
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
   background: var(--bg);
+}
+.task-panel-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+/* Full-width task view; warm tint so it reads apart from the blue worker panel. */
+.task-panel {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 28%, transparent);
+}
+.drawer.task-drawer {
+  width: min(100%, 100vw);
+  max-width: none;
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface));
+}
+/* Sticky bar so Close stays on screen while the panel or drawer scrolls. */
+.panel-titlebar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 2.5rem;
+  padding: 0.45rem 0.5rem 0.45rem 1.15rem;
+  border-bottom: 1px solid var(--border);
+}
+.panel-titlebar h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 1.1rem;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.65rem 1.25rem 1rem;
+}
+.worker-panel > .panel-titlebar {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+.task-panel > .panel-titlebar {
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface));
+}
+.drawer > .panel-titlebar {
+  background: var(--surface);
+}
+.drawer.task-drawer > .panel-titlebar {
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface));
 }
 .shell-worker .workers-rail {
   min-height: 0;
@@ -410,21 +569,17 @@ nav a[aria-current="page"] {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  /* Right gutter keeps the close control clear of scrollbars. */
-  padding: 0.65rem 2.15rem 1rem 1.25rem;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
+  gap: 0;
   border: 1px solid var(--accent);
   border-radius: 10px;
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 .icon-close {
-  position: absolute;
-  top: 0.35rem;
-  right: 0.2rem;
-  z-index: 1;
+  flex: 0 0 auto;
   width: 1.75rem;
   height: 1.75rem;
   margin: 0;
@@ -446,6 +601,7 @@ nav a[aria-current="page"] {
   flex: 0 0 28%;
   min-height: 3.5rem;
   overflow: auto;
+  padding: 0.65rem 1.25rem 0;
 }
 .worker-panel-meta .facts {
   grid-template-columns: repeat(3, max-content minmax(0, 1fr));
@@ -492,7 +648,7 @@ nav a[aria-current="page"] {
 }
 .worker-split {
   flex: 0 0 auto;
-  margin: 0;
+  margin: 0 1.25rem;
   border: none;
   height: 7px;
   cursor: row-resize;
@@ -518,6 +674,7 @@ nav a[aria-current="page"] {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  padding: 0 1.25rem 1rem;
 }
 .worker-panel .term {
   flex: 1 1 auto;
@@ -873,14 +1030,12 @@ nav a[aria-current="page"] {
   position: relative;
   width: min(720px, 100%);
   height: 100%;
-  overflow: auto;
+  overflow: hidden;
   background: var(--surface);
-  padding: 1.25rem 2.35rem 1.25rem 1.25rem;
+  padding: 0;
   box-shadow: var(--shadow);
-}
-.drawer > .icon-close {
-  top: 0.65rem;
-  right: 0.35rem;
+  display: flex;
+  flex-direction: column;
 }
 .facts {
   display: grid;
@@ -893,9 +1048,6 @@ nav a[aria-current="page"] {
 }
 .facts dd {
   margin: 0;
-}
-.spec {
-  max-height: 360px;
 }
 ul.plain {
   list-style: none;
@@ -1032,8 +1184,18 @@ th {
   background: var(--surface-2);
   border-radius: var(--radius);
   padding: 0.75rem 1rem;
-  max-height: 420px;
-  overflow: auto;
+  /* Grow with the text; the panel scrolls. A nested max-height + flex shrink
+     crushed this into a one-line scrollbar. */
+  overflow: visible;
+}
+.spec .markdown {
+  margin: 0;
+}
+.spec .markdown > :first-child {
+  margin-top: 0;
+}
+.spec .markdown > :last-child {
+  margin-bottom: 0;
 }
 .spec .markdown pre {
   background: var(--surface);

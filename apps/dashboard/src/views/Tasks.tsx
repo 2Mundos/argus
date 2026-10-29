@@ -37,6 +37,21 @@ export function Tasks() {
   );
   const tasks = data?.items;
 
+  if (selected) {
+    return (
+      <section className="task-panel-page">
+        <TaskDetail
+          taskId={selected}
+          variant="panel"
+          onClose={() => {
+            setSelected(null);
+            if (window.location.hash.startsWith("#tasks/")) window.location.hash = "tasks";
+          }}
+        />
+      </section>
+    );
+  }
+
   return (
     <section>
       <div className="toolbar">
@@ -82,15 +97,6 @@ export function Tasks() {
       </div>
       {archiving && <ArchiveTasks onClose={() => setArchiving(false)} />}
       {creating && <NewTask onClose={() => setCreating(false)} />}
-      {selected && (
-        <TaskDetail
-          taskId={selected}
-          onClose={() => {
-            setSelected(null);
-            if (window.location.hash.startsWith("#tasks/")) window.location.hash = "tasks";
-          }}
-        />
-      )}
     </section>
   );
 }

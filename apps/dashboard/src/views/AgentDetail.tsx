@@ -99,15 +99,18 @@ export function AgentDetail({
     handle.addEventListener("pointerup", onUp);
   }
 
-  const close = (
-    <button type="button" className="icon-close" aria-label="Close" onClick={onClose}>
-      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-        <path
-          d="M3.2 3.2a.75.75 0 0 1 1.06 0L8 6.94l3.74-3.74a.75.75 0 1 1 1.06 1.06L9.06 8l3.74 3.74a.75.75 0 1 1-1.06 1.06L8 9.06l-3.74 3.74a.75.75 0 1 1-1.06-1.06L6.94 8 3.2 4.26a.75.75 0 0 1 0-1.06Z"
-          fill="currentColor"
-        />
-      </svg>
-    </button>
+  const titlebar = (
+    <header className="panel-titlebar">
+      <h2>{agent?.name ?? "Worker"}</h2>
+      <button type="button" className="icon-close" aria-label="Close" onClick={onClose}>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <path
+            d="M3.2 3.2a.75.75 0 0 1 1.06 0L8 6.94l3.74-3.74a.75.75 0 1 1 1.06 1.06L9.06 8l3.74 3.74a.75.75 0 1 1-1.06 1.06L8 9.06l-3.74 3.74a.75.75 0 1 1-1.06-1.06L6.94 8 3.2 4.26a.75.75 0 0 1 0-1.06Z"
+            fill="currentColor"
+          />
+        </svg>
+      </button>
+    </header>
   );
 
   const meta = agent && (
@@ -240,7 +243,7 @@ export function AgentDetail({
   if (variant === "panel") {
     return (
       <section className="worker-panel" ref={panelRef}>
-        {close}
+        {titlebar}
         {meta && (
           <>
             <div className="worker-panel-meta" style={{ flex: `0 0 ${metaPct}%` }}>
@@ -265,9 +268,11 @@ export function AgentDetail({
   return (
     <div className="overlay" onClick={onClose} onKeyDown={(e) => e.key === "Escape" && onClose()}>
       <aside className="drawer" onClick={(e) => e.stopPropagation()} onKeyDown={() => {}}>
-        {close}
-        {meta}
-        {output}
+        {titlebar}
+        <div className="panel-body">
+          {meta}
+          {output}
+        </div>
       </aside>
     </div>
   );

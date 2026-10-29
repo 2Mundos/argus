@@ -3,6 +3,7 @@ import { handleUnauthorized, setToken, token } from "./api";
 import { Brand } from "./Brand";
 import { LiveProvider, useLive } from "./live";
 import { Home } from "./views/Home";
+import { LiveStatusBar } from "./views/LiveStatusBar";
 import { Login } from "./views/Login";
 import { WorkersSidebar } from "./WorkersSidebar";
 
@@ -178,6 +179,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
         </Suspense>
       </main>
       <WorkersSidebar selectedId={selectedWorker} onSelect={setSelectedWorker} />
+      <LiveStatusBar />
     </div>
   );
 }

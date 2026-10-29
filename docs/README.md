@@ -83,7 +83,8 @@ every new dependency is judged against it.
   preservation of a task's unpublished work and its restore by the next attempt,
   or a typed `env_checkpoint_*` block
 - [Live work](specs/live-work.spec.md) — what an agent is doing now: task activity
-  feed, agent drawer with its current work and container output
+  feed, agent drawer with its current work and container output, and a fixed
+  live status bar (expandable recent-event feed)
 - [Gitea helper for workers](specs/gitea-helper.spec.md) — `argus-gitea-api`
   command matrix, exit codes, security model, and the review-findings gate
 - [GitHub repositories](specs/github-repositories.spec.md) — `github` repository
