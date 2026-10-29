@@ -47,7 +47,7 @@ from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
 from argus_api.paging import DEFAULT_LIMIT, View
 from argus_api.settings import service as settings_svc
-from argus_api.tasks import delivery, log, service, steers, views
+from argus_api.tasks import changes, delivery, log, service, steers, views
 from argus_api.tasks.views import TaskPage
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -350,6 +350,40 @@ async def post_log(
     )  # redaction stays outside the writer
     async with db.write() as tx:
         return await log.append(tx, agent_id, task_id, body.attempt, body.source, lines)
+
+
+@router.put("/{task_id}/changes")
+async def put_changes(
+    task_id: str,
+    body: changes.ChangesWrite,
+    db: DbDep,
+    agent_id: AgentDep,
+    token: TokenDep,
+) -> changes.ChangesAccepted:
+    """Replace the diff snapshot of the attempt you hold (agent token), computed in
+    the container against the workspace's merge base. At most 384 KiB, 500 files and
+    a 256 KiB patch (longer is cut), one snapshot per 5 s. Secrets are redacted
+    before storing; the summary is published as a `task.changes` event. Fenced like
+    the live log: a stale attempt is 409 `stale_attempt`."""
+    async with db.snapshot() as snap:  # refuse cheaply before the costly redaction
+        await changes.admit(snap, agent_id, task_id, body.attempt)
+    body = changes.prepare(body, (token,) if token else ())
+    async with db.write() as tx:
+        return await changes.store(tx, agent_id, task_id, body)
+
+
+@router.get("/{task_id}/changes")
+async def get_changes(
+    task_id: str,
+    db: DbDep,
+    caller: CallerDep,
+    attempt: Annotated[int | None, Query(ge=0, le=log.MAX_SEQ)] = None,
+) -> changes.Changes:
+    """The diff snapshot of an attempt (default: the current one); 404 `no_changes`
+    when it has none. Workers only read tasks they have leased."""
+    async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
+        return await changes.read(conn, task_id, attempt)
 
 
 @router.post("/{task_id}/steers", status_code=status.HTTP_201_CREATED)

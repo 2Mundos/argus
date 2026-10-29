@@ -422,6 +422,20 @@ async def get_task_log(
 
 
 @tool(ANYONE)
+async def get_task_changes(
+    ctx: Context, task_id: str, attempt: int | None = None
+) -> dict:
+    """Read what a task attempt (default: the current one) has changed in its
+    workspace, as the dashboard's Changes panel shows it: {branch, base, head,
+    commits, files: [{path, status, added, deleted, binary}], untracked, patch,
+    truncated, at}. 404 no_changes when the worker has posted none. Secrets are
+    redacted. Workers read leased tasks only."""
+    return await _call(
+        ctx, "GET", f"/tasks/{task_id}/changes", params={"attempt": attempt}
+    )
+
+
+@tool(ANYONE)
 async def get_tasks(ctx: Context, ids: list[str], view: ViewArg = "summary") -> dict:
     """Read up to 50 tasks in one call, in the order given; unknown ids come back in
     `missing`. view=detail adds spec and result (long text cut, see `truncated`)."""

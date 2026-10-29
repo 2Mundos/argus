@@ -23,6 +23,7 @@ REQUIRED = {
     "/tmp/argus-engines/anthropic-redirect.mjs",
     "/tmp/argus-engines/milestones.mjs",
     "/tmp/argus-engines/livelog.mjs",
+    "/tmp/argus-engines/changes.mjs",
     "/tmp/argus-engines/usage.mjs",
 }
 # Earlier layouts: model-policy on its own COPY line, modules added one release at a time.
@@ -32,6 +33,7 @@ UPGRADES = [
     "oct21-usage-not-copied",
     "oct21-account-settings-not-copied",
     "oct27-no-github-helper",
+    "oct29-changes-not-copied",
 ]
 
 
@@ -121,7 +123,8 @@ def test_earlier_layouts_upgrade_to_a_buildable_block(
     assert p.read_text() == after
 
 
-@pytest.mark.parametrize("name", UPGRADES[1:-1])
+# The first is a layout change, the last two only lack a module nothing reads yet.
+@pytest.mark.parametrize("name", UPGRADES[1:-2])
 def test_fixtures_reproduce_the_build_failure(name: str) -> None:
     """The broken states really are broken: a step reads a file the COPY never staged."""
     sources, run = argus_block((FIXTURES / f"{name}.Dockerfile").read_text())

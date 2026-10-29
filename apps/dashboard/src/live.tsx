@@ -51,7 +51,8 @@ export function LiveProvider(props: {
       onMessage: (data) => {
         const event = JSON.parse(data) as ArgusEvent;
         for (const listener of listeners.current) listener(event);
-        if (event.kind === "task.log") return; // output only: no state to refetch
+        // output only: no state to refetch (TaskChanges listens for its own)
+        if (event.kind === "task.log" || event.kind === "task.changes") return;
         clearTimeout(timer);
         timer = setTimeout(() => setVersion((v) => v + 1), 250);
       },

@@ -32,6 +32,7 @@ import {
   CUSTOM_HARNESS_AUTH_TOKEN,
   LOCAL_HARNESS_AUTH_TOKEN,
 } from "./anthropic-redirect.mjs";
+import { CHANGES_FILE, startChanges } from "./changes.mjs";
 import { createFileRelay, envSecrets, RELAY_FILE, startLiveLog } from "./livelog.mjs";
 import { createSink, createTracker, gitHead, waitingInput } from "./milestones.mjs";
 import { implementationScope, loadPolicy, selectModel } from "./model-policy.mjs";
@@ -1028,6 +1029,34 @@ async function runAttempt(
     live = null;
   }
 
+  // Task changes: the workspace diff, computed here because git must never read the
+  // worker's .git on the host. No token, no network; the host puts the snapshot.
+  let changes = null;
+  try {
+    const taskId = snapshot.context?.task_id;
+    const attempt = Number(snapshot.context?.attempt);
+    if (taskId && Number.isSafeInteger(attempt) && attempt >= 1) {
+      const file =
+        e.ARGUS_TASK_CHANGES_FILE ||
+        path.join(
+          path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
+          CHANGES_FILE,
+        );
+      const ms =
+        Number(e.ARGUS_CHANGES_TICK_S) > 0 ? Number(e.ARGUS_CHANGES_TICK_S) * 1000 : undefined;
+      changes = startChanges({
+        cwd,
+        file,
+        taskId,
+        attempt,
+        secrets: [e[CUSTOM_KEY_ENV]?.trim(), ...envSecrets(e)],
+        intervalMs: ms,
+      });
+    }
+  } catch {
+    changes = null;
+  }
+
   // Milestones come from real state, polled while the executor runs and once after it.
   const sink = createSink({ e, out });
   const pending = [];
@@ -1085,6 +1114,7 @@ async function runAttempt(
   fs.closeSync(outFd);
   fs.closeSync(errFd);
   live?.stop();
+  changes?.stop();
   clearInterval(poller);
   await polling;
   await tracker.poll();

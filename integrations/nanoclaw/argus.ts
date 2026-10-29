@@ -61,6 +61,7 @@ import {
   releaseRepositoryLease,
   runtimeProviders,
 } from "./argus-accounts.js";
+import { CHANGES_RELAY_FILE, createChangesRelay } from "./argus-changes-relay.js";
 import { defaultContinuationObserve } from "./argus-continuation-observe.js";
 import { syncCustomHarnessBridge } from "./argus-custom-bridge.js";
 import {
@@ -1615,6 +1616,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let logTimer: ReturnType<typeof setInterval> | null = null;
   let usageRelay: ReturnType<typeof createUsageRelay> | null = null;
   let usageTimer: ReturnType<typeof setInterval> | null = null;
+  let changesRelay: ReturnType<typeof createChangesRelay> | null = null;
+  let changesTimer: ReturnType<typeof setInterval> | null = null;
   // Stall visibility: remember a session once seen; fail if it vanishes without a reply.
   let seenSessionId: string | null = null;
   let sessionMissingSince: number | null = null;
@@ -1912,6 +1915,30 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
+  /**
+   * Put the workspace diff snapshots the delegate writes in the container (task changes
+   * spec 3.2). The host never runs git over the workspace. Best effort: never fails the task.
+   */
+  async function startChangesRelay(task: { id: string; attempt: number }): Promise<void> {
+    try {
+      const logFile = await cfg.delegateLogFile?.();
+      if (!logFile) return;
+      const file = path.join(path.dirname(logFile), CHANGES_RELAY_FILE);
+      await resetRelayFile(file); // only this attempt's snapshot is relayed
+      const relay = createChangesRelay({
+        file,
+        task,
+        now: nowMs,
+        put: (body) => client.call("PUT", `/tasks/${task.id}/changes`, body),
+      });
+      changesRelay = relay;
+      changesTimer = setInterval(() => void relay.poll(), cfg.logPollMs ?? LOG_POLL_MS);
+      changesTimer.unref?.();
+    } catch (err) {
+      log.warn("Could not start the task changes relay", { err: String(err).slice(0, 200) });
+    }
+  }
+
   /** The last usage of the attempt, posted while its leases still exist. */
   async function drainUsage(): Promise<void> {
     const relay = usageRelay;
@@ -1937,6 +1964,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     logRelay = null;
     if (logTimer) clearInterval(logTimer);
     logTimer = null;
+    changesRelay?.stop();
+    changesRelay = null;
+    if (changesTimer) clearInterval(changesTimer);
+    changesTimer = null;
     injectedSteers.clear();
     current = null;
     seenSessionId = null;
@@ -2563,6 +2594,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       step = "task injection";
       if (!logRelay) await startLogRelay(task);
       if (!usageRelay) await startUsageRelay(task);
+      if (!changesRelay) await startChangesRelay(task);
       resends = 0;
       const best = executor ?? account;
       renderCurrent = () =>
@@ -3318,7 +3350,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (message.files?.length) await attachFiles(task, message.files);
       const d = parseReply(text, task.id);
       // The last lines of the run, before the attempt ends and Argus stops taking them.
-      if (d.kind !== "progress" && !isFailureNotice) await logRelay?.drain();
+      if (d.kind !== "progress" && !isFailureNotice)
+        await Promise.all([logRelay?.drain(), changesRelay?.drain()]);
       // Usage first, on every way out (a failure notice may rotate the leases it is billed to).
       if (d.kind !== "progress" || isFailureNotice) await drainUsage();
       if (current !== task) {

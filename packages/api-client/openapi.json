@@ -2149,6 +2149,27 @@
         "title": "Axes",
         "type": "object"
       },
+      "BaseRef": {
+        "properties": {
+          "ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Ref",
+            "type": "string"
+          },
+          "sha": {
+            "pattern": "^[0-9a-f]{4,64}$",
+            "title": "Sha",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "sha"
+        ],
+        "title": "BaseRef",
+        "type": "object"
+      },
       "BlockRequest": {
         "properties": {
           "attempt": {
@@ -2349,6 +2370,265 @@
           "dry_run"
         ],
         "title": "BulkArchiveResult",
+        "type": "object"
+      },
+      "ChangedFile": {
+        "properties": {
+          "added": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Added"
+          },
+          "binary": {
+            "default": false,
+            "title": "Binary",
+            "type": "boolean"
+          },
+          "deleted": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted"
+          },
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "A",
+              "M",
+              "D",
+              "R",
+              "C",
+              "T",
+              "U",
+              "X"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "status"
+        ],
+        "title": "ChangedFile",
+        "type": "object"
+      },
+      "Changes": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BaseRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branch": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Branch",
+            "type": "string"
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/Commit"
+            },
+            "maxItems": 50,
+            "title": "Commits",
+            "type": "array"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/ChangedFile"
+            },
+            "maxItems": 500,
+            "title": "Files",
+            "type": "array"
+          },
+          "head": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{4,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head"
+          },
+          "patch": {
+            "default": "",
+            "title": "Patch",
+            "type": "string"
+          },
+          "received_at": {
+            "format": "date-time",
+            "title": "Received At",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "truncated": {
+            "$ref": "#/components/schemas/Truncated"
+          },
+          "untracked": {
+            "items": {
+              "$ref": "#/components/schemas/UntrackedFile"
+            },
+            "maxItems": 200,
+            "title": "Untracked",
+            "type": "array"
+          }
+        },
+        "required": [
+          "at",
+          "branch",
+          "task_id",
+          "attempt",
+          "received_at"
+        ],
+        "title": "Changes",
+        "type": "object"
+      },
+      "ChangesAccepted": {
+        "properties": {
+          "added": {
+            "title": "Added",
+            "type": "integer"
+          },
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "deleted": {
+            "title": "Deleted",
+            "type": "integer"
+          },
+          "files": {
+            "title": "Files",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at",
+          "files",
+          "added",
+          "deleted"
+        ],
+        "title": "ChangesAccepted",
+        "type": "object"
+      },
+      "ChangesWrite": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BaseRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branch": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Branch",
+            "type": "string"
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/Commit"
+            },
+            "maxItems": 50,
+            "title": "Commits",
+            "type": "array"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/ChangedFile"
+            },
+            "maxItems": 500,
+            "title": "Files",
+            "type": "array"
+          },
+          "head": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{4,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head"
+          },
+          "patch": {
+            "default": "",
+            "title": "Patch",
+            "type": "string"
+          },
+          "truncated": {
+            "$ref": "#/components/schemas/Truncated"
+          },
+          "untracked": {
+            "items": {
+              "$ref": "#/components/schemas/UntrackedFile"
+            },
+            "maxItems": 200,
+            "title": "Untracked",
+            "type": "array"
+          }
+        },
+        "required": [
+          "at",
+          "branch",
+          "attempt"
+        ],
+        "title": "ChangesWrite",
         "type": "object"
       },
       "Check": {
@@ -3283,6 +3563,26 @@
           }
         },
         "title": "CodexLoginStart",
+        "type": "object"
+      },
+      "Commit": {
+        "properties": {
+          "sha": {
+            "pattern": "^[0-9a-f]{4,64}$",
+            "title": "Sha",
+            "type": "string"
+          },
+          "subject": {
+            "maxLength": 1000,
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "subject"
+        ],
+        "title": "Commit",
         "type": "object"
       },
       "CompleteRequest": {
@@ -15585,6 +15885,43 @@
         "title": "Tri",
         "type": "string"
       },
+      "Truncated": {
+        "properties": {
+          "files": {
+            "default": false,
+            "title": "Files",
+            "type": "boolean"
+          },
+          "patch": {
+            "default": false,
+            "title": "Patch",
+            "type": "boolean"
+          }
+        },
+        "title": "Truncated",
+        "type": "object"
+      },
+      "UntrackedFile": {
+        "properties": {
+          "bytes": {
+            "minimum": 0.0,
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "bytes"
+        ],
+        "title": "UntrackedFile",
+        "type": "object"
+      },
       "Usage-Input": {
         "description": "What the work cost, as reported by the agent. Recorded, never enforced.",
         "properties": {
@@ -24172,6 +24509,128 @@
           }
         ],
         "summary": "Cancel Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/changes": {
+      "get": {
+        "description": "The diff snapshot of an attempt (default: the current one); 404 `no_changes`\nwhen it has none. Workers only read tasks they have leased.",
+        "operationId": "get_changes_api_tasks__task_id__changes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "attempt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Attempt"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Changes"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Changes",
+        "tags": [
+          "tasks"
+        ]
+      },
+      "put": {
+        "description": "Replace the diff snapshot of the attempt you hold (agent token), computed in\nthe container against the workspace's merge base. At most 384 KiB, 500 files and\na 256 KiB patch (longer is cut), one snapshot per 5 s. Secrets are redacted\nbefore storing; the summary is published as a `task.changes` event. Fenced like\nthe live log: a stale attempt is 409 `stale_attempt`.",
+        "operationId": "put_changes_api_tasks__task_id__changes_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangesWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Changes",
         "tags": [
           "tasks"
         ]
