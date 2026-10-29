@@ -81,11 +81,22 @@ A quiet container that is still running is never failed this way.
 - `wait_for_events(inbox=true)` includes `task.quiet`.
 - Agent views expose `quiet_since`: the earliest `quiet_at` among the agent's
   claimed tasks (null when none).
+- `GET /api/tasks/{id}` carries `quiet_at`, the derived `stall_cause`,
+  `last_signal_at` and `last_signal_source`, derived exactly as the Inbox quiet
+  row does; the board list (`GET /api/tasks`, summary and detail views) does not
+  carry them. `last_signal_*` and `quiet_at` are derived only while the task is
+  `claimed`, so a released task reports none; `stall_cause` is set only while
+  `quiet_at` is set, so a busy claim reports its last signal and no cause.
+  Read-only and authorized like any task read.
 
 ## 3.5 Dashboard
 
 - Inbox: quiet row copy "Quiet for N min; last signal: &lt;source&gt; at &lt;time&gt;",
   with the existing release and steer actions.
+- The task detail Activity panel shows the same quiet sentence as the Inbox row
+  for that task ("Quiet for N; last signal: &lt;source&gt; at &lt;time&gt;; likely
+  cause: &lt;cause&gt;."), using the same copy; when the task is not quiet no stall
+  sentence is shown.
 - Worker rail: a busy chip with `quiet_since` shows state `quiet` and its age;
   the newest ended workers stay listed, at most eight, dimmed, with `end_reason`.
 
@@ -174,3 +185,8 @@ been deleted, so sessions never started and each claim sat quiet until
 - 3.7: `LeaseObservation` on the heartbeat, `stall_cause` in events, inbox and
   errors, `env_workspace_missing`, the channel workspace probe and its test
   (`argus-stall-causes.test.ts`).
+- Single-task read (`TaskRead`) exposes the quiet fields on `GET /api/tasks/{id}`;
+  the dashboard Activity panel renders the same stall sentence as the Inbox quiet
+  row. No migration: all fields are derived from `tasks.quiet_at`,
+  `tasks.activity_at`, `tasks.progress_at`, `tasks.output_at`,
+  `task_attempts.claimed_at`, `tasks.observation`, `tasks.observation_at`.
