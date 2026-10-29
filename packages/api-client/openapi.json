@@ -12819,6 +12819,47 @@
         "title": "RoutingOptions",
         "type": "object"
       },
+      "RuntimeImage": {
+        "description": "An image the operator configured for a NanoClaw template, with what was\nmeasured about it on the node. `present` is None when it cannot be checked.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "image": {
+            "title": "Image",
+            "type": "string"
+          },
+          "present": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Present"
+          },
+          "setting": {
+            "title": "Setting",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "image",
+          "source",
+          "setting",
+          "present",
+          "detail"
+        ],
+        "title": "RuntimeImage",
+        "type": "object"
+      },
       "RuntimeKind": {
         "enum": [
           "plain",
@@ -17693,12 +17734,32 @@
       },
       "argus_core__fleet__Readiness": {
         "properties": {
+          "agent_image": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeImage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "checks": {
             "items": {
               "$ref": "#/components/schemas/Check"
             },
             "title": "Checks",
             "type": "array"
+          },
+          "host_image": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeImage"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "images": {
             "items": {

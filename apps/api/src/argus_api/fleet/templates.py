@@ -23,6 +23,7 @@ from argus_core.fleet import (
     Pool,
     PoolUpsert,
     Readiness,
+    RuntimeImage,
     RuntimeKind,
     TargetKind,
     TemplateCatalog,
@@ -522,11 +523,12 @@ async def _judge(
         f"Start or fix the Docker daemon: {f.option.error}",
     )
     images: list[ImageChoice] = []
+    host_image = agent_image = None
     if f.info is not None:
         if tpl.id in NANOCLAW_IDS:
-            await _judge_nanoclaw(
-                settings, f, targets, r, sandboxed=tpl.id == NANOCLAW_SANDBOX.id
-            )
+            sandboxed = tpl.id == NANOCLAW_SANDBOX.id
+            await _judge_nanoclaw(settings, f, targets, r, sandboxed=sandboxed)
+            host_image, agent_image = _nanoclaw_images(settings, r, sandboxed)
         else:
             images = await _judge_worker(settings, f, targets, r)
     return Readiness(
@@ -535,6 +537,47 @@ async def _judge(
         checks=r.checks,
         missing=r.missing,
         images=images,
+        host_image=host_image,
+        agent_image=agent_image,
+    )
+
+
+def _nanoclaw_images(
+    settings: Settings, r: _Report, sandboxed: bool
+) -> tuple[RuntimeImage | None, RuntimeImage | None]:
+    """The configured host and agent images with what the checks measured. The
+    sandbox daemon loads the agent image from an archive, so its presence on the
+    node is not a fact this process can check."""
+    by_name = {c.name: c for c in r.checks}
+
+    def one(image: str | None, setting: str, check: str | None, why: str):
+        if not image:
+            return None
+        found = by_name.get(check) if check else None
+        return RuntimeImage(
+            image=image,
+            source="config",
+            setting=setting,
+            present=None if found is None else found.ok,
+            detail=found.detail if found else why,
+        )
+
+    return (
+        one(
+            settings.nanoclaw_host_image,
+            "ARGUS_NANOCLAW_HOST_IMAGE",
+            "nanoclaw_host_image",
+            "not checked: the NanoClaw settings are incomplete",
+        ),
+        one(
+            settings.nanoclaw_agent_image,
+            "ARGUS_NANOCLAW_AGENT_IMAGE",
+            None if sandboxed else "nanoclaw_agent_image",
+            "loaded from the image archive into the instance's own daemon;"
+            " not checked here"
+            if sandboxed
+            else "not checked",
+        ),
     )
 
 
