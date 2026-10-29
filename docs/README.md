@@ -186,6 +186,9 @@ every new dependency is judged against it.
 - [NanoClaw integration spike](research/2026-10-14.nanoclaw-integration.research.md) —
   channels, credentials, drivers
 
+- [Task workspace ownership visibility](research/2026-10-29.workspace-ownership.research.md) —
+  task detail view: owner, location kind, changes/checkpoint availability (draft §4)
+
 - [Preferred models](specs/model-selection.spec.md)
 - [Task difficulty, executor routing and escalation](specs/task-difficulty.spec.md) — trivial tasks prefer
   the local Strata account and Cursor `composer-2.5`; the executor chain and escalation follow the level.
