@@ -19,6 +19,7 @@ from argus_api.engines.local import (
 from argus_api.engines.local_readiness import local_identity
 from argus_api.main import app
 from argus_core.criteria_safe import assert_schema_definition
+from argus_core.difficulty import Difficulty
 from argus_core.engines import (
     Criteria,
     Fact,
@@ -350,6 +351,27 @@ def test_simple_fitting_task_goes_local_with_escalation_target() -> None:
 def test_anything_unproven_goes_to_a_real_engine(change: dict, why: str) -> None:
     d = router.route(EASY.model_copy(update=change), cat())
     assert d.target == "claude" and why in d.reason
+
+
+def test_multi_file_is_rejected_on_the_single_completion_path() -> None:
+    # Single completion (no acting tools) cannot touch several files: no difficulty.
+    d = router.route(EASY.model_copy(update={"multi_file": True}), cat())
+    assert d.target == "claude"
+    assert "multi-file change (single completion without tools)" in d.local_rejections
+
+
+def test_trivial_multi_file_is_not_blocked_on_the_nanoclaw_harness() -> None:
+    # The local harness orchestrates only; composer-2.5 (Cursor) makes the file writes.
+    req = EASY.model_copy(
+        update={"is_code": True, "multi_file": True, "difficulty": Difficulty.TRIVIAL}
+    )
+    policy = {"trivial": {"agent": ["composer-2.5"]}}
+    d = router.route(
+        req, cat(others=("cursor-agent", "codex", "claude")), policy=policy
+    )
+    assert d.target == "local"
+    assert d.executor == "agent" and d.executor_model == "composer-2.5"
+    assert not any("multi-file" in why for why in d.local_rejections)
 
 
 def test_equal_engines_tie_deterministically_and_need_no_separate_executor() -> None:

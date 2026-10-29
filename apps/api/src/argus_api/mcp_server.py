@@ -1606,7 +1606,8 @@ async def route_task(
     simple Cursor with composer-2.5, standard Claude or Codex, hard the strong model;
     an executor that is not usable is skipped, in chain order, with the reason.
     The local model is chosen only if the task is simple, low risk, has deterministic acceptance criteria,
-    is not multi-file or sensitive, and `input_chars` (everything the model would see:
+    is not sensitive and, unless it is routed to the NanoClaw harness with the Cursor
+    executor (a `difficulty`, whose executor is `agent`), is not multi-file, and `input_chars` (everything the model would see:
     instructions, tool schemas, history, inputs) provably fits. Unknown size never goes
     local. Needs the orchestrator or admin scope. The decision and its reason are recorded."""
     return await _call(
