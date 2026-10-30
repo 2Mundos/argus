@@ -263,7 +263,17 @@ def local_rejections(
     max_input_fraction: float,
     output_reserve: int,
     chat_template_overhead: int,
+    harness: bool = False,
 ) -> tuple[list[str], int | None]:
+    """Why the local model cannot take the task, and the estimated input tokens.
+
+    Two local paths exist. The single completion (a `route` decision without a
+    difficulty, run as `run_local`: no acting tools) writes nothing itself, so it fits
+    only a single narrow change: `multi_file` rejects it.
+    The NanoClaw local harness (`harness=True`) orchestrates only and delegates the
+    file writes to a Cursor executor (`agent`, composer-2.5), which handles multi-file
+    work. There the limit is context, not file count, so `multi_file` does not apply.
+    See engines.spec.md (local routing) and local-harness.spec.md."""
     why: list[str] = []
     if local is None:
         return ["no local model is configured"], None
@@ -275,8 +285,8 @@ def local_rejections(
         why.append("task is not declared low risk")
     if not request.criteria_deterministic:
         why.append("no deterministic acceptance criteria")
-    if request.multi_file:
-        why.append("multi-file change")
+    if request.multi_file and not harness:
+        why.append("multi-file change (single completion without tools)")
     if request.touches_sensitive:
         why.append("touches auth, security or secrets")
     est: int | None = None
@@ -318,14 +328,6 @@ def route(
     if request.difficulty is not None:
         request = request.model_copy(update={"simple": request.difficulty in _CHEAP})
     local = catalog.local
-    rejections, est = local_rejections(
-        request,
-        local,
-        max_input_fraction=max_input_fraction,
-        output_reserve=output_reserve,
-        chat_template_overhead=chat_template_overhead,
-    )
-    n_ctx = local.n_ctx if local else None
     local_entry = next((e for e in catalog.engines if e.id == "local"), None)
     fallback, blocked, moved_from = _fallback(catalog)
     executor = _executor(request, catalog, fallback)
@@ -339,6 +341,17 @@ def route(
             "executor_model": model,
             "executor_reason": why,
         }
+    # A declared difficulty with the Cursor executor is the NanoClaw local harness,
+    # which delegates the file writes (multi-file is allowed there).
+    rejections, est = local_rejections(
+        request,
+        local,
+        max_input_fraction=max_input_fraction,
+        output_reserve=output_reserve,
+        chat_template_overhead=chat_template_overhead,
+        harness=request.difficulty is not None and executor == "agent",
+    )
+    n_ctx = local.n_ctx if local else None
     if not rejections:
         # Fits and is simple; but a local model that never passed a real run
         # is not trusted with work (installed != validated).

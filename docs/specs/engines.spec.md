@@ -139,7 +139,7 @@ In scope:
 - **Local routing is conservative and deterministic.** A task goes to the
   local model only if *all* hold: the caller declares it simple and low-risk
   and gives deterministic acceptance criteria; it touches no auth, security or
-  secret topics; it is not a multi-file change; the **estimated input plus the
+  secret topics; the **estimated input plus the
   reserved output fits** the served context times a safety fraction
   (default 50 % of `n_ctx`, output reserve 2 048); the input estimate counts
   instructions, tool schemas, history and inputs. This is an **upper bound**, not
@@ -151,6 +151,17 @@ In scope:
   schema). Unknown context size (model not probed)
   routes away. Nothing is truncated: a task that does not fit is routed away,
   never trimmed.
+  File count is a rule of the single-completion path only. A `route` decision
+  without a `difficulty` that would send the task to the local model (the
+  `run_local` completion: one chat completion without tools that act on the
+  filesystem) fits only a single narrow change, so `multi_file` is rejected there
+  (`multi-file change (single completion without tools)`). `run_local` itself
+  takes no file count. The NanoClaw local harness is different: it orchestrates
+  only (small context, [local harness](local-harness.spec.md)) and delegates the
+  file writes to the Cursor executor (`agent`, `composer-2.5`, see
+  [task difficulty](task-difficulty.spec.md)), which makes multi-file edits. A
+  `route` decision with a `difficulty` whose executor resolves to `agent` is that
+  harness path, so `multi_file` does not block it; the limit there is context.
 - **Escalation is bounded and effect free.** The local run is a single
   completion without tools that act, so a retry or an escalation duplicates
   nothing. `max_attempts` (default 1, cap 2) counts local attempts; an
