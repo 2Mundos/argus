@@ -945,9 +945,33 @@ function hash(name) {
   }
 }
 
+// Bounded: never follow a link, never block on a FIFO, never read more than the channel writes.
+function readManifest() {
+  const max = ${JSON_MAX_BYTES};
+  const fd = fs.openSync(
+    new URL("manifest.json", here),
+    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+  );
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size > max) throw new Error("not a small file");
+    const buf = Buffer.alloc(max + 1);
+    let n = 0;
+    while (n < buf.length) {
+      const got = fs.readSync(fd, buf, n, buf.length - n, n);
+      if (got === 0) break;
+      n += got;
+    }
+    if (n > max) throw new Error("too large");
+    return JSON.parse(buf.subarray(0, n).toString("utf8"));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 let manifest;
 try {
-  manifest = JSON.parse(fs.readFileSync(new URL("manifest.json", here), "utf8"));
+  manifest = readManifest();
 } catch {
   console.log("manifest.json - - FAIL");
   process.exit(1);

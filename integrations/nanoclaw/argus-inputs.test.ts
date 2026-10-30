@@ -37,6 +37,7 @@ import {
   taskInputsContainerPath,
   taskInputsPath,
   unsafeInputName,
+  VERIFY_INPUTS_SOURCE,
 } from "./argus-inputs.js";
 
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
@@ -62,6 +63,8 @@ type Behaviour = {
   extra?: number;
   status?: number;
   badContentRange?: boolean;
+  /** Answer 416 to the first N requests that carry a Range. */
+  refuseRange?: number;
 };
 
 interface Served {
@@ -152,7 +155,8 @@ class FakeArgus {
     let start = 0;
     if (r && !b.ignoreRange) {
       start = Number(r[1]);
-      if (start >= a.bytes.length) {
+      if (start >= a.bytes.length || (b.refuseRange ?? 0) > 0) {
+        if (b.refuseRange) b.refuseRange -= 1;
         res.writeHead(416).end();
         return;
       }
@@ -406,6 +410,26 @@ describe("materializeTaskInputs", () => {
     expect(result.ok && result.inputs[0].state).toBe("verified");
     expect(contentRequests()[1].range).not.toBeNull();
     expect(readFileSync(path.join(taskInputsPath(g, taskId), "p.diff")).equals(bytes)).toBe(true);
+  });
+
+  it("discards the partial file on a 416 and retries once from byte 0", async () => {
+    const g = group();
+    const taskId = randomUUID();
+    const bytes = patchFixture();
+    const item = fake.add(taskId, "p.diff", bytes, {
+      dropAfter: 20_000,
+      drops: 1,
+      refuseRange: 1,
+    });
+    const { result } = await run(g, taskId, {
+      required: { artifactId: item.id, sha256: item.sha256 },
+    });
+    expect(result.ok && result.inputs[0].state).toBe("verified");
+    // No range, then a resume the server refuses, then a fresh full transfer: nothing more.
+    expect(contentRequests().map((r) => r.range)).toEqual([null, "bytes=20000-", null]);
+    const dir = taskInputsPath(g, taskId);
+    expect(sha(readFileSync(path.join(dir, "p.diff")))).toBe(item.sha256);
+    expect(readdirSync(path.join(dir, ".partial"))).toEqual([]);
   });
 
   it("restarts when a 206 answer names another range", async () => {
@@ -770,6 +794,7 @@ describe("materializeTaskInputs", () => {
   it.each([
     ["the task inputs root", (g: string, _t: string) => path.join(g, TASK_INPUTS_DIR)],
     ["the task directory", (g: string, t: string) => taskInputsPath(g, t)],
+    ["the group directory", (g: string, _t: string) => g],
   ])("never writes outside when %s is swapped for a link after the checks", async (_w, swapped) => {
     const g = group();
     const outside = group();
@@ -786,7 +811,9 @@ describe("materializeTaskInputs", () => {
     writeFileSync(path.join(lookAlike, ".partial", `${item.id}.part`), "victim");
     const before = snapshot(outside);
     const target = swapped(g, taskId);
-    const lookAlikeOf = target === taskInputsPath(g, taskId) ? lookAlike : root;
+    const lookAlikeOf =
+      target === g ? outside : target === taskInputsPath(g, taskId) ? lookAlike : root;
+    if (target === g) dirs.push(`${g}.moved`);
     const { result } = await run(g, taskId, {
       required: { artifactId: item.id, sha256: item.sha256 },
       afterDirsChecked: async () => {
@@ -1020,6 +1047,71 @@ describe("the verifier and the consumed relay", () => {
     rmSync(manifest);
     execFileSync("mkfifo", [manifest]);
     expect(await consumedReceipts(dir)).toEqual([]);
+  });
+
+  describe("run as generated", () => {
+    /** VERIFY_INPUTS_SOURCE in a fresh dir with a good input and manifest. */
+    function verifierDir() {
+      const d = group();
+      const bytes = Buffer.from("payload");
+      writeFileSync(path.join(d, INPUT_VERIFIER), VERIFY_INPUTS_SOURCE);
+      writeFileSync(path.join(d, "in.txt"), bytes);
+      const manifest = JSON.stringify({
+        task_id: randomUUID(),
+        attempt: 1,
+        inputs: [
+          {
+            artifact_id: randomUUID(),
+            name: "in.txt",
+            size: bytes.length,
+            sha256: sha(bytes),
+            state: "verified",
+          },
+        ],
+      });
+      return { d, manifest, file: path.join(d, INPUT_MANIFEST) };
+    }
+    const verify = (d: string) =>
+      spawnSync(process.execPath, [path.join(d, INPUT_VERIFIER)], {
+        encoding: "utf8",
+        timeout: 5_000,
+        killSignal: "SIGKILL",
+      });
+
+    it("passes on a plain manifest", () => {
+      const { d, manifest, file } = verifierDir();
+      writeFileSync(file, manifest);
+      const out = verify(d);
+      expect(out.status).toBe(0);
+      expect(out.stdout).toMatch(/^in\.txt 7 [0-9a-f]{64} ok$/m);
+      expect(existsSync(path.join(d, INPUT_CONSUMED))).toBe(true);
+    });
+
+    it.each([
+      [
+        "a symlink",
+        (file: string, manifest: string) => {
+          const elsewhere = path.join(group(), "manifest.json");
+          writeFileSync(elsewhere, manifest);
+          symlinkSync(elsewhere, file);
+        },
+      ],
+      ["a FIFO", (file: string) => execFileSync("mkfifo", [file])],
+      [
+        "oversized",
+        (file: string, manifest: string) => writeFileSync(file, manifest + " ".repeat(1024 * 1024)),
+      ],
+    ])("fails promptly when the manifest is %s", (_w, plant) => {
+      const { d, manifest, file } = verifierDir();
+      plant(file, manifest);
+      const started = Date.now();
+      const out = verify(d);
+      expect(out.signal).toBeNull(); // not killed by the timeout: it did not hang
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(out.status).toBe(1);
+      expect(out.stdout.trim()).toBe("manifest.json - - FAIL");
+      expect(existsSync(path.join(d, INPUT_CONSUMED))).toBe(false);
+    });
   });
 
   it("relays nothing when the task directory path is a link", async () => {
