@@ -359,7 +359,10 @@ async def claim_task(
     `runtime_providers` are the account providers you can apply; a task restricted to
     other providers (account_providers) is skipped and stays ready.
     Returns the task (keep its `id` and `attempt`) with `knowledge_refs`: pages to
-    read first. Returns {"task": null} when nothing became ready."""
+    read first. `steer_unknown` > 0 means that many operator steers sent to the
+    previous attempt were never confirmed: they may or may not have been applied, so
+    check the work rather than assume either way. Returns {"task": null} when nothing
+    became ready."""
     task = await _call(
         ctx,
         "POST",
@@ -385,7 +388,8 @@ async def heartbeat(
     that task. If state is "draining", finish your task and then call leave.
     `runtime` reports what you run (worker_version, engine, executor, features), if known.
     `steers` in the answer are operator instructions to inject; send their ids back as
-    `steer_acks` once injected. A steer stays listed until you ack it."""
+    `steer_acks` once injected. A steer stays listed until you ack it or the attempt
+    ends; de-duplicate by id."""
     body: dict[str, Any] = {
         "leases": [lease.model_dump() for lease in leases or []],
         "steer_acks": steer_acks or [],
@@ -1149,7 +1153,8 @@ async def steer_task(ctx: Context, task_id: str, message: str) -> dict:
     """Send an instruction to the worker holding this claimed task. 409 not_claimed
     if it is not claimed, 409 steer_unsupported if that worker does not report the
     steer feature, 409 too_many_pending after 10 waiting steers, 429 rate_limited
-    more than once a second. The steer expires when the attempt ends."""
+    more than once a second. If the attempt ends first, the steer expires, or becomes
+    unknown (it may have been delivered) when a heartbeat had carried it."""
     return await _call(
         ctx, "POST", f"/tasks/{task_id}/steers", json={"message": message}
     )
@@ -1160,7 +1165,8 @@ async def list_task_steers(
     ctx: Context, task_id: str, attempt: int | None = None
 ) -> dict:
     """Steers for one attempt (the current one, when attempt is omitted), oldest first:
-    pending, delivered, cancelled or expired."""
+    pending, delivered, cancelled, expired or unknown (sent to the worker, never
+    confirmed: it may have been delivered)."""
     return await _call(
         ctx, "GET", f"/tasks/{task_id}/steers", params={"attempt": attempt}
     )

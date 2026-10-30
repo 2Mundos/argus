@@ -553,3 +553,6 @@ class ClaimedTask(Task):
     # `to` ({provider, model, account ids and names}), `reason`, `attempt`. The
     # channel then drops the pinned model and keeps a held fallback account.
     model_switch: dict[str, Any] | None = None
+    # Steers the previous attempt was sent but never confirmed (task steering spec
+    # 3.3): they may or may not have been applied. A count only, never the text.
+    steer_unknown: int = 0

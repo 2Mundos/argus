@@ -978,3 +978,26 @@ def test_attach_artifact_rejects_text_that_is_not_utf8(
     # ...and the tool refuses one too, without quoting it.
     with pytest.raises(ToolError, match=r"^content is not valid UTF-8 text$"):
         mcp_server._attachment_bytes(secret, None)
+
+
+def test_unknown_steer_outcome_over_mcp_matches_rest(client: TestClient) -> None:
+    first, second = register(client), register(client)
+    admin = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+    task_id = tool(client, ADMIN_TOKEN, "create_task", title="t", project="global")[
+        "id"
+    ]
+    claimed = tool(client, first, "claim_task", wait_s=0)["task"]
+    assert claimed["steer_unknown"] == 0
+    lease = [{"task_id": task_id, "attempt": claimed["attempt"]}]
+    tool(client, first, "heartbeat", leases=lease, runtime={"features": ["steer"]})
+    made = tool(client, ADMIN_TOKEN, "steer_task", task_id=task_id, message="look")
+    carried = tool(client, first, "heartbeat", leases=lease)
+    assert [s["id"] for s in carried["steers"]] == [made["id"]]
+    tool(client, ADMIN_TOKEN, "release_task", task_id=task_id, reason="operator")
+    listed = tool(client, ADMIN_TOKEN, "list_task_steers", task_id=task_id, attempt=1)
+    assert [i["state"] for i in listed["items"]] == ["unknown"]
+    rest = client.get(f"/api/tasks/{task_id}/steers?attempt=1", headers=admin)
+    assert rest.json() == listed
+    again = tool(client, second, "claim_task", wait_s=0)["task"]
+    assert again["id"] == task_id and again["steer_unknown"] == 1
+    assert "look" not in json.dumps(again)

@@ -129,6 +129,7 @@
   "serving_account": null,
   "spec": "Ship FL4.\n\n## Acceptance\nBrowser QA desktop/mobile.\n\n## Clarifications\n\n- **Asked (attempt 1):** Is PR 1099 merged?\n  **Answered by agent:orch (2026-01-01T00:00:00.000000Z):** Not yet: PR #1099 is open and not merged\n\n- **Asked (attempt 2):** May I run browser QA on a disposable stack or synthetic Stage?\n  **Answered by agent:orch (2026-01-01T00:00:11.000000Z):** Yes: browser QA desktop/mobile in pt-BR, en-US, es-ES on a disposable stack or synthetic Stage. Not Production.\n",
   "state": "claimed",
+  "steer_unknown": 0,
   "timeout_at": null,
   "timeout_s": null,
   "title": "FL4",

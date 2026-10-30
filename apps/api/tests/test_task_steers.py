@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from api_support import DONE, FakeClock, insert_agent
 from argus_api.agents import service as agents
-from argus_api.db import Database
+from argus_api.db import Database, ts
 from argus_api.errors import ConflictError, NotFoundError, RateLimitedError
 from argus_api.main import app
 from argus_api.tasks import service as tasks
@@ -180,37 +180,199 @@ async def test_preview_is_capped(db: Database, claimed) -> None:
     assert data["chars"] == 250 and data["preview"] == "x" * 200
 
 
-@pytest.mark.parametrize(
-    "ender", ["complete", "fail", "block", "release", "cancel", "expire"]
-)
-async def test_leaving_claimed_expires_pending_steers(
-    db: Database, claimed, clock: FakeClock, ender: str
+async def beat(db: Database, task, agent: str = A, acks: list[str] | None = None):
+    async with db.write() as tx:
+        return await agents.heartbeat(
+            tx, agent, [(task.id, task.attempt)], steer_acks=acks
+        )
+
+
+async def column(db: Database, steer_id: str, name: str) -> str | None:
+    async with (
+        db.read() as conn,
+        conn.execute(
+            f"SELECT {name} FROM task_steers WHERE id = ?",
+            (steer_id,),
+        ) as cur,
+    ):
+        row = await cur.fetchone()
+    assert row is not None
+    return row[0]
+
+
+async def attempt_unknown(db: Database, task_id: str) -> list[int]:
+    async with db.read() as conn:
+        return [a.steer_unknown for a in await tasks.attempt_definitions(conn, task_id)]
+
+
+async def test_first_dispatch_is_recorded_once_and_survives_a_lost_answer(
+    db: Database, claimed, clock: FakeClock
 ) -> None:
-    await steer(db, claimed.id)
-    if ender == "expire":
+    made = await steer(db, claimed.id)
+    assert await column(db, made.id, "dispatched_at") is None
+    first = await beat(db, claimed)  # the answer is lost on the way back
+    assert [s.id for s in first.steers] == [made.id]
+    dispatched = await column(db, made.id, "dispatched_at")
+    assert dispatched is not None
+    first_at = clock.now
+    clock.advance(30)
+    again = await beat(db, claimed)  # still pending: carried again, same dispatch
+    assert [s.id for s in again.steers] == [made.id]
+    assert await column(db, made.id, "dispatched_at") == dispatched
+    page = await _page(db, claimed.id)
+    assert page.items[0].state == "pending"
+    assert page.items[0].dispatched_at == first_at
+    await beat(db, claimed, acks=[made.id])
+    assert (await states(db, claimed.id)) == ["delivered"]
+
+
+async def test_a_lost_ack_keeps_the_steer_listed_within_the_attempt(
+    db: Database, claimed, clock: FakeClock
+) -> None:
+    made = await steer(db, claimed.id)
+    await beat(db, claimed)
+    # The worker injected it; the heartbeat carrying the ack never arrived.
+    clock.advance(30)
+    retried = await beat(db, claimed)
+    assert [s.id for s in retried.steers] == [made.id]
+    assert (await states(db, claimed.id)) == ["pending"]
+    clock.advance(30)
+    await beat(db, claimed, acks=[made.id])
+    assert (await states(db, claimed.id)) == ["delivered"]
+    assert (await kinds(db, claimed.id)).count("task.steer_delivered") == 1
+
+
+@pytest.mark.parametrize("lease", ["foreign", "stale", "missing"])
+async def test_a_rejected_lease_dispatches_nothing(
+    db: Database, claimed, lease: str
+) -> None:
+    made = await steer(db, claimed.id)
+    held = {
+        "foreign": (B, (claimed.id, claimed.attempt)),
+        "stale": (A, (claimed.id, claimed.attempt + 1)),
+        "missing": (A, ("missing", 1)),
+    }[lease]
+    async with db.write() as tx:
+        answer = await agents.heartbeat(tx, held[0], [held[1]])
+    assert answer.renewed == [] and answer.steers == []
+    assert await column(db, made.id, "dispatched_at") is None
+    async with db.write() as tx:
+        await tasks.cancel(tx, claimed.id, "admin:test")
+    assert (await states(db, claimed.id)) == ["expired"]
+
+
+ENDERS = [
+    "complete",
+    "fail",
+    "fail_final",
+    "block",
+    "requeue",
+    "release",
+    "cancel",
+    "lease_expiry",
+    "timeout",
+    "agent_left",
+]
+
+
+async def _end(db: Database, task, clock: FakeClock, ender: str) -> None:
+    if ender == "lease_expiry":
         # `tx.now` is fixed when the write starts, so the lease must already be past.
-        clock.advance(claimed.lease_ttl_s + 1)
+        clock.advance(task.lease_ttl_s + 1)
     async with db.write() as tx:
         if ender == "complete":
-            await tasks.complete(tx, A, claimed.id, claimed.attempt, DONE)
+            await tasks.complete(tx, A, task.id, task.attempt, DONE)
         elif ender == "fail":
-            await tasks.fail(tx, A, claimed.id, claimed.attempt, "nope")
+            await tasks.fail(tx, A, task.id, task.attempt, "nope")
+        elif ender == "fail_final":
+            await tx.conn.execute(
+                "UPDATE tasks SET max_attempts = 1 WHERE id = ?", (task.id,)
+            )
+            await tasks.fail(tx, A, task.id, task.attempt, "nope")
         elif ender == "block":
-            await tasks.block(
-                tx, A, claimed.id, claimed.attempt, "waiting for decision"
+            await tasks.block(tx, A, task.id, task.attempt, "waiting for decision")
+        elif ender == "requeue":
+            await tasks.pause_for_quota(
+                tx, A, task.id, task.attempt, "quota", wait=False
             )
         elif ender == "release":
-            await tasks.release(tx, claimed.id, "admin:test", "operator")
+            await tasks.release(tx, task.id, "admin:test", "operator")
         elif ender == "cancel":
-            await tasks.cancel(tx, claimed.id, "admin:test")
-        else:
+            await tasks.cancel(tx, task.id, "admin:test")
+        elif ender == "lease_expiry":
             await tasks.expire_leases(tx)
+        elif ender == "timeout":
+            await tx.conn.execute(
+                "UPDATE tasks SET timeout_at = ? WHERE id = ?",
+                (ts(tx.now), task.id),
+            )
+            await tasks.expire_timeouts(tx)
+        else:
+            await agents.leave(tx, A)
+
+
+@pytest.mark.parametrize("ender", ENDERS)
+async def test_leaving_claimed_closes_pending_steers_by_dispatch(
+    db: Database, claimed, clock: FakeClock, ender: str
+) -> None:
+    delivered = await steer(db, claimed.id, "delivered")
+    await beat(db, claimed)
+    await beat(db, claimed, acks=[delivered.id])
+    clock.advance(1)
+    cancelled = await steer(db, claimed.id, "cancelled")
+    async with db.write() as tx:
+        await steers.cancel(tx, claimed.id, cancelled.id, "admin:test")
+    clock.advance(1)
+    carried = await steer(db, claimed.id, "carried, never acknowledged")
+    await beat(db, claimed)
+    clock.advance(1)
+    await steer(db, claimed.id, "never carried")
+    await _end(db, claimed, clock, ender)
+    page = await _page(db, claimed.id, claimed.attempt)
+    assert [i.state for i in page.items] == [
+        "delivered",
+        "cancelled",
+        "unknown",
+        "expired",
+    ]
+    closed = {i.closed_at for i in page.items[2:]}
+    assert closed == {clock.now}  # one transaction, the attempt's end
+    assert page.items[0].closed_at is None and page.items[1].closed_at is not None
+    assert page.items[2].delivered_at is None
+    assert await attempt_unknown(db, claimed.id) == [1]
+    # Terminal: never carried again, and a delayed ack cannot resurrect it.
+    async with db.write() as tx:
+        await steers.acknowledge(tx, A, [carried.id])
+        assert await steers.pending_for(tx, [(claimed.id, claimed.attempt)]) == []
+    assert (await _page(db, claimed.id, claimed.attempt)).items[2].state == "unknown"
+    assert (await kinds(db, claimed.id)).count("task.steer_delivered") == 1
+
+
+async def test_without_dispatch_every_steer_expires(
+    db: Database, claimed, clock: FakeClock
+) -> None:
+    await steer(db, claimed.id)
+    await _end(db, claimed, clock, "release")
     assert (await states(db, claimed.id)) == ["expired"]
-    page = await _page(db, claimed.id)
-    assert page.items[0].closed_at == clock.now
+    assert await attempt_unknown(db, claimed.id) == [0]
 
 
-async def test_retry_expires_a_leftover_pending_steer(db: Database, claimed) -> None:
+async def test_a_delayed_ack_from_the_next_attempt_is_ignored(
+    db: Database, claimed, clock: FakeClock
+) -> None:
+    made = await steer(db, claimed.id)
+    await beat(db, claimed)
+    await _end(db, claimed, clock, "release")
+    again = await claim(db)  # the same worker holds the next attempt
+    assert again.attempt == claimed.attempt + 1
+    answer = await beat(db, again, acks=[made.id])
+    assert answer.steers == []
+    page = await _page(db, claimed.id, claimed.attempt)
+    assert [i.state for i in page.items] == ["unknown"]
+    assert page.items[0].delivered_at is None
+
+
+async def test_retry_closes_a_leftover_pending_steer(db: Database, claimed) -> None:
     await steer(db, claimed.id)
     async with db.write() as tx:
         await tx.conn.execute(
@@ -224,6 +386,81 @@ async def test_retry_expires_a_leftover_pending_steer(db: Database, claimed) -> 
         await tasks.retry(tx, claimed.id, "admin:test")
     page = await _page(db, claimed.id, claimed.attempt)
     assert [item.state for item in page.items] == ["expired"]
+
+
+async def test_retry_closes_a_carried_leftover_as_unknown(
+    db: Database, claimed
+) -> None:
+    await steer(db, claimed.id)
+    await beat(db, claimed)
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE tasks SET max_attempts = 1 WHERE id = ?", (claimed.id,)
+        )
+        await tasks.fail(tx, A, claimed.id, claimed.attempt, "nope")
+        await tx.conn.execute(
+            "UPDATE task_steers SET state = 'pending', closed_at = NULL WHERE task_id = ?",
+            (claimed.id,),
+        )
+        await tasks.retry(tx, claimed.id, "admin:test")
+    assert (await states(db, claimed.id)) == []  # attempt 0 after the retry
+    page = await _page(db, claimed.id, claimed.attempt)
+    assert [item.state for item in page.items] == ["unknown"]
+
+
+async def previous(db: Database, task) -> int:
+    async with db.read() as conn:
+        return await steers.previous_unknown(conn, task.id, task.attempt)
+
+
+async def test_only_the_immediately_previous_attempt_is_reported(
+    db: Database, claimed, clock: FakeClock
+) -> None:
+    assert await previous(db, claimed) == 0  # the first attempt has no previous one
+    for text in ("one", "two"):
+        await steer(db, claimed.id, text)
+        clock.advance(1)
+    await beat(db, claimed)
+    await _end(db, claimed, clock, "release")
+    second = await claim(db, B)
+    assert second.id == claimed.id and second.attempt == claimed.attempt + 1
+    assert await previous(db, second) == 2
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE agents SET runtime = ? WHERE id = ?",
+            ('{"features": ["steer"]}', B),
+        )
+    # The next attempt is never handed the unknown text.
+    assert (await beat(db, second, agent=B)).steers == []
+    assert await _page(db, second.id, second.attempt) == steers.SteerPage(
+        attempt=second.attempt
+    )
+    async with db.write() as tx:
+        await tasks.release(tx, second.id, "admin:test", "operator")
+    third = await claim(db, A)
+    assert third.id == claimed.id
+    other = await create(db, max_attempts=6)
+    assert await previous(db, third) == 0  # attempt 1's count does not reach attempt 3
+    async with db.write() as tx:
+        await tasks.cancel(tx, third.id, "admin:test")
+    fresh = await claim(db, B)
+    assert fresh.id == other.id and await previous(db, fresh) == 0
+
+
+async def test_previous_attempt_count_crosses_a_retry(
+    db: Database, claimed, clock: FakeClock
+) -> None:
+    await steer(db, claimed.id)
+    await beat(db, claimed)
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE tasks SET max_attempts = 1 WHERE id = ?", (claimed.id,)
+        )
+        await tasks.fail(tx, A, claimed.id, claimed.attempt, "nope")
+        await tasks.retry(tx, claimed.id, "admin:test")
+    again = await claim(db)
+    assert again.attempt == 1  # numbering restarts; the previous row is still found
+    assert await previous(db, again) == 1
 
 
 # -- REST ------------------------------------------------------------------------
@@ -300,3 +537,56 @@ def test_rest_contract(client: TestClient) -> None:
 def json_kinds(client: TestClient, task_id: str) -> list[str]:
     events = client.get(f"/api/events?subject_id={task_id}&limit=50").json()
     return [event["kind"] for event in events]
+
+
+def test_rest_unknown_outcome_reaches_the_next_claim(client: TestClient) -> None:
+    first, second = register(client), register(client)
+    task = client.post("/api/tasks", json={"title": "t", "project": "global"}).json()
+    url = f"/api/tasks/{task['id']}/steers"
+    claimed = client.post("/api/tasks/claim", json={}, headers=first).json()
+    assert claimed["steer_unknown"] == 0
+    lease = {"task_id": claimed["id"], "attempt": claimed["attempt"]}
+    beat = {"leases": [lease], "runtime": {"features": ["steer"]}}
+    client.post("/api/agents/me/heartbeat", json=beat, headers=first)
+    made = client.post(url, json={"message": "secret direction"}).json()
+    carried = client.post("/api/agents/me/heartbeat", json=beat, headers=first)
+    assert [s["id"] for s in carried.json()["steers"]] == [made["id"]]
+    # The ack never arrives; the operator frees the worker.
+    released = client.post(
+        f"/api/tasks/{task['id']}/release", json={"reason": "operator"}
+    )
+    assert released.status_code == 200, released.text
+    item = client.get(f"{url}?attempt={claimed['attempt']}").json()["items"][0]
+    assert item["state"] == "unknown"
+    assert item["dispatched_at"] and item["closed_at"] and not item["delivered_at"]
+    again = client.post("/api/tasks/claim", json={}, headers=second)
+    assert again.status_code == 200, again.text
+    body = again.json()
+    assert body["id"] == task["id"] and body["steer_unknown"] == 1
+    assert "secret direction" not in again.text
+    shown = client.post(
+        "/api/agents/me/heartbeat",
+        json={
+            "leases": [{"task_id": body["id"], "attempt": body["attempt"]}],
+            "runtime": {"features": ["steer"]},
+            "steer_acks": [made["id"]],
+        },
+        headers=second,
+    )
+    assert shown.status_code == 200 and shown.json()["steers"] == []
+    attempts = client.get(f"/api/tasks/{task['id']}/attempts").json()
+    assert [a["steer_unknown"] for a in attempts] == [1, 0]
+    assert client.get(f"{url}?attempt={claimed['attempt']}").json() == {
+        "attempt": claimed["attempt"],
+        "items": [item],
+    }
+
+
+def test_openapi_names_the_unknown_outcome() -> None:
+    schemas = app.openapi()["components"]["schemas"]
+    steer = schemas["Steer"]["properties"]
+    assert "unknown" in steer["state"]["enum"]
+    assert "dispatched_at" in steer
+    assert "steer_unknown" in schemas["ClaimedTask"]["properties"]
+    assert "steer_unknown" in schemas["TaskAttempt"]["properties"]
+    assert "dispatched_at" not in schemas["SteerNotice"]["properties"]

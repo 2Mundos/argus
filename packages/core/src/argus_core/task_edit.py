@@ -99,3 +99,6 @@ class TaskAttempt(BaseModel):
     # Set only when an operator released the attempt (worker lifecycle 3.3).
     outcome: Literal["released"] | None = None
     outcome_reason: str | None = None
+    # Steers dispatched to this attempt and never acknowledged when it ended: they
+    # may have been applied (task steering spec 3.3).
+    steer_unknown: int = 0

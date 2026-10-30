@@ -108,6 +108,7 @@
   "serving_account": null,
   "spec": "Reimplementar #51.\n\n## Aceite\n- tudo verde\n\n## Clarifications\n\n- **Asked (attempt 1):** #74 aberto?\n  **Answered by admin:x:** B\n\n- **Asked (attempt 1):** Which option for #74?\n  **Answered by agent:orch (2026-01-01T00:00:00.000000Z):** B\n",
   "state": "claimed",
+  "steer_unknown": 0,
   "timeout_at": null,
   "timeout_s": null,
   "title": "Reimplement #51",

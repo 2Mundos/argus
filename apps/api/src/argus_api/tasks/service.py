@@ -1422,7 +1422,7 @@ async def retry(tx: Tx, task_id: str, actor: str) -> Task:
     )
     await tx.conn.execute("DELETE FROM task_log WHERE task_id = ?", (task_id,))
     await tx.conn.execute("DELETE FROM task_changes WHERE task_id = ?", (task_id,))
-    await steers.expire_task(tx, task_id)
+    await steers.close_task(tx, task_id)
     error = row["error"] or ""
     await record(
         tx,
@@ -1961,6 +1961,7 @@ async def attempt_definitions(
                 definition=json.loads(r["definition"]),
                 outcome=r["outcome"],
                 outcome_reason=r["outcome_reason"],
+                steer_unknown=r["steer_unknown"],
             )
             for r in await cur.fetchall()
         ]
@@ -2801,8 +2802,9 @@ async def _apply(
         {"from": old, "to": new, "attempt": row["attempt"], **(data or {})},
     )
     if leaving_claim:
-        # Pending steers belong to this attempt only (task steering spec 3.3).
-        await steers.expire_attempt(tx, row["id"], row["attempt"])
+        # Pending steers belong to this attempt only: they expire, or end `unknown`
+        # when a heartbeat carried them (task steering spec 3.3).
+        await steers.close_attempt(tx, row["id"], row["attempt"])
         await _ensure_usage_outcome(tx, row, action, data or {})
     # Decisions that waited on the old state are moot once the task leaves it
     # (an answered decision is already closed before its transition runs).
