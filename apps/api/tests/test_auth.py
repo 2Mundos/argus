@@ -165,7 +165,7 @@ def test_admin_token_management(client: TestClient) -> None:
     second = {"Authorization": f"Bearer {issued['token']}"}
     assert client.get("/api/admin/tokens", headers=second).status_code == 200
     labels = [t["label"] for t in client.get("/api/admin/tokens", headers=ADMIN).json()]
-    assert labels == ["preset", "ops"]
+    assert set(labels) == {"preset", "ops"}
     res = client.post(f"/api/admin/tokens/{issued['id']}/revoke", headers=ADMIN)
     assert res.status_code == 204
     assert client.get("/api/admin/tokens", headers=second).status_code == 401

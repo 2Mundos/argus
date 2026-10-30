@@ -1,6 +1,7 @@
 import { type Agent, api, call } from "./api";
 import { useLiveData } from "./live";
 import { useNow } from "./views/Activity";
+import { WorkerChip } from "./WorkerChip";
 
 const ENDED_LIMIT = 8;
 
@@ -21,40 +22,8 @@ function recentlyEnded(agents: Agent[] | undefined): Agent[] {
     .slice(0, ENDED_LIMIT);
 }
 
-/** Compact age: "12s", "3m", "2h". */
-function age(iso: string, now: number): string {
-  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.round(s / 60)}m`;
-  if (s < 86_400) return `${Math.round(s / 3600)}h`;
-  return `${Math.round(s / 86_400)}d`;
-}
-
-function status(agent: Agent): "busy" | "idle" | "draining" | "quiet" | "ended" {
-  if (agent.state === "lost" || agent.state === "gone") return "ended";
-  if (agent.state === "draining") return "draining";
-  if (agent.quiet_since) return "quiet";
-  return agent.claimed_tasks > 0 ? "busy" : "idle";
-}
-
-function shortName(name: string): string {
-  // nanoclaw-socket-d6f8e4c0 → d6f8e4c0; otherwise keep a short label.
-  const tail = name.split("-").pop();
-  return tail && /^[a-f0-9]{6,}$/i.test(tail) ? tail.slice(0, 8) : name.slice(0, 14);
-}
-
-function engineLabel(agent: Agent): string {
-  return agent.runtime?.engine ?? agent.runtime?.executor ?? "unknown";
-}
-
 /** Full-height rail of live workers; selection drives the main worker panel. */
-export function WorkersSidebar({
-  selectedId,
-  onSelect,
-}: {
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-}) {
+export function WorkersSidebar({ selectedId }: { selectedId: string | null }) {
   const now = useNow(5000);
   const { data: agents, error } = useLiveData(
     (signal) => call(api.GET("/api/agents", { signal })),
@@ -88,35 +57,17 @@ export function WorkersSidebar({
         <p className="workers-rail-empty muted small">None live</p>
       ) : (
         <ul className="workers-list">
-          {listed.map((a) => {
-            const kind = status(a);
-            const eng = engineLabel(a);
-            const selected = a.id === selectedId;
-            return (
-              <li key={a.id}>
-                <button
-                  type="button"
-                  className={`worker-chip worker-${kind}${selected ? " selected" : ""}`}
-                  title={[a.name, eng, a.end_reason].filter(Boolean).join(" · ")}
-                  aria-current={selected ? "true" : undefined}
-                  onClick={() => onSelect(a.id)}
-                >
-                  <span className={`worker-dot worker-state-${kind}`} />
-                  <span className="worker-name">{shortName(a.name)}</span>
-                  <span className="muted small worker-age">
-                    {kind === "ended"
-                      ? a.ended_at
-                        ? age(a.ended_at, now)
-                        : "—"
-                      : age(a.last_heartbeat_at, now)}
-                  </span>
-                  <span className={`worker-state worker-state-${kind}`}>
-                    {kind === "busy" ? "running" : kind}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
+          {listed.map((a) => (
+            <li key={a.id}>
+              <WorkerChip
+                agentId={a.id}
+                agent={a}
+                layout="rail"
+                now={now}
+                selected={a.id === selectedId}
+              />
+            </li>
+          ))}
         </ul>
       )}
     </aside>

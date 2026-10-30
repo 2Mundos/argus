@@ -119,10 +119,11 @@ describe("Activity", () => {
   });
 
   it("keeps counting how long the agent has been silent", async () => {
-    render(<Activity task={task} events={[]} />);
-    expect(screen.getByText(/updated now/)).toBeTruthy();
+    const { container } = render(<Activity task={task} events={[]} />);
+    const stamp = () => container.querySelector(".muted.small")?.textContent ?? "";
+    expect(stamp()).toMatch(/updated now/);
     await flush(30_000);
-    expect(screen.getByText(/updated 30 seconds ago/)).toBeTruthy();
+    expect(stamp()).toMatch(/updated 30 seconds ago/);
   });
 
   it("is hidden for a finished task that sent no note", () => {

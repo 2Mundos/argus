@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLiveData } from "../live";
 import { compactDraft, type Draft, emptyChains, toDraft } from "../models";
+import { PageHeader } from "../PageHeader";
 import {
   fetchModelsOverride,
   fetchProjects,
@@ -27,8 +28,10 @@ export function Settings() {
 
   return (
     <section className="settings-page">
-      <div className="toolbar">
-        <h2>Settings</h2>
+      <PageHeader
+        title="Settings"
+        lead="Operator choices with per-project overrides. An override replaces the global value for that project; Reset restores inheritance."
+      >
         <label>
           Scope{" "}
           <select
@@ -49,11 +52,7 @@ export function Settings() {
         <button type="button" onClick={() => reload()}>
           Reload
         </button>
-      </div>
-      <p className="page-lead">
-        Operator choices with per-project overrides. An override replaces the global value for that
-        project; Reset restores inheritance.
-      </p>
+      </PageHeader>
       {error && <p className="error">{error.message}</p>}
       {!data && !error && <p className="muted">Loading…</p>}
       {data && (

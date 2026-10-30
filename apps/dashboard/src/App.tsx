@@ -6,6 +6,7 @@ import { verdict } from "./overview";
 import { Home } from "./views/Home";
 import { LiveStatusBar } from "./views/LiveStatusBar";
 import { Login } from "./views/Login";
+import { WorkerPanelProvider } from "./WorkerPanel";
 import { WorkersSidebar } from "./WorkersSidebar";
 
 const Accounts = lazy(() => import("./views/Accounts").then((m) => ({ default: m.Accounts })));
@@ -320,102 +321,104 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
   const awaiting = overview?.tasks.awaiting_approval;
 
   return (
-    <div className={`shell${selectedWorker ? " shell-worker" : ""}`}>
-      <aside className="nav-side">
-        <Brand as="strong" />
-        <nav aria-label="Primary">
-          <NavLink href="#home" current={isCurrent("#home", route)} label="Home" />
-          <NavLink
-            href="#tasks"
-            current={isCurrent("#tasks", route)}
-            label="Tasks"
-            count={awaiting}
-          />
-          <NavLink
-            href="#inbox"
-            current={isCurrent("#inbox", route)}
-            label="Inbox"
-            count={openDecisions}
-          />
-          <NavLink
-            href="#workers/agents"
-            current={isCurrent("#workers/agents", route)}
-            label="Agents"
-          />
-          <NavLink
-            href="#workers/pools"
-            current={isCurrent("#workers/pools", route)}
-            label="Pools"
-          />
-          <NavLink
-            href="#setup/accounts"
-            current={isCurrent("#setup/accounts", route)}
-            label="Accounts"
-          />
-        </nav>
-        <p className="nav-label">More</p>
-        <nav aria-label="More">
-          <NavLink href="#knowledge" current={isCurrent("#knowledge", route)} label="Knowledge" />
-          <NavLink
-            href="#workers/fleet"
-            current={isCurrent("#workers/fleet", route)}
-            label="Fleet"
-          />
-          <NavLink
-            href="#setup/engines"
-            current={isCurrent("#setup/engines", route)}
-            label="Engines"
-          />
-          <NavLink href="#setup/cost" current={isCurrent("#setup/cost", route)} label="Cost" />
-          <NavLink
-            href="#setup/events"
-            current={isCurrent("#setup/events", route)}
-            label="Events"
-          />
-          <NavLink
-            href="#setup/settings"
-            current={isCurrent("#setup/settings", route)}
-            label="Settings"
-          />
-        </nav>
-        <ServerBox system={system} />
-      </aside>
-      <div className="workspace">
-        <header className="topbar">
-          <PageSearch />
-          <div className="topbar-end">
-            <span className={`status status-${status}`} title={`Event stream: ${status}`}>
-              {status === "live" ? "Live" : status}
-            </span>
-            <a className="bell" href="#inbox" aria-label="Inbox">
-              <Icon d={iconFor("#inbox")} />
-              {openDecisions !== undefined && openDecisions > 0 && (
-                <span className="nav-count">{openDecisions}</span>
+    <WorkerPanelProvider selectedId={selectedWorker} openWorker={setSelectedWorker}>
+      <div className={`shell${selectedWorker ? " shell-worker" : ""}`}>
+        <aside className="nav-side">
+          <Brand as="strong" />
+          <nav aria-label="Primary">
+            <NavLink href="#home" current={isCurrent("#home", route)} label="Home" />
+            <NavLink
+              href="#tasks"
+              current={isCurrent("#tasks", route)}
+              label="Tasks"
+              count={awaiting}
+            />
+            <NavLink
+              href="#inbox"
+              current={isCurrent("#inbox", route)}
+              label="Inbox"
+              count={openDecisions}
+            />
+            <NavLink
+              href="#workers/agents"
+              current={isCurrent("#workers/agents", route)}
+              label="Agents"
+            />
+            <NavLink
+              href="#workers/pools"
+              current={isCurrent("#workers/pools", route)}
+              label="Pools"
+            />
+            <NavLink
+              href="#setup/accounts"
+              current={isCurrent("#setup/accounts", route)}
+              label="Accounts"
+            />
+          </nav>
+          <p className="nav-label">More</p>
+          <nav aria-label="More">
+            <NavLink href="#knowledge" current={isCurrent("#knowledge", route)} label="Knowledge" />
+            <NavLink
+              href="#workers/fleet"
+              current={isCurrent("#workers/fleet", route)}
+              label="Fleet"
+            />
+            <NavLink
+              href="#setup/engines"
+              current={isCurrent("#setup/engines", route)}
+              label="Engines"
+            />
+            <NavLink href="#setup/cost" current={isCurrent("#setup/cost", route)} label="Cost" />
+            <NavLink
+              href="#setup/events"
+              current={isCurrent("#setup/events", route)}
+              label="Events"
+            />
+            <NavLink
+              href="#setup/settings"
+              current={isCurrent("#setup/settings", route)}
+              label="Settings"
+            />
+          </nav>
+          <ServerBox system={system} />
+        </aside>
+        <div className="workspace">
+          <header className="topbar">
+            <PageSearch />
+            <div className="topbar-end">
+              <span className={`status status-${status}`} title={`Event stream: ${status}`}>
+                {status === "live" ? "Live" : status}
+              </span>
+              <a className="bell" href="#inbox" aria-label="Inbox">
+                <Icon d={iconFor("#inbox")} />
+                {openDecisions !== undefined && openDecisions > 0 && (
+                  <span className="nav-count">{openDecisions}</span>
+                )}
+              </a>
+              <button type="button" className="link" onClick={onSignOut}>
+                Sign out
+              </button>
+            </div>
+          </header>
+          <main>
+            <Suspense fallback={<p className="muted">Loading…</p>}>
+              {selectedWorker ? (
+                <AgentDetail
+                  key={selectedWorker}
+                  agentId={selectedWorker}
+                  onClose={() => setSelectedWorker(null)}
+                  variant="panel"
+                />
+              ) : (
+                <RouteView route={route} />
               )}
-            </a>
-            <button type="button" className="link" onClick={onSignOut}>
-              Sign out
-            </button>
-          </div>
-        </header>
-        <main>
-          <Suspense fallback={<p className="muted">Loading…</p>}>
-            {selectedWorker ? (
-              <AgentDetail
-                key={selectedWorker}
-                agentId={selectedWorker}
-                onClose={() => setSelectedWorker(null)}
-                variant="panel"
-              />
-            ) : (
-              <RouteView route={route} />
-            )}
-          </Suspense>
-        </main>
+            </Suspense>
+          </main>
+        </div>
+        <WorkersSidebar selectedId={selectedWorker} />
+        <LiveStatusBar />
       </div>
-      <WorkersSidebar selectedId={selectedWorker} onSelect={setSelectedWorker} />
-      <LiveStatusBar />
-    </div>
+    </WorkerPanelProvider>
   );
 }
 

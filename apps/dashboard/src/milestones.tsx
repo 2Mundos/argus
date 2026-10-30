@@ -1,5 +1,6 @@
 import type { Task } from "./api";
-import { relative, shortId } from "./format";
+import { DateChip } from "./DateChip";
+import { shortId } from "./format";
 
 // Progress milestones (docs/specs/progress-milestones.spec.md 3.4).
 
@@ -83,7 +84,12 @@ export function MilestoneLine({ task, now }: { task: Signal; now: number }) {
           </a>
         </>
       )}
-      {at && <span className="muted"> · {relative(at, now)}</span>}
+      {at && (
+        <span className="muted">
+          {" · "}
+          <DateChip at={at} now={now} />
+        </span>
+      )}
     </span>
   );
 }

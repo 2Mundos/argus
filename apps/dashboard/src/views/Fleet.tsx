@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { api, call, type FleetHealth, type WorkspaceCleanupSummary } from "../api";
-import { bytes, relative } from "../format";
+import { DateChip } from "../DateChip";
+import { bytes } from "../format";
 import { useLiveData } from "../live";
+import { PageHeader } from "../PageHeader";
 
 export const NO_DATA = "no data";
 const WINDOWS = [1, 6, 24, 168, 720];
@@ -48,8 +50,7 @@ export function Fleet() {
 
   return (
     <section className="fleet">
-      <div className="toolbar">
-        <h2>Fleet</h2>
+      <PageHeader title="Fleet" lead="The fleet numbers this page already computes.">
         <label>
           Window{" "}
           <select value={window} onChange={(e) => setWindow(Number(e.target.value))}>
@@ -60,8 +61,7 @@ export function Fleet() {
             ))}
           </select>
         </label>
-      </div>
-      <p className="page-lead">The fleet numbers this page already computes.</p>
+      </PageHeader>
       {error !== undefined && (
         <p className="error" role="alert">
           Fleet health failed to load: {error.message}{" "}
@@ -110,7 +110,7 @@ function Body({ h }: { h: FleetHealth }) {
                 {p.live} / {p.desired}
               </td>
               <td>{p.running}</td>
-              <td>{p.last_heartbeat_at ? relative(p.last_heartbeat_at) : NO_DATA}</td>
+              <td>{p.last_heartbeat_at ? <DateChip at={p.last_heartbeat_at} /> : NO_DATA}</td>
             </tr>
           ))}
         </tbody>
@@ -242,7 +242,9 @@ function Body({ h }: { h: FleetHealth }) {
                     {g.examples.map((e) => (
                       <li key={`${e.task_id}-${e.at}`}>
                         <a href={`#tasks/${e.task_id}`}>{e.title}</a>{" "}
-                        <span className="muted small">{relative(e.at)}</span>
+                        <span className="muted small">
+                          <DateChip at={e.at} />
+                        </span>
                         <div className="small">{e.error || NO_DATA}</div>
                       </li>
                     ))}
@@ -301,9 +303,13 @@ function WorkspaceCleanup() {
           <p className="muted small">archive root {s.archive_root ?? "not set"}</p>
           <p className="small">
             last run{" "}
-            {run
-              ? `${relative(run.started_at)} · ${run.dry_run ? "dry" : "real"} · ${run.status}`
-              : NO_DATA}
+            {run ? (
+              <>
+                <DateChip at={run.started_at} /> · {run.dry_run ? "dry" : "real"} · {run.status}
+              </>
+            ) : (
+              NO_DATA
+            )}
           </p>
           <p className="small">
             {Object.entries(data.counts)

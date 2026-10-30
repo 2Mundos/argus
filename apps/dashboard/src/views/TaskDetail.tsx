@@ -2,15 +2,16 @@ import { useEffect, useState } from "react";
 import { api, call, download } from "../api";
 import { ARCHIVABLE } from "../archive";
 import { blockReasonText } from "../blockCopy";
+import { DateChip } from "../DateChip";
 import { TaskDelivery } from "../delivery";
 import { TaskFailover } from "../failover";
-import { bytes, relative, shortId } from "../format";
+import { bytes, shortId } from "../format";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
 import { TaskLabel } from "../TaskLabel";
 import { pinText } from "../taskEdit";
+import { WorkerChip } from "../WorkerChip";
 import { Activity } from "./Activity";
-import { AgentDetail } from "./AgentDetail";
 import { AttemptStrip } from "./AttemptStrip";
 import { EventList } from "./EventList";
 import { TaskChanges } from "./TaskChanges";
@@ -20,6 +21,26 @@ import { TaskSteers } from "./TaskSteers";
 
 /** Size of the History page; a full page may hide older events. */
 const HISTORY_LIMIT = 50;
+const ERROR_EXCERPT = 160;
+
+function LastError({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const needsMore = text.length > ERROR_EXCERPT;
+  const shown = open || !needsMore ? text : `${text.slice(0, ERROR_EXCERPT).trimEnd()}…`;
+  return (
+    <p className="error last-error">
+      Last error: {shown}
+      {needsMore && (
+        <>
+          {" "}
+          <button type="button" className="link" onClick={() => setOpen((v) => !v)}>
+            {open ? "Show less" : "Read more"}
+          </button>
+        </>
+      )}
+    </p>
+  );
+}
 
 export function TaskDetail({
   taskId,
@@ -33,7 +54,6 @@ export function TaskDetail({
 }) {
   const [error, setError] = useState<string>();
   const [confirmingRetry, setConfirmingRetry] = useState(false);
-  const [agentId, setAgentId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [picked, setPicked] = useState<number | null>(null);
   const [steerOpen, setSteerOpen] = useState(false);
@@ -133,6 +153,63 @@ export function TaskDetail({
   const titlebar = (
     <header className="panel-titlebar">
       <h2>{task ? <TaskLabel title={task.title} project={task.project} /> : "…"}</h2>
+      {task && (
+        <div className="panel-titlebar-actions" role="group" aria-label="Task actions">
+          {(task.editable_fields ?? []).length > 0 && !editing && (
+            <button type="button" onClick={() => setEditing(true)}>
+              Edit
+            </button>
+          )}
+          {task.state === "blocked" && (
+            <button type="button" onClick={() => act("unblock")}>
+              Unblock
+            </button>
+          )}
+          {task.state === "failed" &&
+            (confirmingRetry ? (
+              <>
+                <button type="button" className="primary" onClick={() => act("retry")}>
+                  Confirm retry
+                </button>
+                <button type="button" onClick={() => setConfirmingRetry(false)}>
+                  Keep failed
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                title={`Reset attempts (${task.attempt}/${task.max_attempts} used) and run it again`}
+                onClick={() => setConfirmingRetry(true)}
+              >
+                Retry
+              </button>
+            ))}
+          {ARCHIVABLE.includes(task.state) &&
+            (task.archived_at ? (
+              <button type="button" onClick={() => act("unarchive")}>
+                Unarchive
+              </button>
+            ) : (
+              <button type="button" onClick={() => act("archive")}>
+                Archive
+              </button>
+            ))}
+          {steerable && selected === task.attempt && supportsSteer !== false && (
+            <button
+              type="button"
+              aria-expanded={steerOpen}
+              onClick={() => setSteerOpen((open) => !open)}
+            >
+              {steerOpen ? "Close steer" : "Steer"}
+            </button>
+          )}
+          {!ARCHIVABLE.includes(task.state) && (
+            <button type="button" className="danger" onClick={() => act("cancel")}>
+              Cancel task
+            </button>
+          )}
+        </div>
+      )}
       <button type="button" className="icon-close" aria-label="Close" onClick={onClose}>
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
           <path
@@ -156,63 +233,86 @@ export function TaskDetail({
           />
           <Activity task={task} events={events ?? []} selected={selected} />
           {delivery && <TaskDelivery delivery={delivery} onChanged={reload} />}
-          <h3>Models</h3>
-          {modelTrace?.executions.length ? (
-            <div className="plain">
-              {modelAttempts.map((attempt) => (
-                <section key={attempt} aria-label={`Attempt ${attempt} models`}>
-                  <h4>Attempt {attempt}</h4>
-                  {modelTrace.executions
-                    .filter((run) => run.attempt === attempt)
-                    .map((run) => (
-                      <p key={run.id}>
-                        <strong>
-                          {run.layer === "harness"
-                            ? (run.engine ?? "harness")
-                            : (run.executor ?? "executor")}
-                        </strong>{" "}
-                        {run.observed_model ?? run.configured_model ?? "not reported"}
-                        {run.observed_model
-                          ? ` (${run.evidence})`
-                          : run.configured_model
-                            ? " (configured)"
-                            : ""}
-                        {run.account_name
-                          ? ` · account ${run.account_name}`
-                          : run.account_id
-                            ? ` · account ${run.account_id}`
-                            : ""}{" "}
-                        · {run.state}
-                        {run.started_at ? ` · ${new Date(run.started_at).toISOString()}` : ""}
-                        {run.ended_at ? ` → ${new Date(run.ended_at).toISOString()}` : ""}
-                        {run.usage
-                          ? ` · ${run.usage.input_tokens ?? 0}+${run.usage.output_tokens ?? 0} tokens · $${run.usage.cost_usd ?? "?"}`
-                          : ""}
-                      </p>
-                    ))}
-                  {modelTrace.timeline
-                    .filter((selection) => selection.attempt === attempt)
-                    .map((selection) => (
-                      <p key={selection.id} className="muted small">
-                        {selection.kind} · {selection.reason_code} ·{" "}
-                        {selection.from_model ??
-                          selection.from_account_name ??
-                          selection.from_account_id ??
-                          "start"}{" "}
-                        →{" "}
-                        {selection.to_model ??
-                          selection.to_account_name ??
-                          selection.to_account_id ??
-                          "?"}
-                        {selection.outcome ? ` · ${selection.outcome}` : ""}
-                      </p>
-                    ))}
-                </section>
-              ))}
-            </div>
-          ) : (
-            <p className="muted">No model reports.</p>
-          )}
+          <section className="task-models" aria-label="Models">
+            <header className="task-section-label">Models</header>
+            {modelTrace?.executions.length ? (
+              <div className="task-models-list">
+                {modelAttempts.map((attempt) => (
+                  <section
+                    key={attempt}
+                    className="task-models-attempt"
+                    aria-label={`Attempt ${attempt} models`}
+                  >
+                    <span className="task-models-attempt-tag" title={`Attempt ${attempt}`}>
+                      #{attempt}
+                    </span>
+                    <div className="task-models-runs">
+                      {modelTrace.executions
+                        .filter((run) => run.attempt === attempt)
+                        .map((run) => (
+                          <p key={run.id} className="task-models-run">
+                            <span className="task-models-engine">
+                              {run.layer === "harness"
+                                ? (run.engine ?? "harness")
+                                : (run.executor ?? "executor")}
+                            </span>{" "}
+                            <span className="task-models-detail">
+                              {run.observed_model ?? run.configured_model ?? "not reported"}
+                              {run.observed_model
+                                ? ` (${run.evidence})`
+                                : run.configured_model
+                                  ? " (configured)"
+                                  : ""}
+                              {run.account_name
+                                ? ` · account ${run.account_name}`
+                                : run.account_id
+                                  ? ` · account ${run.account_id}`
+                                  : ""}
+                              {" · "}
+                              {run.state}
+                              {run.started_at ? (
+                                <>
+                                  {" · "}
+                                  <DateChip at={run.started_at} />
+                                </>
+                              ) : null}
+                              {run.ended_at ? (
+                                <>
+                                  {" → "}
+                                  <DateChip at={run.ended_at} />
+                                </>
+                              ) : null}
+                              {run.usage
+                                ? ` · ${run.usage.input_tokens ?? 0}+${run.usage.output_tokens ?? 0} tokens · $${run.usage.cost_usd ?? "?"}`
+                                : ""}
+                            </span>
+                          </p>
+                        ))}
+                      {modelTrace.timeline
+                        .filter((selection) => selection.attempt === attempt)
+                        .map((selection) => (
+                          <p key={selection.id} className="task-models-hop muted">
+                            {selection.kind} · {selection.reason_code} ·{" "}
+                            {selection.from_model ??
+                              selection.from_account_name ??
+                              selection.from_account_id ??
+                              "start"}{" "}
+                            →{" "}
+                            {selection.to_model ??
+                              selection.to_account_name ??
+                              selection.to_account_id ??
+                              "?"}
+                            {selection.outcome ? ` · ${selection.outcome}` : ""}
+                          </p>
+                        ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <p className="muted small">No model reports.</p>
+            )}
+          </section>
           <dl className="facts">
             <dt>State</dt>
             <dd>
@@ -254,21 +354,17 @@ export function TaskDetail({
               <>
                 <dt>Assignee</dt>
                 <dd>
-                  <button
-                    type="button"
-                    className="link"
-                    onClick={() => setAgentId(task.assignee_agent_id)}
-                  >
-                    {shortId(task.assignee_agent_id)}
-                  </button>{" "}
-                  · lease {relative(task.lease_expires_at)}
+                  <WorkerChip agentId={task.assignee_agent_id} layout="inline" /> · lease{" "}
+                  <DateChip at={task.lease_expires_at} />
                 </dd>
               </>
             )}
             {task.timeout_at && (
               <>
                 <dt>Times out</dt>
-                <dd>{relative(task.timeout_at)}</dd>
+                <dd>
+                  <DateChip at={task.timeout_at} />
+                </dd>
               </>
             )}
             {task.required_capabilities.length > 0 && (
@@ -309,63 +405,9 @@ export function TaskDetail({
             )}
             <dt>Created</dt>
             <dd>
-              {relative(task.created_at)} by {task.created_by}
+              <DateChip at={task.created_at} /> by {task.created_by}
             </dd>
           </dl>
-          <div className="actions left">
-            {(task.editable_fields ?? []).length > 0 && !editing && (
-              <button type="button" onClick={() => setEditing(true)}>
-                Edit
-              </button>
-            )}
-            {task.state === "blocked" && (
-              <button type="button" onClick={() => act("unblock")}>
-                Unblock
-              </button>
-            )}
-            {task.state === "failed" &&
-              (confirmingRetry ? (
-                <>
-                  <span className="muted small">
-                    Reset attempts ({task.attempt}/{task.max_attempts} used) and run it again?
-                  </span>
-                  <button type="button" className="primary" onClick={() => act("retry")}>
-                    Confirm retry
-                  </button>
-                  <button type="button" onClick={() => setConfirmingRetry(false)}>
-                    Keep failed
-                  </button>
-                </>
-              ) : (
-                <button type="button" onClick={() => setConfirmingRetry(true)}>
-                  Retry
-                </button>
-              ))}
-            {ARCHIVABLE.includes(task.state) &&
-              (task.archived_at ? (
-                <button type="button" onClick={() => act("unarchive")}>
-                  Unarchive
-                </button>
-              ) : (
-                <button type="button" onClick={() => act("archive")}>
-                  Archive
-                </button>
-              ))}
-            {steerable && selected === task.attempt && supportsSteer !== false && (
-              <button
-                type="button"
-                aria-expanded={steerOpen}
-                onClick={() => setSteerOpen((open) => !open)}
-              >
-                {steerOpen ? "Close steer" : "Steer"}
-              </button>
-            )}
-            {!ARCHIVABLE.includes(task.state) && (
-              <button type="button" className="danger" onClick={() => act("cancel")}>
-                Cancel task
-              </button>
-            )}
-          </div>
           {steerable && selected === task.attempt && supportsSteer !== false && (
             <TaskSteers
               taskId={taskId}
@@ -379,7 +421,7 @@ export function TaskDetail({
             />
           )}
           {error && <p className="error">{error}</p>}
-          {task.error && <p className="error">Last error: {task.error}</p>}
+          {task.error && <LastError key={task.error} text={task.error} />}
           {editing ? (
             <TaskEditForm
               task={task}
@@ -390,7 +432,7 @@ export function TaskDetail({
             />
           ) : (
             <>
-              <h3>Spec</h3>
+              <header className="task-section-label">Spec</header>
               <div className="spec">
                 <Markdown>{task.spec || "_No spec._"}</Markdown>
               </div>
@@ -418,14 +460,14 @@ export function TaskDetail({
           )}
           {task.result && (
             <>
-              <h3>Result</h3>
+              <header className="task-section-label">Result</header>
               <Markdown>{task.result.summary}</Markdown>
               {task.result.data && <pre>{JSON.stringify(task.result.data, null, 2)}</pre>}
             </>
           )}
           {artifacts && artifacts.length > 0 && (
             <>
-              <h3>Artifacts</h3>
+              <header className="task-section-label">Artifacts</header>
               <ul className="plain">
                 {artifacts.map((a) => (
                   <li key={a.id}>
@@ -445,7 +487,7 @@ export function TaskDetail({
               </ul>
             </>
           )}
-          <h3>History</h3>
+          <header className="task-section-label">History</header>
           {events?.length === HISTORY_LIMIT && (
             <p className="muted small">
               Only the newest {HISTORY_LIMIT} events are shown. Older events are not listed.
@@ -457,35 +499,25 @@ export function TaskDetail({
     </>
   );
 
-  const nested = agentId ? (
-    <AgentDetail agentId={agentId} onClose={() => setAgentId(null)} />
-  ) : null;
-
   if (variant === "panel") {
     return (
-      <>
-        <section className="task-panel" aria-label="Task detail">
-          {titlebar}
-          <div className="panel-body">{body}</div>
-        </section>
-        {nested}
-      </>
+      <section className="task-panel" aria-label="Task detail">
+        {titlebar}
+        <div className="panel-body">{body}</div>
+      </section>
     );
   }
 
   return (
-    <>
-      <div className="overlay" onClick={onClose} onKeyDown={(e) => e.key === "Escape" && onClose()}>
-        <aside
-          className="drawer task-drawer"
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={() => {}}
-        >
-          {titlebar}
-          <div className="panel-body">{body}</div>
-        </aside>
-      </div>
-      {nested}
-    </>
+    <div className="overlay" onClick={onClose} onKeyDown={(e) => e.key === "Escape" && onClose()}>
+      <aside
+        className="drawer task-drawer"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={() => {}}
+      >
+        {titlebar}
+        <div className="panel-body">{body}</div>
+      </aside>
+    </div>
   );
 }

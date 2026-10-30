@@ -1,4 +1,5 @@
 import type { Task } from "./api";
+import { DateChip } from "./DateChip";
 import { relative } from "./format";
 
 // Account failover on a task (docs/specs/account-selection.spec.md 3.6).
@@ -22,7 +23,9 @@ const label = (code: string | null | undefined) => (code ? (CODES[code] ?? code)
 
 /** The provider's reset: the stated time, else its own words, else that it said nothing. */
 function resetNote(f: NonNullable<Task["failover"]>): string | null {
-  if (f.reset_status === "stated" && f.reset_at) return `resets ${f.reset_at}`;
+  // Stated reset times use DateChip at the call site when rendered alone; here we only
+  // keep non-date prose for the compact reason line.
+  if (f.reset_status === "stated" && f.reset_at) return `resets ${relative(f.reset_at)}`;
   if (f.reset_status === "ambiguous")
     return f.reset_text ? `reset (provider's words, no zone): ${f.reset_text}` : "reset ambiguous";
   if (f.reset_status === "absent") return "no reset stated";
@@ -57,9 +60,13 @@ export function TaskFailover({ task, now = Date.now() }: { task: FailoverInfo; n
         <>
           <dt>Waiting for quota</dt>
           <dd>
-            {task.refill_at
-              ? `until ${task.refill_at} (${relative(task.refill_at, now)})`
-              : "until an account recovers"}
+            {task.refill_at ? (
+              <>
+                until <DateChip at={task.refill_at} now={now} />
+              </>
+            ) : (
+              "until an account recovers"
+            )}
           </dd>
         </>
       )}
@@ -75,7 +82,7 @@ export function TaskFailover({ task, now = Date.now() }: { task: FailoverInfo; n
           <dd>
             {f.from_account ?? "—"} → {f.to_account ?? "no account left"}{" "}
             <span className="muted">
-              at attempt {f.attempt}, {relative(f.at, now)}
+              at attempt {f.attempt}, <DateChip at={f.at} now={now} />
             </span>
             <div className="small muted">{f.reason}</div>
             <div className="small muted">
@@ -89,7 +96,7 @@ export function TaskFailover({ task, now = Date.now() }: { task: FailoverInfo; n
               </div>
             ) : f.apply === "applied" ? (
               <div className="small muted">
-                Applied {f.applied_at ? relative(f.applied_at, now) : ""}
+                Applied {f.applied_at ? <DateChip at={f.applied_at} now={now} /> : null}
               </div>
             ) : null}
           </dd>

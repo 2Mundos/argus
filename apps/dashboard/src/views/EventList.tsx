@@ -1,11 +1,19 @@
 import type { ArgusEvent } from "../api";
+import { DateChip } from "../DateChip";
 import { describeEvent } from "../eventLine";
-import { actor, clock, relative, shortId } from "../format";
+import { shortId } from "../format";
+import { WorkerActorChip } from "../WorkerChip";
+
+function eventDetail(event: Pick<ArgusEvent, "data" | "subject_type" | "subject_id">): string {
+  const summary = describeEvent(event);
+  const subject = `${event.subject_type} ${shortId(event.subject_id)}`;
+  return summary ? `${summary} · ${subject}` : subject;
+}
 
 export function EventList({ events }: { events: ArgusEvent[] }) {
   if (events.length === 0) return <p className="muted empty-state">No events.</p>;
   return (
-    <div className="table-wrap">
+    <div className="table-wrap events-table">
       <table>
         <thead>
           <tr>
@@ -13,26 +21,23 @@ export function EventList({ events }: { events: ArgusEvent[] }) {
             <th>Type</th>
             <th>Details</th>
             <th>Status</th>
-            <th>Agent</th>
+            <th>Worker</th>
           </tr>
         </thead>
         <tbody>
           {events.map((e) => (
             <tr key={e.id}>
               <td>
-                <time dateTime={e.at} title={relative(e.at)}>
-                  {clock(e.at)}
-                </time>
+                <DateChip at={e.at} />
               </td>
-              <td>{e.subject_type}</td>
-              <td>
-                {e.kind}
-                {describeEvent(e) ? ` · ${describeEvent(e)}` : ""} {shortId(e.subject_id)}
-              </td>
+              <td>{e.kind}</td>
+              <td>{eventDetail(e)}</td>
               <td>
                 <span className={`badge ${eventTone(e.kind)}`}>{e.kind.split(".").pop()}</span>
               </td>
-              <td className="muted small">{actor(e.actor)}</td>
+              <td className="muted small">
+                <WorkerActorChip actor={e.actor} />
+              </td>
             </tr>
           ))}
         </tbody>

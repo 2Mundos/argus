@@ -1,9 +1,11 @@
 import { useRef, useState } from "react";
 import { api, call, type DecisionDetail, type InboxGroup, type InboxItem } from "../api";
 import { blockReasonText } from "../blockCopy";
-import { actor, relative, shortId } from "../format";
+import { DateChip } from "../DateChip";
+import { actor, shortId } from "../format";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
+import { PageHeader } from "../PageHeader";
 import { dur, quietFacts } from "../stall";
 import { TaskLabel } from "../TaskLabel";
 import { BatchPanel, type Draft, type Entry, isAnswerable, MAX_BATCH } from "./InboxBatch";
@@ -89,8 +91,7 @@ export function Inbox() {
   }
   return (
     <section>
-      <div className="toolbar">
-        <h2>Inbox</h2>
+      <PageHeader title="Inbox" lead="Decisions waiting for an answer.">
         <label>
           Sort
           <select value={order} onChange={(e) => setOrder(e.target.value as "age" | "impact")}>
@@ -106,8 +107,7 @@ export function Inbox() {
           />
           Blocking only
         </label>
-      </div>
-      <p className="page-lead">Decisions waiting for an answer.</p>
+      </PageHeader>
       {error && <p className="error">{error.message}</p>}
       {page?.items.length === 0 && (
         <p className="muted empty-state">Nothing waiting for a decision.</p>
@@ -359,7 +359,7 @@ function DecisionCard(props: {
           <strong>
             <DecisionSubject decision={decision} />
           </strong>{" "}
-          · {relative(decision.created_at)} by {actor(decision.requested_by)}
+          · <DateChip at={decision.created_at} /> by {actor(decision.requested_by)}
         </span>
       </header>
       <p className="muted small">

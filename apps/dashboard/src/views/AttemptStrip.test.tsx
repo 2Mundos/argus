@@ -90,6 +90,10 @@ vi.mock("../live", async () => {
   };
 });
 vi.mock("./AgentDetail", () => ({ AgentDetail: () => null }));
+vi.mock("../WorkerChip", () => ({
+  WorkerChip: () => null,
+  WorkerActorChip: () => null,
+}));
 vi.mock("./EventList", () => ({ EventList: () => null }));
 vi.mock("./TaskEditForm", () => ({ TaskEditForm: () => null }));
 vi.mock("./TaskSteers", () => ({ TaskSteers: () => null }));

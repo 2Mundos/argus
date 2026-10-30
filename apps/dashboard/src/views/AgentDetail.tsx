@@ -1,6 +1,7 @@
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 import { api, call, fetchText } from "../api";
-import { relative, shortId } from "../format";
+import { DateChip } from "../DateChip";
+import { shortId } from "../format";
 import { useLiveData } from "../live";
 import { TaskLabel } from "../TaskLabel";
 import { renderTerminalText } from "../terminalLog";
@@ -126,7 +127,9 @@ export function AgentDetail({
           {agent.end_reason && <span className="muted small"> {agent.end_reason}</span>}
         </dd>
         <dt>Heartbeat</dt>
-        <dd>{relative(agent.last_heartbeat_at, now)}</dd>
+        <dd>
+          <DateChip at={agent.last_heartbeat_at} now={now} />
+        </dd>
         {agent.runtime && (
           <>
             <dt>Runtime</dt>
@@ -203,8 +206,19 @@ export function AgentDetail({
                 <td>{task.progress_percent != null ? `${task.progress_percent}%` : "—"}</td>
                 <td>{task.progress_message ?? "—"}</td>
                 <td className="muted small">
-                  {task.progress_at ? `updated ${relative(task.progress_at, now)}` : "silent"}
-                  {task.state === "claimed" && ` · lease ${relative(task.lease_expires_at, now)}`}
+                  {task.progress_at ? (
+                    <>
+                      updated <DateChip at={task.progress_at} now={now} />
+                    </>
+                  ) : (
+                    "silent"
+                  )}
+                  {task.state === "claimed" && (
+                    <>
+                      {" · lease "}
+                      <DateChip at={task.lease_expires_at} now={now} />
+                    </>
+                  )}
                 </td>
               </tr>
             ))
