@@ -217,6 +217,10 @@ Kubernetes get the warn and refuse bands only.
 
 Judged separately; the worst one decides. Paths on the same `st_dev` form one group
 and one episode; a group containing the data directory counts as the data directory.
+The admission slice needs no per-group role: the 64 MiB readiness check reads the
+data directory alone and limits use the worst free among groups. The role union
+(and the data-directory-strictness rule) becomes load-bearing only for pause and
+shed, which are pending.
 Unknown beats every measured free; otherwise the minimum free among applicable
 groups decides the band. Bounded: a constant number of `stat` / `statvfs` /
 Docker-info calls per pass; no directory walks; Docker query with a short timeout.
