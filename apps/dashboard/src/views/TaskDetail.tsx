@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, call, download } from "../api";
 import { ARCHIVABLE } from "../archive";
 import { blockReasonText } from "../blockCopy";
@@ -98,10 +98,20 @@ export function TaskDetail({
   );
   const [task, artifacts, events, delivery, modelTrace, attemptList] = data ?? [];
   const current = task?.attempt ?? 0;
+  const prevTaskId = useRef(taskId);
+  const prevCurrent = useRef<number | null>(null);
   // A new current attempt (or another task) re-selects the current one.
   useEffect(() => {
     setPicked(null);
-    setSteerOpen(false);
+    const taskChanged = prevTaskId.current !== taskId;
+    if (taskChanged) {
+      setSteerOpen(false);
+      prevCurrent.current = null;
+    } else if (prevCurrent.current !== null && prevCurrent.current !== current) {
+      setSteerOpen(false);
+    }
+    prevTaskId.current = taskId;
+    if (current > 0) prevCurrent.current = current;
   }, [taskId, current]);
   const attemptNumbers = Array.isArray(attemptList) ? attemptList.map((a) => a.attempt) : [];
   const steerable = task?.state === "claimed" && current > 0;
