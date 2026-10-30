@@ -21,7 +21,7 @@ def test_root_icons_and_manifest_are_served(tmp_path: Path) -> None:
     them at fixed root paths, so they must be served there with the right type."""
     expected = {
         "favicon.ico": "image/vnd.microsoft.icon",
-        "favicon.svg": "image/svg+xml",
+        "favicon-32x32.png": "image/png",
         "apple-touch-icon.png": "image/png",
         "site.webmanifest": "application/manifest+json",
     }
