@@ -67,12 +67,13 @@ interface ProviderMapping {
   /**
    * Inject with a generic header secret, one per endpoint (host + path pattern),
    * instead of a typed secret. A request that matches no endpoint is forwarded
-   * untouched, so the credential cannot be used on any other path.
+   * untouched, so the credential cannot be used on any other path. An endpoint
+   * names its own host when the provider spans several; otherwise `host` applies.
    */
   generic?: {
     headerName: string;
     valueFormat: string;
-    endpoints: Array<{ suffix: string; pathPattern: string }>;
+    endpoints: Array<{ suffix: string; pathPattern: string; host?: string }>;
   };
 }
 
@@ -252,6 +253,44 @@ export async function exchangeCursorApiKey(
   return token;
 }
 
+/** Token prefixes the pinned Copilot CLI accepts (probed on 1.0.105, copilot accounts spec 4). */
+const COPILOT_PREFIXES = ["github_pat_", "gho_", "ghu_"];
+
+/**
+ * Why a Copilot document cannot be applied, or null: exactly `{token}`, a
+ * fine-grained PAT, OAuth or GitHub App user token. Mirrors the core validation
+ * on the prefix only; never echoes the value.
+ */
+export function copilotProblem(c: Record<string, unknown>): string | null {
+  const extra = Object.keys(c).filter((k) => k !== "token");
+  if (extra.length) return `unexpected fields: ${extra.sort().join(", ")} (only token)`;
+  const token = typeof c.token === "string" ? c.token : null;
+  if (!token || !token.trim() || /\s/.test(token))
+    return "token must be a non-empty string without whitespace";
+  if (token.startsWith("ghp_"))
+    return "token is a classic personal access token (ghp_), which Copilot does not accept";
+  if (!COPILOT_PREFIXES.some((p) => token.startsWith(p) && token.length > p.length))
+    return `token must start with one of: ${COPILOT_PREFIXES.join(", ")}`;
+  return null;
+}
+
+/**
+ * Where the pinned Copilot CLI (1.0.105) sends its bearer token for an individual
+ * seat, from the fake-credential probe (fixtures/copilot-cli): token validation on
+ * api.github.com and model calls on api.individual.githubcopilot.com. Exact paths
+ * only; repository secrets on api.github.com keep their own patterns. GAP: the
+ * Business and Enterprise hosts (api.business. / api.enterprise.githubcopilot.com)
+ * are not probed, so those seats get no injection (copilot accounts spec 4).
+ */
+const COPILOT_API_HOST = "api.individual.githubcopilot.com";
+export const COPILOT_ENDPOINTS = [
+  { suffix: "-user", host: "api.github.com", pathPattern: "/copilot_internal/user" },
+  { suffix: "-models", host: COPILOT_API_HOST, pathPattern: "/models" },
+  { suffix: "-responses", host: COPILOT_API_HOST, pathPattern: "/responses" },
+  { suffix: "-chat", host: COPILOT_API_HOST, pathPattern: "/chat/completions" },
+  { suffix: "-messages", host: COPILOT_API_HOST, pathPattern: "/v1/messages" },
+];
+
 export const PROVIDERS: Record<string, ProviderMapping> = {
   // An API key, or a subscription's OAuth token; OneCLI tells them apart.
   anthropic: {
@@ -335,6 +374,22 @@ export const PROVIDERS: Record<string, ProviderMapping> = {
       return key ? exchangeCursorApiKey(key, fetchImpl) : null;
     },
   },
+  // GitHub Copilot: the delegated CLI holds a sentinel `COPILOT_GITHUB_TOKEN`; the
+  // gateway swaps in the real token for exactly the endpoints above.
+  copilot: {
+    type: "generic",
+    host: COPILOT_API_HOST,
+    engine: "",
+    executorOnly: true,
+    secretSuffix: "-copilot",
+    generic: {
+      headerName: "Authorization",
+      valueFormat: "Bearer {value}",
+      endpoints: COPILOT_ENDPOINTS,
+    },
+    problem: (c) => copilotProblem(c),
+    pick: (c) => text(c.token),
+  },
 };
 
 /**
@@ -350,7 +405,9 @@ export function runtimeProviders(role: "engine" | "executor"): string[] {
 
 /** The delegate CLI (`argus-delegate EXECUTOR`) that runs on a provider's account. */
 export function executorFor(provider: string): string | null {
-  return { anthropic: "claude", openai: "codex", cursor: "agent" }[provider] ?? null;
+  return (
+    { anthropic: "claude", openai: "codex", cursor: "agent", copilot: "copilot" }[provider] ?? null
+  );
 }
 
 /**
@@ -712,7 +769,7 @@ export async function applyLeasesDetailed(
             name: secretName,
             type: "generic",
             value,
-            hostPattern: host,
+            hostPattern: endpoint.host ?? host,
             pathPattern: endpoint.pathPattern,
             injectionConfig: {
               headerName: mapping.generic!.headerName,

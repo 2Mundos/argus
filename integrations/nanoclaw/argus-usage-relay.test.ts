@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  checkAuthRejectedRecord,
   checkUsageRecord,
   createUsageRelay,
   type HeldAccountIds,
@@ -275,5 +276,68 @@ describe("createUsageRelay", () => {
     await s.relay.poll();
     expect(posted).toEqual([]);
     expect(s.relay.stats.dropped).toBe(0); // another task's record is ignored, not an error
+  });
+});
+
+describe("executor auth rejection relay", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+  const rejected = (over: Record<string, unknown> = {}) => ({
+    v: 1,
+    kind: "auth_rejected",
+    role: "executor",
+    task_id: "t1",
+    attempt: 2,
+    account_id: "acc-exec",
+    ...over,
+  });
+
+  it("accepts only the executor lease this host holds, for this attempt", () => {
+    expect(checkAuthRejectedRecord(rejected(), task, held)).toEqual({
+      ok: true,
+      accountId: "acc-exec",
+    });
+    const why = (r: unknown, h: HeldAccountIds = held) => {
+      const c = checkAuthRejectedRecord(r, task, h);
+      return c.ok ? "ok" : c.why;
+    };
+    expect(why(rejected({ role: "engine" }))).toBe("bad_role");
+    expect(why(rejected({ account_id: "acc-engine" }))).toBe("account_mismatch");
+    expect(why(rejected({ attempt: 1 }))).toBe("other_task");
+    expect(why(rejected(), { engine: "acc-engine", executor: null })).toBe("no_account_held");
+    expect(why(record())).toBe("not_auth_rejected");
+  });
+
+  it("reports a rejected executor once and never posts it as usage", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "argus-usage-relay-"));
+    dirs.push(dir);
+    const file = path.join(dir, USAGE_RELAY_FILE);
+    const reported: string[] = [];
+    const posted: string[] = [];
+    let fail = true;
+    const relay = createUsageRelay({
+      file,
+      task,
+      held: () => held,
+      post: async (id) => void posted.push(id),
+      authRejected: async (id) => {
+        if (fail) {
+          fail = false;
+          throw new TypeError("fetch failed");
+        }
+        reported.push(id);
+      },
+    });
+    writeFileSync(file, `${JSON.stringify(rejected())}\n${JSON.stringify(rejected())}\n`);
+    await relay.poll(); // transient failure: kept
+    expect(reported).toEqual([]);
+    await relay.poll();
+    expect(reported).toEqual(["acc-exec"]);
+    appendFileSync(file, `${JSON.stringify(rejected())}\n`);
+    await relay.drain(1000);
+    expect(reported).toEqual(["acc-exec"]);
+    expect(posted).toEqual([]);
   });
 });

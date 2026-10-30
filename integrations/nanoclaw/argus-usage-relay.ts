@@ -127,6 +127,27 @@ interface Post {
 }
 
 /**
+ * A delegated CLI said its credential was rejected (copilot accounts spec 3, failure
+ * classes): `{v:1, kind:"auth_rejected", task_id, attempt, role:"executor", account_id}`.
+ * Only the executor lease this host holds can be named; the record carries no text, so
+ * the host reports a fixed reason and never free text from the container.
+ */
+export function checkAuthRejectedRecord(
+  raw: unknown,
+  task: UsageTask,
+  held: HeldAccountIds,
+): { ok: true; accountId: string } | { ok: false; why: string } {
+  if (!isObject(raw) || raw.v !== 1 || raw.kind !== "auth_rejected")
+    return { ok: false, why: "not_auth_rejected" };
+  if (raw.task_id !== task.id || raw.attempt !== task.attempt)
+    return { ok: false, why: "other_task" };
+  if (raw.role !== "executor") return { ok: false, why: "bad_role" };
+  if (!held.executor) return { ok: false, why: "no_account_held" };
+  if (raw.account_id !== held.executor) return { ok: false, why: "account_mismatch" };
+  return { ok: true, accountId: held.executor };
+}
+
+/**
  * Reads the container's usage file and posts each valid record once. Transient failures
  * (network, 5xx, 429, 409 conflicts) keep the record and back off; a permanent refusal
  * (403/404/422/...) drops it, as does 401 (the channel stops anyway). The API deduplicates
@@ -137,6 +158,8 @@ export function createUsageRelay(opts: {
   task: UsageTask;
   held: () => HeldAccountIds;
   post: Post;
+  /** Report a rejected executor credential; called at most once per account and relay. */
+  authRejected?: (accountId: string) => Promise<unknown>;
   now?: () => number;
 }) {
   const now = opts.now ?? Date.now;
@@ -144,6 +167,8 @@ export function createUsageRelay(opts: {
   let tail = "";
   let pending: { accountId: string; body: UsageBody }[] = [];
   const seen = new Set<string>(); // run_keys read in this relay: a rewritten file does not repost
+  const rejected = new Set<string>(); // accounts already reported (or queued) as auth_rejected
+  const rejectPending: string[] = [];
   let stopped = false;
   let busy = false;
   let backoffMs = 0;
@@ -202,6 +227,16 @@ export function createUsageRelay(opts: {
         } catch {
           continue; // a torn line
         }
+        if (isObject(rec) && rec.kind === "auth_rejected") {
+          const auth = checkAuthRejectedRecord(rec, opts.task, opts.held());
+          if (!auth.ok) {
+            if (auth.why !== "other_task") drop(auth.why);
+          } else if (opts.authRejected && !rejected.has(auth.accountId)) {
+            rejected.add(auth.accountId);
+            rejectPending.push(auth.accountId);
+          }
+          continue;
+        }
         const checked = checkUsageRecord(rec, opts.task, opts.held());
         if (!checked.ok) {
           if (checked.why !== "other_task") drop(checked.why);
@@ -214,6 +249,24 @@ export function createUsageRelay(opts: {
       }
     } finally {
       await handle.close();
+    }
+  }
+
+  async function postRejections(): Promise<void> {
+    while (rejectPending.length && opts.authRejected) {
+      try {
+        await opts.authRejected(rejectPending[0]);
+        rejectPending.shift();
+      } catch (err) {
+        const status = (err as { status?: number })?.status;
+        // Not the holder any more, or a refusal: retrying cannot help.
+        if (typeof status === "number" && status >= 400 && status < 500 && status !== 429) {
+          rejectPending.shift();
+          drop(`auth_rejected_http_${status}`);
+          continue;
+        }
+        return; // transient: the next poll tries again
+      }
     }
   }
 
@@ -256,6 +309,7 @@ export function createUsageRelay(opts: {
     busy = true;
     try {
       await readNew();
+      await postRejections();
       await postPending();
     } catch (err) {
       log.warn("Usage relay failed (will retry)", { err: String(err).slice(0, 200) });
@@ -289,7 +343,8 @@ export function createUsageRelay(opts: {
       for (;;) {
         const ran = await poll();
         const unread = fileSize > offset;
-        if (stopped || (ran && !pending.length && !unread) || Date.now() >= deadline) break;
+        const idle = !pending.length && !rejectPending.length && !unread;
+        if (stopped || (ran && idle) || Date.now() >= deadline) break;
         const wait = Math.max(50, Math.min(notBefore - now(), deadline - Date.now()));
         await new Promise((r) => setTimeout(r, wait));
       }

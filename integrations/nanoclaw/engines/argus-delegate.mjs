@@ -6,7 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 //                  [--out DIR] [--model M] [--read-only]
 //                  [--model-attempt N --fallback-reason REASON]
 //
-// EXECUTOR is claude | codex | opencode | agent. The prompt comes from stdin or
+// EXECUTOR is claude | codex | opencode | agent | copilot. The prompt comes from stdin or
 // --prompt-file. The last line on stdout is one JSON object: the identity of the
 // engine that delegated and the executor that did the work, how it ended, and
 // the artifacts, and the run's token usage (`usage`, `run_key`, `usage_report`; see
@@ -36,9 +36,40 @@ import { CHANGES_FILE, startChanges } from "./changes.mjs";
 import { createFileRelay, envSecrets, RELAY_FILE, startLiveLog } from "./livelog.mjs";
 import { createSink, createTracker, gitHead, waitingInput } from "./milestones.mjs";
 import { implementationScope, loadPolicy, selectModel } from "./model-policy.mjs";
-import { appendUsageRecord, parseUsage, runKey, runKeyHash, USAGE_RELAY_FILE } from "./usage.mjs";
+import {
+  appendAuthRejectedRecord,
+  appendUsageRecord,
+  parseUsage,
+  runKey,
+  runKeyHash,
+  USAGE_RELAY_FILE,
+} from "./usage.mjs";
 
-export const EXECUTORS = ["claude", "codex", "opencode", "agent"];
+export const EXECUTORS = ["claude", "codex", "opencode", "agent", "copilot"];
+
+/**
+ * Not a credential: the value the NanoClaw host gives the worker when every Copilot
+ * secret is assigned in the vault (argus-copilot-stub.ts, keep in step). The gateway
+ * swaps in the real token on the wire; any other value here is refused (fail closed).
+ */
+export const COPILOT_SENTINEL_TOKEN =
+  "github_pat_ARGUS_ONECLI_SENTINEL_not_a_credential_0000000000000000000000000000000000";
+
+/** Exact lines the pinned CLI (1.0.105) prints when it rejects a credential (exit 1). */
+export const COPILOT_AUTH_REJECTED = [
+  "Error: Authentication failed",
+  "Error: Authentication token found but could not be validated.",
+  "Error: No authentication information found.",
+  "Classic Personal Access Tokens (ghp_) are not supported by Copilot.",
+];
+
+/** Did the Copilot CLI reject its credential? Exact known lines only; free text never counts. */
+export function copilotAuthRejected(text) {
+  const lines = String(text ?? "")
+    .split("\n")
+    .map((l) => l.trim());
+  return lines.some((l) => COPILOT_AUTH_REJECTED.some((m) => l === m || l.startsWith(`${m} `)));
+}
 const KILL_GRACE_MS = 5000;
 const TAIL_CHARS = 2000;
 const OUTPUT_SCAN_BYTES = 1_000_000;
@@ -157,6 +188,14 @@ export function authStatus(executor, e = process.env, home = os.homedir(), setti
       return present(path.join(xdg, "cursor", "auth.json"))
         ? { ok: true }
         : { ok: false, need: "a Cursor auth.json stub (from the gateway; not CURSOR_API_KEY)" };
+    case "copilot":
+      // Only the gateway sentinel: a real token in the container is refused, never used.
+      return e.COPILOT_GITHUB_TOKEN === COPILOT_SENTINEL_TOKEN
+        ? { ok: true }
+        : {
+            ok: false,
+            need: "the gateway's COPILOT_GITHUB_TOKEN sentinel (an Argus copilot executor lease)",
+          };
     default:
       return { ok: false, need: "unknown executor" };
   }
@@ -414,6 +453,28 @@ export function buildCommand(
         promptVia: "argv",
         readOnlyEnforcement: readOnly ? "prompt_only" : "force_flag",
       };
+    case "copilot":
+      if (!model) throw new Error("copilot needs an explicit model");
+      return {
+        bin: "copilot",
+        args: [
+          "--model",
+          model,
+          "-s",
+          "--no-ask-user",
+          "--disable-builtin-mcps",
+          "--disable-client-telemetry",
+          "--no-auto-update",
+          // Never --allow-all-tools, --allow-url, --share or --share-gist. Read tools need
+          // no grant; write mode allows file edits only, so shell commands stay denied.
+          ...(readOnly
+            ? ["--deny-tool", "write", "--deny-tool", "shell"]
+            : ["--allow-tool", "write"]),
+          "-p",
+        ],
+        promptVia: "argv",
+        readOnlyEnforcement: readOnly ? "copilot_deny_write_and_shell" : "copilot_allow_write_only",
+      };
     default:
       throw new Error(`unknown executor ${executor}`);
   }
@@ -484,6 +545,32 @@ export function materializePrivateCursorConfig(stubDir, runtimeRoot) {
 }
 
 /**
+ * Copilot CLI runtime: only the sentinel may authenticate, so every other credential
+ * source the CLI reads (GH_TOKEN, GITHUB_TOKEN, a `gh` login, BYOK providers) is
+ * scrubbed, and HOME/COPILOT_HOME are a fresh private tree under the authorized cwd,
+ * removed when the delegate exits: nothing the CLI writes outlives the run.
+ */
+export function prepareCopilotEnv(e, runtimeRoot) {
+  const out = {};
+  for (const [k, v] of Object.entries(e)) {
+    if (k === "GH_TOKEN" || k === "GITHUB_TOKEN" || k.startsWith("GH_")) continue;
+    if (k.startsWith("COPILOT_PROVIDER_")) continue;
+    out[k] = v;
+  }
+  const home = path.join(runtimeRoot, "copilot-home", randomUUID());
+  fs.mkdirSync(path.join(home, "gh"), { recursive: true, mode: 0o700 });
+  fs.chmodSync(home, 0o700);
+  process.once("exit", () => fs.rmSync(home, { recursive: true, force: true }));
+  return {
+    ...out,
+    HOME: home,
+    COPILOT_HOME: home,
+    GH_CONFIG_DIR: path.join(home, "gh"),
+    COPILOT_AUTO_UPDATE: "false",
+  };
+}
+
+/**
  * Cursor CLI runtime: gateway stubs stay read-only mounts; the native CLI needs a
  * writable CURSOR_CONFIG_DIR for atomic cli-config updates even when HTTP/1.1 is preset.
  */
@@ -492,6 +579,7 @@ export function prepareExecutorEnv(
   e = process.env,
   runtimeRoot = "/tmp/argus-cursor-runtime",
 ) {
+  if (executor === "copilot") return prepareCopilotEnv(e, runtimeRoot);
   if (executor !== "agent") return e;
   const home = e.HOME || os.homedir();
   const xdg = e.XDG_CONFIG_HOME || path.join(home, ".config");
@@ -771,6 +859,13 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
   } catch (err) {
     finish(64, { ...identity, error: "model_policy_invalid", detail: err.message });
   }
+  // The Copilot CLI's own default model is never used: no model, no run.
+  if (executor === "copilot" && !selection.configured_model)
+    finish(64, {
+      ...identity,
+      error: "usage",
+      detail: "copilot needs an explicit model (--model, a task pin or the model policy)",
+    });
 
   const roots = (e.ARGUS_DELEGATE_ROOTS || "/workspace").split(":").filter(Boolean);
   const cwd = authorizedCwd(opts.cwd || process.cwd(), roots);
@@ -1153,10 +1248,21 @@ async function runAttempt(
   if (fs.existsSync(lastMessageFile)) artifacts.push(lastMessageFile);
   const stdoutText = fs.readFileSync(stdoutFile, "utf8");
   const tailSource = fs.existsSync(lastMessageFile) ? lastMessageFile : stdoutFile;
-  const secret = (e[CUSTOM_KEY_ENV] ?? "").trim();
-  const redact = (text) => (secret ? text.split(secret).join("[redacted]") : text);
+  const secrets = [e[CUSTOM_KEY_ENV], e.COPILOT_GITHUB_TOKEN]
+    .map((v) => (v ?? "").trim())
+    .filter(Boolean);
+  const redact = (text) => secrets.reduce((t, s) => t.split(s).join("[redacted]"), text);
   const tail = redact(fs.readFileSync(tailSource, "utf8")).slice(-TAIL_CHARS);
-  const jsonFail = !timedOut && code === 0 ? executorJsonFailure(executor, stdoutText) : null;
+  const stderrText = fs.readFileSync(stderrFile, "utf8");
+  const jsonFail =
+    !timedOut && code === 0
+      ? executorJsonFailure(executor, stdoutText)
+      : executor === "copilot" &&
+          !timedOut &&
+          !interrupted &&
+          copilotAuthRejected(`${stdoutText}\n${stderrText}`)
+        ? { kind: "auth_rejected", detail: "GitHub Copilot rejected the credential" }
+        : null;
   const exit = timedOut ? 124 : interrupted || jsonFail || code !== 0 ? 1 : 0;
   const taskId = taskIdEarly;
   const usage = parseUsage(executor, stdoutText);
@@ -1194,6 +1300,17 @@ async function runAttempt(
     });
     if (queued) usageReport = { status: "queued", reason: "host_relay", direct: usageReport };
   }
+  // The host exhausts the executor account with a fixed reason (copilot accounts spec 3).
+  if (jsonFail?.kind === "auth_rejected" && accountId && taskId) {
+    appendAuthRejectedRecord(
+      e.ARGUS_USAGE_RELAY_FILE ||
+        path.join(
+          path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
+          USAGE_RELAY_FILE,
+        ),
+      { task_id: taskId, attempt: snapshot.context?.attempt ?? null, account_id: accountId },
+    );
+  }
   const report = {
     ...identity,
     ...evidence,
@@ -1220,7 +1337,7 @@ async function runAttempt(
     usage_spool: spoolFile,
     usage_report: usageReport,
     tail,
-    stderr_tail: redact(fs.readFileSync(stderrFile, "utf8")).slice(-TAIL_CHARS),
+    stderr_tail: redact(stderrText).slice(-TAIL_CHARS),
     ...(jsonFail ? { executor_error: { ...jsonFail, detail: redact(jsonFail.detail) } } : {}),
   };
   fs.writeFileSync(reportFile, JSON.stringify(report, null, 2) + "\n");

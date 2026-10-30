@@ -76,6 +76,7 @@ node_modules/.bin/vitest run \
   src/drivers/docker-driver.test.ts src/drivers/conformance.test.ts src/drivers/driver-selection.test.ts \
   src/container-runner.test.ts src/channels/argus.test.ts src/channels/argus-accounts.test.ts \
   src/channels/argus-gitea-lease.test.ts src/gateway-providers/argus-cursor-stub.test.ts \
+  src/gateway-providers/argus-copilot-stub.test.ts \
   src/gateway-providers/argus-onecli-git-ca.test.ts src/gateway-providers/onecli.test.ts \
   src/gateway-providers/argus-local-harness.test.ts \
   src/host-sweep.test.ts src/host-sweep.queue.test.ts src/host-sweep.feeds.test.ts src/host-sweep-grace.test.ts
