@@ -276,14 +276,23 @@ ENDERS = [
     "cancel",
     "lease_expiry",
     "timeout",
+    "stall",
     "agent_left",
 ]
+STALL_S = 60
 
 
 async def _end(db: Database, task, clock: FakeClock, ender: str) -> None:
     if ender == "lease_expiry":
         # `tx.now` is fixed when the write starts, so the lease must already be past.
         clock.advance(task.lease_ttl_s + 1)
+    elif ender == "stall":
+        # Heartbeats are no signal: the claim is the last one, past the stall cutoff.
+        async with db.write() as tx:
+            await tx.conn.execute(
+                "UPDATE tasks SET quiet_at = ? WHERE id = ?", (ts(tx.now), task.id)
+            )
+        clock.advance(STALL_S + 1)
     async with db.write() as tx:
         if ender == "complete":
             await tasks.complete(tx, A, task.id, task.attempt, DONE)
@@ -312,6 +321,8 @@ async def _end(db: Database, task, clock: FakeClock, ender: str) -> None:
                 (ts(tx.now), task.id),
             )
             await tasks.expire_timeouts(tx)
+        elif ender == "stall":
+            assert await tasks.expire_stalled(tx, STALL_S) == [task.id]
         else:
             await agents.leave(tx, A)
 

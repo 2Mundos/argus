@@ -4,20 +4,7 @@ import { DateChip } from "../DateChip";
 import { useLiveData } from "../live";
 import { useNow } from "./Activity";
 
-/**
- * Steers for the attempt in flight (task steering spec 3.9). The composer opens
- * from the terminal's or the actions row's Steer button; the message is text, never HTML.
- */
-export function TaskSteers({
-  taskId,
-  attempt,
-  claimed,
-  assigneeId,
-  supportsSteer,
-  composerOpen,
-  onComposerOpenChange,
-  showList = true,
-}: {
+type Props = {
   taskId: string;
   attempt: number;
   claimed: boolean;
@@ -27,12 +14,49 @@ export function TaskSteers({
   onComposerOpenChange: (open: boolean) => void;
   /** False for the composer in the task actions row: the Live panel owns the list. */
   showList?: boolean;
-}) {
+};
+
+/**
+ * Steers for the attempt in flight (task steering spec 3.9). The composer opens
+ * from the terminal's or the actions row's Steer button; the message is text, never HTML.
+ * Another task or attempt gets a fresh composer: the draft never carries over, and
+ * the open composer closes.
+ */
+export function TaskSteers(props: Props) {
+  const key = `${props.taskId}:${props.attempt}`;
+  const { onComposerOpenChange } = props;
+  const shown = useRef(key);
+  useEffect(() => {
+    if (shown.current === key) return;
+    shown.current = key;
+    onComposerOpenChange(false);
+  }, [key, onComposerOpenChange]);
+  return <Steers key={key} {...props} />;
+}
+
+function Steers({
+  taskId,
+  attempt,
+  claimed,
+  assigneeId,
+  supportsSteer,
+  composerOpen,
+  onComposerOpenChange,
+  showList = true,
+}: Props) {
   const now = useNow();
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const box = useRef<HTMLTextAreaElement>(null);
+  // A send that lands after the composer moved to another task or attempt must not touch it.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const needsLookup = supportsSteer === undefined && claimed && !!assigneeId;
   const { data: page, reload } = useLiveData(
     (signal) =>
@@ -67,7 +91,7 @@ export function TaskSteers({
 
   async function send() {
     const message = draft.trim();
-    if (!message || busy || !can) return;
+    if (!message || busy || !can || !claimed) return;
     setBusy(true);
     setError(undefined);
     try {
@@ -77,13 +101,14 @@ export function TaskSteers({
           body: { message },
         }),
       );
+      if (!mounted.current) return;
       setDraft("");
       onComposerOpenChange(false);
       reload();
     } catch (err) {
-      setError((err as Error).message);
+      if (mounted.current) setError((err as Error).message);
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
