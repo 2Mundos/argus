@@ -4775,6 +4775,47 @@ export interface components {
          * @enum {string}
          */
         DifficultySource: "declared" | "inferred";
+        /**
+         * DiskGuardOut
+         * @description Authenticated disk-guard visibility; no paths or device identifiers.
+         */
+        DiskGuardOut: {
+            /**
+             * Claim Admission
+             * @enum {string}
+             */
+            claim_admission: "admitted" | "refused";
+            /** Enabled */
+            enabled: boolean;
+            /** Free Bytes */
+            free_bytes?: number | null;
+            /**
+             * Measurement
+             * @enum {string}
+             */
+            measurement: "measured" | "unknown" | "stale";
+            /** Roots */
+            roots: components["schemas"]["DiskGuardRootOut"][];
+            /** Warn Episode */
+            warn_episode: boolean;
+        };
+        /** DiskGuardRootOut */
+        DiskGuardRootOut: {
+            /**
+             * Applicability
+             * @enum {string}
+             */
+            applicability: "measured" | "unknown" | "stale" | "not_applicable";
+            /** Band */
+            band?: ("ok" | "warn" | "refuse") | null;
+            /** Free Bytes */
+            free_bytes?: number | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "data" | "instances" | "docker";
+        };
         /** DockerOptions */
         "DockerOptions-Input": {
             /**
@@ -7778,6 +7819,7 @@ export interface components {
             decisions_open: number;
             /** Disk Free Bytes */
             disk_free_bytes: number;
+            disk_guard: components["schemas"]["DiskGuardOut"];
             /** Events Total */
             events_total: number;
             /** Loops */

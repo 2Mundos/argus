@@ -33,6 +33,7 @@ from argus_api.conversations.routes import router as conversations_router
 from argus_api.db import Database, DataDirLock
 from argus_api.decisions.routes import router as decisions_router
 from argus_api.deps import get_db
+from argus_api.disk_guard import DiskGuard
 from argus_api.engines.local import LocalModel
 from argus_api.engines.routes import router as engines_router
 from argus_api.errors import DomainError
@@ -155,6 +156,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             "reaper": LoopStats("reaper", reaper.REAP_INTERVAL_S),
             "reconciler": LoopStats("reconciler", settings.reconcile_interval_s),
         }
+        # Disk guard keeps its own LoopStats but must not join readiness `loops`
+        # (operations 3.5: /readyz checks stay database/reaper/reconciler/disk/secrets).
+        disk_guard_stats = LoopStats("disk_guard", settings.disk_guard_interval_s)
+        app.state.disk_guard = DiskGuard(settings, db, disk_guard_stats)
+        if settings.disk_guard_enabled:
+            await app.state.disk_guard.measure_once()
         local_model = app.state.local_model
 
         async def local_probe() -> tuple[bool | None, str]:
@@ -200,6 +207,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                     ),
                 ]
                 if settings.workspace_cleanup_enabled
+                else []
+            ),
+            *(
+                [asyncio.create_task(app.state.disk_guard.run())]
+                if settings.disk_guard_enabled
                 else []
             ),
         ]

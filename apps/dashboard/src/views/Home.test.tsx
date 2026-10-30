@@ -29,6 +29,14 @@ vi.mock("../api", () => ({
         pools: [],
         database: { main_bytes: 0, wal_bytes: 0 },
         disk_free_bytes: 0,
+        disk_guard: {
+          enabled: true,
+          claim_admission: "admitted",
+          warn_episode: false,
+          measurement: "measured",
+          free_bytes: 0,
+          roots: [],
+        },
       };
     }
     return [];

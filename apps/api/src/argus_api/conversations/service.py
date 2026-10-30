@@ -23,6 +23,7 @@ from argus_core.conversations import (
 from argus_core.redact import redact, redact_private_keys
 
 from argus_api.db import Tx, ts
+from argus_api.disk_guard import DiskGuard
 from argus_api.errors import (
     ConflictError,
     DomainError,
@@ -388,13 +389,15 @@ async def _cap_notice_target(conn: aiosqlite.Connection, now: datetime) -> str |
 
 
 async def claim_next(
-    tx: Tx, *, agent_id: str, path
+    tx: Tx, *, agent_id: str, path, disk_guard: DiskGuard | None = None
 ) -> tuple[Conversation, Message] | None:
     """Claim the oldest deliverable queued human message.
 
     Delivery is idempotent by message id: a second claim of a delivered id is a no-op
     at the channel (it only sees queued rows here).
     """
+    if disk_guard is not None:
+        disk_guard.require_admission()
     # Daily cap: stop delivering when spend since 00:00 UTC reaches the budget.
     if await daily_cap_reached(tx.conn, tx.now, path):
         target = await _cap_notice_target(tx.conn, tx.now)

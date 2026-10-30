@@ -71,6 +71,7 @@ from argus_api.accounts.usage import (
 )
 from argus_api.db import Snapshot, Tx, ts
 from argus_api.decisions import store as decisions
+from argus_api.disk_guard import DiskGuard
 from argus_api.errors import (
     ConflictError,
     ForbiddenError,
@@ -283,6 +284,7 @@ async def claim(
     default_timeout_s: int = 0,
     runtime_providers: list[str] | None = None,
     can_lease: Callable[[Tx, aiosqlite.Row], Awaitable[bool]] | None = None,
+    disk_guard: DiskGuard | None = None,
 ) -> Task | None:
     """Claim the highest-priority, oldest ready task the agent is capable of.
 
@@ -300,7 +302,12 @@ async def claim(
 
     The attempt's wall-clock deadline is the task's `timeout_s` (which creation
     filled from its kind), else `default_timeout_s`; 0 means no deadline.
+
+    When `disk_guard` refuses admission, raises `ConflictError(code=disk_low)`
+    before any attempt is spent or credential/engine lease is acquired.
     """
+    if disk_guard is not None:
+        disk_guard.require_admission()
     state = await _agent_state(tx.conn, agent_id)
     if state is not AgentState.ACTIVE:
         raise ConflictError(
