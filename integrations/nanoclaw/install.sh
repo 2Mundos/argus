@@ -37,6 +37,8 @@ cp "$here/argus-repo-preflight.ts" "$target/src/channels/argus-repo-preflight.ts
 cp "$here/argus-repo-preflight.test.ts" "$target/src/channels/argus-repo-preflight.test.ts"
 cp "$here/argus-repo-preflight.docker.test.ts" "$target/src/channels/argus-repo-preflight.docker.test.ts"
 cp "$here/argus.test.ts" "$target/src/channels/argus.test.ts"
+# Unknown steer outcomes (task steering spec 3.3-3.6), run by scripts/steer-unknown-e2e.sh.
+cp "$here/argus-steer-unknown.e2e.test.ts" "$target/src/channels/argus-steer-unknown.e2e.test.ts"
 cp "$here/argus-accounts.test.ts" "$target/src/channels/argus-accounts.test.ts"
 cp "$here/argus-runtime.test.ts" "$target/src/channels/argus-runtime.test.ts"
 # The quota patterns' shared fixture (Argus's packages/core), read by argus-accounts.test.ts.

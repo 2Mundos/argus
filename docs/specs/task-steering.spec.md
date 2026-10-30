@@ -291,4 +291,5 @@ or `unknown` and counting them on `task_attempts`; `steer_unknown` on the claim 
 on `TaskAttempt`; regenerated client; the dashboard label; the channel's warning
 line. Tests cover a lost heartbeat answer, a lost ack, every exit from `claimed`, a
 delayed ack, the previous-attempt count (not older attempts, not other tasks, across
-a retry), REST/MCP/OpenAPI, the upgrade, and the installed channel end to end.
+a retry), REST/MCP/OpenAPI, the upgrade, and the installed channel end to end
+(`scripts/steer-unknown-e2e.sh`).
