@@ -608,7 +608,7 @@ async def test_migration_0053_backfills_attempt_and_is_idempotent(
         again = await Database.open(path)
         try:
             async with again.read() as c, c.execute("PRAGMA user_version") as cur:
-                assert (await cur.fetchone())[0] == 55
+                assert (await cur.fetchone())[0] == 56
             async with (
                 again.read() as c,
                 c.execute("SELECT count(*) FROM account_usage") as cur,
