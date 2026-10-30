@@ -139,6 +139,12 @@ while `ready`, `pending` or `awaiting_approval`, only `priority` while
 
 Split large goals into tasks one worker can finish and one reviewer can check.
 
+To hand a worker input that does not fit the spec (a log, a fixture, notes),
+`attach_artifact(task_id, name, content, share_with_workers=true)` and name the
+attachment in the spec. Any worker leased on that task can then `list_artifacts`,
+`verify_artifact` and `read_artifact` it. Without `share_with_workers`, an
+attachment is evidence for managers only. Never attach secrets.
+
 `route_task` says where a piece of work should run, and `run_local` runs a
 small bounded completion on the local model. Use them for quick, low-risk,
 checkable work (classifying, extracting, short rewrites) instead of a whole

@@ -316,7 +316,7 @@ def test_attachment_event_is_in_task_feeds_without_identity(
     assert events[0]["subject_id"] == task["id"]
     for key in ("name", "artifact_id", "size", "sha256"):
         assert key not in events[0]["data"]
-    assert events[0]["data"] == {"source": "attachment"}
+    assert events[0]["data"] == {"source": "attachment", "worker_readable": False}
     assert events[0]["actor"].startswith("orchestrator:")
     own = client.get("/api/events", params=params, headers=worker).json()
     assert [e for e in own if e["kind"] == "task.attachment"] == []
@@ -514,3 +514,110 @@ def test_list_artifacts_excludes_attachments_by_default(
     default, withall = asyncio.run(run())
     assert default == []
     assert len(withall) == 1
+
+
+def test_attachments_are_not_shared_by_default(
+    client: TestClient, orchestrator, task
+) -> None:
+    art = attach(client, orchestrator, task).json()
+    assert art["worker_readable"] is False
+
+
+def read_all(client: TestClient, headers, art: dict) -> list[int]:
+    base = f"/api/artifacts/{art['id']}"
+    return [
+        client.get(base, headers=headers).status_code,
+        client.get(f"{base}/content", headers=headers).status_code,
+        client.get(f"{base}/text", headers=headers).status_code,
+        client.post(f"{base}/verify", headers=headers).status_code,
+    ]
+
+
+def test_shared_attachment_is_readable_by_every_worker_leased_on_the_task(
+    client: TestClient, orchestrator, task
+) -> None:
+    body = "input for the next attempt\n\u00e9\n".encode()
+    shared = attach(
+        client, orchestrator, task, name="in.txt", body=body, worker_readable="true"
+    ).json()
+    private = attach(client, orchestrator, task, name="secret.bin").json()
+    assert (shared["worker_readable"], private["worker_readable"]) == (True, False)
+    first, second = register(client, "worker"), register(client, "worker")
+    claimed = client.post("/api/tasks/claim", json={}, headers=first).json()
+    released = client.post(
+        f"/api/tasks/{task['id']}/release", json={"reason": "handoff"}, headers=ADMIN
+    )
+    assert released.status_code == 200, released.text
+    again = client.post("/api/tasks/claim", json={}, headers=second).json()
+    assert again["id"] == task["id"] and again["attempt"] != claimed["attempt"]
+    for worker in (first, second):  # an earlier attempt's grant still reads
+        assert read_all(client, worker, shared) == [200] * 4
+        assert read_all(client, worker, private) == [403] * 4
+        got = client.get(f"/api/artifacts/{shared['id']}/content", headers=worker)
+        assert got.content == body
+        assert hashlib.sha256(got.content).hexdigest() == shared["sha256"]
+        listed = client.get(f"/api/tasks/{task['id']}/artifacts", headers=worker)
+        assert [a["id"] for a in listed.json()] == [shared["id"]]
+    # the attachment is still not a worker's own output
+    done = client.post(
+        f"/api/tasks/{task['id']}/complete",
+        json={
+            "attempt": again["attempt"],
+            "result": {"summary": "x", "artifacts": [shared["id"]]},
+        },
+        headers=second,
+    )
+    assert done.status_code == 422
+
+
+def test_shared_attachment_is_denied_to_workers_on_other_tasks(
+    client: TestClient, orchestrator, worker
+) -> None:
+    other = client.post(
+        "/api/tasks", json={"project": "global", "title": "other"}, headers=ADMIN
+    ).json()
+    assert (
+        client.post("/api/tasks/claim", json={}, headers=worker).json()["id"]
+        == (other["id"])
+    )
+    task = client.post(
+        "/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN
+    ).json()
+    shared = attach(client, orchestrator, task, worker_readable="true").json()
+    assert read_all(client, worker, shared) == [403] * 4
+    res = client.get(f"/api/artifacts/{shared['id']}/content", headers=worker)
+    assert res.json()["detail"]["code"] == "not_leased"
+    assert (
+        client.get(f"/api/tasks/{task['id']}/artifacts", headers=worker).status_code
+        == 403
+    )
+    # sharing does not let a worker attach
+    assert (
+        attach(client, worker, other, name="w.bin", worker_readable="true").status_code
+        == 403
+    )
+
+
+def test_shared_attachment_event_names_no_file(
+    client: TestClient, orchestrator, worker, task
+) -> None:
+    client.post("/api/tasks/claim", json={}, headers=worker)
+    art = attach(client, orchestrator, task, worker_readable="true").json()
+    events = client.get(
+        "/api/events", params={"subject_id": task["id"]}, headers=ADMIN
+    ).json()
+    data = [e["data"] for e in events if e["kind"] == "task.attachment"]
+    assert data == [{"source": "attachment", "worker_readable": True}]
+    feed = client.get("/api/events", params={"limit": 200}, headers=worker).text
+    assert "task.attachment" not in feed and art["id"] not in feed
+
+
+def test_list_artifacts_include_shared(client: TestClient, orchestrator, task) -> None:
+    attach(client, orchestrator, task, name="a.bin")
+    shared = attach(client, orchestrator, task, name="b.bin", worker_readable="true")
+
+    async def run() -> list:
+        async with client.app.state.db.read() as conn:
+            return await list_artifacts(conn, task["id"], include_shared=True)
+
+    assert [a.id for a in asyncio.run(run())] == [shared.json()["id"]]

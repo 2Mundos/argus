@@ -1883,6 +1883,11 @@
           "task_id": {
             "title": "Task Id",
             "type": "string"
+          },
+          "worker_readable": {
+            "default": false,
+            "title": "Worker Readable",
+            "type": "boolean"
           }
         },
         "required": [
@@ -14866,6 +14871,11 @@
           "task_id": {
             "title": "Task Id",
             "type": "string"
+          },
+          "worker_readable": {
+            "default": false,
+            "title": "Worker Readable",
+            "type": "boolean"
           }
         },
         "required": [
@@ -26167,7 +26177,7 @@
     },
     "/api/tasks/{task_id}/attachments": {
       "post": {
-        "description": "Attach the raw request body to a task as evidence (orchestrator or admin).\n\nNeeds no lease and does not count against any agent quota. Attachments have\n`source: attachment`, are immutable, and are readable by orchestrators and\nadmins only; workers cannot read them.",
+        "description": "Attach the raw request body to a task as evidence (orchestrator or admin).\n\nNeeds no lease and does not count against any agent quota. Attachments have\n`source: attachment`, are immutable, and are readable by orchestrators and\nadmins only, unless `worker_readable` shares them with every worker holding a\nlease grant on the task.",
         "operationId": "attach_artifact_api_tasks__task_id__attachments_post",
         "parameters": [
           {
@@ -26202,6 +26212,16 @@
                 }
               ],
               "title": "Role"
+            }
+          },
+          {
+            "in": "query",
+            "name": "worker_readable",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Worker Readable",
+              "type": "boolean"
             }
           }
         ],

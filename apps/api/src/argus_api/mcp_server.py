@@ -795,29 +795,55 @@ async def attach_artifact(
     content_base64: str | None = None,
     media_type: str = "text/plain",
     role: ArtifactRole | None = None,
+    share_with_workers: bool = False,
 ) -> dict:
     """Attach evidence to any task without a lease: pass text as `content` or binary
-    (screenshot, ZIP) as `content_base64`. Returns the artifact (id, size, sha256,
-    source "attachment"). Immutable; names: letters, digits, . _ - Only orchestrators
-    and admins can read attachments; workers cannot."""
+    (screenshot, ZIP) as `content_base64`. Returns the artifact (id, name, media_type,
+    size, sha256, source "attachment"), never its bytes. Immutable; names: letters,
+    digits, . _ - Only orchestrators and admins can read attachments, unless
+    `share_with_workers` is true: then any worker leased on the task can list,
+    verify and read it (use it to hand input to a later attempt)."""
     if (content is None) == (content_base64 is None):
         raise ToolError("pass exactly one of content or content_base64")
-    try:
-        data = (
-            content.encode()
-            if content is not None
-            else b64decode(content_base64 or "", validate=True)
-        )
-    except ValueError as e:
-        raise ToolError("content_base64 is not valid base64") from e
+    data = _attachment_bytes(content, content_base64)
     return await _call(
         ctx,
         "POST",
         f"/tasks/{task_id}/attachments",
-        params={"name": name, "role": role},
+        params={
+            "name": name,
+            "role": role,
+            "worker_readable": "true" if share_with_workers else None,
+        },
         content=data,
         headers={"Content-Type": media_type},
     )
+
+
+def _attachment_bytes(content: str | None, content_base64: str | None) -> bytes:
+    """Decode an attachment, checking the size before any encode or decode. Errors
+    never quote the content."""
+    assert _app is not None
+    limit: int = _app.state.settings.artifact_max_bytes
+    too_large = ToolError(f"413 too_large: artifact exceeds the {limit}-byte limit")
+    if content is not None:
+        if len(content) > limit:  # every character is at least one UTF-8 byte
+            raise too_large
+        try:
+            data = content.encode()  # at most 4 * limit bytes
+        except UnicodeEncodeError:
+            raise ToolError("content is not valid UTF-8 text") from None
+    else:
+        assert content_base64 is not None
+        if len(content_base64) > 4 * -(-limit // 3):  # longest base64 of `limit`
+            raise too_large
+        try:
+            data = b64decode(content_base64, validate=True)
+        except ValueError:
+            raise ToolError("content_base64 is not valid base64") from None
+    if len(data) > limit:
+        raise too_large
+    return data
 
 
 @tool(AGENTS)

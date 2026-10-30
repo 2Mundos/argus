@@ -185,21 +185,35 @@ Findings outside the gap list:
   `GET /artifacts/{id}` for metadata.
 - **Attachments:** an orchestrator or admin can attach evidence (screenshots,
   ZIPs, logs) to any task without a worker lease. REST
-  `POST /api/tasks/{id}/attachments?name&role` takes the raw body (same name
-  rules, same `ARGUS_ARTIFACT_MAX_BYTES` limit and streaming as the worker
-  upload); MCP `attach_artifact(task_id, name, content | content_base64,
-  media_type?, role?)` wraps it and is listed to managers only. Attachments are
+  `POST /api/tasks/{id}/attachments?name&role&worker_readable` takes the raw body
+  (same name rules, same `ARGUS_ARTIFACT_MAX_BYTES` limit and streaming as the
+  worker upload); MCP `attach_artifact(task_id, name, content | content_base64,
+  media_type?, role?, share_with_workers?)` wraps it and is listed to managers
+  only. The tool checks the size before it encodes `content` or decodes
+  `content_base64` (more characters than the limit, or more base64 than the limit
+  can decode to, is `413 too_large` with no bytes staged), rejects invalid base64
+  or text that is not valid UTF-8, and never echoes content in an error. It
+  returns the artifact (id, name, media type, size, SHA-256), never its bytes;
+  there is no host-path parameter. Attachments are
   stored at `tasks/{id}/0/{name}` (attempt 0 is the task-level pseudo attempt, so
   a duplicate name is `409 artifact_exists` and never overwrites), do not count
   against the agent quota, and are capped per task by
   `ARGUS_ATTACHMENT_MAX_PER_TASK` (default 50, `400 attachment_limit`). Rows carry
   `source: attachment` and `attached_by` (`orchestrator:<id>` or `admin:<label>`,
   never `agent:…`); worker rows are `source: worker` with `attached_by` null.
-  Attachments are readable by orchestrators and admins only: workers get `403
-  attachment_scope` on get, content, text and verify, do not see them in
-  `GET /tasks/{id}/artifacts`, and cannot list them in `result.artifacts`. The
+  By default attachments are readable by orchestrators and admins only: workers
+  get `403 attachment_scope` on get, content, text and verify, do not see them in
+  `GET /tasks/{id}/artifacts`, and cannot list them in `result.artifacts`. An
+  attachment made with `worker_readable=true` (MCP `share_with_workers=true`;
+  default false, fixed at attach time, returned as `worker_readable`) is the
+  exception: any worker holding a lease grant on that task (the task read rule)
+  may list, get, read and verify it, whichever attempt it holds. That is how an
+  orchestrator hands input to a later attempt or another worker. Workers on other
+  tasks still get `403 not_leased`, workers still cannot attach, a shared
+  attachment still cannot be listed in `result.artifacts`, and the
+  `task.attachment` event stays hidden from workers. The
   existing read, `/content`, `/text` and `/verify` endpoints serve them. The
-  `task.attachment` event records only `{source: attachment}` and the actor: no id,
+  `task.attachment` event records only `{source, worker_readable}` and the actor: no id,
   name, size or hash, so the feed never discloses evidence names or digests. Read
   the artifact for those. The dashboard
   shows name, size, media type and source for every artifact with a download.

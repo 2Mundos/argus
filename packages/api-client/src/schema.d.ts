@@ -2288,7 +2288,8 @@ export interface paths {
          *
          *     Needs no lease and does not count against any agent quota. Attachments have
          *     `source: attachment`, are immutable, and are readable by orchestrators and
-         *     admins only; workers cannot read them.
+         *     admins only, unless `worker_readable` shares them with every worker holding a
+         *     lease grant on the task.
          */
         post: operations["attach_artifact_api_tasks__task_id__attachments_post"];
         delete?: never;
@@ -3374,6 +3375,11 @@ export interface components {
             source?: components["schemas"]["ArtifactSource"];
             /** Task Id */
             task_id: string;
+            /**
+             * Worker Readable
+             * @default false
+             */
+            worker_readable?: boolean;
         };
         /**
          * ArtifactIn
@@ -7811,6 +7817,11 @@ export interface components {
             source?: components["schemas"]["ArtifactSource"];
             /** Task Id */
             task_id: string;
+            /**
+             * Worker Readable
+             * @default false
+             */
+            worker_readable?: boolean;
         };
         /**
          * TaskAttempt
@@ -13287,6 +13298,7 @@ export interface operations {
             query: {
                 name: string;
                 role?: components["schemas"]["ArtifactRole"] | null;
+                worker_readable?: boolean;
             };
             header?: never;
             path: {
