@@ -636,7 +636,9 @@ A **vanished** session is different from a quiet one. Once the channel has seen
 a session container for the injected task, if none remain for 90 s and no reply
 has arrived (and it is not mid-recycle or mid-resend), it fails the attempt with
 `reason: session_lost`, naming the container, exit code and a short redacted log
-excerpt ([stall visibility](stall-visibility.spec.md) 3.1). Heartbeats also carry
+excerpt ([stall visibility](stall-visibility.spec.md) 3.1). The full bounded
+tail is the `stderr-tail` artifact and the inline excerpt is capped at 2 KiB
+(3.12.1). Heartbeats also carry
 per-lease `activity_at` so Argus can flag a quiet claim without killing it.
 
 When Argus ends the channel's claim (a heartbeat rejects the pair: released,
@@ -1063,8 +1065,37 @@ inbox. Chat notifications are a later, optional integration (single-node 3.5).
 | Output | Example | Home |
 | --- | --- | --- |
 | Progress notes | "tests written, fixing 2 failures" | `POST /tasks/{id}/progress` with a message and optional percent. Latest note on the task row, history in `events` (`task.progress`), shown live on the dashboard. A progress post is a worker write (3.3) and also renews the lease. Rate-limited per task (one per 10 s, `429` otherwise). |
-| Container logs | agent stdout/stderr | Not stored. The dashboard streams them live from the target (`Target.logs`) while the container exists. |
+| Container log tail | last bytes of agent stdout/stderr | Bounded attempt-level artifact `stderr-tail` (3.12.1). Live streaming via `Target.logs` is unchanged and applies only while the container exists; the stored tail does not replace it. |
 | Artifacts | files, diffs, reports, transcripts | `POST /tasks/{id}/artifacts?attempt=&name=` with the raw body, by the lease holder, before completing; listed by id in `result.artifacts`. Stored under `/data/artifacts/tasks/<task_id>/<attempt>/<name>`, immutable, with size (`ARGUS_ARTIFACT_MAX_BYTES`, default 100 MB) and SHA-256 recorded. Bytes are staged to a temporary file outside the write transaction; a short transaction then checks the lease, records the row, and renames the file into place (single-node 3.4). |
+
+### 3.12.1 Stderr tail
+
+([research](../research/2026-10-29.harness-stderr-tail.research.md))
+
+- **Artifact.** Name `stderr-tail`, attempt-level, written by the NanoClaw
+  runtime hook (3.8) when the container exits or the session is lost, and on
+  failure and completion paths that have a tail. Only the last bytes are kept.
+  Stored under the usual artifact path
+  (`/data/artifacts/tasks/<task_id>/<attempt>/stderr-tail`) with `truncated`,
+  `complete`, `bytes`, and `redaction_version` recorded in the artifact
+  metadata/description. Reads follow [worker read scope](worker-read-scope.spec.md) 3.
+- **Role.** `other` (existing `ArtifactRole`); name-only, no schema change and
+  no migration. A new role was considered and deferred: adding one requires a
+  schema check of the artifact role constraint and a migration first.
+- **Caps.** In-memory tail: 16 KiB = 16384 UTF-8 bytes, the last bytes of the
+  redacted merged stdout+stderr text (today: 2 KiB as 2048 JavaScript code
+  units, via `.slice(-2048)` in the NanoClaw hook). Inline excerpt in the
+  `session_lost` / error string: at most 2 KiB = 2048 UTF-8 bytes, so today's
+  inline size is kept, now counted in bytes; the full tail is the artifact.
+- **Bytes, not code units.** All new caps count UTF-8 bytes. Truncation cuts at
+  a UTF-8 code-point boundary, so the result is valid UTF-8 and never exceeds
+  the cap. Existing code-unit slices elsewhere (for example the 2000-character
+  `error.slice(0, 2000)` on fail) are unchanged and out of scope.
+- **Redaction** runs before the cap, as today.
+- **Verification boundary.** This section is a docs-only change. The caps, the
+  truncation rule, and the read rule are not yet implemented or tested in code.
+  They would be verified by a unit test for truncation at a code-point
+  boundary and a negative read test for a non-leased worker.
 
 # 4. Open Questions
 

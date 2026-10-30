@@ -50,6 +50,12 @@ that work. Orchestrators and admins keep global reads.
   not ([task edit](task-edit.spec.md) 3.8); this spec widens nothing. The
   per-attempt definitions (`GET /tasks/{id}/attempts`) carry the spec text and
   follow the task rule: `403 not_leased` for a task the worker never leased.
+- **Stderr tail.** The `stderr-tail` artifact ([worker lifecycle](worker-lifecycle.spec.md)
+  3.12.1) follows the same read rule as other task artifacts: readable by the
+  task's holder (a worker with a lease grant for the task) and by
+  orchestrator/admin managers, refused to any other worker with
+  `403 not_leased`. It never reaches events (`/events`, `/events/wait`, stream
+  resume), the live feed, or metric labels.
 - **Migration backfill.** Existing `task.claim` events seed `task_lease_grants`
   so prior leases keep working after upgrade.
 
