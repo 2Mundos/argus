@@ -16,6 +16,9 @@ export const BLOCK_COPY: Record<string, string> = {
   env_workspace_limit: "the worker holds too many task workspaces",
   env_executor_auth: "the executor could not log in",
   env_workspace_missing: "its agent group directory is missing on the worker host",
+  env_input_unavailable: "a required task input could not be downloaded",
+  env_input_invalid: "a required task input failed its safety or integrity check",
+  env_input_limit: "the task inputs exceed the worker's size or file limits",
   worker_env: "the worker reported a missing workspace, tool or credential",
   worker_gave_up: "the worker gave up; retry or cancel it",
 };

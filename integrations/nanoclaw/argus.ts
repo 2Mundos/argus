@@ -76,6 +76,16 @@ import {
   removeCustomHarnessFile,
   writeCustomHarnessFile,
 } from "./argus-custom-harness.js";
+import {
+  consumedReceipts,
+  type InputReceipt,
+  type InputsSource,
+  isCanonicalTaskId,
+  type MaterializedInput,
+  materializeTaskInputs,
+  parseInputRef,
+  taskInputLines,
+} from "./argus-inputs.js";
 import { syncLocalStrataForward } from "./argus-local-forward.js";
 import {
   localHarnessFromCredential,
@@ -280,6 +290,8 @@ export interface ArgusConfig {
    * Default: `argusGroupDir`; tests inject a temporary directory.
    */
   workspaceRoot?: () => Promise<string | null>;
+  /** Test seam: the first retry delay of a task input download (default 1 s, doubling). */
+  inputsBackoffMs?: number;
   /**
    * Node-local checkpoint store for unpublished task work (task checkpoint spec).
    * Default: `ARGUS_CHECKPOINT_DIR`; unset disables checkpoints (nothing is saved or restored).
@@ -979,6 +991,8 @@ export function renderTask(
     customHarness?: boolean;
     runtime?: RuntimeSelection | null;
     workspace?: TaskWorkspace | null;
+    /** Materialized task inputs: trusted metadata only, never content (task inputs spec 3.5). */
+    inputs?: MaterializedInput[];
   } = {},
 ): string {
   const pinned = task.executor_model;
@@ -1019,6 +1033,7 @@ export function renderTask(
     `[Argus task] Task: ${task.id} · Project: ${task.project} · Attempt: ${task.attempt}`,
     ...(task.repository_url ? repositoryTaskLines(task, opts.workspace) : []),
     ...(opts.runtime ? runtimeTaskLines(opts.runtime) : []),
+    ...(opts.inputs?.length ? ["", ...taskInputLines(task.id, opts.inputs)] : []),
     "",
     UNTRUSTED_TASK_DATA_RULES,
     frameUntrustedTaskData(untrusted),
@@ -1166,6 +1181,19 @@ class ArgusClient {
     return this.send(method, path, {
       body: body === undefined ? undefined : JSON.stringify(body),
       contentType: "application/json",
+      signal,
+    });
+  }
+
+  /**
+   * A GET whose body the caller streams (artifact content): not buffered, not parsed, and
+   * no error thrown on a status, so a Range answer and its headers reach the caller as is.
+   */
+  stream(path: string, headers: Record<string, string>, signal?: AbortSignal): Promise<Response> {
+    const doFetch = this.cfg.fetch ?? fetch;
+    return doFetch(this.cfg.url.replace(/\/$/, "") + "/api" + path, {
+      method: "GET",
+      headers: { ...headers, ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
       signal,
     });
   }
@@ -1865,7 +1893,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           worker_version: cfg.workerVersion ?? null,
           engine: engineInUse,
           executor: executor?.provider ?? null,
-          features: ["steer"],
+          features: ["steer", "task-inputs"],
         },
       });
       for (const id of acks) steerAcks.delete(id);
@@ -2601,6 +2629,77 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     return prepareTaskWorkspace({ groupDir, taskId: task.id, repositoryUrl: task.repository_url });
   }
 
+  const inputsSource: InputsSource = {
+    list: async (taskId) => (await client.call("GET", `/tasks/${taskId}/inputs`)).data,
+    content: (artifactId, range, signal) =>
+      client.stream(`/artifacts/${artifactId}/content`, range ? { Range: range } : {}, signal),
+  };
+  /** The attempt whose inputs were materialized, for its `consumed` receipts at the end. */
+  let inputsAttempt: { taskId: string; attempt: number; dir: string } | null = null;
+
+  function postInputReceipt(
+    task: Pick<ArgusTask, "id" | "attempt">,
+    r: InputReceipt,
+  ): Promise<void> {
+    const { artifact_id, ...body } = r;
+    return client
+      .call("POST", `/tasks/${task.id}/inputs/${artifact_id}/receipt`, {
+        attempt: task.attempt,
+        ...body,
+      })
+      .then(
+        () => undefined,
+        () => undefined, // best effort: a lost receipt is missing evidence, not a failure
+      );
+  }
+
+  /**
+   * The task's shared inputs (task inputs spec 3.4-3.6), materialized after the repository
+   * preflight and before the workspace is touched. Only a required input that cannot be had
+   * blocks; an old Argus without the inputs list is skipped.
+   */
+  async function inputsPreflight(
+    task: ArgusTask,
+  ): Promise<
+    { ok: true; inputs: MaterializedInput[] } | { ok: false; reason: string; error: string }
+  > {
+    inputsAttempt = null;
+    const required = parseInputRef(task.continuation?.wip?.ref);
+    // A task id that cannot name a directory has no inputs: nothing to list or resolve.
+    if (!required && !isCanonicalTaskId(task.id)) return { ok: true, inputs: [] };
+    const result = await materializeTaskInputs({
+      groupDir: cfg.workspaceRoot ?? argusGroupDir,
+      taskId: task.id,
+      attempt: task.attempt,
+      source: inputsSource,
+      required,
+      onReceipt: (r) => postInputReceipt(task, r),
+      backoffMs: cfg.inputsBackoffMs,
+    });
+    if (!result.ok) return result;
+    if (result.skipped) log.info("Task inputs skipped", { task: task.id, why: result.skipped });
+    if (result.dir) {
+      inputsAttempt = { taskId: task.id, attempt: task.attempt, dir: result.dir };
+      log.info("Task inputs materialized", {
+        task: task.id,
+        inputs: result.inputs.map((i) => ({ id: i.artifact_id, state: i.state, reused: i.reused })),
+      });
+    }
+    return { ok: true, inputs: result.inputs };
+  }
+
+  /** Relay the in-session verifier's `consumed.json` as receipts, once per attempt. */
+  async function inputsAfterAttempt(task: Pick<ArgusTask, "id" | "attempt">): Promise<void> {
+    const held = inputsAttempt;
+    inputsAttempt = null;
+    if (!held || held.taskId !== task.id || held.attempt !== task.attempt) return;
+    try {
+      for (const r of await consumedReceipts(held.dir)) await postInputReceipt(task, r);
+    } catch (err) {
+      log.warn("Could not relay consumed task inputs", { task: task.id, err: String(err) });
+    }
+  }
+
   /** Save the task's unpublished work after an attempt that did not complete. Best effort. */
   async function checkpointAfterAttempt(task: ArgusTask): Promise<void> {
     const storeRoot = cfg.checkpointRoot ?? process.env.ARGUS_CHECKPOINT_DIR?.trim();
@@ -2696,6 +2795,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     try {
       let envBlock: { reason: string; error: string } | null = await repositoryPreflight(task);
       let workspace: TaskWorkspace | null = null;
+      let inputs: MaterializedInput[] = [];
+      if (!envBlock) {
+        // Before the workspace: a required input that cannot be had edits nothing.
+        step = "task inputs";
+        const got = await inputsPreflight(task);
+        if (got.ok) inputs = got.inputs;
+        else envBlock = got;
+      }
       if (!envBlock) {
         step = "task workspace";
         const prepared = await workspacePreflight(task);
@@ -2737,6 +2844,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           customHarness: account?.provider === "custom",
           runtime: runtimeSelection,
           workspace,
+          inputs,
         });
       currentText = renderCurrent();
       sessionCarriesTask = true;
@@ -3139,6 +3247,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             await runTask(task);
           } finally {
             await closeAttemptSession(task);
+            await inputsAfterAttempt(task);
             await checkpointAfterAttempt(task);
           }
         }
@@ -3496,6 +3605,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         log.warn("Argus claim changed during delivery; reply dropped", { task: task.id });
         return undefined;
       }
+      // Receipts are fenced by the attempt: relay `consumed` while it is still held.
+      if (d.kind !== "progress" || isFailureNotice) await inputsAfterAttempt(task);
       try {
         if (isFailureNotice) {
           await handleFailure(task, text, (content as Record<string, unknown>).providerFailure);
@@ -3971,6 +4082,15 @@ async function argusGroup(): Promise<{ id: string; name: string; folder: string 
 }
 
 /** The Argus agent group's directory on the host (what the container mounts as its workspace). */
+/**
+ * ARGUS_CAPABILITIES plus what this channel can always do: it materializes task inputs
+ * (task inputs spec 3.8), so a task that requires them is claimable by this instance only.
+ */
+export function capabilitiesFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+  const listed = (env.ARGUS_CAPABILITIES ?? "").split(",").map((c) => c.trim());
+  return [...new Set([...listed.filter(Boolean), "task-inputs"])];
+}
+
 export async function argusGroupDir(): Promise<string | null> {
   const group = await argusGroup();
   return group ? path.resolve("groups", group.folder) : null;
@@ -4106,10 +4226,7 @@ export function fromEnv(): ChannelAdapter | null {
     url,
     bootstrapToken: bootstrap || undefined,
     agentToken: agentToken || undefined,
-    capabilities: (process.env.ARGUS_CAPABILITIES ?? "")
-      .split(",")
-      .map((c) => c.trim())
-      .filter(Boolean),
+    capabilities: capabilitiesFromEnv(),
     name: process.env.ARGUS_AGENT_NAME?.trim() || "nanoclaw",
     workerVersion: nanoclawVersion(),
     accounts: accountsFromEnv(),

@@ -907,6 +907,46 @@ def test_shared_attachment_hands_input_to_another_worker(small: TestClient) -> N
     )
 
 
+def test_attach_artifact_checks_expected_sha256_and_lists_inputs(
+    small: TestClient, tmp_path: Path
+) -> None:
+    orchestrator, worker = register(small, "orchestrator"), register(small)
+    assert "list_task_inputs" in listed(small, orchestrator)
+    assert "list_task_inputs" not in listed(small, worker)
+    task_id = tool(small, orchestrator, "create_task", title="t", project="global")[
+        "id"
+    ]
+    raw = "input é\n".encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    bad = tool(
+        small,
+        orchestrator,
+        "attach_artifact",
+        task_id=task_id,
+        name="in.txt",
+        content=raw.decode(),
+        share_with_workers=True,
+        expected_sha256="0" * 64,
+    )
+    assert bad["error"].startswith("422 integrity_mismatch")
+    assert stored(tmp_path) == (0, [])
+    art = tool(
+        small,
+        orchestrator,
+        "attach_artifact",
+        task_id=task_id,
+        name="in.txt",
+        content=raw.decode(),
+        share_with_workers=True,
+        expected_sha256=digest,
+    )
+    assert art["sha256"] == digest
+    tool(small, orchestrator, "attach_artifact", task_id=task_id, name="p", content="p")
+    view = tool(small, orchestrator, "list_task_inputs", task_id=task_id)
+    assert [(i["id"], i["sha256"]) for i in view["inputs"]] == [(art["id"], digest)]
+    assert view["unshared_attachments"] == 1
+
+
 def test_attach_artifact_rejects_text_that_is_not_utf8(
     small: TestClient, tmp_path: Path
 ) -> None:

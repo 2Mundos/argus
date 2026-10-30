@@ -217,6 +217,14 @@ Findings outside the gap list:
   name, size or hash, so the feed never discloses evidence names or digests. Read
   the artifact for those. The dashboard
   shows name, size, media type and source for every artifact with a download.
+- **Task inputs** ([task inputs](task-inputs.spec.md)): the attach route also
+  takes `expected_size` and `expected_sha256`; a difference from the received
+  bytes is `422 integrity_mismatch` with nothing stored (MCP `attach_artifact`
+  takes `expected_sha256`). MCP content is for small text: anything a model would
+  transcribe is uploaded by `scripts/attach_artifact.py`, which streams the file,
+  re-verifies it and is safe to retry. `GET /api/tasks/{id}/inputs` (MCP
+  `list_task_inputs`, managers) lists the shared attachments with their receipts
+  and, for managers, the count of unshared ones.
 - **Verification:** `POST /api/artifacts/{id}/verify` → MCP
   `verify_artifact`. It re-hashes the stored file and returns
   `{ok, size, sha256, expected_size, expected_sha256}`. `ok` means the bytes are
