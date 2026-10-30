@@ -178,6 +178,8 @@ every new dependency is judged against it.
   state and last accepted/rejected request per account, kept separate
 - [Harness stderr tail](drafts/2026-10-29.harness-stderr-tail.draft.md) — a
   bounded, redacted stderr artifact on every attempt exit, with truncation flags
+- [Harness stderr tail research](research/2026-10-29.harness-stderr-tail.research.md) —
+  the NanoClaw hook drops container stderr today (only `docker logs` stdout is kept)
 - [Bounded recovery](drafts/2026-10-29.bounded-recovery.draft.md) — throttled
   session starts, one recovery per unexpected exit, uncertain work never resent
 - [Verification boundary](drafts/2026-10-29.verification-boundary.draft.md) — a
