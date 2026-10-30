@@ -261,6 +261,11 @@ async def test_a_rejected_lease_dispatches_nothing(
     assert (await states(db, claimed.id)) == ["expired"]
 
 
+# Spec 3.3 also lists reassignment. There is no dedicated reassignment API: the attempt
+# ends in steers.close_attempt when the lease expires and another worker claims (see
+# test_reassignment_closes_dispatched_steer_as_unknown), or via the same close_attempt
+# hook as the other leave-claimed paths below.
+
 ENDERS = [
     "complete",
     "fail",
@@ -309,6 +314,21 @@ async def _end(db: Database, task, clock: FakeClock, ender: str) -> None:
             await tasks.expire_timeouts(tx)
         else:
             await agents.leave(tx, A)
+
+
+async def test_reassignment_closes_dispatched_steer_as_unknown(
+    db: Database, claimed, clock: FakeClock
+) -> None:
+    await steer(db, claimed.id, "before reassignment")
+    await beat(db, claimed)
+    clock.advance(claimed.lease_ttl_s + 1)
+    async with db.write() as tx:
+        assert await tasks.expire_leases(tx) == [claimed.id]
+    reassigned = await claim(db, B)
+    assert reassigned.id == claimed.id and reassigned.attempt == claimed.attempt + 1
+    page = await _page(db, claimed.id, claimed.attempt)
+    assert [i.state for i in page.items] == ["unknown"]
+    assert await attempt_unknown(db, claimed.id) == [1, 0]
 
 
 @pytest.mark.parametrize("ender", ENDERS)

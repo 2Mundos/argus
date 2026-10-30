@@ -2,9 +2,10 @@
 // 3.3-3.6): the real channel against a real Argus API on a disposable database. A
 // heartbeat carries a steer, the channel injects it and its ack never reaches Argus, the
 // attempt is released, and the next worker's prompt warns of one unconfirmed steer
-// without its text. Run by scripts/steer-unknown-e2e.sh, which starts the API, creates
-// the task and passes everything in ARGUS_E2E_*; skipped otherwise. API bodies are
-// `any`: the assertions check their shape.
+// without its text. Not in make check, pnpm test, or CI (same convention as
+// argus-task-inputs.e2e.test.ts). Run manually via scripts/steer-unknown-e2e.sh, which
+// starts the API, creates the task and passes everything in ARGUS_E2E_*; skipped when
+// ARGUS_E2E_API_URL is unset. API bodies are `any`: the assertions check their shape.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
