@@ -35,6 +35,7 @@ from pydantic import ValidationError
 from argus_api.config import Settings
 from argus_api.errors import ConflictError, ValidationFailedError
 from argus_api.fleet import capabilities
+from argus_api.fleet.names import suggest
 from argus_api.fleet.targets import TargetError, TargetInfo, TargetRegistry
 
 LABEL = "argus.worker"  # value "plain": the image speaks the Argus API
@@ -50,7 +51,6 @@ class TemplateDef:
     name: str
     description: str
     runtime: RuntimeKind
-    base_name: str
     notes: tuple[str, ...]
     warning: str | None
     setup: tuple[str, ...]
@@ -67,7 +67,6 @@ NANOCLAW_SANDBOX = TemplateDef(
     description="One NanoClaw agent in its own sandbox runtime with a private Docker"
     " daemon. The Docker socket is not shared.",
     runtime=RuntimeKind.NANOCLAW,
-    base_name="nanoclaw-sandbox",
     warning=None,
     notes=(
         "Isolated: the host runs under the sandbox OCI runtime (e.g. sysbox-runc)"
@@ -90,7 +89,6 @@ NANOCLAW_SOCKET = TemplateDef(
     description="One NanoClaw agent whose host process uses this node's Docker"
     " daemon directly, through the Docker socket.",
     runtime=RuntimeKind.NANOCLAW,
-    base_name="nanoclaw-socket",
     warning="Not sandboxed: this worker's host gets the Docker socket, which is"
     " root-equivalent on this Docker host. Anything that controls the agent can"
     " control the host and every container on it.",
@@ -112,7 +110,6 @@ ARGUS_WORKER = TemplateDef(
     name="Argus API worker",
     description="A container image that speaks the Argus worker API itself.",
     runtime=RuntimeKind.PLAIN,
-    base_name="worker",
     warning=None,
     notes=("Only images marked as Argus workers are offered, not every image.",),
     setup=(
@@ -581,15 +578,6 @@ def _nanoclaw_images(
     )
 
 
-def _suggest(base: str, taken: set[str]) -> str:
-    if base not in taken:
-        return base
-    n = 2
-    while f"{base}-{n}" in taken:
-        n += 1
-    return f"{base}-{n}"
-
-
 async def catalog(
     settings: Settings,
     pools: list[Pool],
@@ -610,7 +598,7 @@ async def catalog(
                 warning=tpl.warning,
                 setup=list(tpl.setup),
                 defaults=TemplateDefaults(
-                    name=_suggest(tpl.base_name, taken),
+                    name=suggest(taken),
                     quantity=1,
                     max_replicas=TEMPLATE_DEFAULT_MAX_REPLICAS,
                     capabilities=[],

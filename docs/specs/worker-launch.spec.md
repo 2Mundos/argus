@@ -167,7 +167,16 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
   `unknown_image`). Defaults (quantity 1, cap `max(quantity, 3)`, extra
   host `host.docker.internal:host-gateway`, template capabilities) come from the
   catalog and are the same for UI and MCP. The catalog also *suggests* a free
-  name, which the dashboard fills in; the server never picks one itself.
+  name, which the dashboard fills in (editable); the server never picks one
+  itself. The suggestion is a single lowercase word from a built-in list of
+  about 170 Greek-mythology and constellation names (`atlas`, `nyx`, `lyra`,
+  `orion`, ...), the same for every template. It is deterministic for a given
+  set of existing pool names (seeded from that set, no clock or RNG state), so
+  re-reading the catalog does not reshuffle it, and it changes only once the
+  suggested name is taken. It skips names already used by a pool and falls
+  back to `<word>-2`, `<word>-3`, ... only when the whole list is taken. The
+  list is a static module in `argus_api.fleet`, English only, with no
+  dependency, and every entry matches the pool name pattern.
 - **Selecting or discovering never creates anything.** Only the confirmed POST
   writes: one transaction creates the pool (`desired_replicas` = quantity) and
   records `pool.created`. The name is the idempotency key: it is required (omitting it is `422`), so a
