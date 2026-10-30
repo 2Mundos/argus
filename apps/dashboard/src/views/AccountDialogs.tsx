@@ -1,5 +1,12 @@
 import { type FormEvent, useState } from "react";
-import { GITEA_PROVIDER, GITHUB_PROVIDER } from "../accountProviders";
+import {
+  COPILOT_PROVIDER,
+  copilotTokenNotice,
+  GITEA_PROVIDER,
+  GITHUB_PROVIDER,
+  validateCopilotToken,
+  withoutSecret,
+} from "../accountProviders";
 import { type Account, api, call } from "../api";
 import { parseTokenLimits, TOKEN_LIMIT_PERIODS } from "../usage";
 
@@ -225,6 +232,7 @@ export function ReplaceCredential({
 }) {
   const isGitea = account.provider === GITEA_PROVIDER;
   const isGithub = account.provider === GITHUB_PROVIDER;
+  const isCopilot = account.provider === COPILOT_PROVIDER;
   const [text, setText] = useState("");
   const [username, setUsername] = useState("");
   const [token, setToken] = useState("");
@@ -245,7 +253,14 @@ export function ReplaceCredential({
     e.preventDefault();
     setError(undefined);
     let credential: Record<string, unknown>;
-    if (isGitea) {
+    if (isCopilot) {
+      const hint = validateCopilotToken(token);
+      if (hint) {
+        setError(hint);
+        return;
+      }
+      credential = { token: token.trim() };
+    } else if (isGitea) {
       credential = { username: username.trim(), token };
     } else if (isGithub) {
       credential = { token };
@@ -271,9 +286,11 @@ export function ReplaceCredential({
           body: { credential },
         }),
       );
+      setToken("");
       onDone(`Replaced the credential of “${account.name}”.`);
     } catch (err) {
-      setError((err as Error).message);
+      setError(withoutSecret((err as Error).message, token));
+      setToken("");
       setBusy(false);
     }
   }
@@ -281,7 +298,7 @@ export function ReplaceCredential({
   return (
     <div className="overlay">
       <form
-        className="dialog"
+        className={`dialog${isCopilot ? " copilot-import" : ""}`}
         onSubmit={submit}
         aria-label={`Replace credential of ${account.name}`}
         noValidate
@@ -293,7 +310,20 @@ export function ReplaceCredential({
           login document the provider's client writes, not a settings file without tokens: Argus
           stores it but cannot tell here whether it signs in.
         </p>
-        {isGitea || isGithub ? (
+        {isCopilot && <p className="muted small">{copilotTokenNotice()}</p>}
+        {isCopilot ? (
+          <label>
+            Copilot token
+            <input
+              type="password"
+              aria-label="Copilot token"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+        ) : isGitea || isGithub ? (
           <div className="row">
             {isGitea && (
               <label>

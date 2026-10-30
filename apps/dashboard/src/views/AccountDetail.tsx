@@ -92,6 +92,10 @@ export function AccountDetail(props: {
           )}
         </p>
 
+        <p className="muted small">
+          Credential: {a.secret_ref ? "stored" : "not stored"} (write-only, never shown).
+        </p>
+
         {!model ? (
           <p className="muted">Repository account: no model tokens or quota.</p>
         ) : (

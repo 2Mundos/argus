@@ -3294,3 +3294,13 @@ button.link.account-name {
   border-color: #3d4d66;
   color: #fff;
 }
+
+/* Copilot token import: the token field and notice never overflow a narrow screen. */
+.dialog.copilot-import input[type="password"] {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.dialog.copilot-import p {
+  overflow-wrap: anywhere;
+}

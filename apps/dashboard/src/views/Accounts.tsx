@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import {
+  COPILOT_PROVIDER,
   CUSTOM_PROVIDER_PATTERN,
   GITEA_PROVIDER,
   GITHUB_PROVIDER,
@@ -7,7 +8,9 @@ import {
   nativeAuthNotice,
   PROVIDER_PICK_CUSTOM,
   providerOptionsFromCatalog,
+  validateCopilotToken,
   validateProviderId,
+  withoutSecret,
 } from "../accountProviders";
 import { type Account, api, call } from "../api";
 import { DateChip } from "../DateChip";
@@ -374,6 +377,8 @@ function AddAccount({ onClose }: { onClose: () => void }) {
   const authNotice = nativeAuthNotice(resolvedProvider);
   const isGitea = resolvedProvider === GITEA_PROVIDER;
   const isGithub = resolvedProvider === GITHUB_PROVIDER;
+  const isCopilot = resolvedProvider === COPILOT_PROVIDER;
+  const kind = isCopilot ? "subscription" : form.kind;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -388,7 +393,14 @@ function AddAccount({ onClose }: { onClose: () => void }) {
       return;
     }
     let credential: Record<string, unknown>;
-    if (isGitea) {
+    if (isCopilot) {
+      const hint = validateCopilotToken(form.repoToken);
+      if (hint) {
+        setError(hint);
+        return;
+      }
+      credential = { token: form.repoToken.trim() };
+    } else if (isGitea) {
       credential = { username: form.repoUsername.trim(), token: form.repoToken };
     } else if (isGithub) {
       credential = { token: form.repoToken };
@@ -406,22 +418,24 @@ function AddAccount({ onClose }: { onClose: () => void }) {
           body: {
             name: form.name,
             provider: resolvedProvider,
-            kind: form.kind,
+            kind,
             priority: form.priority,
             max_leases: form.maxLeases ? Number(form.maxLeases) : null,
             credential,
           },
         }),
       );
+      set("repoToken", "");
       onClose();
     } catch (err) {
-      setError((err as Error).message);
+      setError(withoutSecret((err as Error).message, form.repoToken));
+      set("repoToken", "");
     }
   }
 
   return (
     <div className="overlay">
-      <form className="dialog" onSubmit={submit}>
+      <form className={`dialog${isCopilot ? " copilot-import" : ""}`} onSubmit={submit}>
         <h2>Add account</h2>
         <p className="muted small">{localBrokerNotice()}</p>
         {catalogError && (
@@ -472,7 +486,8 @@ function AddAccount({ onClose }: { onClose: () => void }) {
           <label>
             Kind
             <select
-              value={form.kind}
+              value={kind}
+              disabled={isCopilot}
               onChange={(e) => set("kind", e.target.value as typeof form.kind)}
             >
               <option value="api_key">API key</option>
@@ -507,7 +522,20 @@ function AddAccount({ onClose }: { onClose: () => void }) {
             should see exhaustion.
           </p>
         )}
-        {isGitea || isGithub ? (
+        {isCopilot ? (
+          <label>
+            Copilot token (stored encrypted, never shown again)
+            <input
+              type="password"
+              aria-label="Copilot token"
+              value={form.repoToken}
+              onChange={(e) => set("repoToken", e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              required
+            />
+          </label>
+        ) : isGitea || isGithub ? (
           <div className="row">
             {isGitea && (
               <label>
