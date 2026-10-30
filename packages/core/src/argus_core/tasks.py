@@ -543,3 +543,7 @@ class ClaimedTask(Task):
     # The channel prefers these over the host file; revision fences a stale snapshot.
     model_policy: dict[str, dict[str, list[str]]] | None = None
     model_policy_revision: str | None = None
+    # The harness pin fell back for this attempt (task models spec 3.3): `from`,
+    # `to` ({provider, model, account ids and names}), `reason`, `attempt`. The
+    # channel then drops the pinned model and keeps a held fallback account.
+    model_switch: dict[str, Any] | None = None

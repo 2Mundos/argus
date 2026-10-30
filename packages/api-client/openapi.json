@@ -3123,6 +3123,18 @@
             ],
             "title": "Model Policy Revision"
           },
+          "model_switch": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Switch"
+          },
           "models": {
             "$ref": "#/components/schemas/ModelsSummary",
             "default": {

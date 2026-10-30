@@ -1203,6 +1203,7 @@ async function runAttempt(
     model: selection.configured_model,
     model_source: modelChoice.source,
     policy_map: selection.scope,
+    model_switch: snapshot.context?.model_switch ?? null,
     provider_block_applied:
       Boolean(settings?.provider) && settingsSupport(executor).includes("provider"),
     cwd,

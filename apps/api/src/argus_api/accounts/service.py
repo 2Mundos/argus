@@ -7,7 +7,7 @@ store and are only ever handed to the agent holding a lease.
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import uuid4
 
 import aiosqlite
@@ -302,7 +302,8 @@ async def lease(
     if not runtime_providers:
         raise ValidationFailedError("runtime_providers must be non-empty")
     await tasks.check_lease(tx, task_id, attempt, agent_id)
-    allowed = await _narrowed(tx, task_id, role, runtime_providers)
+    scope = await _scope(tx, task_id, role, runtime_providers, agent_id)
+    allowed = scope.providers
     await release(tx, agent_id, "replaced", role)
     result = await _try_lease(
         tx,
@@ -312,7 +313,7 @@ async def lease(
         allowed,
         reuse_held=reuse_held,
         prefer_local=await _prefer_local(tx, task_id, role),
-        only_account=await _pinned_account(tx, task_id, role),
+        only_account=scope.account,
     )
     if result is None:
         reset = await earliest_reset(tx, role, allowed)
@@ -320,6 +321,14 @@ async def lease(
             f"no usable {role} account"
             + (f"; earliest reset at {reset.isoformat()}" if reset else ""),
         )
+    await _note_switch(
+        tx,
+        agent_id,
+        task_id,
+        attempt,
+        scope,
+        {"id": result.account_id, "name": result.name, "provider": result.provider},
+    )
     return result
 
 
@@ -342,16 +351,16 @@ async def _lease_available(
 ) -> bool:
     """Would `lease` give this task an engine account now? The same narrowing,
     ranking and credential test, without writing."""
-    allowed = await _narrowed(tx, task["id"], "engine", runtime_providers)
+    scope = await _scope(tx, task["id"], "engine", runtime_providers, agent_id)
     ranked = _only(
         await _ranked(
             tx,
             agent_id,
             "engine",
-            allowed,
+            scope.providers,
             prefer_local=await _prefer_local(tx, task["id"], "engine"),
         ),
-        await _pinned_account(tx, task["id"], "engine"),
+        scope.account,
     )
     return any((name := ref_name(r["secret_ref"])) and store.get(name) for r in ranked)
 
@@ -388,7 +397,10 @@ async def claim(
         runtime_providers=runtime_providers,
         can_lease=can_lease if reserve else None,
     )
-    if task is None or not reserve:
+    if task is None:
+        return task, None
+    if not reserve:
+        await _note_held(tx, agent_id, task, runtime_providers)
         return task, None
     leased = await lease(
         tx,
@@ -399,6 +411,28 @@ async def claim(
         attempt=task.attempt,
     )
     return task, leased
+
+
+async def _note_held(
+    tx: Tx, agent_id: str, task: Task, runtime_providers: list[str] | None
+) -> None:
+    """The caller keeps the engine account it holds: when that account is a valid
+    fallback for a pin that cannot serve, record the model switch (the channel keeps
+    the account instead of leasing afresh)."""
+    if not runtime_providers or not await tasks.manages_accounts(tx.conn):
+        return
+    async with tx.conn.execute(
+        "SELECT a.id, a.name, a.provider FROM account_leases l JOIN accounts a"
+        " ON a.id = l.account_id WHERE l.agent_id = ? AND l.role = 'engine'"
+        " AND l.released_at IS NULL",
+        (agent_id,),
+    ) as cur:
+        held = await cur.fetchone()
+    if held is None:
+        return
+    scope = await _scope(tx, task.id, "engine", runtime_providers, agent_id)
+    if scope.choice is not None and scope.choice.fits(held["provider"], held["id"]):
+        await _note_switch(tx, agent_id, task.id, task.attempt, scope, held)
 
 
 async def exhausted(
@@ -448,7 +482,8 @@ async def exhausted(
         tx, agent_id, account_id, report.until, reason, cooldown, detail
     )
     await release(tx, agent_id, "exhausted", role)
-    allowed = await _narrowed(tx, task_id, role, report.runtime_providers)
+    scope = await _scope(tx, task_id, role, report.runtime_providers, agent_id)
+    allowed = scope.providers
     next_candidate = _only(
         await _ranked(
             tx,
@@ -457,7 +492,7 @@ async def exhausted(
             allowed,
             prefer_local=await _prefer_local(tx, task_id, role),
         ),
-        await _pinned_account(tx, task_id, role),
+        scope.account,
     )
     # The switch itself happens at the next claim, through a lease bound to it.
     await _failover(
@@ -524,8 +559,8 @@ async def fail_task(
         tx, agent_id, held["id"], hit.until, hit.reason, cooldown, detail
     )
     await release(tx, agent_id, "exhausted", "engine")
-    runtime = await _narrowed(
-        tx, task_id, "engine", json.loads(held["providers"]) or None
+    scope = await _scope(
+        tx, task_id, "engine", json.loads(held["providers"]) or None, agent_id
     )
     # No lease here: the next claim leases (bound to it) and the channel applies it.
     next_candidate = _only(
@@ -533,10 +568,10 @@ async def fail_task(
             tx,
             agent_id,
             "engine",
-            runtime,
+            scope.providers,
             prefer_local=await _prefer_local(tx, task_id, "engine"),
         ),
-        await _pinned_account(tx, task_id, "engine"),
+        scope.account,
     )
     task = await tasks.pause_for_quota(
         tx, agent_id, task_id, attempt, hit.reason, wait=not next_candidate
@@ -910,10 +945,42 @@ async def _prefer_local(tx: Tx, task_id: str, role: LeaseRole) -> bool:
     return role == "engine" and await tasks.prefers_local(tx.conn, task_id)
 
 
-async def _pinned_account(tx: Tx, task_id: str, role: LeaseRole) -> str | None:
-    """The one account the task's engine lease may use (its harness account pin,
-    task models spec 3.4); None for any other role or an unpinned task."""
-    return await tasks.harness_account(tx.conn, task_id) if role == "engine" else None
+class _Scope(NamedTuple):
+    """Where a task's lease may land: `providers` (None: any the runtime applies), the
+    one `account` (a harness account pin) and the pin `choice` behind them."""
+
+    providers: list[str] | None
+    account: str | None
+    choice: tasks.EngineChoice | None
+
+
+async def _scope(
+    tx: Tx,
+    task_id: str,
+    role: LeaseRole,
+    runtime_providers: list[str] | None,
+    agent_id: str,
+) -> _Scope:
+    """`runtime_providers` cut down for the task: for the engine role the effective
+    set `tasks.engine_choice` decides (stored `account_providers`, narrowed to a
+    usable pinned harness provider or account: a preference, task models spec
+    3.2-3.4), for the executor role its pinned executor's provider; the restriction
+    only narrows, never widens. An empty result means no account is eligible."""
+    choice = None
+    account = None
+    if role == "engine":
+        row = await tasks.task_row(tx.conn, task_id)
+        choice = await tasks.engine_choice_for(
+            tx.conn, tx.now, row, agent_id, runtime_providers
+        )
+        restriction, account = choice.providers, choice.account
+    elif role == "executor" and (p := await tasks.executor_provider(tx.conn, task_id)):
+        restriction = [p]
+    else:
+        restriction = None
+    if runtime_providers is None or restriction is None:
+        return _Scope(runtime_providers, account, choice)
+    return _Scope([p for p in runtime_providers if p in restriction], account, choice)
 
 
 def _only(rows: list[aiosqlite.Row], account_id: str | None) -> list[aiosqlite.Row]:
@@ -921,24 +988,23 @@ def _only(rows: list[aiosqlite.Row], account_id: str | None) -> list[aiosqlite.R
     return rows if account_id is None else [r for r in rows if r["id"] == account_id]
 
 
-async def _narrowed(
-    tx: Tx, task_id: str, role: LeaseRole, runtime_providers: list[str] | None
-) -> list[str] | None:
-    """`runtime_providers` cut down to the task's `account_providers` (and pinned
-    harness) for the engine role (local harness spec 3), or to its pinned executor's
-    provider for the executor role (task models spec 3.2): the restriction only
-    narrows, never widens. An empty result means no account is eligible."""
-    if runtime_providers is None:
-        return None
-    if role == "engine":
-        restriction = await tasks.account_providers(tx.conn, task_id)
-    elif role == "executor" and (p := await tasks.executor_provider(tx.conn, task_id)):
-        restriction = [p]
-    else:
-        restriction = None
-    if restriction is None:
-        return runtime_providers
-    return [p for p in runtime_providers if p in restriction]
+async def _note_switch(
+    tx: Tx, agent_id: str, task_id: str, attempt: int, scope: _Scope, leased: Any
+) -> None:
+    """Record the fallback when the lease landed away from an unusable pin."""
+    if scope.choice is not None and scope.choice.reason:
+        await tasks.record_model_switch(
+            tx,
+            task_id,
+            attempt,
+            agent_id,
+            scope.choice.reason,
+            {
+                "id": leased["id"],
+                "name": leased["name"],
+                "provider": leased["provider"],
+            },
+        )
 
 
 async def _try_lease(

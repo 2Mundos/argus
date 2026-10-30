@@ -113,7 +113,7 @@ async def test_pin_forces_the_engine_lease_onto_that_account(
     assert attempts[0].definition["harness_account"] == account_id
 
 
-async def test_pin_waits_as_awaiting_quota_while_its_account_cannot_serve(
+async def test_pin_falls_back_while_its_account_cannot_serve(
     db: Database, store, agent
 ) -> None:
     await fleet(db, store)
@@ -122,7 +122,32 @@ async def test_pin_waits_as_awaiting_quota_while_its_account_cannot_serve(
             tx, "acc-or", AccountUpdate(enabled=False), "admin:test"
         )
     task_id = await make_task(db, harness_account="acc-or")
-    # The other custom account and both cloud accounts are usable: it never runs there.
+    # Other accounts are usable: the task runs there, never waiting for acc-or.
+    task = await claim(db)
+    assert task is not None and task.id == task_id and task.failures == 0
+    lease = await engine_lease(db, store, task)
+    assert lease.account_id == "acc-claude"
+    async with db.read() as conn:
+        switch = (await tasks.attempt_definitions(conn, task_id))[0].definition[
+            "model_switch"
+        ]
+    assert switch["reason"] == "disabled"
+    assert switch["from"]["account_id"] == "acc-or"
+    assert switch["to"]["account_id"] == "acc-claude"
+
+
+async def test_pin_waits_when_no_allowed_account_can_serve(
+    db: Database, store, agent
+) -> None:
+    await fleet(db, store)
+    for account in ("acc-or", "acc-or2"):
+        async with db.write() as tx:
+            await accounts.update_account(
+                tx, account, AccountUpdate(enabled=False), "admin:test"
+            )
+    task_id = await make_task(
+        db, harness_account="acc-or", account_providers=["custom"]
+    )
     assert await claim(db) is None
     task = await get(db, task_id)
     assert task.state == "blocked" and task.block_reason == "awaiting_quota"
@@ -145,10 +170,12 @@ async def test_wake_spends_only_the_pinned_accounts_slot(
         await accounts.update_account(
             tx, "acc-strata", AccountUpdate(enabled=False), "admin:test"
         )
-    waiting = await make_task(db, harness_account="strata-local")
+    waiting = await make_task(
+        db, harness_account="strata-local", account_providers=["local"]
+    )
     assert await claim(db) is None
     async with db.write() as tx:
-        assert await tasks.wake_waiting(tx) == []  # cloud capacity is not Strata's
+        assert await tasks.wake_waiting(tx) == []  # cloud capacity is not allowed
     async with db.write() as tx:  # enabling it wakes exactly the task pinned to it
         await accounts.update_account(
             tx, "acc-strata", AccountUpdate(enabled=True), "admin:test"
@@ -171,19 +198,33 @@ async def test_the_pinned_account_must_be_held_or_usable_at_claim(
             tx, "agent-b", RUNTIME, store, task_id=held.id, attempt=held.attempt
         )
     second = await make_task(db, harness_account="acc-or")
-    assert await claim(db) is None  # acc-or is full; acc-or2 is free but not pinned
-    assert (await get(db, second)).block_reason == "awaiting_quota"
+    task = await claim(db)  # acc-or is full: the pin yields to the free acc-or2
+    assert task is not None and task.id == second
+    assert (await engine_lease(db, store, task)).account_id == "acc-or2"
+    async with db.write() as tx:
+        await accounts.release(tx, A, "done")
+        await accounts.update_account(
+            tx, "acc-or2", AccountUpdate(enabled=False), "admin:test"
+        )
+    third = await make_task(db, harness_account="acc-or", account_providers=["custom"])
+    assert await claim(db) is None  # acc-or is full and acc-or2 disabled
+    assert (await get(db, third)).block_reason == "awaiting_quota"
 
 
-async def test_lease_refuses_any_other_account(db: Database, store, agent) -> None:
+async def test_lease_refuses_accounts_the_task_does_not_allow(
+    db: Database, store, agent
+) -> None:
     await fleet(db, store)
-    task_id = await make_task(db, harness_account="acc-or")
+    task_id = await make_task(
+        db, harness_account="acc-or", account_providers=["custom"]
+    )
     task = await claim(db)
     assert task is not None and task.id == task_id
-    async with db.write() as tx:
-        await accounts.update_account(
-            tx, "acc-or", AccountUpdate(enabled=False), "admin:test"
-        )
+    for account in ("acc-or", "acc-or2"):
+        async with db.write() as tx:
+            await accounts.update_account(
+                tx, account, AccountUpdate(enabled=False), "admin:test"
+            )
     with pytest.raises(NoAccountError):
         await engine_lease(db, store, task)
 

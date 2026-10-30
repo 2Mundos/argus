@@ -84,7 +84,11 @@ isolation or sandbox/TLS restrictions.
   engine's own account when none is: native reuse); the selected lease is
   authoritative over engine kind or task complexity, a local/custom engine with no
   executor lease has none (capacity or missing account, distinct from invalid
-  credentials), and a task pin still wins. `argus-delegate`
+  credentials), and an executor pin still wins. A harness pin
+  (`harness_model`, `harness_account`) is only a preference: it holds while its
+  provider or account is usable and otherwise falls back to the other allowed
+  engine providers with the policy's default model, recorded as a model switch
+  ([task models](task-models.spec.md) 3.2-3.4). `argus-delegate`
   reports `preferred_executor` and `matches_preferred`; it never
   switches executor itself. The model-policy snapshot pinned for
   each task carries `engine`, `account_provider` and `executor_account_provider`
@@ -174,6 +178,9 @@ isolation or sandbox/TLS restrictions.
     `POST /accounts/awaiting-quota` (capabilities, runtime providers) when its
     lease fails with `no_account`; the endpoint refuses (409 `account_available`)
     while any account is usable, and only blocks tasks that worker could claim.
+    A harness pin does not narrow this: a task parks only when every provider its
+    `account_providers` allows is exhausted or leased out, not when only the
+    pinned one is ([task models](task-models.spec.md) 3.2).
   - *Claim gate and waking (2026-10-21).* Leases are bound to a claim, so a
     worker claims first; Argus therefore gates the claim itself. With
     `runtime_providers` and a fleet that manages model accounts, a task (restricted
@@ -191,7 +198,10 @@ isolation or sandbox/TLS restrictions.
     now: free lease slots plus idle holders, per account, cloud before local, each
     task taking a slot of an account its `account_providers` allow (an account
     without `max_leases` wakes all that fit). The rest keep waiting; none spends a
-    failure.
+    failure. The gate and waking honour a harness pin as a preference: the pinned
+    provider (or account) while it is usable, the other allowed providers when it
+    is not ([task models](task-models.spec.md) 3.2). The same preferred-then-
+    fallback set applies to the lease, `exhausted` and `fail_task` candidates.
   - *Capacity counts only providers a live worker runs (2026-10-21).* Each claim
     records the caller's `runtime_providers` on its agent row (migration `0034`).
     Capacity (claim parking, `FAIL` quota parking and waking) counts an account only

@@ -248,6 +248,9 @@ async def claim_task(
                     policy, revision = await settings_svc.effective_model_policy(
                         conn, settings.model_policy_path, task.project
                     )
+                    switch = await service.attempt_model_switch(
+                        conn, task.id, task.attempt
+                    )
                 if engine_lease is not None:
                     engine_lease = await with_local_context(request, engine_lease)
                 return ClaimedTask(
@@ -256,6 +259,7 @@ async def claim_task(
                     engine_lease=engine_lease,
                     model_policy=policy,
                     model_policy_revision=revision,
+                    model_switch=switch,
                 )
             remaining = deadline - loop.time()
             try:

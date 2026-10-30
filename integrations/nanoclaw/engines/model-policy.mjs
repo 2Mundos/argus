@@ -92,9 +92,20 @@ export function selectModel(snapshot, scope, engine, attempt = 1, reason = null,
   };
 }
 
-export function selectHarnessModel(snapshot, engine, task) {
-  // A task pin is fixed (task models spec 3.3): no chain, no fallback.
-  if (task.harness_model?.engine === engine)
+const PIN_PROVIDERS = { claude: "anthropic", codex: "openai" };
+
+/**
+ * The harness model of the attempt. A task pin is fixed while the lease is on the
+ * pinned provider (task models spec 3.3): no chain, no fallback. When the engine
+ * lease fell back to another provider (`accountProvider` differs from the pin's) the
+ * pinned model is dropped for the attempt and the policy default applies.
+ */
+export function selectHarnessModel(snapshot, engine, task, accountProvider) {
+  const pin = task.harness_model;
+  if (
+    pin?.engine === engine &&
+    (accountProvider == null || accountProvider === PIN_PROVIDERS[pin.engine])
+  )
     return {
       ...selectModel(snapshot, "harness", engine, 1, null, task.harness_model.model),
       policy_map: "task",

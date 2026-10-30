@@ -113,13 +113,18 @@ async def test_executor_pin_narrows_the_executor_lease(
     assert executor.provider == "cursor"
 
 
-async def test_harness_pin_waits_for_its_provider(db: Database, store, agent) -> None:
+async def test_harness_pin_yields_to_another_provider(
+    db: Database, store, agent
+) -> None:
     await add_account(db, store, "codex", "openai", priority=100)
     task_id = await make_task(db, harness_model=OPUS)
-    assert await claim(db) is None  # only Codex is usable: it never runs there
-    async with db.read() as conn:
-        task = await tasks.get_task(conn, task_id)
-    assert task.state == "blocked" and task.block_reason == "awaiting_quota"
+    task = await claim(db)  # only Codex is usable: the pin is a preference
+    assert task is not None and task.id == task_id
+    async with db.write() as tx:
+        engine = await accounts.lease(
+            tx, A, RUNTIME, store, task_id=task.id, attempt=task.attempt
+        )
+    assert engine.provider == "openai"
 
 
 async def test_pins_edit_rules(db: Database, store, agent) -> None:
