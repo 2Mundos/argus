@@ -202,6 +202,9 @@ async def launch_worker(
     """Request one more worker from the pool. Refused (nothing changes) when the
     node cannot start it now. Success means *requested*: the reconciler starts
     the instance next pass; follow it in `/instances`."""
+    service.require_launch_precondition(
+        body.expected_desired_replicas, body.unconditional
+    )
     async with db.read() as conn:
         pool = await service.get_pool(conn, name)
     # Probed before the write: no target call inside a write transaction.

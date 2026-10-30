@@ -5492,6 +5492,11 @@ export interface components {
         LaunchRequest: {
             /** Expected Desired Replicas */
             expected_desired_replicas?: number | null;
+            /**
+             * Unconditional
+             * @default false
+             */
+            unconditional?: boolean;
         };
         /** LaunchResult */
         LaunchResult: {

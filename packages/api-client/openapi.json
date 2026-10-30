@@ -8675,6 +8675,11 @@
               }
             ],
             "title": "Expected Desired Replicas"
+          },
+          "unconditional": {
+            "default": false,
+            "title": "Unconditional",
+            "type": "boolean"
           }
         },
         "title": "LaunchRequest",
