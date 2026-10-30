@@ -1,15 +1,20 @@
 import base64
+import hashlib
 import itertools
 import json
+import logging
 import re
+import sqlite3
 from collections.abc import Generator
 from pathlib import Path
 
 import pytest
 from argus_api import mcp_server
+from argus_api.artifacts.store import LocalArtifactStore
 from argus_api.main import app
 from argus_core.auth import Scope
 from fastapi.testclient import TestClient
+from mcp.server.mcpserver.exceptions import ToolError
 
 ADMIN_TOKEN = "test-admin-token-" + "m" * 32
 _ids = itertools.count(1)
@@ -670,3 +675,266 @@ def test_attach_artifact_is_manager_only_and_round_trips(client: TestClient) -> 
         client, worker, "attach_artifact", task_id=task_id, name="y", content="z"
     )
     assert "error" in denied
+
+
+@pytest.fixture
+def small(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
+    """A client whose artifact limit is 1024 bytes."""
+    monkeypatch.setenv("ARGUS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", ADMIN_TOKEN)
+    monkeypatch.setenv("ARGUS_ARTIFACT_MAX_BYTES", "1024")
+    with TestClient(app) as c:
+        yield c
+
+
+def stored(tmp_path: Path) -> tuple[int, list[Path]]:
+    con = sqlite3.connect(next(tmp_path.glob("*.db")))
+    try:
+        rows = con.execute("SELECT count(*) FROM artifacts").fetchone()[0]
+    finally:
+        con.close()
+    return rows, [p for p in (tmp_path / "artifacts").rglob("*") if p.is_file()]
+
+
+def test_attach_artifact_by_admin_returns_metadata_not_content(
+    small: TestClient,
+) -> None:
+    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="global")["id"]
+    text = "notes é\n"
+    art = tool(
+        small,
+        ADMIN_TOKEN,
+        "attach_artifact",
+        task_id=task_id,
+        name="n.txt",
+        content=text,
+    )
+    raw = text.encode()
+    assert {k: art[k] for k in ("name", "media_type", "size", "sha256")} == {
+        "name": "n.txt",
+        "media_type": "text/plain",
+        "size": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    assert art["id"] and art["worker_readable"] is False
+    assert text not in json.dumps(art)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "decodes"),
+    [
+        ({"content": "x" * 1025}, False),
+        ({"content": "\u00e9" * 513}, False),  # 513 characters, 1026 UTF-8 bytes
+        ({"content_base64": "A" * 1372}, False),  # longer than any 1024-byte payload
+        ({"content_base64": base64.b64encode(b"x" * 1025).decode()}, True),
+    ],
+)
+def test_attach_artifact_oversize_is_rejected_before_staging(
+    small: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: dict,
+    decodes: bool,
+) -> None:
+    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="global")["id"]
+    staged: list[bool] = []
+
+    async def stage(self, chunks):
+        staged.append(True)
+        raise AssertionError("staged")
+
+    monkeypatch.setattr(LocalArtifactStore, "stage", stage)
+    decoded: list[bool] = []
+
+    def b64decode(*args, **kwargs):
+        decoded.append(True)
+        return base64.b64decode(*args, **kwargs)
+
+    monkeypatch.setattr(mcp_server, "b64decode", b64decode)
+    res = tool(
+        small, ADMIN_TOKEN, "attach_artifact", task_id=task_id, name="big", **arguments
+    )
+    assert res["error"] == "413 too_large: artifact exceeds the 1024-byte limit"
+    assert staged == []
+    assert bool(decoded) is decodes  # 1372 > 1368, the base64 length of 1024 bytes
+    assert stored(tmp_path) == (0, [])
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"content_base64": "not base64!"}, "content_base64 is not valid base64"),
+        ({"content_base64": "QUJD\nRA=="}, "content_base64 is not valid base64"),
+    ],
+)
+def test_attach_artifact_rejects_invalid_encodings_without_echoing(
+    small: TestClient, tmp_path: Path, arguments: dict, message: str
+) -> None:
+    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="global")["id"]
+    res = tool(
+        small, ADMIN_TOKEN, "attach_artifact", task_id=task_id, name="bad", **arguments
+    )
+    assert res["error"] == message
+    assert stored(tmp_path) == (0, [])
+
+
+def test_attach_artifact_storage_failure_leaves_nothing_and_hides_content(
+    small: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="global")["id"]
+    secret = "canary text alpha"
+
+    async def stage(self, chunks):
+        async for _ in chunks:
+            pass
+        raise OSError("disk full")
+
+    monkeypatch.setattr(LocalArtifactStore, "stage", stage)
+    caplog.set_level(logging.DEBUG)
+    arguments = {"task_id": task_id, "name": "s.txt", "content": secret}
+    res = rpc(
+        small,
+        ADMIN_TOKEN,
+        "tools/call",
+        {"name": "attach_artifact", "arguments": arguments},
+    )
+    assert res["isError"] is True
+    assert secret not in json.dumps(res)
+    assert secret not in caplog.text
+    assert stored(tmp_path) == (0, [])
+    events = small.get(
+        "/api/events",
+        params={"subject_id": task_id},
+        headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+    ).text
+    assert "task.attachment" not in events and secret not in events
+
+
+def test_attach_artifact_content_stays_out_of_events_and_logs(
+    small: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="global")["id"]
+    secret = "canary text beta"
+    caplog.set_level(logging.DEBUG)
+    art = tool(
+        small,
+        ADMIN_TOKEN,
+        "attach_artifact",
+        task_id=task_id,
+        name="c.txt",
+        content=secret,
+        share_with_workers=True,
+    )
+    assert secret not in json.dumps(art)
+    events = small.get(
+        "/api/events",
+        params={"subject_id": task_id},
+        headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+    ).text
+    assert "task.attachment" in events and secret not in events
+    assert secret not in caplog.text
+
+
+def test_shared_attachment_hands_input_to_another_worker(small: TestClient) -> None:
+    orchestrator = register(small, "orchestrator")
+    names = listed(small, orchestrator)
+    assert {"create_task", "attach_artifact", "release_task"} <= names
+    schema = {t["name"]: t for t in rpc(small, orchestrator, "tools/list")["tools"]}
+    props = schema["attach_artifact"]["inputSchema"]["properties"]
+    assert props["share_with_workers"]["default"] is False
+    assert not {"path", "file", "file_path"} & set(props)
+    task_id = tool(
+        small, orchestrator, "create_task", title="Disposable", project="global"
+    )["id"]
+    text = "synthetic input é\nline 2\n"
+    raw = text.encode()
+    shared = tool(
+        small,
+        orchestrator,
+        "attach_artifact",
+        task_id=task_id,
+        name="input.txt",
+        content=text,
+        share_with_workers=True,
+    )
+    assert shared["worker_readable"] is True
+    private = tool(
+        small,
+        orchestrator,
+        "attach_artifact",
+        task_id=task_id,
+        name="evidence.txt",
+        content="manager only",
+    )
+    assert private["worker_readable"] is False
+
+    first, second, outsider = register(small), register(small), register(small)
+    held = tool(small, first, "claim_task", wait_s=0)["task"]
+    assert held["id"] == task_id
+    tool(small, orchestrator, "release_task", task_id=task_id, reason="hand off")
+    again = tool(small, second, "claim_task", wait_s=0)["task"]
+    assert again["id"] == task_id and again["attempt"] != held["attempt"]
+
+    arts = tool(small, second, "list_artifacts", task_id=task_id)
+    assert [a["id"] for a in arts] == [shared["id"]]
+    assert arts[0]["sha256"] == hashlib.sha256(raw).hexdigest() == shared["sha256"]
+    ver = tool(small, second, "verify_artifact", artifact_id=shared["id"])
+    assert ver["ok"] is True and ver["sha256"] == shared["sha256"]
+    read = tool(small, second, "read_artifact", artifact_id=shared["id"])
+    assert read["text"].encode() == raw and read["next_offset"] is None
+    got = small.get(
+        f"/api/artifacts/{shared['id']}/content",
+        headers={"Authorization": f"Bearer {second}"},
+    )
+    assert got.content == raw
+
+    assert "error" in tool(small, second, "read_artifact", artifact_id=private["id"])
+    assert "error" in tool(small, second, "verify_artifact", artifact_id=private["id"])
+    denied = tool(small, outsider, "read_artifact", artifact_id=shared["id"])
+    assert "not_leased" in denied["error"]
+    assert "error" in tool(small, outsider, "list_artifacts", task_id=task_id)
+    assert "error" in tool(
+        small,
+        second,
+        "attach_artifact",
+        task_id=task_id,
+        name="w.txt",
+        content="x",
+        share_with_workers=True,
+    )
+
+
+def test_attach_artifact_rejects_text_that_is_not_utf8(
+    small: TestClient, tmp_path: Path
+) -> None:
+    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="global")["id"]
+    secret = "canary text \ud800"
+    # JSON-RPC parsing refuses a lone surrogate before the tool runs...
+    res = small.post(
+        "/mcp",
+        headers={
+            "Accept": "application/json, text/event-stream",
+            "Host": "127.0.0.1",
+            "Authorization": f"Bearer {ADMIN_TOKEN}",
+            "Content-Type": "application/json",
+        },
+        content=json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "attach_artifact",
+                    "arguments": {"task_id": task_id, "name": "u", "content": secret},
+                },
+            }
+        ),
+    )
+    assert "error" in res.json() and "canary text" not in res.text
+    assert stored(tmp_path) == (0, [])
+    # ...and the tool refuses one too, without quoting it.
+    with pytest.raises(ToolError, match=r"^content is not valid UTF-8 text$"):
+        mcp_server._attachment_bytes(secret, None)

@@ -83,12 +83,14 @@ async def attach_artifact(
     settings: SettingsDep,
     name: Annotated[str, Query()],
     role: Annotated[ArtifactRole | None, Query()] = None,
+    worker_readable: Annotated[bool, Query()] = False,
 ) -> Artifact:
     """Attach the raw request body to a task as evidence (orchestrator or admin).
 
     Needs no lease and does not count against any agent quota. Attachments have
     `source: attachment`, are immutable, and are readable by orchestrators and
-    admins only; workers cannot read them.
+    admins only, unless `worker_readable` shares them with every worker holding a
+    lease grant on the task.
     """
     return await service.attach(
         db,
@@ -102,6 +104,7 @@ async def attach_artifact(
         chunks=request.stream(),
         role=role,
         max_per_task=settings.attachment_max_per_task,
+        worker_readable=worker_readable,
     )
 
 
@@ -123,6 +126,7 @@ async def list_artifacts(
             attempt=attempt,
             role=role,
             include_attachments=is_global_reader(caller),
+            include_shared=True,  # the task rule above already holds
         )
 
 
@@ -130,7 +134,9 @@ async def list_artifacts(
 async def get_artifact(artifact_id: str, db: DbDep, caller: CallerDep) -> Artifact:
     async with db.read() as conn:
         artifact = await service.get_artifact(conn, artifact_id)
-        await require_artifact_readable(conn, caller, artifact.task_id, artifact.source)
+        await require_artifact_readable(
+            conn, caller, artifact.task_id, artifact.source, artifact.worker_readable
+        )
         return artifact
 
 
@@ -141,7 +147,9 @@ async def download_artifact(
     """The raw bytes. Honours `Range: bytes=…` for partial reads."""
     async with db.read() as conn:
         artifact = await service.get_artifact(conn, artifact_id)
-        await require_artifact_readable(conn, caller, artifact.task_id, artifact.source)
+        await require_artifact_readable(
+            conn, caller, artifact.task_id, artifact.source, artifact.worker_readable
+        )
     return FileResponse(
         store.path(service.key(artifact.task_id, artifact.attempt, artifact.name)),
         media_type=artifact.media_type,
@@ -162,7 +170,9 @@ async def read_artifact_text(
     continue from `next_offset`. Other media types return `binary` and no bytes."""
     async with db.read() as conn:
         artifact = await service.get_artifact(conn, artifact_id)
-        await require_artifact_readable(conn, caller, artifact.task_id, artifact.source)
+        await require_artifact_readable(
+            conn, caller, artifact.task_id, artifact.source, artifact.worker_readable
+        )
     return await service.read_text(store, artifact, offset, max_bytes)
 
 
@@ -174,5 +184,7 @@ async def verify_artifact(
     `ok` means intact, not acceptable."""
     async with db.read() as conn:
         artifact = await service.get_artifact(conn, artifact_id)
-        await require_artifact_readable(conn, caller, artifact.task_id, artifact.source)
+        await require_artifact_readable(
+            conn, caller, artifact.task_id, artifact.source, artifact.worker_readable
+        )
     return await service.verify(store, artifact)

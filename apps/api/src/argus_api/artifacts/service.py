@@ -58,6 +58,7 @@ class Artifact(BaseModel):
     role: ArtifactRole | None = None
     source: ArtifactSource = ArtifactSource.WORKER
     attached_by: str | None = None  # uploader of an attachment; never `agent:…`
+    worker_readable: bool = False  # an attachment shared with the task's lease holders
 
 
 class TaskArtifact(Artifact):
@@ -141,6 +142,7 @@ async def attach(
     chunks: AsyncIterator[bytes],
     role: ArtifactRole | None = None,
     max_per_task: int,
+    worker_readable: bool = False,
 ) -> Artifact:
     """Attach evidence to a task for a manager: no lease, no agent quota. Same
     staging as `upload`; the staged file is discarded on any error."""
@@ -174,8 +176,8 @@ async def attach(
             artifact_id = str(uuid4())
             await tx.conn.execute(
                 "INSERT INTO artifacts (id, task_id, attempt, name, media_type, size,"
-                " sha256, created_by, created_at, role, source, attached_by)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " sha256, created_by, created_at, role, source, attached_by,"
+                " worker_readable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     artifact_id,
                     task_id,
@@ -189,6 +191,7 @@ async def attach(
                     role,
                     ArtifactSource.ATTACHMENT,
                     attached_by,
+                    int(worker_readable),
                 ),
             )
             await record(
@@ -197,7 +200,8 @@ async def attach(
                 "task",
                 task_id,
                 "task.attachment",
-                {"source": "attachment"},  # workers on the lease see no identity
+                # Workers never see this event; it names no file either way.
+                {"source": "attachment", "worker_readable": worker_readable},
             )
             store.promote(staged, key(task_id, ATTACHMENT_ATTEMPT, name))
             promoted = store.path(key(task_id, ATTACHMENT_ATTEMPT, name))
@@ -313,12 +317,17 @@ async def list_artifacts(
     attempt: int | None = None,
     role: ArtifactRole | None = None,
     include_attachments: bool = False,
+    include_shared: bool = False,
 ) -> list[TaskArtifact]:
+    """`include_attachments`: every attachment (managers); `include_shared`: only
+    those attached with `worker_readable` (workers leased on the task)."""
     task = await tasks.get_task(conn, task_id)  # 404 for unknown tasks
     listed = set(task.result.artifacts) if task.result is not None else set()
     sql = "SELECT * FROM artifacts WHERE task_id = ?"
     params: list[str | int] = [task_id]
-    if not include_attachments:
+    if include_shared and not include_attachments:
+        sql += " AND (source = 'worker' OR worker_readable = 1)"
+    elif not include_attachments:
         sql += " AND source = 'worker'"
     if attempt is not None:
         sql += " AND attempt = ?"
