@@ -29,6 +29,7 @@ from argus_api.artifacts.routes import router as artifacts_router
 from argus_api.artifacts.store import LocalArtifactStore
 from argus_api.auth import ensure_admin_token
 from argus_api.config import Settings
+from argus_api.conversations.routes import router as conversations_router
 from argus_api.db import Database, DataDirLock
 from argus_api.decisions.routes import router as decisions_router
 from argus_api.deps import get_db
@@ -45,6 +46,7 @@ from argus_api.kinds.routes import router as kinds_router
 from argus_api.knowledge.routes import router as knowledge_router
 from argus_api.model_policy import router as models_router
 from argus_api.modeltrace.routes import router as model_trace_router
+from argus_api.onboarding import router as onboarding_router
 from argus_api.ops import LoopStats, ReadinessCache
 from argus_api.ops_routes import probes as probes_router
 from argus_api.ops_routes import router as ops_router
@@ -238,6 +240,8 @@ for router in (
     engines_router,
     models_router,
     settings_router,
+    onboarding_router,
+    conversations_router,
     ops_router,
     runtime_router,
 ):

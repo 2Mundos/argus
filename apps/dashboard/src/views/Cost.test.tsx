@@ -101,6 +101,14 @@ const REPORT: CostReport = {
     { ...used, project: "alpha" },
     { ...none, runs: 1, measured_runs: 1, input_tokens: 0, output_tokens: 0, project: null },
   ],
+  orchestrator: {
+    ...none,
+    runs: 2,
+    measured_runs: 2,
+    input_tokens: 400,
+    output_tokens: 100,
+    estimated_cost_usd: 0.05,
+  },
   daily: [
     { ...none, start: "2026-10-19T00:00:00Z" },
     { ...used, start: "2026-10-20T00:00:00Z" },

@@ -503,6 +503,9 @@ class Task(BaseModel):
     harness_model: HarnessModel | None = None
     executor_model: ExecutorModel | None = None
     harness_account: str | None = None
+    # Set by the server when the internal orchestrator creates the task from a
+    # conversation turn (internal-orchestrator.spec.md 3.6); never a tool argument.
+    origin_conversation_id: str | None = None
     created_by: str
     created_at: datetime
     updated_at: datetime

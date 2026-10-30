@@ -255,6 +255,9 @@ async def report(
         for p, acc in by_proj.items()
     ]
     by_project.sort(key=lambda r: _order(r.project or "", r))
+    orch = await _orchestrator_figures(conn, start, now)
+    # Listed so the pricing banner names every unpriced model; the totals stay clean.
+    pricing_unpriced = totals.unpriced_models | orch.unpriced_models
     daily = [
         DayCost(start=d, **per_day.get(d, _Acc()).figures().model_dump())
         for d in usage.bucket_starts(start, now, "day", zone)
@@ -269,11 +272,47 @@ async def report(
             as_of=table.as_of,
             version=table.version,
             source=table.source,
-            unpriced_models=sorted(totals.unpriced_models),
+            unpriced_models=sorted(pricing_unpriced),
         ),
         totals=totals.figures(),
         unattributed=unattributed.figures(),
         by_account=by_account,
         by_project=by_project,
+        orchestrator=orch.figures(),
         daily=daily,
     )
+
+
+async def _orchestrator_figures(
+    conn: aiosqlite.Connection,
+    start: datetime,
+    end: datetime,
+) -> _Acc:
+    """Sum conversation_usage for the window (internal-orchestrator 3.7).
+
+    `cost_usd` was priced when the turn was recorded; we sum stored figures.
+    """
+    acc = _Acc()
+    async with conn.execute(
+        "SELECT model, measurement, count(*),"
+        " sum(input_tokens), sum(output_tokens), sum(cost_usd)"
+        " FROM conversation_usage WHERE at > ? AND at <= ?"
+        " GROUP BY model, measurement",
+        (ts(start), ts(end)),
+    ) as cur:
+        async for model, measurement, n, i, o, cost in cur:
+            n = int(n)
+            acc.runs += n
+            if measurement == "unknown":
+                acc.not_reported += n
+                continue
+            acc.measured += n
+            for k, v in enumerate((i, o)):
+                if v is not None:
+                    acc.tokens[k] = (acc.tokens[k] or 0) + int(v)
+            if measurement == "unpriced":
+                acc.unpriced += n
+                acc.unpriced_models.add(model or NO_MODEL)
+            elif cost is not None:
+                acc.estimated = (acc.estimated or 0.0) + float(cost)
+    return acc

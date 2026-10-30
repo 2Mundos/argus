@@ -55,13 +55,34 @@ async def list_pools(conn: aiosqlite.Connection) -> list[Pool]:
         return [_to_pool(r) for r in await cur.fetchall()]
 
 
-async def upsert_pool(tx: Tx, name: str, body: PoolUpsert, actor: str) -> Pool:
+async def upsert_pool(
+    tx: Tx,
+    name: str,
+    body: PoolUpsert,
+    actor: str,
+    *,
+    system: str | None = None,
+) -> Pool:
+    """Write a pool. `system` is set only on insert (internal orchestrator); an
+    existing system pool keeps its marker and refuses a conflicting value."""
+    existing = (
+        await get_pool(tx.conn, name) if await _pool_exists(tx.conn, name) else None
+    )
+    if existing is not None and existing.system is not None:
+        if system is not None and system != existing.system:
+            raise ConflictError(
+                f"pool {name!r} is a system pool ({existing.system})",
+                code="system_pool",
+            )
+        system = existing.system
+        # System pools: only image (and nanoclaw agent image via patch) may change
+        # through the normal upsert path used by patch; desired is set by enable.
     config = json.dumps({f: getattr(body, f) for f in _CONFIG_FIELDS}, default=_dump)
     now = ts(tx.now)
     await tx.conn.execute(
         "INSERT INTO pools (name, target, runtime, image, capabilities,"
-        " agents_per_instance, desired_replicas, max_replicas, config, created_at,"
-        " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " agents_per_instance, desired_replicas, max_replicas, config, system,"
+        " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         " ON CONFLICT (name) DO UPDATE SET target = excluded.target,"
         " runtime = excluded.runtime, image = excluded.image,"
         " capabilities = excluded.capabilities,"
@@ -79,6 +100,7 @@ async def upsert_pool(tx: Tx, name: str, body: PoolUpsert, actor: str) -> Pool:
             body.desired_replicas,
             body.max_replicas,
             config,
+            system,
             now,
             now,
         ),
@@ -87,6 +109,20 @@ async def upsert_pool(tx: Tx, name: str, body: PoolUpsert, actor: str) -> Pool:
         tx, actor, "pool", name, "pool.upserted", {"desired": body.desired_replicas}
     )
     return await get_pool(tx.conn, name)
+
+
+async def _pool_exists(conn: aiosqlite.Connection, name: str) -> bool:
+    async with conn.execute("SELECT 1 FROM pools WHERE name = ?", (name,)) as cur:
+        return await cur.fetchone() is not None
+
+
+def require_not_system(pool: Pool, *, action: str = "change") -> None:
+    """Refuse mutating a system-owned pool (internal orchestrator 3.1)."""
+    if pool.system is not None:
+        raise ConflictError(
+            f"cannot {action} system pool {pool.name!r}",
+            code="system_pool",
+        )
 
 
 def redact(pool: Pool) -> Pool:
@@ -111,6 +147,14 @@ async def patch_pool(
             details=[pool.version],
         )
     changes = body.model_dump(exclude_unset=True, exclude={"expected_version", "env"})
+    if pool.system is not None:
+        # Internal orchestrator 3.1: only the image (host / agent) may change.
+        allowed = {"image", "nanoclaw"}
+        if body.env is not None or set(changes) - allowed:
+            raise ConflictError(
+                f"cannot change system pool {pool.name!r} except its image",
+                code="system_pool",
+            )
     current = PoolUpsert.model_validate(pool.model_dump()).model_dump()
     merged = {**current, **changes}
     if body.env is not None:
@@ -168,6 +212,7 @@ async def scale(
     it, admins raise the cap along with it, while an orchestrator's request opens a
     `policy` decision for a human instead of failing (3.5, 3.10)."""
     pool = await get_pool(tx.conn, name)
+    require_not_system(pool, action="scale")
     if desired > pool.max_replicas and scope is not Scope.ADMIN:
         decision_id = await decisions.open_decision(
             tx,
@@ -212,6 +257,7 @@ async def launch(tx: Tx, name: str, expected_desired: int | None, actor: str) ->
     (`expected_desired` None), guarded by the caller's view of `desired_replicas`
     so a repeated submit adds one worker."""
     pool = await get_pool(tx.conn, name)
+    require_not_system(pool, action="launch")
     if expected_desired is not None and pool.desired_replicas != expected_desired:
         raise ConflictError(
             f"pool {name!r} now wants {pool.desired_replicas} replicas, not"

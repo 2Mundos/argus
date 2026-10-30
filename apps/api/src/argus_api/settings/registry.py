@@ -64,6 +64,58 @@ REGISTRY: dict[str, SettingDefinition] = {
         scopes=["global", "project"],
         description="Require review by a different model before a code task succeeds.",
     ),
+    "onboarding.dismissed": SettingDefinition(
+        key="onboarding.dismissed",
+        schema={"type": "boolean"},
+        default=False,
+        scopes=["global"],
+        description="Whether the admin has closed the onboarding wizard.",
+    ),
+    "orchestrator.enabled": SettingDefinition(
+        key="orchestrator.enabled",
+        schema={"type": "boolean"},
+        default=False,
+        scopes=["global"],
+        description="Host Argus's internal orchestrator (system pool) and chat.",
+    ),
+    "orchestrator.model": SettingDefinition(
+        key="orchestrator.model",
+        schema={
+            "type": ["string", "null"],
+            "pattern": r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+        },
+        default=None,
+        scopes=["global"],
+        description="Preferred harness engine/model for the internal orchestrator.",
+    ),
+    "orchestrator.daily_budget_usd": SettingDefinition(
+        key="orchestrator.daily_budget_usd",
+        schema={"type": "number", "minimum": 0},
+        default=5,
+        scopes=["global"],
+        description="Daily spend cap (USD, UTC day) for the internal orchestrator.",
+    ),
+    "orchestrator.max_concurrent_turns": SettingDefinition(
+        key="orchestrator.max_concurrent_turns",
+        schema={"type": "integer", "minimum": 1, "maximum": 4},
+        default=2,
+        scopes=["global"],
+        description="Max conversation turns in flight at once (plus Updates).",
+    ),
+    "orchestrator.confirm_above_tasks": SettingDefinition(
+        key="orchestrator.confirm_above_tasks",
+        schema={"type": "integer", "minimum": 0},
+        default=3,
+        scopes=["global"],
+        description="Skill guidance: confirm before creating more than this many tasks.",
+    ),
+    "orchestrator.confirm_above_usd": SettingDefinition(
+        key="orchestrator.confirm_above_usd",
+        schema={"type": "number", "minimum": 0},
+        default=10,
+        scopes=["global"],
+        description="Skill guidance: confirm before a plan with budget_usd above this.",
+    ),
 }
 
 

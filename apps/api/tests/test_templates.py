@@ -130,8 +130,12 @@ def test_fresh_install_lists_templates_with_explicit_missing_prerequisites(
     assert any("ARGUS_NANOCLAW_ALLOW_DOCKER_SOCKET" in m for m in nc["missing"])
     [w] = cat["argus-worker"]["readiness"]
     assert any("argus.worker=plain" in m for m in w["missing"]) and w["images"] == []
-    suggested = {cat[t]["defaults"]["name"] for t in cat if t != "_"}
+    # Worker templates share one suggested constellation name; the system
+    # orchestrator template is listed but uses a fixed pool name.
+    worker = ("nanoclaw-socket", "nanoclaw-sandbox", "argus-worker")
+    suggested = {cat[t]["defaults"]["name"] for t in worker}
     assert len(suggested) == 1 and suggested <= set(WORDS)
+    assert cat["nanoclaw-orchestrator"]["defaults"]["name"] == "orchestrator"
     assert cat["nanoclaw-sandbox"]["setup"] and cat["argus-worker"]["setup"]
     # Looking creates nothing and starts nothing.
     assert pools(client) == [] and target.started == []

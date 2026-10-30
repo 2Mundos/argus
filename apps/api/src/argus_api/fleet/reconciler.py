@@ -370,13 +370,12 @@ async def _act(
             " AND used_at IS NULL AND instance_id = ?",
             (ts(tx.now), action.instance_id),
         )
+        role = Role.ORCHESTRATOR if pool.system == "orchestrator" else Role.WORKER
         tokens = [
             (
                 await agents.create_bootstrap_token(
                     tx,
-                    BootstrapTokenCreate(
-                        role=Role.WORKER, instance_id=action.instance_id
-                    ),
+                    BootstrapTokenCreate(role=role, instance_id=action.instance_id),
                     "system",
                 )
             ).token

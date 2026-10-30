@@ -118,8 +118,24 @@ ARGUS_WORKER = TemplateDef(
         " images in ARGUS_WORKER_IMAGES. The image must already be on the node.",
     ),
 )
+NANOCLAW_ORCHESTRATOR = TemplateDef(
+    id="nanoclaw-orchestrator",
+    name="Internal orchestrator",
+    description="Argus-hosted orchestrator (system pool of size 1). Registers with"
+    " role orchestrator and chats with admins; off until enabled in settings.",
+    runtime=RuntimeKind.NANOCLAW,
+    warning=None,
+    notes=(
+        "System-owned: max_replicas is 1; it cannot be deleted or scaled by hand.",
+        "Ready when either NanoClaw worker mode (sandboxed or host socket) is ready.",
+        "Enable with the orchestrator.enabled setting (or onboarding step 3).",
+    ),
+    setup=_NC_COMMON_SETUP,
+)
+# Worker-create templates only; the orchestrator pool is created by enabling it.
 TEMPLATES = (NANOCLAW_SOCKET, NANOCLAW_SANDBOX, ARGUS_WORKER)
-NANOCLAW_IDS = (NANOCLAW_SANDBOX.id, NANOCLAW_SOCKET.id)
+ALL_TEMPLATES = (*TEMPLATES, NANOCLAW_ORCHESTRATOR)
+NANOCLAW_IDS = (NANOCLAW_SANDBOX.id, NANOCLAW_SOCKET.id, NANOCLAW_ORCHESTRATOR.id)
 
 
 class _Facts:
@@ -522,7 +538,29 @@ async def _judge(
     images: list[ImageChoice] = []
     host_image = agent_image = None
     if f.info is not None:
-        if tpl.id in NANOCLAW_IDS:
+        if tpl.id == NANOCLAW_ORCHESTRATOR.id:
+            # Ready when either NanoClaw worker mode would be; prefer sandbox.
+            base = list(r.checks)
+            base_missing = list(r.missing)
+            fallback: tuple[_Report, bool] | None = None
+            for sandboxed in (True, False):
+                trial = _Report()
+                trial.checks = list(base)
+                trial.missing = list(base_missing)
+                await _judge_nanoclaw(settings, f, targets, trial, sandboxed=sandboxed)
+                if not trial.missing:
+                    r = trial
+                    host_image, agent_image = _nanoclaw_images(
+                        settings, trial, sandboxed
+                    )
+                    break
+                if fallback is None:
+                    fallback = (trial, sandboxed)
+            else:
+                assert fallback is not None
+                r, sandboxed = fallback
+                host_image, agent_image = _nanoclaw_images(settings, r, sandboxed)
+        elif tpl.id in (NANOCLAW_SANDBOX.id, NANOCLAW_SOCKET.id):
             sandboxed = tpl.id == NANOCLAW_SANDBOX.id
             await _judge_nanoclaw(settings, f, targets, r, sandboxed=sandboxed)
             host_image, agent_image = _nanoclaw_images(settings, r, sandboxed)
@@ -584,9 +622,9 @@ async def catalog(
     targets: TargetRegistry,
 ) -> TemplateCatalog:
     facts = await _nodes(settings, pools, targets)
-    taken = {p.name for p in pools}
+    taken = {p.name for p in pools if p.system is None}
     templates = []
-    for tpl in TEMPLATES:
+    for tpl in ALL_TEMPLATES:
         readiness = [await _judge(settings, tpl, f, targets) for f in facts]
         templates.append(
             WorkerTemplate(
@@ -598,9 +636,15 @@ async def catalog(
                 warning=tpl.warning,
                 setup=list(tpl.setup),
                 defaults=TemplateDefaults(
-                    name=suggest(taken),
+                    name=suggest(taken)
+                    if tpl.id != NANOCLAW_ORCHESTRATOR.id
+                    else "orchestrator",
                     quantity=1,
-                    max_replicas=TEMPLATE_DEFAULT_MAX_REPLICAS,
+                    max_replicas=(
+                        1
+                        if tpl.id == NANOCLAW_ORCHESTRATOR.id
+                        else TEMPLATE_DEFAULT_MAX_REPLICAS
+                    ),
                     capabilities=[],
                     extra_hosts=list(EXTRA_HOSTS),
                 ),
@@ -613,7 +657,7 @@ async def catalog(
         default_node=LOCAL,
         nodes=[f.option for f in facts],
         templates=templates,
-        pools=len(pools),
+        pools=sum(1 for p in pools if p.system is None),
     )
 
 
@@ -648,6 +692,12 @@ def build_pool(
 ) -> tuple[str, PoolUpsert]:
     """The pool a request stands for, rebuilt from the template alone; raises the
     precise refusal. Shared by REST and MCP, so both validate identically."""
+    if req.template == NANOCLAW_ORCHESTRATOR.id:
+        raise ValidationFailedError(
+            "the internal orchestrator is created by enabling orchestrator.enabled,"
+            " not by create_worker",
+            code="system_template",
+        )
     tpl_def = next((t for t in TEMPLATES if t.id == req.template), None)
     if tpl_def is None:
         raise ValidationFailedError(

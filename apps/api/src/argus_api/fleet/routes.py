@@ -39,6 +39,7 @@ from argus_api.fleet import (
 )
 from argus_api.fleet.targets import TargetError, TargetRegistry
 from argus_api.fleet.workspace_cleanup import WorkspaceCleaner
+from argus_api.orchestrator import require_not_internal_orchestrator
 
 router = APIRouter(tags=["fleet"])
 
@@ -104,6 +105,8 @@ async def create_worker(
     name, upsert = templates.build_pool(settings, cat, body, pools)
     policy.enforce_nanoclaw_image_roles(upsert, settings)
     policy.enforce_nanoclaw_socket_policy(upsert, settings)
+    async with db.read() as conn:
+        await require_not_internal_orchestrator(conn, caller, action="create_worker")
     async with db.write() as tx:
         pool = await service.create_pool(tx, name, upsert, caller.actor)
     return CreateWorkerResult(
@@ -145,6 +148,15 @@ async def upsert_pool(
     whole; PATCH changes single variables without resending the others."""
     policy.enforce_nanoclaw_image_roles(body, settings)
     policy.enforce_nanoclaw_socket_policy(body, settings)
+    from argus_api.errors import NotFoundError
+
+    async with db.read() as conn:
+        try:
+            existing = await service.get_pool(conn, name)
+        except NotFoundError:
+            existing = None
+        if existing is not None:
+            service.require_not_system(existing, action="replace")
     async with db.write() as tx:
         return service.redact(await service.upsert_pool(tx, name, body, caller.actor))
 
@@ -183,6 +195,8 @@ async def scale_pool(
 ) -> ScaleResult:
     """Set desired replicas. Orchestrators may scale up to `max_replicas`; asking
     for more opens a decision for a human (`decision_id`) instead of failing."""
+    async with db.read() as conn:
+        await require_not_internal_orchestrator(conn, caller, action="scale_pool")
     async with db.write() as tx:
         pool, decision_id = await service.scale(
             tx, name, body.desired_replicas, caller.actor, caller.scope
@@ -206,6 +220,7 @@ async def launch_worker(
         body.expected_desired_replicas, body.unconditional
     )
     async with db.read() as conn:
+        await require_not_internal_orchestrator(conn, caller, action="launch_worker")
         pool = await service.get_pool(conn, name)
     # Probed before the write: no target call inside a write transaction.
     verdict = await capabilities.discover_pool(
@@ -286,6 +301,11 @@ async def recycle_instance(
     claimed task, and a new one starts in its place. By default work finishes
     first; with `requeue` the claimed tasks are released now, no attempt counted."""
     body = body or RecycleRequest()
+    if body.requeue:
+        async with db.read() as conn:
+            await require_not_internal_orchestrator(
+                conn, caller, action="recycle_instance with requeue"
+            )
     async with db.write() as tx:
         await service.recycle(tx, instance_id, caller.actor, requeue=body.requeue)
     async with db.read() as conn:

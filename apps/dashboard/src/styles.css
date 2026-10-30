@@ -1571,6 +1571,135 @@ main > section.home > .page-header {
   border-color: currentColor;
 }
 
+/* -- chat ----------------------------------------------------------------- */
+
+.chat-layout {
+  display: grid;
+  grid-template-columns: minmax(10rem, 14rem) 1fr;
+  gap: 1rem;
+  min-height: 24rem;
+}
+.chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  border-right: 1px solid var(--border);
+  padding-right: 0.75rem;
+}
+.chat-list-item {
+  text-align: left;
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: transparent;
+}
+.chat-list-item.current {
+  border-color: var(--border);
+  background: var(--surface);
+}
+.chat-list-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+.chat-thread-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.chat-thread-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  flex: 1;
+  overflow: auto;
+  max-height: min(60vh, 32rem);
+}
+.chat-msg {
+  display: grid;
+  gap: 0.25rem;
+}
+.chat-composer {
+  display: grid;
+  gap: 0.5rem;
+}
+.chat-composer textarea {
+  width: 100%;
+  resize: vertical;
+}
+.empty-state {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 28rem;
+}
+@media (max-width: 640px) {
+  .chat-layout {
+    grid-template-columns: 1fr;
+  }
+  .chat-list {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: 0.75rem;
+    flex-direction: row;
+    overflow-x: auto;
+  }
+}
+
+/* -- onboarding ----------------------------------------------------------- */
+
+.onboarding-overlay {
+  justify-content: center;
+  z-index: 20;
+}
+.onboarding-dialog {
+  width: min(720px, calc(100% - 2rem));
+}
+.onboarding-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.onboarding-steps button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.onboarding-step-n {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  background: var(--border);
+}
+.onboarding-steps button.primary .onboarding-step-n {
+  background: var(--accent, var(--fg));
+  color: var(--surface);
+}
+.onboarding-panel {
+  display: grid;
+  gap: 0.75rem;
+}
+
 /* -- overlays ------------------------------------------------------------- */
 
 .overlay {

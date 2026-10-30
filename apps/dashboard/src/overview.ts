@@ -1,4 +1,4 @@
-// Rules behind the Home view (docs/specs/home.spec.md).
+// Rules behind the Dashboard view (docs/specs/home.spec.md).
 import type { Overview, SystemSummary } from "./api";
 import type { StreamStatus } from "./sse";
 
@@ -98,7 +98,7 @@ export function attention(input: {
         human: false,
         count: 1,
         text: `Check "${name}" is ${check.status}${check.detail ? `: ${check.detail}` : ""}.`,
-        href: "#home",
+        href: "#dashboard",
       });
     }
   }

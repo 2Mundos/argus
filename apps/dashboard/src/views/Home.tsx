@@ -27,7 +27,7 @@ function useSource<T>(
 
 const fmt = (n: number | undefined) => (n === undefined ? "—" : String(n));
 
-export function Home() {
+export function Home({ onOpenSetup }: { onOpenSetup?: () => void }) {
   const { status } = useLive();
   const overview = useSource<Overview>((signal) => call(api.GET("/api/overview", { signal })));
   const system = useSource((signal) => call(api.GET("/api/system", { signal })));
@@ -40,8 +40,13 @@ export function Home() {
 
   return (
     <section className="home">
-      <PageHeader title="Home" lead="Monitor agents, tasks and the fleet from one place.">
-        <div className="home-tabs" role="tablist" aria-label="Home sections">
+      <PageHeader title="Dashboard" lead="Monitor agents, tasks and the fleet from one place.">
+        {onOpenSetup && (
+          <button type="button" className="link" onClick={onOpenSetup}>
+            Set up
+          </button>
+        )}
+        <div className="home-tabs" role="tablist" aria-label="Dashboard sections">
           {HOME_PANELS.map(([id, label]) => (
             <button
               key={id}

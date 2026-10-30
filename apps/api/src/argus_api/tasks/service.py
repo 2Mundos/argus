@@ -62,6 +62,7 @@ from argus_core.tasks import (
 )
 from pydantic import ValidationError
 
+from argus_api import orchestrator
 from argus_api.access import record_lease_grant
 from argus_api.accounts.eligibility import engine_pool
 from argus_api.accounts.usage import (
@@ -187,14 +188,20 @@ async def create_task(
         if body.difficulty
         else DifficultySource.INFERRED
     )
+    origin_conversation_id = (
+        await orchestrator.task_origin(tx.conn, tx.now, actor.removeprefix("agent:"))
+        if actor.startswith("agent:")
+        else None
+    )
+
     await tx.conn.execute(
         "INSERT INTO tasks (id, parent_id, kind, title, spec, acceptance, input,"
         " required_capabilities, priority, state, requires_approval, review,"
         " prompt_trust, lease_ttl_s, max_attempts, project, timeout_s, created_by,"
         " created_at, updated_at, difficulty, difficulty_source, account_providers,"
-        " harness_model, executor_model, harness_account)"
+        " harness_model, executor_model, harness_account, origin_conversation_id)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-        " ?, ?, ?)",
+        " ?, ?, ?, ?)",
         (
             task_id,
             body.parent_id,
@@ -222,6 +229,7 @@ async def create_task(
             _pin_json(body.harness_model),
             _pin_json(body.executor_model),
             harness_account,
+            origin_conversation_id,
         ),
     )
     await tx.conn.executemany(

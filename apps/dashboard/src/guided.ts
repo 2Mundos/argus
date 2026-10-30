@@ -22,11 +22,17 @@ export function readinessFor(template: WorkerTemplate | undefined, node: string)
   return template?.readiness.find((r) => r.node === node);
 }
 
+/** Templates an operator may create as a worker pool. The internal orchestrator
+ * is listed in the catalog for readiness, but is enabled via settings. */
+export function workerTemplates(catalog: TemplateCatalog): WorkerTemplate[] {
+  return catalog.templates.filter((t) => t.id !== "nanoclaw-orchestrator");
+}
+
 /** Nothing is preselected unless it is safe and ready: the first ready template
  * without a security warning. A template that carries a warning is a deliberate
  * choice, and a not-ready one is never a default. Otherwise: no selection. */
 export function initialState(catalog: TemplateCatalog): GuidedState {
-  const template = catalog.templates.find((t) => t.ready && !t.warning);
+  const template = workerTemplates(catalog).find((t) => t.ready && !t.warning);
   const node =
     readinessFor(template, catalog.default_node)?.ready || !template
       ? catalog.default_node
