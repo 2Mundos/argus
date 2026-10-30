@@ -31,6 +31,9 @@
  *   ARGUS_EXIT_ON_DRAIN       "false" to keep the host running once Argus has
  *                             drained this agent (default: exit, so the
  *                             instance ends; only when ARGUS_INSTANCE_ID is set)
+ *   ARGUS_AGENT_ROLE          "orchestrator" forces the chat loop (also taken
+ *                             from POST /agents/register). Workers claim tasks;
+ *                             the internal orchestrator long-polls /agents/me/chat.
  */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -62,6 +65,13 @@ import {
   runtimeProviders,
 } from "./argus-accounts.js";
 import { CHANGES_RELAY_FILE, createChangesRelay } from "./argus-changes-relay.js";
+import {
+  type ChatTurnUsage,
+  createChatLoop,
+  DEFAULT_MAX_CONCURRENT_TURNS,
+  parseChatThread,
+} from "./argus-chat.js";
+
 import {
   type CheckpointFailure,
   checkpointTaskWorkspace,
@@ -288,6 +298,10 @@ export interface ArgusConfig {
   url: string;
   bootstrapToken?: string;
   agentToken?: string;
+  /** When set (or returned by register), run the chat loop instead of task claim. */
+  role?: "orchestrator" | "worker";
+  /** Cap on concurrent chat turns (Updates exempt). Default 2. */
+  maxConcurrentTurns?: number;
   capabilities: string[];
   name: string;
   /** Account leasing from Argus into the OneCLI vault. Off when absent. */
@@ -1634,6 +1648,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   const injectingSteers = new Set<string>();
   const steerAcks = new Set<string>();
   let loop: Promise<void> | null = null;
+  let agentRole: "orchestrator" | "worker" = cfg.role ?? "worker";
+  let chat: ReturnType<typeof createChatLoop> | null = null;
   let lastProgressAt = 0;
   let pendingProgress: { task: Claim; text: string } | null = null;
   let progressTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1656,6 +1672,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   async function register(): Promise<number> {
     if (cfg.agentToken) {
       client.token = cfg.agentToken;
+      if (cfg.role) agentRole = cfg.role;
       return 30;
     }
     if (!cfg.bootstrapToken)
@@ -1666,7 +1683,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       capabilities: cfg.capabilities,
     });
     client.token = data.token;
-    log.info("Argus channel registered", { agentId: data.agent.id });
+    const role = data.agent?.role;
+    if (role === "orchestrator" || role === "worker") agentRole = role;
+    else if (cfg.role) agentRole = cfg.role;
+    log.info("Argus channel registered", { agentId: data.agent?.id, role: agentRole });
     return data.heartbeat_interval_s ?? 30;
   }
 
@@ -3429,13 +3449,32 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       stopped = false;
       heartbeatTimer = setInterval(() => void heartbeat(), Math.max(interval, 1) * 1000);
       heartbeatTimer.unref?.();
-      loop = claimLoop();
-      void loop.catch((err) => log.error("Argus claim loop crashed", { err }));
+      if (agentRole === "orchestrator") {
+        chat = createChatLoop({
+          call: (method, path, body, signal) => client.call(method, path, body, signal),
+          onInbound: async (platformId, threadId, message) => {
+            await setupCfg!.onInbound(platformId, threadId, message);
+          },
+          platformId: PLATFORM_ID,
+          isStopped: () => stopped,
+          isDraining: () => draining,
+          maxConcurrentTurns: cfg.maxConcurrentTurns ?? DEFAULT_MAX_CONCURRENT_TURNS,
+          claimWaitS: cfg.claimWaitS ?? undefined,
+          log,
+        });
+        loop = chat.loop();
+        void loop.catch((err) => log.error("Argus chat loop crashed", { err }));
+      } else {
+        loop = claimLoop();
+        void loop.catch((err) => log.error("Argus claim loop crashed", { err }));
+      }
     },
 
     async teardown(): Promise<void> {
       stopped = true;
       abortClaim?.abort();
+      chat?.stop();
+      chat = null;
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       heartbeatTimer = null;
       finishTask();
@@ -3459,7 +3498,6 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       message: OutboundMessage,
     ): Promise<string | undefined> {
       if (platformId !== PLATFORM_ID) return undefined;
-      const task = current; // the claim this reply is judged against, fixed for the whole delivery
       const content = message.content as Record<string, unknown> | string | undefined;
       const text =
         typeof content === "string"
@@ -3467,6 +3505,19 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           : typeof content?.text === "string"
             ? content.text
             : null;
+      // Orchestrator chat turns use argus-chat:<conversation_id> threads.
+      if (chat && parseChatThread(threadId)) {
+        if (!text?.trim()) return undefined;
+        // Explicit mid-turn chatter is host-side only. Any other text is the reply: unlike
+        // a task claim, a chat turn has no directive to parse, so plain prose is the answer.
+        if (/^\s*PROGRESS\s*:/.test(text)) return undefined;
+        const meta = typeof content === "object" ? content : undefined;
+        const usage = meta?.usage as ChatTurnUsage | undefined;
+        const title = typeof meta?.title === "string" ? meta.title : null;
+        await chat.deliverChat(threadId, text.trim(), usage ?? null, title);
+        return undefined;
+      }
+      const task = current; // the claim this reply is judged against, fixed for the whole delivery
       // Only the session of the claim in flight answers for it; anything else is the late
       // output of an earlier attempt.
       if (!task || threadId !== attemptThread(task)) {
@@ -4102,10 +4153,16 @@ export function fromEnv(): ChannelAdapter | null {
     return null;
   }
   const runtime = runtimeFromEnv();
+  const roleEnv = process.env.ARGUS_AGENT_ROLE?.trim().toLowerCase();
+  const role =
+    roleEnv === "orchestrator" || roleEnv === "worker"
+      ? (roleEnv as "orchestrator" | "worker")
+      : undefined;
   return createArgusAdapter({
     url,
     bootstrapToken: bootstrap || undefined,
     agentToken: agentToken || undefined,
+    role,
     capabilities: (process.env.ARGUS_CAPABILITIES ?? "")
       .split(",")
       .map((c) => c.trim())

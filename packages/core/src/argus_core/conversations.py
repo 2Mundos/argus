@@ -92,4 +92,25 @@ class MessageList(BaseModel):
     items: list[Message]
 
 
+class ChatSessionPut(BaseModel):
+    """NanoClaw session id for resume after a container recreate (3.4)."""
+
+    session_ref: str = Field(min_length=1, max_length=200)
+    # The session was rebuilt from a history excerpt: the thread shows a system note.
+    restored: bool = False
+
+
+class ChatOriginTask(BaseModel):
+    id: str
+    title: str
+    state: str
+
+
+class ChatContext(BaseModel):
+    """Bounded seed for a new session when session_ref cannot be resumed."""
+
+    messages: list[Message]
+    tasks: list[ChatOriginTask]
+
+
 AgentChatReply.model_rebuild()

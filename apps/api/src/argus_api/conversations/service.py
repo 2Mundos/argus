@@ -581,3 +581,22 @@ async def set_session_ref(tx: Tx, conv_id: str, session_ref: str | None) -> None
         "UPDATE conversations SET session_ref = ?, updated_at = ? WHERE id = ?",
         (session_ref, ts(tx.now), conv_id),
     )
+
+
+async def note_session_restored(tx: Tx, conv_id: str) -> None:
+    await get_conversation(tx.conn, conv_id)
+    await _system_message(tx, conv_id, "Session restored from history.")
+
+
+async def chat_context(
+    conn: aiosqlite.Connection, conv_id: str, *, message_limit: int = 20
+) -> tuple[list[Message], list[tuple[str, str, str]]]:
+    """Last N messages and tasks with this conversation as origin (3.4 seed)."""
+    messages = await list_messages(conn, conv_id, limit=message_limit)
+    async with conn.execute(
+        "SELECT id, title, state FROM tasks WHERE origin_conversation_id = ?"
+        " AND archived_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 50",
+        (conv_id,),
+    ) as cur:
+        tasks = [(r["id"], r["title"], r["state"]) for r in await cur.fetchall()]
+    return messages, tasks

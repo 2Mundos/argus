@@ -53,6 +53,23 @@ export function OnboardingWizard({
     setStep(initialStep ?? firstIncompleteStep(status));
   }, [open, status, initialStep]);
 
+  // Enabling ends when the refreshed status shows the orchestrator (or the request fails),
+  // not when the PUTs return: until then the panel shows progress, not the form again.
+  const orchestratorOn = status?.orchestrator === true;
+  useEffect(() => {
+    if (orchestratorOn) setEnabling(false);
+  }, [orchestratorOn]);
+  useEffect(() => {
+    if (!enabling) return;
+    const t = setTimeout(() => {
+      setEnabling(false);
+      setError(
+        "The orchestrator was enabled, but its status has not updated yet. Reopen to check.",
+      );
+    }, 20_000);
+    return () => clearTimeout(t);
+  }, [enabling]);
+
   useEffect(() => {
     if (!status) return;
     if (step === 1 && status.account) setStep(2);
@@ -82,6 +99,7 @@ export function OnboardingWizard({
       const value = Number(budget);
       if (!Number.isFinite(value) || value < 0) {
         setError("Daily budget must be a number ≥ 0.");
+        setEnabling(false);
         return;
       }
       await call(
@@ -99,7 +117,6 @@ export function OnboardingWizard({
       reload();
     } catch (err) {
       setError((err as Error).message);
-    } finally {
       setEnabling(false);
     }
   }
@@ -286,6 +303,11 @@ function OrchestratorStep(props: {
         <p className="small">
           Orchestrator enabled. Open <a href="#chat">Chat</a> to send a goal.
         </p>
+      ) : props.enabling ? (
+        <p className="busy" role="status" aria-live="polite">
+          <span className="spinner" aria-hidden="true" />
+          Enabling the orchestrator… starting its container can take a moment.
+        </p>
       ) : (
         <>
           <label>
@@ -298,13 +320,8 @@ function OrchestratorStep(props: {
               onChange={(e) => props.setBudget(e.target.value)}
             />
           </label>
-          <button
-            type="button"
-            className="primary"
-            disabled={props.enabling}
-            onClick={props.onEnable}
-          >
-            {props.enabling ? "Enabling…" : "Enable orchestrator"}
+          <button type="button" className="primary" onClick={props.onEnable}>
+            Enable orchestrator
           </button>
         </>
       )}
