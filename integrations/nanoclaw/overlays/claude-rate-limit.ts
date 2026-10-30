@@ -8,6 +8,11 @@
  * line (or a fixed text) as its error; the poll loop turns it into the structured providerFailure
  * `{provider:"claude", kind:"rate_limit", resets_at?}` and keeps the generic
  * channel text, so no other upstream detail leaves the container.
+ *
+ * A failed turn whose assistant message the SDK marked `authentication_failed`
+ * (and only that mark: not `billing_error`, `rate_limit` or any other error, and
+ * never text that merely contains the word) errors with that fixed marker, which
+ * becomes `{provider:"claude", kind:"auth_expired"}`. The mark lasts one turn.
  */
 
 /** The whole result, one line: `.` stops at a newline and `$` is the end of the text. */

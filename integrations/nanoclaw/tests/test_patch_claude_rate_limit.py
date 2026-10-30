@@ -105,6 +105,25 @@ def test_hooks_claude_and_the_poll_loop_once(tmp_path: Path) -> None:
     assert {p: p.read_text() for p in src.rglob("*.ts")} == before
 
 
+def test_the_auth_mark_is_only_authentication_failed_and_lasts_one_turn(
+    tmp_path: Path,
+) -> None:
+    src = runner(tmp_path)
+    assert patch(tmp_path).returncode == 0
+    claude = (src / "providers" / "claude.ts").read_text()
+    setters = [
+        line.strip() for line in claude.splitlines() if "authFailed = true" in line
+    ]
+    assert setters == [
+        "if ((message as { error?: string }).error === 'authentication_failed')"
+        " authFailed = true;"
+    ]
+    read = claude.index("claudeAuthExpiredError(authFailed)")
+    reset = claude.index("authFailed = false;", read)
+    assert claude.index("let authFailed = false;") < claude.index("for await") < read
+    assert read < reset < claude.index("yield {", read)
+
+
 def test_without_the_provider_failure_field_only_claude_is_hooked(
     tmp_path: Path,
 ) -> None:

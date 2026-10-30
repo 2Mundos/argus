@@ -1301,6 +1301,17 @@ def _usage_sql(since: str) -> str:
     )
 
 
+# Auth-health evidence (account-usage.spec.md 3.5), correlated on `a.id`; each is one
+# seek on its partial index from migration 0058.
+LAST_ACCEPTED_SQL = (
+    "(SELECT max(u.at) FROM account_usage u WHERE u.account_id = a.id"
+    " AND u.measurement = 'measured' AND u.output_tokens > 0)"
+)
+LAST_REJECTED_SQL = (
+    "(SELECT max(e.at) FROM events e WHERE e.subject_type = 'account'"
+    " AND e.subject_id = a.id AND e.kind = 'account.auth_rejected')"
+)
+
 _SELECT = (  # constant fragments only
     "SELECT a.*,"  # noqa: S608
     " (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
@@ -1313,11 +1324,8 @@ _SELECT = (  # constant fragments only
     "  'observed_at', q.observed_at, 'source', q.source))"
     "  FROM (SELECT * FROM account_quota WHERE account_id = a.id"
     "   ORDER BY window_minutes IS NULL, window_minutes, window) q) AS quota,"
-    " (SELECT max(u.at) FROM account_usage u WHERE u.account_id = a.id"
-    "  AND u.measurement = 'measured' AND u.output_tokens > 0) AS last_accepted_at,"
-    " (SELECT max(e.at) FROM events e WHERE e.subject_type = 'account'"
-    "  AND e.subject_id = a.id AND e.kind = 'account.auth_rejected')"
-    "  AS last_rejected_at"
+    " " + LAST_ACCEPTED_SQL + " AS last_accepted_at,"
+    " " + LAST_REJECTED_SQL + " AS last_rejected_at"
     " FROM accounts a"
 )
 

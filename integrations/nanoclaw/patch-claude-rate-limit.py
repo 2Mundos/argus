@@ -6,8 +6,11 @@ usage: patch-claude-rate-limit.py /path/to/nanoclaw
 claude.ts gives a failed turn that hit its quota only Claude Code's one-line notice or a fixed
 text as its error (overlays/claude-rate-limit.ts, copied next to it first); poll-loop.ts turns
 that error into the structured providerFailure
-`{provider:"claude", kind:"rate_limit", resets_at?}` with the generic notice text. The
-poll-loop and formatter hooks extend the providerFailure plumbing of NanoClaw's add-codex
+`{provider:"claude", kind:"rate_limit", resets_at?}` with the generic notice text. A turn
+whose assistant message the SDK marked `authentication_failed` (that value only, reset
+after every result) errors with the fixed marker instead, which becomes
+`{provider:"claude", kind:"auth_expired"}`.
+The poll-loop and formatter hooks extend the providerFailure plumbing of NanoClaw's add-codex
 skill; a runner without it only gets the claude.ts hook, whose error then reaches the
 channel as the notice text. Idempotent: every hook is "ensure this exact text", and an
 anchor that is missing or ambiguous stops the install (the upstream shape changed).

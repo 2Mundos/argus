@@ -2312,12 +2312,17 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       return boundHead(error, STDERR_TAIL_INLINE_BYTES - utf8Bytes(pointer)) + pointer;
     };
     if (f.kind === "auth_rejected" && cfg.accounts && account) {
-      await client.call("POST", `/accounts/${account.id}/auth-rejected`, {
-        task_id: task.id,
-        attempt: task.attempt,
-        role: "engine",
-        source: f.source ?? "structured",
-      });
+      // Evidence only: a refused or failed report must not keep the attempt open.
+      try {
+        await client.call("POST", `/accounts/${account.id}/auth-rejected`, {
+          task_id: task.id,
+          attempt: task.attempt,
+          role: "engine",
+          source: f.source ?? "structured",
+        });
+      } catch (err) {
+        log.warn("Could not report the account's authentication rejection", { err });
+      }
     }
     if (f.kind === "exhausted" && cfg.accounts && account) {
       const exhausted = account;

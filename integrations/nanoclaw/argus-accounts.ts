@@ -1089,9 +1089,15 @@ function rateLimitReason(resetsAt: unknown): {
  * kind:"rate_limit", notice?, reset_text?, resets_at?}` against a held `openai`
  * account, and `{provider:"claude", kind:"rate_limit", resets_at?}` against a held
  * `anthropic` account exhaust it (`codex`/`claude` are the NanoClaw engines; Argus
- * names the accounts by their vendor). Anything else (unknown value, other account
- * provider, bad shape) is not a decision: null. The reason is the sanitized notice
- * when given, else a fixed text; a reset counts only with a zone.
+ * names the accounts by their vendor). `{provider:"claude", kind:"auth_expired"}`
+ * against a held `anthropic` account is `auth_rejected`, never an exhaustion: the
+ * runner sends it only for a turn the SDK marked `authentication_failed`
+ * (overlays/claude-rate-limit.ts), so billing, rate-limit, organization or on-hold
+ * errors and any notice or log text never qualify; the channel records the
+ * rejection with the fixed reason and fails the attempt as usual. Anything else
+ * (unknown value, other account provider, bad shape) is not a decision: null. The
+ * reason is the sanitized notice when given, else a fixed text; a reset counts only
+ * with a zone.
  */
 export function classifyProviderFailure(
   value: unknown,
