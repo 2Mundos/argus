@@ -17,6 +17,11 @@ const MARKS: Record<string, { label: string; path: string }> = {
     // A cube seen from a corner.
     path: "M12 2 21 7v10l-9 5-9-5V7Zm0 2.3L5.2 8 12 11.8 18.8 8Zm-7 5.4v6.2l6 3.4v-6.3Zm14 0-6 3.3v6.3l6-3.4Z",
   },
+  copilot: {
+    label: "GitHub Copilot",
+    // A visor with two eyes.
+    path: "M12 3C7 3 3 6 3 10v3c0 3.9 4 7 9 7s9-3.1 9-7v-3c0-4-4-7-9-7Zm-3.500 8a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Zm7 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z",
+  },
   gitea: {
     label: "Gitea",
     // A cup with a branch.
@@ -34,6 +39,7 @@ export function providerForTool(name: string | null | undefined): string {
   if (raw === "codex" || raw === "openai" || /\b(codex|openai)\b/.test(raw)) return "openai";
   if (raw === "cursor" || /\b(cursor)\b/.test(raw)) return "cursor";
   if (raw === "gitea") return "gitea";
+  if (raw === "copilot") return "copilot";
   return raw;
 }
 

@@ -21,7 +21,7 @@ from argus_core.decisions import DecisionAnswer
 from argus_core.fleet import PoolUpsert
 from argus_core.tasks import TaskCreate
 
-SETTINGS = FleetSettings(argus_url="http://argus.test:8000")
+SETTINGS = FleetSettings(argus_url="http://argus.test:8000", max_starts_in_flight=64)
 ADMIN = Identity("t", Scope.ADMIN, None, "test")
 
 
@@ -82,6 +82,8 @@ async def test_scale_up_starts_instances_with_working_bootstrap_tokens(
 ) -> None:
     await make_pool(db, desired=2, capabilities=["python"], env={"MODE": "x"})
     await tick(db, registry)
+    assert [i.state for i in await instances(db)] == ["reserved", "reserved"]
+    await tick(db, registry)  # the listing confirms both
     live = await instances(db)
     assert [i.state for i in live] == ["running", "running"]
     assert len(target.started) == 2
@@ -99,7 +101,7 @@ async def test_no_public_url_means_no_starts(
     db: Database, registry: TargetRegistry
 ) -> None:
     await make_pool(db, desired=1)
-    await tick(db, registry, FleetSettings(argus_url=None))
+    await tick(db, registry, FleetSettings(argus_url=None, max_starts_in_flight=64))
     async with db.read() as conn:
         pool = await fleet.get_pool(conn, "web")
     assert (pool.status, pool.live_instances) == ("failing", 0)
@@ -148,6 +150,7 @@ async def test_unreachable_target_changes_nothing(
 ) -> None:
     await make_pool(db, desired=1)
     await tick(db, registry)
+    await tick(db, registry)  # confirmed running
     target.reachable = False
     await scale(db, 3)
     await tick(db, registry)
@@ -166,6 +169,7 @@ async def test_lost_agent_terminates_and_keeps_the_slot_until_confirmed(
 ) -> None:
     await make_pool(db, desired=1)
     await tick(db, registry)
+    await tick(db, registry)  # confirmed running
     [inst] = await instances(db)
     agent_id = await register_from(db, target, inst.provider_ref)
     clock.advance(91)
@@ -193,6 +197,7 @@ async def test_unexpected_exit_ends_agents_and_replaces(
 ) -> None:
     await make_pool(db, desired=1)
     await tick(db, registry)
+    await tick(db, registry)  # confirmed running
     [inst] = await instances(db)
     agent_id = await register_from(db, target, inst.provider_ref)
     async with db.write() as tx:
@@ -272,6 +277,7 @@ async def test_agent_never_registers(
 ) -> None:
     await make_pool(db, desired=1)
     await tick(db, registry)
+    await tick(db, registry)  # confirmed running
     clock.advance(301)
     await tick(db, registry)
     [inst] = await instances(db)
@@ -599,6 +605,7 @@ async def test_host_exit_with_live_agents_stops_them_before_confirming(
 ) -> None:
     await _nanoclaw_pool(db)
     await tick(db, registry)
+    await tick(db, registry)  # confirmed running
     [inst] = await instances(db)
     _child(target, "ncl-agent-1", inst.id)
     target.exit(inst.provider_ref, code=1)
