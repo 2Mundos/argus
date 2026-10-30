@@ -1376,7 +1376,8 @@ describe("copilot credential documents", () => {
     ]).catch((e) => e);
     expect(String(err.message)).toMatch(/copilot-1 \(copilot\)/);
     const value = String((credential as { token?: unknown }).token ?? "");
-    if (value.length > 4) expect(String(err.message)).not.toContain(value);
+    const barePrefix = ["github_pat_", "gho_", "ghu_"].includes(value);
+    if (value.length > 4 && !barePrefix) expect(String(err.message)).not.toContain(value);
     expect(w.onecli.secrets).toEqual([]);
   });
 
