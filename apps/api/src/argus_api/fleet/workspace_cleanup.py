@@ -51,6 +51,7 @@ UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 MAX_TREE_DEPTH = 256
 TARGET_TIMEOUT_S = 30.0
 FIRST_LOOP_DELAY_S = 60.0
+MAX_RETRY_BACKOFF_S = 24 * 3600.0
 SYSTEM_DIRS = frozenset(
     {
         "/bin",
@@ -79,6 +80,22 @@ SYSTEM_DIRS = frozenset(
 )
 # Deleting started: a leftover tombstone with this reason is finished, not restored.
 DELETING = ("delete_interrupted", "delete_error")
+# Blockers a read-only probe can see clear or change (spec 3.2, retries).
+PROBED = frozenset(
+    {
+        "permission_denied",
+        "task_claimed",
+        "agent_active",
+        "shared_path",
+        "container_check_unavailable",
+        "container_mount",
+        "mounts_unreadable",
+        "mount_present",
+        "process_reference",
+        "low_disk",
+        "db_error",
+    }
+)
 S = WorkspaceCleanupStatus
 
 
@@ -210,6 +227,8 @@ def _can_remove_dir(st: Any, uid: int, groups: Collection[int]) -> bool:
 
     A foreign directory cannot be chmod-ed, so it needs rwx for the owner and
     for the class that applies to uid: group if st_gid is in groups, else other.
+    An empty one needs nothing of its own (callers skip this check for it):
+    removing it is a write on its parent, which is checked as a directory too.
     """
     if uid == 0 or st.st_uid == uid:
         return True
@@ -260,12 +279,14 @@ def _measure(
         tree.bytes += st.st_blocks * 512
     if not stat.S_ISDIR(st.st_mode):
         return
-    if not _can_remove_dir(st, uid, groups):
-        tree.unremovable_dir = True
     fd = _open_dir(name, parent_fd, st)
     try:
         with os.scandir(fd) as it:
             entries = list(it)
+        # An empty foreign directory, such as a mount point stub the container
+        # runtime created as root, is removed by its parent alone.
+        if entries and not _can_remove_dir(st, uid, groups):
+            tree.unremovable_dir = True
         for e in entries:
             _measure(
                 fd,
@@ -321,10 +342,10 @@ def _remove(
         raise Unsafe("scan_limit", "tree_depth")
     fd = _open_dir(name, parent_fd, st)
     try:
-        if (st.st_mode & 0o700) != 0o700:
-            os.fchmod(fd, stat.S_IMODE(st.st_mode) | 0o700)
         with os.scandir(fd) as it:
             names = [e.name for e in it]
+        if names and (st.st_mode & 0o700) != 0o700:
+            os.fchmod(fd, stat.S_IMODE(st.st_mode) | 0o700)
         for child in names:
             _remove(
                 fd,
@@ -453,6 +474,9 @@ class WorkspaceCleaner:
         self.uid = os.geteuid() if uid is None else uid
         self.busy = False
         self.current: asyncio.Task[WorkspaceCleanupRun] | None = None
+        self._idle = asyncio.Event()
+        self._idle.set()
+        self._terminated = asyncio.Event()  # a termination not yet run for
         # Set by each run's plan: local Docker targets and the archive root check.
         self._local_targets: list[Target] = []
         self._archive_problem: str | None = None
@@ -485,10 +509,35 @@ class WorkspaceCleaner:
                 log.exception("workspace cleanup run failed")
             await asyncio.sleep(self.settings.workspace_cleanup_interval_s)
 
+    def notify_terminated(self, instance_id: str) -> None:
+        """The reconciler committed `instance_id` as terminated. Never blocks:
+        it only flags a run for `follow_terminations`, so any number of calls
+        before that run starts coalesce into it."""
+        if self.settings.workspace_cleanup_enabled:
+            log.debug("workspace cleanup requested for %s", instance_id)
+            self._terminated.set()
+
+    async def follow_terminations(self) -> None:
+        """One `terminated` run per batch of notifications. A notification
+        during any run, or a run already in progress, gets one follow-up."""
+        while True:
+            await self._terminated.wait()
+            await self._idle.wait()
+            self._terminated.clear()
+            try:
+                await self.run(
+                    "terminated", ACTOR, self.settings.workspace_cleanup_dry_run
+                )
+            except CleanupRunningError:
+                self._terminated.set()  # claimed meanwhile: run after it
+            except Exception:
+                log.exception("workspace cleanup run failed")
+
     def _claim(self) -> None:
         if self.busy:
             raise CleanupRunningError("a workspace cleanup run is already in progress")
         self.busy = True
+        self._idle.clear()
 
     async def _run(
         self, trigger: str, actor: str, dry_run: bool
@@ -544,6 +593,7 @@ class WorkspaceCleaner:
             free_after = self._free(roots)
         finally:
             self.busy = False
+            self._idle.set()
         async with self.db.write() as tx:
             await tx.conn.execute(
                 "UPDATE workspace_cleanup_runs SET status = ?, finished_at = ?,"
@@ -613,8 +663,8 @@ class WorkspaceCleaner:
             ) as cur:
                 instances = {r["id"]: dict(r) for r in await cur.fetchall()}
             async with conn.execute(
-                "SELECT root, name, status, reason, attempts, lock_run_id,"
-                " lock_expires_at FROM workspace_cleanup"
+                "SELECT root, name, status, reason, attempts, attempted_at,"
+                " lock_run_id, lock_expires_at FROM workspace_cleanup"
             ) as cur:
                 audit = {(r["root"], r["name"]): dict(r) for r in await cur.fetchall()}
         by_name = {p.name: p for p in pools}
@@ -676,6 +726,7 @@ class WorkspaceCleaner:
 
         cutoff = ts(now - timedelta(hours=s.workspace_cleanup_min_age_hours))
         candidates: list[tuple[str, Candidate]] = []
+        capped: list[tuple[dict, Candidate]] = []
         rows: list[tuple[str, str, str | None, str | None, Outcome]] = []
         for root in roots:
             if not run.dry_run:
@@ -723,16 +774,15 @@ class WorkspaceCleaner:
                     )
                     continue
                 prev = audit.get((root, name))
+                cand = Candidate(root, name, pool, local[pool.name], resume)
                 if (
-                    run.trigger == "loop"
+                    run.trigger != "manual"
                     and prev is not None
                     and prev["status"] != S.CLEANED
                     and prev["attempts"] >= s.workspace_cleanup_max_attempts
                 ):
-                    outcome = Outcome(S.BLOCKED, "max_attempts")
-                    rows.append((root, name, name, pool.name, outcome))
+                    capped.append((prev, cand))
                     continue
-                cand = Candidate(root, name, pool, local[pool.name], resume)
                 candidates.append((inst["terminated_at"], cand))
         for root, name, instance_id, pool_name, outcome in rows:
             prev = audit.get((root, name))
@@ -748,7 +798,44 @@ class WorkspaceCleaner:
                 run, root, name, instance_id, pool_name, outcome, event=False
             )
         candidates.sort(key=lambda c: c[0])
-        return roots, [c for _, c in candidates[: s.workspace_cleanup_max_instances]]
+        chosen = [c for _, c in candidates]
+        for prev, cand in capped:  # after every directory not yet capped
+            if await self._retry_due(run, cand, prev):
+                chosen.append(cand)
+            else:  # keeps its last blocker and the attempted_at the backoff runs from
+                run.counts[S(prev["status"])] += 1
+                await self._touch(run, cand.root, cand.name)
+        return roots, chosen[: s.workspace_cleanup_max_instances]
+
+    async def _retry_due(self, run: RunState, cand: Candidate, prev: dict) -> bool:
+        """Whether an automatic run retries a directory past `max_attempts`: once
+        its backoff elapsed, or at once when a probe shows its blocker changed."""
+        s = self.settings
+        last = service.parse_ts(prev["attempted_at"])
+        if last is None:
+            return True
+        over = min(prev["attempts"] - s.workspace_cleanup_max_attempts, 16)
+        backoff = min(s.workspace_cleanup_interval_s * 2**over, MAX_RETRY_BACKOFF_S)
+        if (self.db.now() - last).total_seconds() >= backoff:
+            return True
+        if cand.resume or prev["reason"] not in PROBED:
+            return False
+        return await self._probe(run, cand) != prev["reason"]
+
+    async def _probe(self, run: RunState, cand: Candidate) -> str | None:
+        """Read-only: the blocker `_real` would meet first, in its order."""
+        try:
+            tree = await asyncio.to_thread(measure, cand.root, cand.name, self.uid)
+        except Unsafe as exc:
+            return exc.code
+        except OSError:
+            return "permission_denied"
+        if tree.unremovable_dir:
+            return "permission_denied"
+        path = os.path.join(cand.root, cand.name)
+        if problem := await self._references(cand, [path]):
+            return problem
+        return "low_disk" if run.low_disk else None
 
     async def _settle_tombstones(self, root: str, now: str) -> None:
         """Rename back a leftover tombstone whose deletion never started and
@@ -1147,6 +1234,7 @@ class WorkspaceCleaner:
                 reason=row["reason"] if row else "in_progress",
                 lock_run_id=run.id,
                 lock_expires_at=ts(expires),
+                attempted_at=ts(tx.now),
             )
         return prev or {"status": S.ELIGIBLE, "reason": "in_progress"}
 

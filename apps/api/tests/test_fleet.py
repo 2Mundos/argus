@@ -737,3 +737,75 @@ async def test_nanoclaw_runtime_spec_is_hardened(
     assert spec.read_only is True
     assert spec.pids_limit == 4096
     assert spec.tmpfs == RUNTIME_TMPFS
+
+
+# -- termination notifications (workspace-cleanup.spec.md 3.2) --------------------------
+
+
+async def test_confirmed_termination_notifies_after_commit(
+    db: Database, registry: TargetRegistry, target: FakeTarget
+) -> None:
+    await make_pool(db, desired=1)
+    await tick(db, registry)
+    [inst] = await instances(db)
+    seen: list[str] = []
+
+    def on_terminated(instance_id: str) -> None:
+        assert db.write_held_for() == 0  # never inside the write transaction
+        assert inst.provider_ref not in target.containers  # exited one removed
+        seen.append(instance_id)
+
+    await reconcile_pool(db, "web", registry, SETTINGS, on_terminated)
+    assert seen == []  # running
+    target.exit(inst.provider_ref, code=1)
+    await reconcile_pool(db, "web", registry, SETTINGS, on_terminated)
+    assert seen == [inst.id]
+    [old] = [i for i in await instances(db, True) if i.id == inst.id]
+    assert old.state == "terminated"
+
+
+async def test_rolled_back_pass_does_not_notify(
+    db: Database,
+    registry: TargetRegistry,
+    target: FakeTarget,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from argus_api.fleet import reconciler
+
+    await make_pool(db, desired=1)
+    await tick(db, registry)
+    [inst] = await instances(db)
+    target.exit(inst.provider_ref, code=1)
+
+    async def boom(*args: object) -> list:
+        raise RuntimeError("after confirm_terminated, before commit")
+
+    monkeypatch.setattr(reconciler, "_scale", boom)
+    seen: list[str] = []
+    with pytest.raises(RuntimeError):
+        await reconcile_pool(db, "web", registry, SETTINGS, seen.append)
+    assert seen == []
+    assert [i.state for i in await instances(db, True) if i.id == inst.id] == [
+        "running"
+    ]
+
+
+async def test_terminating_does_not_notify_until_confirmed(
+    db: Database, registry: TargetRegistry, target: FakeTarget
+) -> None:
+    await make_pool(db, desired=1)
+    await tick(db, registry)
+    [inst] = await instances(db)
+    async with db.write() as tx:
+        await fleet.request_termination(tx, inst.id, "test")
+    target.fail_stop = True
+    seen: list[str] = []
+    await reconcile_pool(db, "web", registry, SETTINGS, seen.append)
+    await reconcile_pool(db, "web", registry, SETTINGS, seen.append)
+    [cur] = [i for i in await instances(db, True) if i.id == inst.id]
+    assert cur.state == "terminating"
+    assert seen == []  # the container may still exist
+    target.fail_stop = False
+    await reconcile_pool(db, "web", registry, SETTINGS, seen.append)  # stops it
+    await reconcile_pool(db, "web", registry, SETTINGS, seen.append)  # confirms
+    assert seen == [inst.id]
