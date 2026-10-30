@@ -105,7 +105,9 @@ equal paths that end in the same record, and let the pool choose the engine:
   the notice or log text is never copied. It fails closed: unknown provider or
   kind, another account provider, a bad shape, or the field outside a failure
   notice is an ordinary failed attempt. Free text never exhausts an account
-  beyond the recognised quota/auth notices above.
+  beyond the recognised quota/auth notices above. A Codex auth rejection also
+  writes `account.auth_rejected` for the account, in addition to the exhaustion;
+  the exhaustion behaviour is unchanged and the new event is written alongside it.
 - **Lease order is global priority.** Superseding the earlier Codex-first
   provider order: the pool ranks every usable account across providers by
   priority ([global account selection](account-selection.spec.md)), and an
