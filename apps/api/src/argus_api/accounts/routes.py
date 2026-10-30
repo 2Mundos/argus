@@ -4,7 +4,13 @@ from typing import Annotated, Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from argus_core import claude_auth, codex_auth, cursor_auth, custom_accounts
+from argus_core import (
+    claude_auth,
+    codex_auth,
+    copilot_auth,
+    cursor_auth,
+    custom_accounts,
+)
 from argus_core.accounts import (
     LOCAL_PROVIDER,
     Account,
@@ -59,6 +65,8 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
             found = codex_auth.validate(credential)
         elif provider == cursor_auth.PROVIDER:
             found = cursor_auth.validate(credential)
+        elif provider == copilot_auth.PROVIDER:
+            found = copilot_auth.validate(credential)
         elif provider == custom_accounts.PROVIDER:
             custom_accounts.validate_credential(credential)
             return "api_key", "api_key"
@@ -105,6 +113,7 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
     except (
         claude_auth.ClaudeAuthError,
         codex_auth.CodexAuthError,
+        copilot_auth.CopilotAuthError,
         cursor_auth.CursorAuthError,
         custom_accounts.CustomAccountError,
     ) as exc:
@@ -185,6 +194,10 @@ async def create_account(
     if body.provider == "github" and body.credential is None:
         raise ValidationFailedError(
             "invalid github credential: the token must be validated at registration"
+        )
+    if body.provider == copilot_auth.PROVIDER and body.credential is None:
+        raise ValidationFailedError(
+            "invalid copilot credential: the token must be validated at registration"
         )
     if body.provider == custom_accounts.PROVIDER and body.credential is None:
         raise ValidationFailedError(
@@ -562,6 +575,8 @@ async def update_credential(
     async with db.read() as conn:
         name = await service.secret_name_for_update(conn, account_id, caller.agent_id)
         account = await service.get_account(conn, account_id, utcnow())
+    if caller.agent_id is not None and account.provider == copilot_auth.PROVIDER:
+        raise ForbiddenError("a copilot credential is replaced by an admin only")
     if caller.agent_id is not None:
         if body.task_id is None or body.attempt is None:
             raise ValidationFailedError("task_id and attempt are required")
