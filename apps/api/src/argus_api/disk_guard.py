@@ -493,6 +493,9 @@ class DiskGuard:
     async def run(self) -> None:
         """Background loop: measure, record LoopStats, continue on errors."""
         while True:
+            # The lifespan already measured once; wait one interval before the
+            # next pass so startup is not measured twice.
+            await asyncio.sleep(self.thresholds.interval_s)
             started = time.monotonic()
             try:
                 await self.measure_once()
@@ -502,4 +505,3 @@ class DiskGuard:
             except Exception:
                 log.exception("disk guard pass failed")
                 self.stats.record(time.monotonic() - started, ok=False)
-            await asyncio.sleep(self.thresholds.interval_s)

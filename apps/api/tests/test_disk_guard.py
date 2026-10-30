@@ -461,7 +461,13 @@ async def test_loop_cancellation(db: Database, tmp_path: Path) -> None:
 
 
 @pytest.fixture
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
+def client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    # Requested so it is set up before this fixture: the autouse fixture in
+    # conftest disables the guard, and this one must win for these tests.
+    _disk_guard_off: None,
+) -> Generator[TestClient]:
     monkeypatch.setenv("ARGUS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ARGUS_ADMIN_TOKEN", ADMIN_TOKEN)
     monkeypatch.setenv("ARGUS_DISK_GUARD_ENABLED", "true")
@@ -545,6 +551,7 @@ def test_system_disk_guard_redaction_and_refresh(
         assert "st_dev" not in r
 
     guard: DiskGuard = client.app.state.disk_guard
+    assert guard.enabled
     before = dg["claim_admission"]
     guard._machine.refused = True
     guard._machine.measurement = "measured"
