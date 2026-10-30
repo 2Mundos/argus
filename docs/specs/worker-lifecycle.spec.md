@@ -1088,25 +1088,36 @@ inbox. Chat notifications are a later, optional integration (single-node 3.5).
   failure and completion paths that have a tail. Only the last bytes are kept.
   Stored under the usual artifact path
   (`/data/artifacts/tasks/<task_id>/<attempt>/stderr-tail`) with `truncated`,
-  `complete`, `bytes`, and `redaction_version` recorded in the artifact
-  metadata/description. Reads follow [worker read scope](worker-read-scope.spec.md) 3.
+  `complete`, `bytes`, and `redaction_version` recorded as parameters of the
+  artifact's media type (the artifact has no other metadata field):
+  `text/plain; charset=utf-8; truncated=…; complete=…; bytes=…; redaction_version=1`.
+  `complete` is true only when `docker logs` was read without error, returned
+  fewer lines than its `--tail` limit, and the byte cap cut nothing. The upload is
+  best-effort and happens before the fail; a failed upload never blocks the fail.
+  Reads follow [worker read scope](worker-read-scope.spec.md) 3.
 - **Role.** `other` (existing `ArtifactRole`); name-only, no schema change and
   no migration. A new role was considered and deferred: adding one requires a
   schema check of the artifact role constraint and a migration first.
 - **Caps.** In-memory tail: 16 KiB = 16384 UTF-8 bytes, the last bytes of the
-  redacted merged stdout+stderr text (today: 2 KiB as 2048 JavaScript code
-  units, via `.slice(-2048)` in the NanoClaw hook). Inline excerpt in the
-  `session_lost` / error string: at most 2 KiB = 2048 UTF-8 bytes, so today's
-  inline size is kept, now counted in bytes; the full tail is the artifact.
+  redacted merged stdout+stderr text (formerly 2048 JavaScript code units).
+  A fail error that carries an excerpt (`session_lost`, or a generic failure
+  with a log tail) is at most 2 KiB = 2048 UTF-8 bytes in total and ends with
+  `(full tail: artifact stderr-tail)` when the artifact was stored; the full
+  tail is the artifact.
 - **Bytes, not code units.** All new caps count UTF-8 bytes. Truncation cuts at
   a UTF-8 code-point boundary, so the result is valid UTF-8 and never exceeds
   the cap. Existing code-unit slices elsewhere (for example the 2000-character
   `error.slice(0, 2000)` on fail) are unchanged and out of scope.
 - **Redaction** runs before the cap, as today.
-- **Verification boundary.** This section is a docs-only change. The caps, the
-  truncation rule, and the read rule are not yet implemented or tested in code.
-  They would be verified by a unit test for truncation at a code-point
-  boundary and a negative read test for a non-leased worker.
+- **Verification boundary.** Implemented in the NanoClaw hook
+  (`integrations/nanoclaw/argus-stderr-tail.ts`) and covered offline: unit
+  tests for the caps, the code-point cut, and redaction before the cap, and
+  channel tests with a fake Docker runner and a scripted Argus
+  (`argus-stderr-tail.test.ts`); API tests for the read rule (holder and
+  managers read, a non-leased worker gets `403 not_leased`) and for the tail
+  never reaching `/events` (`test_stderr_tail_read_scope.py`). Not yet verified
+  live: capture from a real Docker daemon and NanoClaw session (stream order,
+  `docker logs` limits on a real container).
 
 # 4. Open Questions
 
