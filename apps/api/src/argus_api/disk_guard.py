@@ -11,10 +11,10 @@ import asyncio
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from argus_api.config import Settings
 from argus_api.db import Database
@@ -249,8 +249,8 @@ def group_by_device(samples: tuple[RootSample, ...]) -> list[_Group]:
         if g is None:
             by_dev[s.st_dev] = _Group(s.st_dev, s.free_bytes)
         else:
-            # Same device: free space is shared; keep one group.
-            by_dev[s.st_dev] = _Group(s.st_dev, s.free_bytes)
+            # Same device: one filesystem; the worst measured free decides.
+            by_dev[s.st_dev] = _Group(s.st_dev, min(g.free_bytes, s.free_bytes))
     groups = list(by_dev.values())
     # Unknown applicable roots participate as their own worst-case group.
     groups.extend(_Group(st_dev=-1, free_bytes=0, unknown=True) for _ in unknowns)
@@ -389,6 +389,10 @@ class DiskGuard:
     _statvfs: StatvfsFn = field(default=os.statvfs, repr=False)
     _docker_root: DockerRootFn | None = field(default=None, repr=False)
     _clock: ClockFn = field(default=time.monotonic, repr=False)
+    # Injectable seam for the warn-event INSERT (tests); default writes via db.
+    _write_warn: Callable[[dict[str, Any]], Awaitable[None]] | None = field(
+        default=None, repr=False
+    )
 
     def __post_init__(self) -> None:
         self.thresholds = Thresholds.from_settings(self.settings)
@@ -488,8 +492,29 @@ class DiskGuard:
             RootSample("docker", "unknown"),
         )
 
+    async def _write_warn_event(self, payload: dict[str, Any]) -> None:
+        """Persist one disk.warn event. Overridable via `_write_warn` for tests."""
+        if self._write_warn is not None:
+            await self._write_warn(payload)
+            return
+        async with self.db.write() as tx:
+            await record(
+                tx,
+                ACTOR,
+                "system",
+                "disk",
+                WARN_EVENT,
+                payload,
+            )
+
     async def measure_once(self) -> Snapshot:
-        """One bounded pass; may write a single warn event (never while measuring)."""
+        """One bounded pass; may write a single warn event (never while measuring).
+
+        Sampling and admission advance always commit to `_machine`. A warn-event
+        INSERT failure is logged and leaves the pending entry for exactly-once
+        retry; it does not fail the pass (so API startup stays up when only the
+        event write is unhealthy).
+        """
         if not self.enabled:
             return self.snapshot()
         try:
@@ -509,21 +534,20 @@ class DiskGuard:
                     "free_bytes": self._machine.warn_entry_free_bytes,
                     "claim_admission": self._machine.warn_entry_claim_admission,
                 }
-                async with self.db.write() as tx:
-                    await record(
-                        tx,
-                        ACTOR,
-                        "system",
-                        "disk",
-                        WARN_EVENT,
-                        payload,
-                    )
-                # Clear only after a successful record so a failed write can retry
-                # without losing the episode's only event (and without duplicating).
-                self._machine.warn_just_entered = False
-                self._machine.warn_entry_free_bytes = None
-                self._machine.warn_entry_measurement = None
-                self._machine.warn_entry_claim_admission = None
+                try:
+                    await self._write_warn_event(payload)
+                except Exception:
+                    # Leave warn_just_entered set so the next pass retries the
+                    # entry snapshot exactly once; measurement already advanced.
+                    log.exception("disk guard warn event write failed")
+                else:
+                    # Clear only after a successful record so a failed write can
+                    # retry without losing the episode's only event (and without
+                    # duplicating).
+                    self._machine.warn_just_entered = False
+                    self._machine.warn_entry_free_bytes = None
+                    self._machine.warn_entry_measurement = None
+                    self._machine.warn_entry_claim_admission = None
         return snap
 
     async def run(self) -> None:

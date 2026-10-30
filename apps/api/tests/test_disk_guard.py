@@ -124,7 +124,7 @@ def guard_for(
 
 
 def test_st_dev_dedup_and_worst_band(tmp_path: Path) -> None:
-    """Same st_dev → one group; a third root on another device is separate; min wins."""
+    """Same st_dev → one group with min free; another device is separate; min wins."""
     data = tmp_path / "data"
     instances = tmp_path / "instances"
     docker = tmp_path / "docker"
@@ -136,8 +136,10 @@ def test_st_dev_dedup_and_worst_band(tmp_path: Path) -> None:
         instances.resolve(): "instances",
         docker.resolve(): "docker",
     }
-    # data + instances share st_dev 1 (3 GiB / 4 GiB reported); docker is st_dev 2 at 1 GiB.
-    frees = {"data": 3 * GiB, "instances": 4 * GiB, "docker": 1 * GiB}
+    # data + instances share st_dev 1 with DIFFERENT frees (3 GiB / 1 GiB);
+    # docker is a second device at 4 GiB. Conservative min on the shared device
+    # is 1 GiB, which is also the overall worst.
+    frees = {"data": 3 * GiB, "instances": 1 * GiB, "docker": 4 * GiB}
     devs = {"data": 1, "instances": 1, "docker": 2}
 
     def stat(path: Path) -> FakeStat:
@@ -159,9 +161,8 @@ def test_st_dev_dedup_and_worst_band(tmp_path: Path) -> None:
     measured = [g for g in groups if not g.unknown]
     assert len(measured) == 2
     by_dev = {g.st_dev: g.free_bytes for g in measured}
-    # Same device keeps one free value (whichever sample last wrote the group).
-    assert by_dev[1] in (3 * GiB, 4 * GiB)
-    assert by_dev[2] == 1 * GiB
+    assert by_dev[1] == 1 * GiB
+    assert by_dev[2] == 4 * GiB
     assert worst_free(groups) == ("measured", 1 * GiB)
 
 
@@ -406,26 +407,36 @@ async def test_one_warn_event_per_episode(db: Database, tmp_path: Path) -> None:
     assert len(rows) == 2
 
 
-async def test_warn_event_survives_failed_then_succeeding_write(
-    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Clear warn_just_entered only after record succeeds; retry must not duplicate."""
-    import argus_api.disk_guard as dg
+def _flaky_write_warn(
+    g: DiskGuard, db: Database, calls: dict[str, int], *, fail_first: int = 1
+):
+    """Injectable warn-event writer: fail the first `fail_first` calls, then persist."""
+    from argus_api import events as events_mod
 
+    async def write(payload: dict) -> None:
+        calls["n"] += 1
+        if calls["n"] <= fail_first:
+            raise RuntimeError("write failed")
+        async with db.write() as tx:
+            await events_mod.record(tx, "system", "system", "disk", WARN_EVENT, payload)
+
+    g._write_warn = write
+    return write
+
+
+async def test_warn_event_survives_failed_then_succeeding_write(
+    db: Database, tmp_path: Path
+) -> None:
+    """Clear warn_just_entered only after record succeeds; retry must not duplicate.
+
+    Event-write failure must not raise out of measure_once (sampling already advanced).
+    """
     clock = [1.0]
     g = guard_for(db, tmp_path, frees={"data": WARN - 1}, clock=clock)
     calls = {"n": 0}
-    real_record = dg.record
-
-    async def flaky_record(tx, *args, **kwargs):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("write failed")
-        return await real_record(tx, *args, **kwargs)
-
-    monkeypatch.setattr(dg, "record", flaky_record)
-    with pytest.raises(RuntimeError, match="write failed"):
-        await g.measure_once()
+    _flaky_write_warn(g, db, calls)
+    snap = await g.measure_once()
+    assert snap.measurement == "measured"
     assert g._machine.warn_just_entered
     await g.measure_once()
     assert not g._machine.warn_just_entered
@@ -439,26 +450,15 @@ async def test_warn_event_survives_failed_then_succeeding_write(
 
 
 async def test_warn_event_survives_failed_write_then_episode_clear(
-    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    db: Database, tmp_path: Path
 ) -> None:
     """Pending warn survives episode clear; a later successful pass records exactly one."""
-    import argus_api.disk_guard as dg
-
     clock = [1.0]
     frees: dict[str, int | None] = {"data": WARN - 1}
     g = guard_for(db, tmp_path, frees=frees, clock=clock)
     calls = {"n": 0}
-    real_record = dg.record
-
-    async def flaky_record(tx, *args, **kwargs):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("write failed")
-        return await real_record(tx, *args, **kwargs)
-
-    monkeypatch.setattr(dg, "record", flaky_record)
-    with pytest.raises(RuntimeError, match="write failed"):
-        await g.measure_once()
+    _flaky_write_warn(g, db, calls)
+    await g.measure_once()
     assert g._machine.warn_just_entered
     assert g._machine.warn_episode
     # Episode clears before the retry succeeds; pending flag must still land one event.
@@ -477,28 +477,17 @@ async def test_warn_event_survives_failed_write_then_episode_clear(
 
 
 async def test_warn_event_retry_records_entry_snapshot(
-    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    db: Database, tmp_path: Path
 ) -> None:
     """A retried warn event records the entry-pass free/admission, not the retry pass."""
-    import argus_api.disk_guard as dg
-
     clock = [1.0]
     entry_free = WARN - 1
     retry_free = WARN - 100
     frees: dict[str, int | None] = {"data": entry_free}
     g = guard_for(db, tmp_path, frees=frees, clock=clock)
     calls = {"n": 0}
-    real_record = dg.record
-
-    async def flaky_record(tx, *args, **kwargs):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("write failed")
-        return await real_record(tx, *args, **kwargs)
-
-    monkeypatch.setattr(dg, "record", flaky_record)
-    with pytest.raises(RuntimeError, match="write failed"):
-        await g.measure_once()
+    _flaky_write_warn(g, db, calls)
+    await g.measure_once()
     frees["data"] = retry_free
     clock[0] = 2.0
     await g.measure_once()
@@ -678,20 +667,28 @@ def test_readyz_contract_unchanged_and_no_disk_guard_loop(client: TestClient) ->
     assert "disk_guard" not in body["loops"]
 
 
+def _assert_disk_guard_redacted(dg: dict, tmp_path: Path) -> None:
+    """Same redaction guarantees for admin and non-admin callers."""
+    text = str(dg)
+    assert str(tmp_path) not in text
+    assert "st_dev" not in text
+    assert "/var/lib/docker" not in text
+    assert "DockerRootDir" not in text
+    assert "docker.sock" not in text
+    assert dg["claim_admission"] in ("admitted", "refused")
+    assert {r["role"] for r in dg["roots"]} == {"data", "instances", "docker"}
+    for r in dg["roots"]:
+        assert set(r) <= {"role", "applicability", "free_bytes", "band"}
+        assert "path" not in r
+        assert "st_dev" not in r
+
+
 def test_system_disk_guard_redaction_and_refresh(
     client: TestClient, tmp_path: Path
 ) -> None:
     body = client.get("/api/system", headers=ADMIN).json()
     dg = body["disk_guard"]
-    text = str(dg)
-    assert str(tmp_path) not in text
-    assert "st_dev" not in text
-    assert "/var/lib/docker" not in text
-    assert dg["claim_admission"] in ("admitted", "refused")
-    assert {r["role"] for r in dg["roots"]} == {"data", "instances", "docker"}
-    for r in dg["roots"]:
-        assert "path" not in r
-        assert "st_dev" not in r
+    _assert_disk_guard_redacted(dg, tmp_path)
 
     guard: DiskGuard = client.app.state.disk_guard
     assert guard.enabled
@@ -704,6 +701,93 @@ def test_system_disk_guard_redaction_and_refresh(
     after = client.get("/api/system", headers=ADMIN).json()["disk_guard"]
     assert after["claim_admission"] == "refused"
     assert after["claim_admission"] != before or before == "refused"
+
+
+def test_system_disk_guard_redaction_for_worker(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Non-admin valid token can read /api/system; disk_guard stays path-free."""
+    worker = _worker(client)
+    res = client.get("/api/system", headers=worker)
+    assert res.status_code == 200
+    _assert_disk_guard_redacted(res.json()["disk_guard"], tmp_path)
+
+
+def test_startup_survives_warn_event_write_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _disk_guard_off: None,
+) -> None:
+    """Warn-event INSERT failure must not abort a healthy boot; retry records once."""
+    from argus_api import events as events_mod
+
+    monkeypatch.setenv("ARGUS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", ADMIN_TOKEN)
+    monkeypatch.setenv("ARGUS_DISK_GUARD_ENABLED", "true")
+    monkeypatch.setenv("ARGUS_DISK_GUARD_INTERVAL_S", "3600")
+    monkeypatch.setenv("ARGUS_DISK_GUARD_WARN_BYTES", str(WARN))
+    monkeypatch.setenv("ARGUS_DISK_GUARD_WARN_CLEAR_BYTES", str(CLEAR))
+    monkeypatch.setenv("ARGUS_DISK_GUARD_REFUSE_BYTES", str(REFUSE))
+    monkeypatch.setenv("ARGUS_DISK_GUARD_RESUME_BYTES", str(RESUME))
+
+    entry_free = WARN - 1
+    frees: dict[str, int] = {"data": entry_free}
+    write_calls = {"n": 0}
+    orig_post_init = DiskGuard.__post_init__
+
+    def patched_post_init(self: DiskGuard) -> None:
+        orig_post_init(self)
+        if not self.enabled:
+            return
+        self._stat = lambda _p: FakeStat(1)  # type: ignore[method-assign]
+        self._statvfs = lambda _p: FakeVfs(frees["data"])  # type: ignore[method-assign]
+        self._docker_root = lambda: DockerRootQuery("not_applicable")
+        self._clock = lambda: 1.0
+
+        async def flaky(payload: dict) -> None:
+            write_calls["n"] += 1
+            if write_calls["n"] == 1:
+                raise RuntimeError("write failed")
+            async with self.db.write() as tx:
+                await events_mod.record(
+                    tx, "system", "system", "disk", WARN_EVENT, payload
+                )
+
+        self._write_warn = flaky
+
+    monkeypatch.setattr(DiskGuard, "__post_init__", patched_post_init)
+
+    with TestClient(app) as client:
+        assert client.get("/healthz").status_code == 200
+        assert client.get("/api/system", headers=ADMIN).status_code == 200
+        guard: DiskGuard = client.app.state.disk_guard
+        assert guard.enabled
+        assert guard._machine.warn_episode
+        assert guard._machine.warn_just_entered
+        assert guard._machine.warn_entry_free_bytes == entry_free
+        assert write_calls["n"] == 1
+
+        # Free has left the warn band; the pending entry snapshot must still record.
+        frees["data"] = CLEAR + 1
+        client.portal.call(guard.measure_once)  # type: ignore[union-attr]
+        assert not guard._machine.warn_just_entered
+        assert not guard._machine.warn_episode
+        assert write_calls["n"] == 2
+
+        db: Database = client.app.state.db
+        rows = client.portal.call(_warn_event_rows, db)  # type: ignore[union-attr]
+        assert len(rows) == 1
+        data = json.loads(rows[0]["data"])
+        assert data["free_bytes"] == entry_free
+        assert data["measurement"] == "measured"
+
+
+async def _warn_event_rows(db: Database) -> list:
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT data FROM events WHERE kind = ?", (WARN_EVENT,)) as cur,
+    ):
+        return list(await cur.fetchall())
 
 
 def test_mcp_claim_task_surfaces_disk_low_via_http(client: TestClient) -> None:

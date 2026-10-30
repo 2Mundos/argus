@@ -152,6 +152,11 @@ the pending pause/shed slice and are not introduced here.
   above 2.5 GiB. Equality at a threshold does not change state (`free < warn`
   enters warn; `free > clear` exits; `free < refuse` refuses; `free > resume`
   readmits). Between refuse and resume the refusal holds.
+- **Warning event persistence.** One `disk.warn` event is recorded per warn
+  episode, carrying the free space measured when the episode began. A failed
+  event write is logged and retried on the next pass until it succeeds (never
+  duplicated); it never fails the pass, so a healthy boot with a warning band
+  and an unhealthy event write still serves traffic.
 - **Failed / unknown measurement.** A failed `stat` / `statvfs` / Docker-info
   query is state **unknown**, distinct from a measured 0. Unknown refuses new
   claims (fail closed). `ops.disk_free` returns 0 on `OSError`, so the guard must
