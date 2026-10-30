@@ -8,14 +8,19 @@ const mock = vi.hoisted(() => ({
   features: ["steer"] as string[],
   posts: [] as { path: string; body: unknown }[],
   steerReads: 0,
+  attempts: {} as Record<string, { attempt: number; steer_unknown?: number }[]>,
 }));
 
 vi.mock("../api", () => ({
   api: {
-    GET: (path: string) => ({ method: "GET", path }),
+    GET: (path: string, opts?: { params?: { path?: { task_id?: string } } }) => ({
+      method: "GET",
+      path,
+      taskId: opts?.params?.path?.task_id,
+    }),
     POST: (path: string, opts: { body: unknown }) => ({ method: "POST", path, body: opts.body }),
   },
-  call: async (req: { method: string; path: string; body?: unknown }) => {
+  call: async (req: { method: string; path: string; body?: unknown; taskId?: string }) => {
     if (req.method === "POST") {
       mock.posts.push({ path: req.path, body: req.body });
       return {};
@@ -25,10 +30,11 @@ vi.mock("../api", () => ({
       return { attempt: 2, items: [] };
     }
     if (req.path === "/api/agents/{agent_id}") return { runtime: { features: mock.features } };
-    if (req.path === "/api/tasks/{task_id}") return mock.task;
+    if (req.path === "/api/tasks/{task_id}") return { ...mock.task, id: req.taskId };
     if (req.path === "/api/tasks/{task_id}/models") return { executions: [], timeline: [] };
     if (req.path === "/api/tasks/{task_id}/delivery") return null;
-    if (req.path === "/api/tasks/{task_id}/attempts") return [{ attempt: 1 }, { attempt: 2 }];
+    if (req.path === "/api/tasks/{task_id}/attempts")
+      return mock.attempts[req.taskId ?? ""] ?? [{ attempt: 1 }, { attempt: 2 }];
     return [];
   },
   download: vi.fn(),
@@ -85,6 +91,7 @@ beforeEach(() => {
   mock.features = ["steer"];
   mock.posts = [];
   mock.steerReads = 0;
+  mock.attempts = {};
 });
 afterEach(cleanup);
 
@@ -142,5 +149,37 @@ describe("TaskDetail actions-row steer", () => {
     render(<TaskDetail taskId="t1" onClose={() => {}} />);
     await screen.findByText("Attempt");
     await waitFor(() => expect(steerButton()).toBeNull());
+  });
+});
+
+describe("TaskDetail unknown steers", () => {
+  const note = () => screen.queryByRole("note");
+
+  it("follows the selected attempt", async () => {
+    mock.attempts.t1 = [
+      { attempt: 1, steer_unknown: 2 },
+      { attempt: 2, steer_unknown: 0 },
+    ];
+    render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    await screen.findByRole("button", { name: "Attempt 2 (current)" });
+    expect(note()).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Attempt 1" }));
+    expect((await screen.findByRole("note")).textContent).toBe(
+      "2 steers to attempt 1 unknown: may have been delivered (never acknowledged)",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Attempt 2 (current)" }));
+    await waitFor(() => expect(note()).toBeNull());
+  });
+
+  it("does not carry over to another task", async () => {
+    mock.attempts.t1 = [
+      { attempt: 1, steer_unknown: 0 },
+      { attempt: 2, steer_unknown: 1 },
+    ];
+    mock.attempts.t2 = [{ attempt: 1 }, { attempt: 2 }];
+    const { rerender } = render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    expect((await screen.findByRole("note")).textContent).toContain("1 steer to attempt 2");
+    rerender(<TaskDetail taskId="t2" onClose={() => {}} />);
+    await waitFor(() => expect(note()).toBeNull());
   });
 });

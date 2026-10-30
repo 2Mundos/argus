@@ -164,6 +164,9 @@ export function TaskSteers({
                   <>
                     sent <DateChip at={item.created_at} now={now} />
                   </>
+                ) : item.state === "unknown" ? (
+                  // Carried to the worker, never acknowledged before the attempt ended.
+                  "may have been delivered"
                 ) : (
                   item.state
                 )}
