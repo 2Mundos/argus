@@ -650,8 +650,9 @@ has arrived (and it is not mid-recycle or mid-resend), it fails the attempt with
 `reason: session_lost`, naming the container, exit code and a short redacted log
 excerpt ([stall visibility](stall-visibility.spec.md) 3.1). The full bounded
 tail is the `stderr-tail` artifact and the inline excerpt is capped at 2 KiB
-(3.12.1). The fail is retried at most three times on a transient error, never
-after a `409`; Argus then applies the automatic resume rule
+(3.12.1). On a transient error the channel keeps the task and the next
+heartbeat (which renews the lease) repeats the same fail, one in flight at a
+time, never after a `409` or once Argus ends the claim; Argus then applies the automatic resume rule
 ([failure classes](failure-classes.spec.md) 3.2). Heartbeats also carry
 per-lease `activity_at` so Argus can flag a quiet claim without killing it.
 

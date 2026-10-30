@@ -168,12 +168,6 @@ const RUNTIME_VERIFY_MS = 120_000; // how long to look for the session container
 const RECYCLE_TIMEOUT_MS = 30_000; // wait for the old container to exit after an account rotation
 /** After a session was seen, how long it may stay gone before fail session_lost. */
 const SESSION_GONE_GRACE_MS = 90_000;
-/**
- * Tries of the session_lost fail. The confirmed exit counts for the automatic resume rule
- * (failure classes 3.2) only if Argus records it; a lost fail ends as an unconfirmed
- * `lease_expired`. A repeat is safe: Argus answers 409 once one landed.
- */
-const SESSION_LOST_FAIL_TRIES = 3;
 /** A delegate with a signal (progress, log line, session heartbeat) this recent is "active". */
 const DELEGATE_ACTIVE_MS = 5 * 60_000;
 
@@ -308,8 +302,6 @@ export interface ArgusConfig {
   workspaceRoot?: () => Promise<string | null>;
   /** Test seam: the first retry delay of a task input download (default 1 s, doubling). */
   inputsBackoffMs?: number;
-  /** Test seam: the delay between tries of the session_lost fail (default 2 s). */
-  exitRetryMs?: number;
   /**
    * Node-local checkpoint store for unpublished task work (task checkpoint spec).
    * Default: `ARGUS_CHECKPOINT_DIR`; unset disables checkpoints (nothing is saved or restored).
@@ -1699,6 +1691,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   // Stall visibility: remember a session once seen; fail if it vanishes without a reply.
   let seenSessionId: string | null = null;
   let sessionMissingSince: number | null = null;
+  /**
+   * The confirmed exit (failure classes 3.2) not yet recorded by Argus. Counts for the
+   * automatic resume rule only once recorded; a dropped one would end as an unconfirmed
+   * `lease_expired`. So the task is kept, its lease renewed, and each heartbeat repeats the
+   * same report until Argus answers. A repeat is safe: Argus answers 409 once one landed.
+   */
+  let exitReport: { taskId: string; attempt: number; error: string } | null = null;
+  let exitReporting: Claim | null = null; // one report in flight, however heartbeats overlap
   let resending = false; // mid-inject / mid-resend: skip session-lost watchdog
   let sessionState: LeaseObservation["session"] = "unknown"; // what watchSession saw last
   let workspaceMissingSince: number | null = null;
@@ -1781,6 +1781,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     const task = current;
     sessionState = "unknown";
     if (!task || !sessionCarriesTask || !cfg.runtime?.sessions) return;
+    if (exitReporting === task || reportFor(task)) {
+      sessionState = "gone"; // confirmed already: only the report is left
+      if (exitReporting !== task) await reportExit(task, async () => reportFor(task)!.error);
+      return;
+    }
     // Mid-recycle / mid-resend: containers are stopped on purpose.
     if (recycleOnLease || switchFailure || resending) {
       sessionMissingSince = null;
@@ -1806,12 +1811,17 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     const now = nowMs();
     sessionMissingSince ??= now;
     if (now - sessionMissingSince < SESSION_GONE_GRACE_MS) return;
-    const missingId = seenSessionId;
+    await reportExit(task, () => exitError(task, seenSessionId!));
+  }
+
+  /** The confirmed exit's error: container, exit code and a redacted excerpt of its tail. */
+  async function exitError(task: Claim, missingId: string): Promise<string> {
+    const sessionEvidence = cfg.runtime?.sessionEvidence;
     let exitCode: number | null = null;
     let tail: SessionTail | null = null;
-    if (cfg.runtime.sessionEvidence) {
+    if (sessionEvidence) {
       try {
-        const evidence = await cfg.runtime.sessionEvidence(missingId);
+        const evidence = await sessionEvidence(missingId);
         exitCode = evidence.exitCode;
         tail = sessionTail(evidence);
       } catch {
@@ -1831,51 +1841,54 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       container: missingId,
       exitCode,
     });
-    await failSessionLost(task, error);
+    return error;
+  }
+
+  /**
+   * Report the confirmed exit once; Argus applies the automatic resume rule (failure classes
+   * 3.2) and answers with the task: `ready` when it resumed, `failed` when it did not. A
+   * transient error keeps the task: the heartbeat renews the lease and the next one repeats
+   * the report (never a sleep inside the heartbeat). A conflict or a rejection is final.
+   */
+  async function reportExit(task: Claim, error: () => Promise<string>): Promise<void> {
+    exitReporting = task; // before the first await: an overlapping heartbeat skips
+    try {
+      const report = { taskId: task.id, attempt: task.attempt, error: await error() };
+      exitReport = report;
+      const { data } = await client.call("POST", `/tasks/${task.id}/fail`, {
+        attempt: task.attempt,
+        error: report.error,
+        reason: "session_lost",
+      });
+      const state = (data as { state?: string } | null)?.state;
+      log.info("Argus recorded the session exit", { task: task.id, attempt: task.attempt, state });
+    } catch (err) {
+      const final = err instanceof ArgusError && (err.status === 409 || err.permanent);
+      log.warn(
+        final ? "Argus refused the session exit" : "Could not record the session exit (will retry)",
+        {
+          task: task.id,
+          attempt: task.attempt,
+          ...(err instanceof ArgusError
+            ? { status: err.status, code: err.code }
+            : { err: String(err).slice(0, 200) }),
+        },
+      );
+      if (!final) return;
+    } finally {
+      exitReporting = null;
+    }
+    if (current !== task) return; // the claim ended meanwhile (abandoned, finished)
     current = null;
     void cfg.runtime?.cleanup(task.id).catch(() => undefined);
     finishTask();
   }
 
-  /**
-   * Report the confirmed exit; Argus applies the automatic resume rule (failure classes 3.2)
-   * and answers with the task: `ready` when it resumed, `failed` when it did not. Retried a
-   * bounded number of times on a transient error; a conflict or a rejection is final.
-   */
-  async function failSessionLost(
-    task: Readonly<{ id: string; attempt: number }>,
-    error: string,
-  ): Promise<void> {
-    for (let tries = 1; ; tries++) {
-      try {
-        const { data } = await client.call("POST", `/tasks/${task.id}/fail`, {
-          attempt: task.attempt,
-          error,
-          reason: "session_lost",
-        });
-        const state = (data as { state?: string } | null)?.state;
-        log.info("Argus recorded the session exit", {
-          task: task.id,
-          attempt: task.attempt,
-          state,
-        });
-        return;
-      } catch (err) {
-        const final = err instanceof ArgusError && (err.status === 409 || err.permanent);
-        if (final || tries >= SESSION_LOST_FAIL_TRIES) {
-          log.warn("Could not record the session exit", {
-            task: task.id,
-            attempt: task.attempt,
-            tries,
-            ...(err instanceof ArgusError
-              ? { status: err.status, code: err.code }
-              : { err: String(err).slice(0, 200) }),
-          });
-          return;
-        }
-        await sleep(cfg.exitRetryMs ?? 2_000);
-      }
-    }
+  /** The confirmed exit of this attempt still to be recorded, if any. */
+  function reportFor(task: Claim): { error: string } | null {
+    return exitReport?.taskId === task.id && exitReport.attempt === task.attempt
+      ? exitReport
+      : null;
   }
 
   /** Probe the agent group directory; a throw or a slow probe is "unknown". */
@@ -2142,6 +2155,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     current = null;
     seenSessionId = null;
     sessionMissingSince = null;
+    exitReport = null;
     sessionState = "unknown";
     workspaceMissingSince = null;
     harnessRun = null;

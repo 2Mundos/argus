@@ -210,6 +210,26 @@ async def test_the_error_is_capped_and_the_event_has_no_text(db: Database) -> No
     assert MARKER not in json.dumps(data)
 
 
+@pytest.mark.parametrize("char", ["é", "€", "😀"], ids=["2-byte", "3-byte", "4-byte"])
+async def test_the_error_cap_is_bytes_and_never_splits_a_character(
+    db: Database, char: str
+) -> None:
+    agent = await worker(db)
+    task_id = await new_task(db)
+    attempt = await claim(db, agent, task_id)
+    error = "x" + char * 3000  # the boundary falls inside a character for each width
+    async with db.write() as tx:
+        task = await tasks.fail(
+            tx, agent, task_id, attempt, error, reason="session_lost"
+        )
+    assert task.error is not None
+    size = len(task.error.encode())
+    assert tasks.EXIT_ERROR_MAX - len(char.encode()) < size <= tasks.EXIT_ERROR_MAX
+    assert error.startswith(task.error)
+    [(_, data)] = await events(db, task_id, "task.auto_resumed")
+    assert MARKER not in json.dumps(data)
+
+
 # -- recovery epoch ----------------------------------------------------------------
 
 
@@ -311,13 +331,19 @@ async def test_environment_block_is_unchanged(db: Database, clock: FakeClock) ->
 # -- the reaper: agent_ended -------------------------------------------------------
 
 
-async def end_agent(db: Database, clock: FakeClock, task_id: str, obs) -> str:
-    """A fresh agent claims, heartbeats `obs` once, then goes silent and is lost."""
+# Heartbeats 30 s apart that saw the session gone for the whole 90 s grace.
+STABLY_GONE = (GONE,) * 4
+
+
+async def end_agent(db: Database, clock: FakeClock, task_id: str, *beats) -> str:
+    """A fresh agent claims, heartbeats `beats` 30 s apart (an observation, or
+    None for a renewal without one), then goes silent and is lost."""
     agent = await worker(db)
     attempt = await claim(db, agent, task_id)
-    clock.advance(10)
-    async with db.write() as tx:
-        await agents.heartbeat(tx, agent, [(task_id, attempt, None, obs)])
+    for obs in beats:
+        clock.advance(30)
+        async with db.write() as tx:
+            await agents.heartbeat(tx, agent, [(task_id, attempt, None, obs)])
     clock.advance(LOST_AFTER_S + 1)
     async with db.write() as tx:
         await agents.mark_lost(tx)
@@ -328,7 +354,7 @@ async def test_agent_ended_with_the_session_gone_follows_the_rule(
     db: Database, clock: FakeClock
 ) -> None:
     task_id = await new_task(db)
-    first = await end_agent(db, clock, task_id, GONE)
+    first = await end_agent(db, clock, task_id, *STABLY_GONE)
     assert await state(db, task_id) == "ready"
     assert await events(db, task_id, "task.auto_resumed") == [
         ("system", {"attempt": 1, "reason": "agent_ended"})
@@ -336,20 +362,40 @@ async def test_agent_ended_with_the_session_gone_follows_the_rule(
     # the lost agent's late fail is fenced: nothing more is recorded
     with pytest.raises(LeaseConflictError):
         await lose(db, first, task_id, 1)
-    await end_agent(db, clock, task_id, GONE)
+    await end_agent(db, clock, task_id, *STABLY_GONE)
     assert await state(db, task_id) == "failed"
     expires = await events(db, task_id, "task.expire")
     assert expires[-1][1]["auto_resume"] == "no_progress"
     assert len(await events(db, task_id, "task.auto_resumed")) == 1
 
 
-@pytest.mark.parametrize("obs", [None, RUNNING], ids=["unobserved", "running"])
-async def test_agent_ended_without_a_gone_session_is_not_confirmed(
-    db: Database, clock: FakeClock, obs
+@pytest.mark.parametrize(
+    "beats",
+    [
+        (None,),
+        (RUNNING,),
+        (GONE,),  # one listing is not a confirmation
+        (GONE, GONE, GONE),  # 60 s, short of the grace
+        (GONE, GONE, RUNNING, GONE, GONE, GONE),  # a restart breaks the run
+        (GONE, GONE, None, GONE, GONE, GONE),  # so does a renewal without one
+        (*STABLY_GONE, RUNNING),  # the last observation is what counts
+    ],
+    ids=[
+        "unobserved",
+        "running",
+        "gone-once",
+        "gone-short",
+        "restart-gap",
+        "unobserved-gap",
+        "running-last",
+    ],
+)
+async def test_agent_ended_without_a_stable_gone_session_is_not_confirmed(
+    db: Database, clock: FakeClock, beats
 ) -> None:
     task_id = await new_task(db)
     for _ in range(3):
-        await end_agent(db, clock, task_id, obs)
+        await end_agent(db, clock, task_id, *beats)
         assert await state(db, task_id) == "ready"
     assert await events(db, task_id, "task.auto_resumed") == []
 
@@ -358,15 +404,21 @@ async def test_an_observation_from_before_the_claim_does_not_confirm(
     db: Database, clock: FakeClock
 ) -> None:
     task_id = await new_task(db)
-    await end_agent(db, clock, task_id, GONE)  # resumed
+    await end_agent(db, clock, task_id, *STABLY_GONE)  # resumed
     agent = await worker(db)
     clock.advance(1)
     attempt = await claim(db, agent, task_id)
-    # a stale GONE written for this attempt but dated before its claim
+    # a stale GONE run written for this attempt but dated before its claim
     async with db.write() as tx:
         await tx.conn.execute(
-            "UPDATE tasks SET observation = ?, observation_at = ? WHERE id = ?",
-            (GONE.model_dump_json(), "2000-01-01T00:00:00+00:00", task_id),
+            "UPDATE tasks SET observation = ?, observation_at = ?, session_gone_at = ?"
+            " WHERE id = ?",
+            (
+                GONE.model_dump_json(),
+                "2000-01-01T00:05:00+00:00",
+                "2000-01-01T00:00:00+00:00",
+                task_id,
+            ),
         )
     clock.advance(LOST_AFTER_S + 1)
     async with db.write() as tx:

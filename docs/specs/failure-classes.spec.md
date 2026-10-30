@@ -79,9 +79,14 @@ reasons and adds `failure_class` to each failure row and a count per class.
       ([worker lifecycle](worker-lifecycle.spec.md) 3.8). That check is the
       confirmation.
     - `agent_ended` (the reaper ends a lost or departed agent): confirmed only
-      when the host's last lease observation for this attempt, taken after its
-      claim, reported the session `gone` (stall visibility 3.7). Without it, the
-      exit is not confirmed and keeps today's rule (requeue at once).
+      when the host's lease observations for this attempt, after its claim, saw
+      the session `gone` without a break for the same 90 s grace, up to the last
+      one (stall visibility 3.7). Each heartbeat's `gone` starts or extends
+      `tasks.session_gone_at` (migration `0058_task_session_gone_at.sql`); any
+      other session state, or a renewal without an observation, clears it, and a
+      claim or an expiry resets it. One `gone` listing (a container restart, a
+      gap) is not a confirmation. Without it, the exit is not confirmed and keeps
+      today's rule (requeue at once).
     - `stalled`, `timeout` and `lease_expired` are never confirmed exits.
   - The first confirmed exit of a task requeues it, as long as `max_attempts`
     allows. It records `task.auto_resumed` (new event; actor: the failing agent,
@@ -100,7 +105,9 @@ reasons and adds `failure_class` to each failure row and a count per class.
     `failed` whatever is left of `max_attempts`, and its `error` is the exit's own
     text (for `session_lost` the exit code and the redacted stderr excerpt the
     channel sends, at most 2 KiB, with the `stderr-tail` artifact as the full
-    tail; the server keeps at most 2,048 characters). The `task.fail` (or
+    tail; the server keeps at most 2,048 UTF-8 bytes, cut on a character
+    boundary). The reaper's own `error` is built from ids, times and enum names,
+    never session output. The `task.fail` (or
     `task.expire`) event carries `auto_resume: "no_progress"`. A retry is the
     operator's act.
   - `POST /tasks/{id}/retry` and an operator's unblock (any actor but `system`:
@@ -319,8 +326,11 @@ when the work is hard. Any other `FAIL:` is `worker_fail`.
 - Automatic resume (3.2): `fail` and the reaper's `_expire_where` apply the rule
   in the fail transaction (`_auto_resume`); migration
   `0057_events_task_kind.sql` adds the partial index it seeks; the new event
-  `task.auto_resumed`. The channel's `failSessionLost` retries a transient error
-  a bounded number of times and logs the state Argus answered.
+  `task.auto_resumed`. The channel's `reportExit` sends the fail once per
+  heartbeat: a transient error keeps the task, so the heartbeat renews its lease
+  (observed `gone`) and the next one repeats the same report, with one report in
+  flight at a time; a `409` or a rejection ends it, as does Argus ending the
+  claim. It logs the state Argus answered.
 
 ## Verification boundary
 
@@ -339,14 +349,23 @@ when the work is hard. Any other `FAIL:` is `worker_fail`.
   - retry and an operator unblock start a new epoch, a `system` unblock does not;
   - `stalled`, `timeout`, `lease_expired`, the quota fallback and an environment
     block are unchanged;
-  - `agent_ended` follows the rule only after a `gone` observation dated after
-    the claim;
+  - `agent_ended` follows the rule only after `gone` observations held for 90 s
+    after the claim, up to the last one; one `gone`, a shorter run, a run broken
+    by `running` or by a renewal without an observation, and a run dated before
+    the claim do not;
   - concurrent and repeated fails record one `task.auto_resumed`, and a stale or
     lost holder is refused;
-  - the error is capped and the event carries no error text;
+  - the error is capped in UTF-8 bytes without splitting a 2-, 3- or 4-byte
+    character, and the event carries no error text;
   - `EXPLAIN QUERY PLAN` shows each read is one seek on `events_task_kind`.
   - The channel tests (fake runtime, scripted Argus) cover one report with the
-    attempt and a redacted error, the bounded retry, no retry after a `409`, and a
-    plain reply posted as progress before the exit.
+    attempt and a redacted error, a transient error repeated on each heartbeat
+    with the lease renewed and the evidence read once, one report in flight when
+    heartbeats overlap, no repeat after a `409` or after Argus ends the claim, and
+    a plain reply posted as progress before the exit.
 - Not verified: real Docker sessions dying, a real NanoClaw host lost mid-claim,
   and any deployed node.
+- Accepted as is: the server trusts a `session_lost` from the lease holder (the
+  channel's 90 s check is the confirmation; a fenced worker can only spend its
+  own attempt), and the rule's reads are separate `LIMIT 1` seeks rather than
+  one combined query.

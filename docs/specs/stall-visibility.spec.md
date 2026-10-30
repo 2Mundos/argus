@@ -43,8 +43,8 @@ mid-resend, the channel:
 - inspects the last known container for its exit code and takes the last 40 log
   lines (at most 2 KiB, redacted like the live log);
 - `POST /tasks/{id}/fail` with `reason: "session_lost"` and an error naming the
-  container, exit code and a short log excerpt (retried at most three times on a
-  transient error, never after a `409`; Argus applies the automatic resume rule
+  container, exit code and a short log excerpt (repeated on each heartbeat while
+  a transient error keeps the lease held, never after a `409`; Argus applies the automatic resume rule
   of [failure classes](failure-classes.spec.md) 3.2);
 - finishes the task (same cleanup as any other fail).
 

@@ -107,10 +107,13 @@ WORKER_GAVE_UP = "worker_gave_up"
 
 # Exits that end the session itself; a confirmed one follows the automatic resume
 # rule (failure classes 3.2). `session_lost` is confirmed by the channel's 90 s
-# listing check, `agent_ended` only by a `gone` observation of the attempt.
+# listing check, `agent_ended` only by `gone` observations of the attempt that held
+# without a break for as long (`SESSION_GONE_STABLE_S`).
 AUTO_RESUME_REASONS = frozenset({"session_lost", "agent_ended"})
-# The server's cap on a confirmed exit's `error` (the channel sends at most 2 KiB).
+# The server's cap, in UTF-8 bytes, on an exit's `error` (the channel sends at most 2 KiB).
 EXIT_ERROR_MAX = 2048
+# The channel's session grace (worker lifecycle 3.8): how long `gone` must hold.
+SESSION_GONE_STABLE_S = 90
 
 
 # -- reads -------------------------------------------------------------------
@@ -403,6 +406,7 @@ async def claim(
             "progress_kind": None,  # a milestone belongs to one attempt
             "progress_data": None,
             "output_at": None,
+            "session_gone_at": None,
             "lease_expires_at": _deadline(tx.now, row["lease_ttl_s"]),
             "timeout_at": (
                 _deadline(tx.now, timeout)
@@ -927,7 +931,9 @@ async def renew(
     An optional third element is `activity_at` (stall visibility): clamped to
     `<= tx.now`, never moved backwards, and clears `quiet_at` when it advances.
     An optional fourth is the host's `LeaseObservation` (3.7), stored with
-    `observation_at = tx.now`; it never renews, expires or clears anything."""
+    `observation_at = tx.now`; it never renews, expires or clears anything. A
+    `gone` session starts or extends `session_gone_at`; any other observation, or
+    a renewal without one, breaks that run (failure classes 3.2)."""
     renewed: list[RenewedLease] = []
     rejected: list[RejectedLease] = []
     for item in leases:
@@ -950,9 +956,21 @@ async def renew(
             # observation_at is this transaction's time, so it is never ahead of
             # tx.now; an older write (a skewed clock) never replaces a newer one.
             await tx.conn.execute(
-                "UPDATE tasks SET observation = ?, observation_at = ? WHERE id = ?"
-                " AND (observation_at IS NULL OR observation_at <= ?)",
-                (observation.model_dump_json(), ts(tx.now), task_id, ts(tx.now)),
+                "UPDATE tasks SET observation = ?, observation_at = ?,"
+                " session_gone_at = CASE WHEN ? THEN COALESCE(session_gone_at, ?)"
+                " END WHERE id = ? AND (observation_at IS NULL OR observation_at <= ?)",
+                (
+                    observation.model_dump_json(),
+                    ts(tx.now),
+                    observation.session == "gone",
+                    ts(tx.now),
+                    task_id,
+                    ts(tx.now),
+                ),
+            )
+        else:
+            await tx.conn.execute(
+                "UPDATE tasks SET session_gone_at = NULL WHERE id = ?", (task_id,)
             )
         renewed.append(RenewedLease(task_id, attempt, deadline))
     return renewed, rejected
@@ -1188,7 +1206,7 @@ async def fail(
     kind = retry_class(reason)
     if reason == "session_lost":
         # The channel saw the container gone for 90 s: a confirmed exit.
-        error = error[:EXIT_ERROR_MAX]
+        error = _cap_utf8(error, EXIT_ERROR_MAX)
         resume = await _auto_resume(tx, row, retries=retries)
         await _apply(
             tx,
@@ -2706,6 +2724,7 @@ async def _expire_where(
                         "activity_at": None,
                         "observation": None,
                         "observation_at": None,
+                        "session_gone_at": None,
                     },
                     data=data,
                     exhausted=resume.exhausted,
@@ -2725,6 +2744,11 @@ async def _expire_where(
 # -- internals ------------------------------------------------------------------
 
 
+def _cap_utf8(text: str, limit: int) -> str:
+    """At most `limit` UTF-8 bytes of `text`, never splitting a character."""
+    return text.encode()[:limit].decode(errors="ignore")
+
+
 class _Resume(NamedTuple):
     """The automatic resume rule's verdict on one exit (failure classes 3.2)."""
 
@@ -2737,17 +2761,23 @@ _NOT_CONFIRMED = _Resume(resumed=False, exhausted=False, data={})
 
 
 def _exit_confirmed(row: aiosqlite.Row) -> bool:
-    """`agent_ended` is a confirmed exit only when the host's last observation of
-    this attempt, taken after its claim, saw the session gone (3.2, 3.7). It is
-    not held to the staleness window: the agent ended because it went silent."""
-    observation, at, claimed_at = (
+    """`agent_ended` is a confirmed exit only when the host's observations of this
+    attempt, after its claim, saw the session gone without a break for the
+    channel's grace, up to its last one (3.2, 3.7): one `gone` listing between a
+    restart and a crash is not a confirmation. The last observation is not held to
+    the staleness window: the agent ended because it went silent."""
+    observation, at, gone_at, claimed_at = (
         row["observation"],
         row["observation_at"],
+        row["session_gone_at"],
         row["claimed_at"],
     )
-    if observation is None or at is None or claimed_at is None:
+    if observation is None or at is None or gone_at is None or claimed_at is None:
         return False
-    if datetime.fromisoformat(at) < datetime.fromisoformat(claimed_at):
+    last, since = datetime.fromisoformat(at), datetime.fromisoformat(gone_at)
+    if since < datetime.fromisoformat(claimed_at):
+        return False
+    if (last - since).total_seconds() < SESSION_GONE_STABLE_S:
         return False
     try:
         return LeaseObservation.model_validate_json(observation).session == "gone"
