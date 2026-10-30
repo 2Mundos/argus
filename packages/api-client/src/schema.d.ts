@@ -571,6 +571,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/me/chat/{conversation_id}/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Chat Context
+         * @description Bounded history for seeding a new session after restart (3.4).
+         */
+        get: operations["chat_context_api_agents_me_chat__conversation_id__context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/me/chat/{conversation_id}/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Chat Session
+         * @description Remember the NanoClaw session id for resume (3.4).
+         */
+        put: operations["put_chat_session_api_agents_me_chat__conversation_id__session_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/me/heartbeat": {
         parameters: {
             query?: never;
@@ -3663,6 +3703,38 @@ export interface components {
             truncated?: components["schemas"]["Truncated"];
             /** Untracked */
             untracked?: components["schemas"]["UntrackedFile"][];
+        };
+        /**
+         * ChatContext
+         * @description Bounded seed for a new session when session_ref cannot be resumed.
+         */
+        ChatContext: {
+            /** Messages */
+            messages: components["schemas"]["Message"][];
+            /** Tasks */
+            tasks: components["schemas"]["ChatOriginTask"][];
+        };
+        /** ChatOriginTask */
+        ChatOriginTask: {
+            /** Id */
+            id: string;
+            /** State */
+            state: string;
+            /** Title */
+            title: string;
+        };
+        /**
+         * ChatSessionPut
+         * @description NanoClaw session id for resume after a container recreate (3.4).
+         */
+        ChatSessionPut: {
+            /**
+             * Restored
+             * @default false
+             */
+            restored?: boolean;
+            /** Session Ref */
+            session_ref: string;
         };
         /**
          * Check
@@ -10228,6 +10300,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chat_context_api_agents_me_chat__conversation_id__context_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatContext"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_chat_session_api_agents_me_chat__conversation_id__session_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatSessionPut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conversation"];
                 };
             };
             /** @description Validation Error */

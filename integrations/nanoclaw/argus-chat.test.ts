@@ -1,0 +1,482 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelSetup } from "./adapter.js";
+import { type ArgusConfig, createArgusAdapter } from "./argus.js";
+import {
+  chatThread,
+  createChatLoop,
+  parseChatThread,
+  renderChatInbound,
+  renderChatSeed,
+} from "./argus-chat.js";
+
+/** A long-poll that stays open until the loop aborts it. */
+const hang = (signal?: AbortSignal) =>
+  new Promise<never>((_, reject) => {
+    const abort = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort);
+  });
+
+describe("chat thread ids", () => {
+  it("round-trips conversation ids", () => {
+    expect(chatThread("c1")).toBe("argus-chat:c1");
+    expect(parseChatThread("argus-chat:c1")).toBe("c1");
+    expect(parseChatThread("argus:task:1")).toBeNull();
+    expect(parseChatThread(null)).toBeNull();
+  });
+});
+
+describe("renderChatInbound", () => {
+  it("frames the admin message as a trusted instruction", () => {
+    const text = renderChatInbound({
+      message: {
+        id: "m1",
+        conversation_id: "c1",
+        author: "admin:alice",
+        body: "Ship the fix",
+        state: "delivered",
+        turn_id: "t1",
+        created_at: "2026-10-20T12:00:00Z",
+      },
+      conversation: {
+        id: "c1",
+        kind: "chat",
+        title: "Login",
+        session_ref: null,
+      },
+    });
+    expect(text).toContain("Trusted operator instruction from admin:alice");
+    expect(text).toContain("Ship the fix");
+    expect(text).toContain("untrusted DATA");
+  });
+});
+
+describe("renderChatSeed", () => {
+  it("lists recent messages and originated tasks", () => {
+    const text = renderChatSeed({
+      messages: [
+        {
+          id: "m1",
+          conversation_id: "c1",
+          author: "admin:a",
+          body: "hi",
+          state: "answered",
+          turn_id: null,
+          created_at: "2026-10-20T12:00:00Z",
+        },
+      ],
+      tasks: [{ id: "task-1", title: "Fix login", state: "ready" }],
+    });
+    expect(text).toContain("Session restored from history");
+    expect(text).toContain("task-1");
+    expect(text).toContain("hi");
+    expect(text).toContain("untrusted DATA");
+  });
+});
+
+describe("createChatLoop", () => {
+  it("claims, injects, and posts a reply with usage", async () => {
+    const calls: { method: string; path: string; body?: unknown }[] = [];
+    let claimOnce = true;
+    const inbound: string[] = [];
+    const sleep = vi.fn(async () => undefined);
+    let stopped = false;
+
+    const loop = createChatLoop({
+      call: async (method, path, body, signal) => {
+        calls.push({ method, path, body });
+        if (method === "GET" && path.startsWith("/agents/me/chat?")) {
+          if (!claimOnce) {
+            await hang(signal); // hang until stop
+          }
+          claimOnce = false;
+          return {
+            status: 200,
+            data: {
+              message: {
+                id: "m1",
+                conversation_id: "c1",
+                author: "admin:a",
+                body: "Do it",
+                state: "delivered",
+                turn_id: "turn-1",
+                created_at: "2026-10-20T12:00:00Z",
+              },
+              conversation: {
+                id: "c1",
+                kind: "chat",
+                title: "Goal",
+                session_ref: "argus-chat:c1",
+              },
+            },
+          };
+        }
+        if (method === "POST" && path === "/agents/me/chat/c1") {
+          return { status: 200, data: { id: "reply-1" } };
+        }
+        return { status: 200, data: {} };
+      },
+      onInbound: async (_p, _t, m) => {
+        inbound.push(m.content.text);
+      },
+      platformId: "local",
+      isStopped: () => stopped,
+      claimWaitS: 1,
+      sleep,
+      log: { info: () => undefined, warn: () => undefined },
+    });
+
+    const running = loop.loop();
+    await vi.waitFor(() => expect(inbound.length).toBe(1));
+    expect(inbound[0]).toContain("Do it");
+
+    const handled = await loop.deliverChat(chatThread("c1"), "Done.", {
+      input_tokens: 10,
+      output_tokens: 4,
+      model: "claude-sonnet-5-5",
+    });
+    expect(handled).toBe(true);
+    const reply = calls.find((c) => c.method === "POST" && c.path === "/agents/me/chat/c1");
+    expect(reply?.body).toMatchObject({
+      body: "Done.",
+      turn_id: "turn-1",
+      usage: { input_tokens: 10, output_tokens: 4, model: "claude-sonnet-5-5" },
+    });
+
+    stopped = true;
+    loop.stop();
+    await running;
+  });
+
+  it("folds the history seed into the first inbound and records the session on reply", async () => {
+    const inbound: string[] = [];
+    const calls: { method: string; path: string; body?: any }[] = [];
+    let claimOnce = true;
+    let stopped = false;
+    const msg = (id: string, body: string) => ({
+      id,
+      conversation_id: "c2",
+      author: "admin:a",
+      body,
+      state: "answered",
+      turn_id: null,
+      created_at: "2026-10-20T11:00:00Z",
+    });
+    const loop = createChatLoop({
+      call: async (method, path, body, signal) => {
+        calls.push({ method, path, body });
+        if (method === "GET" && path.startsWith("/agents/me/chat?")) {
+          if (!claimOnce) await hang(signal);
+          claimOnce = false;
+          return {
+            status: 200,
+            data: {
+              message: { ...msg("m2", "Continue"), state: "delivered", turn_id: "t2" },
+              conversation: { id: "c2", kind: "chat", title: "Resume", session_ref: null },
+            },
+          };
+        }
+        if (path.endsWith("/context")) {
+          // The claimed message is already part of the history the API returns.
+          return {
+            status: 200,
+            data: { messages: [msg("old", "earlier"), msg("m2", "Continue")], tasks: [] },
+          };
+        }
+        return { status: 200, data: {} };
+      },
+      onInbound: async (_p, _t, m) => {
+        inbound.push(m.content.text);
+      },
+      platformId: "local",
+      isStopped: () => stopped,
+      claimWaitS: 1,
+      sleep: async () => undefined,
+    });
+    const running = loop.loop();
+    await vi.waitFor(() => expect(inbound.length).toBe(1));
+    expect(inbound[0]).toContain("Session restored from history");
+    expect(inbound[0]).toContain("earlier");
+    expect(inbound[0].match(/Continue/g)).toHaveLength(1);
+    expect(calls.some((c) => c.method === "PUT")).toBe(false); // not before it answered
+
+    await loop.deliverChat(chatThread("c2"), "ok");
+    const put = calls.find((c) => c.method === "PUT");
+    expect(put?.path).toBe("/agents/me/chat/c2/session");
+    expect(put?.body).toMatchObject({ session_ref: chatThread("c2"), restored: true });
+    stopped = true;
+    loop.stop();
+    await running;
+  });
+
+  it("does not record a session or seed again when the seed fetch fails", async () => {
+    const inbound: string[] = [];
+    const puts: unknown[] = [];
+    const claims: any[] = [];
+    const claim = (id: string) => ({
+      message: {
+        id,
+        conversation_id: "c3",
+        author: "admin:a",
+        body: id,
+        state: "delivered",
+        turn_id: `t-${id}`,
+        created_at: "2026-10-20T12:00:00Z",
+      },
+      conversation: { id: "c3", kind: "chat", title: "T", session_ref: null },
+    });
+    claims.push(claim("a"), claim("b"));
+    let contextCalls = 0;
+    let stopped = false;
+    let openSecond!: () => void;
+    const secondMayCome = new Promise<void>((r) => {
+      openSecond = r;
+    });
+    const loop = createChatLoop({
+      call: async (method, path, body, signal) => {
+        if (method === "GET" && path.startsWith("/agents/me/chat?")) {
+          if (claims.length === 1) await secondMayCome; // one turn per conversation
+          const next = claims.shift();
+          if (!next) await hang(signal);
+          return { status: 200, data: next };
+        }
+        if (path.endsWith("/context")) {
+          contextCalls += 1;
+          throw new Error("boom");
+        }
+        if (method === "PUT") puts.push(body);
+        return { status: 200, data: {} };
+      },
+      onInbound: async (_p, _t, m) => {
+        inbound.push(m.content.text);
+      },
+      platformId: "local",
+      isStopped: () => stopped,
+      claimWaitS: 1,
+      sleep: async () => undefined,
+    });
+    const running = loop.loop();
+    await vi.waitFor(() => expect(inbound.length).toBe(1));
+    await loop.deliverChat(chatThread("c3"), "r1");
+    openSecond();
+    await vi.waitFor(() => expect(inbound.length).toBe(2));
+    expect(contextCalls).toBe(2); // retried, not remembered as seeded
+    expect(puts[0]).toMatchObject({ restored: false });
+    stopped = true;
+    loop.stop();
+    await running;
+  });
+
+  function singleClaimLoop(opts: {
+    post: () => Promise<{ status: number; data: any }>;
+    turnTimeoutMs?: number;
+    claims?: number;
+  }) {
+    let n = opts.claims ?? 1;
+    let stopped = false;
+    const inbound: string[] = [];
+    const loop = createChatLoop({
+      call: async (method, path, _body, signal) => {
+        if (method === "GET" && path.startsWith("/agents/me/chat?")) {
+          if (n === 0) await hang(signal);
+          n -= 1;
+          return {
+            status: 200,
+            data: {
+              message: {
+                id: `m${n}`,
+                conversation_id: "c1",
+                author: "admin:a",
+                body: `body ${n}`,
+                state: "delivered",
+                turn_id: `t${n}`,
+                created_at: "2026-10-20T12:00:00Z",
+              },
+              conversation: { id: "c1", kind: "chat", title: "G", session_ref: "argus-chat:c1" },
+            },
+          };
+        }
+        if (method === "POST") return opts.post();
+        return { status: 200, data: {} };
+      },
+      onInbound: async (_p, _t, m) => {
+        inbound.push(m.content.text);
+      },
+      platformId: "local",
+      isStopped: () => stopped,
+      claimWaitS: 1,
+      turnTimeoutMs: opts.turnTimeoutMs,
+      sleep: async () => undefined,
+      log: { info: () => undefined, warn: () => undefined },
+    });
+    const running = loop.loop();
+    return {
+      loop,
+      inbound,
+      stop: async () => {
+        stopped = true;
+        loop.stop();
+        await running;
+      },
+    };
+  }
+
+  it("keeps the turn open for a redelivery after a transient POST failure", async () => {
+    let attempts = 0;
+    const h = singleClaimLoop({
+      post: async () => {
+        attempts += 1;
+        if (attempts === 1) throw Object.assign(new Error("down"), { status: 503 });
+        return { status: 200, data: {} };
+      },
+    });
+    await vi.waitFor(() => expect(h.inbound.length).toBe(1));
+    await expect(h.loop.deliverChat(chatThread("c1"), "x")).rejects.toThrow("down");
+    expect(h.loop.active.has("c1")).toBe(true);
+    await h.loop.deliverChat(chatThread("c1"), "x");
+    await vi.waitFor(() => expect(h.loop.active.size).toBe(0));
+    await h.stop();
+  });
+
+  it("ends the turn when the API refuses the reply", async () => {
+    const h = singleClaimLoop({
+      post: async () => {
+        throw Object.assign(new Error("conflict"), { status: 409 });
+      },
+    });
+    await vi.waitFor(() => expect(h.inbound.length).toBe(1));
+    await expect(h.loop.deliverChat(chatThread("c1"), "x")).rejects.toThrow("conflict");
+    await vi.waitFor(() => expect(h.loop.active.size).toBe(0));
+    await h.stop();
+  });
+
+  it("frees the conversation when no reply arrives before the turn timeout", async () => {
+    const h = singleClaimLoop({
+      post: async () => ({ status: 200, data: {} }),
+      turnTimeoutMs: 20,
+    });
+    await vi.waitFor(() => expect(h.inbound.length).toBe(1));
+    await vi.waitFor(() => expect(h.loop.active.size).toBe(0));
+    await h.stop();
+  });
+
+  it("injects a claim that arrives while a stale turn is held, instead of dropping it", async () => {
+    const h = singleClaimLoop({
+      post: async () => ({ status: 200, data: {} }),
+      claims: 2,
+    });
+    await vi.waitFor(() => expect(h.inbound.length).toBe(2));
+    expect(h.inbound[1]).toContain("body 0");
+    expect(h.loop.active.get("c1")?.messageId).toBe("m0");
+    await h.loop.deliverChat(chatThread("c1"), "done");
+    await vi.waitFor(() => expect(h.loop.active.size).toBe(0));
+    await h.stop();
+  });
+});
+
+type Call = { method: string; path: string; body: any };
+
+function fakeChatArgus() {
+  const calls: Call[] = [];
+  const queue: any[] = [
+    {
+      message: {
+        id: "m1",
+        conversation_id: "c1",
+        author: "admin:a",
+        body: "Plan the rollout",
+        state: "delivered",
+        turn_id: "turn-1",
+        created_at: "2026-10-20T12:00:00Z",
+      },
+      conversation: {
+        id: "c1",
+        kind: "chat",
+        title: "Rollout",
+        session_ref: chatThread("c1"),
+      },
+    },
+  ];
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    const path = new URL(url).pathname.replace(/^\/api/, "") + (new URL(url).search || "");
+    const body = init.body ? JSON.parse(init.body as string) : undefined;
+    calls.push({ method: init.method ?? "GET", path, body });
+    if (path === "/agents/register") {
+      return new Response(
+        JSON.stringify({
+          token: "argus_agent_x",
+          agent: { id: "orch-1", role: "orchestrator" },
+          heartbeat_interval_s: 1,
+        }),
+        { status: 201 },
+      );
+    }
+    if (path === "/agents/me/heartbeat") {
+      return new Response(JSON.stringify({ state: "active", renewed: [], rejected: [] }), {
+        status: 200,
+      });
+    }
+    if (path === "/agents/me/leave") {
+      return new Response(JSON.stringify({ state: "gone" }), { status: 200 });
+    }
+    if (path.startsWith("/agents/me/chat?")) {
+      const next = queue.shift();
+      if (next) return new Response(JSON.stringify(next), { status: 200 });
+      return new Promise<Response>((_, reject) => {
+        init.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        );
+      });
+    }
+    if (path === "/agents/me/chat/c1") {
+      return new Response(JSON.stringify({ id: "r1", body: body?.body }), { status: 200 });
+    }
+    return new Response(JSON.stringify({}), { status: 200 });
+  }) as unknown as typeof fetch;
+  return { calls, fetchImpl };
+}
+
+const live: Array<{ teardown: () => Promise<void> }> = [];
+afterEach(async () => {
+  for (const a of live.splice(0)) await a.teardown();
+});
+
+describe("createArgusAdapter orchestrator mode", () => {
+  it("registers as orchestrator, injects chat, and delivers replies", async () => {
+    const fake = fakeChatArgus();
+    const inbound: any[] = [];
+    let thread: string | null = null;
+    const setup = {
+      onInbound: vi.fn(async (_p: string, t: string | null, m: any) => {
+        thread = t;
+        inbound.push(m);
+      }),
+      onInboundEvent: vi.fn(),
+      onMetadata: vi.fn(),
+      onAction: vi.fn(),
+    } as unknown as ChannelSetup;
+    const adapter = createArgusAdapter({
+      url: "http://argus.test",
+      bootstrapToken: "argus_boot_x",
+      capabilities: [],
+      name: "orch",
+      fetch: fake.fetchImpl,
+      claimWaitS: 1,
+    } as ArgusConfig);
+    live.push(adapter);
+    await adapter.setup(setup);
+    await vi.waitFor(() => expect(inbound.length).toBe(1));
+    expect(thread).toBe(chatThread("c1"));
+    expect(inbound[0].content.text).toContain("Plan the rollout");
+
+    await adapter.deliver!("local", thread, {
+      content: { text: "Here is the plan.", usage: { input_tokens: 1, output_tokens: 2 } },
+    } as any);
+    const posted = fake.calls.find((c) => c.method === "POST" && c.path === "/agents/me/chat/c1");
+    expect(posted?.body).toMatchObject({
+      body: "Here is the plan.",
+      turn_id: "turn-1",
+      usage: { input_tokens: 1, output_tokens: 2 },
+    });
+  });
+});
