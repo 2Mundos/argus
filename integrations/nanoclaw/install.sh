@@ -43,6 +43,8 @@ cp "$here/argus-continuation-observe.test.ts" "$target/src/channels/argus-contin
 # Reply fencing: output of an earlier task never applies to the task claimed next.
 cp "$here/argus-reply-fence.test.ts" "$target/src/channels/argus-reply-fence.test.ts"
 cp "$here/argus-stall-causes.test.ts" "$target/src/channels/argus-stall-causes.test.ts"
+cp "$here/argus-stderr-tail.ts" "$target/src/channels/argus-stderr-tail.ts"
+cp "$here/argus-stderr-tail.test.ts" "$target/src/channels/argus-stderr-tail.test.ts"
 cp "$here/argus-claim-isolation.test.ts" "$target/src/channels/argus-claim-isolation.test.ts"
 mkdir -p "$target/src/channels/fixtures"
 rm -rf "$target/src/channels/fixtures/continuation"
