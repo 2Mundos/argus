@@ -22,6 +22,7 @@ STAGE = "/tmp/argus-engines/"  # noqa: S108 (a path inside the image build, not 
 # What install-engines.sh copies next to the Dockerfile: the only files a COPY may name.
 SHIPPED = (
     "install-cursor-agent.sh",
+    "install-copilot-cli.sh",
     "argus-delegate.mjs",
     "account-settings.mjs",
     "anthropic-redirect.mjs",
@@ -37,12 +38,13 @@ SHIPPED = (
 MARKER = "# ---- ncl CLI wrapper"
 BLOCK = f"""# ---- Argus specialist CLIs ---------------------------------------------------
 # claude, codex and opencode come from cli-tools.json above (pinned). The Cursor
-# agent is a checksummed tarball; argus-delegate is the non-interactive entry the
-# worker uses to hand work to any of the four. The smoke fails the build if a CLI
+# agent is a checksummed tarball; Copilot CLI is a pinned npm package; argus-delegate
+# is the non-interactive entry the worker uses to hand work to any of the five. The smoke fails the build if a CLI
 # does not run, so "in the image" is proven, not assumed. Authentication is NOT
 # part of the image: each worker logs in with the vendor client.
 COPY {" ".join(SHIPPED)} {STAGE}
 RUN sh /tmp/argus-engines/install-cursor-agent.sh \\
+ && sh /tmp/argus-engines/install-copilot-cli.sh \\
  && install -m 0644 /tmp/argus-engines/anthropic-redirect.mjs /usr/local/bin/anthropic-redirect.mjs \\
  && install -m 0755 /tmp/argus-engines/argus-delegate.mjs /usr/local/bin/argus-delegate \\
  && install -m 0644 /tmp/argus-engines/account-settings.mjs /tmp/argus-engines/model-policy.mjs /tmp/argus-engines/model-policy.defaults.json /tmp/argus-engines/milestones.mjs /tmp/argus-engines/livelog.mjs /tmp/argus-engines/changes.mjs /tmp/argus-engines/usage.mjs /usr/local/bin/ \\
@@ -52,12 +54,12 @@ RUN sh /tmp/argus-engines/install-cursor-agent.sh \\
  && install -m 0644 /tmp/argus-engines/github-api.mjs /usr/local/bin/github-api.mjs \\
  && install -m 0755 /tmp/argus-engines/github-api.mjs /usr/local/bin/argus-github-api \\
  && rm -rf /tmp/argus-engines \\
- && claude --version && codex --version && opencode --version && agent --version
+ && claude --version && codex --version && opencode --version && agent --version && copilot --version
 
 """
 MODEL_POLICY = "COPY model-policy.mjs model-policy.defaults.json /usr/local/bin/"
 COPY_RE = re.compile(
-    r"^COPY install-cursor-agent\.sh argus-delegate\.mjs(?P<rest>(?: \S+)*?) "
+    r"^COPY install-cursor-agent\.sh(?: install-copilot-cli\.sh)? argus-delegate\.mjs(?P<rest>(?: \S+)*?) "
     + re.escape(STAGE)
     + r"$",
     re.M,
@@ -82,6 +84,10 @@ STEPS = (
     (
         f"{STAGE}usage.mjs",
         " && install -m 0644 /tmp/argus-engines/usage.mjs /usr/local/bin/ \\\n",
+    ),
+    (
+        f"{STAGE}install-copilot-cli.sh",
+        " && sh /tmp/argus-engines/install-copilot-cli.sh \\\n",
     ),
     (
         f"{STAGE}anthropic-redirect.mjs",
@@ -132,12 +138,20 @@ def patch(p: Path, s: str) -> str:
         ):
             run += step
     files = ["install-cursor-agent.sh", "argus-delegate.mjs", *copy["rest"].split()]
+    if "install-copilot-cli.sh" in run and "install-copilot-cli.sh" not in files:
+        files.insert(1, "install-copilot-cli.sh")
     for name in re.findall(re.escape(STAGE) + r"([\w.-]+)", run):
         if name not in files:
             files.append(name)
     unknown = [f for f in files if f not in SHIPPED]
     if unknown:
         fail(p, f"COPY names files install-engines.sh does not ship: {unknown}")
+    if "install-copilot-cli.sh" in run and "copilot --version" not in run:
+        run = run.replace(
+            " && agent --version",
+            " && agent --version && copilot --version",
+            1,
+        )
     line = f"COPY {' '.join(dict.fromkeys(files))} {STAGE}"
     return s[: copy.start()] + line + run + s[end:]
 

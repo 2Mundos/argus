@@ -1,0 +1,58 @@
+{
+  "package": "@github/copilot",
+  "version": "1.0.105",
+  "tarballIntegrity": "sha512-k5JPVZrc0Ms4YdAmYS80OGxDvwjDZNVqDS3dxphIFUVSTFJRwcHkbHh3yUKk7MEyBjKqQYKLKNAKSF+dVmjl7A==",
+  "method": "CLI run with FAKE tokens through a local TLS-intercepting mock (scripts/copilot-cli-probe-proxy.mjs, throwaway CA, mocked /copilot_internal/user and /models; every other response 401/500). No request reached GitHub. Flags: -p --model gpt-5 -s --no-ask-user --disable-builtin-mcps --disable-client-telemetry --no-auto-update.",
+  "tokenPrefix": {
+    "github_pat_": "accepted client-side",
+    "gho_": "accepted client-side",
+    "ghu_": "accepted client-side",
+    "ghp_": "rejected locally: 'Classic Personal Access Tokens (ghp_) are not supported by Copilot.' (no network)",
+    "unprefixed": "'No authentication information found.' (token ignored)"
+  },
+  "required": [
+    {
+      "host": "api.github.com",
+      "method": "GET",
+      "path": "/copilot_internal/user",
+      "note": "token validation; without it the CLI exits 1 'could not be validated'"
+    },
+    { "host": "api.individual.githubcopilot.com", "method": "GET", "path": "/models" },
+    {
+      "host": "api.individual.githubcopilot.com",
+      "method": "POST",
+      "path": "/responses",
+      "note": "chosen when the model advertises /responses"
+    },
+    {
+      "host": "api.individual.githubcopilot.com",
+      "method": "POST",
+      "path": "/chat/completions",
+      "note": "chosen when the model advertises it"
+    },
+    {
+      "host": "api.individual.githubcopilot.com",
+      "method": "POST",
+      "path": "/v1/messages",
+      "note": "chosen when the model advertises it"
+    }
+  ],
+  "optionalNotAllowed": [
+    "api.github.com GET /copilot_internal/managed_settings",
+    "api.github.com GET /copilot_internal/team_customizations",
+    "api.github.com GET /repos/github/copilot-cli/releases (update check; --no-auto-update)",
+    "telemetry.individual.githubcopilot.com POST /telemetry (--disable-client-telemetry)",
+    "api.individual.githubcopilot.com /mcp/readonly (--disable-builtin-mcps)"
+  ],
+  "stableFailureSignals": {
+    "authRejected": [
+      "Error: Authentication failed",
+      "Error: Authentication token found but could not be validated.",
+      "Error: No authentication information found."
+    ],
+    "classicToken": "Classic Personal Access Tokens (ghp_) are not supported by Copilot.",
+    "modelCallFailed": "Execution failed: Failed to get response from the AI model; retried 5 times",
+    "exitCode": "1 for all of the above; no JSON output observed in this probe"
+  },
+  "gap": "The model-call host comes from the server's /copilot_internal/user `endpoints.api` (plan dependent). Only api.individual.githubcopilot.com is verified here; api.business./api.enterprise.githubcopilot.com seats are NOT allowlisted and need a spec decision. Premium-request-limit text was not observable offline."
+}

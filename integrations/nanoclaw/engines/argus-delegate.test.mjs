@@ -11,7 +11,9 @@ import {
   authorizedCwd,
   authStatus,
   buildCommand,
+  COPILOT_SENTINEL_TOKEN,
   CUSTOM_KEY_ENV,
+  copilotAuthRejected,
   cursorConfigDirAllowsCliWrites,
   executorJsonFailure,
   localHarnessRefusal,
@@ -940,6 +942,7 @@ test("usage: POSTs to the executor account with the bearer token only in the hea
   assert.equal(call.auth, "Bearer tok-secret-123");
   assert.deepEqual(call.body, {
     task_id: "t1",
+    attempt: 1,
     model: "claude-sonnet-5-5",
     engine: "claude",
     role: "executor",
@@ -1775,4 +1778,232 @@ test("executorJsonFailure reads the result event of an agent stream", () => {
     "empty_result",
   );
   assert.equal(executorJsonFailure("agent", "")?.kind, "empty_stdout");
+});
+
+// --- copilot (docs/specs/copilot-accounts.spec.md). FAKE tokens only; no network.
+
+const FAKE_REAL_COPILOT = "github_pat_11FAKEFAKE0000_NOT_A_REAL_TOKEN_copilot_delegate_test";
+
+/**
+ * A fake `copilot` that records its argv and the credential-related env it saw, then
+ * prints `stdout`/`stderr` and exits with `code`.
+ */
+function copilotSandbox(t, { stdout = "nonce-42", stderr = "", code = 0 } = {}) {
+  const s = sandbox(t);
+  const seen = path.join(s.dir, "seen");
+  fs.writeFileSync(path.join(s.dir, "stdout.txt"), stdout);
+  fs.writeFileSync(path.join(s.dir, "stderr.txt"), stderr);
+  s.fake(
+    "copilot",
+    [
+      'if [ "$1" = "--version" ]; then echo "GitHub Copilot CLI 1.0.105"; exit 0; fi',
+      `printf '%s\\n' "$@" > ${seen}.argv`,
+      `env > ${seen}.env`,
+      `cat ${s.dir}/stdout.txt`,
+      `cat ${s.dir}/stderr.txt >&2`,
+      `exit ${code}`,
+    ].join("\n"),
+  );
+  const policy = path.join(s.dir, "argus-model-policy.json");
+  fs.writeFileSync(
+    policy,
+    JSON.stringify(
+      policySnapshot(
+        { harness: { codex: ["luna"] }, implementation: {} },
+        {
+          task_id: "t1",
+          attempt: 1,
+          executor_account_id: "acc-cop",
+        },
+      ),
+    ),
+  );
+  s.env = {
+    ...s.env,
+    ARGUS_MODEL_POLICY_FILE: policy,
+    COPILOT_GITHUB_TOKEN: COPILOT_SENTINEL_TOKEN,
+  };
+  s.seen = seen;
+  return s;
+}
+
+test("copilot: explicit model, non-interactive flags, never a broad grant", () => {
+  const ro = buildCommand("copilot", { cwd: "/w", model: "gpt-5", readOnly: true });
+  assert.equal(ro.bin, "copilot");
+  assert.equal(ro.promptVia, "argv");
+  assert.deepEqual(ro.args, [
+    "--model",
+    "gpt-5",
+    "-s",
+    "--no-ask-user",
+    "--disable-builtin-mcps",
+    "--disable-client-telemetry",
+    "--no-auto-update",
+    "--deny-tool",
+    "write",
+    "--deny-tool",
+    "shell",
+    "-p",
+  ]);
+  const rw = buildCommand("copilot", { cwd: "/w", model: "gpt-5", readOnly: false });
+  assert.deepEqual(rw.args.slice(7), ["--allow-tool", "write", "-p"]);
+  for (const c of [ro, rw]) {
+    for (const flag of [
+      "--allow-all-tools",
+      "--allow-all",
+      "--allow-url",
+      "--share",
+      "--share-gist",
+      "--yolo",
+    ])
+      assert.equal(
+        c.args.some((a) => a === flag || a.startsWith(`${flag}=`)),
+        false,
+        flag,
+      );
+  }
+  assert.throws(() => buildCommand("copilot", { cwd: "/w", readOnly: true }), /explicit model/);
+});
+
+test("copilot: the prompt is the -p argument and the run succeeds on the sentinel", async (t) => {
+  const s = copilotSandbox(t);
+  const { code, report } = await run(
+    ["copilot", "--cwd", s.work, "--model", "gpt-5", "--read-only"],
+    {
+      env: {
+        ...s.env,
+        GH_TOKEN: FAKE_REAL_COPILOT,
+        GITHUB_TOKEN: FAKE_REAL_COPILOT,
+        GH_HOST: "x",
+        COPILOT_PROVIDER_BASE_URL: "http://x",
+      },
+      input: "say the nonce",
+    },
+  );
+  assert.equal(code, 0);
+  assert.equal(report.executor, "copilot");
+  assert.equal(report.version, "GitHub Copilot CLI 1.0.105");
+  assert.equal(report.model, "gpt-5");
+  assert.equal(report.usage.measurement, "not_reported");
+  assert.match(report.tail, /nonce-42/);
+  const argv = fs.readFileSync(`${s.seen}.argv`, "utf8").trim().split("\n");
+  // The prompt is one argv entry, but printf writes each of its lines on a row.
+  const at = argv.indexOf("-p");
+  assert.ok(at > 0 && at < argv.length - 1);
+  assert.match(argv.at(-1), /say the nonce$/);
+  const env = Object.fromEntries(
+    fs
+      .readFileSync(`${s.seen}.env`, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
+  );
+  assert.equal(env.COPILOT_GITHUB_TOKEN, COPILOT_SENTINEL_TOKEN);
+  for (const k of ["GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "COPILOT_PROVIDER_BASE_URL"])
+    assert.equal(env[k], undefined, k);
+  const runtime = path.join(fs.realpathSync(s.work), ".argus-delegate-runtime", "copilot-home");
+  assert.equal(path.dirname(env.COPILOT_HOME), runtime);
+  assert.equal(env.HOME, env.COPILOT_HOME);
+  assert.equal(env.GH_CONFIG_DIR, path.join(env.COPILOT_HOME, "gh"));
+  assert.equal(env.COPILOT_AUTO_UPDATE, "false");
+  // The per-run home is gone once the delegate has exited.
+  assert.equal(fs.existsSync(env.COPILOT_HOME), false);
+  assert.equal(JSON.stringify(report).includes(FAKE_REAL_COPILOT), false);
+});
+
+test("copilot: no model is a usage error (64) and nothing runs", async (t) => {
+  const s = copilotSandbox(t);
+  const { code, report } = await run(["copilot", "--cwd", s.work], { env: s.env });
+  assert.equal(code, 64);
+  assert.equal(report.error, "usage");
+  assert.equal(fs.existsSync(`${s.seen}.argv`), false);
+});
+
+test("copilot: no sentinel, or a real token in the env, is auth_missing (78) and nothing runs", async (t) => {
+  const s = copilotSandbox(t);
+  for (const token of [undefined, "", FAKE_REAL_COPILOT, "gho_FAKE_NOT_REAL"]) {
+    const env = { ...s.env, GH_TOKEN: FAKE_REAL_COPILOT };
+    if (token === undefined) delete env.COPILOT_GITHUB_TOKEN;
+    else env.COPILOT_GITHUB_TOKEN = token;
+    const { code, report } = await run(["copilot", "--cwd", s.work, "--model", "gpt-5"], { env });
+    assert.equal(code, 78, String(token));
+    assert.equal(report.blocked, "auth_missing");
+    assert.equal(JSON.stringify(report).includes(FAKE_REAL_COPILOT), false);
+  }
+  assert.equal(fs.existsSync(`${s.seen}.argv`), false);
+  assert.equal(authStatus("copilot", { COPILOT_GITHUB_TOKEN: COPILOT_SENTINEL_TOKEN }).ok, true);
+});
+
+test("copilot: an exact auth rejection is auth_rejected and queued for the host; no text crosses", async (t) => {
+  const s = copilotSandbox(t, {
+    stderr: "Error: Authentication token found but could not be validated.\n",
+    code: 1,
+  });
+  const { code, report } = await run(["copilot", "--cwd", s.work, "--model", "gpt-5"], {
+    env: s.env,
+  });
+  assert.equal(code, 1);
+  assert.deepEqual(report.executor_error, {
+    kind: "auth_rejected",
+    detail: "GitHub Copilot rejected the credential",
+  });
+  assert.equal(report.attempts.length, 1);
+  const records = fs
+    .readFileSync(path.join(s.dir, "argus-usage.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  assert.deepEqual(
+    records.find((r) => r.kind === "auth_rejected"),
+    {
+      v: 1,
+      kind: "auth_rejected",
+      role: "executor",
+      task_id: "t1",
+      attempt: 1,
+      account_id: "acc-cop",
+    },
+  );
+  assert.equal(JSON.stringify(report).includes(COPILOT_SENTINEL_TOKEN), false);
+});
+
+test("copilot: a model failure, a premium limit or other text is an ordinary failure", async (t) => {
+  for (const stderr of [
+    "Execution failed: Failed to get response from the AI model; retried 5 times",
+    "You have exceeded your premium request allowance.",
+    "Authentication is great, Error: Authentication failed somewhere in the prompt",
+  ]) {
+    const s = copilotSandbox(t, { stderr, code: 1 });
+    const { code, report } = await run(["copilot", "--cwd", s.work, "--model", "gpt-5"], {
+      env: s.env,
+    });
+    assert.equal(code, 1);
+    assert.equal(report.executor_error, undefined, stderr);
+    const relay = path.join(s.dir, "argus-usage.jsonl");
+    const kinds = fs.existsSync(relay)
+      ? fs
+          .readFileSync(relay, "utf8")
+          .trim()
+          .split("\n")
+          .map((l) => JSON.parse(l).kind)
+      : [];
+    assert.equal(kinds.includes("auth_rejected"), false);
+  }
+});
+
+test("copilotAuthRejected matches the pinned CLI's exact lines only", () => {
+  for (const line of [
+    "Error: Authentication failed",
+    "Error: Authentication token found but could not be validated.",
+    "Error: No authentication information found.",
+    "Classic Personal Access Tokens (ghp_) are not supported by Copilot.",
+  ])
+    assert.equal(copilotAuthRejected(`noise\n  ${line}\n`), true, line);
+  for (const text of [
+    "",
+    "authentication failed",
+    "Error: Authentication failedX",
+    "429 rate limit",
+  ])
+    assert.equal(copilotAuthRejected(text), false, text);
 });

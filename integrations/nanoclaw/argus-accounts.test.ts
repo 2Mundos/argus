@@ -25,8 +25,10 @@ import {
   classifyFailure,
   classifyLogTail,
   classifyProviderFailure,
+  copilotProblem,
   exchangeCursorApiKey,
   executorFirst,
+  executorFor,
   jwtExpiryMs,
   OneCliClient,
   preferredExecutorForLease,
@@ -35,6 +37,7 @@ import {
   sanitizeNotice,
 } from "./argus-accounts.js";
 import { sessionRepositoryProbe } from "./argus-repo-preflight.js";
+import { onecliPathMatches } from "./onecli-path-match.js";
 
 // NanoClaw's own modules are replaced, so the real `recycleRuntime` runs against a
 // fake registry of containers, not NanoClaw's database or a real container runtime.
@@ -983,7 +986,7 @@ describe("engine and executor leases in the channel", () => {
       { runtime_providers: ["anthropic", "openai", "local", "custom"], task_id: "t1", attempt: 1 },
       {
         role: "executor",
-        runtime_providers: ["anthropic", "openai", "local", "custom", "cursor"],
+        runtime_providers: ["anthropic", "openai", "local", "custom", "cursor", "copilot"],
         reuse_held: true,
         task_id: "t1",
         attempt: 1,
@@ -1234,6 +1237,162 @@ describe("cursor credential documents", () => {
   });
 });
 
+// -- copilot accounts (docs/specs/copilot-accounts.spec.md) ----------------------------
+
+// Fake tokens only: the filler says so, and no request leaves the test.
+const COPILOT_TOKEN = `github_pat_FAKE${"0".repeat(20)}_NOT_A_REAL_TOKEN`;
+const copilotLease = (over: Partial<AccountLease> = {}) =>
+  lease("copilot-1", "", {
+    provider: "copilot",
+    kind: "subscription",
+    credential: { token: COPILOT_TOKEN },
+    role: "executor",
+    ...over,
+  });
+
+/** Whether a set of generic secrets would inject on `https://host/path`, as the gateway matches. */
+const injects = (secrets: Array<Record<string, unknown>>, host: string, urlPath: string) =>
+  secrets.some(
+    (s) => s.hostPattern === host && onecliPathMatches(urlPath, String(s.pathPattern ?? "")),
+  );
+
+describe("copilot credential documents", () => {
+  const target = { identifier: "g", name: "G" };
+
+  it("is an executor-only provider run by the copilot delegate", () => {
+    expect(runtimeProviders("engine")).not.toContain("copilot");
+    expect(runtimeProviders("executor")).toContain("copilot");
+    expect(executorFor("copilot")).toBe("copilot");
+    expect(preferredExecutorForLease(codexLease(), copilotLease())).toBe("copilot");
+  });
+
+  it("maps the token to exactly the probed hosts and paths, one secret each", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
+    await applyLeases(onecli, target, [codexLease(), copilotLease()]);
+    const posts = w.calls
+      .filter((c) => c.path === "/secrets" && c.method === "POST")
+      .map((c) => c.body)
+      .filter((b) => String(b.name).startsWith("argus-g-copilot-"));
+    expect(posts.map((b) => [b.name, b.hostPattern, b.pathPattern])).toEqual([
+      ["argus-g-copilot-user", "api.github.com", "/copilot_internal/user"],
+      ["argus-g-copilot-models", "api.individual.githubcopilot.com", "/models"],
+      ["argus-g-copilot-responses", "api.individual.githubcopilot.com", "/responses"],
+      ["argus-g-copilot-chat", "api.individual.githubcopilot.com", "/chat/completions"],
+      ["argus-g-copilot-messages", "api.individual.githubcopilot.com", "/v1/messages"],
+    ]);
+    for (const b of posts) {
+      expect(b).toMatchObject({
+        type: "generic",
+        value: COPILOT_TOKEN,
+        injectionConfig: { headerName: "Authorization", valueFormat: "Bearer {value}" },
+      });
+      expect(String(b.pathPattern)).not.toContain("*");
+    }
+    for (const [host, urlPath] of [
+      ["api.github.com", "/copilot_internal/user"],
+      ["api.individual.githubcopilot.com", "/models"],
+      ["api.individual.githubcopilot.com", "/responses"],
+      ["api.individual.githubcopilot.com", "/chat/completions"],
+      ["api.individual.githubcopilot.com", "/v1/messages"],
+    ] as const)
+      expect(injects(posts, host, urlPath)).toBe(true);
+    for (const [host, urlPath] of [
+      ["api.business.githubcopilot.com", "/chat/completions"],
+      ["api.enterprise.githubcopilot.com", "/models"],
+      ["telemetry.individual.githubcopilot.com", "/telemetry"],
+      ["api.github.com", "/repos/acme/widget"],
+      ["api.github.com", "/copilot_internal/managed_settings"],
+      ["api.github.com", "/copilot_internal/user/extra"],
+      ["api.github.com", "/user"],
+      ["api.individual.githubcopilot.com", "/mcp"],
+      ["api.individual.githubcopilot.com", "/models/session"],
+      ["github.com", "/github/copilot-cli/releases"],
+    ] as const)
+      expect(injects(posts, host, urlPath), `${host}${urlPath}`).toBe(false);
+  });
+
+  it("never widens a GitHub repository secret on the shared api.github.com host", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
+    const repoLease = lease("gh", "", {
+      provider: "github",
+      role: "repository",
+      credential: { token: "github_pat_FAKE_REPOSITORY_NOT_A_REAL_TOKEN" },
+    });
+    await applyRepositoryLease(
+      onecli,
+      target,
+      repoLease,
+      "https://github.com/acme/widget",
+      ["https://github.com/acme/widget"],
+      [],
+    );
+    const before = JSON.stringify(w.onecli.secrets.filter((s) => s.name.includes("-repository-")));
+    await applyLeases(onecli, target, [codexLease(), copilotLease(), repoLease]);
+    const repo = w.onecli.secrets.filter((s) => s.name.includes("-repository-"));
+    expect(JSON.stringify(repo)).toBe(before);
+    const rest = repo.find((s) => s.name.endsWith("-rest"))!;
+    expect((rest as Record<string, unknown>).pathPattern).toBe("/repos/acme/widget/*");
+    expect(injects(repo, "api.github.com", "/copilot_internal/user")).toBe(false);
+    const copilot = w.onecli.secrets.filter((s) => s.name.startsWith("argus-g-copilot-"));
+    expect(injects(copilot, "api.github.com", "/repos/acme/widget/pulls")).toBe(false);
+    // The repository secrets stay assigned next to the Copilot ones.
+    const assigned = w.onecli.agents[0]!.secrets.map(
+      (id) => w.onecli.secrets.find((s) => s.id === id)!.name,
+    );
+    expect(assigned).toEqual(
+      expect.arrayContaining(["argus-g-repository-rest", "argus-g-copilot-user"]),
+    );
+  });
+
+  it("re-applies idempotently and unassigns every copilot secret on release", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
+    await applyLeases(onecli, target, [codexLease(), copilotLease()]);
+    await applyLeases(onecli, target, [codexLease(), copilotLease()]);
+    expect(w.onecli.secrets.filter((s) => s.name.startsWith("argus-g-copilot-"))).toHaveLength(5);
+    await applyLeases(onecli, target, [codexLease()]);
+    const after = w.onecli.agents[0]!.secrets.map(
+      (id) => w.onecli.secrets.find((s) => s.id === id)!.name,
+    );
+    expect(after).toEqual(["argus-g-openai"]);
+  });
+
+  it.each([
+    [{ token: `ghp_${"F".repeat(36)}` }, /classic personal access token \(ghp_\)/],
+    [{ token: `gho_FAKE`, extra: "x" }, /unexpected fields: extra/],
+    [{ token: "FAKE_UNPREFIXED_TOKEN" }, /must start with one of/],
+    [{ token: "github_pat_" }, /must start with one of/],
+    [{ token: "gho_FAKE TOKEN" }, /without whitespace/],
+    [{}, /non-empty string/],
+  ])("rejects %j without echoing the value", async (credential, message) => {
+    expect(copilotProblem(credential)).toMatch(message);
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
+    const err = await applyLeases(onecli, target, [
+      codexLease(),
+      copilotLease({ credential }),
+    ]).catch((e) => e);
+    expect(String(err.message)).toMatch(/copilot-1 \(copilot\)/);
+    const value = String((credential as { token?: unknown }).token ?? "");
+    if (value.length > 4) expect(String(err.message)).not.toContain(value);
+    expect(w.onecli.secrets).toEqual([]);
+  });
+
+  it.each(["github_pat_FAKE_x", "gho_FAKE_x", "ghu_FAKE_x"])("accepts %s", (token) => {
+    expect(copilotProblem({ token })).toBeNull();
+  });
+
+  it("is never an engine lease", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
+    await expect(applyLeases(onecli, target, [copilotLease({ role: "engine" })])).rejects.toThrow(
+      /executor, not an engine/,
+    );
+  });
+});
+
 describe("exchangeCursorApiKey", () => {
   it("refuses a response without a usable JWT accessToken", async () => {
     const bad = (body: unknown, status = 200) =>
@@ -1262,7 +1421,7 @@ describe("cursor executor selection in the channel", () => {
       { runtime_providers: ["anthropic", "openai", "local", "custom"], task_id: "t1", attempt: 1 },
       {
         role: "executor",
-        runtime_providers: ["anthropic", "openai", "local", "custom", "cursor"],
+        runtime_providers: ["anthropic", "openai", "local", "custom", "cursor", "copilot"],
         reuse_held: true,
         task_id: "t1",
         attempt: 1,
@@ -1456,7 +1615,7 @@ describe("task-scoped repository auth", () => {
         },
         {
           role: "executor",
-          runtime_providers: ["anthropic", "openai", "local", "custom", "cursor"],
+          runtime_providers: ["anthropic", "openai", "local", "custom", "cursor", "copilot"],
           reuse_held: true,
           task_id: REPO_ID,
           attempt: 1,
@@ -2269,7 +2428,7 @@ describe("global account selection in the channel", () => {
     expect(calls).toEqual([
       {
         role: "executor",
-        runtime_providers: ["anthropic", "openai", "local", "custom", "cursor"],
+        runtime_providers: ["anthropic", "openai", "local", "custom", "cursor", "copilot"],
         reuse_held: true,
         task_id: "t1",
         attempt: 1,
@@ -3103,6 +3262,9 @@ describe("Cursor first on a local or custom engine lease", () => {
 
   it("falls back to any executor provider when no Cursor account is usable", async () => {
     const { calls } = await executorCalls(["no_account", "no_account"]);
-    expect(calls).toEqual([["cursor"], ["anthropic", "openai", "local", "custom", "cursor"]]);
+    expect(calls).toEqual([
+      ["cursor"],
+      ["anthropic", "openai", "local", "custom", "cursor", "copilot"],
+    ]);
   });
 });
