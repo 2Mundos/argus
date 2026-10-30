@@ -2,7 +2,9 @@
 """Validate docs/ naming, spec structure, and index reachability."""
 
 import re
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -21,6 +23,8 @@ SECTIONS = [
 ]
 LINK = re.compile(r"\]\(([^)]+)\)")
 HEADING = re.compile(r"^#{1,6}\s+(.+)$", re.M)
+VERIFICATION = re.compile(r"^##\s+Verification boundary\s*$", re.M)
+RECENT_DAYS = 14
 SKIP_URL = re.compile(r"^(?:https?:|mailto:|#)")
 
 
@@ -36,6 +40,21 @@ def _heading_slugs(text: str) -> set[str]:
         counts[base] = n + 1
         slugs.add(base if n == 0 else f"{base}-{n}")
     return slugs
+
+
+def _is_recent(path: Path) -> bool:
+    """True when the spec's last commit is within RECENT_DAYS (or it is untracked)."""
+    try:
+        out = subprocess.run(
+            ["git", "log", "-1", "--format=%ct", "--", str(path)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return True
+    return not out or time.time() - int(out) <= RECENT_DAYS * 86400
 
 
 def _check_doc_links(path: Path, errors: list[str]) -> None:
@@ -60,6 +79,7 @@ def _check_doc_links(path: Path, errors: list[str]) -> None:
 
 def main() -> int:
     errors: list[str] = []
+    warnings: list[str] = []
     linked = {
         (INDEX.parent / m.split("#")[0]).resolve()
         for m in LINK.findall(INDEX.read_text())
@@ -79,6 +99,8 @@ def main() -> int:
                         for s in SECTIONS
                         if not re.search(rf"^#\s+{re.escape(s)}", text, re.M)
                     ]
+                    if not VERIFICATION.search(text) and _is_recent(doc):
+                        warnings.append(f"{rel}: missing '## Verification boundary'")
             elif "releases" in doc.parts:
                 if not RELEASE.match(doc.name):
                     errors.append(f"{rel}: name must match YYYY-MM-DD.vX-Y-Z.ref.md")
@@ -96,6 +118,8 @@ def main() -> int:
     for doc in sorted(DOCS.rglob("*.md")):
         if doc != INDEX:
             _check_doc_links(doc, errors)
+    for w in warnings:
+        print(f"warning: {w}")
     for e in errors:
         print(f"error: {e}")
     return 1 if errors else 0

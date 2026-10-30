@@ -73,3 +73,11 @@ None.
   artifact, events, knowledge, and decisions, over REST and the real MCP tools,
   plus worker refusal on REST/MCP task edit.
 - Supersedes the open "Worker read scope" note in `mcp-operations.spec.md`.
+
+## Verification boundary
+
+- Commands: `uv run pytest -q -p no:cacheprovider apps/api/tests/test_worker_read_scope.py apps/api/tests/test_worker_read_scope_mcp.py`
+- Verified: the negative cross-worker cases listed above, over REST and the MCP
+  tools, at test-client level against a test database.
+- Not verified: behaviour with real worker containers or real harnesses, and any
+  deployed or production node.

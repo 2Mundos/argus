@@ -356,3 +356,17 @@ the model-policy snapshot or `argus-delegate` output.
   and `patch-claude-rate-limit.py` (run by `install.sh`). It lives in the agent
   image: rerun `provision.sh` (README, "Updating an installed copy") and recreate
   the worker instances.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_accounts.py apps/api/tests/test_account_failover.py apps/api/tests/test_task_account_pins.py packages/core/tests/test_local_accounts.py packages/core/tests/test_quota.py`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only. These tests run the account service, lease
+  and quota-failover logic against an in-memory database, an in-memory secret store
+  and a fake clock, and the HTTP routes through a test client. They also match the
+  quota patterns against recorded notice fixtures.
+- Not verified: leasing and failover against real Claude, Codex or other harness
+  CLIs and real quota notices; the NanoClaw channel and host changes
+  (`integrations/nanoclaw`), the Claude sentinel stub and the runner quota block
+  (no test in the commands above covers them); any deployed or production node.
