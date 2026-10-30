@@ -2717,6 +2717,75 @@
         "title": "ChangesWrite",
         "type": "object"
       },
+      "ChatContext": {
+        "description": "Bounded seed for a new session when session_ref cannot be resumed.",
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/ChatOriginTask"
+            },
+            "title": "Tasks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "messages",
+          "tasks"
+        ],
+        "title": "ChatContext",
+        "type": "object"
+      },
+      "ChatOriginTask": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "state"
+        ],
+        "title": "ChatOriginTask",
+        "type": "object"
+      },
+      "ChatSessionPut": {
+        "description": "NanoClaw session id for resume after a container recreate (3.4).",
+        "properties": {
+          "restored": {
+            "default": false,
+            "title": "Restored",
+            "type": "boolean"
+          },
+          "session_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Session Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_ref"
+        ],
+        "title": "ChatSessionPut",
+        "type": "object"
+      },
       "Check": {
         "description": "One measured fact about a pool's readiness. `ok` is None when it could not\nbe verified from here (`detail` says why); only False blocks a launch.",
         "properties": {
@@ -21094,6 +21163,112 @@
           }
         ],
         "summary": "Post Chat Reply",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/api/agents/me/chat/{conversation_id}/context": {
+      "get": {
+        "description": "Bounded history for seeding a new session after restart (3.4).",
+        "operationId": "chat_context_api_agents_me_chat__conversation_id__context_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatContext"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Chat Context",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/api/agents/me/chat/{conversation_id}/session": {
+      "put": {
+        "description": "Remember the NanoClaw session id for resume (3.4).",
+        "operationId": "put_chat_session_api_agents_me_chat__conversation_id__session_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatSessionPut"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Chat Session",
         "tags": [
           "conversations"
         ]

@@ -265,6 +265,102 @@ async def test_task_origin(svc, monkeypatch: pytest.MonkeyPatch) -> None:
     assert await origin() is None  # ambiguous: no origin rather than a wrong one
 
 
+def test_chat_context_and_session_are_orchestrator_only(client: TestClient) -> None:
+    conv = client.post("/api/conversations", json={}, headers=ADMIN).json()
+    worker = bearer(agent_token(client, "worker"))
+    orch = bearer(agent_token(client, "orchestrator"))  # not in the system pool
+    for headers in (worker, orch):
+        ctx = client.get(f"/api/agents/me/chat/{conv['id']}/context", headers=headers)
+        assert ctx.status_code == 403
+        put = client.put(
+            f"/api/agents/me/chat/{conv['id']}/session",
+            json={"session_ref": "x"},
+            headers=headers,
+        )
+        assert put.status_code == 403
+
+
+def test_agent_chat_context_and_session(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from argus_api.conversations import routes as conv_routes
+
+    orch = bearer(agent_token(client, "orchestrator"))
+
+    async def allow(_db, _agent_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(conv_routes, "_require_internal_orchestrator", allow)
+
+    conv = client.post(
+        "/api/conversations", json={"title": "Goal"}, headers=ADMIN
+    ).json()
+    client.post(
+        f"/api/conversations/{conv['id']}/messages",
+        json={"body": "hello"},
+        headers=ADMIN,
+    )
+    ctx = client.get(f"/api/agents/me/chat/{conv['id']}/context", headers=orch)
+    assert ctx.status_code == 200, ctx.text
+    assert len(ctx.json()["messages"]) == 1
+    assert ctx.json()["tasks"] == []
+    missing = client.get("/api/agents/me/chat/nope/context", headers=orch)
+    assert missing.status_code == 404
+
+    put = client.put(
+        f"/api/agents/me/chat/{conv['id']}/session",
+        json={"session_ref": "argus-chat:" + conv["id"]},
+        headers=orch,
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["session_ref"] == "argus-chat:" + conv["id"]
+    msgs = client.get(f"/api/conversations/{conv['id']}/messages", headers=ADMIN).json()
+    assert not [m for m in msgs["items"] if m["author"] == "system"]
+
+    client.put(
+        f"/api/agents/me/chat/{conv['id']}/session",
+        json={"session_ref": "again", "restored": True},
+        headers=orch,
+    )
+    msgs = client.get(f"/api/conversations/{conv['id']}/messages", headers=ADMIN).json()
+    notes = [m for m in msgs["items"] if m["author"] == "system"]
+    assert [m["body"] for m in notes] == ["Session restored from history."]
+    assert (
+        client.put(
+            "/api/agents/me/chat/nope/session",
+            json={"session_ref": "x"},
+            headers=orch,
+        ).status_code
+        == 404
+    )
+
+
+async def test_chat_context_lists_origin_tasks(svc) -> None:
+    db, clock, _ = svc
+    conv = await chat(db, clock, "a")
+    other = await chat(db, clock, "b")
+    async with db.write() as tx:
+        stamp = ts(tx.now)
+        for task_id, origin, archived in (
+            ("t1", conv, None),
+            ("t2", conv, stamp),
+            ("t3", other, None),
+        ):
+            await tx.conn.execute(
+                "INSERT INTO tasks (id, kind, title, spec, acceptance, input,"
+                " required_capabilities, priority, state, requires_approval, review,"
+                " lease_ttl_s, max_attempts, created_by, created_at, updated_at, project,"
+                " origin_conversation_id, archived_at)"
+                " VALUES (?, 'generic', ?, '', '[]', '{}', '[]', 0, 'ready', 0, 'none',"
+                " 60, 3, 'test', ?, ?, 'global', ?, ?)",
+                (task_id, f"title {task_id}", stamp, stamp, origin, archived),
+            )
+    async with db.read() as conn:
+        messages, tasks = await conversations.chat_context(conn, conv)
+    assert len(messages) == 1
+    assert tasks == [("t1", "title t1", "ready")]  # archived and foreign tasks left out
+
+
 def test_enable_and_reset_converge_the_system_pool(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
