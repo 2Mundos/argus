@@ -142,7 +142,8 @@ database, reaper, reconciler, disk (64 MiB), secrets.
 
 Admission settings (validated at startup): `ARGUS_DISK_GUARD_ENABLED` (`true`),
 `ARGUS_DISK_GUARD_INTERVAL_S` (`5`, must be `> 0`), and the four byte thresholds
-above. Startup requires `clear > warn > resume > refuse >= 0` and `interval > 0`;
+above. An empty or whitespace-only value for a boolean setting means that setting's
+default. Startup requires `clear > warn > resume > refuse >= 0` and `interval > 0`;
 otherwise Argus refuses to start with a message that names the bad setting.
 `ARGUS_DISK_GUARD_PAUSE`, `..._SHED_AFTER_S`, and `..._FAIL_PAUSE_COUNT` belong to
 the pending pause/shed slice and are not introduced here.

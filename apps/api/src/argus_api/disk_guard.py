@@ -114,6 +114,11 @@ class _Machine:
     free_bytes: int | None = None
     measurement: Measurement = "unknown"
     warn_just_entered: bool = False
+    # Captured when the episode was entered; used for the warn event payload
+    # (including retries after a failed write) so the event reflects entry state.
+    warn_entry_free_bytes: int | None = None
+    warn_entry_measurement: Measurement | None = None
+    warn_entry_claim_admission: ClaimAdmission | None = None
 
 
 def _instant_band(free: int, thresholds: Thresholds) -> Band:
@@ -245,7 +250,7 @@ def group_by_device(samples: tuple[RootSample, ...]) -> list[_Group]:
             by_dev[s.st_dev] = _Group(s.st_dev, s.free_bytes)
         else:
             # Same device: free space is shared; keep one group.
-            by_dev[s.st_dev] = _Group(s.st_dev, s.free_bytes, g.unknown)
+            by_dev[s.st_dev] = _Group(s.st_dev, s.free_bytes)
     groups = list(by_dev.values())
     # Unknown applicable roots participate as their own worst-case group.
     groups.extend(_Group(st_dev=-1, free_bytes=0, unknown=True) for _ in unknowns)
@@ -299,9 +304,20 @@ def advance(
         elif free > thresholds.resume_bytes:
             refused = False
         # else: hold refusal between refuse and resume
-        # Keep a pending warn flag until the event write succeeds.
-        if machine.warn_just_entered and warn_episode:
+        # Carry a pending warn flag until the event write succeeds, even if the
+        # episode has already cleared (otherwise the episode's only event is lost).
+        entry_free = None
+        entry_meas: Measurement | None = None
+        entry_adm: ClaimAdmission | None = None
+        if machine.warn_just_entered:
             warn_just_entered = True
+            entry_free = machine.warn_entry_free_bytes
+            entry_meas = machine.warn_entry_measurement
+            entry_adm = machine.warn_entry_claim_admission
+        elif warn_just_entered:
+            entry_free = free
+            entry_meas = "measured"
+            entry_adm = "refused" if refused else "admitted"
         return _Machine(
             warn_episode=warn_episode,
             refused=refused,
@@ -310,6 +326,9 @@ def advance(
             free_bytes=free,
             measurement="measured",
             warn_just_entered=warn_just_entered,
+            warn_entry_free_bytes=entry_free,
+            warn_entry_measurement=entry_meas,
+            warn_entry_claim_admission=entry_adm,
         )
 
     # Unknown this pass: refuse; hold warn episode; maybe mark stale.
@@ -331,7 +350,16 @@ def advance(
         free_bytes=machine.free_bytes,
         measurement=measurement,
         # Preserve pending warn until a successful record clears it.
-        warn_just_entered=machine.warn_just_entered and warn_episode,
+        warn_just_entered=machine.warn_just_entered,
+        warn_entry_free_bytes=machine.warn_entry_free_bytes
+        if machine.warn_just_entered
+        else None,
+        warn_entry_measurement=machine.warn_entry_measurement
+        if machine.warn_just_entered
+        else None,
+        warn_entry_claim_admission=machine.warn_entry_claim_admission
+        if machine.warn_just_entered
+        else None,
     )
 
 
@@ -449,9 +477,14 @@ class DiskGuard:
 
     def _all_unknown_samples(self) -> tuple[RootSample, ...]:
         """Synthetic fail-closed pass when measurement raises unexpectedly."""
+        instances: RootSample = (
+            RootSample("instances", "unknown")
+            if self.settings.nanoclaw_instances_root
+            else RootSample("instances", "not_applicable")
+        )
         return (
             RootSample("data", "unknown"),
-            RootSample("instances", "unknown"),
+            instances,
             RootSample("docker", "unknown"),
         )
 
@@ -464,30 +497,33 @@ class DiskGuard:
         except Exception:
             log.exception("disk guard measurement failed")
             samples = self._all_unknown_samples()
+        # Hold the lock across advance + optional event write so concurrent
+        # measure_once calls cannot both take the same pending warn entry.
         async with self._lock:
             prev = self._machine
             self._machine = advance(prev, samples, self.thresholds, now=self._clock())
-            entered = self._machine.warn_just_entered
             snap = self.snapshot()
-        if entered:
-            async with self.db.write() as tx:
-                await record(
-                    tx,
-                    ACTOR,
-                    "system",
-                    "disk",
-                    WARN_EVENT,
-                    {
-                        "measurement": snap.measurement,
-                        "free_bytes": snap.free_bytes,
-                        "claim_admission": snap.claim_admission,
-                    },
-                )
-            # Clear only after a successful record so a failed write can retry
-            # without losing the episode's only event (and without duplicating).
-            async with self._lock:
-                if self._machine.warn_just_entered:
-                    self._machine.warn_just_entered = False
+            if self._machine.warn_just_entered:
+                payload = {
+                    "measurement": self._machine.warn_entry_measurement,
+                    "free_bytes": self._machine.warn_entry_free_bytes,
+                    "claim_admission": self._machine.warn_entry_claim_admission,
+                }
+                async with self.db.write() as tx:
+                    await record(
+                        tx,
+                        ACTOR,
+                        "system",
+                        "disk",
+                        WARN_EVENT,
+                        payload,
+                    )
+                # Clear only after a successful record so a failed write can retry
+                # without losing the episode's only event (and without duplicating).
+                self._machine.warn_just_entered = False
+                self._machine.warn_entry_free_bytes = None
+                self._machine.warn_entry_measurement = None
+                self._machine.warn_entry_claim_admission = None
         return snap
 
     async def run(self) -> None:

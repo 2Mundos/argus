@@ -367,8 +367,15 @@ def _csv(name: str) -> tuple[str, ...]:
 
 
 def _env_bool(name: str, default: str) -> bool:
-    """Parse a boolean env var; reject anything outside the known vocabulary."""
-    raw = os.environ.get(name, default).strip().lower()
+    """Parse a boolean env var; reject anything outside the known vocabulary.
+
+    Empty or whitespace-only values mean the default (compose `${VAR:-}` leaves
+    an empty string when unset in some setups); real typos still fail startup.
+    """
+    raw = os.environ.get(name, default)
+    if raw is None or not raw.strip():
+        raw = default
+    raw = raw.strip().lower()
     if raw in ("true", "1", "yes", "on"):
         return True
     if raw in ("false", "0", "no", "off"):

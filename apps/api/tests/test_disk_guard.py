@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -123,22 +124,45 @@ def guard_for(
 
 
 def test_st_dev_dedup_and_worst_band(tmp_path: Path) -> None:
-    a = tmp_path / "a"
-    b = tmp_path / "b"
-    a.mkdir()
-    b.mkdir()
+    """Same st_dev → one group; a third root on another device is separate; min wins."""
+    data = tmp_path / "data"
+    instances = tmp_path / "instances"
+    docker = tmp_path / "docker"
+    data.mkdir()
+    instances.mkdir()
+    docker.mkdir()
+    path_key = {
+        data.resolve(): "data",
+        instances.resolve(): "instances",
+        docker.resolve(): "docker",
+    }
+    # data + instances share st_dev 1 (3 GiB / 4 GiB reported); docker is st_dev 2 at 1 GiB.
+    frees = {"data": 3 * GiB, "instances": 4 * GiB, "docker": 1 * GiB}
+    devs = {"data": 1, "instances": 1, "docker": 2}
+
+    def stat(path: Path) -> FakeStat:
+        role = path_key[Path(path).resolve()]
+        return FakeStat(devs[role])
+
+    def statvfs(path: Path) -> FakeVfs:
+        role = path_key[Path(path).resolve()]
+        return FakeVfs(frees[role])
+
     samples = measure_roots(
-        data_dir=a,
-        instances_root=b,
-        docker_root=DockerRootQuery("not_applicable"),
-        stat=lambda p: FakeStat(1 if "a" in str(p) or "b" in str(p) else 2),  # type: ignore[arg-type]
-        statvfs=lambda p: FakeVfs(3 * GiB if "a" in str(p) else 1 * GiB),  # type: ignore[arg-type]
+        data_dir=data,
+        instances_root=instances,
+        docker_root=DockerRootQuery("path", docker),
+        stat=stat,  # type: ignore[arg-type]
+        statvfs=statvfs,  # type: ignore[arg-type]
     )
     groups = group_by_device(samples)
-    # Same st_dev → one group; free is from either path (same device).
     measured = [g for g in groups if not g.unknown]
-    assert len(measured) == 1
-    assert measured[0].free_bytes in (3 * GiB, 1 * GiB)
+    assert len(measured) == 2
+    by_dev = {g.st_dev: g.free_bytes for g in measured}
+    # Same device keeps one free value (whichever sample last wrote the group).
+    assert by_dev[1] in (3 * GiB, 4 * GiB)
+    assert by_dev[2] == 1 * GiB
+    assert worst_free(groups) == ("measured", 1 * GiB)
 
 
 def test_unknown_beats_measured_zero() -> None:
@@ -294,6 +318,16 @@ def test_disk_guard_enabled_boolean_vocabulary(
         Settings.from_env()
 
 
+def test_disk_guard_enabled_empty_means_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty/whitespace ARGUS_DISK_GUARD_ENABLED means the default (true), not error."""
+    monkeypatch.setenv("ARGUS_DATA_DIR", "/tmp")
+    for empty in ("", " ", "\t"):
+        monkeypatch.setenv("ARGUS_DISK_GUARD_ENABLED", empty)
+        assert Settings.from_env().disk_guard_enabled is True
+
+
 def test_stale_readmission_requires_resume_edge() -> None:
     """After a stale gap, a mid dead-band free must not re-admit."""
     from argus_api.disk_guard import _Machine
@@ -402,6 +436,115 @@ async def test_warn_event_survives_failed_then_succeeding_write(
         rows = await cur.fetchall()
     assert len(rows) == 1
     assert calls["n"] == 2
+
+
+async def test_warn_event_survives_failed_write_then_episode_clear(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pending warn survives episode clear; a later successful pass records exactly one."""
+    import argus_api.disk_guard as dg
+
+    clock = [1.0]
+    frees: dict[str, int | None] = {"data": WARN - 1}
+    g = guard_for(db, tmp_path, frees=frees, clock=clock)
+    calls = {"n": 0}
+    real_record = dg.record
+
+    async def flaky_record(tx, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("write failed")
+        return await real_record(tx, *args, **kwargs)
+
+    monkeypatch.setattr(dg, "record", flaky_record)
+    with pytest.raises(RuntimeError, match="write failed"):
+        await g.measure_once()
+    assert g._machine.warn_just_entered
+    assert g._machine.warn_episode
+    # Episode clears before the retry succeeds; pending flag must still land one event.
+    frees["data"] = CLEAR + 1
+    clock[0] = 2.0
+    await g.measure_once()
+    assert not g._machine.warn_episode
+    assert not g._machine.warn_just_entered
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT kind FROM events WHERE kind = ?", (WARN_EVENT,)) as cur,
+    ):
+        rows = await cur.fetchall()
+    assert len(rows) == 1
+    assert calls["n"] == 2
+
+
+async def test_warn_event_retry_records_entry_snapshot(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retried warn event records the entry-pass free/admission, not the retry pass."""
+    import argus_api.disk_guard as dg
+
+    clock = [1.0]
+    entry_free = WARN - 1
+    retry_free = WARN - 100
+    frees: dict[str, int | None] = {"data": entry_free}
+    g = guard_for(db, tmp_path, frees=frees, clock=clock)
+    calls = {"n": 0}
+    real_record = dg.record
+
+    async def flaky_record(tx, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("write failed")
+        return await real_record(tx, *args, **kwargs)
+
+    monkeypatch.setattr(dg, "record", flaky_record)
+    with pytest.raises(RuntimeError, match="write failed"):
+        await g.measure_once()
+    frees["data"] = retry_free
+    clock[0] = 2.0
+    await g.measure_once()
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT data FROM events WHERE kind = ?", (WARN_EVENT,)) as cur,
+    ):
+        rows = await cur.fetchall()
+    assert len(rows) == 1
+    data = json.loads(rows[0]["data"])
+    assert data["free_bytes"] == entry_free
+    assert data["free_bytes"] != retry_free
+    assert data["measurement"] == "measured"
+    assert data["claim_admission"] == "admitted"
+
+
+async def test_concurrent_warn_entry_writes_once(db: Database, tmp_path: Path) -> None:
+    """Two concurrent measure_once calls on warn entry produce exactly one event."""
+    clock = [1.0]
+    g = guard_for(db, tmp_path, frees={"data": WARN - 1}, clock=clock)
+    await asyncio.gather(g.measure_once(), g.measure_once())
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT kind FROM events WHERE kind = ?", (WARN_EVENT,)) as cur,
+    ):
+        rows = await cur.fetchall()
+    assert len(rows) == 1
+    assert not g._machine.warn_just_entered
+
+
+async def test_all_unknown_samples_instances_applicability(
+    db: Database, tmp_path: Path
+) -> None:
+    """Fail-closed synthetic samples: instances not_applicable when unset, else unknown."""
+    g_unset = guard_for(db, tmp_path)
+    samples_unset = g_unset._all_unknown_samples()
+    assert next(s for s in samples_unset if s.role == "instances").applicability == (
+        "not_applicable"
+    )
+    instances = tmp_path / "instances"
+    instances.mkdir()
+    g_set = guard_for(db, tmp_path, instances=instances)
+    samples_set = g_set._all_unknown_samples()
+    assert next(s for s in samples_set if s.role == "instances").applicability == (
+        "unknown"
+    )
 
 
 async def test_claim_refused_disk_low_no_attempt(db: Database, tmp_path: Path) -> None:
