@@ -69,11 +69,13 @@ RESULT_NEW = r"""          const resultAsError = hint ? `${candidate}\n${hint}` 
           // Argus: a quota block's error is only its one-line notice or a fixed text (claude-rate-limit.ts).
           const rateLimit = isError ? claudeRateLimitError(m.result, rateLimited) : undefined;
           rateLimited = false;
+          const authExpired = isError ? claudeAuthExpiredError(authFailed) : undefined;
+          authFailed = false;
           yield {
             type: 'result',
-            text: resultAsError || rateLimit ? null : (m.result ?? null),
+            text: resultAsError || rateLimit || authExpired ? null : (m.result ?? null),
             isError,
-            error: rateLimit ?? (m.errors?.length ? m.errors.join('\n') : resultAsError || undefined),
+            error: authExpired ?? rateLimit ?? (m.errors?.length ? m.errors.join('\n') : resultAsError || undefined),
           };
 """
 KIND = """export type ProviderFailureKind = 'auth_expired';
@@ -110,9 +112,20 @@ CLASSIFY = (
 
 
 CLAUDE_HOOK = "  if (providerName === 'claude') return claudeRateLimitFailure(error);\n"
-CLAUDE_IMPORT = (
-    "import { claudeRateLimitFailure } from './providers/claude-rate-limit.js';\n"
+CLAUDE_CLASSIFY_BLOCK = (
+    "  if (providerName === 'claude') {\n"
+    "    const auth = claudeAuthExpiredFailure(error);\n"
+    "    if (auth) return auth;\n"
+    "    return claudeRateLimitFailure(error);\n"
+    "  }\n"
 )
+CODEX_USAGE_BLOCK = (
+    "  if (providerName === 'codex') {\n"
+    "    const limit = codexUsageLimitFailure(error);\n"
+    "    if (limit) return limit;\n"
+    "  }\n"
+)
+CLAUDE_IMPORT = "import { claudeRateLimitFailure, claudeAuthExpiredFailure } from './providers/claude-rate-limit.js';\n"
 CODEX_IMPORT = (
     "import { codexUsageLimitFailure } from './providers/codex-usage-limit.js';\n"
 )
@@ -128,7 +141,11 @@ def main(root: Path) -> None:
                 "import",
                 IMPORT,
                 IMPORT
-                + "import { claudeRateLimitError } from './claude-rate-limit.js';\n",
+                + "import { claudeRateLimitError, claudeAuthExpiredError } from './claude-rate-limit.js';\n",
+                (
+                    IMPORT
+                    + "import { claudeRateLimitError } from './claude-rate-limit.js';\n",
+                ),
             ),
             (
                 "turn flag",
@@ -136,6 +153,7 @@ def main(root: Path) -> None:
                 LOOP.replace(
                     "      for await",
                     "      let rateLimited = false; // this turn's SDK error: 'rate_limit'\n"
+                    "      let authFailed = false; // assistant.error: 'authentication_failed'\n"
                     "      for await",
                 ),
             ),
@@ -144,7 +162,9 @@ def main(root: Path) -> None:
                 ASSISTANT,
                 ASSISTANT
                 + "          if ((message as { error?: string }).error === 'rate_limit')"
-                " rateLimited = true;\n",
+                " rateLimited = true;\n"
+                + "          if ((message as { error?: string }).error === 'authentication_failed')"
+                " authFailed = true;\n",
             ),
             ("result error", RESULT, RESULT_NEW),
         ],
@@ -176,16 +196,14 @@ def main(root: Path) -> None:
             (
                 "classifyProviderFailure",
                 CLASSIFY,
-                CLASSIFY
-                + "  if (providerName === 'claude') return claudeRateLimitFailure(error);\n",
+                CLASSIFY + CLAUDE_CLASSIFY_BLOCK,
+                (CLASSIFY + CLAUDE_HOOK,),
             ),
             (
                 "codex usage limit",
-                CLAUDE_HOOK,
-                CLAUDE_HOOK + "  if (providerName === 'codex') {\n"
-                "    const limit = codexUsageLimitFailure(error);\n"
-                "    if (limit) return limit;\n"
-                "  }\n",
+                CLAUDE_CLASSIFY_BLOCK,
+                CLAUDE_CLASSIFY_BLOCK + CODEX_USAGE_BLOCK,
+                (CLAUDE_HOOK + CODEX_USAGE_BLOCK,),
             ),
         ],
     )

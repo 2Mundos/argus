@@ -3193,6 +3193,13 @@ describe("Codex usage limit and expired login (account-selection.spec.md 3.6)", 
       kind: "exhausted",
       code: "auth_expired",
     });
+    expect(
+      classifyProviderFailure({ provider: "claude", kind: "auth_expired" }, "anthropic"),
+    ).toMatchObject({
+      kind: "auth_rejected",
+      reason: "Claude authentication failed",
+      source: "structured",
+    });
     expect(classifyFailure("Error: 401 token_expired", "openai")).toMatchObject({
       kind: "exhausted",
       code: "auth_expired",

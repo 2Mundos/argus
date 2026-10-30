@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  CLAUDE_AUTH_FAILED,
   CLAUDE_RATE_LIMITED,
+  claudeAuthExpiredError,
+  claudeAuthExpiredFailure,
   claudeRateLimitError,
   claudeRateLimitFailure,
 } from "./claude-rate-limit.js";
@@ -74,5 +77,22 @@ describe("claudeRateLimitFailure", () => {
     "Rate limit reached (x)",
   ])("is undefined for anything else (%p)", (error) => {
     expect(claudeRateLimitFailure(error, NOW)).toBeUndefined();
+  });
+});
+
+describe("claudeAuthExpiredError", () => {
+  it("maps the SDK authentication_failed flag only", () => {
+    expect(claudeAuthExpiredError(true)).toBe(CLAUDE_AUTH_FAILED);
+    expect(claudeAuthExpiredError(false)).toBeUndefined();
+  });
+});
+
+describe("claudeAuthExpiredFailure", () => {
+  it("turns the fixed error into structured auth_expired", () => {
+    expect(claudeAuthExpiredFailure(CLAUDE_AUTH_FAILED)).toEqual({
+      provider: "claude",
+      kind: "auth_expired",
+    });
+    expect(claudeAuthExpiredFailure("401 Unauthorized")).toBeUndefined();
   });
 });

@@ -2311,6 +2311,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const pointer = (await uploadStderrTail(task, tail)) ? STDERR_TAIL_POINTER : "";
       return boundHead(error, STDERR_TAIL_INLINE_BYTES - utf8Bytes(pointer)) + pointer;
     };
+    if (f.kind === "auth_rejected" && cfg.accounts && account) {
+      await client.call("POST", `/accounts/${account.id}/auth-rejected`, {
+        task_id: task.id,
+        attempt: task.attempt,
+        role: "engine",
+        source: f.source ?? "structured",
+      });
+    }
     if (f.kind === "exhausted" && cfg.accounts && account) {
       const exhausted = account;
       account = null;

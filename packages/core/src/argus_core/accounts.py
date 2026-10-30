@@ -388,6 +388,9 @@ class Account(BaseModel):
     credit: AccountCredit | None = None
     token_limits: dict[str, int] | None = None
     billing_day: int | None = None
+    # Past evidence only (account-usage.spec.md 3.5); never a healthy verdict.
+    last_accepted_at: datetime | None = None
+    last_rejected_at: datetime | None = None
     # `custom` accounts: where and how to call. Never contains the key.
     config: CustomConfig | None = None
     created_at: datetime
@@ -461,6 +464,18 @@ class ExhaustedReport(BaseModel):
         elif self.reset_status is not None and self.until is not None:
             raise ValueError(f"reset_status {self.reset_status!r} cannot carry until")
         return self
+
+
+class AuthRejectedReport(BaseModel):
+    """Record that the provider rejected the stored credential (account usage 3.5).
+
+    Does not exhaust the account or change its state; only writes `account.auth_rejected`.
+    """
+
+    task_id: str
+    attempt: int = Field(ge=1)
+    role: LeaseRole = "engine"
+    source: Literal["structured", "notice", "log"] | None = None
 
 
 class AwaitingQuotaRequest(BaseModel):

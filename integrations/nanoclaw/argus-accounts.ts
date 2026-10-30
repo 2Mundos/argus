@@ -842,6 +842,11 @@ export type FailureKind =
       resetText?: string;
       source?: FailureSource;
     }
+  | {
+      kind: "auth_rejected";
+      reason: string;
+      source?: FailureSource;
+    }
   | { kind: "failed"; reason: string };
 
 /** Control characters folded to spaces, whitespace collapsed: the text classified (URLs and all, so a JSON envelope still parses). */
@@ -1055,6 +1060,7 @@ export function describeLogTail(logTail: string, lines = 3, limit = 300): string
 
 /** Fixed, non-sensitive reason for a structured auth expiry; never the notice or log text. */
 const STRUCTURED_AUTH_EXPIRED_REASON = "OpenAI/Codex authentication expired";
+const STRUCTURED_CLAUDE_AUTH_REASON = "Claude authentication failed";
 const STRUCTURED_CODEX_LIMIT_REASON = "Codex usage limit reached";
 
 /** The runner's placeholder when the provider's own message did not reach the notice. */
@@ -1100,6 +1106,13 @@ export function classifyProviderFailure(
     notice?: unknown;
     reset_text?: unknown;
   };
+  if (accountProvider === "anthropic" && provider === "claude" && kind === "auth_expired") {
+    return {
+      kind: "auth_rejected",
+      reason: STRUCTURED_CLAUDE_AUTH_REASON,
+      source: "structured",
+    };
+  }
   if (accountProvider === "openai" && provider === "codex" && kind === "auth_expired") {
     return {
       kind: "exhausted",

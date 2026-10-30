@@ -38,6 +38,27 @@ export function claudeRateLimitError(
   return sdkRateLimited ? CLAUDE_RATE_LIMITED : undefined;
 }
 
+/** SDK assistant.error when the stored credential was rejected (claude-accounts.spec.md). */
+export const CLAUDE_AUTH_FAILED = "authentication_failed";
+
+/** The `error` of a failed turn the SDK marked authentication_failed, or undefined. */
+export function claudeAuthExpiredError(sdkAuthFailed: boolean): string | undefined {
+  return sdkAuthFailed ? CLAUDE_AUTH_FAILED : undefined;
+}
+
+export interface ClaudeAuthExpiredFailure {
+  provider: "claude";
+  kind: "auth_expired";
+}
+
+/** The providerFailure for `claudeAuthExpiredError`; undefined for anything else. */
+export function claudeAuthExpiredFailure(
+  error: string | undefined,
+): ClaudeAuthExpiredFailure | undefined {
+  if (error === CLAUDE_AUTH_FAILED) return { provider: "claude", kind: "auth_expired" };
+  return undefined;
+}
+
 /** The providerFailure for an error `claudeRateLimitError` produced; undefined for anything else. */
 export function claudeRateLimitFailure(
   error: string | undefined,

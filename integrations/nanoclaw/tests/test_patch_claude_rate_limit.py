@@ -80,16 +80,21 @@ def test_hooks_claude_and_the_poll_loop_once(tmp_path: Path) -> None:
     assert first.returncode == 0, first.stderr
     assert first.stdout.count("patched") == 3
     claude = (src / "providers" / "claude.ts").read_text()
-    assert "import { claudeRateLimitError } from './claude-rate-limit.js';" in claude
+    assert (
+        "import { claudeRateLimitError, claudeAuthExpiredError } from './claude-rate-limit.js';"
+        in claude
+    )
     assert "let rateLimited = false;" in claude
+    assert "let authFailed = false;" in claude
     assert ".error === 'rate_limit') rateLimited = true;" in claude
+    assert ".error === 'authentication_failed') authFailed = true;" in claude
     assert "claudeRateLimitError(m.result, rateLimited)" in claude
-    assert "error: rateLimit ?? (m.errors?.length" in claude
+    assert "claudeAuthExpiredError(authFailed)" in claude
+    assert "error: authExpired ?? rateLimit ?? (m.errors?.length" in claude
     assert "'auth_expired' | 'rate_limit'" in (src / "formatter.ts").read_text()
     poll = (src / "poll-loop.ts").read_text()
-    assert (
-        "if (providerName === 'claude') return claudeRateLimitFailure(error);" in poll
-    )
+    assert "claudeAuthExpiredFailure(error)" in poll
+    assert "claudeRateLimitFailure(error)" in poll
     assert "const limit = codexUsageLimitFailure(error);" in poll
     assert "from './providers/codex-usage-limit.js';" in poll
     assert "reset_text?: string;" in (src / "formatter.ts").read_text()
@@ -152,9 +157,7 @@ export interface ProviderFailure {
   resets_at?: string;
 }""",
 )
-CLAUDE_IMPORT = (
-    "import { claudeRateLimitFailure } from './providers/claude-rate-limit.js';\n"
-)
+CLAUDE_IMPORT = "import { claudeRateLimitFailure, claudeAuthExpiredFailure } from './providers/claude-rate-limit.js';\n"
 CODEX_IMPORT = (
     "import { codexUsageLimitFailure } from './providers/codex-usage-limit.js';\n"
 )
