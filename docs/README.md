@@ -220,6 +220,9 @@ every new dependency is judged against it.
   journey map, gaps, stream filtering, recommendations
 - [Agent resource hygiene investigation](research/2026-10-29.agent-resource-hygiene.research.md) —
   session container inheritance of pool limits, oom_score_adj and CPU shims, OOM detection, spec-update plan
+- [Auth health investigation](research/2026-10-29.auth-health.research.md) —
+  derivability of the last-accepted and last-rejected timestamps, Claude's stream auth-failure signal (2.1.296),
+  Codex `auth_expired` path, and the spec-update plan
 
 - [Preferred models](specs/model-selection.spec.md)
 - [Task difficulty, executor routing and escalation](specs/task-difficulty.spec.md) — trivial tasks prefer
