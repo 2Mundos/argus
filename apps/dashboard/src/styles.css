@@ -206,13 +206,14 @@ label.check input {
   align-items: center;
   justify-content: center;
   width: 100%;
-  gap: 0.55rem;
-  padding: 0 0.45rem;
-  font-size: 1.05rem;
-  letter-spacing: 0.04em;
+  gap: 0.6rem;
+  padding: 0.9rem 0.45rem 0.75rem;
+  font-size: 1.2rem;
 }
 .nav-side .brand img {
-  height: 4.15rem;
+  width: 2.35rem;
+  height: auto;
+  flex: 0 0 auto;
 }
 .nav-label {
   margin: 0.85rem 0.45rem 0.2rem;
@@ -373,24 +374,38 @@ label.check input {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  font-size: 0.95rem;
+  gap: 0.55rem;
+  font-size: 1.05rem;
   font-weight: 600;
   line-height: 1;
 }
 .brand img {
   display: block;
-  width: auto;
-  height: 2rem;
-  /* Dark strokes disappear on --surface; lift the mark slightly. */
-  filter: drop-shadow(0 0 0.5px rgb(255 255 255 / 0.45));
+  width: 2.35rem;
+  height: auto;
+  flex: 0 0 auto;
+  /* Soft lift so the dark mark reads on --surface. */
+  filter: drop-shadow(0 0 6px rgb(56 189 248 / 0.2));
+  /* Optical: eye mark reads a hair high next to uppercase type. */
+  transform: translateY(1px);
+}
+.brand-name {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  margin-right: -0.14em;
+  font-weight: 700;
+  line-height: 1;
+  background: linear-gradient(135deg, #f8fafc 15%, #7dd3fc 58%, #c084fc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 .login .brand {
   font-size: 1.85rem;
-  gap: 0.9rem;
+  gap: 0.85rem;
 }
 .login .brand img {
-  height: 6.5rem;
+  width: 3.6rem;
 }
 nav a {
   color: var(--muted);

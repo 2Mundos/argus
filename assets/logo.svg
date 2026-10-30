@@ -1,54 +1,201 @@
-<svg width="130" height="190" viewBox="5 -25 130 190" xmlns="http://www.w3.org/2000/svg">
+<svg width="140" height="84" viewBox="0 0 140 84" xmlns="http://www.w3.org/2000/svg">
   <defs>
+    <!-- Sclera ambient depth -->
+    <radialGradient id="scleraFill" cx="50%" cy="50%" r="55%" fx="50%" fy="42%">
+      <stop offset="0%" stop-color="#1E3A8A" stop-opacity="0.48" />
+      <stop offset="65%" stop-color="#0F172A" stop-opacity="0.76" />
+      <stop offset="100%" stop-color="#090D16" stop-opacity="0.92" />
+    </radialGradient>
+
     <!-- Gradient for the outer eye shell -->
-    <linearGradient id="eyeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#38BDF8" /> <!-- Sky Blue -->
-      <stop offset="100%" stop-color="#818CF8" /> <!-- Indigo -->
+    <linearGradient id="eyeGrad" x1="0%" y1="20%" x2="100%" y2="80%">
+      <stop offset="0%" stop-color="#22D3EE" />
+      <stop offset="50%" stop-color="#60A5FA" />
+      <stop offset="100%" stop-color="#A855F7" />
     </linearGradient>
 
-    <!-- Gradient for the central orchestrator core -->
-    <linearGradient id="coreGrad" x1="0%" y1="100%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#3B82F6" /> <!-- Blue -->
-      <stop offset="100%" stop-color="#A855F7" /> <!-- Purple -->
+    <!-- Inner rim subtle highlight -->
+    <linearGradient id="rimGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#BAE6FD" stop-opacity="0.35" />
+      <stop offset="50%" stop-color="#818CF8" stop-opacity="0.1" />
+      <stop offset="100%" stop-color="#C084FC" stop-opacity="0.3" />
+    </linearGradient>
+
+    <!-- Network spoke fade from core to wing tips -->
+    <radialGradient id="spokeGrad" cx="70" cy="42" r="56" gradientUnits="userSpaceOnUse">
+      <stop offset="20%" stop-color="#38BDF8" stop-opacity="0.75" />
+      <stop offset="70%" stop-color="#818CF8" stop-opacity="0.42" />
+      <stop offset="100%" stop-color="#64748B" stop-opacity="0.12" />
+    </radialGradient>
+
+    <!-- Gradient for the central orchestrator iris -->
+    <linearGradient id="coreGrad" x1="15%" y1="85%" x2="85%" y2="15%">
+      <stop offset="0%" stop-color="#2563EB" />
+      <stop offset="55%" stop-color="#6366F1" />
+      <stop offset="100%" stop-color="#C084FC" />
+    </linearGradient>
+
+    <!-- Bright ring gradient around pupil -->
+    <linearGradient id="pupilRing" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9" stop-opacity="0.85" />
+      <stop offset="100%" stop-color="#A855F7" stop-opacity="0.65" />
+    </linearGradient>
+
+    <!-- Code bracket gradient -->
+    <linearGradient id="codeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9" />
+      <stop offset="100%" stop-color="#38BDF8" />
     </linearGradient>
 
     <!-- Core glow effect -->
-    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="6" result="coloredBlur" />
+    <filter id="glow" x="-35%" y="-35%" width="170%" height="170%">
+      <feGaussianBlur stdDeviation="4.5" result="coloredBlur" />
       <feMerge>
         <feMergeNode in="coloredBlur" />
         <feMergeNode in="SourceGraphic" />
       </feMerge>
     </filter>
+
+    <!-- Clip internal geometry strictly to the horizontal eye contour -->
+    <clipPath id="eyeClip">
+      <path d="M 6 42 C 36 2 104 2 134 42 C 104 82 36 82 6 42 Z" />
+    </clipPath>
   </defs>
 
-  <!-- Outer Eye Path (Vesica Piscis) -->
-  <path d="M 10 70 Q 70 -20 130 70 Q 70 160 10 70 Z" fill="#1E293B" fill-opacity="0.55" stroke="url(#eyeGrad)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+  <!-- Outer Eye Path (Sleek 2:1 horizontal almond contour) -->
+  <path
+    d="M 6 42 C 36 2 104 2 134 42 C 104 82 36 82 6 42 Z"
+    fill="url(#scleraFill)"
+    stroke="url(#eyeGrad)"
+    stroke-width="3.2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
 
-  <!-- Orbit Track -->
-  <circle cx="70" cy="70" r="45" fill="none" stroke="#94A3B8" stroke-width="1.75" stroke-dasharray="6 6" />
+  <!-- Clipped Internal Fleet & Orchestration Geometry -->
+  <g clip-path="url(#eyeClip)">
+    <!-- Subtle inner iris/sclera contour -->
+    <path
+      d="M 12 42 C 39 7 101 7 128 42 C 101 77 39 77 12 42 Z"
+      fill="none"
+      stroke="url(#rimGrad)"
+      stroke-width="1"
+    />
 
-  <!-- Inner Orchestration Network Lines -->
-  <path d="M 38 38 L 70 70 L 102 38 M 38 102 L 70 70 L 102 102 M 10 70 L 130 70 M 70 10 L 70 130" fill="none" stroke="#94A3B8" stroke-width="1.75" opacity="0.85" />
+    <!-- Horizontal Elliptical Orbit Track (hugs the wide eye contour) -->
+    <ellipse
+      cx="70"
+      cy="42"
+      rx="46"
+      ry="22"
+      fill="none"
+      stroke="#64748B"
+      stroke-opacity="0.45"
+      stroke-width="1.2"
+      stroke-dasharray="3 4"
+    />
 
-  <!-- Peripheral Fleet Agents (Orbiting Nodes) -->
-  <circle cx="38" cy="38" r="5" fill="#38BDF8" />
-  <circle cx="102" cy="38" r="5" fill="#38BDF8" />
-  <circle cx="38" cy="102" r="5" fill="#818CF8" />
-  <circle cx="102" cy="102" r="5" fill="#818CF8" />
+    <!-- Inner Circular Iris Ring -->
+    <circle
+      cx="70"
+      cy="42"
+      r="25"
+      fill="none"
+      stroke="#60A5FA"
+      stroke-opacity="0.22"
+      stroke-width="1"
+    />
 
-  <!-- Compass Anchor Nodes -->
-  <circle cx="70" cy="25" r="3.5" fill="#A855F7" />
-  <circle cx="70" cy="115" r="3.5" fill="#A855F7" />
-  <circle cx="25" cy="70" r="3.5" fill="#38BDF8" />
-  <circle cx="115" cy="70" r="3.5" fill="#38BDF8" />
+    <!-- Horizontal & Wing Orchestration Network Lines -->
+    <path
+      d="M 32.5 29.5 L 107.5 54.5 M 107.5 29.5 L 32.5 54.5 M 6 42 L 134 42"
+      fill="none"
+      stroke="url(#spokeGrad)"
+      stroke-width="1.3"
+      stroke-linecap="round"
+    />
 
-  <!-- Central Orchestrator Core (Glowing) -->
-  <circle cx="70" cy="70" r="23" fill="url(#coreGrad)" filter="url(#glow)" />
+    <!-- Horizontal horizon energy accents -->
+    <path
+      d="M 13 42 L 45 42 M 95 42 L 127 42"
+      fill="none"
+      stroke="#38BDF8"
+      stroke-opacity="0.55"
+      stroke-width="1.65"
+      stroke-linecap="round"
+    />
+  </g>
+
+  <!-- Corner Terminus Nodes (Canthi) -->
+  <circle cx="6" cy="42" r="2.2" fill="#22D3EE" />
+  <circle cx="134" cy="42" r="2.2" fill="#A855F7" />
+
+  <!-- Lateral Horizon Anchor Nodes -->
+  <g>
+    <circle cx="24" cy="42" r="4" fill="#0B1120" stroke="#38BDF8" stroke-width="1.6" />
+    <circle cx="24" cy="42" r="1.5" fill="#BAE6FD" />
+
+    <circle cx="116" cy="42" r="4" fill="#0B1120" stroke="#818CF8" stroke-width="1.6" />
+    <circle cx="116" cy="42" r="1.5" fill="#E0E7FF" />
+  </g>
+
+  <!-- Peripheral Fleet Agents (Wing nodes along the horizontal ellipse) -->
+  <g>
+    <circle cx="32.5" cy="29.5" r="5.2" fill="#38BDF8" fill-opacity="0.2" />
+    <circle cx="32.5" cy="29.5" r="3.5" fill="#0B1120" stroke="#38BDF8" stroke-width="1.8" />
+    <circle cx="32.5" cy="29.5" r="1.4" fill="#E0F2FE" />
+
+    <circle cx="107.5" cy="29.5" r="5.2" fill="#60A5FA" fill-opacity="0.2" />
+    <circle cx="107.5" cy="29.5" r="3.5" fill="#0B1120" stroke="#60A5FA" stroke-width="1.8" />
+    <circle cx="107.5" cy="29.5" r="1.4" fill="#E0F2FE" />
+
+    <circle cx="32.5" cy="54.5" r="5.2" fill="#818CF8" fill-opacity="0.2" />
+    <circle cx="32.5" cy="54.5" r="3.5" fill="#0B1120" stroke="#818CF8" stroke-width="1.8" />
+    <circle cx="32.5" cy="54.5" r="1.4" fill="#E0E7FF" />
+
+    <circle cx="107.5" cy="54.5" r="5.2" fill="#A855F7" fill-opacity="0.2" />
+    <circle cx="107.5" cy="54.5" r="3.5" fill="#0B1120" stroke="#A855F7" stroke-width="1.8" />
+    <circle cx="107.5" cy="54.5" r="1.4" fill="#F3E8FF" />
+  </g>
+
+  <!-- Central Orchestrator Core (Glowing Iris) -->
+  <circle cx="70" cy="42" r="20" fill="url(#coreGrad)" filter="url(#glow)" />
+
+  <!-- Iris Internal Detail Ring -->
+  <circle
+    cx="70"
+    cy="42"
+    r="17.2"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-opacity="0.22"
+    stroke-width="0.8"
+    stroke-dasharray="2 2.5"
+  />
 
   <!-- Inner Pupil (Deep contrast for depth) -->
-  <circle cx="70" cy="70" r="16" fill="#020617" />
+  <circle
+    cx="70"
+    cy="42"
+    r="13.8"
+    fill="#030712"
+    stroke="url(#pupilRing)"
+    stroke-width="1.15"
+  />
+
+  <!-- Specular Lens Reflections -->
+  <circle cx="62.5" cy="33" r="1.9" fill="#FFFFFF" fill-opacity="0.32" />
+  <circle cx="65.5" cy="31" r="0.85" fill="#FFFFFF" fill-opacity="0.2" />
 
   <!-- Software Development Code Brackets (< >) inside the pupil -->
-  <path d="M 66 63 L 59 70 L 66 77 M 74 63 L 81 70 L 74 77" fill="none" stroke="#22D3EE" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+  <path
+    d="M 66 36.5 L 60.5 42 L 66 47.5 M 74 36.5 L 79.5 42 L 74 47.5"
+    fill="none"
+    stroke="url(#codeGrad)"
+    stroke-width="2.2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <!-- Central Orchestrator Pulse Dot -->
+  <circle cx="70" cy="42" r="1.4" fill="#67E8F9" />
 </svg>
