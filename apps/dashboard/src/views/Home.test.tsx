@@ -107,7 +107,9 @@ describe("Home", () => {
       decisions: { by_state: zeros("open"), open_by_kind: {}, open_by_audience: {} },
       knowledge: { pages_by_state: {}, proposals_by_state: zeros("open") },
     };
-    render(<Home />);
+    render(<Home onOpenSetup={() => {}} />);
+    expect(screen.getByRole("heading", { name: "Dashboard" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Set up" })).toBeTruthy();
     expect(await screen.findByText("Awaiting approval")).toBeTruthy();
     expect(screen.getByText("Quota is not measured by Argus.")).toBeTruthy();
     expect(screen.queryByText("All states")).toBeNull();

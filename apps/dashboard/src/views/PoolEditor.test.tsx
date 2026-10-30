@@ -12,9 +12,11 @@ const net = vi.hoisted(() => {
   const Base = globalThis.Request;
   globalThis.Request = class extends Base {
     constructor(input: RequestInfo | URL, init?: RequestInit) {
+      // openapi-fetch passes AbortSignal from React effects; jsdom rejects cross-realm signals.
+      const next = init?.signal ? { ...init, signal: undefined } : init;
       super(
         typeof input === "string" && input.startsWith("/") ? `http://localhost${input}` : input,
-        init,
+        next,
       );
     }
   } as typeof Request;

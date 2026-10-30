@@ -149,6 +149,10 @@ every new dependency is judged against it.
   before a code task succeeds
 - [Routines](specs/routines.spec.md) — cron-scheduled task templates per project;
   run findings become deduplicated tasks, approval-gated by default
+- [Internal orchestrator](specs/internal-orchestrator.spec.md) — Argus hosts its own
+  orchestrator as a system pool; chat with it is the main page; spend cap; skill improvements
+- [Onboarding](specs/onboarding.spec.md) — a wizard from a fresh install to an account,
+  a first worker and optionally the internal orchestrator; Home becomes Dashboard
 
 ### Drafts
 

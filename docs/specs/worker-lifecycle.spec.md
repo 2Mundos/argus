@@ -543,7 +543,8 @@ are also revoked; revocation does not wait for an unreachable container to stop.
 
 **The orchestrator** starts outside Argus: an admin mints a bootstrap token with
 `role: orchestrator` and the orchestrator registers like any agent. Running it
-as a managed pool of size 1 uses the same model and comes later.
+as a managed pool of size 1 uses the same model: see
+[internal orchestrator](internal-orchestrator.spec.md).
 
 ## 3.7 Interfaces
 

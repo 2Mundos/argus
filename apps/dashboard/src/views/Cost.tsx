@@ -100,6 +100,18 @@ export function Report({ report, tz }: { report: CostReport; tz: string }) {
         currency={currency}
         label="Project"
       />
+      <h3>Orchestrator</h3>
+      <Table
+        rows={[
+          {
+            key: "orchestrator",
+            name: "Internal orchestrator (chat)",
+            f: report.orchestrator,
+          },
+        ]}
+        currency={currency}
+        label="Source"
+      />
       <p className="muted small" data-testid="pricing-note">
         {pricingNote(pricing)}
       </p>

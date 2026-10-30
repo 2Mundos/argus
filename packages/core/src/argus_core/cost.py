@@ -65,4 +65,6 @@ class CostReport(BaseModel):
     unattributed: CostFigures  # attempt placeholders with no account (3.10)
     by_account: list[AccountCost]
     by_project: list[ProjectCost]
+    # Chat turns for the internal orchestrator (internal-orchestrator 3.7); not in totals.
+    orchestrator: CostFigures
     daily: list[DayCost]

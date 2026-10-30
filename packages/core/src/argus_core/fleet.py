@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 from urllib.parse import SplitResult, parse_qs, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -311,6 +312,8 @@ class Pool(PoolUpsert):
     created_at: datetime
     updated_at: datetime
     version: str  # updated_at as stored; PATCH takes it as expected_version
+    # Set only by the server for the internal orchestrator pool; never via upsert.
+    system: Literal["orchestrator"] | None = None
 
 
 REDACTED = "***"

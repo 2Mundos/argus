@@ -35,7 +35,11 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestCli
 def test_registry_lists_phase1_keys(client: TestClient) -> None:
     body = client.get("/api/settings/registry", headers=ADMIN).json()
     keys = {d["key"] for d in body}
-    assert keys == {"models", "review.independent"}
+    assert "models" in keys
+    assert "review.independent" in keys
+    assert "onboarding.dismissed" in keys
+    assert "orchestrator.enabled" in keys
+    assert "orchestrator.daily_budget_usd" in keys
     review = next(d for d in body if d["key"] == "review.independent")
     assert review["default"] == {"mode": "off", "max_rounds": 3}
     assert "schema" in review

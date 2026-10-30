@@ -16,6 +16,7 @@ import {
   readinessFor,
   select,
   verdict,
+  workerTemplates,
 } from "../guided";
 
 /** The guided form: pick a worker template, confirm, create. It only edits local
@@ -74,7 +75,7 @@ export function GuidedWorkerForm(props: {
       )}
       <fieldset className="choices">
         <legend>1. What kind of worker?</legend>
-        {catalog.templates.map((t) => (
+        {workerTemplates(catalog).map((t) => (
           <TemplateChoice
             key={t.id}
             template={t}

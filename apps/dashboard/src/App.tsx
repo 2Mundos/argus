@@ -6,6 +6,7 @@ import { verdict } from "./overview";
 import { Home } from "./views/Home";
 import { LiveStatusBar } from "./views/LiveStatusBar";
 import { Login } from "./views/Login";
+import { OnboardingHost } from "./views/Onboarding";
 import { WorkerPanelProvider } from "./WorkerPanel";
 import { WorkersSidebar } from "./WorkersSidebar";
 
@@ -14,6 +15,7 @@ const AgentDetail = lazy(() =>
   import("./views/AgentDetail").then((m) => ({ default: m.AgentDetail })),
 );
 const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
+const Chat = lazy(() => import("./views/Chat").then((m) => ({ default: m.Chat })));
 const Cost = lazy(() => import("./views/Cost").then((m) => ({ default: m.Cost })));
 const Engines = lazy(() => import("./views/Engines").then((m) => ({ default: m.Engines })));
 const Events = lazy(() => import("./views/Events").then((m) => ({ default: m.Events })));
@@ -25,7 +27,8 @@ const Settings = lazy(() => import("./views/Settings").then((m) => ({ default: m
 const Tasks = lazy(() => import("./views/Tasks").then((m) => ({ default: m.Tasks })));
 
 const TABS = {
-  home: "Home",
+  chat: "Chat",
+  dashboard: "Dashboard",
   inbox: "Inbox",
   tasks: "Tasks",
   workers: "Workers",
@@ -50,8 +53,9 @@ const SETUP_SUB = {
 } as const;
 type SetupSub = keyof typeof SETUP_SUB;
 
-/** Old top-level hashes → nested path under Workers / Setup. */
+/** Old top-level hashes → nested path under Workers / Setup, or the Dashboard rename. */
 const LEGACY: Record<string, string> = {
+  home: "dashboard",
   frota: "workers/fleet",
   agents: "workers/agents",
   pools: "workers/pools",
@@ -64,7 +68,7 @@ const LEGACY: Record<string, string> = {
 };
 
 type Route =
-  | { tab: "home" | "inbox" | "knowledge" }
+  | { tab: "chat" | "dashboard" | "inbox" | "knowledge" }
   | { tab: "tasks"; taskId: string | null }
   | { tab: "workers"; sub: WorkersSub }
   | { tab: "setup"; sub: SetupSub };
@@ -81,7 +85,7 @@ function canonicalizeHash(): void {
   history.replaceState(null, "", `#${next}`);
 }
 
-function parseRoute(): Route {
+export function parseRoute(): Route {
   canonicalizeHash();
   const parts = window.location.hash.slice(1).split("/").filter(Boolean);
   const head = parts[0] ?? "";
@@ -95,8 +99,11 @@ function parseRoute(): Route {
     const sub = leaf && leaf in SETUP_SUB ? (leaf as SetupSub) : "settings";
     return { tab: "setup", sub };
   }
-  if (head === "inbox" || head === "knowledge" || head === "home") return { tab: head };
-  return { tab: "home" };
+  if (head === "inbox" || head === "knowledge" || head === "dashboard" || head === "chat") {
+    return { tab: head };
+  }
+  // Empty/invalid: Shell may rewrite to #chat when the orchestrator is on.
+  return { tab: "dashboard" };
 }
 
 export function App() {
@@ -116,7 +123,8 @@ export function App() {
 }
 
 const PAGES: { href: string; label: string }[] = [
-  { href: "#home", label: "Home" },
+  { href: "#chat", label: "Chat" },
+  { href: "#dashboard", label: "Dashboard" },
   { href: "#tasks", label: "Tasks" },
   { href: "#inbox", label: "Inbox" },
   { href: "#workers/agents", label: "Agents" },
@@ -201,7 +209,8 @@ function PageSearch() {
 }
 
 function isCurrent(href: string, route: Route): boolean {
-  if (href === "#home") return route.tab === "home";
+  if (href === "#chat") return route.tab === "chat";
+  if (href === "#dashboard") return route.tab === "dashboard";
   if (href === "#tasks") return route.tab === "tasks";
   if (href === "#inbox") return route.tab === "inbox";
   if (href === "#knowledge") return route.tab === "knowledge";
@@ -302,12 +311,17 @@ function ServerBox({ system }: { system: SystemSummary | undefined }) {
 function Shell({ onSignOut }: { onSignOut: () => void }) {
   const [route, setRoute] = useState<Route>(parseRoute);
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
+  const [onboardingStep, setOnboardingStep] = useState<1 | 2 | 3 | null>(null);
   const { status } = useLive();
   const { data: overview } = useLiveData(
     (signal) => call(api.GET("/api/overview", { signal })),
     [],
   );
   const { data: system } = useLiveData((signal) => call(api.GET("/api/system", { signal })), []);
+  const { data: onboarding } = useLiveData(
+    (signal) => call(api.GET("/api/onboarding", { signal })),
+    [],
+  );
   useEffect(() => {
     const onHash = () => {
       setRoute(parseRoute());
@@ -316,9 +330,16 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+  useEffect(() => {
+    if (!onboarding) return;
+    const raw = window.location.hash.slice(1);
+    if (raw) return;
+    window.location.hash = onboarding.orchestrator ? "#chat" : "#dashboard";
+  }, [onboarding]);
 
   const openDecisions = overview?.decisions.by_state.open;
   const awaiting = overview?.tasks.awaiting_approval;
+  const openSetup = useCallback((step: 1 | 2 | 3 = 1) => setOnboardingStep(step), []);
 
   return (
     <WorkerPanelProvider selectedId={selectedWorker} openWorker={setSelectedWorker}>
@@ -326,7 +347,8 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
         <aside className="nav-side">
           <Brand as="strong" />
           <nav aria-label="Primary">
-            <NavLink href="#home" current={isCurrent("#home", route)} label="Home" />
+            <NavLink href="#chat" current={isCurrent("#chat", route)} label="Chat" />
+            <NavLink href="#dashboard" current={isCurrent("#dashboard", route)} label="Dashboard" />
             <NavLink
               href="#tasks"
               current={isCurrent("#tasks", route)}
@@ -410,20 +432,25 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
                   variant="panel"
                 />
               ) : (
-                <RouteView route={route} />
+                <RouteView route={route} onOpenSetup={openSetup} />
               )}
             </Suspense>
           </main>
         </div>
         <WorkersSidebar selectedId={selectedWorker} />
         <LiveStatusBar />
+        <OnboardingHost
+          requestOpen={onboardingStep}
+          onRequestHandled={() => setOnboardingStep(null)}
+        />
       </div>
     </WorkerPanelProvider>
   );
 }
 
 const NAV_ICON: Record<string, string> = {
-  "#home": "M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z",
+  "#chat": "M4 6h16v10a2 2 0 0 1-2 2H8l-4 4z",
+  "#dashboard": "M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z",
   "#tasks": "M9 6h11M9 12h11M9 18h11M5 6h.01M5 12h.01M5 18h.01",
   "#inbox": "M4 5h16v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM4 5l8 6 8-6",
   "#workers/agents":
@@ -477,10 +504,18 @@ function NavLink({
   );
 }
 
-function RouteView({ route }: { route: Route }) {
+function RouteView({
+  route,
+  onOpenSetup,
+}: {
+  route: Route;
+  onOpenSetup: (step?: 1 | 2 | 3) => void;
+}) {
   switch (route.tab) {
-    case "home":
-      return <Home />;
+    case "chat":
+      return <Chat onOpenSetup={onOpenSetup} />;
+    case "dashboard":
+      return <Home onOpenSetup={() => onOpenSetup(1)} />;
     case "inbox":
       return <Inbox />;
     case "tasks":

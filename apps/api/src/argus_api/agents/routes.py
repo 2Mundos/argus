@@ -227,5 +227,9 @@ async def get_agent_models(agent_id: str, db: DbDep, _: CallerDep) -> AgentModel
 @router.post("/{agent_id}/drain")
 async def drain(agent_id: str, db: DbDep, caller: ManagerDep) -> Agent:
     """Let the agent finish its current work, then claim nothing new."""
+    from argus_api.orchestrator import require_not_internal_orchestrator
+
+    async with db.read() as conn:
+        await require_not_internal_orchestrator(conn, caller, action="drain_agent")
     async with db.write() as tx:
         return await service.drain(tx, agent_id, caller.actor)

@@ -8,8 +8,9 @@ from argus_core.settings import (
     SettingValue,
     SettingWrite,
 )
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
+from argus_api import orchestrator
 from argus_api.deps import AdminDep, CallerDep, DbDep, SettingsDep
 from argus_api.settings import registry, service
 
@@ -57,10 +58,28 @@ async def get_project_override(
 async def put_global_setting(
     key: str,
     body: SettingWrite,
+    request: Request,
     db: DbDep,
     settings: SettingsDep,
     caller: AdminDep,
 ) -> SettingValue:
+    if key == orchestrator.ORCHESTRATOR_ENABLED:
+        sandboxed = False
+        if body.value:
+            # Node probes run before the writer is taken.
+            async with db.read() as conn:
+                sandboxed = await orchestrator.pick_sandboxed(
+                    conn, settings, request.app.state.targets
+                )
+        async with db.write() as tx:
+            return await orchestrator.put_enabled_setting(
+                tx,
+                settings.model_policy_path,
+                settings,
+                body.value,
+                caller.actor,
+                sandboxed=sandboxed,
+            )
     async with db.write() as tx:
         return await service.put_setting(
             tx,
@@ -93,6 +112,10 @@ async def delete_global_setting(
 ) -> SettingValue:
     """Remove the global row (or the model-policy file) so the default applies."""
     async with db.write() as tx:
+        if key == orchestrator.ORCHESTRATOR_ENABLED:
+            return await orchestrator.reset_enabled_setting(
+                tx, settings.model_policy_path, settings, caller.actor
+            )
         return await service.reset_setting(
             tx, settings.model_policy_path, service.GLOBAL, key, caller.actor
         )

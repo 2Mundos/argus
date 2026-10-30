@@ -129,6 +129,39 @@ async def test_aggregates_per_account_project_and_model(db: Database) -> None:
     assert projects["beta"].estimated_cost_usd == pytest.approx(3.0)
     assert projects[None].input_tokens == 1  # the explicit "no project" bucket
     assert r.by_project[0].project == "alpha"  # most expensive first
+    assert r.orchestrator.runs == 0
+
+
+async def test_orchestrator_conversation_usage_row(db: Database) -> None:
+    async with db.write() as tx:
+        now = ts(tx.now)
+        await tx.conn.execute(
+            "INSERT INTO conversations (id, kind, title, title_source, created_by,"
+            " created_at, updated_at) VALUES ('c1', 'chat', 't', 'admin', 'admin', ?, ?)",
+            (now, now),
+        )
+        await tx.conn.execute(
+            "INSERT INTO conversation_usage (conversation_id, turn_id, input_tokens,"
+            " output_tokens, cost_usd, model, at, measurement)"
+            " VALUES ('c1', 't1', 1000, 200, 0.42, 'claude-sonnet-5-5', ?, 'measured')",
+            (ts(NOW - timedelta(hours=1)),),
+        )
+        await tx.conn.execute(
+            "INSERT INTO conversation_usage (conversation_id, turn_id, input_tokens,"
+            " output_tokens, cost_usd, model, at, measurement)"
+            " VALUES ('c1', 't2', 50, 10, NULL, 'mystery', ?, 'unpriced')",
+            (ts(NOW - timedelta(hours=1)),),
+        )
+    r = await run(db)
+    assert r.orchestrator.runs == 2
+    assert r.orchestrator.measured_runs == 2
+    assert r.orchestrator.input_tokens == 1050
+    assert r.orchestrator.output_tokens == 210
+    assert r.orchestrator.estimated_cost_usd == pytest.approx(0.42)
+    assert r.orchestrator.unpriced_runs == 1
+    assert "mystery" in r.pricing.unpriced_models
+    # Orchestrator spend stays out of task totals.
+    assert r.totals.runs == 0
 
 
 async def test_window_boundaries(db: Database) -> None:
@@ -406,6 +439,8 @@ def test_endpoint_shape_for_an_empty_install(client: TestClient) -> None:
     assert body["pricing"]["currency"] == "USD"
     assert body["pricing"]["source"] == pricing.DEFAULT_SOURCE
     assert body["by_account"] == [] and body["by_project"] == []
+    assert body["orchestrator"]["runs"] == 0
+    assert body["orchestrator"]["estimated_cost_usd"] is None
     assert len(body["daily"]) in (7, 8)
     assert all(d["runs"] == 0 for d in body["daily"])
 
