@@ -153,7 +153,9 @@ export function TaskSteers({
         <ul className="steer-list">
           {items.map((item) => (
             <li key={item.id}>
-              <span className={`badge steer-${item.state}`}>{item.state}</span>
+              <span className={`badge steer-${item.state}`}>
+                {item.state === "unknown" ? "unknown: may have been delivered" : item.state}
+              </span>
               <span className="steer-message">{item.message}</span>
               <span className="muted small">
                 {item.state === "delivered" && item.delivered_at ? (
@@ -164,10 +166,7 @@ export function TaskSteers({
                   <>
                     sent <DateChip at={item.created_at} now={now} />
                   </>
-                ) : item.state === "unknown" ? (
-                  // Carried to the worker, never acknowledged before the attempt ended.
-                  "may have been delivered"
-                ) : (
+                ) : item.state === "unknown" ? null : (
                   item.state
                 )}
                 {item.state === "pending" && (

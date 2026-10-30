@@ -55,7 +55,7 @@ describe("TaskSteers", () => {
     };
     render(view("t1", 1));
     const row = (await screen.findByText("use the cache")).closest("li");
-    expect(row?.textContent).toBe("unknownuse the cachemay have been delivered");
+    expect(row?.textContent).toBe("unknown: may have been delivereduse the cache");
     expect(screen.getByText("skip docs").closest("li")?.textContent).toBe(
       "expiredskip docsexpired",
     );
@@ -75,6 +75,6 @@ describe("TaskSteers", () => {
     expect(screen.queryByText("first attempt")).toBeNull();
     rerender(view("t2", 1));
     await waitFor(() => expect(screen.queryByText("second attempt")).toBeNull());
-    expect(screen.queryByText(/may have been delivered/)).toBeNull();
+    expect(screen.queryByText(/unknown: may have been delivered/)).toBeNull();
   });
 });
