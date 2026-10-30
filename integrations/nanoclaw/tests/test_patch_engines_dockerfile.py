@@ -50,7 +50,11 @@ def patch(path: Path) -> subprocess.CompletedProcess[str]:
 def argus_block(s: str) -> tuple[list[str], str]:
     """The Argus COPY line's sources and its RUN step (up to the cleanup)."""
     (copy,) = re.findall(
-        r"^COPY (install-cursor-agent\.sh .*) " + re.escape(STAGE) + "$", s, re.M
+        r"^COPY (install-cursor-agent\.sh(?: install-copilot-cli\.sh)? argus-delegate\.mjs.*) "
+        + re.escape(STAGE)
+        + "$",
+        s,
+        re.M,
     )
     start = s.index(copy)
     run = s[start : s.index(" && rm -rf /tmp/argus-engines", start)]

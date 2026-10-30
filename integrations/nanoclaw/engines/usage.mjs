@@ -189,6 +189,8 @@ const PARSERS = {
   codex: parseCodex,
   agent: parseAgent,
   opencode: parseOpencode,
+  // copilot -s prints the answer only: the pinned CLI (1.0.105) has no usage output.
+  copilot: () => notReported("no_usage_output"),
 };
 
 /** Never throws; anything unrecognizable is `not_reported` with a reason code. */
@@ -196,6 +198,7 @@ export function parseUsage(executor, stdoutText) {
   const parser = PARSERS[executor];
   if (!parser) return notReported("unknown_executor");
   try {
+    if (executor === "copilot") return parser([]);
     const objects = jsonObjects(String(stdoutText ?? ""));
     if (!objects.length) return notReported("no_json_output");
     return parser(objects);
@@ -224,8 +227,20 @@ export const runKeyHash = (key) => createHash("sha256").update(key).digest("hex"
  * true when the record is on disk; never throws (a measurement must not break a delivery).
  */
 export function appendUsageRecord(file, record) {
+  return appendRecord(file, { v: 1, kind: "usage", ...record });
+}
+
+/**
+ * Tell the host the executor CLI rejected its credential: identifiers only, no text
+ * (the host reports a fixed reason). `record` is `{task_id, attempt, account_id}`.
+ */
+export function appendAuthRejectedRecord(file, record) {
+  return appendRecord(file, { v: 1, kind: "auth_rejected", role: "executor", ...record });
+}
+
+function appendRecord(file, record) {
   try {
-    const line = `${JSON.stringify({ v: 1, kind: "usage", ...record })}\n`;
+    const line = `${JSON.stringify(record)}\n`;
     fs.mkdirSync(path.dirname(file), { recursive: true });
     if (fs.existsSync(file) && fs.statSync(file).size + line.length > USAGE_RELAY_MAX_BYTES)
       return false;

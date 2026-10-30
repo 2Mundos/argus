@@ -444,3 +444,19 @@ def test_install_sh_wires_the_preflight_session_files() -> None:
         assert name in script, name
         assert (NANOCLAW / name).is_file() or name.startswith("argus-onecli"), name
     assert (NANOCLAW / "argus-onecli-preflight-lease.test.ts").is_file()
+
+
+def test_install_sh_wires_copilot_delegate_runtime() -> None:
+    """Channel install copies the Copilot stub and patches OneCLI when present."""
+    script = INSTALL_SH.read_text(encoding="utf-8")
+    for needle in (
+        "argus-copilot-stub.ts",
+        "argus-copilot-stub.test.ts",
+        "withCopilotDelegateRuntime",
+        "copilotExecutorAssigned",
+    ):
+        assert needle in script, needle
+    assert (NANOCLAW / "argus-copilot-stub.ts").is_file()
+    assert (NANOCLAW / "engines" / "install-copilot-cli.sh").is_file()
+    engines = INSTALL_ENGINES.read_text(encoding="utf-8")
+    assert "install-copilot-cli.sh" in engines

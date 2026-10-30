@@ -1040,7 +1040,7 @@ export function renderTask(
     ...contractLines(task),
     "",
     "Delegated implementation (mandatory): run all coding/model work through /usr/local/bin/argus-delegate EXECUTOR.",
-    "EXECUTOR is the leased CLI role (claude | codex | opencode | agent). When Cursor is the selected coding executor, use EXECUTOR agent.",
+    "EXECUTOR is the leased CLI role (claude | codex | opencode | agent | copilot). When Cursor is the selected coding executor, use EXECUTOR agent. For GitHub Copilot use EXECUTOR copilot (the model is always explicit).",
     ...(pinned
       ? pinBlocked
         ? [
@@ -1061,7 +1061,7 @@ export function renderTask(
         : []),
     ...(opts.localHarness ? ["", ...localHarnessRules(effective), ""] : []),
     ...(opts.customHarness ? ["", ...customHarnessRules(effective), ""] : []),
-    "Do not invoke agent, cursor-agent, claude, codex, or opencode directly for implementation — that bypasses",
+    "Do not invoke agent, cursor-agent, claude, codex, or opencode directly (nor copilot) for implementation — that bypasses",
     "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
     "Direct Git, gates, QA, and other non-delegated shell commands in the checkout are fine when they are not a",
     "substitute for argus-delegate.",
@@ -1989,6 +1989,22 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         held: () => ({ engine: account?.id ?? null, executor: executor?.id ?? null }),
         post: (accountId, body) =>
           client.call("POST", `/accounts/${encodeURIComponent(accountId)}/usage`, body),
+        // The delegate saw the executor CLI reject its credential (copilot accounts spec
+        // 3): exhaust that account with a fixed reason; the API rotates the executor.
+        authRejected: async (accountId) => {
+          await client.call("POST", `/accounts/${encodeURIComponent(accountId)}/exhausted`, {
+            reason: "The executor CLI rejected the account credential",
+            reason_code: "auth_expired",
+            reset_status: "absent",
+            source: "structured",
+            role: "executor",
+            runtime_providers: runtimeProviders("executor"),
+            task_id: task.id,
+            attempt: task.attempt,
+          });
+          log.warn("Argus executor account rejected by its CLI", { account: executor?.name });
+          if (executor?.id === accountId) executor = null;
+        },
       });
       usageRelay = relay;
       usageTimer = setInterval(() => void relay.poll(), cfg.logPollMs ?? LOG_POLL_MS);

@@ -55,6 +55,8 @@ cp "$here/argus-codex-stub.ts" "$target/src/gateway-providers/argus-codex-stub.t
 cp "$here/argus-codex-stub.test.ts" "$target/src/gateway-providers/argus-codex-stub.test.ts"
 cp "$here/argus-cursor-stub.ts" "$target/src/gateway-providers/argus-cursor-stub.ts"
 cp "$here/argus-cursor-stub.test.ts" "$target/src/gateway-providers/argus-cursor-stub.test.ts"
+cp "$here/argus-copilot-stub.ts" "$target/src/gateway-providers/argus-copilot-stub.ts"
+cp "$here/argus-copilot-stub.test.ts" "$target/src/gateway-providers/argus-copilot-stub.test.ts"
 cp "$here/argus-claude-stub.ts" "$target/src/gateway-providers/argus-claude-stub.ts"
 cp "$here/argus-claude-stub.test.ts" "$target/src/gateway-providers/argus-claude-stub.test.ts"
 cp "$here/engines/anthropic-redirect.mjs" "$target/src/gateway-providers/anthropic-redirect.mjs"
@@ -203,6 +205,31 @@ assert old_tail in s, "onecli.ts ensureSession tail changed upstream"
 open(p, "w").write(s.replace(old_tail, new_tail, 1))
 PY
   echo "patched $onecli_ts (local Strata harness env)"
+fi
+if [ -f "$onecli_ts" ] && ! grep -q "withCopilotDelegateRuntime" "$onecli_ts"; then
+  python3 - "$onecli_ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+needle = "import { withLocalHarnessRuntimeForGroup } from './argus-local-harness.js';"
+assert needle in s, "run install after the local harness hook is present"
+s = s.replace(
+    needle,
+    needle + "\nimport { copilotExecutorAssigned, withCopilotDelegateRuntime } from './argus-copilot-stub.js';",
+    1,
+)
+old_head = "  const config = await withLocalHarnessRuntimeForGroup(withClaudeDelegateRuntime(await withCursorDelegateRuntime("
+old_tail = "  )), DATA_DIR, input.key.agentGroupId);\n  log.info('OneCLI gateway applied'"
+assert old_head in s and old_tail in s, "onecli.ts ensureSession shape changed upstream"
+s = s.replace(old_head, "  const config = await withCopilotDelegateRuntime(await withLocalHarnessRuntimeForGroup(withClaudeDelegateRuntime(await withCursorDelegateRuntime(", 1)
+s = s.replace(
+    old_tail,
+    "  )), DATA_DIR, input.key.agentGroupId), async () =>\n      onecliUrl ? copilotExecutorAssigned(onecliUrl, onecliApiKey, input.key.agentGroupId) : false);\n  log.info('OneCLI gateway applied'",
+    1,
+)
+open(p, "w").write(s)
+PY
+  echo "patched $onecli_ts (Copilot delegate sentinel env)"
 fi
 onecli_test="$target/src/gateway-providers/onecli.test.ts"
 if [ -f "$onecli_test" ] && grep -q 'expect(fetchMock).toHaveBeenCalledTimes(1);' "$onecli_test"; then

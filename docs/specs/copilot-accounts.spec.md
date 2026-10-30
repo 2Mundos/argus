@@ -110,10 +110,12 @@ on create and replace, and deliver it to the **delegated** GitHub Copilot CLI
 
 # 4. Open Questions
 
-- Exact hosts and path families the pinned CLI uses for model calls and token
-  validation, and whether it checks the token prefix client-side (the sentinel
-  must pass it). Resolve with a probe of the pinned version before the
-  implementation PR; the official page lists no endpoints.
+- **Resolved (probe, `@github/copilot` 1.0.105, fake-credential fixture
+  `integrations/nanoclaw/fixtures/copilot-cli/probe-1.0.105.json`)**: individual-seat
+  hosts and exact path families for token validation and model calls; the CLI checks
+  token prefix client-side (`github_pat_`, `gho_`, `ghu_`; rejects `ghp_`). Sentinel
+  shape is in §3. Business and Enterprise model-call hosts (`api.business.` /
+  `api.enterprise.githubcopilot.com`) are still not allowlisted.
 - The CLI's exit codes and error text for auth rejection and premium-request
   limits, and whether it has a stable JSON output mode for the delegate to
   parse. Until verified the delegate treats every non-zero exit as an ordinary

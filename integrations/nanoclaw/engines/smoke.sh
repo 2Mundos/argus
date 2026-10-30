@@ -31,12 +31,14 @@ rows=(
   "$(expect codex codex 'codex-cli 0.162.1')"
   "$(expect opencode opencode '1.18.27')"
   "$(expect cursor-agent agent '2026.10.16-e3cb207')"
+  "$(expect copilot copilot '1.0.105')"
 )
 arows=(
   "$(auth claude claude)"
   "$(auth codex codex)"
   "$(auth opencode opencode)"
   "$(auth cursor-agent agent)"
+  "$(auth copilot copilot)"
 )
 mkdir -p "$(dirname "$ledger")"
 node - "$ledger" "$image" "${rows[@]}" -- "${arows[@]}" <<'JS'
