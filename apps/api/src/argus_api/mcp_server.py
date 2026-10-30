@@ -796,13 +796,17 @@ async def attach_artifact(
     media_type: str = "text/plain",
     role: ArtifactRole | None = None,
     share_with_workers: bool = False,
+    expected_sha256: str | None = None,
 ) -> dict:
     """Attach evidence to any task without a lease: pass text as `content` or binary
     (screenshot, ZIP) as `content_base64`. Returns the artifact (id, name, media_type,
     size, sha256, source "attachment"), never its bytes. Immutable; names: letters,
     digits, . _ - Only orchestrators and admins can read attachments, unless
     `share_with_workers` is true: then any worker leased on the task can list,
-    verify and read it (use it to hand input to a later attempt)."""
+    verify and read it as a task input. `expected_sha256` (64 lowercase hex): a
+    different hash of the decoded bytes is 422 integrity_mismatch and attaches
+    nothing. For small text only: upload anything you would have to transcribe
+    with scripts/attach_artifact.py instead."""
     if (content is None) == (content_base64 is None):
         raise ToolError("pass exactly one of content or content_base64")
     data = _attachment_bytes(content, content_base64)
@@ -814,10 +818,20 @@ async def attach_artifact(
             "name": name,
             "role": role,
             "worker_readable": "true" if share_with_workers else None,
+            "expected_sha256": expected_sha256,
         },
         content=data,
         headers={"Content-Type": media_type},
     )
+
+
+@tool(MANAGERS)
+async def list_task_inputs(ctx: Context, task_id: str) -> dict:
+    """A task's inputs: attachments shared with workers, each with id, name, size,
+    sha256, attached_by and `receipts` (latest per attempt and state: materialized,
+    verified, consumed, failed with a reason). `unshared_attachments` counts
+    attachments workers cannot see. Metadata only, never content."""
+    return await _call(ctx, "GET", f"/tasks/{task_id}/inputs")
 
 
 def _attachment_bytes(content: str | None, content_base64: str | None) -> bytes:

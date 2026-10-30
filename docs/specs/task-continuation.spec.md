@@ -83,6 +83,14 @@ bounded before storage. A stale `expected_revision` is 409 `stale_continuation`;
 a stale attempt on a worker write is the usual 409 `stale_attempt`. A repeated
 identical observation changes nothing.
 
+A WIP `ref` of the form `attachment:<artifact id>:<sha256>` names a required
+task input ([task inputs 3.6](task-inputs.spec.md)). Only the orchestrator or
+admin sets it, and only for a shared attachment of the same task with that
+SHA-256 on a task that requires `task-inputs` (`422 invalid_input_ref`,
+`input_not_found`, `input_not_shared`, `integrity_mismatch`,
+`input_capability_required`). Worker observations may neither set nor replace
+one (`422 input_ref_forbidden`).
+
 ## 3.3 Preflight and reconciliation
 
 Before delegating, the runtime may observe the live system (for NanoClaw, the

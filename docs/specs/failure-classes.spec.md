@@ -122,9 +122,15 @@ task. No model session starts and no attempt is spent.
 | The work exceeds the checkpoint size limit | `env_checkpoint_limit` |
 | Its HEAD is the task branch | `env_workspace_branch_mismatch` |
 | A new workspace stays within `ARGUS_TASK_WORKSPACE_MAX` | `env_workspace_limit` |
+| A required task input is listed, shared and downloadable ([task inputs](task-inputs.spec.md) 3.6) | `env_input_unavailable` |
+| A required task input has a safe name and destination, and its size and SHA-256 match after the retry | `env_input_invalid` |
+| The task inputs stay within the per-input, per-task and file-count limits | `env_input_limit` |
 
 - The workspace checks run only for `repository:write` tasks, after the
   repository checks; [task workspace](task-workspace.spec.md) 3.4 defines them.
+- The input checks run for every task with a required input, before the
+  workspace is prepared and before any model runs
+  ([task inputs](task-inputs.spec.md) 3.4).
 
 ### 3.3.1 Repository preflight session
 

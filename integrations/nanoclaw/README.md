@@ -374,6 +374,33 @@ recreated container refuses its own checkpoints as foreign
 Argus provides no shared store mount, so sharing checkpoints between instances is
 not supported yet.
 
+## Task inputs
+
+Before the workspace and the model, the channel downloads the attachments an
+orchestrator shared with the task's workers into
+`/workspace/agent/task-inputs/<task id>/` (`0700`, files `0400`), verifies each
+SHA-256, writes `manifest.json` and `verify-inputs.mjs`, and lists path, size and
+hash in the prompt ([spec](../../docs/specs/task-inputs.spec.md)). A required
+input (continuation ref `attachment:<id>:<sha256>`) that cannot be verified
+blocks the attempt as `env_input_unavailable`, `env_input_invalid` or
+`env_input_limit`. Limits: `ARGUS_TASK_INPUT_MAX_BYTES`,
+`ARGUS_TASK_INPUT_MAX_TOTAL_BYTES`, `ARGUS_TASK_INPUT_MAX_FILES`. The host must
+be Linux: the channel writes through directory handles under `/proc/self/fd`, so
+a session that swaps a directory for a link cannot redirect a write; without
+`/proc` every input fails as `env_input_invalid`.
+
+The channel always advertises the `task-inputs` capability and heartbeat
+feature. Activating it on a fleet is an operator step:
+
+1. `integrations/nanoclaw/install.sh <checkout>` and `pnpm run build` there (the
+   agent image does not change).
+2. Recreate the worker instances; running hosts keep the old channel.
+3. Add `task-inputs` to the pool's capabilities.
+4. Check that `GET /api/agents` lists `task-inputs` in `runtime.features`.
+
+`scripts/task-input-e2e.sh` runs a disposable API and this channel in a
+disposable checkout end to end.
+
 ## Not done yet
 
 - No token usage is reported back (NanoClaw does not expose it to the channel).

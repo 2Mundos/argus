@@ -8235,6 +8235,55 @@
         "title": "InboxPage",
         "type": "object"
       },
+      "InputFailure": {
+        "enum": [
+          "unavailable",
+          "invalid",
+          "limit",
+          "corrupt"
+        ],
+        "title": "InputFailure",
+        "type": "string"
+      },
+      "InputReceipt": {
+        "description": "The latest receipt of one state in one attempt.",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InputFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reporter": {
+            "title": "Reporter",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReceiptState"
+          }
+        },
+        "required": [
+          "attempt",
+          "state",
+          "at",
+          "reporter"
+        ],
+        "title": "InputReceipt",
+        "type": "object"
+      },
       "InspectedInstance": {
         "properties": {
           "agents": {
@@ -12708,6 +12757,68 @@
         "title": "ReadinessOut",
         "type": "object"
       },
+      "ReceiptRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InputFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReceiptState"
+          }
+        },
+        "required": [
+          "attempt",
+          "state"
+        ],
+        "title": "ReceiptRequest",
+        "type": "object"
+      },
+      "ReceiptState": {
+        "enum": [
+          "materialized",
+          "verified",
+          "consumed",
+          "failed"
+        ],
+        "title": "ReceiptState",
+        "type": "string"
+      },
       "RecoveryExample": {
         "description": "One auditable synthetic sample: source fail (+ claim) event ids.",
         "properties": {
@@ -15879,6 +15990,103 @@
           "changes"
         ],
         "title": "TaskEdit",
+        "type": "object"
+      },
+      "TaskInput": {
+        "description": "A shared attachment as an input: the artifact's authoritative metadata.",
+        "properties": {
+          "attached_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attached By"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "receipts": {
+            "items": {
+              "$ref": "#/components/schemas/InputReceipt"
+            },
+            "title": "Receipts",
+            "type": "array"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "task_id",
+          "name",
+          "media_type",
+          "size",
+          "sha256",
+          "attached_by",
+          "created_at",
+          "receipts"
+        ],
+        "title": "TaskInput",
+        "type": "object"
+      },
+      "TaskInputs": {
+        "properties": {
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/TaskInput"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "unshared_attachments": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unshared Attachments"
+          }
+        },
+        "required": [
+          "task_id",
+          "inputs"
+        ],
+        "title": "TaskInputs",
         "type": "object"
       },
       "TaskKind": {
@@ -26352,7 +26560,7 @@
     },
     "/api/tasks/{task_id}/attachments": {
       "post": {
-        "description": "Attach the raw request body to a task as evidence (orchestrator or admin).\n\nNeeds no lease and does not count against any agent quota. Attachments have\n`source: attachment`, are immutable, and are readable by orchestrators and\nadmins only, unless `worker_readable` shares them with every worker holding a\nlease grant on the task.",
+        "description": "Attach the raw request body to a task as evidence (orchestrator or admin).\n\nNeeds no lease and does not count against any agent quota. Attachments have\n`source: attachment`, are immutable, and are readable by orchestrators and\nadmins only, unless `worker_readable` shares them with every worker holding a\nlease grant on the task (then they are the task's inputs). `expected_size` and\n`expected_sha256` are checked against the received bytes before anything is\nstored: a difference is 422 `integrity_mismatch` and leaves no attachment.",
         "operationId": "attach_artifact_api_tasks__task_id__attachments_post",
         "parameters": [
           {
@@ -26397,6 +26605,40 @@
               "default": false,
               "title": "Worker Readable",
               "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_size",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expected Size"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_sha256",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expected Sha256"
             }
           }
         ],
@@ -27047,6 +27289,121 @@
         "summary": "Fail Task",
         "tags": [
           "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/inputs": {
+      "get": {
+        "description": "A task's inputs: attachments shared with workers, with the size and SHA-256\nArgus computed, provenance, and the latest receipt per attempt and state.\nManagers also get `unshared_attachments`, a count of attachments not shared.",
+        "operationId": "list_task_inputs_api_tasks__task_id__inputs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskInputs"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Task Inputs",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/inputs/{artifact_id}/receipt": {
+      "post": {
+        "description": "Record that the attempt you hold materialized, verified, consumed or failed\nan input. Fenced like progress; `sha256` and `size`, when given, must be the\nartifact's (422 `integrity_mismatch`). An identical latest receipt is not\nwritten again.",
+        "operationId": "post_input_receipt_api_tasks__task_id__inputs__artifact_id__receipt_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskInput"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Input Receipt",
+        "tags": [
+          "artifacts"
         ]
       }
     },

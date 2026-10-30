@@ -2080,6 +2080,16 @@ async def observe(
         artifacts = cont.upsert_artifact(artifacts, a)
     wip = have.wip
     if body.wip is not None:
+        # A required input is the orchestrator's to name or replace (task inputs 3.6).
+        if any(
+            (w.ref or "").startswith(cont.INPUT_REF_PREFIX)
+            for w in (body.wip, have.wip)
+            if w is not None
+        ):
+            raise ValidationFailedError(
+                "only an orchestrator or admin may set or replace a required input",
+                code="input_ref_forbidden",
+            )
         wip = ContinuationWip(
             summary=clean(body.wip.summary, 1000) or "",
             ref=clean(body.wip.ref, 250),
@@ -2155,6 +2165,8 @@ async def update_continuation(
     if body.clear_wip:
         wip = None
     if body.wip is not None:
+        if (body.wip.ref or "").startswith(cont.INPUT_REF_PREFIX):
+            await cont.check_input_ref(tx, row, body.wip.ref or "")
         wip = ContinuationWip(
             summary=clean(body.wip.summary, 1000) or "",
             ref=clean(body.wip.ref, 250),

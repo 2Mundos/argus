@@ -113,6 +113,9 @@ every new dependency is judged against it.
   harness and delegate layers, with evidence, and the routing/fallback timeline
 - [MCP operations](specs/mcp-operations.spec.md) — inbox and fleet journeys over
   MCP with compact, paged responses; REST/MCP coverage audit
+- [Task inputs](specs/task-inputs.spec.md) — byte-exact upload of shared
+  attachments, the inputs view and receipts, materialization by the NanoClaw
+  channel, required inputs and `env_input_*` blocks
 - [Worker read scope](specs/worker-read-scope.spec.md) — workers may only read
   tasks/artifacts they have leased and knowledge/events for those projects;
   orchestrators and admins stay global
@@ -200,6 +203,8 @@ every new dependency is judged against it.
   user-owned artifacts, the isolation runtime, environment
 - [Workspace cleanup](runbooks/2026-10-24.workspace-cleanup.ref.md) — enabling it,
   dry run first, the archive root, restore and reason codes
+- [Task inputs smoke](runbooks/2026-10-30.task-inputs-smoke.ref.md) — operator-run
+  Docker session check of materialized inputs; not yet run
 
 ### Reports
 

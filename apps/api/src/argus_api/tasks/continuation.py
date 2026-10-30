@@ -6,6 +6,8 @@ report here. Callers (tasks.service, decisions.service) pass rows; this module n
 imports them.
 """
 
+import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -28,7 +30,7 @@ from argus_core.continuation import (
 )
 
 from argus_api.db import Tx
-from argus_api.errors import ConflictError
+from argus_api.errors import ConflictError, ValidationFailedError
 from argus_api.events import record
 
 
@@ -77,6 +79,53 @@ async def store(
             {"revision": after.revision, "why": why},
         )
     return after
+
+
+INPUT_REF_PREFIX = "attachment:"
+_INPUT_REF = re.compile(
+    r"attachment:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+    r":([0-9a-f]{64})"
+)
+INPUTS_CAPABILITY = "task-inputs"
+
+
+async def check_input_ref(tx: Tx, row: aiosqlite.Row, ref: str) -> None:
+    """A required input reference (task inputs 3.6): `attachment:<id>:<sha256>` of a
+    shared attachment of this task with that hash, on a task that requires the
+    `task-inputs` capability. Anything else is 422 and writes nothing."""
+    m = _INPUT_REF.fullmatch(ref)
+    if m is None:
+        raise ValidationFailedError(
+            "an input reference is attachment:<artifact id>:<sha256> (lowercase)",
+            code="invalid_input_ref",
+        )
+    artifact_id, sha256 = m.groups()
+    async with tx.conn.execute(
+        "SELECT sha256, worker_readable FROM artifacts"
+        " WHERE id = ? AND task_id = ? AND source = 'attachment'",
+        (artifact_id, row["id"]),
+    ) as cur:
+        art = await cur.fetchone()
+    if art is None:
+        raise ValidationFailedError(
+            f"attachment {artifact_id} is not an attachment of this task",
+            code="input_not_found",
+        )
+    if not art["worker_readable"]:
+        raise ValidationFailedError(
+            f"attachment {artifact_id} is not shared with workers",
+            code="input_not_shared",
+        )
+    if art["sha256"] != sha256:
+        raise ValidationFailedError(
+            f"attachment {artifact_id} has sha256 {art['sha256']}, not {sha256}",
+            code="integrity_mismatch",
+        )
+    if INPUTS_CAPABILITY not in json.loads(row["required_capabilities"]):
+        raise ValidationFailedError(
+            f"a required input needs the task to require {INPUTS_CAPABILITY!r}",
+            code="input_capability_required",
+        )
 
 
 def fence(have: Continuation, expected: int | None) -> None:

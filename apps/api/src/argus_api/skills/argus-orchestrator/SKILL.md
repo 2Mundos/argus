@@ -145,6 +145,18 @@ attachment in the spec. Any worker leased on that task can then `list_artifacts`
 `verify_artifact` and `read_artifact` it. Without `share_with_workers`, an
 attachment is evidence for managers only. Never attach secrets.
 
+For a file a later attempt must use (a recovered patch, a large fixture), do not
+transcribe it into `attach_artifact`. Upload it byte-exact from where it lives:
+`ARGUS_TOKEN=... python3 scripts/attach_artifact.py --url $ARGUS --task ID
+--file PATH --share-with-workers`. It is safe to rerun and prints a `ref`.
+Create the task with `required_capabilities` including `task-inputs`, then set
+that `ref` (`attachment:<id>:<sha256>`) as the WIP reference with
+`update_task_continuation`; Argus refuses it otherwise. `list_task_inputs` shows the
+inputs and the workers' receipts. Until an operator has installed the current
+NanoClaw channel, recreated the workers and added `task-inputs` to a pool, no
+worker can claim such a task; do not rely on a shared attachment for a retry
+before then.
+
 `route_task` says where a piece of work should run, and `run_local` runs a
 small bounded completion on the local model. Use them for quick, low-risk,
 checkable work (classifying, extracting, short rewrites) instead of a whole

@@ -8,7 +8,8 @@ from argus_api.access import (
     require_artifact_readable,
     require_task_readable,
 )
-from argus_api.artifacts import service
+from argus_api.artifacts import inputs, service
+from argus_api.artifacts.inputs import ReceiptRequest, TaskInput, TaskInputs
 from argus_api.artifacts.service import (
     Artifact,
     ArtifactRole,
@@ -84,13 +85,17 @@ async def attach_artifact(
     name: Annotated[str, Query()],
     role: Annotated[ArtifactRole | None, Query()] = None,
     worker_readable: Annotated[bool, Query()] = False,
+    expected_size: Annotated[int | None, Query(ge=0)] = None,
+    expected_sha256: Annotated[str | None, Query(pattern=inputs.SHA256)] = None,
 ) -> Artifact:
     """Attach the raw request body to a task as evidence (orchestrator or admin).
 
     Needs no lease and does not count against any agent quota. Attachments have
     `source: attachment`, are immutable, and are readable by orchestrators and
     admins only, unless `worker_readable` shares them with every worker holding a
-    lease grant on the task.
+    lease grant on the task (then they are the task's inputs). `expected_size` and
+    `expected_sha256` are checked against the received bytes before anything is
+    stored: a difference is 422 `integrity_mismatch` and leaves no attachment.
     """
     return await service.attach(
         db,
@@ -105,7 +110,35 @@ async def attach_artifact(
         role=role,
         max_per_task=settings.attachment_max_per_task,
         worker_readable=worker_readable,
+        expected_size=expected_size,
+        expected_sha256=expected_sha256,
     )
+
+
+@router.get("/tasks/{task_id}/inputs")
+async def list_task_inputs(task_id: str, db: DbDep, caller: CallerDep) -> TaskInputs:
+    """A task's inputs: attachments shared with workers, with the size and SHA-256
+    Argus computed, provenance, and the latest receipt per attempt and state.
+    Managers also get `unshared_attachments`, a count of attachments not shared."""
+    async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
+        return await inputs.list_inputs(conn, task_id, manager=is_global_reader(caller))
+
+
+@router.post("/tasks/{task_id}/inputs/{artifact_id}/receipt")
+async def post_input_receipt(
+    task_id: str,
+    artifact_id: str,
+    body: ReceiptRequest,
+    db: DbDep,
+    agent_id: AgentDep,
+) -> TaskInput:
+    """Record that the attempt you hold materialized, verified, consumed or failed
+    an input. Fenced like progress; `sha256` and `size`, when given, must be the
+    artifact's (422 `integrity_mismatch`). An identical latest receipt is not
+    written again."""
+    async with db.write() as tx:
+        return await inputs.record_receipt(tx, agent_id, task_id, artifact_id, body)
 
 
 @router.get("/tasks/{task_id}/artifacts")

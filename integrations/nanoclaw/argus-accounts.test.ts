@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -2139,6 +2141,168 @@ describe("task-scoped repository auth", () => {
     await until(() => w.calls.some((call) => isRepositoryRelease(call)));
     expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
     expect(h.inbound).toHaveLength(0);
+  });
+
+  // A continuation naming a required input (task inputs spec 3.6) and nothing else.
+  const requiringInput = (ref: string) => ({
+    revision: 1,
+    phase: "implement",
+    artifacts: [],
+    checklist: [],
+    checklist_state: "unstructured",
+    pending: [],
+    decisions: [],
+    environment: [],
+    reconciliation: [],
+    gaps: [],
+    wip: {
+      summary: "recovered patch",
+      ref,
+      provenance: "manager",
+      observed_at: "2026-10-30T00:00:00Z",
+    },
+  });
+
+  // Task inputs spec 3.6: a required input that cannot be had blocks before the workspace.
+  it("blocks on a required input it cannot verify, before the workspace and the model", async () => {
+    const artifact = "0b6f2f0e-3c1a-4d2b-9e8f-7a6b5c4d3e2f";
+    const w = world({
+      leases: [
+        lease("engine", "dummy-engine-key"),
+        lease("repo", "dummy-gitea-token", {
+          provider: "gitea",
+          role: "repository",
+          credential: { username: "service-user", token: "dummy-gitea-token" },
+        }),
+      ],
+      tasks: [
+        { ...repoTask(), continuation: requiringInput(`attachment:${artifact}:${"b".repeat(64)}`) },
+      ],
+    });
+    const listing = {
+      task_id: REPO_ID,
+      inputs: [
+        {
+          id: artifact,
+          task_id: REPO_ID,
+          name: "SECRET-NAME.patch",
+          media_type: "text/x-diff",
+          size: 5,
+          sha256: "a".repeat(64),
+          attached_by: "orchestrator:o1",
+          created_at: "2026-10-30T00:00:00Z",
+          receipts: [],
+        },
+      ],
+    };
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      if (new URL(url).pathname === `/api/tasks/${REPO_ID}/inputs`) {
+        w.calls.push({ who: "argus", method: "GET", path: `/tasks/${REPO_ID}/inputs`, body: null });
+        return new Response(JSON.stringify(listing), { status: 200 });
+      }
+      return w.fetchImpl(url, init);
+    }) as unknown as typeof fetch;
+    const h = harness(
+      w,
+      true,
+      { repositories: { global: "https://git.example.test/org/repo" } },
+      { fetch: fetchImpl },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    const block = w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body;
+    expect(block).toMatchObject({ attempt: 1, reason: "env_input_invalid" });
+    expect(block.error).toContain(artifact);
+    expect(block.error).not.toContain("SECRET");
+    expect(block.error).not.toContain(h.groupDir);
+    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    expect(w.calls.some((call) => call.path.includes("/content"))).toBe(false);
+    expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
+    expect(existsSync(path.join(h.groupDir, "task-workspaces"))).toBe(false);
+    expect(h.inbound).toHaveLength(0);
+  });
+
+  // Task inputs spec 3.7: another worker of the same task needs no affinity to the first.
+  it("lets a second worker on attempt 2 materialize the inputs shared on attempt 1", async () => {
+    const id = "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f";
+    const artifact = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+    const bytes = Buffer.from(`diff --git a/x b/x\n+${"café ✓ ".repeat(500)}\n`, "utf8");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const listing = {
+      task_id: id,
+      inputs: [
+        {
+          id: artifact,
+          task_id: id,
+          name: "recovered.patch",
+          media_type: "text/x-diff",
+          size: bytes.length,
+          sha256,
+          attached_by: "orchestrator:o1",
+          created_at: "2026-10-30T00:00:00Z",
+          receipts: [],
+        },
+      ],
+    };
+    const workerOn = (attempt: number) => {
+      const w = world({
+        leases: [lease("engine", "dummy-engine-key")],
+        tasks: [
+          {
+            ...task(),
+            id,
+            attempt,
+            continuation: requiringInput(`attachment:${artifact}:${sha256}`),
+          },
+        ],
+      });
+      const fetchImpl = (async (url: string, init: RequestInit) => {
+        const p = new URL(url).pathname.replace(/^\/api/, "");
+        if (p === `/tasks/${id}/inputs` || p === `/artifacts/${artifact}/content`) {
+          w.calls.push({ who: "argus", method: "GET", path: p, body: null });
+          return p.endsWith("/inputs")
+            ? new Response(JSON.stringify(listing), { status: 200 })
+            : new Response(bytes, { status: 200 });
+        }
+        return w.fetchImpl(url, init);
+      }) as unknown as typeof fetch;
+      const h = harness(w, true, {}, { fetch: fetchImpl, inputsBackoffMs: 0 });
+      live.push(h.adapter);
+      return { w, h };
+    };
+    const a = workerOn(1);
+    await a.h.adapter.setup(a.h.setup);
+    await until(() => a.h.inbound.length > 0);
+    await a.h.adapter.teardown();
+    const b = workerOn(2);
+    expect(b.h.groupDir).not.toBe(a.h.groupDir);
+    await b.h.adapter.setup(b.h.setup);
+    await until(() => b.h.inbound.length > 0);
+    const file = path.join(b.h.groupDir, "task-inputs", id, "recovered.patch");
+    expect(readFileSync(file).equals(bytes)).toBe(true);
+    expect(b.w.calls.filter((c) => c.path === `/artifacts/${artifact}/content`)).toHaveLength(1);
+    const receipts = b.w.calls.filter((c) => c.path === `/tasks/${id}/inputs/${artifact}/receipt`);
+    expect(receipts.map((c) => c.body)).toEqual([
+      { attempt: 2, state: "materialized", sha256, size: bytes.length },
+      { attempt: 2, state: "verified", sha256, size: bytes.length },
+    ]);
+    const text = b.h.inbound[0].content.text as string;
+    expect(text).toContain(
+      `- /workspace/agent/task-inputs/${id}/recovered.patch · ${bytes.length} bytes · sha256 ${sha256} · required`,
+    );
+    expect(text).toContain(`node /workspace/agent/task-inputs/${id}/verify-inputs.mjs`);
+    expect(text).not.toContain("café");
+    expect(text).not.toContain("argus.test");
+
+    // The verifier ran in the session; `consumed` is relayed while the attempt is still held.
+    const verify = spawnSync("node", ["verify-inputs.mjs"], { cwd: path.dirname(file) });
+    expect(verify.status).toBe(0);
+    await b.h.adapter.deliver("local", b.h.thread(), { kind: "chat", content: "COMPLETE: done" });
+    const paths = b.w.calls.map((c) => `${c.path}:${(c.body as { state?: string })?.state ?? ""}`);
+    const consumed = paths.indexOf(`/tasks/${id}/inputs/${artifact}/receipt:consumed`);
+    expect(consumed).toBeGreaterThan(-1);
+    expect(consumed).toBeLessThan(paths.indexOf(`/tasks/${id}/complete:`));
   });
 
   it("leaves the workspace root alone for a task without repository:write", async () => {

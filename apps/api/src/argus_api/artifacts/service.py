@@ -131,6 +131,23 @@ def _check_name(name: str) -> None:
         )
 
 
+def check_integrity(
+    size: int, sha256: str, expected_size: int | None, expected_sha256: str | None
+) -> None:
+    """422 `integrity_mismatch` when a claimed size or hash is not the real one.
+    The message names no content."""
+    if expected_size is not None and expected_size != size:
+        raise ValidationFailedError(
+            f"size is {size} bytes, expected {expected_size}",
+            code="integrity_mismatch",
+        )
+    if expected_sha256 is not None and expected_sha256 != sha256:
+        raise ValidationFailedError(
+            f"sha256 is {sha256}, expected {expected_sha256}",
+            code="integrity_mismatch",
+        )
+
+
 async def attach(
     db: Database,
     store: LocalArtifactStore,
@@ -143,13 +160,17 @@ async def attach(
     role: ArtifactRole | None = None,
     max_per_task: int,
     worker_readable: bool = False,
+    expected_size: int | None = None,
+    expected_sha256: str | None = None,
 ) -> Artifact:
     """Attach evidence to a task for a manager: no lease, no agent quota. Same
-    staging as `upload`; the staged file is discarded on any error."""
+    staging as `upload`; the staged file is discarded on any error, including a
+    size or SHA-256 that differs from what the uploader expected (task inputs 3.1)."""
     _check_name(name)
     staged = await store.stage(chunks)
     promoted: Path | None = None
     try:
+        check_integrity(staged.size, staged.sha256, expected_size, expected_sha256)
         async with db.write() as tx:
             await tasks.get_task(tx.conn, task_id)  # 404 for unknown tasks
             async with tx.conn.execute(

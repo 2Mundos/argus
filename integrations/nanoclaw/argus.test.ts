@@ -8,6 +8,7 @@ import type { ChannelSetup } from "./adapter.js";
 import {
   type ArgusConfig,
   ArgusError,
+  capabilitiesFromEnv,
   createArgusAdapter,
   createDelegateLogRelay,
   frameUntrustedTaskData,
@@ -653,7 +654,7 @@ describe("Argus channel", () => {
       worker_version: "nanoclaw/9.9.9",
       engine: null,
       executor: null,
-      features: ["steer"],
+      features: ["steer", "task-inputs"],
     });
   });
 
@@ -832,6 +833,14 @@ describe("Argus channel", () => {
     } finally {
       process.env = saved;
     }
+  });
+
+  it("always advertises the task-inputs capability, once", () => {
+    expect(capabilitiesFromEnv({})).toEqual(["task-inputs"]);
+    expect(capabilitiesFromEnv({ ARGUS_CAPABILITIES: " python, ,task-inputs,python" })).toEqual([
+      "python",
+      "task-inputs",
+    ]);
   });
 });
 

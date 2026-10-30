@@ -2329,7 +2329,9 @@ export interface paths {
          *     Needs no lease and does not count against any agent quota. Attachments have
          *     `source: attachment`, are immutable, and are readable by orchestrators and
          *     admins only, unless `worker_readable` shares them with every worker holding a
-         *     lease grant on the task.
+         *     lease grant on the task (then they are the task's inputs). `expected_size` and
+         *     `expected_sha256` are checked against the received bytes before anything is
+         *     stored: a difference is 422 `integrity_mismatch` and leaves no attachment.
          */
         post: operations["attach_artifact_api_tasks__task_id__attachments_post"];
         delete?: never;
@@ -2527,6 +2529,51 @@ export interface paths {
          *     returns to ready (or waits as `awaiting_quota`) and `failures` is unchanged.
          */
         post: operations["fail_task_api_tasks__task_id__fail_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/inputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Task Inputs
+         * @description A task's inputs: attachments shared with workers, with the size and SHA-256
+         *     Argus computed, provenance, and the latest receipt per attempt and state.
+         *     Managers also get `unshared_attachments`, a count of attachments not shared.
+         */
+        get: operations["list_task_inputs_api_tasks__task_id__inputs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/inputs/{artifact_id}/receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Input Receipt
+         * @description Record that the attempt you hold materialized, verified, consumed or failed
+         *     an input. Fenced like progress; `sha256` and `size`, when given, must be the
+         *     artifact's (422 `integrity_mismatch`). An identical latest receipt is not
+         *     written again.
+         */
+        post: operations["post_input_receipt_api_tasks__task_id__inputs__artifact_id__receipt_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5530,6 +5577,28 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /**
+         * InputFailure
+         * @enum {string}
+         */
+        InputFailure: "unavailable" | "invalid" | "limit" | "corrupt";
+        /**
+         * InputReceipt
+         * @description The latest receipt of one state in one attempt.
+         */
+        InputReceipt: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Attempt */
+            attempt: number;
+            reason?: components["schemas"]["InputFailure"] | null;
+            /** Reporter */
+            reporter: string;
+            state: components["schemas"]["ReceiptState"];
+        };
         /** InspectedInstance */
         InspectedInstance: {
             /** Agents */
@@ -7137,6 +7206,22 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** ReceiptRequest */
+        ReceiptRequest: {
+            /** Attempt */
+            attempt: number;
+            reason?: components["schemas"]["InputFailure"] | null;
+            /** Sha256 */
+            sha256?: string | null;
+            /** Size */
+            size?: number | null;
+            state: components["schemas"]["ReceiptState"];
+        };
+        /**
+         * ReceiptState
+         * @enum {string}
+         */
+        ReceiptState: "materialized" | "verified" | "consumed" | "failed";
         /**
          * RecoveryExample
          * @description One auditable synthetic sample: source fail (+ claim) event ids.
@@ -8172,6 +8257,42 @@ export interface components {
             changes: components["schemas"]["TaskChanges"];
             /** Expected Version */
             expected_version: string;
+        };
+        /**
+         * TaskInput
+         * @description A shared attachment as an input: the artifact's authoritative metadata.
+         */
+        TaskInput: {
+            /** Attached By */
+            attached_by: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Media Type */
+            media_type: string;
+            /** Name */
+            name: string;
+            /** Receipts */
+            receipts: components["schemas"]["InputReceipt"][];
+            /** Sha256 */
+            sha256: string;
+            /** Size */
+            size: number;
+            /** Task Id */
+            task_id: string;
+        };
+        /** TaskInputs */
+        TaskInputs: {
+            /** Inputs */
+            inputs: components["schemas"]["TaskInput"][];
+            /** Task Id */
+            task_id: string;
+            /** Unshared Attachments */
+            unshared_attachments?: number | null;
         };
         /** TaskKind */
         TaskKind: {
@@ -13437,6 +13558,8 @@ export interface operations {
                 name: string;
                 role?: components["schemas"]["ArtifactRole"] | null;
                 worker_readable?: boolean;
+                expected_size?: number | null;
+                expected_sha256?: string | null;
             };
             header?: never;
             path: {
@@ -13824,6 +13947,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_task_inputs_api_tasks__task_id__inputs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskInputs"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_input_receipt_api_tasks__task_id__inputs__artifact_id__receipt_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReceiptRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskInput"];
                 };
             };
             /** @description Validation Error */

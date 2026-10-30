@@ -265,6 +265,9 @@ ENV_BLOCK_REASONS = frozenset(
         "env_workspace_limit",
         "env_executor_auth",
         "env_workspace_missing",
+        "env_input_unavailable",
+        "env_input_invalid",
+        "env_input_limit",
         "worker_env",
     }
 )
