@@ -89,6 +89,21 @@ import {
   safeText,
   sessionRepositoryProbe,
 } from "./argus-repo-preflight.js";
+import {
+  boundHead,
+  boundTail,
+  inlineExcerpt,
+  readSessionEvidence,
+  redactSessionTail,
+  type SessionEvidence,
+  type SessionTail,
+  STDERR_TAIL_ARTIFACT,
+  STDERR_TAIL_INLINE_BYTES,
+  STDERR_TAIL_POINTER,
+  sessionTail,
+  stderrTailMediaType,
+  utf8Bytes,
+} from "./argus-stderr-tail.js";
 import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
 import { prepareTaskWorkspace, type WorkspaceResult } from "./argus-workspace.js";
 import { registerChannelAdapter } from "./channel-registry.js";
@@ -135,8 +150,6 @@ const RECYCLE_TIMEOUT_MS = 30_000; // wait for the old container to exit after a
 const SESSION_GONE_GRACE_MS = 90_000;
 /** A delegate with a signal (progress, log line, session heartbeat) this recent is "active". */
 const DELEGATE_ACTIVE_MS = 5 * 60_000;
-const SESSION_LOG_TAIL_BYTES = 2 * 1024;
-const SESSION_LOG_TAIL_LINES = 40;
 
 // Failure classes 3.3. The preflight is bounded inside (every step has its own bound, so it
 // ends within PREFLIGHT_TOTAL_MS including teardown). This outer mark only logs: a task is
@@ -149,21 +162,6 @@ function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<
     timer = setTimeout(() => reject(new Error(message)), ms);
   });
   return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
-}
-
-/** Best-effort credential scrub for fail-error log excerpts (stall visibility). */
-function redactSessionTail(text: string): string {
-  return (
-    text
-      // A URL's userinfo (OneCLI's session proxy URL carries its agent token) and proxy variables.
-      .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]*@/gi, "$1[redacted]@")
-      .replace(/\b((?:https?|all|no)_proxy\s*[=:]\s*)\S+/gi, "$1[redacted]")
-      .replace(/\b(?:bearer\s+|sk-|eyJ|ghp_|github_pat_)[A-Za-z0-9._~+/=-]{8,}/gi, "[redacted]")
-      .replace(
-        /((?:token|secret|password|passwd|pwd|api[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;]+/gi,
-        "$1[redacted]",
-      )
-  );
 }
 
 /** The accounts held when a task's models are chosen (null: not leased). */
@@ -234,8 +232,8 @@ export interface RuntimeHooks {
   cleanup(taskId?: string): Promise<void>;
   /** Running session container ids for this group (stall visibility). */
   sessions?(): Promise<string[]>;
-  /** Exit code and a short redacted log tail for a container that may already be gone. */
-  sessionEvidence?(containerId: string): Promise<{ exitCode: number | null; logTail: string }>;
+  /** Exit code and the redacted stderr tail (3.12.1) of a container that may already be gone. */
+  sessionEvidence?(containerId: string): Promise<SessionEvidence>;
   /** Newest NanoClaw session `.heartbeat` mtime for this group, or null. */
   sessionActivityAt?(): Promise<Date | null>;
   /** Whether the Argus agent group directory exists: ENOENT is "missing", any other error "unknown". */
@@ -338,10 +336,11 @@ export interface ArgusConfig {
    * The tail of the agent's log (host-provided). A run that ends with only the
    * generic failure notice is checked for Claude Code's `Rate limit [..] (resets
    * ..)` or `You've hit your session limit · resets ..` line; otherwise its last
-   * lines are appended to the failure reason. Absent: only the notice text and the
-   * structured providerFailure can show an exhausted account.
+   * lines are appended to the failure reason and the tail is stored as the attempt's
+   * `stderr-tail` artifact. Absent: only the notice text and the structured
+   * providerFailure can show an exhausted account.
    */
-  agentLogTail?: () => Promise<string>;
+  agentLogTail?: () => Promise<string | SessionEvidence>;
   /**
    * One session per attempt: close the session of `thread` (null: the top-level session
    * of the old shared wiring) so NanoClaw never resolves it again, then stop its
@@ -1172,8 +1171,17 @@ class ArgusClient {
   }
 
   /** Upload raw bytes as an artifact of the attempt this agent holds. */
-  upload(taskId: string, attempt: number, name: string, bytes: Uint8Array, mediaType: string) {
-    const q = `attempt=${attempt}&name=${encodeURIComponent(name)}`;
+  upload(
+    taskId: string,
+    attempt: number,
+    name: string,
+    bytes: Uint8Array,
+    mediaType: string,
+    role?: string,
+  ) {
+    const q =
+      `attempt=${attempt}&name=${encodeURIComponent(name)}` +
+      (role ? `&role=${encodeURIComponent(role)}` : "");
     return this.send("POST", `/tasks/${taskId}/artifacts?${q}`, {
       body: bytes as unknown as RequestInit["body"],
       contentType: mediaType,
@@ -1680,6 +1688,38 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     return new Date(Math.max(...times)).toISOString();
   }
 
+  /**
+   * Best-effort: store the redacted tail as the attempt's `stderr-tail` artifact (3.12.1).
+   * Never throws and never holds up the fail that follows; false when not stored.
+   */
+  async function uploadStderrTail(
+    task: { id: string; attempt: number },
+    tail: SessionTail,
+  ): Promise<boolean> {
+    if (!tail.text) return false;
+    try {
+      await withTimeout(
+        client.upload(
+          task.id,
+          task.attempt,
+          STDERR_TAIL_ARTIFACT,
+          new TextEncoder().encode(tail.text),
+          stderrTailMediaType(tail),
+          "other",
+        ),
+        10_000,
+        "stderr-tail upload timed out",
+      );
+      return true;
+    } catch (err) {
+      log.warn("Could not store the stderr tail; failing without it", {
+        task: task.id,
+        err: String(err).slice(0, 200),
+      });
+      return false;
+    }
+  }
+
   /** Fail the attempt when a previously-seen session container is gone for too long. */
   async function watchSession(): Promise<void> {
     const task = current;
@@ -1712,19 +1752,24 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     if (now - sessionMissingSince < SESSION_GONE_GRACE_MS) return;
     const missingId = seenSessionId;
     let exitCode: number | null = null;
-    let logTail = "";
+    let tail: SessionTail | null = null;
     if (cfg.runtime.sessionEvidence) {
       try {
         const evidence = await cfg.runtime.sessionEvidence(missingId);
         exitCode = evidence.exitCode;
-        logTail = redactSessionTail(evidence.logTail);
+        tail = sessionTail(evidence);
       } catch {
         /* still fail the attempt */
       }
     }
+    // Before the fail, while the lease still accepts the upload.
+    const stored = tail ? await uploadStderrTail(task, tail) : false;
     const codeBit = exitCode === null ? "gone" : `exited (code ${exitCode})`;
-    const tailBit = logTail ? `; last output: ${logTail}` : "";
-    const error = `session container ${missingId} ${codeBit} without a reply${tailBit}`;
+    const head = `session container ${missingId} ${codeBit} without a reply`;
+    // Only an excerpt inline (at most STDERR_TAIL_INLINE_BYTES in all); the tail is the artifact.
+    const error = tail?.text
+      ? inlineExcerpt(`${head}; last output: `, tail.text, stored ? STDERR_TAIL_POINTER : "")
+      : head;
     log.warn("Session container vanished; failing the attempt", {
       task: task.id,
       container: missingId,
@@ -1733,7 +1778,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     await client
       .call("POST", `/tasks/${task.id}/fail`, {
         attempt: task.attempt,
-        error: error.slice(0, 2000),
+        error,
         reason: "session_lost",
       })
       .catch(() => undefined);
@@ -2164,20 +2209,32 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       textual.kind === "failed"
         ? (classifyProviderFailure(providerFailure, account?.provider) ?? textual)
         : textual;
+    let tail: SessionTail | null = null;
     if (f.kind === "failed" && isGenericFailureNotice(noticeText) && cfg.agentLogTail) {
       try {
-        const tail = await cfg.agentLogTail();
-        const quota = classifyLogTail(tail, account?.provider);
+        const read = await cfg.agentLogTail();
+        tail = sessionTail(typeof read === "string" ? { logTail: read } : read);
+        // The quota patterns look at the last 2 KiB, the window they had before 3.12.1.
+        const quota = classifyLogTail(
+          boundTail(tail.text, STDERR_TAIL_INLINE_BYTES).text,
+          account?.provider,
+        );
         if (quota) f = quota;
         else {
           // Not a limit: say what the log last said instead of the bare placeholder.
-          const cause = describeLogTail(tail);
+          const cause = describeLogTail(tail.text);
           if (cause) f = { ...f, reason: `${f.reason} (log: ${cause})`.slice(0, 1000) };
         }
       } catch (err) {
         log.warn("Could not read the agent log tail", { err });
       }
     }
+    /** A fail error for this run: stores the tail first, and keeps the error within 2 KiB. */
+    const failError = async (error: string): Promise<string> => {
+      if (!tail?.text) return error;
+      const pointer = (await uploadStderrTail(task, tail)) ? STDERR_TAIL_POINTER : "";
+      return boundHead(error, STDERR_TAIL_INLINE_BYTES - utf8Bytes(pointer)) + pointer;
+    };
     if (f.kind === "exhausted" && cfg.accounts && account) {
       const exhausted = account;
       account = null;
@@ -2230,7 +2287,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           recycleOnLease = true;
           await client.call("POST", `/tasks/${task.id}/fail`, {
             attempt: task.attempt,
-            error: `${f.reason}; the previous worker runtime could not be stopped`,
+            error: await failError(`${f.reason}; the previous worker runtime could not be stopped`),
             reason: "runtime_switch_failed",
           });
           finishTask();
@@ -2260,7 +2317,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         // account refills.
         await client.call("POST", `/tasks/${task.id}/fail`, {
           attempt: task.attempt,
-          error: f.reason,
+          error: await failError(f.reason),
           reason: nextInfo ? "provider_failure" : "quota",
         });
       }
@@ -2269,7 +2326,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
     const { data: failed } = await client.call("POST", `/tasks/${task.id}/fail`, {
       attempt: task.attempt,
-      error: f.reason,
+      error: await failError(f.reason),
       reason: "provider_failure",
     });
     // Argus may have recognised a quota notice itself and moved this worker to
@@ -3799,32 +3856,14 @@ export function runtimeFromEnv(): RuntimeHooks | undefined {
       };
     },
     sessions: sessionContainers,
-    async sessionEvidence(containerId: string) {
-      let exitCode: number | null = null;
-      try {
-        const raw = await docker([
-          "inspect",
-          "--format",
-          "{{.State.ExitCode}}|{{.State.Running}}",
-          containerId,
-        ]);
-        const [code, running] = raw.split("|");
-        if (running !== "true" && code !== undefined && code !== "") {
-          exitCode = Number.parseInt(code, 10);
-          if (Number.isNaN(exitCode)) exitCode = null;
-        }
-      } catch {
-        /* container may already be removed */
-      }
-      let logTail = "";
-      try {
-        const logs = await docker(["logs", "--tail", String(SESSION_LOG_TAIL_LINES), containerId]);
-        logTail = redactSessionTail(logs).slice(-SESSION_LOG_TAIL_BYTES);
-      } catch {
-        /* gone */
-      }
-      return { exitCode, logTail };
-    },
+    sessionEvidence: (containerId: string) =>
+      readSessionEvidence(async (args) => {
+        const { stdout, stderr } = await execFileP(bin, args, {
+          timeout: 30_000,
+          maxBuffer: 8 * 1024 * 1024,
+        });
+        return { stdout, stderr };
+      }, containerId),
     async sessionActivityAt() {
       // NanoClaw: data/v2-sessions/{agent_group_id}/{session_id}/.heartbeat
       const g = await group();
@@ -4022,13 +4061,16 @@ export async function closeSessionFromEnv(thread: string | null): Promise<void> 
 }
 
 /** The redacted log tails of the group's session containers, from the runtime hooks. */
-function sessionLogTail(runtime: RuntimeHooks): () => Promise<string> {
+function sessionLogTail(runtime: RuntimeHooks): () => Promise<SessionEvidence> {
   return async () => {
     const ids = (await runtime.sessions?.()) ?? [];
-    const tails = await Promise.all(
-      ids.map(async (id) => (await runtime.sessionEvidence?.(id))?.logTail ?? ""),
-    );
-    return tails.join("\n");
+    const all = await Promise.all(ids.map(async (id) => runtime.sessionEvidence?.(id)));
+    return {
+      exitCode: null,
+      logTail: all.map((e) => e?.logTail ?? "").join("\n"),
+      truncated: all.some((e) => e?.truncated),
+      complete: all.length > 0 && all.every((e) => e?.complete),
+    };
   };
 }
 
