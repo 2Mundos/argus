@@ -104,7 +104,8 @@ every new dependency is judged against it.
   attempt, live; an optional `budget_usd` steers the attempt to wrap up and blocks new attempts
 - [Task steering](specs/task-steering.spec.md) — a manager sends a message to the
   attempt in flight; delivered on heartbeat, injected into the NanoClaw session as a
-  framed operator instruction; expires with the attempt
+  framed operator instruction; expires with the attempt, or ends `unknown` when it
+  was dispatched and never acknowledged
 - [Account usage](specs/account-usage.spec.md) — tokens spent and quota left per
   provider account: reported usage, Codex quota probe, Cursor pools, charts
 - [Cost view](specs/cost-view.spec.md) — the Cost tab: tokens and estimated cost
@@ -194,6 +195,7 @@ every new dependency is judged against it.
   the NanoClaw hook drops container stderr today (only `docker logs` stdout is kept)
 - [Bounded recovery](drafts/2026-10-29.bounded-recovery.draft.md) — throttled
   session starts, one recovery per unexpected exit, uncertain work never resent
+  (item 3 shipped for steers)
 - [Verification boundary](drafts/2026-10-29.verification-boundary.draft.md) — a
   spec subsection stating what was verified, at which level and versions
 
