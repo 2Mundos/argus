@@ -351,9 +351,10 @@ EVENT_ALIASES = frozenset(
     {"events", *re.findall(r"\b(?:FROM|JOIN) events (\w+)", SESSION_LOST_SQL)}
 )
 # Each events lookup and the index it must use: the kind+at window, then the
-# per-task correlated lookups (next end, claim). A kind-only lookup is a regression.
+# per-task correlated lookups (next end; claim, by the task+kind index of 0057). A
+# kind-only lookup is a regression.
 EXPECTED_EVENT_INDEXES = frozenset(
-    {("e", "events_kind_at"), ("f", "events_subject"), ("c", "events_subject")}
+    {("e", "events_kind_at"), ("f", "events_subject"), ("c", "events_task_kind")}
 )
 
 
@@ -422,7 +423,9 @@ async def test_session_lost_query_plan_uses_event_indexes(db: Database) -> None:
     assert plan_regressions(plan) == [], plan
 
 
-@pytest.mark.parametrize("dropped", ["events_kind_at", "events_subject"])
+@pytest.mark.parametrize(
+    "dropped", ["events_kind_at", "events_subject", "events_task_kind"]
+)
 async def test_missing_event_index_is_detected(db: Database, dropped: str) -> None:
     """Negative control: with the index gone, the same guard must fail."""
     async with db.write() as tx:
@@ -535,13 +538,16 @@ async def test_retry_sequence_pairs_each_fail_with_its_own_claim(
     agent = await worker(db)
     await new_task(db, max_attempts=5)
     task_id, attempt = await claim(db, agent)
-    for gap in (20, 40):
+    for gap in (20, 40, None):
         clock.advance(10)
+        # progress lets a later confirmed exit resume again (failure classes 3.2)
+        async with db.write() as tx:
+            await tasks.report_progress(tx, agent, task_id, attempt, "working")
         await lose(db, agent, task_id, attempt)
+        if gap is None:
+            break  # third loss: not claimed again yet
         clock.advance(gap)
         _, attempt = await claim(db, agent)
-    clock.advance(10)
-    await lose(db, agent, task_id, attempt)  # third loss: not claimed again yet
     r = await report(db, clock)
     assert (r.denominator, r.measured, r.pending, r.anomalous) == (3, 2, 1, 0)
     assert sorted(s.latency_s for s in r.examples) == [20.0, 40.0]

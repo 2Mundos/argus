@@ -168,6 +168,12 @@ const RUNTIME_VERIFY_MS = 120_000; // how long to look for the session container
 const RECYCLE_TIMEOUT_MS = 30_000; // wait for the old container to exit after an account rotation
 /** After a session was seen, how long it may stay gone before fail session_lost. */
 const SESSION_GONE_GRACE_MS = 90_000;
+/**
+ * Tries of the session_lost fail. The confirmed exit counts for the automatic resume rule
+ * (failure classes 3.2) only if Argus records it; a lost fail ends as an unconfirmed
+ * `lease_expired`. A repeat is safe: Argus answers 409 once one landed.
+ */
+const SESSION_LOST_FAIL_TRIES = 3;
 /** A delegate with a signal (progress, log line, session heartbeat) this recent is "active". */
 const DELEGATE_ACTIVE_MS = 5 * 60_000;
 
@@ -302,6 +308,8 @@ export interface ArgusConfig {
   workspaceRoot?: () => Promise<string | null>;
   /** Test seam: the first retry delay of a task input download (default 1 s, doubling). */
   inputsBackoffMs?: number;
+  /** Test seam: the delay between tries of the session_lost fail (default 2 s). */
+  exitRetryMs?: number;
   /**
    * Node-local checkpoint store for unpublished task work (task checkpoint spec).
    * Default: `ARGUS_CHECKPOINT_DIR`; unset disables checkpoints (nothing is saved or restored).
@@ -1823,16 +1831,51 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       container: missingId,
       exitCode,
     });
-    await client
-      .call("POST", `/tasks/${task.id}/fail`, {
-        attempt: task.attempt,
-        error,
-        reason: "session_lost",
-      })
-      .catch(() => undefined);
+    await failSessionLost(task, error);
     current = null;
     void cfg.runtime?.cleanup(task.id).catch(() => undefined);
     finishTask();
+  }
+
+  /**
+   * Report the confirmed exit; Argus applies the automatic resume rule (failure classes 3.2)
+   * and answers with the task: `ready` when it resumed, `failed` when it did not. Retried a
+   * bounded number of times on a transient error; a conflict or a rejection is final.
+   */
+  async function failSessionLost(
+    task: Readonly<{ id: string; attempt: number }>,
+    error: string,
+  ): Promise<void> {
+    for (let tries = 1; ; tries++) {
+      try {
+        const { data } = await client.call("POST", `/tasks/${task.id}/fail`, {
+          attempt: task.attempt,
+          error,
+          reason: "session_lost",
+        });
+        const state = (data as { state?: string } | null)?.state;
+        log.info("Argus recorded the session exit", {
+          task: task.id,
+          attempt: task.attempt,
+          state,
+        });
+        return;
+      } catch (err) {
+        const final = err instanceof ArgusError && (err.status === 409 || err.permanent);
+        if (final || tries >= SESSION_LOST_FAIL_TRIES) {
+          log.warn("Could not record the session exit", {
+            task: task.id,
+            attempt: task.attempt,
+            tries,
+            ...(err instanceof ArgusError
+              ? { status: err.status, code: err.code }
+              : { err: String(err).slice(0, 200) }),
+          });
+          return;
+        }
+        await sleep(cfg.exitRetryMs ?? 2_000);
+      }
+    }
   }
 
   /** Probe the agent group directory; a throw or a slow probe is "unknown". */

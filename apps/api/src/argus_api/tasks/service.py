@@ -105,6 +105,13 @@ RUNTIME_FAILED = "runtime_failed"
 # `blocked` after the worker said FAIL with attempts left (failure classes 3.2).
 WORKER_GAVE_UP = "worker_gave_up"
 
+# Exits that end the session itself; a confirmed one follows the automatic resume
+# rule (failure classes 3.2). `session_lost` is confirmed by the channel's 90 s
+# listing check, `agent_ended` only by a `gone` observation of the attempt.
+AUTO_RESUME_REASONS = frozenset({"session_lost", "agent_ended"})
+# The server's cap on a confirmed exit's `error` (the channel sends at most 2 KiB).
+EXIT_ERROR_MAX = 2048
+
 
 # -- reads -------------------------------------------------------------------
 
@@ -1179,6 +1186,24 @@ async def fail(
     failures = row["failures"] + 1
     retries = failures < row["max_attempts"]
     kind = retry_class(reason)
+    if reason == "session_lost":
+        # The channel saw the container gone for 90 s: a confirmed exit.
+        error = error[:EXIT_ERROR_MAX]
+        resume = await _auto_resume(tx, row, retries=retries)
+        await _apply(
+            tx,
+            row,
+            Action.FAIL,
+            f"agent:{agent_id}",
+            set_={"error": error, "failures": failures} | harder.get("set", {}),
+            data={"error": error, "reason": reason, "retry_class": kind}
+            | resume.data
+            | harder.get("data", {}),
+            exhausted=resume.exhausted,
+        )
+        if resume.resumed:
+            await _record_auto_resumed(tx, row, f"agent:{agent_id}", reason)
+        return await get_task(tx.conn, task_id)
     if kind is RetryClass.TASK and reason not in ESCALATING_REASONS and retries:
         # The worker gave up: asking again would get the same answer, so a human
         # decides (failure classes 3.2). The attempt still counts.
@@ -2654,8 +2679,15 @@ async def _expire_where(
             data["last_signal_source"] = source
         if late is not None:
             data["detected_late_s"] = late
+        retries = row["failures"] + 1 < row["max_attempts"]
         try:
             async with tx.savepoint():
+                resume = (
+                    await _auto_resume(tx, row, retries=retries)
+                    if reason in AUTO_RESUME_REASONS and _exit_confirmed(row)
+                    else _NOT_CONFIRMED
+                )
+                data |= resume.data
                 await _apply(
                     tx,
                     row,
@@ -2667,7 +2699,7 @@ async def _expire_where(
                         "progress_message": (
                             f"attempt {row['attempt']} ended: "
                             f"{reason.replace('_', ' ')};"
-                            f" {'requeued' if row['failures'] + 1 < row['max_attempts'] else 'failed'}"
+                            f" {'requeued' if retries and not resume.exhausted else 'failed'}"
                         ),
                         "progress_percent": None,
                         "quiet_at": None,
@@ -2676,7 +2708,10 @@ async def _expire_where(
                         "observation_at": None,
                     },
                     data=data,
+                    exhausted=resume.exhausted,
                 )
+                if resume.resumed:
+                    await _record_auto_resumed(tx, row, "system", reason)
         except Exception:
             if failed is None:
                 raise
@@ -2688,6 +2723,101 @@ async def _expire_where(
 
 
 # -- internals ------------------------------------------------------------------
+
+
+class _Resume(NamedTuple):
+    """The automatic resume rule's verdict on one exit (failure classes 3.2)."""
+
+    resumed: bool  # requeued under the rule: record `task.auto_resumed`
+    exhausted: bool  # no progress since the last resume: failed whatever is left
+    data: dict[str, Any]  # added to the fail / expire event
+
+
+_NOT_CONFIRMED = _Resume(resumed=False, exhausted=False, data={})
+
+
+def _exit_confirmed(row: aiosqlite.Row) -> bool:
+    """`agent_ended` is a confirmed exit only when the host's last observation of
+    this attempt, taken after its claim, saw the session gone (3.2, 3.7). It is
+    not held to the staleness window: the agent ended because it went silent."""
+    observation, at, claimed_at = (
+        row["observation"],
+        row["observation_at"],
+        row["claimed_at"],
+    )
+    if observation is None or at is None or claimed_at is None:
+        return False
+    if datetime.fromisoformat(at) < datetime.fromisoformat(claimed_at):
+        return False
+    try:
+        return LeaseObservation.model_validate_json(observation).session == "gone"
+    except ValidationError:
+        return False
+
+
+async def _auto_resume(tx: Tx, row: aiosqlite.Row, *, retries: bool) -> _Resume:
+    """Apply the automatic resume rule to a confirmed exit of the claimed attempt.
+
+    Every read is one seek on `events_task_kind` (migration 0057); the epoch is
+    the latest `task.retried` or non-`system` `task.unblock`."""
+    task_id = row["id"]
+    epoch = max(
+        await _latest_event(tx, task_id, "task.retried"),
+        await _latest_event(tx, task_id, "task.unblock", operator=True),
+    )
+    resumed_at = await _latest_event(tx, task_id, "task.auto_resumed", after=epoch)
+    if not resumed_at or await _progressed(tx, row, after=resumed_at):
+        return _Resume(resumed=retries, exhausted=False, data={})
+    return _Resume(resumed=False, exhausted=True, data={"auto_resume": "no_progress"})
+
+
+# The automatic resume rule's reads; each is one seek on `events_task_kind`
+# (migration 0057), checked by EXPLAIN QUERY PLAN in test_auto_resume.py.
+LATEST_TASK_EVENT_SQL = (
+    "SELECT id FROM events WHERE subject_type = 'task' AND subject_id = ?"
+    " AND kind = ? AND id > ? AND (? = 0 OR actor <> 'system')"
+    " ORDER BY id DESC LIMIT 1"
+)
+ATTEMPT_PROGRESS_SQL = (
+    "SELECT 1 FROM events WHERE subject_type = 'task' AND subject_id = ?"
+    " AND kind = 'task.progress' AND id > ?"
+    " AND json_extract(data, '$.attempt') = ? LIMIT 1"
+)
+
+
+async def _latest_event(
+    tx: Tx, task_id: str, kind: str, *, after: int = 0, operator: bool = False
+) -> int:
+    """Id of the task's newest `kind` event after `after`, or 0. `operator` skips
+    the ones the server recorded on its own (actor `system`)."""
+    async with tx.conn.execute(
+        LATEST_TASK_EVENT_SQL, (task_id, kind, after, int(operator))
+    ) as cur:
+        found = await cur.fetchone()
+    return found[0] if found else 0
+
+
+async def _progressed(tx: Tx, row: aiosqlite.Row, *, after: int) -> bool:
+    """Whether the claimed attempt recorded a `task.progress` (a milestone is one)
+    after event `after`. Attempt numbers only grow within an epoch and a late
+    write of an earlier attempt is refused, so the attempt alone places it."""
+    async with tx.conn.execute(
+        ATTEMPT_PROGRESS_SQL, (row["id"], after, row["attempt"])
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
+async def _record_auto_resumed(
+    tx: Tx, row: aiosqlite.Row, actor: str, reason: str
+) -> None:
+    await record(
+        tx,
+        actor,
+        "task",
+        row["id"],
+        "task.auto_resumed",
+        {"attempt": row["attempt"], "reason": reason},
+    )
 
 
 async def check_lease(
@@ -2756,6 +2886,7 @@ async def _apply(
     event: str | None = None,
     review: Review | None = None,
     open_review_decision: bool = True,
+    exhausted: bool = False,
 ) -> TaskState:
     """Validate and persist one transition, its event (`task.<action>` unless
     `event` names it), and its knock-on effects.
@@ -2763,10 +2894,13 @@ async def _apply(
     `counts_failure=False` evaluates a fail/expire as if no failure had counted, so it
     can never exhaust the attempts (the caller leaves `failures` unchanged).
     `open_review_decision=False` enters `in_review` without a human/orchestrator
-    decision (independent code review gate; settings.spec.md 3.5)."""
+    decision (independent code review gate; settings.spec.md 3.5).
+    `exhausted=True` evaluates a fail/expire as if no attempt were left (the
+    automatic resume rule's fail with the cause, failure classes 3.2)."""
     old = S(row["state"])
+    failures = row["failures"] if counts_failure else -1
     ctx = TransitionContext(
-        failures=row["failures"] if counts_failure else -1,
+        failures=row["max_attempts"] if exhausted else failures,
         max_attempts=row["max_attempts"],
         review=review or Review(row["review"]),
         deps_done=deps_done,
