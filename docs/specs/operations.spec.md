@@ -111,6 +111,101 @@ numbers as `/api/metrics` in structured form, and the build version (the release
 tag baked into the image, `0.0.0+dev` otherwise; [releases](releases.spec.md) 3.5). Home
 renders it as its System widgets and refreshes with the event stream.
 
+## 3.5 Disk guard
+
+**Target behaviour, not implemented.** Source: the
+[disk guard draft](../drafts/2026-10-29.disk-guard.draft.md) and its
+[investigation](../reports/2026-10-29.disk-guard-investigation.ref.md). Where the
+investigation found a flaw, the corrected rule is stated and flagged **Decision**.
+
+One guard loop measures free space and acts in bands. The 64 MiB `disk` readiness
+check in 3.1 stays unchanged: data directory only, no effect from guard bands.
+
+| Band | Default (setting) | Effect |
+| --- | --- | --- |
+| Warn | below 5 GiB, `5368709120` (`ARGUS_DISK_GUARD_WARN_BYTES`) | one warning event per episode; Home shows it |
+| Warn clear | above 6 GiB, `6442450944` (`..._WARN_CLEAR_BYTES`) | the episode ends |
+| Refuse | below 2 GiB, `2147483648` (`..._REFUSE_BYTES`) | claims refused with typed admission reason `disk_low`; running session containers paused (`docker pause`) |
+| Resume | above 2.5 GiB, `2684354560` (`..._RESUME_BYTES`) | paused containers resumed; claims admitted |
+| Shed | still paused after 30 s (`..._SHED_AFTER_S=30`) | stop the heaviest writer, `env_disk_full`, no attempt consumed; the rest stay paused |
+
+Other settings: `ARGUS_DISK_GUARD_ENABLED` (`true`), `ARGUS_DISK_GUARD_PAUSE`
+(`false`: no `docker pause`, no shed), `ARGUS_DISK_GUARD_INTERVAL_S` (`5`),
+`ARGUS_DISK_GUARD_FAIL_PAUSE_COUNT` (`2`).
+
+- **Hysteresis.** A band clears only at its upper edge: warn above 6 GiB, refuse
+  above 2.5 GiB. Startup validation requires `clear > warn > resume > refuse`;
+  otherwise Argus refuses to start.
+- **Shed rule (Decision, changes the draft).** Shed at most one writer per
+  30 s period. Resume is gated only on the 2.5 GiB band, never on "resume the
+  rest": resuming while still below 2 GiB would re-pause on the next poll.
+- **Failed measurement.** A failed `statvfs` counts as below 2 GiB: new claims are
+  refused (fail closed). `disk_free` returns 0 on `OSError` today, so the guard
+  must not reuse it; its variant distinguishes "failed" from "0 free".
+  **Decision (owner):** the default pauses running sessions on the first failure;
+  the investigation recommends pausing only after 2 consecutive failures
+  (`ARGUS_DISK_GUARD_FAIL_PAUSE_COUNT=2`), since one transient error would pause
+  every session.
+
+### Pause, leases, and stall detection
+
+- A pause renews the claim's lease with an explicit `paused_disk` heartbeat reason,
+  so the lease is not treated as lost. Heartbeats have no reason field today, and
+  `LeaseObservation` `session` is a closed enum (`running|gone|unknown`), so the
+  reason/session value is new.
+- A heartbeat alone does not stop quiet or stalled: a paused container stops
+  writing `activity_at`. Therefore the guard exposes the set of task ids it has
+  paused to the reaper; quiet and `expire_stalled` skip those claims.
+- `stall_cause` gains `paused_disk` for visibility only. No worker reports the
+  pause as authority; the API knows because it issued `docker pause`.
+- The wall-clock `timeout_s` is not exempt while paused unless the owner decides
+  so (open question).
+
+### Who runs the loop
+
+**Decision:** the API process owns the guard loop. Single node, and it issues
+`docker pause`; it is one more asyncio task with `LoopStats` next to the cleanup
+loop. The NanoClaw host needs no loop.
+
+- Never pause the Argus-started host container: it sends the lease heartbeats.
+  Pause only descendant agent containers found by `descendant_label`.
+- Pause only on a local unix-socket daemon (`shares_filesystem`). Remote daemons
+  and Kubernetes get the warn and refuse bands only.
+
+### "Wrote most"
+
+- Rank by the cgroup v2 `io.stat` `wbytes` delta per container, sampled at pause
+  time and at shed time.
+- Take one bounded directory-size sample of the container's instance directory at
+  pause time (the workspace-cleanup bounded walker): tie-break and the number shown
+  in the event.
+- Reject `docker ps --size`: it reads the writable layer, is slow, and cannot see
+  bind-mount writes.
+- **OPEN:** verify the `io` controller is enabled for the Docker slice and that
+  `wbytes` is readable on a Docker host. If unreadable, fall back to directory
+  size and say "ranked by size" in the event.
+
+### Filesystems
+
+Judged separately; the worst one decides. Paths on the same `st_dev` form one group
+and one episode; a group containing the data directory counts as the data directory.
+
+- The data directory.
+- Task workspaces and checkpoints (`instances_root`).
+- The Docker data root (`DockerRootDir`), local daemon only; otherwise not applicable.
+
+### Open questions (owner decisions)
+
+1. Shed outcome: `blocked` (existing `environment` class) or requeue without an
+   attempt (recommended; new rule).
+2. Defaults `ENABLED=true`, `PAUSE=false` (recommended).
+3. Absolute thresholds, or a percentage floor on small disks.
+4. Whether `timeout_s` is exempt while paused.
+5. Whether guard loop staleness fails `/readyz`.
+6. Data-directory band: pause and shed when sessions may not be the writers.
+7. Accept the two draft changes: resume gated on 2.5 GiB only; failed-measurement
+   pause threshold.
+
 # 4. Open Questions
 
 1. A read-only `metrics` token scope instead of requiring `admin` for scrapers.
