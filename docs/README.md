@@ -56,6 +56,8 @@ every new dependency is judged against it.
   dedicated login, or renew an Anthropic credential as an Argus account
 - [Cursor accounts](specs/cursor-accounts.spec.md) — import a login or API key
   for the delegated Cursor CLI; executor lease and OneCLI path-scoped injection
+- [Copilot accounts](specs/copilot-accounts.spec.md) — import a GitHub Copilot token for
+  the delegated Copilot CLI; executor lease, sentinel env and OneCLI injection
 - [Custom accounts](specs/custom-accounts.spec.md) — an OpenAI-compatible endpoint
   (OpenRouter first) as an account: model and routing per role, probe, 402/429 failover
 - [Custom harness](specs/custom-harness.spec.md) — NanoClaw Claude Code on a custom
