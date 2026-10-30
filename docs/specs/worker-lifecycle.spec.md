@@ -386,6 +386,17 @@ startup lock file guarantees there is only one. As built:
   previous unused ones. Failed starts retry with exponential backoff (5 s
   doubling, max 5 min) and mark the pool `failing` with the error. Nothing
   starts without `ARGUS_PUBLIC_URL` (how containers reach Argus).
+- **Start rate.** The reconciler starts at most `max(1, floor(logical_cpus / 2))`
+  instances in flight at once; "in flight" means instances in `reserved` whose start
+  no provider listing has confirmed yet. `logical_cpus` is the logical CPU count of
+  the host the starts run on (`os.cpu_count()` on the Argus host). Further starts
+  wait for the next pass. This adds no cap against `desired_replicas` or
+  `max_replicas` beyond what they already do. Running instances are not capped; the
+  limit applies only to starts.
+- **Start deadline.** A start gets a longer deadline than an ordinary provider
+  operation: 120 s against the ordinary 30 s. Both values are proposed, not
+  measured: the research took them from another project and has not verified them
+  here ([bounded recovery](../research/2026-10-29.bounded-recovery.research.md)).
 - **Terminations** are begun when an agent of the instance is lost, when all its
   agents have left, when no agent registers within 5 minutes of the container
   running, on scale-down of an instance that has no agent yet, or by an admin
