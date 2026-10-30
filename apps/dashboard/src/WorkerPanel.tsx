@@ -41,10 +41,7 @@ export function WorkerPanelProvider({
   openWorker: (agentId: string) => void;
   children: ReactNode;
 }) {
-  const { data: agents } = useLiveData(
-    (signal) => call(api.GET("/api/agents", { signal })),
-    [],
-  );
+  const { data: agents } = useLiveData((signal) => call(api.GET("/api/agents", { signal })), []);
   return (
     <WorkerPanelContext.Provider value={{ openWorker, selectedId, agents }}>
       {children}

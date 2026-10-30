@@ -3,9 +3,9 @@ import { eventWorker } from "./format";
 import {
   agentIdFromActor,
   useWorkerPanel,
+  type WorkerKind,
   workerKind,
   workerLabel,
-  type WorkerKind,
 } from "./WorkerPanel";
 
 function dotKind(kind: WorkerKind): WorkerKind {
@@ -59,7 +59,9 @@ export function WorkerChip({
         openWorker(agentId);
       }}
     >
-      <span className={`worker-dot worker-state-${dotKind(kind)}${kind === "unknown" ? " worker-dot-unknown" : ""}`} />
+      <span
+        className={`worker-dot worker-state-${dotKind(kind)}${kind === "unknown" ? " worker-dot-unknown" : ""}`}
+      />
       <span className="worker-name">{label}</span>
       {layout === "rail" && resolved && now !== undefined && (
         <>

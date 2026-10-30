@@ -1,7 +1,7 @@
 import { type Agent, api, call } from "./api";
 import { useLiveData } from "./live";
-import { WorkerChip } from "./WorkerChip";
 import { useNow } from "./views/Activity";
+import { WorkerChip } from "./WorkerChip";
 
 const ENDED_LIMIT = 8;
 
@@ -59,7 +59,13 @@ export function WorkersSidebar({ selectedId }: { selectedId: string | null }) {
         <ul className="workers-list">
           {listed.map((a) => (
             <li key={a.id}>
-              <WorkerChip agentId={a.id} agent={a} layout="rail" now={now} selected={a.id === selectedId} />
+              <WorkerChip
+                agentId={a.id}
+                agent={a}
+                layout="rail"
+                now={now}
+                selected={a.id === selectedId}
+              />
             </li>
           ))}
         </ul>

@@ -38,7 +38,9 @@ vi.mock("../live", async () => {
 });
 vi.mock("./Activity", () => ({ Activity: () => null }));
 vi.mock("../WorkerChip", () => ({
-  WorkerChip: ({ agentId }: { agentId: string }) => <span data-testid="worker-chip">{agentId}</span>,
+  WorkerChip: ({ agentId }: { agentId: string }) => (
+    <span data-testid="worker-chip">{agentId}</span>
+  ),
   WorkerActorChip: ({ actor }: { actor: string }) => <span>{actor}</span>,
 }));
 vi.mock("./EventList", () => ({
