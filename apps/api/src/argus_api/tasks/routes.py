@@ -224,10 +224,14 @@ async def claim_task(
     secrets: SecretsDep,
 ) -> ClaimedTask | Response:
     """Claim a ready task, long-polling up to `wait_s` seconds for one."""
+    disk_guard = request.app.state.disk_guard
     loop = asyncio.get_running_loop()
     deadline = loop.time() + body.wait_s
     with db.bus.subscribe() as sub:
         while True:
+            # Re-checked every pass (not only before the poll): a guard that
+            # refuses while the caller waits gets `disk_low`, not a timeout.
+            disk_guard.require_admission()
             async with db.write() as tx:
                 task, engine_lease = await accounts.claim(
                     tx,
@@ -236,6 +240,7 @@ async def claim_task(
                     body.runtime_providers,
                     secrets,
                     default_timeout_s=settings.task_timeout_s,
+                    disk_guard=disk_guard,
                 )
             if task is not None:
                 async with db.read() as conn:

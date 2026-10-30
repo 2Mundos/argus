@@ -5735,6 +5735,119 @@
         "title": "DifficultySource",
         "type": "string"
       },
+      "DiskGuardOut": {
+        "description": "Authenticated disk-guard visibility; no paths or device identifiers.",
+        "properties": {
+          "claim_admission": {
+            "enum": [
+              "admitted",
+              "refused"
+            ],
+            "title": "Claim Admission",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "free_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Bytes"
+          },
+          "measurement": {
+            "enum": [
+              "measured",
+              "unknown",
+              "stale"
+            ],
+            "title": "Measurement",
+            "type": "string"
+          },
+          "roots": {
+            "items": {
+              "$ref": "#/components/schemas/DiskGuardRootOut"
+            },
+            "title": "Roots",
+            "type": "array"
+          },
+          "warn_episode": {
+            "title": "Warn Episode",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "claim_admission",
+          "warn_episode",
+          "measurement",
+          "roots"
+        ],
+        "title": "DiskGuardOut",
+        "type": "object"
+      },
+      "DiskGuardRootOut": {
+        "properties": {
+          "applicability": {
+            "enum": [
+              "measured",
+              "unknown",
+              "stale",
+              "not_applicable"
+            ],
+            "title": "Applicability",
+            "type": "string"
+          },
+          "band": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "warn",
+                  "refuse"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band"
+          },
+          "free_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Bytes"
+          },
+          "role": {
+            "enum": [
+              "data",
+              "instances",
+              "docker"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "applicability"
+        ],
+        "title": "DiskGuardRootOut",
+        "type": "object"
+      },
       "DockerOptions-Input": {
         "properties": {
           "extra_hosts": {
@@ -14364,6 +14477,9 @@
             "title": "Disk Free Bytes",
             "type": "integer"
           },
+          "disk_guard": {
+            "$ref": "#/components/schemas/DiskGuardOut"
+          },
           "events_total": {
             "title": "Events Total",
             "type": "integer"
@@ -14418,6 +14534,7 @@
           "events_total",
           "database",
           "disk_free_bytes",
+          "disk_guard",
           "loops"
         ],
         "title": "SystemSummary",

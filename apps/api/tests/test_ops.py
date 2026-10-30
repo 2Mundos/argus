@@ -261,6 +261,12 @@ def test_system_summary_for_any_valid_token(client: TestClient) -> None:
     assert set(body["loops"]) == {"reaper", "reconciler"}
     assert body["tasks"]["ready"] == 0
     assert body["version"] == ops.VERSION
+    assert body["disk_guard"]["claim_admission"] in ("admitted", "refused")
+    assert {r["role"] for r in body["disk_guard"]["roots"]} == {
+        "data",
+        "instances",
+        "docker",
+    }
 
 
 def test_unready_returns_503(

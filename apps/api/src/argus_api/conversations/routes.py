@@ -147,9 +147,13 @@ async def claim_chat(
 ) -> AgentChatClaim | None:
     """Long-poll for the next queued human message (claim_task pattern)."""
     await _require_internal_orchestrator(db, agent_id)
+    disk_guard = request.app.state.disk_guard
     loop = asyncio.get_running_loop()
     deadline = loop.time() + wait_s
     while True:
+        # Re-checked every pass so a refusal during the wait surfaces as
+        # `disk_low` rather than a wait timeout.
+        disk_guard.require_admission()
         # Idle polls only read; the writer is taken when a message can be delivered.
         async with db.read() as conn:
             ready = await service.has_claimable(
@@ -158,7 +162,10 @@ async def claim_chat(
         if ready:
             async with db.write() as tx:
                 claimed = await service.claim_next(
-                    tx, agent_id=agent_id, path=settings.model_policy_path
+                    tx,
+                    agent_id=agent_id,
+                    path=settings.model_policy_path,
+                    disk_guard=disk_guard,
                 )
             if claimed is not None:
                 conv, msg = claimed

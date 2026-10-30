@@ -109,6 +109,13 @@ class Settings:
     workspace_cleanup_max_attempts: int = 3
     workspace_cleanup_low_disk_bytes: int = 10 * 1024 * 1024 * 1024
     workspace_cleanup_git_timeout_s: float = 300.0
+    # Disk guard admission (operations.spec.md 3.5): warn/refuse hysteresis.
+    disk_guard_enabled: bool = True
+    disk_guard_warn_bytes: int = 5 * 1024 * 1024 * 1024
+    disk_guard_warn_clear_bytes: int = 6 * 1024 * 1024 * 1024
+    disk_guard_refuse_bytes: int = 2 * 1024 * 1024 * 1024
+    disk_guard_resume_bytes: int = int(2.5 * 1024 * 1024 * 1024)
+    disk_guard_interval_s: float = 5.0
 
     @property
     def db_path(self) -> Path:
@@ -132,7 +139,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        return cls(
+        settings = cls(
             data_dir=Path(os.environ.get("ARGUS_DATA_DIR", "data")),
             admin_token=os.environ.get("ARGUS_ADMIN_TOKEN") or None,
             artifact_max_bytes=int(
@@ -280,7 +287,61 @@ class Settings:
             workspace_cleanup_git_timeout_s=float(
                 os.environ.get("ARGUS_WORKSPACE_CLEANUP_GIT_TIMEOUT_S", 300)
             ),
+            disk_guard_enabled=os.environ.get("ARGUS_DISK_GUARD_ENABLED", "true")
+            != "false",
+            disk_guard_warn_bytes=int(
+                os.environ.get("ARGUS_DISK_GUARD_WARN_BYTES", 5 * 1024 * 1024 * 1024)
+            ),
+            disk_guard_warn_clear_bytes=int(
+                os.environ.get(
+                    "ARGUS_DISK_GUARD_WARN_CLEAR_BYTES", 6 * 1024 * 1024 * 1024
+                )
+            ),
+            disk_guard_refuse_bytes=int(
+                os.environ.get("ARGUS_DISK_GUARD_REFUSE_BYTES", 2 * 1024 * 1024 * 1024)
+            ),
+            disk_guard_resume_bytes=int(
+                os.environ.get(
+                    "ARGUS_DISK_GUARD_RESUME_BYTES", int(2.5 * 1024 * 1024 * 1024)
+                )
+            ),
+            disk_guard_interval_s=float(
+                os.environ.get("ARGUS_DISK_GUARD_INTERVAL_S", 5)
+            ),
         )
+        settings._validate_disk_guard()
+        return settings
+
+    def _validate_disk_guard(self) -> None:
+        """Refuse to start when hysteresis thresholds are mis-ordered."""
+        refuse = self.disk_guard_refuse_bytes
+        resume = self.disk_guard_resume_bytes
+        warn = self.disk_guard_warn_bytes
+        clear = self.disk_guard_warn_clear_bytes
+        interval = self.disk_guard_interval_s
+        if refuse < 0:
+            raise ValueError(
+                f"ARGUS_DISK_GUARD_REFUSE_BYTES must be >= 0 (got {refuse})"
+            )
+        if not resume > refuse:
+            raise ValueError(
+                "ARGUS_DISK_GUARD_RESUME_BYTES must be > ARGUS_DISK_GUARD_REFUSE_BYTES "
+                f"(got resume={resume}, refuse={refuse})"
+            )
+        if not warn > resume:
+            raise ValueError(
+                "ARGUS_DISK_GUARD_WARN_BYTES must be > ARGUS_DISK_GUARD_RESUME_BYTES "
+                f"(got warn={warn}, resume={resume})"
+            )
+        if not clear > warn:
+            raise ValueError(
+                "ARGUS_DISK_GUARD_WARN_CLEAR_BYTES must be > ARGUS_DISK_GUARD_WARN_BYTES "
+                f"(got clear={clear}, warn={warn})"
+            )
+        if not interval > 0:
+            raise ValueError(
+                f"ARGUS_DISK_GUARD_INTERVAL_S must be > 0 (got {interval})"
+            )
 
 
 def _difficulty_executors() -> dict[str, tuple[str, ...]]:
