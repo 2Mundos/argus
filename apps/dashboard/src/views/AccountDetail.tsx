@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { type Account, api, call } from "../api";
+import { DateChip } from "../DateChip";
 import { relative } from "../format";
 import { useLiveData } from "../live";
 import {
@@ -82,8 +83,13 @@ export function AccountDetail(props: {
           </button>
         </div>
         <p className="muted small">
-          {a.provider} · {a.kind.replace("_", " ")} · created {relative(a.created_at)}
-          {a.state === "exhausted" && ` · resets ${relative(a.exhausted_until)}`}
+          {a.provider} · {a.kind.replace("_", " ")} · created <DateChip at={a.created_at} />
+          {a.state === "exhausted" && (
+            <>
+              {" · resets "}
+              <DateChip at={a.exhausted_until} />
+            </>
+          )}
         </p>
 
         {!model ? (

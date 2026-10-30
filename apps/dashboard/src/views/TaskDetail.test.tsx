@@ -37,7 +37,10 @@ vi.mock("../live", async () => {
   };
 });
 vi.mock("./Activity", () => ({ Activity: () => null }));
-vi.mock("./AgentDetail", () => ({ AgentDetail: () => null }));
+vi.mock("../WorkerChip", () => ({
+  WorkerChip: ({ agentId }: { agentId: string }) => <span data-testid="worker-chip">{agentId}</span>,
+  WorkerActorChip: ({ actor }: { actor: string }) => <span>{actor}</span>,
+}));
 vi.mock("./EventList", () => ({
   EventList: ({ events }: { events: { id: string; kind: string }[] }) => (
     <ul aria-label="History events">

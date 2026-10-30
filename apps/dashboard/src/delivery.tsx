@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, call, type Delivery } from "./api";
-import { relative } from "./format";
+import { DateChip } from "./DateChip";
 
 // Delivery of a task's pull request (docs/specs/task-delivery.spec.md 3.5).
 
@@ -53,9 +53,14 @@ export function TaskDelivery({
         </a>{" "}
         <span className={`badge pr-${delivery.pr_state}`}>{stateLabel(delivery.pr_state)}</span>
         {delivery.merged_at && (
-          <span className="muted small"> merged {relative(delivery.merged_at)}</span>
+          <span className="muted small">
+            {" "}
+            merged <DateChip at={delivery.merged_at} />
+          </span>
         )}{" "}
-        <span className="muted small">checked {relative(delivery.checked_at)}</span>
+        <span className="muted small">
+          checked <DateChip at={delivery.checked_at} />
+        </span>
       </div>
       {delivery.flags.includes("delivery_merged_pending_review") && (
         <p className="small">

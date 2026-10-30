@@ -33,6 +33,14 @@ export function relative(iso: string | null | undefined, now: number = Date.now(
   return "—";
 }
 
+/** Stable UTC ISO-8601 for tooltips and `dateTime` attributes. */
+export function utcIso(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
 export function shortId(id: string): string {
   return id.slice(0, 8);
 }
@@ -41,6 +49,14 @@ export function shortId(id: string): string {
 export function actor(value: string): string {
   const [kind, id] = value.split(":", 2);
   return kind === "agent" && id ? `agent ${shortId(id)}` : value;
+}
+
+/** Compact worker id for event tables (`agent:uuid` → short id). */
+export function eventWorker(value: string): string {
+  const [kind, id] = value.split(":", 2);
+  if (kind === "agent" && id) return shortId(id);
+  if (id) return `${kind} ${shortId(id)}`;
+  return value || "—";
 }
 
 export function bytes(n: number): string {

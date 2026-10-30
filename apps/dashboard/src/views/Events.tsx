@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { type ArgusEvent, api, call } from "../api";
 import { isTransientEvent } from "../eventLine";
 import { useLive } from "../live";
+import { PageHeader } from "../PageHeader";
 import { EventList } from "./EventList";
 
 const MAX = 300;
@@ -33,8 +34,7 @@ export function Events() {
   const shown = filter ? events.filter((e) => e.subject_type === filter) : events;
   return (
     <section>
-      <div className="toolbar">
-        <h2>Events</h2>
+      <PageHeader title="Events" lead="The latest changes, newest first.">
         <select value={filter} onChange={(e) => setFilter(e.target.value)}>
           <option value="">All subjects</option>
           <option value="task">Tasks</option>
@@ -42,8 +42,7 @@ export function Events() {
           <option value="decision">Decisions</option>
           <option value="task_kind">Task kinds</option>
         </select>
-      </div>
-      <p className="page-lead">The latest changes, newest first.</p>
+      </PageHeader>
       <EventList events={shown} />
     </section>
   );

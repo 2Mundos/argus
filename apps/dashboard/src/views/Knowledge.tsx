@@ -1,8 +1,10 @@
 import { type FormEvent, useState } from "react";
 import { ApiError, api, call, type Page } from "../api";
-import { actor, relative } from "../format";
+import { DateChip } from "../DateChip";
+import { actor } from "../format";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
+import { PageHeader } from "../PageHeader";
 
 export function Knowledge() {
   const [project, setProject] = useState("");
@@ -47,8 +49,10 @@ export function Knowledge() {
 
   return (
     <section className="knowledge">
-      <div className="toolbar">
-        <h2>Knowledge</h2>
+      <PageHeader
+        title="Knowledge"
+        lead="Pages the fleet can read, and the body of the one you open."
+      >
         <select value={project} onChange={(e) => setProject(e.target.value)}>
           <option value="">All projects</option>
           {(projects ?? []).map((p) => (
@@ -67,8 +71,7 @@ export function Knowledge() {
         <button type="button" className="primary" onClick={() => setCreating(true)}>
           New page
         </button>
-      </div>
-      <p className="page-lead">Pages the fleet can read, and the body of the one you open.</p>
+      </PageHeader>
       <div className="split">
         <ul className="page-list">
           {list.map((item) => (
@@ -168,7 +171,7 @@ function PageView({ pageId }: { pageId: string }) {
       </div>
       <p className="muted small">
         {page.project} · revision {page.revision_number} by {actor(page.author)}{" "}
-        {relative(page.updated_at)} · reviewed {relative(page.reviewed_at)}
+        <DateChip at={page.updated_at} /> · reviewed <DateChip at={page.reviewed_at} />
         {page.stale && <span className="badge state-blocked"> stale</span>}
         {page.state === "archived" && <span className="badge"> archived</span>}
       </p>
@@ -225,7 +228,7 @@ function History({ page }: { page: Page }) {
       <ol className="events">
         {(revisions ?? []).map((r) => (
           <li key={r.id}>
-            <time dateTime={r.created_at}>{relative(r.created_at)}</time>
+            <DateChip at={r.created_at} />
             <span className="badge">r{r.number}</span>
             <span className="small">{actor(r.author)}</span>
             <span className="muted small">{r.reason}</span>

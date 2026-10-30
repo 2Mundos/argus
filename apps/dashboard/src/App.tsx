@@ -7,6 +7,7 @@ import { Home } from "./views/Home";
 import { LiveStatusBar } from "./views/LiveStatusBar";
 import { Login } from "./views/Login";
 import { WorkersSidebar } from "./WorkersSidebar";
+import { WorkerPanelProvider } from "./WorkerPanel";
 
 const Accounts = lazy(() => import("./views/Accounts").then((m) => ({ default: m.Accounts })));
 const AgentDetail = lazy(() =>
@@ -320,7 +321,8 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
   const awaiting = overview?.tasks.awaiting_approval;
 
   return (
-    <div className={`shell${selectedWorker ? " shell-worker" : ""}`}>
+    <WorkerPanelProvider selectedId={selectedWorker} openWorker={setSelectedWorker}>
+      <div className={`shell${selectedWorker ? " shell-worker" : ""}`}>
       <aside className="nav-side">
         <Brand as="strong" />
         <nav aria-label="Primary">
@@ -413,9 +415,10 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
           </Suspense>
         </main>
       </div>
-      <WorkersSidebar selectedId={selectedWorker} onSelect={setSelectedWorker} />
+      <WorkersSidebar selectedId={selectedWorker} />
       <LiveStatusBar />
     </div>
+    </WorkerPanelProvider>
   );
 }
 

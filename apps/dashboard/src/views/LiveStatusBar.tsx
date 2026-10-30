@@ -1,7 +1,8 @@
-import { useEffect, useId, useState } from "react";
+import { type MouseEvent, useEffect, useId, useState } from "react";
 import { type ArgusEvent, api, call } from "../api";
+import { DateChip } from "../DateChip";
 import { describeEvent, isTransientEvent } from "../eventLine";
-import { relative, shortId } from "../format";
+import { shortId } from "../format";
 import { useLive } from "../live";
 import { useNow } from "./Activity";
 import { EventList } from "./EventList";
@@ -68,16 +69,25 @@ export function LiveStatusBar() {
   }, [open]);
 
   const latest = events[0];
-  const detail = latest
-    ? [
-        relative(latest.at, now),
-        latest.kind,
-        `${latest.subject_type} ${shortId(latest.subject_id)}`,
-        describeEvent(latest),
-      ]
-        .filter(Boolean)
-        .join(" · ")
-    : "Waiting for events…";
+  const latestSummary = latest ? describeEvent(latest) : "";
+  const detail = latest ? (
+    <>
+      <DateChip at={latest.at} now={now} />
+      {" · "}
+      {latest.kind}
+      {" · "}
+      {latest.subject_type} {shortId(latest.subject_id)}
+      {latestSummary ? ` · ${latestSummary}` : ""}
+    </>
+  ) : (
+    "Waiting for events…"
+  );
+
+  function collapseFeedOnAction(e: MouseEvent) {
+    if (!open) return;
+    const target = e.target as HTMLElement;
+    if (target.closest("button, a[href]")) setOpen(false);
+  }
 
   return (
     <div className={`live-status${open ? " open" : ""}`}>
@@ -88,12 +98,32 @@ export function LiveStatusBar() {
         aria-label="Recent events"
         aria-hidden={!open}
         inert={open ? undefined : true}
+        onClickCapture={collapseFeedOnAction}
       >
         <div className="live-status-feed-head">
           <span className="small">Recent events</span>
-          <a href="#events" className="small">
-            All events
-          </a>
+          <div className="live-status-feed-actions">
+            <a href="#setup/events" className="small">
+              All events
+            </a>
+            <button
+              type="button"
+              className="live-status-collapse"
+              aria-label="Collapse recent events"
+            >
+              <svg viewBox="0 0 16 16" width={14} height={14} aria-hidden="true">
+                <path
+                  d="M4 6l4 4 4-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              Collapse
+            </button>
+          </div>
         </div>
         <EventList events={events} />
       </div>

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type AgentHygiene, api, call, type FleetCapabilities } from "../api";
-import { relative, shortId } from "../format";
+import { DateChip } from "../DateChip";
+import { shortId } from "../format";
 import { launchGate, launchStatus } from "../launch";
 import { useLiveData } from "../live";
-import { AgentDetail } from "./AgentDetail";
+import { PageHeader } from "../PageHeader";
+import { WorkerChip } from "../WorkerChip";
 import { NewWorker } from "./GuidedWorker";
 
 const AGE_BUCKETS = [
@@ -155,7 +157,6 @@ function CreateWorker({ onError }: { onError: (message?: string) => void }) {
 
 export function Agents() {
   const [showEnded, setShowEnded] = useState(false);
-  const [opened, setOpened] = useState<string | null>(null);
   const [issued, setIssued] = useState<{ token: string; expires_at: string }>();
   const [error, setError] = useState<string>();
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -188,14 +189,9 @@ export function Agents() {
     }
   }
 
-  if (opened) {
-    return <AgentDetail agentId={opened} onClose={() => setOpened(null)} variant="panel" />;
-  }
-
   return (
     <section>
-      <div className="toolbar">
-        <h2>Agents</h2>
+      <PageHeader title="Agents" lead="Registered agents, their role and the last heartbeat.">
         <label className="check">
           <input
             type="checkbox"
@@ -213,15 +209,14 @@ export function Agents() {
         <button type="button" onClick={() => setArchiveOpen(true)}>
           Archive old identities…
         </button>
-      </div>
-      <p className="page-lead">Registered agents, their role and the last heartbeat.</p>
+      </PageHeader>
       {error && <p className="error">{error}</p>}
       <CreateWorker onError={setError} />
       {issued && (
         <div className="card notice">
           <p>
-            One-time bootstrap token (shown once, expires {relative(issued.expires_at)}). An agent
-            redeems it at <code>POST /api/agents/register</code>.
+            One-time bootstrap token (shown once, expires <DateChip at={issued.expires_at} />
+            ). An agent redeems it at <code>POST /api/agents/register</code>.
           </p>
           <code className="secret">{issued.token}</code>
           <div className="actions left">
@@ -259,10 +254,7 @@ export function Agents() {
           {visible.map((a) => (
             <tr key={a.id}>
               <td title={a.id}>
-                <button type="button" className="link" onClick={() => setOpened(a.id)}>
-                  {a.name}
-                </button>{" "}
-                <span className="muted small">{shortId(a.id)}</span>
+                <WorkerChip agentId={a.id} agent={a} layout="inline" />
               </td>
               <td>{a.role}</td>
               <td>
@@ -272,7 +264,9 @@ export function Agents() {
                 {a.end_reason && <span className="muted small"> {a.end_reason}</span>}
               </td>
               <td>{a.claimed_tasks}</td>
-              <td>{relative(a.last_heartbeat_at)}</td>
+              <td>
+                <DateChip at={a.last_heartbeat_at} />
+              </td>
               <td className="small">{a.capabilities.join(", ") || "—"}</td>
               <td>
                 {a.state === "active" && (
@@ -396,7 +390,7 @@ function HygieneSection(props: {
           <ul className="small">
             {hygiene.claim_holders.map((h) => (
               <li key={`${h.agent_id}-${h.task_id}`}>
-                agent {shortId(h.agent_id)} · task {shortId(h.task_id)}
+                <WorkerChip agentId={h.agent_id} layout="inline" /> · task {shortId(h.task_id)}
               </li>
             ))}
           </ul>

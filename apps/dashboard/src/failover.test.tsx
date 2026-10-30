@@ -49,7 +49,8 @@ describe("TaskFailover", () => {
       },
     });
     expect(screen.getByText("Waiting for quota")).toBeTruthy();
-    expect(screen.getByText(/until 2026-10-20T23:50:00Z/)).toBeTruthy();
+    expect(screen.getByText("until")).toBeTruthy();
+    expect(screen.getByTitle("2026-10-20T23:50:00.000Z")).toBeTruthy();
     expect(screen.getByText(/acct-a → no account left/)).toBeTruthy();
   });
 

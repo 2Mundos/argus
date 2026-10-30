@@ -1,5 +1,6 @@
 import { type EngineEntry, fetchEngineCatalog, readinessLabel } from "../engines";
 import { useLiveData } from "../live";
+import { PageHeader } from "../PageHeader";
 
 /** Engines, executors and the local model — from GET /api/engines (read-only). */
 export function Engines() {
@@ -7,17 +8,20 @@ export function Engines() {
 
   return (
     <section>
-      <div className="toolbar">
-        <h2>Engines</h2>
+      <PageHeader
+        title="Engines"
+        lead={
+          <>
+            Model provider, harness, executor CLI and account auth are separate. Installed does not
+            mean authenticated; the host login does not prove a container is ready. Edit model
+            chains in <a href="#setup/settings">Settings</a>.
+          </>
+        }
+      >
         <button type="button" onClick={() => reload()}>
           Re-check
         </button>
-      </div>
-      <p className="page-lead">
-        Model provider, harness, executor CLI and account auth are separate. Installed does not mean
-        authenticated; the host login does not prove a container is ready. Edit model chains in{" "}
-        <a href="#setup/settings">Settings</a>.
-      </p>
+      </PageHeader>
       {error && <p className="error">{error.message}</p>}
       {catalog?.local && (
         <p className="small">

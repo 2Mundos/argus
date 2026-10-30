@@ -66,7 +66,7 @@
   <rect width="100%" height="100%" fill="#0B1120" rx="32" />
 
   <!-- Icon Section (Centered in 200x200 box) -->
-  <g transform="translate(30, 58)">
+  <g transform="translate(30, 58) translate(70 42) scale(0.85 1) translate(-70 -42)">
     <!-- Outer Eye Path (Sleek 2:1 horizontal almond contour) -->
     <path
       d="M 6 42 C 36 2 104 2 134 42 C 104 82 36 82 6 42 Z"

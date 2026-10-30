@@ -14,6 +14,7 @@ import {
   topFive,
 } from "../cost";
 import { useLiveData } from "../live";
+import { PageHeader } from "../PageHeader";
 import { bucketLabel, viewerTimeZone } from "../usage";
 import { AccountQuota } from "./charts";
 
@@ -28,8 +29,7 @@ export function Cost() {
   );
   return (
     <section>
-      <div className="toolbar">
-        <h2>Cost</h2>
+      <PageHeader title="Cost" lead="Tokens and estimated cost for the selected window.">
         <div className="segmented" role="group" aria-label="Window">
           {COST_WINDOWS.map((w) => (
             <button
@@ -43,8 +43,7 @@ export function Cost() {
             </button>
           ))}
         </div>
-      </div>
-      <p className="page-lead">Tokens and estimated cost for the selected window.</p>
+      </PageHeader>
       {error && <p className="error">{error.message}</p>}
       {data ? <Report report={data} tz={tz} /> : !error && <p className="muted">Loading…</p>}
     </section>

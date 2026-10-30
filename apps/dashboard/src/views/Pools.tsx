@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { api, call, type Instance, type Pool } from "../api";
-import { relative, shortId } from "../format";
+import { DateChip } from "../DateChip";
+import { shortId } from "../format";
 import { useLiveData } from "../live";
+import { PageHeader } from "../PageHeader";
 import { LogTail } from "./AgentDetail";
 import { NewWorker } from "./GuidedWorker";
 import { PoolEditor } from "./PoolEditor";
@@ -17,16 +19,17 @@ export function Pools() {
   );
   return (
     <section>
-      <div className="toolbar">
-        <h2>Pools</h2>
+      <PageHeader
+        title="Pools"
+        lead="Desired and running workers, and the last error from each pool."
+      >
         <button type="button" className="primary" onClick={() => setGuided((g) => !g)}>
           New worker
         </button>
         <button type="button" onClick={() => setEditing("new")}>
           New pool (advanced)
         </button>
-      </div>
-      <p className="page-lead">Desired and running workers, and the last error from each pool.</p>
+      </PageHeader>
       {error && <p className="error">{error.message}</p>}
       {(guided || pools?.length === 0) && (
         <NewWorker onCancel={guided ? () => setGuided(false) : undefined} />
@@ -139,7 +142,9 @@ function PoolCard({ pool, onEdit }: { pool: Pool; onEdit: () => void }) {
                       .map((a) => `${a.name} (${a.state}${a.claimed_tasks ? ", busy" : ""})`)
                       .join(", ")}
               </td>
-              <td className="small">{relative(i.running_at ?? i.created_at)}</td>
+              <td className="small">
+                <DateChip at={i.running_at ?? i.created_at} />
+              </td>
               <td className="row-actions">
                 <button type="button" className="link" onClick={() => setLogsOf(i)}>
                   Logs

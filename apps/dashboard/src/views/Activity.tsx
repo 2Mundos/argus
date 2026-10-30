@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ArgusEvent, Task, TaskRead } from "../api";
-import { relative } from "../format";
+import { DateChip } from "../DateChip";
 import { MilestoneLine, NoSignal } from "../milestones";
 import { quietFacts } from "../stall";
 
@@ -60,10 +60,7 @@ export function Activity({
           <ol className="notes">
             {prior.map((e) => (
               <li key={e.id}>
-                <time dateTime={e.at} title={e.at} className="muted small">
-                  {relative(e.at, now)}
-                </time>{" "}
-                {(e.data as { message?: string }).message}
+                <DateChip at={e.at} now={now} /> {(e.data as { message?: string }).message}
               </li>
             ))}
           </ol>
@@ -102,18 +99,26 @@ export function Activity({
         <MilestoneLine task={task} now={now} />
         <span>{task.progress_message ?? "No progress note yet."}</span>
         <span className="muted small">
-          {task.progress_at ? `updated ${relative(task.progress_at, now)}` : "silent so far"}
-          {task.state === "claimed" && ` · lease ${relative(task.lease_expires_at, now)}`}
+          {task.progress_at ? (
+            <>
+              updated <DateChip at={task.progress_at} now={now} />
+            </>
+          ) : (
+            "silent so far"
+          )}
+          {task.state === "claimed" && (
+            <>
+              {" · lease "}
+              <DateChip at={task.lease_expires_at} now={now} />
+            </>
+          )}
         </span>
       </div>
       {notes.length > 1 && (
         <ol className="notes">
           {notes.slice(1).map((e) => (
             <li key={e.id}>
-              <time dateTime={e.at} title={e.at} className="muted small">
-                {relative(e.at, now)}
-              </time>{" "}
-              {(e.data as { message?: string }).message}
+              <DateChip at={e.at} now={now} /> {(e.data as { message?: string }).message}
             </li>
           ))}
         </ol>

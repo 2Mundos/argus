@@ -2,15 +2,18 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ArgusEvent } from "../api";
+import { WorkerPanelProvider } from "../WorkerPanel";
 import { LiveStatusBar } from "./LiveStatusBar";
 
 type Listener = (event: ArgusEvent) => void;
 
 const mock = vi.hoisted(() => {
   const listeners = new Set<Listener>();
+  const openWorker = vi.fn();
   return {
     history: [] as ArgusEvent[],
     listeners,
+    openWorker,
     status: "live" as "live" | "connecting" | "offline",
     // Stable identity so LiveStatusBar's effect does not re-run every render.
     subscribe: (listener: Listener) => {
@@ -25,18 +28,31 @@ vi.mock("../api", () => ({
   // Snapshot history at call time so a later afterEach clear cannot empty a pending seed.
   call: async (path: string) => {
     if (path === "/api/events") return [...mock.history];
+    if (path === "/api/agents") return [];
     throw new Error(`unexpected ${path}`);
   },
 }));
 
-vi.mock("../live", () => ({
-  useLive: () => ({
-    status: mock.status,
-    version: 0,
-    connection: 0,
-    subscribe: mock.subscribe,
-  }),
-}));
+vi.mock("../live", async () => {
+  const { useEffect, useState } = await import("react");
+  return {
+    useLive: () => ({
+      status: mock.status,
+      version: 0,
+      connection: 0,
+      subscribe: mock.subscribe,
+    }),
+    useLiveData: <T,>(load: (signal: AbortSignal) => Promise<T>) => {
+      const [data, setData] = useState<T>();
+      useEffect(() => {
+        const controller = new AbortController();
+        load(controller.signal).then(setData);
+        return () => controller.abort();
+      }, []);
+      return { data, error: undefined, reload: () => {} };
+    },
+  };
+});
 
 vi.mock("./Activity", () => ({
   useNow: () => Date.parse("2026-10-29T15:00:00Z"),
@@ -65,17 +81,26 @@ async function stripMatching(re: RegExp) {
   return strip;
 }
 
+function renderBar() {
+  return render(
+    <WorkerPanelProvider selectedId={null} openWorker={mock.openWorker}>
+      <LiveStatusBar />
+    </WorkerPanelProvider>,
+  );
+}
+
 afterEach(() => {
   cleanup();
   mock.history = [];
   mock.listeners.clear();
+  mock.openWorker.mockClear();
   mock.status = "live";
 });
 
 describe("LiveStatusBar", () => {
   it("seeds from history and expands on click", async () => {
     mock.history = [event({ id: 1, kind: "task.claim", data: { from: "ready", to: "claimed" } })];
-    render(<LiveStatusBar />);
+    renderBar();
     const strip = await stripMatching(/task\.claim/);
     expect(strip.getAttribute("aria-expanded")).toBe("false");
     expect(strip.textContent).toMatch(/ready → claimed/);
@@ -84,13 +109,15 @@ describe("LiveStatusBar", () => {
     fireEvent.click(strip);
     expect(strip.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("region", { name: "Recent events" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "All events" }).getAttribute("href")).toBe("#events");
+    expect(screen.getByRole("link", { name: "All events" }).getAttribute("href")).toBe(
+      "#setup/events",
+    );
     expect(document.querySelector(".live-status.open")).toBeTruthy();
   });
 
   it("collapses on Escape", async () => {
     mock.history = [event({ id: 10, kind: "task.created", data: { to: "pending" } })];
-    render(<LiveStatusBar />);
+    renderBar();
     const strip = await stripMatching(/task\.created/);
     fireEvent.click(strip);
     expect(strip.getAttribute("aria-expanded")).toBe("true");
@@ -98,12 +125,42 @@ describe("LiveStatusBar", () => {
     expect(strip.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("collapses from the feed header button", async () => {
+    mock.history = [event({ id: 11, kind: "task.created", data: { to: "pending" } })];
+    renderBar();
+    const strip = await stripMatching(/task\.created/);
+    fireEvent.click(strip);
+    expect(strip.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Collapse recent events" }));
+    expect(strip.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector(".live-status.open")).toBeNull();
+  });
+
+  it("collapses when All events is clicked", async () => {
+    mock.history = [event({ id: 12, kind: "task.created", data: { to: "pending" } })];
+    renderBar();
+    const strip = await stripMatching(/task\.created/);
+    fireEvent.click(strip);
+    fireEvent.click(screen.getByRole("link", { name: "All events" }));
+    expect(strip.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("collapses when a worker chip in the feed is clicked", async () => {
+    mock.history = [event({ id: 13, kind: "task.claim", actor: "agent:agent-w1" })];
+    renderBar();
+    const strip = await stripMatching(/task\.claim/);
+    fireEvent.click(strip);
+    fireEvent.click(await screen.findByRole("button", { name: /Open worker agent-w1/i }));
+    expect(strip.getAttribute("aria-expanded")).toBe("false");
+    expect(mock.openWorker).toHaveBeenCalledWith("agent-w1");
+  });
+
   it("ignores task.log when seeding and when live", async () => {
     mock.history = [
       event({ id: 2, kind: "task.log", data: { lines: ["noise"] } }),
       event({ id: 3, kind: "task.progress", data: { message: "running tests" } }),
     ];
-    render(<LiveStatusBar />);
+    renderBar();
     const strip = await stripMatching(/running tests/);
     expect(strip.textContent).not.toMatch(/noise/);
 
@@ -116,7 +173,7 @@ describe("LiveStatusBar", () => {
 
   it("updates when a non-transient event arrives on the stream", async () => {
     mock.history = [event({ id: 5, kind: "task.created", data: { to: "pending" } })];
-    render(<LiveStatusBar />);
+    renderBar();
     const strip = await stripMatching(/task\.created/);
 
     await act(() => {
@@ -140,7 +197,7 @@ describe("LiveStatusBar", () => {
       event({ id: 7, kind: "task.complete", data: { to: "done" } }),
       event({ id: 8, kind: "task.created", data: { to: "pending" } }),
     ];
-    render(<LiveStatusBar />);
+    renderBar();
     const strip = await stripMatching(/task\.complete/);
     fireEvent.click(strip);
     const feed = screen.getByRole("region", { name: "Recent events" });
@@ -150,7 +207,7 @@ describe("LiveStatusBar", () => {
 
   it("shows a quiet placeholder when nothing has arrived", async () => {
     mock.history = [];
-    render(<LiveStatusBar />);
+    renderBar();
     expect(await screen.findByText("Waiting for events…")).toBeTruthy();
   });
 });

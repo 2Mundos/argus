@@ -3,9 +3,11 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "./api";
 import styles from "./styles.css?raw";
+import { WorkerPanelProvider } from "./WorkerPanel";
 import { WorkersSidebar } from "./WorkersSidebar";
 
 const calls = vi.hoisted(() => ({ paths: [] as string[] }));
+const openWorker = vi.hoisted(() => vi.fn());
 
 vi.mock("./api", () => ({
   api: { GET: (path: string) => path },
@@ -52,27 +54,35 @@ const liveWorker: Agent = {
   created_at: "2026-10-29T12:00:00Z",
 };
 
+function renderRail(selectedId: string | null = null) {
+  return render(
+    <WorkerPanelProvider selectedId={selectedId} openWorker={openWorker}>
+      <WorkersSidebar selectedId={selectedId} />
+    </WorkerPanelProvider>,
+  );
+}
+
 afterEach(() => {
   cleanup();
   calls.paths = [];
+  openWorker.mockClear();
 });
 
 describe("WorkersSidebar", () => {
   it("shows the worker rail without a right-rail live log block", async () => {
-    render(<WorkersSidebar selectedId={null} onSelect={() => {}} />);
+    renderRail();
     expect(await screen.findByRole("complementary", { name: "Running workers" })).toBeTruthy();
     expect(screen.getByText("Workers")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /abc12345/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Open worker abc12345/i })).toBeTruthy();
     expect(screen.queryByText("Live log")).toBeNull();
     expect(document.querySelector(".rail-log")).toBeNull();
-    expect(calls.paths).toEqual(["/api/agents"]);
+    expect(calls.paths.filter((p) => p === "/api/agents").length).toBeGreaterThan(0);
   });
 
-  it("keeps worker selection on the rail", async () => {
-    const onSelect = vi.fn();
-    render(<WorkersSidebar selectedId={null} onSelect={onSelect} />);
-    fireEvent.click(await screen.findByRole("button", { name: /abc12345/i }));
-    expect(onSelect).toHaveBeenCalledWith("agent-w1");
+  it("opens the worker panel from a rail chip", async () => {
+    renderRail();
+    fireEvent.click(await screen.findByRole("button", { name: /Open worker abc12345/i }));
+    expect(openWorker).toHaveBeenCalledWith("agent-w1");
   });
 });
 

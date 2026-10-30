@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { api, call } from "../api";
-import { relative } from "../format";
+import { DateChip } from "../DateChip";
 import { useLive, useLiveData } from "../live";
 import {
   type Attention,
@@ -10,6 +10,7 @@ import {
   type Source,
   sum,
 } from "../overview";
+import { PageHeader } from "../PageHeader";
 import { EventList } from "./EventList";
 import { SystemWidgets } from "./SystemWidgets";
 
@@ -39,25 +40,23 @@ export function Home() {
 
   return (
     <section className="home">
-      <div className="toolbar">
-        <h2>Home</h2>
-      </div>
-      <p className="page-lead">Monitor agents, tasks and the fleet from one place.</p>
-      <div className="home-tabs" role="tablist" aria-label="Home sections">
-        {HOME_PANELS.map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            id={`home-tab-${id}`}
-            aria-selected={panel === id}
-            aria-controls={`home-panel-${id}`}
-            onClick={() => setPanel(id)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <PageHeader title="Home" lead="Monitor agents, tasks and the fleet from one place.">
+        <div className="home-tabs" role="tablist" aria-label="Home sections">
+          {HOME_PANELS.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              id={`home-tab-${id}`}
+              aria-selected={panel === id}
+              aria-controls={`home-panel-${id}`}
+              onClick={() => setPanel(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </PageHeader>
 
       {panel === "overview" && (
         <div
@@ -104,11 +103,17 @@ export function Home() {
                 title="Accounts"
                 counts={o.accounts.by_state}
                 icon="M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0M5 19a6 6 0 0 1 14 0"
-                note={`Quota is not measured by Argus.${
-                  o.accounts.next_reset_at
-                    ? ` Next reset ${relative(o.accounts.next_reset_at)}.`
-                    : ""
-                }`}
+                note={
+                  <>
+                    Quota is not measured by Argus.
+                    {o.accounts.next_reset_at ? (
+                      <>
+                        {" "}
+                        Next reset <DateChip at={o.accounts.next_reset_at} />.
+                      </>
+                    ) : null}
+                  </>
+                }
               />
             </div>
           )}
@@ -294,7 +299,7 @@ function BreakdownCard(props: {
   title: string;
   counts: object;
   icon: string;
-  note?: string;
+  note?: ReactNode;
 }) {
   const rows = Object.entries(props.counts).filter(
     (entry): entry is [string, number] => typeof entry[1] === "number",

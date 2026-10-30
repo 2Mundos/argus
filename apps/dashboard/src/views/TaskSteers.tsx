@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { api, call } from "../api";
-import { relative } from "../format";
+import { DateChip } from "../DateChip";
 import { useLiveData } from "../live";
 import { useNow } from "./Activity";
 
@@ -156,11 +156,17 @@ export function TaskSteers({
               <span className={`badge steer-${item.state}`}>{item.state}</span>
               <span className="steer-message">{item.message}</span>
               <span className="muted small">
-                {item.state === "delivered" && item.delivered_at
-                  ? `delivered ${relative(item.delivered_at, now)}`
-                  : item.state === "pending"
-                    ? `sent ${relative(item.created_at, now)}`
-                    : item.state}
+                {item.state === "delivered" && item.delivered_at ? (
+                  <>
+                    delivered <DateChip at={item.delivered_at} now={now} />
+                  </>
+                ) : item.state === "pending" ? (
+                  <>
+                    sent <DateChip at={item.created_at} now={now} />
+                  </>
+                ) : (
+                  item.state
+                )}
                 {item.state === "pending" && (
                   <>
                     {" "}

@@ -1,10 +1,12 @@
 import { type FormEvent, useState } from "react";
 import { api, call, newestTasks, type TaskKind, type TaskState, type TaskSummary } from "../api";
-import { relative, shortId } from "../format";
+import { DateChip } from "../DateChip";
 import { reportPage, useLiveData } from "../live";
 import { TaskSignal } from "../milestones";
+import { PageHeader } from "../PageHeader";
 import { TaskLabel } from "../TaskLabel";
 import { executorPin, harnessPin } from "../taskEdit";
+import { WorkerChip } from "../WorkerChip";
 import { AccountPin } from "./AccountPin";
 import { useNow } from "./Activity";
 import { ArchiveTasks } from "./ArchiveTasks";
@@ -23,6 +25,31 @@ const COLUMNS: { title: string; states: TaskState[] }[] = [
   { title: "Failed / cancelled", states: ["failed", "cancelled"] },
 ];
 
+type BoardSection =
+  | { type: "column"; title: string; items: TaskSummary[] }
+  | { type: "chip"; columns: { title: string; count: number }[] };
+
+/** Empty columns and user-collapsed ones share a vertical chip stack. */
+function boardSections(
+  tasks: TaskSummary[] | undefined,
+  collapsed: ReadonlySet<string>,
+): BoardSection[] {
+  const sections: BoardSection[] = [];
+  for (const column of COLUMNS) {
+    const items = (tasks ?? []).filter((t) => column.states.includes(t.state));
+    const asChip = items.length === 0 || collapsed.has(column.title);
+    if (asChip) {
+      const last = sections[sections.length - 1];
+      const entry = { title: column.title, count: items.length };
+      if (last?.type === "chip") last.columns.push(entry);
+      else sections.push({ type: "chip", columns: [entry] });
+    } else {
+      sections.push({ type: "column", title: column.title, items });
+    }
+  }
+  return sections;
+}
+
 export function Tasks() {
   // `#tasks/<id>` (linked from Fleet) opens that task's detail.
   const [selected, setSelected] = useState<string | null>(
@@ -31,11 +58,23 @@ export function Tasks() {
   const [creating, setCreating] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [archived, setArchived] = useState(false);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const { data, error } = useLiveData(
     (signal) => newestTasks(5, archived, { signal, onPage: (page) => reportPage(signal, page) }),
     [archived],
   );
   const tasks = data?.items;
+
+  function collapseColumn(title: string) {
+    setCollapsed((prev) => new Set(prev).add(title));
+  }
+  function expandColumn(title: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      next.delete(title);
+      return next;
+    });
+  }
 
   if (selected) {
     return (
@@ -54,8 +93,7 @@ export function Tasks() {
 
   return (
     <section className={selected ? "tasks-open" : "tasks-page"}>
-      <div className="toolbar">
-        <h2>Tasks</h2>
+      <PageHeader title="Tasks" lead="Work waiting, running and finished.">
         <label className="check">
           <input
             type="checkbox"
@@ -72,8 +110,7 @@ export function Tasks() {
         <button type="button" className="primary" onClick={() => setCreating(true)}>
           New task
         </button>
-      </div>
-      <p className="page-lead">Work waiting, running and finished.</p>
+      </PageHeader>
       {archived && <p className="muted small">Showing archived tasks only.</p>}
       {error && <p className="error">{error.message}</p>}
       {data && data.total > data.items.length && (
@@ -82,22 +119,54 @@ export function Tasks() {
         </p>
       )}
       <div className="board">
-        {COLUMNS.map((column) => {
-          const items = (tasks ?? []).filter((t) => column.states.includes(t.state));
-          return (
-            <div className="column" key={column.title}>
-              <h3>
-                {column.title} <span className="count">{items.length}</span>
-              </h3>
+        {boardSections(tasks, collapsed).map((section) =>
+          section.type === "chip" ? (
+            <div key={section.columns.map((c) => c.title).join("|")} className="column-empty-stack">
+              {section.columns.map((column) => (
+                <div
+                  key={column.title}
+                  className="column-chip"
+                  aria-label={`${column.title}: ${column.count}`}
+                >
+                  <span className="column-chip-label">
+                    {column.title} <span className="count">{column.count}</span>
+                  </span>
+                  {column.count > 0 && (
+                    <button
+                      type="button"
+                      className="column-toggle"
+                      aria-label={`Expand ${column.title}`}
+                      onClick={() => expandColumn(column.title)}
+                    >
+                      ▸
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="column" key={section.title}>
+              <div className="column-head">
+                <h3>
+                  {section.title} <span className="count">{section.items.length}</span>
+                </h3>
+                <button
+                  type="button"
+                  className="column-toggle"
+                  aria-label={`Collapse ${section.title}`}
+                  onClick={() => collapseColumn(section.title)}
+                >
+                  ▾
+                </button>
+              </div>
               <div className="column-body">
-                {items.length === 0 && <p className="muted small">None</p>}
-                {items.map((task) => (
+                {section.items.map((task) => (
                   <TaskCard key={task.id} task={task} onOpen={() => setSelected(task.id)} />
                 ))}
               </div>
             </div>
-          );
-        })}
+          ),
+        )}
       </div>
       {archiving && <ArchiveTasks onClose={() => setArchiving(false)} />}
       {creating && <NewTask onClose={() => setCreating(false)} />}
@@ -138,9 +207,10 @@ function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
           ))}
         </span>
       ) : null}
-      {task.state === "claimed" && (
+      {task.state === "claimed" && task.assignee_agent_id && (
         <span className="muted small">
-          {shortId(task.assignee_agent_id ?? "")} · lease {relative(task.lease_expires_at)}
+          <WorkerChip agentId={task.assignee_agent_id} layout="inline" /> · lease{" "}
+          <DateChip at={task.lease_expires_at} now={now} />
         </span>
       )}
       {task.state === "claimed" && <TaskSignal task={task} now={now} />}

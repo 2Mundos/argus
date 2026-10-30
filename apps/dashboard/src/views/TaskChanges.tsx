@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type TaskChanges as Changes, call } from "../api";
-import { relative } from "../format";
+import { DateChip } from "../DateChip";
 import { useLive } from "../live";
 import {
   changesEvent,
@@ -90,9 +90,13 @@ export function TaskChanges({
           <i />
         </span>
         <span className="term-title">
-          {changes
-            ? `changes · ${changes.branch} @ ${shortSha(changes.head)} · ${relative(changes.at)}`
-            : "changes"}
+          {changes ? (
+            <>
+              changes · {changes.branch} @ {shortSha(changes.head)} · <DateChip at={changes.at} />
+            </>
+          ) : (
+            "changes"
+          )}
         </span>
         {selected === undefined && attempts.length > 1 && (
           <select

@@ -30,17 +30,15 @@ export function Login({ onLogin }: { onLogin: () => void }) {
         <p className="muted">
           Paste an admin token. The first one is in <code>/data/admin-token</code>.
         </p>
-        <label>
-          Token
-          <input
-            type="password"
-            autoComplete="off"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            placeholder="argus_admin_…"
-            required
-          />
-        </label>
+        <input
+          type="password"
+          autoComplete="off"
+          aria-label="Token"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="argus_admin_…"
+          required
+        />
         {error && <p className="error">{error}</p>}
         <button type="submit" className="primary" disabled={busy || !value.trim()}>
           {busy ? "Checking…" : "Sign in"}

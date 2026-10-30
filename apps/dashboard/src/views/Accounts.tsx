@@ -10,8 +10,9 @@ import {
   validateProviderId,
 } from "../accountProviders";
 import { type Account, api, call } from "../api";
-import { relative } from "../format";
+import { DateChip } from "../DateChip";
 import { useLiveData } from "../live";
+import { PageHeader } from "../PageHeader";
 import {
   bucketTokens,
   hasModelUsage,
@@ -89,8 +90,10 @@ export function Accounts() {
 
   return (
     <section>
-      <div className="toolbar">
-        <h2>Accounts</h2>
+      <PageHeader
+        title="Accounts"
+        lead="Provider accounts agents lease. Credentials live encrypted in the SOPS file and are never shown here. When an account hits its quota, agents fall back to the next one."
+      >
         <button type="button" onClick={reload}>
           Reload secrets file
         </button>
@@ -106,11 +109,7 @@ export function Accounts() {
         <button type="button" className="primary" onClick={() => setAdding(true)}>
           Add account
         </button>
-      </div>
-      <p className="page-lead">
-        Provider accounts agents lease. Credentials live encrypted in the SOPS file and are never
-        shown here. When an account hits its quota, agents fall back to the next one.
-      </p>
+      </PageHeader>
       {notice && <p className="small">{notice}</p>}
       {(error || loadError) && <p className="error">{error ?? loadError?.message}</p>}
       <table className="accounts-table accounts">
@@ -147,7 +146,10 @@ export function Accounts() {
                     <StateIcon state={a.state} /> {a.state}
                   </span>
                   {a.state === "exhausted" && (
-                    <span className="muted small"> resets {relative(a.exhausted_until)}</span>
+                    <span className="muted small">
+                      {" "}
+                      resets <DateChip at={a.exhausted_until} />
+                    </span>
                   )}
                   {a.disabled_reason && <span className="muted small"> {a.disabled_reason}</span>}
                 </td>
