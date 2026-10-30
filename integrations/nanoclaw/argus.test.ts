@@ -22,6 +22,7 @@ import {
   renderSteer,
   renderTask,
   resetRelayFile,
+  steerUnknownLines,
   takeLogBatch,
   taskAuthorizesMerge,
   UNTRUSTED_TASK_DATA_RULES,
@@ -1837,6 +1838,43 @@ describe("steers", () => {
     await until(() => fake.calls.some((c) => c.body?.steer_acks?.includes("s1")), 3000);
     await new Promise((r) => setTimeout(r, 1200));
     expect(h.inbound.filter((m) => m.id === "argus-steer-s1")).toHaveLength(1);
+  });
+
+  it("warns about the previous attempt's unknown steers by count only", () => {
+    const text = renderTask(task({ attempt: 2, steer_unknown: 2 }) as any, new Map());
+    const warning = steerUnknownLines(task({ steer_unknown: 2 }) as any)[0];
+    expect(warning).toContain("2 steer(s) sent to the previous attempt were never confirmed");
+    expect(warning).toContain("may or may not have been applied");
+    // Trusted text, after the untrusted frame closes; never inside it.
+    const end = text.indexOf("-----END ARGUS_UNTRUSTED_TASK_DATA-----");
+    expect(end).toBeGreaterThan(0);
+    expect(text.indexOf(warning)).toBeGreaterThan(end);
+    expect(JSON.stringify(parseFramedUntrustedTaskData(text))).not.toContain("steer");
+    for (const steer_unknown of [0, -1, 1.5, "3", undefined, null]) {
+      const plain = renderTask(task({ steer_unknown }) as any, new Map());
+      expect(plain).not.toContain("Operator steers:");
+    }
+  });
+
+  it("frames the next claim with the warning and injects no old steer", async () => {
+    const fake = fakeArgus({
+      tasks: [task({ attempt: 2, steer_unknown: 1 })],
+      heartbeat: () => ({
+        state: "active",
+        renewed: [{ task_id: "t1", attempt: 2 }],
+        rejected: [],
+        steers: [],
+      }),
+    });
+    const h = harness(fake);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    expect(h.inbound[0].content.text).toContain(
+      "Operator steers: 1 steer(s) sent to the previous attempt were never confirmed.",
+    );
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(h.inbound.filter((m) => String(m.id).startsWith("argus-steer-"))).toHaveLength(0);
   });
 
   it("acks a steer for another attempt without injecting it", async () => {

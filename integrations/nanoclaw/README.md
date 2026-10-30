@@ -27,6 +27,14 @@ input. A steer does not interrupt a running `argus-delegate` process; the agent
 sees it when that process returns. A steer for any other task or attempt is
 acknowledged and not injected.
 
+When the previous attempt ended with steers it was sent but never acknowledged,
+Argus reports their count at claim (`steer_unknown`) and the prompt says, after
+the task's untrusted frame, that they may or may not have been applied. Their
+text is never repeated and they are never injected again.
+`scripts/steer-unknown-e2e.sh` runs that path end to end: dispatch, a lost ack,
+release, and the next worker's claim (about a minute: steers ride the 30 s
+heartbeat).
+
 ## Install
 
 ```bash

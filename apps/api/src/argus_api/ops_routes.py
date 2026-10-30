@@ -1,7 +1,7 @@
 """Health, readiness, metrics and the system summary (operations spec)."""
 
 import time
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -11,6 +11,7 @@ from argus_api import fleet_health as fleet_health_module
 from argus_api import ops
 from argus_api import overview as overview_module
 from argus_api.deps import AdminDep, CallerDep, DbDep, ManagerDep, SettingsDep
+from argus_api.disk_guard import root_band
 from argus_api.fleet_health import (
     DEFAULT_WINDOW_HOURS,
     MAX_WINDOW_HOURS,
@@ -98,6 +99,24 @@ class DatabaseOut(BaseModel):
     wal_bytes: int
 
 
+class DiskGuardRootOut(BaseModel):
+    role: Literal["data", "instances", "docker"]
+    applicability: Literal["measured", "unknown", "stale", "not_applicable"]
+    free_bytes: int | None = None
+    band: Literal["ok", "warn", "refuse"] | None = None
+
+
+class DiskGuardOut(BaseModel):
+    """Authenticated disk-guard visibility; no paths or device identifiers."""
+
+    enabled: bool
+    claim_admission: Literal["admitted", "refused"]
+    warn_episode: bool
+    measurement: Literal["measured", "unknown", "stale"]
+    free_bytes: int | None = None
+    roots: list[DiskGuardRootOut]
+
+
 class SystemSummary(BaseModel):
     version: str
     uptime_s: float
@@ -111,7 +130,29 @@ class SystemSummary(BaseModel):
     events_total: int
     database: DatabaseOut
     disk_free_bytes: int
+    disk_guard: DiskGuardOut
     loops: dict[str, LoopOut]
+
+
+def _disk_guard_out(request: Request) -> DiskGuardOut:
+    guard = request.app.state.disk_guard
+    snap = guard.snapshot()
+    return DiskGuardOut(
+        enabled=snap.enabled,
+        claim_admission=snap.claim_admission,
+        warn_episode=snap.warn_episode,
+        measurement=snap.measurement,
+        free_bytes=snap.free_bytes,
+        roots=[
+            DiskGuardRootOut(
+                role=r.role,
+                applicability=r.applicability,
+                free_bytes=r.free_bytes,
+                band=root_band(r, guard.thresholds),
+            )
+            for r in snap.roots
+        ],
+    )
 
 
 @router.get("/system")
@@ -140,6 +181,7 @@ async def system(
             main_bytes=snap.db_main_bytes, wal_bytes=snap.db_wal_bytes
         ),
         disk_free_bytes=snap.disk_free_bytes,
+        disk_guard=_disk_guard_out(request),
         loops={
             name: LoopOut(
                 status=st.status(),

@@ -104,7 +104,8 @@ every new dependency is judged against it.
   attempt, live; an optional `budget_usd` steers the attempt to wrap up and blocks new attempts
 - [Task steering](specs/task-steering.spec.md) — a manager sends a message to the
   attempt in flight; delivered on heartbeat, injected into the NanoClaw session as a
-  framed operator instruction; expires with the attempt
+  framed operator instruction; expires with the attempt, or ends `unknown` when it
+  was dispatched and never acknowledged
 - [Account usage](specs/account-usage.spec.md) — tokens spent and quota left per
   provider account: reported usage, Codex quota probe, Cursor pools, charts
 - [Cost view](specs/cost-view.spec.md) — the Cost tab: tokens and estimated cost
@@ -194,6 +195,7 @@ every new dependency is judged against it.
   the NanoClaw hook drops container stderr today (only `docker logs` stdout is kept)
 - [Bounded recovery](drafts/2026-10-29.bounded-recovery.draft.md) — throttled
   session starts, one recovery per unexpected exit, uncertain work never resent
+  (item 3 shipped for steers)
 - [Verification boundary](drafts/2026-10-29.verification-boundary.draft.md) — a
   spec subsection stating what was verified, at which level and versions
 
@@ -205,9 +207,15 @@ every new dependency is judged against it.
   dry run first, the archive root, restore and reason codes
 - [Task inputs smoke](runbooks/2026-10-30.task-inputs-smoke.ref.md) — operator-run
   Docker session check of materialized inputs; not yet run
+- [Session quota smoke](runbooks/2026-10-30.session-quota-smoke.ref.md) — operator-run
+  Docker check that NanoClaw sessions carry pool `--cpus`/`--memory`; ASSIST
+  procedure when no daemon is available; not yet run
 
 ### Reports
 
+- [Session quota recovery (2026-10-30)](reports/2026-10-30.session-quota-recovery.ref.md) —
+  commit `64b8d8c` unrecoverable; reimplemented pool→`CONTAINER_*_LIMIT` propagation,
+  `session_quota` evidence, Docker ASSIST runbook; live daemon still a blocker
 - [Disk guard investigation (2026-10-29)](reports/2026-10-29.disk-guard-investigation.ref.md) —
   who runs the loop, `io.stat` vs `docker ps --size`, cleanup dry run on warn,
   pause vs leases and stall detection; spec-update plan for the disk-guard draft

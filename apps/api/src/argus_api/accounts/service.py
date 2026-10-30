@@ -42,6 +42,7 @@ from argus_core.tasks import Task
 from argus_api.accounts import usage
 from argus_api.accounts.eligibility import engine_pool
 from argus_api.db import Tx, ts
+from argus_api.disk_guard import DiskGuard
 from argus_api.errors import (
     ConflictError,
     ForbiddenError,
@@ -373,6 +374,7 @@ async def claim(
     store: SecretStore,
     *,
     default_timeout_s: int = 0,
+    disk_guard: DiskGuard | None = None,
 ) -> tuple[Task | None, AccountLease | None]:
     """Claim a task and, when the agent holds no engine lease, reserve its account
     in the same transaction: a task is only claimed when an account leases for it
@@ -396,6 +398,7 @@ async def claim(
         default_timeout_s=default_timeout_s,
         runtime_providers=runtime_providers,
         can_lease=can_lease if reserve else None,
+        disk_guard=disk_guard,
     )
     if task is None:
         return task, None

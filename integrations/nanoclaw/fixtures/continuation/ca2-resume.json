@@ -147,6 +147,7 @@
   "serving_account": null,
   "spec": "Implement corporate actions collection.",
   "state": "claimed",
+  "steer_unknown": 0,
   "timeout_at": null,
   "timeout_s": null,
   "title": "CA2 corporate actions collection",

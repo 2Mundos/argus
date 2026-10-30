@@ -2738,7 +2738,8 @@ export interface paths {
         /**
          * Create Steer
          * @description Send an instruction to the attempt in flight. The assignee must report
-         *     the `steer` feature; the message expires if the attempt ends first.
+         *     the `steer` feature. If the attempt ends first, the message expires, or ends
+         *     `unknown` (it may have been delivered) when a heartbeat had carried it.
          */
         post: operations["create_steer_api_tasks__task_id__steers_post"];
         delete?: never;
@@ -3991,6 +3992,11 @@ export interface components {
             /** Spec */
             spec: string;
             state: components["schemas"]["TaskState"];
+            /**
+             * Steer Unknown
+             * @default 0
+             */
+            steer_unknown?: number;
             /** Timeout At */
             timeout_at: string | null;
             /** Timeout S */
@@ -4775,6 +4781,47 @@ export interface components {
          * @enum {string}
          */
         DifficultySource: "declared" | "inferred";
+        /**
+         * DiskGuardOut
+         * @description Authenticated disk-guard visibility; no paths or device identifiers.
+         */
+        DiskGuardOut: {
+            /**
+             * Claim Admission
+             * @enum {string}
+             */
+            claim_admission: "admitted" | "refused";
+            /** Enabled */
+            enabled: boolean;
+            /** Free Bytes */
+            free_bytes?: number | null;
+            /**
+             * Measurement
+             * @enum {string}
+             */
+            measurement: "measured" | "unknown" | "stale";
+            /** Roots */
+            roots: components["schemas"]["DiskGuardRootOut"][];
+            /** Warn Episode */
+            warn_episode: boolean;
+        };
+        /** DiskGuardRootOut */
+        DiskGuardRootOut: {
+            /**
+             * Applicability
+             * @enum {string}
+             */
+            applicability: "measured" | "unknown" | "stale" | "not_applicable";
+            /** Band */
+            band?: ("ok" | "warn" | "refuse") | null;
+            /** Free Bytes */
+            free_bytes?: number | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "data" | "instances" | "docker";
+        };
         /** DockerOptions */
         "DockerOptions-Input": {
             /**
@@ -7722,6 +7769,8 @@ export interface components {
             created_at: string;
             /** Delivered At */
             delivered_at?: string | null;
+            /** Dispatched At */
+            dispatched_at?: string | null;
             /** Id */
             id: string;
             /** Message */
@@ -7730,7 +7779,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "pending" | "delivered" | "cancelled" | "expired";
+            state: "pending" | "delivered" | "cancelled" | "expired" | "unknown";
         };
         /** SteerCreate */
         SteerCreate: {
@@ -7778,6 +7827,7 @@ export interface components {
             decisions_open: number;
             /** Disk Free Bytes */
             disk_free_bytes: number;
+            disk_guard: components["schemas"]["DiskGuardOut"];
             /** Events Total */
             events_total: number;
             /** Loops */
@@ -8002,6 +8052,11 @@ export interface components {
             outcome?: "released" | null;
             /** Outcome Reason */
             outcome_reason?: string | null;
+            /**
+             * Steer Unknown
+             * @default 0
+             */
+            steer_unknown?: number;
         };
         /**
          * TaskChanges

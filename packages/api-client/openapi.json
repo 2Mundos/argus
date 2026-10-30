@@ -3437,6 +3437,11 @@
           "state": {
             "$ref": "#/components/schemas/TaskState"
           },
+          "steer_unknown": {
+            "default": 0,
+            "title": "Steer Unknown",
+            "type": "integer"
+          },
           "timeout_at": {
             "anyOf": [
               {
@@ -5734,6 +5739,119 @@
         ],
         "title": "DifficultySource",
         "type": "string"
+      },
+      "DiskGuardOut": {
+        "description": "Authenticated disk-guard visibility; no paths or device identifiers.",
+        "properties": {
+          "claim_admission": {
+            "enum": [
+              "admitted",
+              "refused"
+            ],
+            "title": "Claim Admission",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "free_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Bytes"
+          },
+          "measurement": {
+            "enum": [
+              "measured",
+              "unknown",
+              "stale"
+            ],
+            "title": "Measurement",
+            "type": "string"
+          },
+          "roots": {
+            "items": {
+              "$ref": "#/components/schemas/DiskGuardRootOut"
+            },
+            "title": "Roots",
+            "type": "array"
+          },
+          "warn_episode": {
+            "title": "Warn Episode",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "claim_admission",
+          "warn_episode",
+          "measurement",
+          "roots"
+        ],
+        "title": "DiskGuardOut",
+        "type": "object"
+      },
+      "DiskGuardRootOut": {
+        "properties": {
+          "applicability": {
+            "enum": [
+              "measured",
+              "unknown",
+              "stale",
+              "not_applicable"
+            ],
+            "title": "Applicability",
+            "type": "string"
+          },
+          "band": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "warn",
+                  "refuse"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band"
+          },
+          "free_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Bytes"
+          },
+          "role": {
+            "enum": [
+              "data",
+              "instances",
+              "docker"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "applicability"
+        ],
+        "title": "DiskGuardRootOut",
+        "type": "object"
       },
       "DockerOptions-Input": {
         "properties": {
@@ -14234,6 +14352,18 @@
             ],
             "title": "Delivered At"
           },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispatched At"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -14247,7 +14377,8 @@
               "pending",
               "delivered",
               "cancelled",
-              "expired"
+              "expired",
+              "unknown"
             ],
             "title": "State",
             "type": "string"
@@ -14364,6 +14495,9 @@
             "title": "Disk Free Bytes",
             "type": "integer"
           },
+          "disk_guard": {
+            "$ref": "#/components/schemas/DiskGuardOut"
+          },
           "events_total": {
             "title": "Events Total",
             "type": "integer"
@@ -14418,6 +14552,7 @@
           "events_total",
           "database",
           "disk_free_bytes",
+          "disk_guard",
           "loops"
         ],
         "title": "SystemSummary",
@@ -15116,6 +15251,11 @@
               }
             ],
             "title": "Outcome Reason"
+          },
+          "steer_unknown": {
+            "default": 0,
+            "title": "Steer Unknown",
+            "type": "integer"
           }
         },
         "required": [
@@ -27951,7 +28091,7 @@
         ]
       },
       "post": {
-        "description": "Send an instruction to the attempt in flight. The assignee must report\nthe `steer` feature; the message expires if the attempt ends first.",
+        "description": "Send an instruction to the attempt in flight. The assignee must report\nthe `steer` feature. If the attempt ends first, the message expires, or ends\n`unknown` (it may have been delivered) when a heartbeat had carried it.",
         "operationId": "create_steer_api_tasks__task_id__steers_post",
         "parameters": [
           {

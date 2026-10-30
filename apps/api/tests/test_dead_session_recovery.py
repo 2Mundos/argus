@@ -351,7 +351,7 @@ EVENT_ALIASES = frozenset(
     {"events", *re.findall(r"\b(?:FROM|JOIN) events (\w+)", SESSION_LOST_SQL)}
 )
 # Each events lookup and the index it must use: the kind+at window, then the
-# per-task correlated lookups (next end; claim, by the task+kind index of 0057). A
+# per-task correlated lookups (next end; claim, by the task+kind index of 0058). A
 # kind-only lookup is a regression.
 EXPECTED_EVENT_INDEXES = frozenset(
     {("e", "events_kind_at"), ("f", "events_subject"), ("c", "events_task_kind")}

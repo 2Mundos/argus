@@ -127,6 +127,10 @@ export function TaskDetail({
         ? false
         : undefined;
   const selected = picked !== null && attemptNumbers.includes(picked) ? picked : current;
+  // Numbers restart after a retry: the newest row with the number is the one shown.
+  const unknownSteers = Array.isArray(attemptList)
+    ? (attemptList.filter((a) => a.attempt === selected).at(-1)?.steer_unknown ?? 0)
+    : 0;
   const modelAttempts = [...new Set(modelTrace?.executions.map((run) => run.attempt) ?? [])].sort(
     (a, b) => b - a,
   );
@@ -231,6 +235,12 @@ export function TaskDetail({
             selected={selected}
             onSelect={setPicked}
           />
+          {unknownSteers > 0 && (
+            <p className="muted small" role="note">
+              {unknownSteers === 1 ? "1 steer" : `${unknownSteers} steers`} to attempt {selected}{" "}
+              unknown: may have been delivered (never acknowledged)
+            </p>
+          )}
           <Activity task={task} events={events ?? []} selected={selected} />
           {delivery && <TaskDelivery delivery={delivery} onChanged={reload} />}
           <section className="task-models" aria-label="Models">

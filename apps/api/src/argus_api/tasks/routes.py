@@ -224,10 +224,14 @@ async def claim_task(
     secrets: SecretsDep,
 ) -> ClaimedTask | Response:
     """Claim a ready task, long-polling up to `wait_s` seconds for one."""
+    disk_guard = request.app.state.disk_guard
     loop = asyncio.get_running_loop()
     deadline = loop.time() + body.wait_s
     with db.bus.subscribe() as sub:
         while True:
+            # Re-checked every pass (not only before the poll): a guard that
+            # refuses while the caller waits gets `disk_low`, not a timeout.
+            disk_guard.require_admission()
             async with db.write() as tx:
                 task, engine_lease = await accounts.claim(
                     tx,
@@ -236,6 +240,7 @@ async def claim_task(
                     body.runtime_providers,
                     secrets,
                     default_timeout_s=settings.task_timeout_s,
+                    disk_guard=disk_guard,
                 )
             if task is not None:
                 async with db.read() as conn:
@@ -251,6 +256,7 @@ async def claim_task(
                     switch = await service.attempt_model_switch(
                         conn, task.id, task.attempt
                     )
+                    unknown = await steers.previous_unknown(conn, task.id, task.attempt)
                 if engine_lease is not None:
                     engine_lease = await with_local_context(request, engine_lease)
                 return ClaimedTask(
@@ -260,6 +266,7 @@ async def claim_task(
                     model_policy=policy,
                     model_policy_revision=revision,
                     model_switch=switch,
+                    steer_unknown=unknown,
                 )
             remaining = deadline - loop.time()
             try:
@@ -395,7 +402,8 @@ async def create_steer(
     task_id: str, body: steers.SteerCreate, db: DbDep, caller: ManagerDep
 ) -> steers.Steer:
     """Send an instruction to the attempt in flight. The assignee must report
-    the `steer` feature; the message expires if the attempt ends first."""
+    the `steer` feature. If the attempt ends first, the message expires, or ends
+    `unknown` (it may have been delivered) when a heartbeat had carried it."""
     async with db.write() as tx:
         return await steers.create(tx, task_id, body.message, caller.actor)
 

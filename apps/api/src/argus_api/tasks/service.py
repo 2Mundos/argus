@@ -71,6 +71,7 @@ from argus_api.accounts.usage import (
 )
 from argus_api.db import Snapshot, Tx, ts
 from argus_api.decisions import store as decisions
+from argus_api.disk_guard import DiskGuard
 from argus_api.errors import (
     ConflictError,
     ForbiddenError,
@@ -293,6 +294,7 @@ async def claim(
     default_timeout_s: int = 0,
     runtime_providers: list[str] | None = None,
     can_lease: Callable[[Tx, aiosqlite.Row], Awaitable[bool]] | None = None,
+    disk_guard: DiskGuard | None = None,
 ) -> Task | None:
     """Claim the highest-priority, oldest ready task the agent is capable of.
 
@@ -310,7 +312,12 @@ async def claim(
 
     The attempt's wall-clock deadline is the task's `timeout_s` (which creation
     filled from its kind), else `default_timeout_s`; 0 means no deadline.
+
+    When `disk_guard` refuses admission, raises `ConflictError(code=disk_low)`
+    before any attempt is spent or credential/engine lease is acquired.
     """
+    if disk_guard is not None:
+        disk_guard.require_admission()
     state = await _agent_state(tx.conn, agent_id)
     if state is not AgentState.ACTIVE:
         raise ConflictError(
@@ -1465,7 +1472,7 @@ async def retry(tx: Tx, task_id: str, actor: str) -> Task:
     )
     await tx.conn.execute("DELETE FROM task_log WHERE task_id = ?", (task_id,))
     await tx.conn.execute("DELETE FROM task_changes WHERE task_id = ?", (task_id,))
-    await steers.expire_task(tx, task_id)
+    await steers.close_task(tx, task_id)
     error = row["error"] or ""
     await record(
         tx,
@@ -2004,6 +2011,7 @@ async def attempt_definitions(
                 definition=json.loads(r["definition"]),
                 outcome=r["outcome"],
                 outcome_reason=r["outcome_reason"],
+                steer_unknown=r["steer_unknown"],
             )
             for r in await cur.fetchall()
         ]
@@ -2788,7 +2796,7 @@ def _exit_confirmed(row: aiosqlite.Row) -> bool:
 async def _auto_resume(tx: Tx, row: aiosqlite.Row, *, retries: bool) -> _Resume:
     """Apply the automatic resume rule to a confirmed exit of the claimed attempt.
 
-    Every read is one seek on `events_task_kind` (migration 0057); the epoch is
+    Every read is one seek on `events_task_kind` (migration 0058); the epoch is
     the latest `task.retried` or non-`system` `task.unblock`."""
     task_id = row["id"]
     epoch = max(
@@ -2802,7 +2810,7 @@ async def _auto_resume(tx: Tx, row: aiosqlite.Row, *, retries: bool) -> _Resume:
 
 
 # The automatic resume rule's reads; each is one seek on `events_task_kind`
-# (migration 0057), checked by EXPLAIN QUERY PLAN in test_auto_resume.py.
+# (migration 0058), checked by EXPLAIN QUERY PLAN in test_auto_resume.py.
 LATEST_TASK_EVENT_SQL = (
     "SELECT id FROM events WHERE subject_type = 'task' AND subject_id = ?"
     " AND kind = ? AND id > ? AND (? = 0 OR actor <> 'system')"
@@ -2965,8 +2973,9 @@ async def _apply(
         {"from": old, "to": new, "attempt": row["attempt"], **(data or {})},
     )
     if leaving_claim:
-        # Pending steers belong to this attempt only (task steering spec 3.3).
-        await steers.expire_attempt(tx, row["id"], row["attempt"])
+        # Pending steers belong to this attempt only: they expire, or end `unknown`
+        # when a heartbeat carried them (task steering spec 3.3).
+        await steers.close_attempt(tx, row["id"], row["attempt"])
         await _ensure_usage_outcome(tx, row, action, data or {})
     # Decisions that waited on the old state are moot once the task leaves it
     # (an answered decision is already closed before its transition runs).

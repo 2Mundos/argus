@@ -82,7 +82,7 @@ reasons and adds `failure_class` to each failure row and a count per class.
       when the host's lease observations for this attempt, after its claim, saw
       the session `gone` without a break for the same 90 s grace, up to the last
       one (stall visibility 3.7). Each heartbeat's `gone` starts or extends
-      `tasks.session_gone_at` (migration `0058_task_session_gone_at.sql`); any
+      `tasks.session_gone_at` (migration `0059_task_session_gone_at.sql`); any
       other session state, or a renewal without an observation, clears it, and a
       claim or an expiry resets it. One `gone` listing (a container restart, a
       gap) is not a confirmation. Without it, the exit is not confirmed and keeps
@@ -119,7 +119,7 @@ reasons and adds `failure_class` to each failure row and a count per class.
   - The rule is checkable from the events: `task.auto_resumed`, `task.progress`,
     `task.retried` and `task.unblock` for one task, no counter column. Each lookup is one seek on the partial index
     `events_task_kind (subject_id, kind, id) WHERE subject_type = 'task'`
-    (migration `0057_events_task_kind.sql`), newest first or `LIMIT 1`; no scan of
+    (migration `0058_events_task_kind.sql`), newest first or `LIMIT 1`; no scan of
     the event log.
   - The fail is fenced as every worker write (agent, attempt, state): a repeated
     or late fail of the same attempt is a `409` and records nothing, so one exit
@@ -325,7 +325,7 @@ when the work is hard. Any other `FAIL:` is `worker_fail`.
   reason, and the environment FAIL directive.
 - Automatic resume (3.2): `fail` and the reaper's `_expire_where` apply the rule
   in the fail transaction (`_auto_resume`); migration
-  `0057_events_task_kind.sql` adds the partial index it seeks; the new event
+  `0058_events_task_kind.sql` adds the partial index it seeks; the new event
   `task.auto_resumed`. The channel's `reportExit` sends the fail once per
   heartbeat: a transient error keeps the task, so the heartbeat renews its lease
   (observed `gone`) and the next one repeats the same report, with one report in

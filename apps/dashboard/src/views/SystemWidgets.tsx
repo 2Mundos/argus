@@ -89,6 +89,13 @@ export function SystemWidgets({ data }: { data: SystemSummary }) {
               <dt>Disk free</dt>
               <dd>{bytes(data.disk_free_bytes)}</dd>
             </div>
+            <div>
+              <dt>Claim admission</dt>
+              <dd>
+                {data.disk_guard.warn_episode ? "warn · " : ""}
+                {data.disk_guard.claim_admission}
+              </dd>
+            </div>
           </dl>
         </div>
       </div>
