@@ -40,9 +40,9 @@ service and the dashboard read it; nothing else maps reasons.
 | Class | Reasons |
 | --- | --- |
 | `admission` | `quota`, `account_unavailable` |
-| `environment` | `env_*` block reasons (3.3), `worker_env` (3.4) |
+| `environment` | `env_*` block reasons (3.3), `worker_env` (3.4), `env_oom` (3.2; the promoted, pool-level block only, not a per-task reason) |
 | `transient` | `provider_failure`, `channel_error`, `runtime_switch_failed` |
-| `session` | `session_lost`, `stalled`, `timeout`, `lease_expired`, `agent_ended` |
+| `session` | `session_lost`, `stalled`, `timeout`, `lease_expired`, `agent_ended`; fact `oom_kill` (the session container was OOM-killed) |
 | `task` | `worker_fail`, `context_overflow`, `verification_failed` |
 
 A reason not in the table is `task`. Fleet's `classify_failure` keeps its
@@ -95,6 +95,9 @@ reasons and adds `failure_class` to each failure row and a count per class.
     every completed turn posts one. Until verified, a turn with no
     `task.progress` is not progress.
 - `max_attempts` keeps its meaning: the cap on attempts that count.
+- **OOM.** `env_oom` blocks after 2 consecutive OOM-killed sessions on one pool.
+  Before that, an OOM-killed session is a `session` attempt as today, with the
+  `oom_kill` fact recorded on the failure row.
 
 ## 3.3 Channel preflight
 
@@ -251,6 +254,8 @@ when the work is hard. Any other `FAIL:` is `worker_fail`.
   start?
 - Is blocking on the first `worker_fail` too strict for tasks that would pass on a
   plain retry? Re-check after two weeks against the baseline.
+- Is 2 consecutive OOM-killed sessions the right threshold for `env_oom`? Should
+  it count per pool or per task, and over what window?
 
 # 5. Constraints
 

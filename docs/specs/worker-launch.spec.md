@@ -95,9 +95,12 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
   CPUs and memory; a pool is checked for: public URL set, target reachable,
   `docker.runtime` present on the daemon, requested CPU/memory within the node,
   image (and NanoClaw agent image) present on the daemon, free slot under the
-  cap, and, for NanoClaw on the local daemon only, its host paths. Anything about
-  a remote daemon's filesystem is `null`, not guessed. An image that is absent
-  but pullable is `null` ("will be pulled on start"), since a registry is not probed.
+  cap, that a pool with `cpus` and/or `memory` set gives its sessions a quota
+  (`ok: null` until the NanoClaw session quota is confirmed; it cannot be
+  verified from this repo), and, for NanoClaw on the local daemon only, its
+  host paths. Anything about a remote daemon's filesystem is `null`, not
+  guessed. An image that is absent but pullable is `null` ("will be pulled on
+  start"), since a registry is not probed.
 - Probes time out after 5 s per target and are read-only.
 - **Templates are authoritative, small, explicit backend definitions**
   (`fleet/templates.py`), one per supported integration:
