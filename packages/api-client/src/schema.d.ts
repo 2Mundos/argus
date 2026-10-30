@@ -4778,6 +4778,10 @@ export interface components {
         /**
          * DiskGuardOut
          * @description Authenticated disk-guard visibility; no paths or device identifiers.
+         *
+         *     Per-root `band` is instantaneous free-space for that root. Global
+         *     `claim_admission` is latched hysteresis, so a root may show band "warn"
+         *     (or "ok") while claim_admission is still "refused".
          */
         DiskGuardOut: {
             /**
@@ -4793,7 +4797,7 @@ export interface components {
              * Measurement
              * @enum {string}
              */
-            measurement: "measured" | "unknown" | "stale";
+            measurement: "measured" | "unknown" | "stale" | "disabled";
             /** Roots */
             roots: components["schemas"]["DiskGuardRootOut"][];
             /** Warn Episode */

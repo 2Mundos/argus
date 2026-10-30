@@ -5736,7 +5736,7 @@
         "type": "string"
       },
       "DiskGuardOut": {
-        "description": "Authenticated disk-guard visibility; no paths or device identifiers.",
+        "description": "Authenticated disk-guard visibility; no paths or device identifiers.\n\nPer-root `band` is instantaneous free-space for that root. Global\n`claim_admission` is latched hysteresis, so a root may show band \"warn\"\n(or \"ok\") while claim_admission is still \"refused\".",
         "properties": {
           "claim_admission": {
             "enum": [
@@ -5765,7 +5765,8 @@
             "enum": [
               "measured",
               "unknown",
-              "stale"
+              "stale",
+              "disabled"
             ],
             "title": "Measurement",
             "type": "string"

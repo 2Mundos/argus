@@ -287,8 +287,7 @@ class Settings:
             workspace_cleanup_git_timeout_s=float(
                 os.environ.get("ARGUS_WORKSPACE_CLEANUP_GIT_TIMEOUT_S", 300)
             ),
-            disk_guard_enabled=os.environ.get("ARGUS_DISK_GUARD_ENABLED", "true")
-            != "false",
+            disk_guard_enabled=_env_bool("ARGUS_DISK_GUARD_ENABLED", "true"),
             disk_guard_warn_bytes=int(
                 os.environ.get("ARGUS_DISK_GUARD_WARN_BYTES", 5 * 1024 * 1024 * 1024)
             ),
@@ -365,3 +364,13 @@ def _difficulty_executors() -> dict[str, tuple[str, ...]]:
 
 def _csv(name: str) -> tuple[str, ...]:
     return tuple(x.strip() for x in os.environ.get(name, "").split(",") if x.strip())
+
+
+def _env_bool(name: str, default: str) -> bool:
+    """Parse a boolean env var; reject anything outside the known vocabulary."""
+    raw = os.environ.get(name, default).strip().lower()
+    if raw in ("true", "1", "yes", "on"):
+        return True
+    if raw in ("false", "0", "no", "off"):
+        return False
+    raise ValueError(f"{name} must be true/false (or 1/0, yes/no, on/off); got {raw!r}")
