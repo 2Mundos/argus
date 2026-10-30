@@ -33,6 +33,18 @@ def _migrated_template(tmp_path_factory: pytest.TempPathFactory) -> Generator[No
         yield
 
 
+@pytest.fixture(autouse=True)
+def _disk_guard_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unrelated tests independent of the host's free space.
+
+    The disk guard refuses claims below 2 GiB and is measured from the real
+    filesystem at startup; a runner or developer machine short of space must not
+    change what any other test observes. Tests that exercise the guard
+    (`test_disk_guard.py`) turn it back on explicitly.
+    """
+    monkeypatch.setenv("ARGUS_DISK_GUARD_ENABLED", "false")
+
+
 @pytest.fixture
 def clock() -> FakeClock:
     return FakeClock()

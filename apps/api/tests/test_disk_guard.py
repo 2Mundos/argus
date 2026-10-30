@@ -363,6 +363,10 @@ async def test_loop_cancellation(db: Database, tmp_path: Path) -> None:
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
     monkeypatch.setenv("ARGUS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ARGUS_ADMIN_TOKEN", ADMIN_TOKEN)
+    monkeypatch.setenv("ARGUS_DISK_GUARD_ENABLED", "true")
+    # One startup pass, then no background pass: a test that sets guard state
+    # must not race the loop's own measurement.
+    monkeypatch.setenv("ARGUS_DISK_GUARD_INTERVAL_S", "3600")
     with TestClient(app) as c:
         yield c
 
