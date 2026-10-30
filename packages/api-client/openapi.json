@@ -3437,6 +3437,11 @@
           "state": {
             "$ref": "#/components/schemas/TaskState"
           },
+          "steer_unknown": {
+            "default": 0,
+            "title": "Steer Unknown",
+            "type": "integer"
+          },
           "timeout_at": {
             "anyOf": [
               {
@@ -14234,6 +14239,18 @@
             ],
             "title": "Delivered At"
           },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispatched At"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -14247,7 +14264,8 @@
               "pending",
               "delivered",
               "cancelled",
-              "expired"
+              "expired",
+              "unknown"
             ],
             "title": "State",
             "type": "string"
@@ -15116,6 +15134,11 @@
               }
             ],
             "title": "Outcome Reason"
+          },
+          "steer_unknown": {
+            "default": 0,
+            "title": "Steer Unknown",
+            "type": "integer"
           }
         },
         "required": [
@@ -27951,7 +27974,7 @@
         ]
       },
       "post": {
-        "description": "Send an instruction to the attempt in flight. The assignee must report\nthe `steer` feature; the message expires if the attempt ends first.",
+        "description": "Send an instruction to the attempt in flight. The assignee must report\nthe `steer` feature. If the attempt ends first, the message expires, or ends\n`unknown` (it may have been delivered) when a heartbeat had carried it.",
         "operationId": "create_steer_api_tasks__task_id__steers_post",
         "parameters": [
           {

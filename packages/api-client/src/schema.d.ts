@@ -2738,7 +2738,8 @@ export interface paths {
         /**
          * Create Steer
          * @description Send an instruction to the attempt in flight. The assignee must report
-         *     the `steer` feature; the message expires if the attempt ends first.
+         *     the `steer` feature. If the attempt ends first, the message expires, or ends
+         *     `unknown` (it may have been delivered) when a heartbeat had carried it.
          */
         post: operations["create_steer_api_tasks__task_id__steers_post"];
         delete?: never;
@@ -3991,6 +3992,11 @@ export interface components {
             /** Spec */
             spec: string;
             state: components["schemas"]["TaskState"];
+            /**
+             * Steer Unknown
+             * @default 0
+             */
+            steer_unknown?: number;
             /** Timeout At */
             timeout_at: string | null;
             /** Timeout S */
@@ -7722,6 +7728,8 @@ export interface components {
             created_at: string;
             /** Delivered At */
             delivered_at?: string | null;
+            /** Dispatched At */
+            dispatched_at?: string | null;
             /** Id */
             id: string;
             /** Message */
@@ -7730,7 +7738,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "pending" | "delivered" | "cancelled" | "expired";
+            state: "pending" | "delivered" | "cancelled" | "expired" | "unknown";
         };
         /** SteerCreate */
         SteerCreate: {
@@ -8002,6 +8010,11 @@ export interface components {
             outcome?: "released" | null;
             /** Outcome Reason */
             outcome_reason?: string | null;
+            /**
+             * Steer Unknown
+             * @default 0
+             */
+            steer_unknown?: number;
         };
         /**
          * TaskChanges
