@@ -78,6 +78,28 @@ afterEach(() => {
   mock.artifacts = [];
   mock.events = [];
 });
+describe("TaskDetail blocked reason", () => {
+  it("shows the inbox card sentence for a block_reason", async () => {
+    mock.task = { ...base, state: "blocked", block_reason: "env_repository_unconfigured" };
+    mock.trace = { executions: [], timeline: [] };
+    await act(async () => {
+      render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    });
+    expect(screen.getByText("Blocked").nextElementSibling?.textContent).toBe(
+      "its project has no repository configured",
+    );
+  });
+
+  it("shows no Blocked fact without a block_reason", async () => {
+    mock.task = { ...base, state: "ready", block_reason: null };
+    mock.trace = { executions: [], timeline: [] };
+    await act(async () => {
+      render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    });
+    expect(screen.queryByText("Blocked")).toBeNull();
+  });
+});
+
 describe("TaskDetail model trace", () => {
   it("renders attempt grouped harness and delegate executions, evidence, accounts, usage and switches", async () => {
     mock.task = base;

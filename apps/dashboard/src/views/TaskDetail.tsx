@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, call, download } from "../api";
 import { ARCHIVABLE } from "../archive";
+import { blockReasonText } from "../blockCopy";
 import { TaskDelivery } from "../delivery";
 import { TaskFailover } from "../failover";
 import { bytes, relative, shortId } from "../format";
@@ -217,6 +218,12 @@ export function TaskDetail({
             <dd>
               <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
             </dd>
+            {task.block_reason && (
+              <>
+                <dt>Blocked</dt>
+                <dd>{blockReasonText(task.block_reason)}</dd>
+              </>
+            )}
             <dt>Kind</dt>
             <dd>{task.kind}</dd>
             <dt>Difficulty</dt>
