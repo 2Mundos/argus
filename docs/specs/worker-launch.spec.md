@@ -95,12 +95,18 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
   CPUs and memory; a pool is checked for: public URL set, target reachable,
   `docker.runtime` present on the daemon, requested CPU/memory within the node,
   image (and NanoClaw agent image) present on the daemon, free slot under the
-  cap, that a pool with `cpus` and/or `memory` set gives its sessions a quota
-  (`ok: null` until the NanoClaw session quota is confirmed; it cannot be
-  verified from this repo), and, for NanoClaw on the local daemon only, its
-  host paths. Anything about a remote daemon's filesystem is `null`, not
-  guessed. An image that is absent but pullable is `null` ("will be pulled on
-  start"), since a registry is not probed.
+  cap, that a NanoClaw pool with `cpus` and/or `memory` set gives its sessions
+  a quota (`session_quota`: `ok: true` when Argus sets `CONTAINER_CPU_LIMIT`
+  and/or `CONTAINER_MEMORY_LIMIT` from the pool request on the host env, which
+  NanoClaw's `composeSessionSpec` maps to `SessionSpec.resources` and the
+  Docker driver realizes as `--cpus`/`--memory`; omitted when the pool is not
+  NanoClaw or requests no quota). This check is static composition evidence,
+  not a live `docker inspect` of a spawned session — that remains the
+  [session quota smoke](../runbooks/2026-10-30.session-quota-smoke.ref.md)
+  runbook. And, for NanoClaw on the local daemon only, its host paths.
+  Anything about a remote daemon's filesystem is `null`, not guessed. An image
+  that is absent but pullable is `null` ("will be pulled on start"), since a
+  registry is not probed.
 - Probes time out after 5 s per target and are read-only.
 - **Templates are authoritative, small, explicit backend definitions**
   (`fleet/templates.py`), one per supported integration:
@@ -249,10 +255,17 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
 - `fleet/targets.py`: `Target.probe()` and `Target.image_present()`.
 - `fleet/capabilities.py` (discovery), `fleet/service.launch`, two routes in
   `fleet/routes.py`, two tools in `mcp_server.py`, OpenAPI and client regenerated.
+- `fleet/runtimes.session_quota_env` / `container_spec`: a NanoClaw host whose
+  pool sets `cpus` / `memory_mb` receives `CONTAINER_CPU_LIMIT` /
+  `CONTAINER_MEMORY_LIMIT` so agent sessions inherit the same quota.
+- `fleet/capabilities.session_quota_check`: the `session_quota` readiness check
+  for NanoClaw pools that request a quota.
 - `fleet/templates.py`, `POST /fleet/workers`, `GET /fleet/templates`, MCP
   `list_worker_templates` / `create_worker`; `Target.probe` reports whether the
   daemon shares this filesystem; `Target.labeled_images`; `PoolUpsert.template`.
 - Dashboard: `views/Agents.tsx` (guided form, advanced foldout) and `Pools.tsx`
   (editor preserves hidden settings).
-- Tests: scopes, discovery available/unavailable, launch success and each
-  refusal, MCP, and the view's pure state logic.
+- Tests: scopes, discovery available/unavailable, `session_quota` evidence,
+  launch success and each refusal, MCP, and the view's pure state logic.
+- Live Docker confirmation of session `--cpus`/`--memory` and OOM classification
+  signals: [session quota smoke](../runbooks/2026-10-30.session-quota-smoke.ref.md).

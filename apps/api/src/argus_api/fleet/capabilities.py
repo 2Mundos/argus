@@ -15,6 +15,7 @@ from argus_core.fleet import (
 )
 
 from argus_api.fleet import runtimes
+from argus_api.fleet.runtimes import session_quota_env
 from argus_api.fleet.targets import TargetError, TargetInfo, TargetRegistry
 
 PROBE_TIMEOUT_S = 5.0
@@ -99,6 +100,37 @@ def path_check(
     )
 
 
+def session_quota_check(pool: Pool) -> Check | None:
+    """Evidence that a NanoClaw pool with cpus/memory will give sessions a quota.
+
+    Confirmed statically: Argus sets `CONTAINER_*_LIMIT` from the pool request
+    (worker-launch 3). Live `--cpus`/`--memory` on a spawned session is the
+    session-quota smoke runbook, not this probe. Omitted when the pool is not
+    NanoClaw or requests no quota.
+    """
+    if pool.runtime != RuntimeKind.NANOCLAW:
+        return None
+    if pool.cpus is None and pool.memory_mb is None:
+        return None
+    env = session_quota_env(pool)
+    if not env:
+        return Check(
+            name="session_quota",
+            ok=False,
+            detail="pool requests a quota but session env was not composed",
+        )
+    parts = [f"{k}={v}" for k, v in sorted(env.items())]
+    return Check(
+        name="session_quota",
+        ok=True,
+        detail=(
+            "sessions inherit the pool quota via "
+            + ", ".join(parts)
+            + " (composeSessionSpec.resources)"
+        ),
+    )
+
+
 async def judge_pool(
     pool: Pool,
     targets: TargetRegistry,
@@ -131,6 +163,8 @@ async def judge_pool(
             detail=f"{pool.live_instances} of {pool.max_replicas} slots used",
         )
     )
+    if (quota := session_quota_check(pool)) is not None:
+        checks.append(quota)
     if info is not None:
         if pool.docker.runtime:
             have = pool.docker.runtime in info.runtimes

@@ -18,7 +18,7 @@ from argus_api.tasks import service as tasks
 from argus_core.agents import AgentRegister
 from argus_core.auth import Scope
 from argus_core.decisions import DecisionAnswer
-from argus_core.fleet import PoolUpsert
+from argus_core.fleet import Pool, PoolUpsert
 from argus_core.tasks import TaskCreate
 
 SETTINGS = FleetSettings(argus_url="http://argus.test:8000", max_starts_in_flight=64)
@@ -669,24 +669,42 @@ def _sandboxed_pool(**nanoclaw: object) -> PoolUpsert:
     )
 
 
-def test_sandboxed_nanoclaw_has_no_docker_socket() -> None:
+def _pool_from_upsert(name: str, upsert: PoolUpsert, **overrides: object) -> Pool:
     from datetime import UTC, datetime
 
-    from argus_api.fleet.runtimes import container_spec
-    from argus_api.fleet.targets import SANDBOX_TMPFS
-    from argus_core.fleet import Pool
-
     now = datetime.now(UTC)
-    upsert = _sandboxed_pool(agent_image_archive="/srv/agent.tar")
-    pool = Pool(
-        name="sbx",
+    return Pool(
+        name=name,
         status="ok",
         last_error=None,
         live_instances=0,
         created_at=now,
         updated_at=now,
         version="v1",
-        **upsert.model_dump(),
+        **{**upsert.model_dump(), **overrides},
+    )
+
+
+def test_session_quota_env_formats_pool_cpus_and_memory() -> None:
+    from argus_api.fleet.runtimes import session_quota_env
+
+    bare = _pool_from_upsert("sbx", _sandboxed_pool())
+    assert session_quota_env(bare) == {}
+    capped = _pool_from_upsert("sbx", _sandboxed_pool(), cpus=2.0, memory_mb=512)
+    assert session_quota_env(capped) == {
+        "CONTAINER_CPU_LIMIT": "2",
+        "CONTAINER_MEMORY_LIMIT": "512m",
+    }
+    fractional = _pool_from_upsert("sbx", _sandboxed_pool(), cpus=0.5)
+    assert session_quota_env(fractional) == {"CONTAINER_CPU_LIMIT": "0.5"}
+
+
+def test_sandboxed_nanoclaw_has_no_docker_socket() -> None:
+    from argus_api.fleet.runtimes import container_spec
+    from argus_api.fleet.targets import SANDBOX_TMPFS
+
+    pool = _pool_from_upsert(
+        "sbx", _sandboxed_pool(agent_image_archive="/srv/agent.tar")
     )
     spec = container_spec(pool, "i-1", ["argus_boot_x"], "http://argus")
     assert spec.runtime == "sysbox-runc"
@@ -701,6 +719,23 @@ def test_sandboxed_nanoclaw_has_no_docker_socket() -> None:
     assert spec.read_only is True
     assert spec.pids_limit == 4096
     assert spec.tmpfs == SANDBOX_TMPFS
+    assert "CONTAINER_CPU_LIMIT" not in spec.env
+    assert "CONTAINER_MEMORY_LIMIT" not in spec.env
+
+
+def test_nanoclaw_host_propagates_session_cpu_and_memory_quota() -> None:
+    from argus_api.fleet.runtimes import container_spec
+
+    pool = _pool_from_upsert(
+        "sbx",
+        _sandboxed_pool(agent_image_archive="/srv/agent.tar"),
+        cpus=2,
+        memory_mb=1024,
+    )
+    spec = container_spec(pool, "i-1", ["argus_boot_x"], "http://argus")
+    assert (spec.cpus, spec.memory_mb) == (2, 1024)  # host container still capped
+    assert spec.env["CONTAINER_CPU_LIMIT"] == "2"
+    assert spec.env["CONTAINER_MEMORY_LIMIT"] == "1024m"
 
 
 def test_sandboxed_nanoclaw_runs_as_root_in_its_sandbox() -> None:
