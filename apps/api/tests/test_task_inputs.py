@@ -422,21 +422,41 @@ def test_receipt_body_is_validated(client: TestClient, body: dict) -> None:
     assert res.status_code == 422
 
 
+@pytest.mark.parametrize("state", ["materialized", "verified"])
 @pytest.mark.parametrize(
     "proof", [{"size": 7}, {"sha256": "0" * 64}, {"size": 6, "sha256": "1" * 64}]
 )
 def test_receipt_cannot_claim_another_hash_or_size(
-    client: TestClient, proof: dict
+    client: TestClient, proof: dict, state: str
 ) -> None:
     task = new_task(client)
     art = share(client, task, body=b"input\n")
     worker = register(client)
     attempt = claim(client, worker)["attempt"]
     full = {"size": 6, "sha256": sha(b"input\n"), **proof}
-    res = receipt(client, worker, task, art, attempt, "verified", **full)
+    res = receipt(client, worker, task, art, attempt, state, **full)
     assert (res.status_code, code(res)) == (422, "integrity_mismatch")
     view = client.get(f"/api/tasks/{task['id']}/inputs", headers=ADMIN).json()
     assert view["inputs"][0]["receipts"] == []
+    # the channel's materialized receipt carries the listed size and hash (spec 3.3)
+    exact = {"size": 6, "sha256": sha(b"input\n")}
+    assert (
+        receipt(client, worker, task, art, attempt, state, **exact).status_code == 200
+    )
+
+
+@pytest.mark.parametrize("reason", ["unavailable", "invalid", "limit", "corrupt"])
+def test_every_channel_failure_reason_is_accepted(
+    client: TestClient, reason: str
+) -> None:
+    # integrations/nanoclaw/argus-inputs.ts ReceiptFailure sends exactly these codes
+    task = new_task(client)
+    art = share(client, task)
+    worker = register(client)
+    attempt = claim(client, worker)["attempt"]
+    res = receipt(client, worker, task, art, attempt, "failed", reason=reason)
+    assert res.status_code == 200, res.text
+    assert [r["reason"] for r in res.json()["receipts"]] == [reason]
 
 
 def test_receipt_is_fenced_like_progress(client: TestClient, tmp_path: Path) -> None:
@@ -465,7 +485,12 @@ def test_receipt_is_fenced_like_progress(client: TestClient, tmp_path: Path) -> 
         f"/api/tasks/{task['id']}/release", json={"reason": "handoff"}, headers=ADMIN
     )
     assert released.status_code == 200
-    # a released holder keeps its read grant but may not write
+    # a released holder keeps its read grant (worker read scope spec) but may not write
+    view = client.get(f"/api/tasks/{task['id']}/inputs", headers=first)
+    assert view.status_code == 200
+    assert [i["id"] for i in view.json()["inputs"]] == [art["id"]]
+    content = client.get(f"/api/artifacts/{art['id']}/content", headers=first)
+    assert (content.status_code, content.content) == (200, b"input\n")
     res = receipt(client, first, task, art, attempt, "materialized")
     assert res.status_code == 409
     nxt = claim(client, second)

@@ -2284,7 +2284,7 @@ describe("task-scoped repository auth", () => {
     expect(b.w.calls.filter((c) => c.path === `/artifacts/${artifact}/content`)).toHaveLength(1);
     const receipts = b.w.calls.filter((c) => c.path === `/tasks/${id}/inputs/${artifact}/receipt`);
     expect(receipts.map((c) => c.body)).toEqual([
-      { attempt: 2, state: "materialized" },
+      { attempt: 2, state: "materialized", sha256, size: bytes.length },
       { attempt: 2, state: "verified", sha256, size: bytes.length },
     ]);
     const text = b.h.inbound[0].content.text as string;

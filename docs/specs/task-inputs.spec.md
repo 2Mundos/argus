@@ -98,9 +98,14 @@ reason code from 3.6 and no detail.
 `POST /api/tasks/{id}/inputs/{artifact_id}/receipt` is a worker write
 (attempt-fenced like [progress](worker-lifecycle.spec.md): `409 stale_attempt`,
 `403 not_leased`). Body: `attempt`, `state` (`materialized`, `verified`,
-`consumed`, `failed`), `sha256` and `size` (for `verified` and `consumed`), and
-`reason` (for `failed`, one of the codes in 3.6). The server checks that the
-artifact belongs to this task and is shared (otherwise `404`), and that
+`consumed`, `failed`), `sha256` and `size` (required for `verified` and
+`consumed`, optional otherwise; the channel sends them with `materialized`
+too), and `reason` (only for `failed`: `unavailable`, `invalid`, `limit` or
+`corrupt`). The channel maps the block reasons of 3.6 onto these codes
+(`env_input_unavailable` → `unavailable`, `env_input_limit` → `limit`,
+`env_input_invalid` → `invalid`, or `corrupt` when bytes arrived that are not
+the artifact's: longer than its size or another hash). The server checks that the
+artifact belongs to this task and is shared (otherwise `404`), and that a given
 `sha256` and `size` equal the stored values (otherwise `422
 integrity_mismatch`: a receipt cannot claim a hash the artifact does not
 have). An identical latest receipt is not written twice (idempotent retry).
@@ -117,15 +122,29 @@ calls `materializeTaskInputs` (also for tasks without `repository:write`).
   lowercase UUID. The directory is created `0700` and each file `0400`, owned by
   the user the channel runs as, which is also the user of the session
   container; nothing is root-owned and nothing is world-readable. The `task-inputs`
-  root and the task directory must be real directories (no symlink, not
-  outside the group dir after `realpath`); otherwise the step fails with
+  root and the task directory must be real, private directories of that user
+  (opened with `O_DIRECTORY|O_NOFOLLOW`); otherwise the step fails with
   `invalid`.
+- **Containment:** the session container runs as the same user and can rename
+  any directory below the group dir, so a checked path proves nothing a moment
+  later. The channel therefore holds the group dir, the `task-inputs` root, the
+  task directory and `.partial` open and performs every create, read, unlink,
+  rename and mode change relative to those handles (`/proc/self/fd/<fd>/<name>`
+  on Linux, after checking that the handle path names the opened directory;
+  where it does not, the step is `invalid`). An ancestor swapped for a link after
+  the checks redirects nothing: writes land in the directory that was checked.
+  Before reporting success the channel checks that the task path still leads,
+  without a link, to that same directory; if it does not, every input is
+  `failed` and a required one blocks with `env_input_invalid`.
 - **Names:** the server's artifact name rule (letters, digits, `.`, `_`, `-`,
   at most 200, no leading `.`, `_`, `-`) is re-checked on the host. A name with a
   separator, a dot-only name, a Windows device name or a duplicate after case
-  folding is `invalid`. Files are created with `O_EXCL|O_NOFOLLOW`; an existing
-  path that is a symlink, a directory or a hard-linked file is `invalid`, never
-  followed.
+  folding is `invalid`. Files are opened with `O_NOFOLLOW|O_NONBLOCK` and must be
+  regular, single-link files of the channel user. A planted entry at a final or
+  partial name is cleared without being followed and the input is downloaded
+  again: a symlink or hard link loses only its name in the task directory (its
+  target is never opened or changed), a directory is renamed into `.partial`
+  as `<name>.displaced.<uuid>`. A planted entry never blocks later attempts.
 - **Authority:** the list comes from `GET /tasks/{id}/inputs` with the channel's
   own worker token. Each entry must repeat the task id and be shared; its id,
   size and hash are the only truth. The channel never trusts a name, path or hash
@@ -134,8 +153,11 @@ calls `materializeTaskInputs` (also for tasks without `repository:write`).
   `.partial/<artifact id>.part` with a bounded buffer (never the whole file in
   memory, never in a log line, event or prompt). An interrupted transfer resumes
   with `Range: bytes=<partial size>-` and a matching `Content-Range`; a server
-  answer that does not honour the range restarts the file. At most 3 attempts
-  per input with backoff; the retry budget is separate from the task's attempt.
+  answer that does not honour the range restarts the file, and a `416` drops the
+  partial. A partial that already holds `size` bytes is hashed without a request.
+  At most 3 failed transfers per input, 0.5 s and then 1 s apart; a transfer
+  idle for 60 s is a failed transfer. This budget is separate from the hash
+  retry below and from the task's attempt.
 - **Verify, then publish:** when the partial file has `size` bytes, its SHA-256
   is computed from disk. Equal to the artifact's: the file is moved to its final
   name (rename, same directory), set `0400`, and the manifest is rewritten
@@ -146,7 +168,9 @@ calls `materializeTaskInputs` (also for tasks without `repository:write`).
   reused without a download; a mismatch is replaced from Argus. `manifest.json`
   records, per input, `artifact_id`, `name`, `size`, `sha256`, `state` and
   the attempt; it holds no content and no token. Orphan `.partial` files of a
-  finished or other task are never read.
+  finished or other task are never read. `manifest.json` and `consumed.json` are
+  read through the held directories, at most 1 MiB, never through a link or from
+  a FIFO; anything else is treated as absent.
 - **Limits:** per input `ARGUS_TASK_INPUT_MAX_BYTES` (default
   `ARGUS_ARTIFACT_MAX_BYTES`, 100 MB), per task `ARGUS_TASK_INPUT_MAX_TOTAL_BYTES`
   (default 256 MiB) and `ARGUS_TASK_INPUT_MAX_FILES` (default 20). Over a limit
@@ -192,7 +216,7 @@ any model runs**, so nothing in the repository is edited:
 | Reason | When |
 | --- | --- |
 | `env_input_unavailable` | the input is missing from the list, not shared any more, Argus is unreachable after the retries, or the content endpoint answers `403`/`404`/`5xx` |
-| `env_input_invalid` | the name or path is unsafe, the destination is a symlink or not private, the hash or size differs after the retry, or the reference's hash differs from the artifact's |
+| `env_input_invalid` | the name or path is unsafe, the `task-inputs` root or task directory is a link, not private or replaced during the step, the hash or size differs after the retry, or the reference's hash differs from the artifact's |
 | `env_input_limit` | a size, total or file-count limit is exceeded |
 
 They join `ENV_BLOCK_REASONS` ([failure classes 3.3](failure-classes.spec.md)),
@@ -204,10 +228,12 @@ directory, content or a token.
 
 ## 3.7 Isolation
 
-- A worker reads only inputs of tasks it holds a lease grant on; another task is
-  `403 not_leased`, an unshared attachment `403 attachment_scope` (unchanged), a
-  released or expired lease `401`/`403` on the next call. The channel asks for
-  nothing else.
+- A worker reads only inputs of tasks it holds or held a lease grant on
+  ([worker read scope](worker-read-scope.spec.md): completing or releasing the
+  lease keeps the read grant); another task is `403 not_leased`, an unshared
+  attachment `403 attachment_scope` (unchanged). Writes, receipts included, are
+  fenced by the current lease: a released or expired holder gets `409`. The
+  channel asks for nothing else.
 - Cross-project: the lease grant is per task, so a worker of another project's
   task has no access. The channel writes only below the group dir of its own
   instance and never reads another task's directory.
@@ -238,10 +264,14 @@ Until then the orchestrator must not rely on a shared attachment for a retry.
 What the repository tests prove, and what they do not:
 
 - API tests: upload with expected size and hash, mismatch and truncation,
-  inputs view, receipts, isolation, required-reference validation.
+  inputs view, receipts (every channel reason code, integrity of a
+  `materialized` receipt), isolation, reads by a former leaseholder,
+  required-reference validation.
 - Channel tests (vitest, in the installed NanoClaw checkout): materialization
   with a real local HTTP server, resume, corruption, symlink and traversal,
-  limits, idempotence, blocking before workspace preparation, prompt contents.
+  limits, idempotence, blocking before workspace preparation, prompt contents,
+  planted links and directories, and an ancestor swapped for a link after the
+  checks (a test hook) leaving every file outside the group dir unchanged.
 - Installed-runtime test (`scripts/task-input-e2e.sh`): a real Argus API on a
   disposable database and the channel built by `provision.sh` in a disposable
   NanoClaw checkout; worker A claims and is released, worker B claims the next

@@ -384,7 +384,10 @@ hash in the prompt ([spec](../../docs/specs/task-inputs.spec.md)). A required
 input (continuation ref `attachment:<id>:<sha256>`) that cannot be verified
 blocks the attempt as `env_input_unavailable`, `env_input_invalid` or
 `env_input_limit`. Limits: `ARGUS_TASK_INPUT_MAX_BYTES`,
-`ARGUS_TASK_INPUT_MAX_TOTAL_BYTES`, `ARGUS_TASK_INPUT_MAX_FILES`.
+`ARGUS_TASK_INPUT_MAX_TOTAL_BYTES`, `ARGUS_TASK_INPUT_MAX_FILES`. The host must
+be Linux: the channel writes through directory handles under `/proc/self/fd`, so
+a session that swaps a directory for a link cannot redirect a write; without
+`/proc` every input fails as `env_input_invalid`.
 
 The channel always advertises the `task-inputs` capability and heartbeat
 feature. Activating it on a fleet is an operator step:

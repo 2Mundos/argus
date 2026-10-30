@@ -9,6 +9,8 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -218,6 +220,25 @@ function run(
   }).then((result) => ({ result, receipts }));
 }
 
+/** Every entry below `dir`: kind, mode and, for files, content. Links are not followed. */
+function snapshot(dir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (d: string) => {
+    for (const name of readdirSync(d)) {
+      const p = path.join(d, name);
+      const st = lstatSync(p);
+      const rel = path.relative(dir, p);
+      if (st.isDirectory()) {
+        out[rel] = `dir ${st.mode & 0o777}`;
+        walk(p);
+      } else if (st.isSymbolicLink()) out[rel] = `link ${readlinkSync(p)}`;
+      else out[rel] = `file ${st.mode & 0o777} ${st.nlink} ${readFileSync(p)}`;
+    }
+  };
+  walk(dir);
+  return out;
+}
+
 const contentRequests = () => fake.requests.filter((r) => r.url.endsWith("/content"));
 
 describe("paths and references", () => {
@@ -335,7 +356,7 @@ describe("materializeTaskInputs", () => {
     });
     expect(readFileSync(path.join(dir, INPUT_MANIFEST), "utf8")).not.toContain("café");
     expect(receipts).toEqual([
-      { artifact_id: item.id, state: "materialized" },
+      { artifact_id: item.id, state: "materialized", sha256: item.sha256, size: bytes.length },
       { artifact_id: item.id, state: "verified", sha256: item.sha256, size: bytes.length },
     ]);
     // Nothing partial is left, and only expected files are in the directory.
@@ -428,9 +449,8 @@ describe("materializeTaskInputs", () => {
     const dir = taskInputsPath(g, taskId);
     expect(existsSync(path.join(dir, "p.diff"))).toBe(false);
     expect(readdirSync(path.join(dir, ".partial"))).toEqual([]);
-    expect(receipts).toEqual([
-      { artifact_id: item.id, state: "failed", reason: "env_input_invalid" },
-    ]);
+    // Receipt reasons are the API's codes (artifacts/inputs.py InputFailure).
+    expect(receipts).toEqual([{ artifact_id: item.id, state: "failed", reason: "corrupt" }]);
   });
 
   it("treats more bytes than the size as corrupt and stops at size + 1", async () => {
@@ -561,11 +581,7 @@ describe("materializeTaskInputs", () => {
         name: null,
       });
       expect(result.inputs.find((i) => i.artifact_id === good.id)?.state).toBe("verified");
-      expect(receipts).toContainEqual({
-        artifact_id: bad.id,
-        state: "failed",
-        reason: "env_input_invalid",
-      });
+      expect(receipts).toContainEqual({ artifact_id: bad.id, state: "failed", reason: "invalid" });
       expect(existsSync(path.join(g, "escape.txt"))).toBe(false);
       const prompt = taskInputLines(taskId, result.inputs).join("\n");
       if (name !== "manifest.json") expect(prompt).not.toContain(name);
@@ -624,7 +640,7 @@ describe("materializeTaskInputs", () => {
     if (!files.result.ok) expect(files.result.error).toContain("ARGUS_TASK_INPUT_MAX_FILES");
   });
 
-  it("refuses a symlinked root, task directory, final file or partial file", async () => {
+  it("refuses a symlinked root or task directory", async () => {
     const outside = group();
     const taskId = randomUUID();
     const item = fake.add(taskId, "p.diff", Buffer.from("payload"));
@@ -644,45 +660,143 @@ describe("materializeTaskInputs", () => {
       ok: false,
       reason: "env_input_invalid",
     });
+    expect(readdirSync(outside)).toEqual([]);
+    expect(contentRequests()).toHaveLength(0);
+  });
 
-    const g3 = group();
-    const d3 = taskInputsPath(g3, taskId);
-    mkdirSync(d3, { recursive: true, mode: 0o700 });
-    writeFileSync(path.join(outside, "target"), "victim");
-    symlinkSync(path.join(outside, "target"), path.join(d3, "p.diff"));
-    expect((await run(g3, taskId, { required })).result).toMatchObject({
-      ok: false,
-      reason: "env_input_invalid",
+  it.each([
+    ["a symlink at the final name", (d: string, _p: string, o: string) => symlinkSync(o, d)],
+    ["a symlink at the partial name", (_d: string, p: string, o: string) => symlinkSync(o, p)],
+    ["a hard link at the final name", (d: string, _p: string, o: string) => linkSync(o, d)],
+    ["a hard link at the partial name", (_d: string, p: string, o: string) => linkSync(o, p)],
+  ])("recovers from %s without touching its target", async (_w, plant) => {
+    const g = group();
+    const outside = group();
+    const taskId = randomUUID();
+    const bytes = Buffer.from("payload");
+    const item = fake.add(taskId, "p.diff", bytes);
+    const dir = taskInputsPath(g, taskId);
+    mkdirSync(path.join(dir, ".partial"), { recursive: true, mode: 0o700 });
+    const target = path.join(outside, "target");
+    writeFileSync(target, "victim");
+    plant(path.join(dir, "p.diff"), path.join(dir, ".partial", `${item.id}.part`), target);
+    // Unlinking a hard link only drops its name here: the target keeps its bytes and mode.
+    chmodSync(target, 0o644);
+    const before = { ...snapshot(outside), target: `file ${0o644} 1 victim` };
+    const { result } = await run(g, taskId, {
+      required: { artifactId: item.id, sha256: item.sha256 },
     });
-    expect(readFileSync(path.join(outside, "target"), "utf8")).toBe("victim");
+    expect(result.ok && result.inputs[0].state).toBe("verified");
+    expect(snapshot(outside)).toEqual(before);
+    const st = lstatSync(path.join(dir, "p.diff"));
+    expect(st.isFile() && st.nlink).toBe(1);
+    expect(readFileSync(path.join(dir, "p.diff")).equals(bytes)).toBe(true);
+    // A second run is not blocked either: the entry is gone for good.
+    expect((await run(g, taskId, { attempt: 2 })).result.ok).toBe(true);
+  });
 
-    const g4 = group();
-    const d4 = taskInputsPath(g4, taskId);
-    mkdirSync(path.join(d4, ".partial"), { recursive: true, mode: 0o700 });
-    symlinkSync(path.join(outside, "target"), path.join(d4, ".partial", `${item.id}.part`));
-    expect((await run(g4, taskId, { required })).result).toMatchObject({
-      ok: false,
-      reason: "env_input_invalid",
+  it("moves a planted directory at the final name aside, contents intact", async () => {
+    const g = group();
+    const taskId = randomUUID();
+    const item = fake.add(taskId, "p.diff", Buffer.from("payload"));
+    const dir = taskInputsPath(g, taskId);
+    mkdirSync(path.join(dir, "p.diff"), { recursive: true, mode: 0o700 });
+    writeFileSync(path.join(dir, "p.diff", "kept"), "kept");
+    const { result } = await run(g, taskId, {
+      required: { artifactId: item.id, sha256: item.sha256 },
     });
-    expect(readFileSync(path.join(outside, "target"), "utf8")).toBe("victim");
+    expect(result.ok && result.inputs[0].state).toBe("verified");
+    expect(readFileSync(path.join(dir, "p.diff"), "utf8")).toBe("payload");
+    const aside = readdirSync(path.join(dir, ".partial"));
+    expect(aside).toHaveLength(1);
+    expect(aside[0]).toMatch(/^p\.diff\.displaced\./);
+    expect(readFileSync(path.join(dir, ".partial", aside[0], "kept"), "utf8")).toBe("kept");
+  });
 
-    const g5 = group();
-    const d5 = taskInputsPath(g5, taskId);
-    mkdirSync(path.join(d5, "p.diff"), { recursive: true });
-    expect((await run(g5, taskId, { required })).result).toMatchObject({
-      ok: false,
-      reason: "env_input_invalid",
+  it("verifies a partial file that is already complete without a request", async () => {
+    const g = group();
+    const taskId = randomUUID();
+    const bytes = patchFixture();
+    const item = fake.add(taskId, "p.diff", bytes);
+    const partial = path.join(taskInputsPath(g, taskId), ".partial", `${item.id}.part`);
+    mkdirSync(path.dirname(partial), { recursive: true, mode: 0o700 });
+    writeFileSync(partial, bytes);
+    const { result } = await run(g, taskId, {
+      required: { artifactId: item.id, sha256: item.sha256 },
     });
+    expect(result.ok).toBe(true);
+    expect(contentRequests()).toHaveLength(0);
+  });
 
-    const g6 = group();
-    const d6 = taskInputsPath(g6, taskId);
-    mkdirSync(d6, { recursive: true, mode: 0o700 });
-    writeFileSync(path.join(outside, "hard"), "payload");
-    linkSync(path.join(outside, "hard"), path.join(d6, "p.diff"));
-    expect((await run(g6, taskId, { required })).result).toMatchObject({
-      ok: false,
-      reason: "env_input_invalid",
+  it("restarts from byte 0 when a complete partial file holds other bytes", async () => {
+    const g = group();
+    const taskId = randomUUID();
+    const bytes = patchFixture();
+    const item = fake.add(taskId, "p.diff", bytes);
+    const partial = path.join(taskInputsPath(g, taskId), ".partial", `${item.id}.part`);
+    mkdirSync(path.dirname(partial), { recursive: true, mode: 0o700 });
+    const wrong = Buffer.from(bytes);
+    wrong[0] ^= 1;
+    writeFileSync(partial, wrong);
+    const { result } = await run(g, taskId, {
+      required: { artifactId: item.id, sha256: item.sha256 },
     });
+    expect(result.ok).toBe(true);
+    expect(contentRequests().map((r) => r.range)).toEqual([null]);
+    expect(readFileSync(path.join(taskInputsPath(g, taskId), "p.diff")).equals(bytes)).toBe(true);
+  });
+
+  it("sends only the API's receipt reason codes", async () => {
+    const g = group();
+    const taskId = randomUUID();
+    const gone = fake.add(taskId, "gone.bin", Buffer.from("x"), { status: 404 });
+    const big = fake.add(taskId, "big.bin", Buffer.alloc(11, 1));
+    const bad = fake.add(taskId, "bad.bin", Buffer.from("abc"), { corrupt: Infinity });
+    const odd = fake.add(taskId, ".odd", Buffer.from("y"));
+    const { receipts } = await run(g, taskId, {
+      limits: { maxBytes: 10, maxTotalBytes: 100, maxFiles: 5 },
+    });
+    const reasons = Object.fromEntries(
+      receipts.filter((r) => r.state === "failed").map((r) => [r.artifact_id, r.reason]),
+    );
+    expect(reasons).toEqual({
+      [gone.id]: "unavailable",
+      [big.id]: "limit",
+      [bad.id]: "corrupt",
+      [odd.id]: "invalid",
+    });
+  });
+
+  it.each([
+    ["the task inputs root", (g: string, _t: string) => path.join(g, TASK_INPUTS_DIR)],
+    ["the task directory", (g: string, t: string) => taskInputsPath(g, t)],
+  ])("never writes outside when %s is swapped for a link after the checks", async (_w, swapped) => {
+    const g = group();
+    const outside = group();
+    const taskId = randomUUID();
+    const item = fake.add(taskId, "p.diff", patchFixture());
+    // What the swapped link leads to: a look-alike tree outside the group dir, with victims
+    // under the names the channel writes, unlinks or replaces.
+    const root = path.join(outside, TASK_INPUTS_DIR);
+    const lookAlike = path.join(root, taskId);
+    mkdirSync(path.join(lookAlike, ".partial"), { recursive: true, mode: 0o700 });
+    chmodSync(root, 0o700);
+    for (const name of ["p.diff", INPUT_CONSUMED, `.${INPUT_MANIFEST}.${process.pid}.tmp`])
+      writeFileSync(path.join(lookAlike, name), "victim");
+    writeFileSync(path.join(lookAlike, ".partial", `${item.id}.part`), "victim");
+    const before = snapshot(outside);
+    const target = swapped(g, taskId);
+    const lookAlikeOf = target === taskInputsPath(g, taskId) ? lookAlike : root;
+    const { result } = await run(g, taskId, {
+      required: { artifactId: item.id, sha256: item.sha256 },
+      afterDirsChecked: async () => {
+        renameSync(target, `${target}.moved`);
+        symlinkSync(lookAlikeOf, target);
+      },
+    });
+    expect(snapshot(outside)).toEqual(before);
+    // The path no longer names the directory the channel holds: the attempt is refused.
+    expect(result).toMatchObject({ ok: false, reason: "env_input_invalid", artifactId: item.id });
   });
 
   it("refuses a task directory that is not private", async () => {
@@ -880,6 +994,43 @@ describe("the verifier and the consumed relay", () => {
     forge({ task_id: taskId, attempt: 2, inputs: [entry, entry] });
     expect(await consumedReceipts(dir)).toHaveLength(1);
     forge("not json at all {");
+    expect(await consumedReceipts(dir)).toEqual([]);
+  });
+
+  it("ignores a consumed.json or manifest that is oversized, a FIFO or a link", async () => {
+    const { dir, item, bytes, taskId } = await materialized();
+    const entry = { artifact_id: item.id, size: bytes.length, sha256: item.sha256 };
+    const good = JSON.stringify({ task_id: taskId, attempt: 2, inputs: [entry] });
+    const file = path.join(dir, INPUT_CONSUMED);
+    writeFileSync(file, good + " ".repeat(1024 * 1024));
+    expect(await consumedReceipts(dir)).toEqual([]);
+    rmSync(file);
+    execFileSync("mkfifo", [file]);
+    expect(await consumedReceipts(dir)).toEqual([]);
+    rmSync(file);
+    const elsewhere = path.join(group(), "consumed.json");
+    writeFileSync(elsewhere, good);
+    symlinkSync(elsewhere, file);
+    expect(await consumedReceipts(dir)).toEqual([]);
+    rmSync(file);
+    writeFileSync(file, good);
+    expect(await consumedReceipts(dir)).toHaveLength(1);
+    // A manifest that is not a plain file of ours leaves nothing to relay.
+    const manifest = path.join(dir, INPUT_MANIFEST);
+    rmSync(manifest);
+    execFileSync("mkfifo", [manifest]);
+    expect(await consumedReceipts(dir)).toEqual([]);
+  });
+
+  it("relays nothing when the task directory path is a link", async () => {
+    const { dir, item, bytes, taskId } = await materialized();
+    const entry = { artifact_id: item.id, size: bytes.length, sha256: item.sha256 };
+    writeFileSync(
+      path.join(dir, INPUT_CONSUMED),
+      JSON.stringify({ task_id: taskId, attempt: 2, inputs: [entry] }),
+    );
+    renameSync(dir, `${dir}.moved`);
+    symlinkSync(`${dir}.moved`, dir);
     expect(await consumedReceipts(dir)).toEqual([]);
   });
 
