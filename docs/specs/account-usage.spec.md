@@ -189,6 +189,10 @@ account lease and must preserve the document structure and JSON value types.
   freshly refreshed so the client does not rotate it proactively. If a rotation
   happens anyway, the rotated document is written back and
   `account.credential_rotated` is recorded.
+- **No probe reads auth state.** The probes read usage and quota only. Polling
+  does not check that a credential is valid, and a credential's validity is not
+  inferred from probe results (the outcome codes above describe the probe, not
+  the credential).
 - **Requests.** Each Claude and OpenRouter read is one GET (Cursor: three POSTs, 15 s in all) with a 15 s timeout,
   to the provider's own host, no redirects. The credential goes only in the
   `Authorization` header of that request and never into a log, event, error or
@@ -240,6 +244,20 @@ account lease and must preserve the document structure and JSON value types.
   worker_report`) and
   `last_probe`. Credit makes the status `known` while fresh. No figure is ever
   invented: `unknown` has no windows, and unknown is never zero.
+- The account read model carries two auth-health timestamps. Neither is a
+  column, and neither is ever shown as healthy: a timestamp is evidence of a
+  past event, not a verdict on the current state, and the credential state is a
+  separate fact.
+  - `last_accepted_at` is derived on read: `MAX(at)` over `account_usage` rows
+    where `account_id = ?`, `measurement = 'measured'` and `output_tokens > 0`.
+    `not_reported` placeholders never match, and a NULL output never matches.
+    It is the report time, accurate to about a run; a late report rewrites `at`
+    (§3.10), so it can move forward but never back.
+  - `last_rejected_at` is derived on read from `events`: `MAX(at)` where
+    `subject_type = 'account'`, `subject_id = ?` and `kind =
+    'account.auth_rejected'`, the event written when the provider rejects the
+    stored credential (see the Codex and Claude account specs). Rate limits and
+    quota never appear in it.
 - `GET /api/accounts/usage?from&to&bucket=hour|day&tz=<IANA>[&account_id]`
   returns totals and a time series per account.
   - Buckets follow the viewer's timezone, so "Today" matches their clock.

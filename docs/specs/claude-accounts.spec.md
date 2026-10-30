@@ -115,6 +115,17 @@ let the operator **renew** an existing one without recreating it:
   happens inside a write.
 - **Docker mode** (image) runs `--cap-drop=ALL`, `no-new-privileges`, the caller's
   UID, a memory/pids limit and no Docker socket.
+- **Auth rejection signal.** The Claude rejection signal is the SDK assistant
+  message field `assistant.error === "authentication_failed"`. Other values
+  (`rate_limit`, `billing_error`, `oauth_org_not_allowed`, `account_on_hold`)
+  are not credential rejections and are excluded. The pinned Claude Code is
+  2.1.296 (`engines/smoke.sh` expects `2.1.296 (Claude Code)`). The value is in
+  that binary's message schema but not in the shipped public typings, and live
+  emission for an expired or revoked login in `-p` stream mode is **unverified**:
+  no forced-failure run has been done, and one needs a credentialed run on a
+  disposable credential. On such a rejection the channel records
+  `account.auth_rejected` (see the account-selection spec, §3.6, and the Codex
+  spec's structured auth-expiry signal).
 
 # 4. Open Questions
 

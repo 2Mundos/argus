@@ -220,6 +220,12 @@ isolation or sandbox/TLS restrictions.
     config; the NanoClaw host does not provide it (the channel has no handle on
     the agent's log, and the runner already emits the structured field), so it
     gets the notice and structured cases.
+    Next to the `rate_limit` branch, a structured `providerFailure
+    {provider:"claude", kind:"auth_expired"}` on an `anthropic` account, mapped
+    from `assistant.error === "authentication_failed"`, records
+    `account.auth_rejected` for that account. It does not exhaust the account (no
+    cooldown); the reason is fixed, never raw text. Live emission of that SDK
+    value is unverified (see the Claude accounts spec, §3).
   - *Runner.* The NanoClaw agent runner, as `install.sh` patches it, turns a
     failed Claude turn whose result is exactly one
     `^You('|’)ve hit your (session|usage|weekly) limit · resets .+$` line, or
