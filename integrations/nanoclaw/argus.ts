@@ -430,6 +430,8 @@ export interface ArgusTask {
   /** Effective model policy for the task's project at claim (settings.spec.md 3.4). */
   model_policy?: Record<string, Record<string, string[]>> | null;
   model_policy_revision?: string | null;
+  /** Steers the previous attempt was sent but never acknowledged (task steering spec 3.3). */
+  steer_unknown?: number;
 }
 
 export type ContinuationPhase = "implement" | "resume" | "reconcile" | "qa" | "close_evidence";
@@ -974,6 +976,15 @@ function contractLines(task: ArgusTask): string[] {
   ];
 }
 
+/** Trusted and numeric only: the unconfirmed steers' text is never repeated (task steering spec 3.6). */
+export function steerUnknownLines(task: ArgusTask): string[] {
+  const n = task.steer_unknown;
+  if (typeof n !== "number" || !Number.isSafeInteger(n) || n <= 0) return [];
+  return [
+    `Operator steers: ${n} steer(s) sent to the previous attempt were never confirmed. They may or may not have been applied, and their text is not repeated. Do not assume either way: check the work, and ASK if the direction matters.`,
+  ];
+}
+
 /** What the worker's environment holds, from the readiness Argus verified; never a guess. */
 export function runtimeTaskLines(rt: RuntimeSelection): string[] {
   if (rt.state !== "ready" || !rt.image) return [];
@@ -1053,6 +1064,7 @@ export function renderTask(
     frameUntrustedTaskData(untrusted),
     "",
     ...contractLines(task),
+    ...steerUnknownLines(task),
     "",
     "Delegated implementation (mandatory): run all coding/model work through /usr/local/bin/argus-delegate EXECUTOR.",
     "EXECUTOR is the leased CLI role (claude | codex | opencode | agent | copilot). When Cursor is the selected coding executor, use EXECUTOR agent. For GitHub Copilot use EXECUTOR copilot (the model is always explicit).",

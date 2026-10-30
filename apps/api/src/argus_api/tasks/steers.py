@@ -17,7 +17,9 @@ MAX_PENDING = 10
 MIN_INTERVAL_S = 1
 PREVIEW_CHARS = 200
 
-SteerState = Literal["pending", "delivered", "cancelled", "expired"]
+# `unknown`: a heartbeat carried it, no ack came back, and the attempt ended. The
+# channel may have injected it; it is terminal and never sent again (3.3).
+SteerState = Literal["pending", "delivered", "cancelled", "expired", "unknown"]
 
 
 class SteerCreate(BaseModel):
@@ -39,6 +41,7 @@ class Steer(BaseModel):
     actor: str
     state: SteerState
     created_at: datetime
+    dispatched_at: datetime | None = None
     delivered_at: datetime | None = None
     closed_at: datetime | None = None
 
@@ -219,7 +222,9 @@ async def acknowledge(tx: Tx, agent_id: str, steer_ids: list[str]) -> None:
 
 
 async def pending_for(tx: Tx, leases: list[tuple[str, int]]) -> list[SteerNotice]:
-    """Pending steers for leases renewed in this heartbeat, oldest first."""
+    """Pending steers for leases renewed in this heartbeat, oldest first. The first
+    heartbeat that carries a steer records `dispatched_at`, in its own transaction,
+    so an answer lost on the way still leaves the dispatch on record (3.4)."""
     notices: list[SteerNotice] = []
     for task_id, attempt in leases:
         async with tx.conn.execute(
@@ -228,26 +233,66 @@ async def pending_for(tx: Tx, leases: list[tuple[str, int]]) -> list[SteerNotice
             (task_id, attempt),
         ) as cur:
             rows = await cur.fetchall()
+        await tx.conn.execute(
+            "UPDATE task_steers SET dispatched_at = ? WHERE task_id = ?"
+            " AND attempt = ? AND state = 'pending' AND dispatched_at IS NULL",
+            (ts(tx.now), task_id, attempt),
+        )
         notices.extend(_notice(r) for r in rows)
     return notices
 
 
-async def expire_attempt(tx: Tx, task_id: str, attempt: int) -> None:
-    """The attempt left `claimed`. Pending steers for it are never delivered."""
-    await tx.conn.execute(
-        "UPDATE task_steers SET state = 'expired', closed_at = ?"
-        " WHERE task_id = ? AND attempt = ? AND state = 'pending'",
-        (ts(tx.now), task_id, attempt),
-    )
+async def close_attempt(tx: Tx, task_id: str, attempt: int) -> int:
+    """The attempt left `claimed`: close its pending steers (3.3). One never carried
+    expires; one carried but not acknowledged becomes `unknown`, and the attempt
+    keeps that count for the next one. Returns the count."""
+    unknown = await _close(tx, "task_id = ? AND attempt = ?", (task_id, attempt))
+    if unknown:
+        # `attempt` restarts at 1 after a retry: the newest row is this attempt.
+        await tx.conn.execute(
+            "UPDATE task_attempts SET steer_unknown = steer_unknown + ?"
+            " WHERE id = (SELECT max(id) FROM task_attempts"
+            " WHERE task_id = ? AND attempt = ?)",
+            (unknown, task_id, attempt),
+        )
+    return unknown
 
 
-async def expire_task(tx: Tx, task_id: str) -> None:
-    """Drop every pending steer on the task (a retry starts clean)."""
-    await tx.conn.execute(
-        "UPDATE task_steers SET state = 'expired', closed_at = ?"
-        " WHERE task_id = ? AND state = 'pending'",
-        (ts(tx.now), task_id),
+async def close_task(tx: Tx, task_id: str) -> None:
+    """Close every pending steer left on the task (a retry starts clean)."""
+    await _close(tx, "task_id = ?", (task_id,))
+
+
+async def _close(tx: Tx, where: str, args: tuple[object, ...]) -> int:
+    closed = ts(tx.now)
+    cur = await tx.conn.execute(
+        "UPDATE task_steers SET state = 'unknown', closed_at = ?"  # noqa: S608 - `where` is code-controlled
+        f" WHERE {where} AND state = 'pending' AND dispatched_at IS NOT NULL",
+        (closed, *args),
     )
+    unknown = cur.rowcount
+    await tx.conn.execute(
+        "UPDATE task_steers SET state = 'expired', closed_at = ?"  # noqa: S608 - `where` is code-controlled
+        f" WHERE {where} AND state = 'pending'",
+        (closed, *args),
+    )
+    return unknown
+
+
+async def previous_unknown(
+    conn: aiosqlite.Connection, task_id: str, attempt: int
+) -> int:
+    """Steers left `unknown` by the attempt just before `attempt` of this task: the
+    next attempt is warned they may have been applied (3.3). Older attempts and other
+    tasks never count."""
+    async with conn.execute(
+        "SELECT steer_unknown FROM task_attempts WHERE task_id = ? AND id < ("
+        " SELECT max(id) FROM task_attempts WHERE task_id = ? AND attempt = ?)"
+        " ORDER BY id DESC LIMIT 1",
+        (task_id, task_id, attempt),
+    ) as cur:
+        row = await cur.fetchone()
+    return row[0] if row else 0
 
 
 async def _task(conn: aiosqlite.Connection, task_id: str) -> aiosqlite.Row:
@@ -279,6 +324,7 @@ def _steer(row: aiosqlite.Row) -> Steer:
         actor=row["actor"],
         state=row["state"],
         created_at=datetime.fromisoformat(row["created_at"]),
+        dispatched_at=_dt(row["dispatched_at"]),
         delivered_at=_dt(row["delivered_at"]),
         closed_at=_dt(row["closed_at"]),
     )

@@ -2,8 +2,13 @@ from pathlib import Path
 
 import aiosqlite
 import pytest
-from argus_api.db import Database, MigrationError
+from api_support import insert_agent
+from argus_api.agents import service as _agents  # noqa: F401 - avoids an import cycle
+from argus_api.db import Database, MigrationError, ts
 from argus_api.db.migrate import Migration, load_migrations
+from argus_api.tasks import service as tasks
+from argus_api.tasks import steers
+from argus_core.tasks import TaskCreate
 
 
 async def _user_version(path: Path) -> int:
@@ -70,3 +75,57 @@ async def test_0004_rebuild_keeps_existing_tokens(tmp_path: Path) -> None:
         rows = [tuple(r) for r in await cur.fetchall()]
     await db.close()
     assert rows == [("t1", "bootstrap", None)]
+
+
+async def test_0057_marks_pending_steers_dispatched(tmp_path: Path) -> None:
+    path = tmp_path / "argus.db"
+    migrations = load_migrations()
+    db = await Database.open(path, migrations=migrations[:56])
+    await insert_agent(db, "a")
+    async with db.write() as tx:
+        task = await tasks.create_task(
+            tx, TaskCreate(project="global", title="t"), "admin:test"
+        )
+        await tasks.claim(tx, "a", [])
+        await tx.conn.execute(
+            "UPDATE agents SET runtime = '{\"features\": [\"steer\"]}' WHERE id = 'a'"
+        )
+        waiting = await steers.create(tx, task.id, "waiting", "admin:test")
+        await tx.conn.execute(
+            "INSERT INTO task_steers (id, task_id, attempt, agent_id, message, actor,"
+            " state, created_at, delivered_at) VALUES ('done', ?, 1, 'a', 'x',"
+            " 'admin:test', 'delivered', ?, ?)",
+            (task.id, ts(tx.now), ts(tx.now)),
+        )
+    await db.close()
+
+    for _ in range(2):  # the upgrade, then a reopen that must change nothing
+        db = await Database.open(path, migrations=migrations)
+        async with db.read() as conn:
+            async with conn.execute(
+                "SELECT id, state, created_at, dispatched_at FROM task_steers"
+                " ORDER BY id"
+            ) as cur:
+                rows = [tuple(r) for r in await cur.fetchall()]
+            async with conn.execute("SELECT steer_unknown FROM task_attempts") as cur:
+                counts = [r[0] for r in await cur.fetchall()]
+        await db.close()
+        assert await _user_version(path) == len(migrations)
+        by_id = {r[0]: r for r in rows}
+        assert by_id["done"][1:] == ("delivered", by_id["done"][2], None)
+        assert by_id[waiting.id][1] == "pending"
+        assert by_id[waiting.id][3] == by_id[waiting.id][2]  # conservatively carried
+        assert counts == [0]
+
+    db = await Database.open(path, migrations=migrations)
+    async with db.write() as tx:
+        await tasks.release(tx, task.id, "admin:test", "operator")
+    async with db.read() as conn:
+        page = await steers.list_steers(conn, task.id, 1)
+        attempts = await tasks.attempt_definitions(conn, task.id)
+    await db.close()
+    assert {s.id: s.state for s in page.items} == {
+        "done": "delivered",
+        waiting.id: "unknown",
+    }
+    assert [a.steer_unknown for a in attempts] == [1]

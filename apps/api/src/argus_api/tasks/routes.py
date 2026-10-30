@@ -256,6 +256,7 @@ async def claim_task(
                     switch = await service.attempt_model_switch(
                         conn, task.id, task.attempt
                     )
+                    unknown = await steers.previous_unknown(conn, task.id, task.attempt)
                 if engine_lease is not None:
                     engine_lease = await with_local_context(request, engine_lease)
                 return ClaimedTask(
@@ -265,6 +266,7 @@ async def claim_task(
                     model_policy=policy,
                     model_policy_revision=revision,
                     model_switch=switch,
+                    steer_unknown=unknown,
                 )
             remaining = deadline - loop.time()
             try:
@@ -400,7 +402,8 @@ async def create_steer(
     task_id: str, body: steers.SteerCreate, db: DbDep, caller: ManagerDep
 ) -> steers.Steer:
     """Send an instruction to the attempt in flight. The assignee must report
-    the `steer` feature; the message expires if the attempt ends first."""
+    the `steer` feature. If the attempt ends first, the message expires, or ends
+    `unknown` (it may have been delivered) when a heartbeat had carried it."""
     async with db.write() as tx:
         return await steers.create(tx, task_id, body.message, caller.actor)
 

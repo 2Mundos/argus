@@ -15,7 +15,7 @@ without restarting it.
 In scope:
 
 - `POST /api/tasks/{id}/steers` and the steer lifecycle (pending, delivered,
-  cancelled, expired), stored per attempt.
+  cancelled, expired, unknown), stored per attempt.
 - Delivery through the existing heartbeat, with an acknowledgement, so no new
   connection or loop is needed on the worker.
 - The NanoClaw channel (`integrations/nanoclaw/argus.ts`) injecting a steer into the
@@ -149,6 +149,11 @@ edit](task-edit.spec.md).
   re-injected). A steer for any other task or
   attempt is acknowledged without injection (the server expires it anyway when the
   attempt ends; acknowledging avoids repeating it until then).
+- **Previous attempt's unknown steers.** When the claim carries `steer_unknown > 0`
+  (3.3), the trusted task context, outside any frame, adds one line with the number
+  only: that many operator steers sent to the previous attempt were never
+  confirmed, may or may not have been applied, and are not repeated; the agent
+  checks the work and asks if the direction matters. The text is never re-sent.
 - **Acknowledge after injection.** The id is acknowledged only once `onInbound`
   resolves; a failure is logged and retried on the next heartbeat.
 - **Text the agent sees.** A fixed trusted header written by the channel, then the
@@ -181,7 +186,8 @@ edit](task-edit.spec.md).
 - `task.steered` (actor: the sender; data `{steer_id, attempt, chars, preview}`,
   `preview` the first 200 characters), `task.steer_delivered` (actor: the agent;
   data `{steer_id, attempt}`), `task.steer_cancelled` (actor: the canceller).
-  Expiry records no event of its own; the attempt-ending event already explains it.
+  Expiry and `unknown` record no event of their own; the attempt-ending event
+  already explains them.
 - They are ordinary events: stored, streamed on `/api/events/stream`, readable with
   `GET /events`, with the task's read scope ([worker read
   scope](worker-read-scope.spec.md)). The full message is read with 3.8, not from
@@ -190,8 +196,9 @@ edit](task-edit.spec.md).
 ## 3.8 Reading: `GET /api/tasks/{id}/steers?attempt=`
 
 - Manager token. `attempt` defaults to the current one. Answer `{attempt, items:
-  [{id, attempt, message, actor, state, created_at, delivered_at, closed_at}]}`,
-  oldest first.
+  [{id, attempt, message, actor, state, created_at, dispatched_at, delivered_at,
+  closed_at}]}`, oldest first.
+- `GET /api/tasks/{id}/attempts` carries each attempt's `steer_unknown` (3.3).
 - MCP, orchestrator and admin scopes: `steer_task(task_id, message)`,
   `list_task_steers(task_id, attempt?)` and `cancel_steer(task_id, steer_id)`,
   with the REST permissions, added to the [MCP operations](mcp-operations.spec.md)
@@ -204,7 +211,8 @@ edit](task-edit.spec.md).
   that button opens it ("Steer this attempt…", Enter sends, Shift+Enter breaks a
   line); sending or toggling Steer again closes it. The attempt's steers list
   (under the bar when non-empty) shows state: `pending` (with Cancel),
-  `delivered` (with the time), `cancelled`, `expired`. Steers also appear in the
+  `delivered` (with the time), `cancelled`, `expired`, and `unknown` as "unknown:
+  may have been delivered". Steers also appear in the
   task's event timeline. With no claimed task, no Steer button.
 - **Task actions row** (task view): a **Steer** toggle next to Edit and Cancel when
   `task.state` is `claimed` and the attempt shown is the current one (attempt > 0),
@@ -248,6 +256,12 @@ edit](task-edit.spec.md).
 - Backwards compatible: the new heartbeat fields are optional both ways, and a
   worker that does not report `features: ["steer"]` is never sent one.
 - Migration `0043_task_steers.sql` is additive: one new table and its index.
+- Migration `0057_steer_unknown.sql` rebuilds `task_steers` (SQLite cannot widen a
+  `CHECK`) with `dispatched_at` and the `unknown` state, and adds
+  `task_attempts.steer_unknown` (default 0). Dispatch was never recorded before it,
+  so a steer still `pending` at upgrade is treated as dispatched
+  (`dispatched_at = created_at`) and ends `unknown`, never `expired`: the safe side
+  when it cannot be known whether a heartbeat carried it.
 
 # 6. Implementation Consequences
 
@@ -268,3 +282,14 @@ receives no steers.
 heartbeat answer with the framed text; acknowledge after injection; de-duplicate
 by id; tests in `argus.test.ts` for framing (a forged end marker stays inside the
 frame), de-duplication, ack-after-success and the foreign-attempt case.
+
+**Unknown outcomes** (3.3, 3.4, 3.6; implemented): migration `0057_steer_unknown.sql`;
+`dispatched_at` written by `pending_for` in the heartbeat transaction, for renewed
+leases only; `close_attempt` in the single leave-`claimed` path of
+`tasks/service.py` (and `close_task` on retry) closing `pending` steers as `expired`
+or `unknown` and counting them on `task_attempts`; `steer_unknown` on the claim and
+on `TaskAttempt`; regenerated client; the dashboard label; the channel's warning
+line. Tests cover a lost heartbeat answer, a lost ack, every exit from `claimed`, a
+delayed ack, the previous-attempt count (not older attempts, not other tasks, across
+a retry), REST/MCP/OpenAPI, the upgrade, and the installed channel end to end
+(`scripts/steer-unknown-e2e.sh`).
