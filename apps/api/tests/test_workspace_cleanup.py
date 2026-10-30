@@ -13,6 +13,7 @@ import os
 import subprocess
 from collections.abc import Generator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import BinaryIO
 
 import pytest
@@ -1528,3 +1529,78 @@ def test_mcp_tools(client: TestClient) -> None:
     assert page["total"] == 0
     denied = tool(client, token, "run_workspace_cleanup", dry_run=False)
     assert "error" in denied
+
+
+# -- directory removability (spec 3.3) -----------------------------------------------
+
+
+def _dir_stat(uid: int, gid: int, mode: int) -> SimpleNamespace:
+    return SimpleNamespace(st_uid=uid, st_gid=gid, st_mode=0o040000 | mode)
+
+
+@pytest.mark.parametrize(
+    ("owner", "mode", "gid_in_groups", "expected"),
+    [
+        (1000, 0o500, False, True),  # owned: the delete may chmod it
+        (2000, 0o755, False, False),
+        (2000, 0o777, False, True),
+        (2000, 0o700, False, False),
+        (2000, 0o770, True, True),
+        (2000, 0o750, False, False),
+        (2000, 0o770, False, False),  # group bits do not apply without membership
+        (2000, 0o077, True, False),  # owner bits must be rwx
+    ],
+)
+def test_can_remove_dir_rule(
+    owner: int, mode: int, gid_in_groups: bool, expected: bool
+) -> None:
+    st = _dir_stat(owner, 50, mode)
+    assert wc._can_remove_dir(st, 1000, {50} if gid_in_groups else {7}) is expected
+
+
+def test_can_remove_dir_root_always_true() -> None:
+    assert wc._can_remove_dir(_dir_stat(2000, 50, 0o000), 0, set())
+
+
+def test_measure_flags_foreign_dir_without_rwx(tmp_path: Path) -> None:
+    (tmp_path / "inst" / "sub").mkdir(parents=True)
+    (tmp_path / "inst" / "sub" / "f").write_text("x")
+    (tmp_path / "inst" / "sub").chmod(0o755)
+    fake = os.geteuid() + 1
+    assert wc.measure(str(tmp_path), "inst", os.geteuid()).unremovable_dir is False
+    # Simulate a foreign uid: every directory must then be rwx for its class.
+    for d in (tmp_path / "inst", tmp_path / "inst" / "sub"):
+        d.chmod(0o777)
+    assert wc.measure(str(tmp_path), "inst", fake).unremovable_dir is False
+    (tmp_path / "inst" / "sub").chmod(0o755)
+    assert wc.measure(str(tmp_path), "inst", fake).unremovable_dir is True
+
+
+async def test_nested_tree_owned_by_service_user_is_cleaned(env: Env) -> None:
+    path = await env.instance(A)
+    deep = path / "a" / "b" / "c"
+    deep.mkdir(parents=True)
+    (deep / "f.txt").write_text("x")
+    (path / "a" / "g.txt").write_text("y")
+    (path / "a" / "b").chmod(0o555)  # owned, read-only: the delete chmods it
+    run = await env.run()
+    assert run.cleaned == 1
+    assert not path.exists()
+
+
+async def test_unremovable_dir_blocks_wip_instance_untouched(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = await env.instance(A)
+    repo = make_wip_repo(env.tmp, path)
+    (path / "locked").mkdir()
+    before = snapshot(repo)
+    monkeypatch.setattr(wc, "_can_remove_dir", lambda st, uid, groups: False)
+    run = await env.run()
+    assert run.cleaned == 0
+    row = await env.entry(A)
+    assert (row["status"], row["reason"]) == ("blocked", "permission_denied")
+    assert row["error"] == "dir_not_writable"
+    assert snapshot(repo) == before
+    assert (path / "locked").exists()
+    assert not any(env.archive.iterdir())
