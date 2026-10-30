@@ -21,8 +21,9 @@ Invariants:
 
 import asyncio
 import logging
+import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -52,6 +53,11 @@ from argus_api.ops import LoopStats
 log = logging.getLogger(__name__)
 
 
+def default_start_cap() -> int:
+    """Starts in flight at once: half the logical CPUs of this host, at least 1."""
+    return max(1, (os.cpu_count() or 1) // 2)
+
+
 @dataclass(frozen=True)
 class FleetSettings:
     argus_url: str | None  # how containers reach Argus; required to start anything
@@ -60,6 +66,8 @@ class FleetSettings:
     start_backoff_max: timedelta = timedelta(minutes=5)
     # The manager's model policy file; set, it is passed to new NanoClaw instances.
     model_policy_path: Path | None = None
+    # Reconciler-wide cap on `reserved` instances no listing has confirmed yet.
+    max_starts_in_flight: int = field(default_factory=default_start_cap)
 
 
 @dataclass(frozen=True)
@@ -137,6 +145,15 @@ async def _decide(
     ) as cur:
         instances = list(await cur.fetchall())
 
+    # Existing reservations hold their slots; only the oldest `cap` of them
+    # (across all pools) may retry their start, so a stuck one never starves.
+    async with tx.conn.execute(
+        "SELECT id FROM instances WHERE state = 'reserved'"
+        " ORDER BY created_at, id LIMIT ?",
+        (settings.max_starts_in_flight,),
+    ) as cur:
+        may_start = {r["id"] for r in await cur.fetchall()}
+
     known = set()
     for inst in instances:
         known.add(inst["id"])
@@ -160,7 +177,7 @@ async def _decide(
                     tx, inst["id"], f"exited while starting ({obs.exit_code})"
                 )
                 actions.append(_Stop(obs.ref))  # remove the exited container
-            elif _start_due(inst, tx, settings):
+            elif inst["id"] in may_start and _start_due(inst, tx, settings):
                 actions.append(_Start(inst["id"]))
         elif state == "running":
             if obs is None or obs.status == "exited":
@@ -250,7 +267,14 @@ async def _scale(tx: Tx, pool: Pool, settings: FleetSettings) -> list[_Start | _
                 "ARGUS_PUBLIC_URL is not set: containers cannot reach Argus",
             )
             return []
-        for _ in range(desired - len(live)):
+        # Reservations anywhere (this pass included) are starts in flight.
+        async with tx.conn.execute(
+            "SELECT count(*) AS n FROM instances WHERE state = 'reserved'"
+        ) as cur:
+            row = await cur.fetchone()
+        in_flight = row["n"] if row else 0
+        room = max(0, settings.max_starts_in_flight - in_flight)
+        for _ in range(min(desired - len(live), room)):
             instance_id = str(uuid4())
             await tx.conn.execute(
                 "INSERT INTO instances (id, pool, provider_ref, state, created_at)"
@@ -396,7 +420,7 @@ async def _act(
             settings.argus_url,
             model_policy=_model_policy(pool, settings),
         )
-        ref = await target.start(spec)
+        await target.start(spec)
     except TargetError as exc:
         # Possibly ambiguous: the next pass looks the instance up by name before
         # starting again, so this can never create a second container.
@@ -407,14 +431,10 @@ async def _act(
             )
             await _set_status(tx, pool_name, "failing", str(exc))
         return
-    async with db.write() as tx:
-        async with tx.conn.execute(
-            "SELECT state FROM instances WHERE id = ?", (action.instance_id,)
-        ) as cur:
-            row = await cur.fetchone()
-        if row is not None and row["state"] == "reserved":
-            await _mark_running(tx, action.instance_id, ref)
-        if pool.status == "failing":
+    # The instance stays `reserved` (an in-flight start) until a provider
+    # listing confirms it.
+    if pool.status == "failing":
+        async with db.write() as tx:
             await _set_status(tx, pool_name, "ok", None)
 
 
