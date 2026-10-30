@@ -117,7 +117,8 @@ Getting a first account, worker and orchestrator is the
 - **Outbound:** `deliver()` posts to `POST /api/agents/me/chat/{conversation_id}`,
   which stores the reply and marks the human messages of that turn `answered`.
 - **Trust:** a human chat message is a **trusted operator instruction** from an
-  admin, framed as such. Everything the orchestrator reads through tools (task
+  admin, framed as such. A `system` message is a server notice, not an admin
+  instruction. Everything the orchestrator reads through tools (task
   specs, results, artifacts, knowledge) stays untrusted DATA
   ([prompt-data isolation](prompt-data-isolation.spec.md)).
 - **Offline:** while the orchestrator is not live (disabled, starting, lost, every
@@ -135,6 +136,14 @@ Getting a first account, worker and orchestrator is the
   `wait_for_events(inbox=true)` → repeat. Proactive posts ("3 reviews wait on a
   human", "the tasks from *Fix login* are done") are a `deliver()` to Updates.
   Updates also accepts admin messages.
+- **Inbox wake.** When a decision opens with audience `any` or `orchestrator` and
+  `orchestrator.enabled` is true, Argus queues one message on Updates (`author:
+  system`, `state: queued`) so the chat long-poll delivers it at once. The message
+  names the decision id, kind and audience, and does not copy the question text.
+  A notice already queued is not duplicated; once that notice is claimed, the next
+  such decision queues another. Audience `human` does not wake it. If Updates
+  already holds 20 queued messages, the decision still opens and the notice is
+  skipped. The channel frames that `system` message as a server notice.
 - At most **one turn in flight per conversation**; later messages queue behind it.
   At most `orchestrator.max_concurrent_turns` (default 2) conversation turns run at
   once, plus the Updates loop.
@@ -153,8 +162,8 @@ Getting a first account, worker and orchestrator is the
   `recycle_instance` with `requeue=true`, and `drain_agent`. It keeps read-only
   fleet diagnosis and `recycle_instance` without requeue. Hiding a tool is not
   access control; the check is in the route.
-- It answers only `orchestrator`-audience decisions; `human` ones stay for admins
-  (unchanged).
+- It answers `orchestrator` and `any` audience decisions. `human` ones stay for
+  admins. An `any` decision it cannot settle stays open for an admin.
 - Its actions are attributed `orchestrator:<agent id>` as today, and events carry
   `actor_internal: true` when the agent belongs to the system pool, so the Events
   view can filter "what the internal orchestrator did".
@@ -274,8 +283,9 @@ cap; events; the `#chat` route, conversation list, thread, composer, status
 header and cost; the Cost tab row; regenerated `openapi.json` and `schema.d.ts`.
 Tests: role minting, every refusal, enable/disable converging the pool, queueing
 while offline, per-conversation ordering and the concurrency cap, limits,
-truncation, redaction, the cap pausing and resuming, and `origin_conversation_id`
-on created tasks.
+truncation, redaction, the cap pausing and resuming, `origin_conversation_id`
+on created tasks, and an inbox decision of audience `any` or `orchestrator`
+waking Updates once while the orchestrator is enabled.
 
 **NanoClaw channel:** a session per conversation, inbound long-poll with
 idempotent ack, `deliver()` to the agent chat route, per-turn usage, resume then

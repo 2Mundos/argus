@@ -3,12 +3,16 @@ from pathlib import Path
 
 import pytest
 from api_support import DONE, FakeClock, insert_agent
+from argus_api import orchestrator
 from argus_api.auth import Identity
+from argus_api.conversations import service as conversations
 from argus_api.db import Database
 from argus_api.decisions import service as decisions
+from argus_api.decisions import store as decision_store
 from argus_api.decisions import views as decision_views
 from argus_api.errors import ConflictError, ForbiddenError, ValidationFailedError
 from argus_api.main import app
+from argus_api.settings import service as settings_service
 from argus_api.tasks import service as tasks
 from argus_core.auth import Scope
 from argus_core.decisions import (
@@ -134,6 +138,114 @@ async def test_audiences(db: Database) -> None:
     await answer(db, asked.id, caller=ADMIN, text="x")
     with pytest.raises(ConflictError):  # already answered
         await answer(db, asked.id, text="again")
+
+
+async def _inbox_wakes(db: Database) -> list[tuple[str, str]]:
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT body, state FROM messages WHERE author = 'system'"
+            " AND substr(body, 1, ?) = ? ORDER BY created_at",
+            (len(conversations.INBOX_WAKE_PREFIX), conversations.INBOX_WAKE_PREFIX),
+        ) as cur,
+    ):
+        return [(r["body"], r["state"]) for r in await cur.fetchall()]
+
+
+async def test_inbox_decision_wakes_the_internal_orchestrator(
+    db: Database, tmp_path: Path
+) -> None:
+    path = tmp_path / "models.json"
+    for _ in range(4):
+        await create(db)
+    question = "which-region-token-9f3a"
+
+    task = await claim(db)
+    async with db.write() as tx:
+        await decisions.ask(
+            tx, A, task.id, Ask(attempt=task.attempt, question=question)
+        )
+    assert await _inbox_wakes(db) == []  # orchestrator is off
+
+    async with db.write() as tx:
+        await settings_service.put_setting(
+            tx, path, "global", "orchestrator.enabled", True, "admin:t"
+        )
+        await orchestrator.ensure_updates_conversation(tx, "admin:t")
+
+    task = await claim(db)
+    async with db.write() as tx:
+        asked = await decisions.ask(
+            tx,
+            A,
+            task.id,
+            Ask(attempt=task.attempt, question=question, audience=Audience.ANY),
+        )
+    wakes = await _inbox_wakes(db)
+    assert len(wakes) == 1
+    body, state = wakes[0]
+    assert state == "queued"
+    assert asked.id in body and "kind: question" in body and "audience: any" in body
+    assert question not in body
+
+    task = await claim(db)
+    async with db.write() as tx:
+        await decisions.ask(
+            tx,
+            A,
+            task.id,
+            Ask(
+                attempt=task.attempt,
+                question="again",
+                audience=Audience.ORCHESTRATOR,
+            ),
+        )
+    assert len(await _inbox_wakes(db)) == 1  # one queued notice is enough
+
+    task = await claim(db)
+    async with db.write() as tx:
+        human = await decisions.ask(
+            tx,
+            A,
+            task.id,
+            Ask(attempt=task.attempt, question=question, audience=Audience.HUMAN),
+        )
+    wakes = await _inbox_wakes(db)
+    assert len(wakes) == 1 and human.id not in wakes[0][0]
+
+    async with db.write() as tx:
+        claimed = await conversations.claim_next(tx, agent_id="orch", path=path)
+    assert claimed is not None and claimed[0].kind == "updates"
+    assert claimed[1].state == "delivered"
+    assert all(state != "queued" for _, state in await _inbox_wakes(db))
+
+    async with db.write() as tx:
+        review_id = await decision_store.open_decision(
+            tx,
+            subject_type="task",
+            subject_id=task.id,
+            kind=DecisionKind.REVIEW,
+            question="Review the secret result PLEASE_NO",
+            options=["accept", "reject"],
+            audience=Audience.ORCHESTRATOR,
+            requested_by=f"agent:{A}",
+        )
+    queued = [body for body, state in await _inbox_wakes(db) if state == "queued"]
+    assert len(queued) == 1
+    assert review_id in queued[0] and "PLEASE_NO" not in queued[0]
+
+    async with db.write() as tx:
+        await decision_store.open_decision(
+            tx,
+            subject_type="task",
+            subject_id=task.id,
+            kind=DecisionKind.REVIEW,
+            question="for a human",
+            options=["accept", "reject"],
+            audience=Audience.HUMAN,
+            requested_by=f"agent:{A}",
+        )
+    assert len([b for b, s in await _inbox_wakes(db) if s == "queued"]) == 1
 
 
 async def test_decision_becomes_moot_when_task_moves_on(db: Database) -> None:
