@@ -10,6 +10,7 @@ import errno
 import json
 import logging
 import os
+import stat
 import subprocess
 from collections.abc import Generator
 from pathlib import Path
@@ -17,7 +18,7 @@ from types import SimpleNamespace
 from typing import BinaryIO
 
 import pytest
-from api_support import FakeTarget, insert_agent
+from api_support import FakeClock, FakeTarget, insert_agent
 from argus_api.config import Settings
 from argus_api.db import Database, ts
 from argus_api.fleet import service
@@ -1604,3 +1605,307 @@ async def test_unremovable_dir_blocks_wip_instance_untouched(
     assert snapshot(repo) == before
     assert (path / "locked").exists()
     assert not any(env.archive.iterdir())
+
+
+def test_measure_ignores_empty_foreign_dir(tmp_path: Path) -> None:
+    (tmp_path / "inst" / "agent").mkdir(parents=True)
+    (tmp_path / "inst").chmod(0o777)
+    (tmp_path / "inst" / "agent").chmod(0o755)
+    fake = os.geteuid() + 1  # the stub reads as foreign and not writable
+    assert wc.measure(str(tmp_path), "inst", fake).unremovable_dir is False
+    (tmp_path / "inst" / "agent" / "f").write_text("x")
+    assert wc.measure(str(tmp_path), "inst", fake).unremovable_dir is True
+
+
+def _foreign(monkeypatch: pytest.MonkeyPatch, *dirs: Path) -> list[int]:
+    """Make `dirs` read as root-owned 0755 to the removability rule, and record
+    every fchmod instead of making it (the cleaner must never chmod these)."""
+    inodes = {d.stat().st_ino for d in dirs}
+    real = wc._can_remove_dir
+    monkeypatch.setattr(
+        wc,
+        "_can_remove_dir",
+        lambda st, uid, groups: st.st_ino not in inodes and real(st, uid, groups),
+    )
+    chmods: list[int] = []
+    monkeypatch.setattr(wc.os, "fchmod", lambda fd, mode: chmods.append(fd))
+    return chmods
+
+
+async def test_empty_root_owned_mount_stubs_do_not_block(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = await env.instance(A)
+    stubs = [path / "sess-1" / "agent", path / "sess-1" / "group"]
+    for d in stubs:
+        d.mkdir(parents=True)
+        d.chmod(0o555)
+    chmods = _foreign(monkeypatch, *stubs)
+    run = await env.run()
+    assert run.cleaned == 1
+    assert not path.exists()
+    assert chmods == []
+
+
+async def test_root_owned_session_dir_blocks_without_chmod_and_retries_bounded(
+    env: Env, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = await env.instance(A)
+    group = path / "sess-1" / "group"
+    group.mkdir(parents=True)
+    (group / "CLAUDE.md").write_text("x")
+    group.chmod(0o755)
+    chmods = _foreign(monkeypatch, group)
+    cleaner = env.cleaner()
+    for _ in range(3):  # max_attempts
+        await cleaner.run("loop", wc.ACTOR, False)
+    row = await env.entry(A)
+    assert (row["status"], row["reason"], row["error"]) == (
+        "blocked",
+        "permission_denied",
+        "dir_not_writable",
+    )
+    assert row["attempts"] == 3
+    for _ in range(5):  # capped: no attempt until the backoff elapsed
+        await cleaner.run("loop", wc.ACTOR, False)
+    assert (await env.entry(A))["attempts"] == 3
+    clock.advance(3601)
+    await cleaner.run("loop", wc.ACTOR, False)
+    assert (await env.entry(A))["attempts"] == 4
+    assert stat.S_IMODE(group.stat().st_mode) == 0o755
+    assert (group / "CLAUDE.md").read_text() == "x"
+    assert chmods == []
+    assert not any(env.archive.iterdir())
+
+
+async def test_capped_dir_backs_off_exponentially_and_never_spins(
+    env: Env, clock: FakeClock
+) -> None:
+    path = await env.instance(A)
+    (env.proc / "4242").mkdir()
+    (env.proc / "4242" / "cwd").symlink_to(path)
+    cleaner = env.cleaner()
+    for _ in range(3):
+        await env.run()
+    assert (await env.entry(A))["attempts"] == 3
+
+    async def attempts_after(seconds: float) -> int:
+        clock.advance(seconds)
+        run = await cleaner.run("loop", wc.ACTOR, False)
+        assert run.blocked == 1
+        row = await env.entry(A)
+        assert (row["status"], row["reason"]) == ("blocked", "process_reference")
+        return row["attempts"]
+
+    assert await attempts_after(3599) == 3  # backoff 1 interval
+    assert await attempts_after(2) == 4
+    assert await attempts_after(3601) == 4  # backoff now 2 intervals
+    assert await attempts_after(3600) == 5
+    async with db_write(env) as tx:
+        await tx.conn.execute("UPDATE workspace_cleanup SET attempts = 100")
+    assert await attempts_after(wc.MAX_RETRY_BACKOFF_S - 1) == 100  # capped
+    assert await attempts_after(1) == 101
+    assert path.exists()
+
+
+def db_write(env: Env):
+    return env.db.write()
+
+
+async def test_capped_dir_retries_at_once_when_its_blocker_clears(env: Env) -> None:
+    path = await env.instance(A)
+    (env.proc / "4242").mkdir()
+    (env.proc / "4242" / "cwd").symlink_to(path)
+    for _ in range(3):
+        await env.run()
+    cleaner = env.cleaner()
+    await cleaner.run("loop", wc.ACTOR, False)
+    assert (await env.entry(A))["attempts"] == 3
+    (env.proc / "4242" / "cwd").unlink()
+    (env.proc / "4242").rmdir()
+    run = await cleaner.run("loop", wc.ACTOR, False)  # no clock change
+    assert run.cleaned == 1
+    assert not path.exists()
+
+
+async def test_notify_is_noop_when_disabled(env: Env) -> None:
+    cleaner = env.cleaner(workspace_cleanup_enabled=False)
+    cleaner.notify_terminated(A)
+    assert not cleaner._terminated.is_set()
+    enabled = env.cleaner()
+    enabled.notify_terminated(A)
+    assert enabled._terminated.is_set()
+
+
+async def test_notifications_coalesce_into_one_follow_up_run(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await env.instance(A)
+    cleaner = env.cleaner()
+    triggers: list[str] = []
+    entered, gate = asyncio.Event(), asyncio.Event()
+    real = cleaner._run
+
+    async def gated(trigger: str, actor: str, dry_run: bool):
+        triggers.append(trigger)
+        entered.set()
+        await gate.wait()
+        gate.clear()
+        return await real(trigger, actor, dry_run)
+
+    monkeypatch.setattr(cleaner, "_run", gated)
+
+    async def release() -> None:
+        entered.clear()
+        gate.set()
+
+    follower = asyncio.create_task(cleaner.follow_terminations())
+    try:
+        manual = asyncio.create_task(cleaner.run("manual", "admin:test", False))
+        await entered.wait()
+        for _ in range(3):  # while a run is busy
+            cleaner.notify_terminated(A)
+        await asyncio.sleep(0.01)
+        assert triggers == ["manual"]
+        await release()
+        await manual
+        await entered.wait()
+        assert triggers == ["manual", "terminated"]
+        for _ in range(3):  # during the triggered run
+            cleaner.notify_terminated(B)
+        await release()
+        await entered.wait()
+        assert triggers == ["manual", "terminated", "terminated"]
+        await release()
+        await asyncio.sleep(0.05)
+        assert triggers == ["manual", "terminated", "terminated"]
+        assert not cleaner.busy
+    finally:
+        follower.cancel()
+    async with (
+        env.db.read() as conn,
+        conn.execute(
+            "SELECT trigger, status FROM workspace_cleanup_runs ORDER BY rowid"
+        ) as cur,
+    ):
+        rows = [tuple(r) for r in await cur.fetchall()]
+    assert rows == [
+        ("manual", "finished"),
+        ("terminated", "finished"),
+        ("terminated", "finished"),
+    ]
+
+
+async def _terminate_via_reconciler(env: Env, cleaner: wc.WorkspaceCleaner) -> None:
+    from argus_api.fleet.reconciler import FleetSettings, reconcile_pool
+
+    # The instance's container is gone from the listing: the reconciler
+    # confirms it terminated, commits, then notifies the cleaner.
+    await reconcile_pool(
+        env.db,
+        "nc",
+        env.registry,
+        FleetSettings(argus_url="http://x"),
+        cleaner.notify_terminated,
+    )
+
+
+async def _settle(cleaner: wc.WorkspaceCleaner) -> None:
+    """Wait until follow_terminations finishes the run for the current notify.
+
+    follow_terminations clears `_terminated` before `_claim` sets `busy`, so a
+    single (clear, idle) observation can be the gap before the run starts.
+    Require two consecutive clear+idle observations, or wait out a busy cycle.
+    """
+    clear_idle = 0
+    for _ in range(50_000):
+        if cleaner.busy:
+            clear_idle = 0
+            await cleaner._idle.wait()
+            if not cleaner._terminated.is_set() and not cleaner.busy:
+                return
+            continue
+        if cleaner._terminated.is_set():
+            clear_idle = 0
+            await asyncio.sleep(0)
+            continue
+        clear_idle += 1
+        if clear_idle >= 2:
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("cleanup follower did not settle")
+
+
+async def test_reconciler_termination_triggers_safe_cleanup(env: Env) -> None:
+    path = await env.instance(A, state="running")
+    cleaner = env.cleaner()
+    follower = asyncio.create_task(cleaner.follow_terminations())
+    try:
+        await cleaner.run("manual", "admin:test", False)  # running: never touched
+        assert path.exists()
+        await _terminate_via_reconciler(env, cleaner)
+        await _settle(cleaner)
+    finally:
+        follower.cancel()
+    assert not path.exists()
+    row = await env.entry(A)
+    assert row["status"] == "cleaned"
+
+
+async def test_triggered_run_keeps_dir_mounted_by_container(env: Env) -> None:
+    path = await env.instance(A, state="running")
+    env.target.mounts = [("agent-1", str(path / "sess-1"), True)]  # still alive
+    cleaner = env.cleaner()
+    follower = asyncio.create_task(cleaner.follow_terminations())
+    try:
+        await _terminate_via_reconciler(env, cleaner)
+        await _settle(cleaner)
+    finally:
+        follower.cancel()
+    assert (path / "notes.txt").read_text() == "hello"
+    assert (await env.entry(A))["reason"] == "container_mount"
+
+
+async def test_triggered_run_respects_min_age_and_loop_falls_back(
+    env: Env, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = await env.instance(A, state="running")
+    cleaner = env.cleaner(
+        workspace_cleanup_min_age_hours=1, workspace_cleanup_interval_s=0.01
+    )
+    terminated_done = asyncio.Event()
+    loop_cleaned = asyncio.Event()
+    real = cleaner._run
+
+    async def watching(trigger: str, actor: str, dry_run: bool):
+        result = await real(trigger, actor, dry_run)
+        if trigger == "terminated":
+            terminated_done.set()
+        if trigger == "loop" and result.cleaned:
+            loop_cleaned.set()
+        return result
+
+    monkeypatch.setattr(cleaner, "_run", watching)
+    follower = asyncio.create_task(cleaner.follow_terminations())
+    try:
+        await _terminate_via_reconciler(env, cleaner)
+        await asyncio.wait_for(terminated_done.wait(), timeout=5)
+    finally:
+        follower.cancel()
+    assert path.exists()
+    assert (await env.entry(A))["reason"] == "too_recent"
+    clock.advance(3601)
+    loop = asyncio.create_task(cleaner.loop())
+    try:
+        await asyncio.wait_for(loop_cleaned.wait(), timeout=5)
+    finally:
+        loop.cancel()
+    assert not path.exists()
+    async with (
+        env.db.read() as conn,
+        conn.execute(
+            "SELECT trigger FROM workspace_cleanup_runs WHERE cleaned = 1"
+        ) as cur,
+    ):
+        triggers = [r["trigger"] for r in await cur.fetchall()]
+    assert triggers == ["loop"]

@@ -37,15 +37,15 @@ All settings are environment variables read by `Settings.from_env`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ARGUS_WORKSPACE_CLEANUP_ENABLED` | `false` | Runs the background loop and allows real runs |
+| `ARGUS_WORKSPACE_CLEANUP_ENABLED` | `false` | Runs the background loop and the termination trigger, and allows real runs |
 | `ARGUS_WORKSPACE_CLEANUP_DRY_RUN` | `true` | The loop only reports; `false` lets it delete |
 | `ARGUS_WORKSPACE_CLEANUP_ARCHIVE_ROOT` | unset | Where WIP archives go; without it WIP blocks and the run-now API refuses a real run |
 | `ARGUS_WORKSPACE_CLEANUP_MIN_AGE_HOURS` | `168` | Minimum time since `terminated_at` |
-| `ARGUS_WORKSPACE_CLEANUP_INTERVAL_S` | `3600` | Pause between loop runs |
+| `ARGUS_WORKSPACE_CLEANUP_INTERVAL_S` | `3600` | Pause between loop runs; base of the retry backoff |
 | `ARGUS_WORKSPACE_CLEANUP_RUN_TIMEOUT_S` | `1800` | Wall-clock cap of one run |
 | `ARGUS_WORKSPACE_CLEANUP_MAX_INSTANCES` | `20` | Directories one run may act on |
 | `ARGUS_WORKSPACE_CLEANUP_MAX_ARCHIVE_BYTES` | `2147483648` | Archive budget per instance |
-| `ARGUS_WORKSPACE_CLEANUP_MAX_ATTEMPTS` | `3` | Loop retries per directory |
+| `ARGUS_WORKSPACE_CLEANUP_MAX_ATTEMPTS` | `3` | Attempts per directory before automatic runs back off |
 | `ARGUS_WORKSPACE_CLEANUP_LOW_DISK_BYTES` | `10737418240` | Free-space floor (see 3.7) |
 | `ARGUS_WORKSPACE_CLEANUP_GIT_TIMEOUT_S` | `300` | Cap of one git command |
 
@@ -86,8 +86,42 @@ Rules for runs:
 
 - **Order.** Candidates are processed oldest `terminated_at` first, at most
   `max_instances` per run, inside the run timeout.
-- **Retries.** A loop run skips a directory that has reached `max_attempts`.
-  A manual run always tries again.
+- **Triggers.** A run's `trigger` is `loop`, `manual` or `terminated`:
+  - `loop`: every `interval_s`. It is the fallback that finds every directory
+    after a crash, a restart or a missed notification.
+  - `manual`: the run-now API (3.8).
+  - `terminated`: the reconciler calls `notify_terminated(instance_id)` once
+    the write transaction that confirmed the instance `terminated` has
+    committed and the pass has removed the exited containers. A rolled-back
+    pass, `terminating`, and a disabled cleanup never notify. The call only sets
+    a flag and never blocks the reconciler. A worker task then starts one
+    run with the loop's `dry_run` setting. Notifications that arrive before that
+    run starts coalesce into it. A notification during any run, or a run already
+    in progress, gets exactly one follow-up run.
+
+  The trigger only decides when a run starts. A `terminated` run scans the
+  roots like any other run and applies every rule of this spec: eligibility,
+  the minimum age, the lease, the tombstone and the reference checks. With the
+  default minimum age the instance is `too_recent`, and a later loop run
+  deletes it.
+- **Retries.** Each lease increments `attempts` and sets `attempted_at` (3.4).
+  An automatic run (`loop`, `terminated`) leaves a directory alone once
+  `attempts` reaches `max_attempts`, until one of these holds:
+  - **Backoff elapsed.** At least `min(interval_s * 2^(attempts -
+    max_attempts), 24 h)` has passed since `attempted_at`. A row without
+    `attempted_at` is due.
+  - **Blocker changed.** The row's reason is one a read-only probe can see:
+    `permission_denied`, `task_claimed`, `agent_active`, `shared_path`,
+    `container_check_unavailable`, `container_mount`, `mounts_unreadable`,
+    `mount_present`, `process_reference`, `low_disk` or `db_error`. The probe
+    measures the tree, checks references and checks low disk, in the same
+    order as a real run. If its result differs from the stored reason (or is
+    empty), the directory is retried at once.
+
+  A permanent failure therefore costs at most one attempt per backoff step, up
+  to one a day, and never spins. A skipped directory keeps its last status and
+  reason. Capped directories come after all others in the `max_instances`
+  budget. A manual run always tries again.
 - **Dry runs.** A dry run writes only audit rows and the run row. It does no
   rename, archive or delete. Git runs with `--no-optional-locks`.
 - **Byte counts.** A dry run still counts bytes and finds WIP.
@@ -140,9 +174,36 @@ A directory in the tree is removable by uid `U` when any of these holds:
   `U` are `rwx`. That class is the group bits when the directory's gid is one of
   the supplementary or effective groups of Argus, otherwise the other bits.
 
+An empty directory is exempt from this rule. It has nothing to empty, and
+removing it is a write on its parent, which the rule checks. This covers the
+mount point stubs described below. The deletion never `chmod`s an empty
+directory, and never `chmod`s one it does not own.
+
 If any directory fails this rule, the instance is `blocked` with
 `permission_denied` and the fixed error detail `dir_not_writable`, before
-anything moves. The check fails closed. No new reason code exists.
+anything moves. A directory Argus cannot open or list gives `permission_denied`
+too. The check fails closed. No new reason code exists, and Argus never
+changes the owner or mode of an existing directory to unblock it. Such a
+directory is retried on the bounded schedule of 3.2.
+
+**Root-owned session directories.** The NanoClaw host runs as
+`nanoclaw.user` when set (socket mode), and Argus creates the instance
+directory with that owner (`Mount.create_owner`). Inside it, NanoClaw
+bind-mounts each session directory
+`<instance>/data/v2-sessions/<agent>/sess-*` at `/workspace` in an agent
+container. It also bind-mounts the group folder at `/workspace/agent`, and the
+agent image has `WORKDIR /workspace/group`. The OCI runtime runs as root.
+When a nested mount point or the workdir is missing it creates it inside the
+session directory, so `sess-*/agent` and `sess-*/group` end up owned by
+`0:0` with mode `0755`. The agent's `--user` cannot change that.
+These stubs stay empty, so the rule above makes them removable.
+
+Argus's NanoClaw install now pre-creates `agent/` and `group/` in each new
+session directory as the host uid before the container starts, so the runtime
+reuses them and never creates root-owned stubs. The empty-stub tolerance and
+the fail-closed rule for non-empty foreign directories remain. A root-owned
+stub that is not empty, for example a group workdir a root process wrote into,
+still blocks with `permission_denied`.
 
 ## 3.4 Locking, revalidation and races
 
@@ -150,7 +211,8 @@ A real run handles each candidate in this order:
 
 1. **DB lease.** In one write transaction the run re-reads the instance (still
    `terminated`) and takes a lease on the audit row (`lock_run_id`,
-   `lock_expires_at = now + run timeout`). It also increments `attempts`. If
+   `lock_expires_at = now + run timeout`). It also increments `attempts` and
+   sets `attempted_at`. If
    another run holds an unexpired lease, the candidate is skipped and nothing
    is overwritten.
 2. **Tombstone rename.** The directory is renamed atomically, inside the root,
@@ -185,7 +247,8 @@ A real run handles each candidate in this order:
 Concurrency and leftovers:
 
 - A process-local lock lets only one run per process execute at a time. A
-  second manual run gets `409 workspace_cleanup_running`.
+  second manual run gets `409 workspace_cleanup_running`. A loop run that
+  finds the lock taken is skipped; a termination waits for it (3.2).
 - Two runs in different objects or processes are serialized by the DB lease.
 - On the next run, a leftover tombstone either finishes its deletion (the row
   is `failed`, or its archive is recorded) or is renamed back and treated
@@ -370,6 +433,11 @@ Nothing outside eligible terminated instances is touched.
 - `workspace_cleanup`: one row per `(root, name)`, with its status, reason,
   attempts, bytes, archive path, sanitized error, lease and timestamps.
 
+`0054_workspace_cleanup_retry.sql` rebuilds `workspace_cleanup_runs` so that
+its `trigger` check accepts `terminated`, copying every row. It also adds
+`workspace_cleanup.attempted_at`, the time of the last lease, which the retry
+backoff counts from (3.2).
+
 **Events.** A real run records an event of each kind it produces. Each one
 carries reason codes and byte counts:
 
@@ -422,10 +490,13 @@ directory it accepts can still fail at delete time (`permission_denied`).
 
 # 5. Constraints
 
-- Single node, SQLite only. One additive migration. All writes go through
+- Single node, SQLite only. Two migrations (0048, 0054), with no data
+  dropped. All writes go through
   `Database.write()` with `tx.now`. No filesystem, git or Docker call happens
   inside a write transaction.
 - Fail closed. When safety cannot be proven, the directory stays.
+- A trigger never widens what is deleted. Only the rules of 3.2–3.4 decide, and
+  a container missing from a listing never deletes anything.
 - No secrets in logs, audit rows, events or responses.
 - Deletion never leaves the validated instances root, and it never follows a
   symlink.
@@ -442,7 +513,9 @@ directory it accepts can still fail at delete time (`permission_denied`).
   - models in `argus_core.fleet`;
   - `DockerTarget.mount_sources()`;
   - settings in `config.py`;
-  - the loop wired in `main.py`;
+  - `fleet/reconciler.py`: an optional `on_terminated` callback on `run`,
+    `reconcile` and `reconcile_pool`, called after commit;
+  - the loop, the termination worker and the callback wired in `main.py`;
   - three tools in `mcp_server.py`.
 - **Tests:** `apps/api/tests/test_workspace_cleanup.py`, which covers the
   filesystem, git, races and failure injection on real `tmp_path` trees, plus

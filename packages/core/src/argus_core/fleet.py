@@ -607,7 +607,7 @@ class WorkspaceCleanupPage(BaseModel):
 
 class WorkspaceCleanupRun(BaseModel):
     id: str
-    trigger: str  # loop | manual
+    trigger: str  # loop | manual | terminated
     actor: str
     dry_run: bool
     low_disk: bool

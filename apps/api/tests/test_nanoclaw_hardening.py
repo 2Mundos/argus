@@ -554,3 +554,16 @@ def test_docker_start_refuses_to_publish_without_a_bridge_gateway(
     )
     with pytest.raises(TargetError, match="no IPv4 gateway"):
         target._start(spec)
+
+
+def test_socket_nanoclaw_host_user_owns_its_workdir() -> None:
+    """The host runs as the configured user and Argus creates its instance
+    directory owned by that user, so everything the host itself writes there is
+    removable by workspace cleanup (spec workspace-cleanup 3.3)."""
+    from argus_api.fleet.runtimes import container_spec
+
+    spec = container_spec(_socket_pool(), "i-1", ["argus_boot_x"], "http://argus")
+    [workdir] = [m for m in spec.mounts if m.host == "/srv/nc-i/i-1"]
+    assert (workdir.container, workdir.mode) == ("/srv/nc-i/i-1", "rw")
+    assert workdir.create_owner == spec.user == "1000:1000"
+    assert spec.group_add == ["999"]

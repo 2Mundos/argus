@@ -187,10 +187,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                     app.state.fleet,
                     settings.reconcile_interval_s,
                     app.state.loops["reconciler"],
+                    app.state.workspace_cleanup.notify_terminated,
                 )
             ),
             *(
-                [asyncio.create_task(app.state.workspace_cleanup.loop())]
+                [
+                    asyncio.create_task(app.state.workspace_cleanup.loop()),
+                    asyncio.create_task(
+                        app.state.workspace_cleanup.follow_terminations()
+                    ),
+                ]
                 if settings.workspace_cleanup_enabled
                 else []
             ),

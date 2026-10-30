@@ -536,6 +536,11 @@ cp "$here/overlays/docker-stop-removal.ts" "$here/overlays/docker-stop-removal.t
   "$here/overlays/docker-driver-teardown.test.ts" "$target/src/drivers/"
 python3 "$here/patch-docker-teardown.py" "$target"
 
+# Pre-create session bind-mount stubs as the host uid (workspace-cleanup.spec.md 3.3).
+cp "$here/overlays/session-mount-stubs.ts" "$here/overlays/session-mount-stubs.test.ts" \
+  "$target/src/"
+python3 "$here/patch-session-mount-stubs.py" "$target"
+
 # The repository preflight session takes its gateway lease through the worker path's admission gate.
 python3 "$here/patch-gateway-session-export.py" "$target"
 # Claims and preflight sessions wait for startup adoption, which stops any session without a database row.

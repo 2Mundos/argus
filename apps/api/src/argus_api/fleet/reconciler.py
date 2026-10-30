@@ -9,6 +9,8 @@ Each pass, per pool:
    start terminations, reserve slots for new instances, drain idle ones.
 3. **Act** after commit: start and stop containers. A failed or ambiguous call
    changes nothing; the next pass observes the outcome and acts again.
+4. **Notify** `on_terminated` (workspace cleanup) of each instance the committed
+   transaction confirmed terminated. It must not block.
 
 Invariants:
 - An instance holds a capacity slot until the provider confirms it stopped or no
@@ -23,6 +25,7 @@ import asyncio
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -80,20 +83,31 @@ class _Stop:
     ref: str
 
 
+# Told, after commit, of each instance this pass confirmed terminated.
+OnTerminated = Callable[[str], None]
+
+
 async def reconcile(
-    db: Database, targets: TargetRegistry, settings: FleetSettings
+    db: Database,
+    targets: TargetRegistry,
+    settings: FleetSettings,
+    on_terminated: OnTerminated | None = None,
 ) -> None:
     async with db.read() as conn:
         pools = await fleet.list_pools(conn)
     for pool in pools:
         try:
-            await reconcile_pool(db, pool.name, targets, settings)
+            await reconcile_pool(db, pool.name, targets, settings, on_terminated)
         except Exception:
             log.exception("reconciling pool %s failed", pool.name)
 
 
 async def reconcile_pool(
-    db: Database, name: str, targets: TargetRegistry, settings: FleetSettings
+    db: Database,
+    name: str,
+    targets: TargetRegistry,
+    settings: FleetSettings,
+    on_terminated: OnTerminated | None = None,
 ) -> None:
     async with db.read() as conn:
         pool = await fleet.get_pool(conn, name)
@@ -108,10 +122,16 @@ async def reconcile_pool(
             await _set_status(tx, name, "unreachable", str(exc))
         return
 
+    terminated: list[str] = []
     async with db.write() as tx:
-        actions = await _decide(tx, name, observed, descendants, settings)
+        actions = await _decide(tx, name, observed, descendants, settings, terminated)
     for action in actions:
         await _act(db, target, name, action, settings)
+    # After commit (a rolled-back pass never gets here) and after the exited
+    # containers were removed; the cleaner still checks every reference itself.
+    if on_terminated is not None:
+        for instance_id in terminated:
+            on_terminated(instance_id)
 
 
 async def _observe_descendants(
@@ -135,6 +155,7 @@ async def _decide(
     observed: dict[str, ProviderInstance],
     descendants: dict[str, list[LabeledContainer]],
     settings: FleetSettings,
+    terminated: list[str],
 ) -> list[_Start | _Stop]:
     pool = await fleet.get_pool(tx.conn, name)
     if pool.status == "unreachable":
@@ -176,6 +197,7 @@ async def _decide(
                 await confirm_terminated(
                     tx, inst["id"], f"exited while starting ({obs.exit_code})"
                 )
+                terminated.append(inst["id"])
                 actions.append(_Stop(obs.ref))  # remove the exited container
             elif inst["id"] in may_start and _start_due(inst, tx, settings):
                 actions.append(_Start(inst["id"]))
@@ -190,6 +212,7 @@ async def _decide(
                     actions.extend(_Stop(c.ref) for c in children)
                 else:
                     await confirm_terminated(tx, inst["id"], why)
+                    terminated.append(inst["id"])
                 if obs is not None:
                     actions.append(_Stop(obs.ref))  # remove the exited container
             elif reason := await _why_terminate(tx.conn, inst, tx, settings):
@@ -203,6 +226,7 @@ async def _decide(
                     await confirm_terminated(
                         tx, inst["id"], inst["exit_reason"] or "stopped"
                     )
+                    terminated.append(inst["id"])
                 if obs is not None:
                     actions.append(_Stop(obs.ref))
             else:
@@ -538,12 +562,13 @@ async def run(
     settings: FleetSettings,
     interval: float = 5.0,
     stats: LoopStats | None = None,
+    on_terminated: OnTerminated | None = None,
 ) -> None:
     while True:
         started = time.monotonic()
         ok = True
         try:
-            await reconcile(db, targets, settings)
+            await reconcile(db, targets, settings, on_terminated)
         except Exception:  # a whole pass failing (not one pool) must not end the loop
             log.exception("reconcile pass failed")
             ok = False
