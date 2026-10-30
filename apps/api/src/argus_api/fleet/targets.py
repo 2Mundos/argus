@@ -16,6 +16,11 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+# Deadlines (worker lifecycle 3.5). Both values are proposed by the spec, not
+# measured in this deployment.
+PROVIDER_OP_TIMEOUT_S = 30.0  # list, logs, image checks, probes, mount sources
+START_TIMEOUT_S = 120.0  # Target.start; stop gets its grace on top of the ordinary one
+
 MANAGED_LABEL = "argus.managed"
 POOL_LABEL = "argus.pool"
 INSTANCE_LABEL = "argus.instance_id"
@@ -196,32 +201,45 @@ class DockerTarget:
         return self._client
 
     async def start(self, spec: ContainerSpec) -> str:
-        return await self._call(self._start, spec)
+        return await self._call(self._start, spec, deadline=START_TIMEOUT_S)
 
     async def stop(self, ref: str, *, grace: timedelta) -> None:
-        await self._call(self._stop, ref, int(grace.total_seconds()))
+        await self._call(
+            self._stop,
+            ref,
+            int(grace.total_seconds()),
+            deadline=grace.total_seconds() + PROVIDER_OP_TIMEOUT_S,
+        )
 
     async def list(self, labels: Mapping[str, str]) -> list[ProviderInstance]:
-        return await self._call(self._list, dict(labels))
+        return await self._call(
+            self._list, dict(labels), deadline=PROVIDER_OP_TIMEOUT_S
+        )
 
     async def list_by_label(self, key: str) -> builtins.list[LabeledContainer]:
-        return await self._call(self._list_by_label, key)
+        return await self._call(
+            self._list_by_label, key, deadline=PROVIDER_OP_TIMEOUT_S
+        )
 
     async def logs(self, ref: str, *, tail: int) -> str:
-        return await self._call(self._logs, ref, tail)
+        return await self._call(self._logs, ref, tail, deadline=PROVIDER_OP_TIMEOUT_S)
 
     async def probe(self) -> TargetInfo:
-        return await self._call(self._probe)
+        return await self._call(self._probe, deadline=PROVIDER_OP_TIMEOUT_S)
 
     async def mount_sources(self) -> builtins.list[MountSource]:
         """Host paths mounted by every container (any state); raises TargetError."""
-        return await self._call(self._mount_sources)
+        return await self._call(self._mount_sources, deadline=PROVIDER_OP_TIMEOUT_S)
 
     async def image_present(self, image: str) -> bool | None:
-        return await self._call(self._image_present, image)
+        return await self._call(
+            self._image_present, image, deadline=PROVIDER_OP_TIMEOUT_S
+        )
 
     async def labeled_images(self, key: str) -> builtins.list[LabeledImage]:
-        return await self._call(self._labeled_images, key)
+        return await self._call(
+            self._labeled_images, key, deadline=PROVIDER_OP_TIMEOUT_S
+        )
 
     def _labeled_images(self, key: str) -> builtins.list[LabeledImage]:
         found = self._docker().images.list(filters={"label": [key]})
@@ -256,11 +274,15 @@ class DockerTarget:
             return False
         return True
 
-    async def _call(self, fn, *args):
+    async def _call(self, fn, *args, deadline: float):
         from docker.errors import DockerException
 
         try:
-            return await asyncio.to_thread(fn, *args)
+            return await asyncio.wait_for(asyncio.to_thread(fn, *args), deadline)
+        except (
+            TimeoutError
+        ) as exc:  # the worker thread cannot be cancelled and finishes alone
+            raise TargetError(f"docker call timed out after {deadline:g} s") from exc
         except DockerException as exc:
             raise TargetError(str(exc)[:500]) from exc
 
@@ -521,12 +543,20 @@ class KubernetesTarget:
             self._api_obj = client.CoreV1Api(api_client)
         return self._api_obj
 
-    async def _call(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+    async def _call(self, fn: Any, *args: Any, deadline: float, **kwargs: Any) -> Any:
         from kubernetes.client.exceptions import ApiException
         from kubernetes.config.config_exception import ConfigException
 
         try:
-            return await asyncio.to_thread(fn, *args, **kwargs)
+            return await asyncio.wait_for(
+                asyncio.to_thread(fn, *args, **kwargs), deadline
+            )
+        except (
+            TimeoutError
+        ) as exc:  # the worker thread cannot be cancelled and finishes alone
+            raise TargetError(
+                f"kubernetes call timed out after {deadline:g} s"
+            ) from exc
         except ApiException as exc:
             raise _KubeError(
                 exc.status or 0, f"{exc.status} {exc.reason}: {_body(exc)}"
@@ -537,7 +567,12 @@ class KubernetesTarget:
     async def start(self, spec: ContainerSpec) -> str:
         pod = pod_manifest(spec, self.namespace)
         try:
-            await self._call(self._api().create_namespaced_pod, self.namespace, pod)
+            await self._call(
+                self._api().create_namespaced_pod,
+                self.namespace,
+                pod,
+                deadline=START_TIMEOUT_S,
+            )
         except _KubeError as exc:
             if exc.status != 409:  # 409: created by an earlier, ambiguous attempt
                 raise TargetError(str(exc)) from exc
@@ -549,6 +584,7 @@ class KubernetesTarget:
                 self._api().delete_namespaced_pod,
                 ref,
                 self.namespace,
+                deadline=grace.total_seconds() + PROVIDER_OP_TIMEOUT_S,
                 grace_period_seconds=int(grace.total_seconds()),
             )
         except _KubeError as exc:
@@ -581,7 +617,12 @@ class KubernetesTarget:
 
     async def probe(self) -> TargetInfo:
         try:
-            await self._call(self._api().list_namespaced_pod, self.namespace, limit=1)
+            await self._call(
+                self._api().list_namespaced_pod,
+                self.namespace,
+                limit=1,
+                deadline=PROVIDER_OP_TIMEOUT_S,
+            )
         except _KubeError as exc:
             raise TargetError(str(exc)) from exc
         return TargetInfo()
@@ -595,7 +636,10 @@ class KubernetesTarget:
     async def _list_pods(self, selector: str) -> Any:
         try:
             result = await self._call(
-                self._api().list_namespaced_pod, self.namespace, label_selector=selector
+                self._api().list_namespaced_pod,
+                self.namespace,
+                label_selector=selector,
+                deadline=PROVIDER_OP_TIMEOUT_S,
             )
         except _KubeError as exc:
             raise TargetError(str(exc)) from exc
@@ -612,6 +656,7 @@ class KubernetesTarget:
                 tail_lines=tail,
                 timestamps=True,
                 _preload_content=False,
+                deadline=PROVIDER_OP_TIMEOUT_S,
             )
             return bytes(resp.data).decode(errors="replace")
         except _KubeError as exc:
@@ -623,7 +668,12 @@ class KubernetesTarget:
 
     async def _why_not_started(self, ref: str) -> str:
         try:
-            pod = await self._call(self._api().read_namespaced_pod, ref, self.namespace)
+            pod = await self._call(
+                self._api().read_namespaced_pod,
+                ref,
+                self.namespace,
+                deadline=PROVIDER_OP_TIMEOUT_S,
+            )
         except _KubeError:
             return ""
         return describe_waiting(pod)

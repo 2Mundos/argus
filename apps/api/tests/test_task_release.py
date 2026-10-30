@@ -319,7 +319,7 @@ async def test_a_silent_agent_and_a_timeout_still_count_failures(
         assert (await tasks.get_task(conn, timed)).failures == 1
 
 
-SETTINGS = FleetSettings(argus_url="http://argus.test:8000")
+SETTINGS = FleetSettings(argus_url="http://argus.test:8000", max_starts_in_flight=64)
 
 
 @pytest.fixture

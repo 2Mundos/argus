@@ -30,7 +30,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestCli
 def test_fleet_journey_over_mcp(client: TestClient) -> None:
     target = FakeTarget()
     client.app.state.targets.override("docker", None, target)
-    settings = FleetSettings(argus_url="http://argus.test:8000")
+    settings = FleetSettings(
+        argus_url="http://argus.test:8000", max_starts_in_flight=64
+    )
 
     def reconcile() -> None:
         async def once() -> None:

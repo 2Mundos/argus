@@ -18,7 +18,7 @@ from argus_core.fleet import PoolUpsert
 from argus_core.tasks import TaskCreate
 from fastapi.testclient import TestClient
 
-SETTINGS = FleetSettings(argus_url="http://argus.test:8000")
+SETTINGS = FleetSettings(argus_url="http://argus.test:8000", max_starts_in_flight=64)
 
 
 @pytest.fixture
