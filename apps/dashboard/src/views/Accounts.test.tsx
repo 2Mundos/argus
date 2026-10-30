@@ -140,7 +140,7 @@ afterEach(() => {
 describe("accountProviders", () => {
   it("dedupes providers from account_provider axes, skips local, adds gitea", () => {
     const opts = providerOptionsFromCatalog(catalog);
-    expect(opts.map((o) => o.id)).toEqual(["anthropic", "gitea", "github", "openai"]);
+    expect(opts.map((o) => o.id)).toEqual(["anthropic", "copilot", "gitea", "github", "openai"]);
     expect(opts.some((o) => o.id === "codex" || o.id === "claude")).toBe(false);
   });
 
