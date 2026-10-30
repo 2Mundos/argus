@@ -71,8 +71,11 @@ edit](task-edit.spec.md).
 ## 3.3 Storage and states
 
 - Table `task_steers(id, task_id, attempt, agent_id, message, actor, state,
-  created_at, delivered_at, closed_at)`, `state` in `pending`, `delivered`,
-  `cancelled`, `expired`. Index on `(task_id, attempt, state)`.
+  created_at, dispatched_at, delivered_at, closed_at)`, `state` in `pending`,
+  `delivered`, `cancelled`, `expired`, `unknown`. Index on `(task_id, attempt,
+  state)`.
+- `dispatched_at` is set the first time the steer is returned in a heartbeat
+  response (3.4); it stays null for a steer no heartbeat has carried.
 - `actor` is the caller's actor string (`admin:<token>` or `agent:<id>`), shown in the
   dashboard and passed to the worker so the agent knows who is steering.
 - Transitions:
@@ -81,13 +84,25 @@ edit](task-edit.spec.md).
   | --- | --- | --- |
   | `pending` | `delivered` | the assignee acknowledges it on a heartbeat (3.4) |
   | `pending` | `cancelled` | `DELETE` (3.2) |
-  | `pending` | `expired` | the attempt ends, in the same transaction |
+  | `pending` | `unknown` | the session dies (`session_lost`, `agent_ended` or lease expiry, as classified in [failure classes](failure-classes.spec.md) 3.2) or the attempt ends, while the steer is dispatched (`dispatched_at` set) and not acknowledged (`delivered` not reached); same transaction as the attempt end |
+  | `pending` | `expired` | the attempt ends with the steer never dispatched, in the same transaction |
 
 - **An attempt ends** on every transition out of `claimed`: complete, fail, ask
-  (block), release, lease expiry, reassignment, cancel and retry. Each of those sets
-  the attempt's `pending` steers to `expired` with `closed_at = tx.now`. A steer never
-  carries over to the next attempt: the next attempt starts from the task as it is,
-  and the operator re-steers or edits the task if the instruction should last.
+  (block), release, lease expiry, reassignment, cancel and retry. Each of those
+  closes the attempt's `pending` steers with `closed_at = tx.now`: `expired` when the
+  steer was never dispatched, `unknown` when it was dispatched and not acknowledged
+  (the channel may have injected it). A steer never carries over to the next
+  attempt: the next attempt starts from the task as it is, and the operator
+  re-steers or edits the task if the instruction should last.
+- **`unknown` is terminal.** The dashboard shows it as "unknown: may have been
+  delivered". It is never returned in a heartbeat and never injected again.
+- **`steer_unknown`.** `task_attempts` gains a counter `steer_unknown`: the number of
+  steers that became `unknown` when that attempt ended, written in the same
+  transaction as the attempt end. The next claim response
+  ([worker lifecycle](worker-lifecycle.spec.md) 3.3, claim) carries the previous
+  attempt's value, and the task context tells the agent that this many operator
+  steers may already have been applied and are not confirmed; the agent must not
+  assume either way. Only the next attempt reads it, and no other decision uses it.
 - Rows are kept with the task (no purge path exists, as for the live log); at most
   a few dozen per attempt.
 
@@ -103,6 +118,12 @@ edit](task-edit.spec.md).
   retried heartbeat is harmless.
 - A steer stays in `steers` on every heartbeat until acknowledged, so a lost
   response or a crashed injection is retried. The worker de-duplicates by `id`.
+  Re-delivery within an attempt stops at `unknown`: while the session is alive, a
+  dispatched but unacknowledged steer is returned again (a lost ack; the channel
+  dedupes by id and does not inject it twice); once its session dies it becomes
+  `unknown` (3.3) and is not returned again.
+- `dispatched_at` is written in the heartbeat transaction that first returns the
+  steer.
 - **Latency** is at most one heartbeat interval (30 s) plus the injection. That is
   acceptable for steering work that runs for minutes; 4 lists a faster path.
 - The MCP `heartbeat` tool passes the new fields through unchanged, so an MCP-driven
@@ -124,7 +145,8 @@ edit](task-edit.spec.md).
 - On each heartbeat answer, for every steer whose `task_id` and `attempt` match the
   task in flight and whose `id` it has not injected yet, the channel injects it with
   `setupCfg.onInbound(PLATFORM_ID, null, …)`, message id `argus-steer-<id>`. It then
-  adds the id to the next heartbeat's `steer_acks`. A steer for any other task or
+  adds the id to the next heartbeat's `steer_acks` (3.4: `unknown` is never
+  re-injected). A steer for any other task or
   attempt is acknowledged without injection (the server expires it anyway when the
   attempt ends; acknowledging avoids repeating it until then).
 - **Acknowledge after injection.** The id is acknowledged only once `onInbound`

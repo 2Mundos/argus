@@ -55,7 +55,7 @@ reasons and adds `failure_class` to each failure row and a count per class.
 | `admission` | unchanged: requeue or `awaiting_quota` | no |
 | `environment` | `blocked` with the `env_*` reason; inbox row; a manager unblocks | no |
 | `transient` | requeue after a backoff (below) | yes |
-| `session` | requeue at once, as today | yes |
+| `session` | requeue once after a confirmed exit; a further automatic requeue needs progress since the last automatic resume, else the task fails with the cause | yes |
 | `task` | escalating reasons: requeue one difficulty up, as today; `worker_fail`: `blocked` as `worker_gave_up` | yes |
 
 - **Backoff.** A `transient` fail that requeues sets `tasks.retry_at` to
@@ -67,6 +67,33 @@ reasons and adds `failure_class` to each failure row and a count per class.
   as `worker_gave_up` instead of requeueing it, with the worker's text as `error`.
   The inbox shows it like any block; unblock retries it, cancel ends it. A
   `worker_fail` on the last attempt fails the task, as today.
+- **Session resume.** `session_lost` and `agent_ended` are the unexpected exits
+  and follow the rule below. `stalled`, `timeout` and `lease_expired` are not
+  exits the host confirmed, and keep today's rule: requeue at once.
+- **Automatic resume rule** (for `session_lost` and `agent_ended`):
+  - A **confirmed exit** means the old container is confirmed gone. The
+    `session_lost` path already checks for it within 90 s
+    ([worker lifecycle](worker-lifecycle.spec.md) 3.8); that check is reused, no
+    new one is added.
+  - The first such fail of a task requeues it. It records `task.auto_resumed`
+    (new event; actor: the failing agent or the reaper; data `{attempt, reason}`)
+    in the fail transaction.
+  - A later such fail requeues only if **progress** was recorded for the claimed
+    attempt after the latest `task.auto_resumed`. Progress is a `task.progress`
+    event for that attempt; a milestone is one with `data.kind` set, so it counts
+    as well. Nothing else counts.
+  - Otherwise the task fails with the exit code and the stderr tail as its
+    `error`. The attempt is spent; a retry is the operator's act.
+  - `POST /tasks/{id}/retry` and unblock reset the rule: events before them are
+    ignored, as they reset `failures`.
+  - The rule is checkable from the events: `task.auto_resumed` and
+    `task.progress` for one task and attempt, no counter column.
+  - **Open point.** A completed turn counts only if it writes a `task.progress`
+    event. The spec says a plain reply is a progress note
+    ([worker lifecycle](worker-lifecycle.spec.md) 3.8), but a turn that ends with no
+    directive is left to the server, and it is not verified from the code that
+    every completed turn posts one. Until verified, a turn with no
+    `task.progress` is not progress.
 - `max_attempts` keeps its meaning: the cap on attempts that count.
 
 ## 3.3 Channel preflight
