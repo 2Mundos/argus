@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { onecliPathMatches } from "../gateway-providers/onecli-path-match.js";
 import type { ChannelSetup } from "./adapter.js";
 import { accountsFromEnv, closeSessionFromEnv, createArgusAdapter, renderTask } from "./argus.js";
 import {
@@ -37,7 +38,6 @@ import {
   sanitizeNotice,
 } from "./argus-accounts.js";
 import { sessionRepositoryProbe } from "./argus-repo-preflight.js";
-import { onecliPathMatches } from "./onecli-path-match.js";
 
 // NanoClaw's own modules are replaced, so the real `recycleRuntime` runs against a
 // fake registry of containers, not NanoClaw's database or a real container runtime.
