@@ -1811,10 +1811,29 @@ async def _terminate_via_reconciler(env: Env, cleaner: wc.WorkspaceCleaner) -> N
 
 
 async def _settle(cleaner: wc.WorkspaceCleaner) -> None:
-    for _ in range(100):
-        await asyncio.sleep(0.01)
-        if not cleaner._terminated.is_set() and not cleaner.busy:
+    """Wait until follow_terminations finishes the run for the current notify.
+
+    follow_terminations clears `_terminated` before `_claim` sets `busy`, so a
+    single (clear, idle) observation can be the gap before the run starts.
+    Require two consecutive clear+idle observations, or wait out a busy cycle.
+    """
+    clear_idle = 0
+    for _ in range(50_000):
+        if cleaner.busy:
+            clear_idle = 0
+            await cleaner._idle.wait()
+            if not cleaner._terminated.is_set() and not cleaner.busy:
+                return
+            continue
+        if cleaner._terminated.is_set():
+            clear_idle = 0
+            await asyncio.sleep(0)
+            continue
+        clear_idle += 1
+        if clear_idle >= 2:
             return
+        await asyncio.sleep(0)
+    raise AssertionError("cleanup follower did not settle")
 
 
 async def test_reconciler_termination_triggers_safe_cleanup(env: Env) -> None:
@@ -1848,36 +1867,45 @@ async def test_triggered_run_keeps_dir_mounted_by_container(env: Env) -> None:
 
 
 async def test_triggered_run_respects_min_age_and_loop_falls_back(
-    env: Env, clock: FakeClock
+    env: Env, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = await env.instance(A, state="running")
     cleaner = env.cleaner(
         workspace_cleanup_min_age_hours=1, workspace_cleanup_interval_s=0.01
     )
+    terminated_done = asyncio.Event()
+    loop_cleaned = asyncio.Event()
+    real = cleaner._run
+
+    async def watching(trigger: str, actor: str, dry_run: bool):
+        result = await real(trigger, actor, dry_run)
+        if trigger == "terminated":
+            terminated_done.set()
+        if trigger == "loop" and result.cleaned:
+            loop_cleaned.set()
+        return result
+
+    monkeypatch.setattr(cleaner, "_run", watching)
     follower = asyncio.create_task(cleaner.follow_terminations())
     try:
         await _terminate_via_reconciler(env, cleaner)
-        await _settle(cleaner)
+        await asyncio.wait_for(terminated_done.wait(), timeout=5)
     finally:
         follower.cancel()
     assert path.exists()
     assert (await env.entry(A))["reason"] == "too_recent"
     clock.advance(3601)
     loop = asyncio.create_task(cleaner.loop())
-    triggers: list[str] = []
     try:
-        for _ in range(300):
-            await asyncio.sleep(0.01)
-            async with (
-                env.db.read() as conn,
-                conn.execute(
-                    "SELECT trigger FROM workspace_cleanup_runs WHERE cleaned = 1"
-                ) as cur,
-            ):
-                triggers = [r["trigger"] for r in await cur.fetchall()]
-            if triggers:
-                break
+        await asyncio.wait_for(loop_cleaned.wait(), timeout=5)
     finally:
         loop.cancel()
     assert not path.exists()
+    async with (
+        env.db.read() as conn,
+        conn.execute(
+            "SELECT trigger FROM workspace_cleanup_runs WHERE cleaned = 1"
+        ) as cur,
+    ):
+        triggers = [r["trigger"] for r in await cur.fetchall()]
     assert triggers == ["loop"]

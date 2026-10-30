@@ -792,9 +792,21 @@ async def test_rolled_back_pass_does_not_notify(
     with pytest.raises(RuntimeError):
         await reconcile_pool(db, "web", registry, SETTINGS, seen.append)
     assert seen == []
-    assert [i.state for i in await instances(db, True) if i.id == inst.id] == [
-        "running"
-    ]
+    [cur] = [i for i in await instances(db, True) if i.id == inst.id]
+    # Start leaves the row reserved until a listing confirms it; either live
+    # state proves the rolled-back pass did not terminate.
+    assert cur.state in ("reserved", "running")
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT count(*) AS n FROM events WHERE subject_id = ?"
+            " AND kind = 'instance.terminated'",
+            (inst.id,),
+        ) as cur_ev,
+    ):
+        row = await cur_ev.fetchone()
+        assert row is not None
+        assert row["n"] == 0
 
 
 async def test_terminating_does_not_notify_until_confirmed(

@@ -1,0 +1,37 @@
+// Verbatim excerpts of NanoClaw 8fbacc91b6e2671d53c17fd0c866c0e2eef21715
+// src/container-runner.ts: the import tail and the head of buildMounts,
+// the two anchors patch-session-mount-stubs.py pins.
+
+import {
+  heartbeatPath,
+  markContainerRunning,
+  markContainerStopped,
+  sessionContextPath,
+  sessionDir,
+  writeSessionContext,
+  writeSessionRouting,
+} from './session-manager.js';
+
+export async function buildMounts(
+  agentGroup: AgentGroup,
+  session: Session,
+  containerConfig: import('./container-config.js').ContainerConfig,
+  provider: string,
+  providerContribution: ProviderContainerContribution,
+  providerSurfaces?: ProviderSpawnRealization,
+): Promise<VolumeMount[]> {
+  const projectRoot = process.cwd();
+
+  const contract = getProviderHostContract(provider);
+  // Undeclared payloads stay on the legacy capability gate. Declared payloads
+  // are realized below from their contract.
+  const defaultSurfaces = !contract && !providerProvidesAgentSurfaces(provider);
+
+  const groupDir = path.resolve(GROUPS_DIR, agentGroup.folder);
+  const claudeDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, '.claude-shared');
+  const sessDir = sessionDir(agentGroup.id, session.id);
+  const projectDocument = contract?.projectDocument;
+  let lateProjectDocumentMount: VolumeMount | undefined;
+  const lateStateVolumeMounts = new Map<string, VolumeMount>();
+  const lateSkillViewMounts = new Map<string, VolumeMount[]>();
+  let skillBackingPaths = new Map<string, string>();

@@ -198,12 +198,12 @@ session directory, so `sess-*/agent` and `sess-*/group` end up owned by
 `0:0` with mode `0755`. The agent's `--user` cannot change that.
 These stubs stay empty, so the rule above makes them removable.
 
-The narrow, durable fix is outside Argus: NanoClaw's container runner would
-create `agent/` and `group/` in each new session directory, as the host uid,
-before `docker run`. Argus configures everything it owns: the host's user and
-groups and the instance directory owner. A root-owned stub that is not empty,
-for example a group workdir a root process wrote into, still blocks with
-`permission_denied`.
+Argus's NanoClaw install now pre-creates `agent/` and `group/` in each new
+session directory as the host uid before the container starts, so the runtime
+reuses them and never creates root-owned stubs. The empty-stub tolerance and
+the fail-closed rule for non-empty foreign directories remain. A root-owned
+stub that is not empty, for example a group workdir a root process wrote into,
+still blocks with `permission_denied`.
 
 ## 3.4 Locking, revalidation and races
 
