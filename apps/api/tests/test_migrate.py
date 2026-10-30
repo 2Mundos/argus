@@ -83,10 +83,13 @@ async def test_0057_marks_pending_steers_dispatched(tmp_path: Path) -> None:
     db = await Database.open(path, migrations=migrations[:56])
     await insert_agent(db, "a")
     async with db.write() as tx:
+        # claim writes a column that a later migration adds; borrow it for the setup
+        await tx.conn.execute("ALTER TABLE tasks ADD COLUMN session_gone_at TEXT")
         task = await tasks.create_task(
             tx, TaskCreate(project="global", title="t"), "admin:test"
         )
         await tasks.claim(tx, "a", [])
+        await tx.conn.execute("ALTER TABLE tasks DROP COLUMN session_gone_at")
         await tx.conn.execute(
             "UPDATE agents SET runtime = '{\"features\": [\"steer\"]}' WHERE id = 'a'"
         )
