@@ -39,6 +39,26 @@ def agent_name(pool_name: str, instance_id: str) -> str:
     return f"{pool_name}-{instance_id[:8]}"
 
 
+def session_quota_env(pool: Pool) -> dict[str, str]:
+    """NanoClaw host env that makes each agent session inherit the pool quota.
+
+    NanoClaw's `composeSessionSpec` (pinned install) maps `CONTAINER_CPU_LIMIT`
+    / `CONTAINER_MEMORY_LIMIT` onto `SessionSpec.resources`; the Docker driver
+    then passes `--cpus` / `--memory`. Without these, only the host container
+    is capped and sibling session containers on the daemon stay unbounded
+    (agent-resource-hygiene research). Empty when the pool requests no quota.
+    """
+    env: dict[str, str] = {}
+    if pool.cpus is not None:
+        cpus = pool.cpus
+        env["CONTAINER_CPU_LIMIT"] = (
+            str(int(cpus)) if float(cpus).is_integer() else str(cpus)
+        )
+    if pool.memory_mb is not None:
+        env["CONTAINER_MEMORY_LIMIT"] = f"{pool.memory_mb}m"
+    return env
+
+
 def descendant_owner(pool: Pool, label_value: str) -> str | None:
     """Map a descendant's label value to the owning instance's id prefix (8 chars).
 
@@ -96,6 +116,7 @@ def container_spec(
             "ONECLI_URL": nc.onecli_url,
             "ARGUS_REPOSITORIES_JSON": json.dumps(nc.repositories, sort_keys=True),
             "NO_PROXY": "host.docker.internal,127.0.0.1,localhost",
+            **session_quota_env(pool),
         }
         if pool.docker.network:
             env["ARGUS_NANOCLAW_NETWORK"] = pool.docker.network

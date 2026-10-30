@@ -122,6 +122,62 @@ def test_discovery_available(client: TestClient, target: FakeTarget) -> None:
     assert (node["available"], node["runtimes"], node["cpus"]) == (True, ["runc"], 4)
     [pool] = caps["pools"]
     assert (pool["launchable"], pool["free_slots"], pool["blockers"]) == (True, 2, [])
+    # Plain workers are the capped container; session_quota is NanoClaw-only.
+    assert all(c["name"] != "session_quota" for c in pool["checks"])
+
+
+def test_nanoclaw_session_quota_check_is_ok_when_pool_requests_cpus_or_memory(
+    client: TestClient, tmp_path: Path, target: FakeTarget
+) -> None:
+    from dataclasses import replace
+
+    client.app.state.settings = replace(
+        client.app.state.settings, nanoclaw_allow_docker_socket=True
+    )
+    target.shares_filesystem = True
+    target.images = {"argus-nanoclaw-host:dev", "nc-agent:1"}
+    # instances_root is length-limited: keep these short (see NanoclawOptions).
+    with tempfile.TemporaryDirectory(prefix="a") as d:
+        root = Path(d)
+        (root / "i").mkdir()
+        sock = root / "s.sock"
+        sock.write_text("")
+        nc = {
+            "install_dir": str(root),
+            "instances_root": str(root / "i"),
+            "agent_image": "nc-agent:1",
+            "docker_socket": str(sock),
+            "user": "1000:1000",
+            "group_add": ["0"],
+        }
+        make_pool(
+            client,
+            "nc",
+            runtime="nanoclaw",
+            image="argus-nanoclaw-host:dev",
+            cpus=2,
+            memory_mb=512,
+            nanoclaw=nc,
+        )
+        make_pool(
+            client,
+            "nc-free",
+            runtime="nanoclaw",
+            image="argus-nanoclaw-host:dev",
+            nanoclaw=nc,
+        )
+        by = {
+            p["name"]: p
+            for p in client.get("/api/fleet/capabilities", headers=ADMIN).json()[
+                "pools"
+            ]
+        }
+        quota = next(c for c in by["nc"]["checks"] if c["name"] == "session_quota")
+        assert quota["ok"] is True
+        assert "CONTAINER_CPU_LIMIT=2" in quota["detail"]
+        assert "CONTAINER_MEMORY_LIMIT=512m" in quota["detail"]
+        assert by["nc"]["launchable"]
+        assert all(c["name"] != "session_quota" for c in by["nc-free"]["checks"])
 
 
 def test_discovery_unavailable(client: TestClient, target: FakeTarget) -> None:

@@ -205,9 +205,15 @@ every new dependency is judged against it.
   dry run first, the archive root, restore and reason codes
 - [Task inputs smoke](runbooks/2026-10-30.task-inputs-smoke.ref.md) — operator-run
   Docker session check of materialized inputs; not yet run
+- [Session quota smoke](runbooks/2026-10-30.session-quota-smoke.ref.md) — operator-run
+  Docker check that NanoClaw sessions carry pool `--cpus`/`--memory`; ASSIST
+  procedure when no daemon is available; not yet run
 
 ### Reports
 
+- [Session quota recovery (2026-10-30)](reports/2026-10-30.session-quota-recovery.ref.md) —
+  commit `64b8d8c` unrecoverable; reimplemented pool→`CONTAINER_*_LIMIT` propagation,
+  `session_quota` evidence, Docker ASSIST runbook; live daemon still a blocker
 - [Disk guard investigation (2026-10-29)](reports/2026-10-29.disk-guard-investigation.ref.md) —
   who runs the loop, `io.stat` vs `docker ps --size`, cleanup dry run on warn,
   pause vs leases and stall detection; spec-update plan for the disk-guard draft
