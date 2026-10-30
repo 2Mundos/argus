@@ -2,6 +2,7 @@
 """Guided worker templates (docs/specs/worker-launch.spec.md)."""
 
 import os
+import re
 import tempfile
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -9,6 +10,8 @@ from pathlib import Path
 
 import pytest
 from api_support import FakeTarget
+from argus_api.fleet.names import WORDS, suggest
+from argus_core.fleet import POOL_NAME_PATTERN
 from fastapi.testclient import TestClient
 from test_launch import (  # noqa: F401  (fixtures)
     ADMIN,
@@ -127,8 +130,8 @@ def test_fresh_install_lists_templates_with_explicit_missing_prerequisites(
     assert any("ARGUS_NANOCLAW_ALLOW_DOCKER_SOCKET" in m for m in nc["missing"])
     [w] = cat["argus-worker"]["readiness"]
     assert any("argus.worker=plain" in m for m in w["missing"]) and w["images"] == []
-    assert cat["nanoclaw-socket"]["defaults"]["name"] == "nanoclaw-socket"
-    assert cat["nanoclaw-sandbox"]["defaults"]["name"] == "nanoclaw-sandbox"
+    suggested = {cat[t]["defaults"]["name"] for t in cat if t != "_"}
+    assert len(suggested) == 1 and suggested <= set(WORDS)
     assert cat["nanoclaw-sandbox"]["setup"] and cat["argus-worker"]["setup"]
     # Looking creates nothing and starts nothing.
     assert pools(client) == [] and target.started == []
@@ -210,7 +213,8 @@ def test_create_from_scratch_starts_a_real_launch(
     )
     assert len(target.started) == 1
     # The suggested name moves on once taken.
-    assert templates(client)["argus-worker"]["defaults"]["name"] == "worker-2"
+    again = templates(client)["argus-worker"]["defaults"]["name"]
+    assert again in WORDS and again != "worker"
 
 
 def test_quantity_and_name_are_honoured(client: TestClient, target: FakeTarget) -> None:
@@ -859,7 +863,8 @@ def test_omitted_name_is_rejected_so_a_retry_cannot_silently_duplicate(
     assert [p["name"] for p in pools(client)] == [suggested]
     assert pools(client)[0]["desired_replicas"] == 1
     # The catalog moves on to a new suggestion; using it is a new, explicit choice.
-    assert templates(client)["argus-worker"]["defaults"]["name"] == f"{suggested}-2"
+    moved = templates(client)["argus-worker"]["defaults"]["name"]
+    assert moved in WORDS and moved != suggested
 
 
 def test_mcp_create_worker_requires_a_name(
@@ -935,3 +940,20 @@ def test_only_admin_can_set_the_cap(client: TestClient, target: FakeTarget) -> N
         advanced={"max_replicas": 9},
     )
     assert via_mcp["error"].startswith("403 forbidden") and pools(client) == []
+
+
+def test_suggested_names_are_valid_unique_and_stable() -> None:
+    assert len(set(WORDS)) == len(WORDS) >= 150
+    assert all(re.fullmatch(POOL_NAME_PATTERN, w) for w in WORDS)
+    taken = {"atlas", "nyx"}
+    assert suggest(taken) == suggest(set(taken))  # same set, same pick
+    assert suggest(taken) not in taken
+
+
+def test_suggestion_skips_taken_names_and_falls_back_to_a_suffix() -> None:
+    first = suggest(set())
+    assert suggest({first}) != first
+    everything = set(WORDS)
+    pick = suggest(everything)
+    assert pick.rsplit("-", 1)[1] == "2" and pick.rsplit("-", 1)[0] in WORDS
+    assert suggest(everything | {pick}).endswith("-3")
