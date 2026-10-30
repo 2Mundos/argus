@@ -161,7 +161,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         disk_guard_stats = LoopStats("disk_guard", settings.disk_guard_interval_s)
         app.state.disk_guard = DiskGuard(settings, db, disk_guard_stats)
         if settings.disk_guard_enabled:
-            await app.state.disk_guard.measure_once()
+            started = time.monotonic()
+            try:
+                await app.state.disk_guard.measure_once()
+                disk_guard_stats.record(time.monotonic() - started)
+            except Exception:
+                disk_guard_stats.record(time.monotonic() - started, ok=False)
+                raise
         local_model = app.state.local_model
 
         async def local_probe() -> tuple[bool | None, str]:

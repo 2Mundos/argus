@@ -136,18 +136,19 @@ def test_st_dev_dedup_and_worst_band(tmp_path: Path) -> None:
     )
     groups = group_by_device(samples)
     # Same st_dev → one group; free is from either path (same device).
-    assert len([g for g in groups if not g.unknown]) == 1
-    assert "data" in next(g.roles for g in groups if not g.unknown)
+    measured = [g for g in groups if not g.unknown]
+    assert len(measured) == 1
+    assert measured[0].free_bytes in (3 * GiB, 1 * GiB)
 
 
 def test_unknown_beats_measured_zero() -> None:
     from argus_api.disk_guard import _Group
 
-    measured_zero = [_Group(1, 0, frozenset({"data"}))]
+    measured_zero = [_Group(1, 0)]
     assert worst_free(measured_zero) == ("measured", 0)
     with_unknown = [
         *measured_zero,
-        _Group(-1, 0, frozenset({"docker"}), unknown=True),
+        _Group(-1, 0, unknown=True),
     ]
     assert worst_free(with_unknown) == ("unknown", None)
     samples = (
@@ -180,6 +181,32 @@ def test_unstatable_docker_root_is_not_applicable(tmp_path: Path) -> None:
     docker = next(s for s in samples if s.role == "docker")
     assert docker.applicability == "not_applicable"
     assert worst_free(group_by_device(samples)) == ("measured", 50 * GiB)
+
+
+def test_docker_statvfs_failure_stays_unknown(tmp_path: Path) -> None:
+    """stat-able DockerRootDir with failed statvfs must refuse, not downgrade."""
+    docker_root = tmp_path / "docker-data"
+    docker_root.mkdir()
+
+    def stat(path: Path) -> FakeStat:
+        return FakeStat(1 if Path(path) == tmp_path else 2)
+
+    def statvfs(path: Path) -> FakeVfs:
+        if Path(path) == docker_root:
+            raise OSError("statvfs failed")
+        return FakeVfs(50 * GiB)
+
+    samples = measure_roots(
+        data_dir=tmp_path,
+        instances_root=None,
+        docker_root=DockerRootQuery("path", docker_root),
+        stat=stat,  # type: ignore[arg-type]
+        statvfs=statvfs,  # type: ignore[arg-type]
+    )
+    docker = next(s for s in samples if s.role == "docker")
+    assert docker.applicability == "unknown"
+    assert docker.probe_error == "statvfs"
+    assert worst_free(group_by_device(samples)) == ("unknown", None)
 
 
 def test_missing_instances_root_is_absent_not_failed(tmp_path: Path) -> None:
@@ -252,6 +279,48 @@ def test_invalid_config_ordering_names_the_setting(
         Settings.from_env()
 
 
+def test_disk_guard_enabled_boolean_vocabulary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ARGUS_DATA_DIR", "/tmp")
+    for off in ("false", "FALSE", "0", "no", "OFF"):
+        monkeypatch.setenv("ARGUS_DISK_GUARD_ENABLED", off)
+        assert Settings.from_env().disk_guard_enabled is False
+    for on in ("true", "TRUE", "1", "yes", "on"):
+        monkeypatch.setenv("ARGUS_DISK_GUARD_ENABLED", on)
+        assert Settings.from_env().disk_guard_enabled is True
+    monkeypatch.setenv("ARGUS_DISK_GUARD_ENABLED", "maybe")
+    with pytest.raises(ValueError, match="ARGUS_DISK_GUARD_ENABLED"):
+        Settings.from_env()
+
+
+def test_stale_readmission_requires_resume_edge() -> None:
+    """After a stale gap, a mid dead-band free must not re-admit."""
+    from argus_api.disk_guard import _Machine
+
+    def sample(free: int) -> tuple[RootSample, ...]:
+        return (RootSample("data", "measured", free, 1),)
+
+    m = _Machine()
+    m = advance(m, sample(10 * GiB), THRESHOLDS, now=1000.0)
+    assert not m.refused
+    # Snapshot-style stale window elapsed; machine.refused still False.
+    mid_band = int(2.2 * GiB)  # refuse < mid < resume
+    assert REFUSE < mid_band < RESUME
+    m = advance(
+        m,
+        sample(mid_band),
+        THRESHOLDS,
+        now=1000.0 + THRESHOLDS.stale_after_s + 1,
+    )
+    assert m.measurement == "measured"
+    assert m.refused
+    m = advance(
+        m, sample(RESUME + 1), THRESHOLDS, now=1000.0 + THRESHOLDS.stale_after_s + 2
+    )
+    assert not m.refused
+
+
 # -- guard service ----------------------------------------------------------------
 
 
@@ -301,6 +370,38 @@ async def test_one_warn_event_per_episode(db: Database, tmp_path: Path) -> None:
     ):
         rows = await cur.fetchall()
     assert len(rows) == 2
+
+
+async def test_warn_event_survives_failed_then_succeeding_write(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clear warn_just_entered only after record succeeds; retry must not duplicate."""
+    import argus_api.disk_guard as dg
+
+    clock = [1.0]
+    g = guard_for(db, tmp_path, frees={"data": WARN - 1}, clock=clock)
+    calls = {"n": 0}
+    real_record = dg.record
+
+    async def flaky_record(tx, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("write failed")
+        return await real_record(tx, *args, **kwargs)
+
+    monkeypatch.setattr(dg, "record", flaky_record)
+    with pytest.raises(RuntimeError, match="write failed"):
+        await g.measure_once()
+    assert g._machine.warn_just_entered
+    await g.measure_once()
+    assert not g._machine.warn_just_entered
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT kind FROM events WHERE kind = ?", (WARN_EVENT,)) as cur,
+    ):
+        rows = await cur.fetchall()
+    assert len(rows) == 1
+    assert calls["n"] == 2
 
 
 async def test_claim_refused_disk_low_no_attempt(db: Database, tmp_path: Path) -> None:
@@ -498,4 +599,58 @@ async def test_failure_then_recovery_async(db: Database, tmp_path: Path) -> None
     g._stat = lambda _p: FakeStat(1)  # type: ignore[method-assign]
     clock[0] = 20.0
     snap = await g.measure_once()
+    assert snap.claim_admission == "admitted"
+
+
+async def test_non_oserror_measurement_fails_closed(
+    db: Database, tmp_path: Path
+) -> None:
+    clock = [10.0]
+    g = guard_for(db, tmp_path, frees={"data": 10 * GiB}, clock=clock)
+    await g.measure_once()
+    assert g.snapshot().claim_admission == "admitted"
+
+    def boom() -> DockerRootQuery:
+        raise RuntimeError("unexpected")
+
+    g._docker_root = boom  # type: ignore[method-assign]
+    snap = await g.measure_once()
+    assert snap.measurement == "unknown"
+    assert snap.claim_admission == "refused"
+    assert snap.free_bytes is None
+
+
+async def test_configured_docker_socket_passed_to_resolver(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sock = tmp_path / "custom.sock"
+    sock.write_text("")
+    seen: list[str] = []
+
+    def capture(*, docker_host=None, socket_path="/var/run/docker.sock"):
+        seen.append(socket_path)
+        return DockerRootQuery("not_applicable")
+
+    monkeypatch.setattr(
+        "argus_api.disk_guard.default_docker_root", capture, raising=True
+    )
+    s = settings_for(tmp_path, nanoclaw_docker_socket=str(sock))
+    # Rebuild guard so __post_init__ binds the (patched) default resolver.
+    from argus_api.disk_guard import DiskGuard as DG
+
+    g = DG(s, db, LoopStats("disk_guard", 5.0))
+    g._stat = lambda _p: FakeStat(1)  # type: ignore[method-assign]
+    g._statvfs = lambda _p: FakeVfs(10 * GiB)  # type: ignore[method-assign]
+    g._clock = lambda: 1.0
+    await g.measure_once()
+    assert seen == [str(sock)]
+
+
+async def test_disabled_snapshot_is_not_measured(db: Database, tmp_path: Path) -> None:
+    s = settings_for(tmp_path, disk_guard_enabled=False)
+    g = DiskGuard(s, db, LoopStats("disk_guard", 5.0))
+    snap = g.snapshot()
+    assert snap.enabled is False
+    assert snap.measurement == "disabled"
+    assert snap.free_bytes is None
     assert snap.claim_admission == "admitted"
