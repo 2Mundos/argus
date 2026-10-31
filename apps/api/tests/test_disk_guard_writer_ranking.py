@@ -144,7 +144,10 @@ def test_sample_instance_directory_zero_is_not_unknown(tmp_path: Path) -> None:
     inst = tmp_path / "empty-id"
     inst.mkdir()
     sample = sample_instance_directory(str(tmp_path), "empty-id", os.geteuid())
-    assert sample.bytes == 0
+    # Allocated-byte contract: the directory's own blocks count (0 on tmpfs,
+    # 4096 on ext4), so compare with lstat instead of a literal.
+    assert sample.bytes is not None
+    assert sample.bytes == inst.lstat().st_blocks * 512
     assert sample.source == "measured"
 
 
@@ -157,7 +160,10 @@ def test_sample_instance_directory_symlink_not_followed(tmp_path: Path) -> None:
     big.write_bytes(b"z" * 8192)
     (inst / "link").symlink_to(big)
     sample = sample_instance_directory(str(tmp_path), "inst", os.geteuid())
-    assert sample.bytes == 0
+    # Only the directory and the link itself are counted, never the target.
+    expected = (inst.lstat().st_blocks + (inst / "link").lstat().st_blocks) * 512
+    assert sample.bytes == expected
+    assert sample.bytes < big.stat().st_blocks * 512 + expected
 
 
 def test_sample_instance_directory_rank_by_size_source(tmp_path: Path) -> None:
