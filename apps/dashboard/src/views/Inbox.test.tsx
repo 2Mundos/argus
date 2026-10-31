@@ -191,12 +191,12 @@ describe("Inbox quiet claims", () => {
     };
     render(<Inbox />);
     expect(
-      await screen.findByText(/is quiet\s+for 25m; likely cause: workspace missing on the host\./),
+      await screen.findByText(/Quiet for 25m; likely cause: workspace missing on the host\./),
     ).toBeTruthy();
     const rows = [...document.querySelectorAll("article.quiet-claim > p:first-child")];
     expect(rows.map((p) => p.textContent?.replace(/\s+/g, " "))).toEqual([
-      "Alpha - Task q1 is quiet for 25m; likely cause: workspace missing on the host.",
-      "Alpha - Task q2 is quiet for 25m.",
+      "Alpha - Task q1: Quiet for 25m; likely cause: workspace missing on the host.",
+      "Alpha - Task q2: Quiet for 25m.",
     ]);
   });
 });
