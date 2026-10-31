@@ -135,6 +135,9 @@ every new dependency is judged against it.
 - [Task delivery](specs/task-delivery.spec.md) — read-only PR state (open, merged,
   closed, unknown) of a task's delivery on REST, MCP and the dashboard; a merge is
   flagged for review, never accepted.
+- [Task discovery and prerequisite evidence](specs/task-discovery.spec.md) —
+  bounded task text search with citations, and a read-only view of whether
+  dependencies are forge-merged or artifact-verified (distinct from `succeeded`)
 - [Task continuation](specs/task-continuation.spec.md) — one typed contract per task:
   phase, artifacts with provenance, checklist evidence, effective decisions, gaps;
   contract first, narrative as history

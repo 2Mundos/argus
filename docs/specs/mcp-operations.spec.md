@@ -153,6 +153,11 @@ Findings outside the gap list:
   The Tasks tab requests up to five pages of 100 summaries, draws the first page
   when it arrives, and appends the rest. Changing active/archived drops the list
   on screen; a live refetch of the same list does not.
+- **Task search and prerequisites:** optional `q` on `GET /api/tasks` /
+  `list_tasks`, and `GET /api/tasks/{id}/prerequisites` /
+  `get_task_prerequisites`, are specified in
+  [task discovery](task-discovery.spec.md). Search is literal substring only;
+  prerequisite evidence is read-only and does not change `depends_on`.
 - **Batch read:** `GET /api/tasks?ids=a,b,c&view=detail` (≤50 ids) → MCP
   `get_tasks(ids, view)`. Unknown ids come back in `missing: [...]`; nothing
   fails as a whole. `ids` takes no other filter or cursor (`422 ids_exclusive`).
