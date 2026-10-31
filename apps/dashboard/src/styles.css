@@ -3627,6 +3627,25 @@ button.link.account-name {
   color: var(--warn);
   border-style: dashed;
 }
+.check-success {
+  color: var(--ok);
+  border-color: currentColor;
+}
+.check-failure,
+.check-error,
+.check-cancelled {
+  color: var(--danger);
+  border-color: currentColor;
+}
+.check-pending,
+.check-unknown,
+.check-skipped {
+  color: var(--warn);
+  border-color: currentColor;
+}
+.delivery .warn {
+  color: var(--warn);
+}
 
 /* -- pool editor ---------------------------------------------------------- */
 

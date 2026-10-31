@@ -136,9 +136,10 @@ every new dependency is judged against it.
   choices, version-checked saves, field-level errors
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes
   that say whether an upgrade can be rolled back, the tagged image
-- [Task delivery](specs/task-delivery.spec.md) — read-only PR state (open, merged,
-  closed, unknown) of a task's delivery on REST, MCP and the dashboard; a merge is
-  flagged for review, never accepted.
+- [Task delivery](specs/task-delivery.spec.md) — read-only PR projection (state,
+  exact-head checks/statuses, mergeability, review evidence; checklist and
+  authorization separate) on REST, MCP and the dashboard; a merge is flagged for
+  review, never accepted; green does not authorize merge.
 - [Task continuation](specs/task-continuation.spec.md) — one typed contract per task:
   phase, artifacts with provenance, checklist evidence, effective decisions, gaps;
   contract first, narrative as history

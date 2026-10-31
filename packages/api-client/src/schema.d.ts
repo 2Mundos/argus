@@ -4131,6 +4131,11 @@ export interface components {
             /** Status */
             status: string;
         };
+        /**
+         * CheckState
+         * @enum {string}
+         */
+        CheckState: "success" | "pending" | "failure" | "error" | "skipped" | "cancelled" | "unknown";
         /** Checklist */
         Checklist: {
             /** Omitted */
@@ -5134,25 +5139,112 @@ export interface components {
         /**
          * Delivery
          * @description What Argus read of the task's pull request. Observed only: a merge neither
-         *     closes the task nor counts as acceptance.
+         *     closes the task nor counts as acceptance. Green checks do not authorize merge.
          */
         Delivery: {
             /** Accept Blocked */
             accept_blocked: ("not_in_review" | "checklist_pending" | "no_review") | null;
             /** Accept Decision Id */
             accept_decision_id: string | null;
+            authorization?: components["schemas"]["DeliveryAuthorization"] | null;
+            base?: components["schemas"]["ShaFact"] | null;
             /**
              * Checked At
              * Format: date-time
              */
             checked_at: string;
+            checklist?: components["schemas"]["DeliveryChecklist"] | null;
+            /** Checks */
+            checks?: components["schemas"]["DeliveryCheck"][];
+            checks_combined?: components["schemas"]["CheckState"] | null;
+            /** Disclosures */
+            disclosures?: string[];
             /** Flags */
             flags: "delivery_merged_pending_review"[];
+            head?: components["schemas"]["ShaFact"] | null;
+            merge?: components["schemas"]["MergeFact"] | null;
             /** Merged At */
             merged_at: string | null;
+            /** Partial */
+            partial?: string[];
             /** Pr */
             pr: string;
             pr_state: components["schemas"]["PrState"];
+            required_gates?: components["schemas"]["RequiredGates"] | null;
+            review?: components["schemas"]["DeliveryReviewEvidence"] | null;
+            /**
+             * Stale
+             * @default false
+             */
+            stale?: boolean;
+            task?: components["schemas"]["DeliveryTask"] | null;
+        };
+        /** DeliveryAuthorization */
+        DeliveryAuthorization: {
+            /** Accept Blocked */
+            accept_blocked?: ("not_in_review" | "checklist_pending" | "no_review") | null;
+            /** Accept Decision Id */
+            accept_decision_id?: string | null;
+            /** Allow Merge */
+            allow_merge?: boolean | null;
+            /**
+             * Notes
+             * @default Green checks do not authorize merge. Merge is not acceptance. Authorization and checklist are separate from forge CI.
+             */
+            notes?: string;
+            /**
+             * Source
+             * @default task
+             * @constant
+             */
+            source?: "task";
+        };
+        /** DeliveryCheck */
+        DeliveryCheck: {
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /** Description */
+            description?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "status" | "check_run";
+            /** Name */
+            name: string;
+            /** Required */
+            required?: boolean | null;
+            /** Sha */
+            sha: string;
+            /**
+             * Source
+             * @default forge
+             * @constant
+             */
+            source?: "forge";
+            state: components["schemas"]["CheckState"];
+            /** Target Url */
+            target_url?: string | null;
+        };
+        /** DeliveryChecklist */
+        DeliveryChecklist: {
+            /** Done */
+            done: number;
+            /** Pending */
+            pending: number;
+            /** Pending Ids */
+            pending_ids?: string[];
+            /**
+             * Source
+             * @default task
+             * @constant
+             */
+            source?: "task";
+            /** Total */
+            total: number;
         };
         /** DeliveryEvidence */
         DeliveryEvidence: {
@@ -5168,6 +5260,37 @@ export interface components {
              */
             status: "unknown" | "stale" | "conflict" | "fresh";
             stored: components["schemas"]["Evidence"];
+        };
+        /** DeliveryReviewEvidence */
+        DeliveryReviewEvidence: {
+            /** Agentic Finding Count */
+            agentic_finding_count?: number | null;
+            /** Checked At */
+            checked_at?: string | null;
+            /** Forge Review Count */
+            forge_review_count?: number | null;
+            /** Forge Reviews For Head */
+            forge_reviews_for_head?: number | null;
+            independent?: components["schemas"]["IndependentReviewSummary"] | null;
+            /** Sha */
+            sha?: string | null;
+            /** @default unknown */
+            source?: components["schemas"]["FactOrigin"];
+        };
+        /** DeliveryTask */
+        DeliveryTask: {
+            /** Id */
+            id: string;
+            /** Project */
+            project: string;
+            /**
+             * Source
+             * @default task
+             * @constant
+             */
+            source?: "task";
+            /** State */
+            state: string;
         };
         /** DependenciesRequest */
         DependenciesRequest: {
@@ -5752,6 +5875,11 @@ export interface components {
             timed_out: number;
         };
         /**
+         * FactOrigin
+         * @enum {string}
+         */
+        FactOrigin: "forge" | "task" | "unknown";
+        /**
          * FactSource
          * @description How far a runtime fact is proven, weakest first.
          * @enum {string}
@@ -6108,6 +6236,21 @@ export interface components {
             totals_by_state: {
                 [key: string]: number;
             };
+        };
+        /** IndependentReviewSummary */
+        IndependentReviewSummary: {
+            /** Child Task Id */
+            child_task_id?: string | null;
+            /** Head Sha */
+            head_sha?: string | null;
+            /**
+             * Source
+             * @default task
+             * @constant
+             */
+            source?: "task";
+            /** Verdict */
+            verdict?: string | null;
         };
         /** InputAssessment */
         InputAssessment: {
@@ -6753,6 +6896,17 @@ export interface components {
             triggered: boolean;
             /** Window Hours */
             window_hours: number;
+        };
+        /** MergeFact */
+        MergeFact: {
+            /** Checked At */
+            checked_at?: string | null;
+            /** Mergeable */
+            mergeable?: boolean | null;
+            /** Mergeable State */
+            mergeable_state?: string | null;
+            /** @default unknown */
+            source?: components["schemas"]["FactOrigin"];
         };
         /** Message */
         Message: {
@@ -8178,6 +8332,25 @@ export interface components {
             task_id: string;
         };
         /**
+         * RequiredGates
+         * @description Present only when the forge disclosed required contexts (may be empty).
+         */
+        RequiredGates: {
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /** Contexts */
+            contexts: string[];
+            /**
+             * Source
+             * @default forge
+             * @constant
+             */
+            source?: "forge";
+        };
+        /**
          * ResumabilityCause
          * @description Closed set of cause codes (spec 3.8).
          * @enum {string}
@@ -8749,6 +8922,17 @@ export interface components {
             scope: string;
             /** Settings */
             settings: components["schemas"]["SettingValue"][];
+        };
+        /** ShaFact */
+        ShaFact: {
+            /** Checked At */
+            checked_at?: string | null;
+            /** Ref */
+            ref?: string | null;
+            /** Sha */
+            sha?: string | null;
+            /** @default unknown */
+            source?: components["schemas"]["FactOrigin"];
         };
         /**
          * Source

@@ -685,11 +685,13 @@ async def task_resumability_preflight(
 
 @tool(ANYONE)
 async def get_task_delivery(ctx: Context, task_id: str) -> dict | None:
-    """The state of the task's pull request as the forge shows it: pr, pr_state
-    (open | merged | closed | unknown; unknown means it could not be read, not open),
-    merged_at, checked_at. A merged PR carries the flag delivery_merged_pending_review
-    and, only when the task awaits review with its checklist done, accept_decision_id
-    (answer it with choice accept). Merged is not accepted. null: no unambiguous PR."""
+    """Bounded read-only delivery projection for a task's PR (inbox review evidence).
+    Top-level: pr, pr_state (open|merged|closed|unknown; unknown means unread, not open),
+    merged_at, checked_at, flags, accept_decision_id / accept_blocked.
+    Additive: task, head/base (source+sha+checked_at), merge, exact-head checks/statuses
+    (pending|skipped|failed|…), checks_combined, required_gates (null when unknown),
+    review evidence, checklist and authorization separately, stale, partial, disclosures.
+    Green checks do not authorize merge; merge is not acceptance. null: no unambiguous PR."""
     return await _call(ctx, "GET", f"/tasks/{task_id}/delivery")
 
 
