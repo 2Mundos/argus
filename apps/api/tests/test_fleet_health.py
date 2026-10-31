@@ -417,6 +417,59 @@ async def test_yield_cost_only_measured_does_not_invent_zero_tokens(
     assert y.tokens_per_succeeded == 1000.0  # only the five token-measured tasks
 
 
+async def add_attempt_usage(
+    db: Database,
+    task: str,
+    attempt: int,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cost: float | None,
+) -> None:
+    """A measured attempt row with exactly the given figures (None = not reported)."""
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "INSERT INTO accounts (id, name, provider, kind, secret_ref, priority,"
+            " state, created_at, updated_at) SELECT 'acc', 'acc', 'anthropic',"
+            " 'api_key', 'sops:acc', 0, 'available', ?, ? WHERE NOT EXISTS"
+            " (SELECT 1 FROM accounts WHERE id = 'acc')",
+            (ts(NOW), ts(NOW)),
+        )
+        await tx.conn.execute(
+            "INSERT INTO account_usage (account_id, task_id, attempt, input_tokens,"
+            " output_tokens, cost_usd, at, measurement, run_key)"
+            " VALUES ('acc', ?, ?, ?, ?, ?, ?, 'measured', ?)",
+            (
+                task,
+                attempt,
+                input_tokens,
+                output_tokens,
+                cost,
+                ts(NOW),
+                f"{attempt}:{task}",
+            ),
+        )
+
+
+async def test_yield_partial_attempt_figures_never_sum_unknown_as_zero(
+    db: Database,
+) -> None:
+    """A task total is known only when every measured attempt reports that figure."""
+    for i in range(MIN_SAMPLES):
+        await add_finished(db, f"tok{i}", "succeeded")
+        await add_attempt_usage(db, f"tok{i}", 1, 1000 * (i + 1), 0, 0.5)
+    # Attempt 1 has tokens but no cost; attempt 2 has cost but no tokens.
+    await add_finished(db, "mixed", "succeeded")
+    await add_attempt_usage(db, "mixed", 1, 1000, 0, None)
+    await add_attempt_usage(db, "mixed", 2, None, None, 0.1)
+    # Input reported, output not: the token total is unknown, not input alone.
+    await add_finished(db, "half", "succeeded")
+    await add_attempt_usage(db, "half", 1, 1000, None, 0.5)
+    y = (await health(db)).yield_
+    assert y.tokens_per_succeeded == 3000.0  # only the five fully reported tasks
+    assert y.cost_per_succeeded == 0.5  # "mixed" cost is unknown, not 0.1 or 0.5
+    assert y.usage_tasks == MIN_SAMPLES + 2 and y.measured_tasks == MIN_SAMPLES + 2
+
+
 def test_classify_failure_tolerates_spaces_and_hyphens() -> None:
     assert (
         fleet_health.classify_failure("worker_fail", "Auth missing: no token")
