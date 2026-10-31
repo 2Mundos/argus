@@ -78,7 +78,8 @@ documents.
   create; see [prompt-data isolation](prompt-data-isolation.spec.md)),
   `assignee_agent_id`, `lease_expires_at`, `lease_ttl_s`,
   `attempt`, `failures`, `max_attempts`, `result` (json), `error`,
-  `block_reason`, `created_by`, timestamps. A database `CHECK` enforces that an
+  `block_reason`, `created_by` (an actor, or `routine:<id>` for a
+  [routine](routines.spec.md) run), timestamps. A database `CHECK` enforces that an
   assignee and lease exist exactly while the task is `claimed`.
 - **`task_deps`** — `(task_id, depends_on_id)`.
 - **`task_kinds`** — 3.11.

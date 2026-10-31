@@ -1,5 +1,5 @@
 """Routine store: validation on save, persistence, schedule previews
-(docs/specs/routines.spec.md 3.1 and 3.4). There is no scheduler here."""
+(docs/specs/routines.spec.md 3.1 and 3.4). Runs are in `runs`."""
 
 import json
 from datetime import datetime
@@ -12,6 +12,7 @@ from argus_core.tasks import TaskCreate
 from pydantic import ValidationError
 
 from argus_api.db import Tx, ts
+from argus_api.decisions import store as decisions
 from argus_api.errors import ForbiddenError, NotFoundError, ValidationFailedError
 from argus_api.events import record
 from argus_api.knowledge import service as knowledge
@@ -152,6 +153,8 @@ async def upsert(
     )
     if existing is not None and existing["enabled"] and not body.enabled:
         await _record_disabled(tx, actor, routine_id)
+    if body.enabled:
+        await _close_reenable_question(tx, routine_id)
     return await get_routine(tx.conn, routine_id, tx.now)
 
 
@@ -177,15 +180,28 @@ async def set_enabled(
             await record(
                 tx, actor, "routine", row["id"], "routine.updated", {"enabled": True}
             )
+            await _close_reenable_question(tx, row["id"])
         else:
             await _record_disabled(tx, actor, row["id"])
     return await get_routine(tx.conn, row["id"], tx.now)
+
+
+async def reenable(tx: Tx, routine_id: str, actor: str) -> None:
+    """An admin approved the re-enable question opened by the failure threshold
+    (routines spec 3.5). A routine deleted since is left alone."""
+    async with tx.conn.execute(
+        "SELECT project, slug FROM routines WHERE id = ?", (routine_id,)
+    ) as cur:
+        row = await cur.fetchone()
+    if row is not None:
+        await set_enabled(tx, row["project"], row["slug"], True, actor, admin=True)
 
 
 async def delete(tx: Tx, project: str, slug: str, actor: str) -> None:
     """Remove the routine. Its run tasks stay: they only name it in `created_by`."""
     row = await _require_by_slug(tx.conn, project, slug)
     await tx.conn.execute("DELETE FROM routines WHERE id = ?", (row["id"],))
+    await _close_reenable_question(tx, row["id"])
     await record(
         tx,
         actor,
@@ -267,6 +283,12 @@ async def _record_disabled(tx: Tx, actor: str, routine_id: str) -> None:
     await record(
         tx, actor, "routine", routine_id, "routine.disabled", {"reason": "manual"}
     )
+
+
+async def _close_reenable_question(tx: Tx, routine_id: str) -> None:
+    """The failure threshold's re-enable question is moot once a manager enables
+    or deletes the routine."""
+    await decisions.cancel_open(tx, "routine", routine_id)
 
 
 async def _row_by_slug(

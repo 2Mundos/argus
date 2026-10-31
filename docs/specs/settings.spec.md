@@ -133,6 +133,13 @@ different model**, with `different_provider` shown as "…from a different provi
   reopen succeeded tasks; turning it off lets a waiting gate pass on the next
   completion or a manager's `accept`.
 
+## 3.6 Routines
+
+Key `routines.enabled`, scope `global` only, boolean, default `true`. Off pauses
+every [routine](routines.spec.md) without editing them: the scheduler creates no
+runs and leaves `next_run_at` as it is, so turning it back on gives each due
+routine one catch-up run. Run now still works while it is off.
+
 # 4. Open Questions
 
 - Should orchestrators be allowed to write project overrides? Phase 1 says admin
@@ -144,8 +151,7 @@ different model**, with `different_provider` shown as "…from a different provi
 - Should the PR's agentic review ([gitea helper](gitea-helper.spec.md) 3.4) count
   as an independent review when its model is known? Needs a model on that comment.
 - Candidates for later keys: default task `review`, `max_attempts`, lease TTL,
-  `ARGUS_MAX_TASKS_PER_AGENT_HOUR`, workspace cleanup. [Routines](routines.spec.md)
-  adds `routines.enabled`.
+  `ARGUS_MAX_TASKS_PER_AGENT_HOUR`, workspace cleanup.
 
 # 5. Constraints
 

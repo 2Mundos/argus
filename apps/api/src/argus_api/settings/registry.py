@@ -71,6 +71,13 @@ REGISTRY: dict[str, SettingDefinition] = {
         scopes=["global"],
         description="Whether the admin has closed the onboarding wizard.",
     ),
+    "routines.enabled": SettingDefinition(
+        key="routines.enabled",
+        schema={"type": "boolean"},
+        default=True,
+        scopes=["global"],
+        description="Run routines on their schedules; off pauses every routine.",
+    ),
     "orchestrator.enabled": SettingDefinition(
         key="orchestrator.enabled",
         schema={"type": "boolean"},

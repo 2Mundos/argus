@@ -3,7 +3,7 @@
 Rows are tasks that are blocked, in review or awaiting approval, each joined
 with its open decision if any; pending tasks stuck behind a failed or cancelled
 dependency (task dependencies 3.2); and open decisions about other subjects
-(pools, knowledge proposals). Totals come from the same snapshot as the page.
+(pools, knowledge proposals, routines disabled by failures). Totals come from the same snapshot as the page.
 """
 
 from collections import defaultdict
@@ -38,7 +38,7 @@ class BlockedTask(BaseModel):
 
 
 class InboxItem(BaseModel):
-    subject_type: str  # task, pool, knowledge_proposal
+    subject_type: str  # task, pool, knowledge_proposal, routine
     subject_id: str
     title: str | None
     project: str | None  # None for pools
@@ -65,7 +65,7 @@ class InboxItem(BaseModel):
 
 
 class InboxGroup(BaseModel):
-    key: str  # task:<id>, pool, or knowledge_proposal:<project>
+    key: str  # task:<id>, pool, knowledge_proposal:<project> or routine:<project>
     project: str | None
     subject_type: str
     subject_id: str | None  # the task; None for pool and knowledge groups
@@ -107,11 +107,12 @@ _ROWS = (
     " FROM tasks t"
     " WHERE t.state = 'claimed' AND t.quiet_at IS NOT NULL"
     " UNION ALL"
-    " SELECT d.subject_type, d.subject_id, coalesce(kp.title, d.subject_id),"
-    " kp.project, NULL, NULL, NULL, NULL, d.id, d.kind, d.audience,"
-    " d.created_at, d.id, NULL"
+    " SELECT d.subject_type, d.subject_id,"
+    " coalesce(kp.title, ro.title, d.subject_id), coalesce(kp.project, ro.project),"
+    " NULL, NULL, NULL, NULL, d.id, d.kind, d.audience, d.created_at, d.id, NULL"
     " FROM decisions d LEFT JOIN knowledge_proposals kp"
     "  ON d.subject_type = 'knowledge_proposal' AND kp.id = d.subject_id"
+    " LEFT JOIN routines ro ON d.subject_type = 'routine' AND ro.id = d.subject_id"
     " WHERE d.state = 'open' AND d.subject_type != 'task'"
 )
 
@@ -266,8 +267,8 @@ def _age(snap: Snapshot, row: Any) -> int:
 def _group_key(row: Any) -> str:
     if row["subject_type"] == "task":
         return f"task:{row['subject_id']}"
-    if row["subject_type"] == "knowledge_proposal":
-        return f"knowledge_proposal:{row['project']}"
+    if row["subject_type"] in ("knowledge_proposal", "routine"):
+        return f"{row['subject_type']}:{row['project']}"
     return row["subject_type"]
 
 
@@ -297,7 +298,8 @@ def _groups(
     dependents: dict[str, list[BlockedTask]],
     order: Order,
 ) -> list[InboxGroup]:
-    """One group per task, per project's knowledge proposals, and for pools."""
+    """One group per task, per project's knowledge proposals and routines, and for
+    pools."""
     members: dict[str, list[Any]] = {}
     for r in rows:
         members.setdefault(_group_key(r), []).append(r)

@@ -75,3 +75,11 @@ class Routine(BaseModel):
     next_slots: list[datetime]
     # Most recent run tasks first; filled by `GET /routines/{id}` only.
     last_runs: list[RoutineRun] = []
+
+
+class RoutineRunResult(BaseModel):
+    """`POST /routines/{id}/run`: the run task, or why none was created."""
+
+    routine_id: str
+    task_id: str | None  # None when skipped
+    skipped: Literal["previous_running"] | None = None

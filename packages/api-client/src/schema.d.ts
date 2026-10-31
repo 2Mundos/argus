@@ -2008,6 +2008,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/routines/{routine_id}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Routine
+         * @description Run it now, even while disabled or paused. If its previous run is still
+         *     open, nothing is created: `skipped: previous_running` (a `routine.skipped`).
+         */
+        post: operations["run_routine_api_routines__routine_id__run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runtime/catalog": {
         parameters: {
             query?: never;
@@ -7657,6 +7678,18 @@ export interface components {
             state: components["schemas"]["TaskState"];
             /** Task Id */
             task_id: string;
+        };
+        /**
+         * RoutineRunResult
+         * @description `POST /routines/{id}/run`: the run task, or why none was created.
+         */
+        RoutineRunResult: {
+            /** Routine Id */
+            routine_id: string;
+            /** Skipped */
+            skipped?: "previous_running" | null;
+            /** Task Id */
+            task_id: string | null;
         };
         /**
          * RoutineWrite
@@ -13323,6 +13356,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Routine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_routine_api_routines__routine_id__run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                routine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutineRunResult"];
                 };
             };
             /** @description Validation Error */

@@ -51,6 +51,7 @@ from argus_api.onboarding import router as onboarding_router
 from argus_api.ops import LoopStats, ReadinessCache
 from argus_api.ops_routes import probes as probes_router
 from argus_api.ops_routes import router as ops_router
+from argus_api.routines import runs as routine_runs
 from argus_api.routines.routes import router as routines_router
 from argus_api.runtime.docker import CliDocker
 from argus_api.runtime.routes import router as runtime_router
@@ -191,6 +192,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 )
             ),
             asyncio.create_task(app.state.quota.run()),
+            asyncio.create_task(routine_runs.run(db, settings.model_policy_path)),
             *(
                 [asyncio.create_task(app.state.runtime.run())]
                 if settings.project_runtime

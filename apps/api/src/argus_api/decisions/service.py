@@ -25,6 +25,7 @@ from argus_api.errors import (
 from argus_api.events import record
 from argus_api.fleet import service as fleet
 from argus_api.knowledge import service as knowledge
+from argus_api.routines import service as routines
 from argus_api.tasks import service as tasks
 
 
@@ -234,6 +235,9 @@ async def _apply_answer(
                 approve=body.choice == "approve",
                 actor=caller.actor,
             )
+        case DecisionKind.POLICY if decision.subject_type == "routine":
+            if body.choice == "approve":
+                await routines.reenable(tx, decision.subject_id, caller.actor)
         case DecisionKind.APPROVAL | DecisionKind.POLICY:
             if body.choice == "approve":
                 await tasks.approve(tx, task_id, caller.actor)

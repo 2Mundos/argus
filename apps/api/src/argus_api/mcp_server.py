@@ -1658,6 +1658,14 @@ async def set_routine_enabled(
     )
 
 
+@tool(MANAGERS)
+async def run_routine(ctx: Context, routine_id: str) -> dict:
+    """Run a routine now, even while it is disabled or routines are paused. Returns
+    `task_id`, or `skipped: previous_running` (and no task) while its previous run
+    task is not terminal."""
+    return await _call(ctx, "POST", f"/routines/{routine_id}/run")
+
+
 # -- preferred models -------------------------------------------------------------------
 
 
