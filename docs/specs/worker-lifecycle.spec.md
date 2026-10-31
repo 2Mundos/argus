@@ -116,6 +116,9 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
 - A task created with `requires_approval` starts in `awaiting_approval` and
   opens a decision (3.10); approval moves it on as if just created.
 - A task with no unfinished dependencies enters `ready` directly.
+- A [task draft](task-drafts.spec.md) is not a task and has no state here: it
+  enters this machine only when published, with its complete definition and
+  dependencies, in one transaction.
 - When a task `succeeded`, dependents whose dependencies are all done move to
   `ready` in the same transaction.
 - If a dependency ends `failed` or `cancelled`, dependents stay `pending` and an
@@ -512,7 +515,7 @@ anonymous access. Three scopes:
 | Scope | Can |
 | --- | --- |
 | `worker` | Claim, heartbeat, update/complete/fail/block its own tasks, report progress, ask questions, lease accounts, create subtasks under a task it holds. |
-| `orchestrator` | Everything `worker` can, plus create/cancel/release any task, edit deps of waiting tasks ([task dependencies](task-dependencies.spec.md)) and edit tasks ([task edit](task-edit.spec.md)), answer `orchestrator` decisions, set `desired_replicas` up to `max_replicas`, drain agents. |
+| `orchestrator` | Everything `worker` can, plus create/cancel/release any task, edit deps of waiting tasks ([task dependencies](task-dependencies.spec.md)) and edit tasks ([task edit](task-edit.spec.md)), draft and publish tasks ([task drafts](task-drafts.spec.md)), answer `orchestrator` decisions, set `desired_replicas` up to `max_replicas`, drain agents. |
 | `admin` (human) | Everything, including pool and account definitions, `max_replicas`, killing instances, revoking tokens. |
 
 Every route requires a token except `GET /healthz` and `POST /agents/register`
@@ -564,6 +567,8 @@ as a managed pool of size 1 uses the same model: see
   `leave`; `search_knowledge`, `get_knowledge_page`, `write_knowledge`;
   `lease_account`, `report_account_exhausted`; `list_engines`, `run_local`; and
   for orchestrators `attach_artifact`, `get_inbox`, `list_tasks`, `edit_task`, `set_task_dependencies`,
+  `create_task_draft`, `list_task_drafts`, `get_task_draft`, `edit_task_draft`,
+  `discard_task_draft`, `publish_task_drafts` ([task drafts](task-drafts.spec.md)),
   `unblock_task`, `retry_task`, `release_task`,
   `cancel_task`, `list_agents`, `list_pools`, `scale_pool`,
   `inspect_pool`, `get_instance`, `get_instance_logs`, `drain_agent`,

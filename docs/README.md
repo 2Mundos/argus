@@ -132,6 +132,8 @@ every new dependency is judged against it.
   dependencies with a cycle check; stuck dependents surface in the inbox
 - [Task edit](specs/task-edit.spec.md) — edit a task's title, spec, criteria, priority,
   capabilities, pins and dependencies with one rule set for REST, MCP and the dashboard
+- [Task drafts](specs/task-drafts.spec.md) — persisted, never-claimable task drafts
+  published in one validated, idempotent transaction (atomic or partial)
 - [Pool editor](specs/pool-editor.spec.md) — separate host and NanoClaw agent image fields with verified
   choices, version-checked saves, field-level errors
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes

@@ -1,0 +1,17 @@
+{
+  "account_id": "c34947ba-1bc9-44f8-a93f-5c80d6ea1449",
+  "payload": {
+    "task_id": "030540ef-d69a-4c2c-839d-f4970e8c94d7",
+    "attempt": 2,
+    "model": "claude-opus-5-5",
+    "engine": "claude",
+    "role": "executor",
+    "measurement": "not_reported",
+    "input_tokens": null,
+    "output_tokens": null,
+    "cached_input_tokens": null,
+    "cost_usd": null,
+    "reason": "no_result_object",
+    "run_key": "r1:030540ef-d69a-4c2c-839d-f4970e8c94d7:330bf5306209:claude:claude:2026-10-31T23_00_20.744Z"
+  }
+}

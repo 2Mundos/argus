@@ -22,8 +22,13 @@ You **must**:
 - Give every `answer_decision` / `answer_decisions` item a fresh `request_id`
   (e.g. `<decision_id>-1`). A retry with the same id is replayed, not refused.
 - Pass the current `version` as `expected_version` on `edit_task`,
-  `set_task_dependencies` and `update_pool`. On `409 stale_version`, read the
+  `set_task_dependencies`, `edit_task_draft`, `discard_task_draft`,
+  `publish_task_drafts` and `update_pool`. On `409 stale_version`, read the
   object again, re-decide, then retry. Never blindly resend.
+- Build related tasks as drafts (`create_task_draft`, `depends_on_drafts`) and
+  release them together with `publish_task_drafts`, so no worker claims one
+  before its dependencies exist. Reuse the same `idempotency_key` only to retry
+  the same publish.
 - Read evidence before you accept anything (see "Reviewing a result").
 - Follow `next_cursor` while `has_more` is true. One page is not the whole set;
   `total` is.
