@@ -24,9 +24,13 @@ tools it calls have changed shape since, so check that commit out to rerun it.
 `journey_after` uses the P0 read tools; its numbers are in `results/after.json`.
 `journey_answers` adds the batch answer (step 4), in `results/answers.json`;
 rerun after its items became compact (step 6), in `results/answers-compact.json`.
-Each recorded journey stays as it was; a later step adds its own.
+`journey_actionable` reads the inbox with view=actionable instead of the
+summary plus list_decisions, in `results/actionable.json`; that run also
+records `triage`, the inbox read alone (summary then detail against
+actionable). Each recorded journey stays as it was; a later step adds its own.
 
-    uv run python apps/api/bench/mcp_inbox.py [answers|after|before] [--out FILE]
+    uv run python apps/api/bench/mcp_inbox.py [actionable|answers|after|before]
+        [--out FILE]
 """
 
 import argparse
@@ -42,6 +46,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from argus_core.continuation import item_id
 from fastapi.testclient import TestClient
 
 HERE = Path(__file__).parent
@@ -54,6 +59,7 @@ LAYOUT = {
     "beta": (4, 2, 1, 5),
     "gamma": (2, 2, 1, 5),
 }
+ACCEPTANCE = ["tests cover empty and last pages", "docs updated"]
 PARAGRAPH = (
     "Context: the service exposes a paginated listing whose ordering must stay"
     " stable across retries; callers depend on it for incremental sync. Keep the"
@@ -100,6 +106,7 @@ class Agent:
             headers={
                 "Accept": "application/json, text/event-stream",
                 "Authorization": f"Bearer {self.token}",
+                "Host": "127.0.0.1",  # on the MCP DNS-rebinding allowlist
             },
             json=body,
         )
@@ -191,7 +198,7 @@ def seed(client: TestClient) -> Expected:
                 "title": f"{project}: change {i:02d} to the listing endpoint",
                 "project": project,
                 "spec": PARAGRAPH * 6,
-                "acceptance": ["tests cover empty and last pages", "docs updated"],
+                "acceptance": ACCEPTANCE,
                 "input": {"repo": f"{project}/service", "ticket": f"OPS-{100 + i}"},
                 **extra,
             },
@@ -262,7 +269,17 @@ def seed(client: TestClient) -> Expected:
             api(
                 "POST",
                 f"/tasks/{task['id']}/complete",
-                {"attempt": attempt, "result": {"summary": PARAGRAPH}},
+                {
+                    "attempt": attempt,
+                    # Evidenced items, or the result goes to review (continuation).
+                    "result": {
+                        "summary": PARAGRAPH,
+                        "checklist": [
+                            {"id": item_id(a), "status": "done", "evidence": "CI"}
+                            for a in ACCEPTANCE
+                        ],
+                    },
+                },
                 worker,
             )
     for project, (*_, filler) in LAYOUT.items():  # ready: created after every claim
@@ -425,11 +442,95 @@ def journey_answers(agent: Agent) -> dict[str, Any]:
     return {"states": states, "for_human": sorted(for_human)}
 
 
+def pages(agent: Agent, **arguments: Any) -> list[dict]:
+    """Every get_inbox row, following the cursor."""
+    rows: list[dict] = []
+    cursor = None
+    while True:
+        page = agent.call("get_inbox", **arguments, cursor=cursor)
+        rows += page["items"]
+        if not page["has_more"]:
+            return rows
+        cursor = page["next_cursor"]
+
+
+def journey_actionable(agent: Agent) -> dict[str, Any]:
+    """The step 4 journey with the actionable inbox: questions, options and
+    authority come with each row, so list_decisions is not needed."""
+    agent.list_tools()
+    rows = pages(agent, project=TARGET, view="actionable", limit=25)
+    answers: list[dict[str, Any]] = []
+    touched: list[str] = []
+    for_human: list[str] = []
+    for row in rows:
+        task_id, decision_id = row["subject_id"], row["decision_id"]
+        act = row["actionable"]
+        if decision_id is None:
+            continue
+        if not act["authority"]["caller_may_attempt"]:
+            for_human.append(task_id)
+            continue
+        if row["decision_kind"] == "question":
+            assert not act["question"]["truncated"]
+            answer = {"choice": pick_option(act["question"]["text"], act["options"])}
+        elif row["decision_kind"] == "review":
+            listed = agent.call("list_artifacts", task_id=task_id)
+            report = next(a for a in listed if a["in_result"])
+            assert agent.call("verify_artifact", artifact_id=report["id"])["ok"]
+            read = agent.call("read_artifact", artifact_id=report["id"])
+            assert read["next_offset"] is None
+            answer = {
+                "choice": verdict_of(read["text"].encode()),
+                "text": "checked report.md (verified on the server)",
+            }
+        else:
+            continue
+        answers.append(
+            {"decision_id": decision_id, "request_id": decision_id, **answer}
+        )
+        touched.append(task_id)
+    results = agent.call("answer_decisions", answers=answers)["results"]
+    assert all(r["ok"] for r in results), results
+    back = agent.call("get_tasks", ids=touched)
+    assert not back["missing"]
+    states = {t["id"]: t["state"] for t in back["items"]}
+    return {"states": states, "for_human": sorted(for_human)}
+
+
 JOURNEYS: dict[str, Callable[[Agent], dict[str, Any]]] = {
     "before": journey_before,
     "after": journey_after,
     "answers": journey_answers,
+    "actionable": journey_actionable,
 }
+
+TRIAGE_RUNS = 20
+
+
+def triage(client: TestClient, token: str) -> dict[str, Any]:
+    """The read before acting, on the whole inbox (every project), 25 rows a
+    page: get_inbox summary then view=detail, against one view=actionable.
+    Latency is the median of TRIAGE_RUNS runs, in process (no network)."""
+    reads = {
+        "summary+detail": ({"view": "summary"}, {"view": "detail"}),
+        "actionable": ({"view": "actionable"},),
+    }
+    out: dict[str, Any] = {}
+    for label, views in reads.items():
+        walls: list[float] = []
+        for _ in range(TRIAGE_RUNS):
+            agent = Agent(client, token)
+            started = time.perf_counter()
+            for view in views:
+                pages(agent, limit=25, **view)
+            walls.append(time.perf_counter() - started)
+        m = agent.metrics
+        out[label] = {
+            "mcp_calls": m.mcp_calls,
+            "response_bytes": m.response_bytes,
+            "median_ms": round(sorted(walls)[len(walls) // 2] * 1000, 1),
+        }
+    return out
 
 
 # -- runner --------------------------------------------------------------------
@@ -451,6 +552,7 @@ def run(name: str, schemas: Path | None = None) -> dict[str, Any]:
         with TestClient(app) as client:
             expected = seed(client)
             agent = Agent(client, register(client, "orchestrator"))
+            reads = triage(client, agent.token) if name == "actionable" else None
             started = time.perf_counter()
             outcome = JOURNEYS[name](agent)
             wall_s = time.perf_counter() - started
@@ -481,6 +583,7 @@ def run(name: str, schemas: Path | None = None) -> dict[str, Any]:
         "context_bytes": m.context_bytes,
         "context_tokens_estimate": m.context_bytes // 4,
         "wall_s": round(wall_s, 3),
+        **({"triage": reads} if reads else {}),
     }
 
 
