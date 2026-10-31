@@ -6,7 +6,7 @@ import {
   createArgusAdapter,
   noAccountReply,
 } from "./argus.js";
-import { OneCliClient } from "./argus-accounts.js";
+import { argusMcpUrl, OneCliClient } from "./argus-accounts.js";
 import {
   chatThread,
   createChatLoop,
@@ -601,7 +601,13 @@ function fakeVault() {
       state.secrets.push(secret);
       return ok(secret);
     }
+    if (path === "/agents/oa/secrets" && method === "GET") return ok(state.secretIds);
     if (path === "/agents/oa/secrets") state.secretIds = body.secretIds;
+    if (path.startsWith("/secrets/") && method === "PATCH") {
+      const secret = state.secrets.find((x) => `/secrets/${x.id}` === path);
+      Object.assign(secret, body);
+      return ok(secret);
+    }
     if (path === "/agents/oa/secret-mode") state.mode = body.mode;
     return ok({});
   }) as unknown as typeof fetch;
@@ -753,5 +759,92 @@ describe("createArgusAdapter orchestrator failures", () => {
     expect(h.replies().at(-1)?.body.body).toBe(
       authRejectedReply({ name: "claude a1", provider: "anthropic" }),
     );
+  });
+});
+
+describe("orchestrator Argus MCP wiring (spec 3.1)", () => {
+  it("accepts only an endpoint NanoClaw accepts", () => {
+    expect(argusMcpUrl("https://argus.example/")?.href).toBe("https://argus.example/mcp");
+    expect(argusMcpUrl("https://argus.example/base?x=1")?.href).toBe(
+      "https://argus.example/base/mcp",
+    );
+    expect(argusMcpUrl("http://host.docker.internal:8000")?.href).toBe(
+      "http://host.docker.internal:8000/mcp",
+    );
+    expect(argusMcpUrl("http://argus.lan:8000")).toBeNull();
+    expect(argusMcpUrl("not a url")).toBeNull();
+  });
+
+  it("puts the token in OneCLI for /mcp only, wires the server, and keeps it through the lease", async () => {
+    const fake = fakeChatArgus();
+    const vault = fakeVault();
+    const inbound: any[] = [];
+    const setArgusMcp = vi.fn(async () => undefined);
+    const adapter = createArgusAdapter({
+      url: "https://argus.test",
+      bootstrapToken: "argus_boot_x",
+      capabilities: [],
+      name: "orch",
+      fetch: fake.fetchImpl,
+      claimWaitS: 1,
+      accounts: {
+        models: true,
+        onecli: vault.onecli,
+        resolveTarget: async () => ({ identifier: "g", name: "orch" }),
+        selectEngine: async () => false,
+        setArgusMcp,
+      },
+    } as ArgusConfig);
+    live.push(adapter);
+    await adapter.setup({
+      onInbound: async (_p: string, _t: string | null, m: any) => void inbound.push(m),
+      onInboundEvent: vi.fn(),
+      onMetadata: vi.fn(),
+      onAction: vi.fn(),
+    } as unknown as ChannelSetup);
+    await vi.waitFor(() => expect(inbound.length).toBe(1), { timeout: 5_000 });
+    expect(setArgusMcp).toHaveBeenCalledWith("https://argus.test/mcp");
+    const mcp = vault.state.secrets.find((x) => x.name === "argus-g-mcp");
+    expect(mcp).toMatchObject({
+      type: "generic",
+      value: "argus_agent_x",
+      hostPattern: "argus.test",
+      pathPattern: "/mcp",
+      injectionConfig: { headerName: "Authorization", valueFormat: "Bearer {value}" },
+    });
+    // The account lease that followed kept it assigned, beside the account.
+    expect(vault.state.secretIds).toContain(mcp.id);
+    expect(vault.state.secretIds).toHaveLength(2);
+    expect(vault.state.mode).toBe("selective");
+  });
+
+  it("posts a reply that arrives after its turn ended", async () => {
+    const fake = fakeChatArgus();
+    const inbound: any[] = [];
+    const adapter = createArgusAdapter({
+      url: "http://argus.test",
+      bootstrapToken: "argus_boot_x",
+      capabilities: [],
+      name: "orch",
+      fetch: fake.fetchImpl,
+      claimWaitS: 1,
+    } as ArgusConfig);
+    live.push(adapter);
+    await adapter.setup({
+      onInbound: async (_p: string, _t: string | null, m: any) => void inbound.push(m),
+      onInboundEvent: vi.fn(),
+      onMetadata: vi.fn(),
+      onAction: vi.fn(),
+    } as unknown as ChannelSetup);
+    await vi.waitFor(() => expect(inbound.length).toBe(1));
+    await adapter.deliver!("local", chatThread("c1"), { content: { text: "Done." } } as any);
+    await adapter.deliver!("local", chatThread("c1"), {
+      content: { text: "Correction: it failed." },
+    } as any);
+    const posts = fake.calls.filter((c) => c.method === "POST" && c.path === "/agents/me/chat/c1");
+    expect(posts.map((c) => [c.body.body, c.body.turn_id])).toEqual([
+      ["Done.", "turn-1"],
+      ["Correction: it failed.", null],
+    ]);
   });
 });

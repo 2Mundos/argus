@@ -38,6 +38,33 @@ function arg(name: string): string | undefined {
 
 const id = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+function workerPersona(agentName: string): string {
+  return (
+    `# ${agentName}\n\n` +
+    `You are ${agentName}, a worker in an Argus fleet. Tasks arrive as messages starting with "[Argus task]". ` +
+    'Do the work, send brief progress updates, and finish with a message that starts with "COMPLETE:" and a summary ' +
+    '(or "FAIL:" with the reason, or "ASK:" with a question you need answered). Keep messages concise.'
+  );
+}
+
+/** Argus's internal orchestrator (internal-orchestrator.spec.md 3.1). */
+function orchestratorPersona(agentName: string): string {
+  return [
+    `# ${agentName}`,
+    "",
+    `You are ${agentName}, the internal orchestrator of this Argus install. Admins talk to you in chat; ` +
+      "each conversation is its own thread. Answer in the language the admin writes in.",
+    "",
+    "- Your only way to see or change Argus is the `argus` MCP tools (`mcp__argus__*`). Before you act, read the " +
+      "resource `skill://argus-orchestrator/SKILL.md` from that server (or its `argus-orchestrator` prompt) and follow it.",
+    "- Report only what a tool result confirmed. If a call failed or you did not make one, say so; never describe " +
+      "planned or pending work as done.",
+    "- You cannot launch, create or scale workers or pools: an admin does that in the dashboard. Say so when asked.",
+    "- If the Argus tools are missing, say that they are missing and stop; do not work around them.",
+    "- Keep replies short: the result first.",
+  ].join("\n");
+}
+
 async function main(): Promise<void> {
   const agentName = arg("--agent-name")?.trim() || "Argus Worker";
   const folder =
@@ -67,12 +94,9 @@ async function main(): Promise<void> {
   } else {
     console.log(`Reusing agent group: ${ag.id} (${folder})`);
   }
+  const orchestrator = process.env.ARGUS_AGENT_ROLE?.trim().toLowerCase() === "orchestrator";
   await initGroupFilesystem(ag, {
-    instructions:
-      `# ${agentName}\n\n` +
-      `You are ${agentName}, a worker in an Argus fleet. Tasks arrive as messages starting with "[Argus task]". ` +
-      'Do the work, send brief progress updates, and finish with a message that starts with "COMPLETE:" and a summary ' +
-      '(or "FAIL:" with the reason, or "ASK:" with a question you need answered). Keep messages concise.',
+    instructions: orchestrator ? orchestratorPersona(agentName) : workerPersona(agentName),
     provider: process.env.NANOCLAW_PICKED_PROVIDER?.trim().toLowerCase(),
   });
   // The worker never runs `ncl`: leave the cli and scheduling instructions out of its CLAUDE.md.

@@ -586,4 +586,19 @@ python3 "$here/patch-startup-adoption-gate.py" "$target"
 # No blanket running-session ceiling (reconcile-session.ts): only a stale message claim kills.
 python3 "$here/patch-no-session-ceiling.py" "$target"
 
+# No self-modifying tools for Argus agents (internal orchestrator spec 3.1): create_agent,
+# install_packages and add_mcp_server need a NanoClaw owner's approval, which no Argus host has.
+mcp_tools="$target/container/agent-runner/src/mcp-tools/index.ts"
+if ! grep -q "argus: no self-modifying tools" "$mcp_tools"; then
+  python3 - "$mcp_tools" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "import './agents.js';\nimport './self-mod.js';\n"
+assert old in s, "mcp-tools/index.ts imports changed upstream"
+open(p, "w").write(s.replace(old, "// argus: no self-modifying tools (agents.js, self-mod.js are not loaded).\n", 1))
+PY
+  echo "patched $mcp_tools (no self-modifying tools)"
+fi
+
 echo "installed. Next: (cd $target && pnpm run build && pnpm exec vitest run src/channels/argus.test.ts)"
