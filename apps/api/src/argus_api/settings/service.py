@@ -220,8 +220,8 @@ async def put_setting(
         # Global models still live in data/model-policy.json (settings.spec.md 3.4).
         policy = model_policy.validate(value)
         model_policy._env()  # fail closed on a malformed lock
+        before = _models_from_file(path).value
         model_policy._write(path, policy)
-        before = None
         after = _models_from_file(path)
         await record(
             tx,
