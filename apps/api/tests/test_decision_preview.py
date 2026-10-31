@@ -477,27 +477,29 @@ async def _statuses(db: Database, decision_id: str) -> list[str]:
     return [c.status for c in p.premise_checks.checks]
 
 
-async def _store_ref(db: Database, task_id: str, ref: str, head_sha: str) -> None:
+async def _store_ref(
+    db: Database,
+    task_id: str,
+    ref: str,
+    head_sha: str,
+    *,
+    kind: ArtifactKind = ArtifactKind.PR,
+    url: str | None = None,
+    observed_at: datetime = datetime(2026, 1, 2, tzinfo=UTC),
+) -> None:
+    artifact = ContinuationArtifact(
+        kind=kind,
+        ref=ref,
+        url=url,
+        head_sha=head_sha,
+        state=ArtifactState.OPEN,
+        provenance=ContinuationProvenance.RUNTIME,
+        observed_at=observed_at,
+    )
     async with db.write() as tx:
-        await cont.store(
-            tx,
-            task_id,
-            await cont.current(tx, task_id),
-            Continuation(
-                artifacts=[
-                    ContinuationArtifact(
-                        kind=ArtifactKind.PR,
-                        ref=ref,
-                        head_sha=head_sha,
-                        state=ArtifactState.OPEN,
-                        provenance=ContinuationProvenance.RUNTIME,
-                        observed_at=datetime(2026, 1, 2, tzinfo=UTC),
-                    )
-                ]
-            ),
-            "t",
-            "t",
-        )
+        before = await cont.current(tx, task_id)
+        after = Continuation(artifacts=cont.upsert_artifact(before.artifacts, artifact))
+        await cont.store(tx, task_id, before, after, "t", "t")
 
 
 async def test_unrelated_pr_is_not_reported_stale(db: Database) -> None:
@@ -523,3 +525,120 @@ async def test_multiple_prs_and_ambiguous_references(db: Database) -> None:
     task2, did2 = await _question_decision(db, "Is abc1234 still good?")
     await _store_ref(db, task2, "7", "fed9876cba4321")
     assert await _statuses(db, did2) == ["unknown"]
+
+
+async def _checks(db: Database, decision_id: str) -> list[tuple[str, str, str | None]]:
+    p = await preview(db, decision_id, ORCH, choice="accept")
+    return [(c.status, c.subject, c.recorded) for c in p.premise_checks.checks]
+
+
+async def test_named_pr_is_stale_despite_unrelated_pr_at_the_old_head(
+    db: Database,
+) -> None:
+    task_id, did = await _question_decision(db, f"Review PR 42 at head {SHA_OLD}")
+    await _store_ref(db, task_id, "42", SHA_NEW)
+    await _store_ref(db, task_id, "99", SHA_OLD)  # unrelated, same SHA
+    assert await _checks(db, did) == [("stale", "pr 42", SHA_NEW)]
+    # an unrelated commit at the head does not mask it either
+    await _store_ref(db, task_id, SHA_OLD, SHA_OLD, kind=ArtifactKind.COMMIT)
+    assert await _checks(db, did) == [("stale", "pr 42", SHA_NEW)]
+
+
+async def test_named_pr_at_the_same_head_matches(db: Database) -> None:
+    task_id, did = await _question_decision(db, f"Review PR #42 at head {SHA_OLD}")
+    await _store_ref(db, task_id, "99", SHA_NEW)
+    await _store_ref(db, task_id, "42", SHA_OLD)
+    assert await _checks(db, did) == [("match", "pr 42", SHA_OLD)]
+
+
+async def test_named_pr_not_stored_is_unknown_even_if_another_matches(
+    db: Database,
+) -> None:
+    task_id, did = await _question_decision(db, f"Review PR 42 at head {SHA_OLD}")
+    await _store_ref(db, task_id, "99", SHA_OLD)
+    assert await _statuses(db, did) == ["unknown"]
+
+
+async def _two_repos(db: Database, question: str) -> str:
+    task_id, did = await _question_decision(db, question)
+    url = "https://git.example/team/argus/pulls/42"
+    await _store_ref(db, task_id, "42", SHA_OLD, url=url)
+    await _store_ref(db, task_id, "team/radar#42", SHA_NEW)
+    return did
+
+
+async def test_same_pr_number_in_two_repositories_is_unknown(db: Database) -> None:
+    did = await _two_repos(db, f"Review PR 42 at head {SHA_OLD}")
+    assert await _statuses(db, did) == ["unknown"]
+    # naming the repository disambiguates
+    did = await _two_repos(db, f"Review team/radar#42 at head {SHA_OLD}")
+    assert await _checks(db, did) == [("stale", "pr team/radar#42", SHA_NEW)]
+    did = await _two_repos(
+        db, f"Review https://git.example/team/argus/pulls/42 at head {SHA_OLD}"
+    )
+    assert await _checks(db, did) == [("match", "pr 42", SHA_OLD)]
+
+
+async def test_abbreviated_shas_match_either_way(db: Database) -> None:
+    task_id, did = await _question_decision(db, "Review PR 42 at head abc1234")
+    await _store_ref(db, task_id, "42", SHA_OLD)
+    assert await _statuses(db, did) == ["match"]
+    task2, did2 = await _question_decision(db, f"Review PR 42 at head {SHA_OLD}")
+    await _store_ref(db, task2, "42", "abc1234")
+    assert await _statuses(db, did2) == ["match"]
+    task3, did3 = await _question_decision(db, "Review PR 42 at head abc1234")
+    await _store_ref(db, task3, "42", "abc1235def")
+    assert await _statuses(db, did3) == ["stale"]
+
+
+async def test_sha_without_a_pr_matches_only_when_unambiguous(db: Database) -> None:
+    task_id, did = await _question_decision(db, "Is abc1234 still good?")
+    await _store_ref(db, task_id, SHA_OLD, SHA_OLD, kind=ArtifactKind.COMMIT)
+    await _store_ref(db, task_id, "7", SHA_OLD)  # the same commit twice: one head
+    assert set(await _statuses(db, did)) == {"match"}
+    # a short SHA that prefixes two different stored heads is ambiguous
+    await _store_ref(db, task_id, "8", "abc1234ffff")
+    assert await _statuses(db, did) == ["unknown"]
+    # no PR named and no stored head matches: never stale
+    task2, did2 = await _question_decision(db, "Is 1234abcd still good?")
+    await _store_ref(db, task2, "7", SHA_NEW)
+    assert await _statuses(db, did2) == ["unknown"]
+
+
+async def test_multiple_shas_and_prs_bind_to_their_own_pr(db: Database) -> None:
+    task_id, did = await _question_decision(
+        db, f"PR 42 at {SHA_OLD}, PR 99 at {SHA_NEW} and PR 7 at 1111aaa2222"
+    )
+    await _store_ref(db, task_id, "42", SHA_NEW)  # 42 moved to 99's head
+    await _store_ref(db, task_id, "99", SHA_NEW)
+    await _store_ref(db, task_id, "5", "1111aaa2222")  # unrelated PR at 7's head
+    assert await _checks(db, did) == [
+        ("stale", "pr 42", SHA_NEW),
+        ("match", "pr 99", SHA_NEW),
+        ("unknown", "premise cannot be tied to a stored PR or commit", None),
+    ]
+
+
+async def test_uuid_fragments_are_not_shas(db: Database) -> None:
+    task_id, did = await _question_decision(
+        db, "Retry run 3f2a9c1e-7b4d-4e8a-9c2b-1a2b3c4d5e6f on PR 42"
+    )
+    await _store_ref(db, task_id, "42", SHA_NEW)
+    p = await preview(db, did, ORCH, choice="accept")
+    assert [(c.status, c.premise) for c in p.premise_checks.checks] == [
+        ("unknown", None)
+    ]
+
+
+async def test_observation_older_than_the_decision_is_not_asserted_stale(
+    db: Database, clock
+) -> None:
+    clock.advance(86_400 * 5)  # the decision is asked after the observation
+    task_id, did = await _question_decision(db, f"Review PR 42 at head {SHA_OLD}")
+    await _store_ref(db, task_id, "42", SHA_NEW)  # observed 2026-01-02
+    assert await _statuses(db, did) == ["unknown"]
+    # a later observation can still prove the premise stale
+    await _store_ref(
+        db, task_id, "42", SHA_NEW, observed_at=datetime(2026, 2, 1, tzinfo=UTC)
+    )
+    assert await _statuses(db, did) == ["stale"]

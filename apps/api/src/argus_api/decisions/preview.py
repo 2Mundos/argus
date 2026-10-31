@@ -10,7 +10,7 @@ import re
 from datetime import datetime
 from typing import Literal
 
-from argus_core.continuation import ArtifactKind
+from argus_core.continuation import ArtifactKind, ContinuationArtifact
 from argus_core.decisions import (
     Decision,
     DecisionAnswer,
@@ -37,7 +37,8 @@ MAX_CANCELLED = 20
 
 Provenance = Literal["stored", "derived", "unknown"]
 
-_HEX = re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")
+# Hex runs inside a hyphenated id (a UUID) are not SHAs.
+_HEX = re.compile(r"(?<![\w-])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w-])")
 
 _TASK_ACTION = {
     Effect.CLARIFY: Action.UNBLOCK,
@@ -440,29 +441,52 @@ def _other_effects(decision: Decision, effect: Effect, add) -> None:
             add("routine_unchanged", f"routine {decision.subject_id} stays disabled")
 
 
+# A PR URL, an owner/repo#N reference, or a bare PR N / #N mention.
 _PR_MENTION = re.compile(
-    r"(?:\bPR\b|\bpull request\b|\bpull/|#)\s*#?(\d+)", re.IGNORECASE
+    r"https?://[^\s/]+/([\w.-]+)/([\w.-]+)/pulls?/(\d+)"
+    r"|\b([\w.-]+)/([\w.-]+)#(\d+)"
+    r"|(?:\bPR\b|\bpull request\b|\bpull/|#)\s*#?(\d+)",
+    re.IGNORECASE,
 )
 
+PrId = tuple[str, tuple[str, str] | None]  # (number, (owner, repo) or unknown)
 
-def _pr_number(ref: str) -> str | None:
-    m = re.fullmatch(r"#?(\d+)", ref.strip())
-    return m.group(1) if m else None
+
+def _mention(m: re.Match[str]) -> PrId:
+    if m.group(3):
+        return m.group(3), (m.group(1).lower(), m.group(2).lower())
+    if m.group(6):
+        return m.group(6), (m.group(4).lower(), m.group(5).lower())
+    return m.group(7), None
+
+
+def _pr_id(ref: str, url: str | None) -> PrId | None:
+    """A stored PR's number and repository; the repository comes from the ref or URL."""
+    found = [_mention(m) for t in (ref, url or "") for m in _PR_MENTION.finditer(t)]
+    with_repo = [f for f in found if f[1] is not None]
+    if bare := re.fullmatch(r"#?(\d+)", ref.strip()):
+        number = bare.group(1)
+        return number, next((r for n, r in with_repo if n == number), None)
+    return (with_repo or found or [None])[0]
+
+
+def _same_head(a: str, b: str) -> bool:
+    return a.startswith(b) or b.startswith(a)
 
 
 def _premise_pairs(
     question: str, payload_sha: str | None
-) -> list[tuple[str, str | None]]:
-    """(sha, PR number) pairs; the PR is the nearest preceding mention, else the
-    only mention, else None (association unknown)."""
-    mentions = [(m.start(), m.group(1)) for m in _PR_MENTION.finditer(question)]
-    only = mentions[0][1] if len({n for _, n in mentions}) == 1 else None
-    out: dict[str, str | None] = {}
+) -> list[tuple[str, PrId | None]]:
+    """(sha, PR) pairs; the PR is the nearest preceding mention, else the only
+    mention, else None (association unknown)."""
+    mentions = [(m.start(), _mention(m)) for m in _PR_MENTION.finditer(question)]
+    only = mentions[0][1] if len({p for _, p in mentions}) == 1 else None
+    out: dict[str, PrId | None] = {}
     if payload_sha:
         out[payload_sha] = only
     else:
         for m in _HEX.finditer(question):
-            before = [n for pos, n in mentions if pos < m.start()]
+            before = [p for pos, p in mentions if pos < m.start()]
             out.setdefault(m.group(0), before[-1] if before else only)
             if len(out) >= 5:
                 break
@@ -490,7 +514,7 @@ def _premise(decision: Decision, task_row) -> PreviewPremiseChecks:
     )
     contract = cont.load(task_row)
     stored = [
-        a
+        (a, a.head_sha)
         for a in contract.artifacts
         if a.kind in (ArtifactKind.PR, ArtifactKind.COMMIT) and a.head_sha
     ]
@@ -509,6 +533,24 @@ def _premise(decision: Decision, task_row) -> PreviewPremiseChecks:
             )
         )
 
+    def check(a: ContinuationArtifact, head: str, sha: str) -> None:
+        status: Literal["match", "stale", "unknown"] = "match"
+        if not _same_head(head, sha):
+            # An observation older than the question cannot prove it stale: the
+            # head may have moved to the premise after it was recorded.
+            status = "stale" if a.observed_at >= decision.created_at else "unknown"
+        checks.append(
+            PreviewPremiseCheck(
+                subject=redact(f"{a.kind.value} {a.ref}")[:300],
+                premise=sha,
+                recorded=head,
+                observed=None,
+                observed_at=a.observed_at,
+                status=status,
+                provenance="stored",
+            )
+        )
+
     if not pairs or not stored:
         unknown(
             "decision names no head"
@@ -517,38 +559,25 @@ def _premise(decision: Decision, task_row) -> PreviewPremiseChecks:
             pairs[0][0] if pairs else None,
         )
         pairs = []
-    for sha, pr_ref in pairs:
-        same = [
-            a
-            for a in stored
-            if a.head_sha is not None
-            and (a.head_sha.startswith(sha) or sha.startswith(a.head_sha))
-        ]
-        # A SHA names its own commit: a prefix match is a match whatever the ref.
-        # Staleness is only asserted for the PR the question actually names.
-        named = (
-            [
-                a
-                for a in stored
-                if a.kind is ArtifactKind.PR and _pr_number(a.ref) == pr_ref
-            ]
-            if pr_ref is not None
-            else []
-        )
-        for a in same or named:
-            assert a.head_sha is not None
-            checks.append(
-                PreviewPremiseCheck(
-                    subject=redact(f"{a.kind.value} {a.ref}")[:300],
-                    premise=sha,
-                    recorded=a.head_sha,
-                    observed=None,
-                    observed_at=a.observed_at,
-                    status="match" if same else "stale",
-                    provenance="stored",
-                )
-            )
-        if not same and not named:
+    for sha, pr in pairs:
+        if pr is not None:
+            # A named PR is compared with its own stored head only; another
+            # artifact at the same SHA never stands in for it.
+            named = _named(stored, pr)
+            if len({repo for _, _, repo in named}) == 1:
+                for a, head, _ in named:
+                    check(a, head, sha)
+            elif named:
+                unknown("PR number names several repositories", sha)
+            else:
+                unknown("premise cannot be tied to a stored PR or commit", sha)
+            continue
+        same = [(a, head) for a, head in stored if _same_head(head, sha)]
+        # No PR named: only a match on one commit is asserted, never staleness.
+        if same and all(_same_head(h, k) for _, h in same for _, k in same):
+            for a, head in same:
+                check(a, head, sha)
+        else:
             unknown("premise cannot be tied to a stored PR or commit", sha)
     checks.extend(
         PreviewPremiseCheck(
@@ -563,3 +592,21 @@ def _premise(decision: Decision, task_row) -> PreviewPremiseChecks:
         for r in contract.reconciliation
     )
     return PreviewPremiseChecks(checks=checks[:MAX_CHECKS])
+
+
+def _named(
+    stored: list[tuple[ContinuationArtifact, str]], pr: PrId
+) -> list[tuple[ContinuationArtifact, str, tuple[str, str] | None]]:
+    """Stored PRs with the named number; a named repository narrows them to that
+    repository, or to PRs whose repository is not recorded."""
+    number, repo = pr
+    found = [
+        (a, head, pid[1])
+        for a, head in stored
+        if a.kind is ArtifactKind.PR
+        and (pid := _pr_id(a.ref, a.url)) is not None
+        and pid[0] == number
+    ]
+    if repo is None:
+        return found
+    return [f for f in found if f[2] == repo] or [f for f in found if f[2] is None]

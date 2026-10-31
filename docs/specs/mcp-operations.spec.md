@@ -314,10 +314,18 @@ Unavailable facts are present and `"unknown"` or `"stale"`, never omitted.
 - `premise_checks`: `{live_forge_checked: false, checks}`. Only stored data is used: the
   task's continuation PR and commit artifacts (`head_sha`, `state`, `observed_at`) and
   its `reconciliation` entries. The premise a decision names is a `head_sha` in its
-  payload or hexadecimal hashes (7 to 40 characters) in its question. Each check is
+  payload or hexadecimal hashes (7 to 40 characters, not part of a hyphenated id such
+  as a UUID) in its question. Heads compare by prefix either way. A SHA bound to a
+  named PR (`PR 42`, `#42`, `owner/repo#42` or a PR URL) is compared only with that
+  PR's stored head; another artifact at the same SHA never stands in for it, and a
+  number stored for several repositories the question does not tell apart is
+  `unknown`. A SHA with no PR named is a `match` only when the stored heads it
+  prefixes are one commit, else `unknown`; never `stale`. Each check is
   `{subject, premise, recorded, observed_at, status}` with `status` `match`, `stale` (the
-  heads differ, or a reconciliation entry records a moved head or a no-longer-merged
-  PR) or `unknown` (no premise or no stored observation). At most 10 checks.
+  heads differ in an observation not older than the decision, or a reconciliation
+  entry records a moved head or a no-longer-merged PR) or `unknown` (no premise, no
+  stored observation, an ambiguous reference, or differing heads observed before the
+  decision was asked). At most 10 checks.
 - `advisory`: `{authorizes: false, executes: false}`.
 
 Lists are capped (effects 20, checks 10, cancelled ids 20); `question.text` at 4,000.
