@@ -107,12 +107,17 @@ export function WorkerChip({
           <span className="worker-name">{label}</span>
           {layout === "rail" && resolved && now !== undefined && (
             <>
+              {kind === "ended" && resolved.end_reason && (
+                <span className="muted small worker-end-reason">{resolved.end_reason}</span>
+              )}
               <span className="muted small worker-age">
                 {kind === "ended"
                   ? resolved.ended_at
                     ? age(resolved.ended_at, now)
                     : "—"
-                  : age(resolved.last_heartbeat_at, now)}
+                  : kind === "quiet" && resolved.quiet_since
+                    ? age(resolved.quiet_since, now)
+                    : age(resolved.last_heartbeat_at, now)}
               </span>
               <WorkerStateIcon kind={kind} />
             </>

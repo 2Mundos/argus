@@ -239,10 +239,13 @@ export function createChatLoop(deps: ChatLoopDeps) {
     try {
       const seed = await seedFor(conv, claim.message.id);
       const inbound = renderChatInbound(claim);
+      const ts = claim.message.created_at
+        ? new Date(claim.message.created_at).toISOString()
+        : new Date().toISOString();
       await deps.onInbound(deps.platformId, thread, {
         id: `argus-chat-${claim.message.id}`,
         kind: "chat",
-        timestamp: claim.message.created_at || new Date().toISOString(),
+        timestamp: ts,
         content: {
           text: seed ? `${seed}\n\n${inbound}` : inbound,
           sender: "argus",

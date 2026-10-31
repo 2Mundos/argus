@@ -291,8 +291,8 @@ async def lease(
     role: LeaseRole = "engine",
     *,
     reuse_held: bool = False,
-    task_id: str,
-    attempt: int,
+    task_id: str | None,
+    attempt: int | None,
 ) -> AccountLease:
     """Lease the best usable account for `role`, ranked globally by priority (then
     least leased, then name); the local model is a tier below every cloud account,
@@ -300,11 +300,19 @@ async def lease(
     it first and takes the cloud in the same call when it cannot serve. `runtime_providers` is only what the
     runtime can technically apply, never an order or allowlist. An agent holds one lease per
     role (`engine`: its harness; `executor`: a delegated CLI; `repository`); a new
-    lease replaces the previous one of the same role. Raises NoAccountError."""
+    lease replaces the previous one of the same role. Raises NoAccountError.
+
+    Without `task_id` (the internal orchestrator's engine; the route checks who may)
+    nothing narrows the runtime's providers and the ranking is the plain one."""
     if not runtime_providers:
         raise ValidationFailedError("runtime_providers must be non-empty")
-    await tasks.check_lease(tx, task_id, attempt, agent_id)
-    scope = await _scope(tx, task_id, role, runtime_providers, agent_id)
+    if task_id is None or attempt is None:
+        scope = _Scope(runtime_providers, None, None)
+        prefer_local = False
+    else:
+        await tasks.check_lease(tx, task_id, attempt, agent_id)
+        scope = await _scope(tx, task_id, role, runtime_providers, agent_id)
+        prefer_local = await _prefer_local(tx, task_id, role)
     allowed = scope.providers
     await release(tx, agent_id, "replaced", role)
     result = await _try_lease(
@@ -314,7 +322,7 @@ async def lease(
         role,
         allowed,
         reuse_held=reuse_held,
-        prefer_local=await _prefer_local(tx, task_id, role),
+        prefer_local=prefer_local,
         only_account=scope.account,
     )
     if result is None:
@@ -323,14 +331,15 @@ async def lease(
             f"no usable {role} account"
             + (f"; earliest reset at {reset.isoformat()}" if reset else ""),
         )
-    await _note_switch(
-        tx,
-        agent_id,
-        task_id,
-        attempt,
-        scope,
-        {"id": result.account_id, "name": result.name, "provider": result.provider},
-    )
+    if task_id is not None and attempt is not None:
+        await _note_switch(
+            tx,
+            agent_id,
+            task_id,
+            attempt,
+            scope,
+            {"id": result.account_id, "name": result.name, "provider": result.provider},
+        )
     return result
 
 

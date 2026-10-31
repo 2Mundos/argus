@@ -45,6 +45,7 @@ from argus_api.deps import (
     SettingsDep,
 )
 from argus_api.errors import ForbiddenError, ValidationFailedError
+from argus_api.orchestrator import SYSTEM_MARKER, agent_system_pool
 from argus_api.secrets import SecretStoreError, ref_name
 from argus_api.tasks import service as tasks
 
@@ -456,11 +457,17 @@ async def lease_account(
     """Lease the best usable account and deliver its credential to a claimed task.
 
     `runtime_providers` is required and states what the runtime can apply. The
-    caller must hold the live claim identified by `task_id` and `attempt`. One
-    active lease per role; `409 no_account` when none is usable. A `local` lease
+    caller must hold the live claim identified by `task_id` and `attempt`; only the
+    internal orchestrator may leave them out, for its engine (internal orchestrator
+    spec 3.1). One active lease per role; `409 no_account` when none is usable. A `local` lease
     whose credential names no `context_tokens` carries the window the local model's
     probe measured, so the harness can compact in time (local harness spec, "Harness orchestrates only")."""
     async with db.write() as tx:
+        if body.task_id is None and (
+            body.role != "engine"
+            or await agent_system_pool(tx.conn, agent_id) != SYSTEM_MARKER
+        ):
+            raise ValidationFailedError("task_id and attempt are required")
         leased = await service.lease(
             tx,
             agent_id,

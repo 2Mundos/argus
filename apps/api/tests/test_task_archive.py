@@ -281,3 +281,17 @@ def test_archived_tasks_leave_overview_and_ops_totals(
     assert 'argus_tasks{state="ready"} 1' in metrics
     client.post(f"/api/tasks/{gone[0]['id']}/unarchive")
     assert client.get("/api/overview").json()["tasks"]["failed"] == 1
+
+
+def test_pending_dependent_sees_archived_dependencies_real_state(
+    client: TestClient, agent: dict[str, str]
+) -> None:
+    dep = make(client, agent, "failed")
+    task = make(client, agent, "ready", depends_on=[dep["id"]])
+    assert task["state"] == "pending"
+    assert client.post(f"/api/tasks/{dep['id']}/archive").status_code == 200
+    after = client.get(f"/api/tasks/{task['id']}").json()
+    assert (after["state"], after["depends_on"]) == ("pending", [dep["id"]])
+    archived = client.get(f"/api/tasks/{dep['id']}").json()
+    assert archived["state"] == "failed"
+    assert archived["archived_at"] is not None

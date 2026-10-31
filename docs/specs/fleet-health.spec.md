@@ -62,7 +62,12 @@ dead-session recovery coverage and latency.
   attempts with a usage row; `usage_tasks` is tasks with any row and
   `measured_tasks` tasks whose every attempt is measured. Only measured tasks
   enter the token and cost means, so an unreported attempt is never counted as
-  zero; a mean needs `MIN_SAMPLES` measured tasks (else `null`). Migration
+  zero. A task's token total (input plus output) and cost are known only when
+  every measured row of the task reports that figure; a row with only cost or
+  only input leaves the task's tokens unknown, and never adds a partial sum. A
+  task with any `not_reported` row (any attempt, including attempt-less rows,
+  engine or executor) is not fully measured and adds no figure. A
+  mean needs `MIN_SAMPLES` measured tasks (else `null`). Migration
   `0046` indexes `account_usage.task_id`. The MCP tool `get_fleet_yield(window_hours)`
   (managers) returns this `yield` block.
 - **Dead-session recovery (P5 measure).** `dead_session_recovery` answers how long
