@@ -2806,6 +2806,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/resumability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Resumability
+         * @description Read-only resumability preflight: attempt/lease state, WIP class, and whether
+         *     shared attachments are currently available (size and SHA-256 re-read). Recorded
+         *     metadata and historical receipts do not prove current availability. Grants
+         *     nothing; never mutates. Optional `expected_attempt` / `expected_version` make a
+         *     mismatch `stale` instead of describing a newer state.
+         */
+        get: operations["get_resumability_api_tasks__task_id__resumability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/retry": {
         parameters: {
             query?: never;
@@ -3580,6 +3604,34 @@ export interface components {
             worker_readable?: boolean;
         };
         /**
+         * ArtifactAssessment
+         * @description One artifact as assessed: recorded facts plus optional current-read.
+         */
+        ArtifactAssessment: {
+            /** Artifact Id */
+            artifact_id?: string | null;
+            availability: components["schemas"]["Availability"];
+            evidence_class: components["schemas"]["EvidenceClass"];
+            /** Kind */
+            kind: string;
+            /** Note */
+            note?: string | null;
+            /** Observed Sha256 */
+            observed_sha256?: string | null;
+            /** Observed Size */
+            observed_size?: number | null;
+            /** Provenance */
+            provenance?: string | null;
+            /** Recorded Sha256 */
+            recorded_sha256?: string | null;
+            /** Recorded Size */
+            recorded_size?: number | null;
+            /** Ref */
+            ref: string;
+            /** State */
+            state?: string | null;
+        };
+        /**
          * ArtifactIn
          * @description A caller's statement about an artifact. ContinuationProvenance and time are Argus's.
          */
@@ -3678,6 +3730,12 @@ export interface components {
             /** Task Id */
             task_id?: string | null;
         };
+        /**
+         * Availability
+         * @description Current store state for an attachment (spec 3.4).
+         * @enum {string}
+         */
+        Availability: "available" | "missing" | "truncated" | "corrupted" | "inaccessible" | "unknown";
         /**
          * AwaitingQuotaRequest
          * @description An agent with no usable account asks for the work it cannot claim to wait.
@@ -4250,6 +4308,12 @@ export interface components {
             /** Version */
             version: string | null;
         };
+        /**
+         * ConsumerPath
+         * @description The only supported cross-attempt consumer for attachment bytes.
+         * @enum {string}
+         */
+        ConsumerPath: "task_inputs_materializer" | "none";
         /** ContinuationArtifact */
         ContinuationArtifact: {
             /** Attempt */
@@ -4748,6 +4812,27 @@ export interface components {
              */
             text?: string;
         };
+        /** DecisionChange */
+        DecisionChange: {
+            /** Decided At */
+            decided_at?: string | null;
+            /** Decision Id */
+            decision_id: string;
+            /**
+             * Premise Outdated
+             * @default false
+             */
+            premise_outdated?: boolean;
+            /** Question */
+            question: string;
+            /**
+             * Relative To Attempt
+             * @enum {string}
+             */
+            relative_to_attempt: "at_or_after" | "before" | "unresolved";
+            /** Status */
+            status: string;
+        };
         /** DecisionDetail */
         DecisionDetail: {
             /** Age S */
@@ -5245,6 +5330,12 @@ export interface components {
             /** Timed Out */
             timed_out: boolean;
         };
+        /**
+         * EvidenceClass
+         * @description How a claim was established (spec 3.3).
+         * @enum {string}
+         */
+        EvidenceClass: "recorded_metadata" | "receipt_only" | "current_read" | "unobserved" | "unknown";
         /** Execution */
         Execution: {
             /** Account Id */
@@ -5768,6 +5859,28 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /** InputAssessment */
+        InputAssessment: {
+            /** Artifact Id */
+            artifact_id: string;
+            availability: components["schemas"]["Availability"];
+            /**
+             * Capability
+             * @default capability_unknown
+             * @enum {string}
+             */
+            capability?: "required" | "capability_not_required" | "capability_unknown";
+            consumer_path: components["schemas"]["ConsumerPath"];
+            evidence_class: components["schemas"]["EvidenceClass"];
+            /** Name */
+            name: string;
+            /** Receipts */
+            receipts?: components["schemas"]["InputReceiptView"][];
+            /** Recorded Sha256 */
+            recorded_sha256: string;
+            /** Recorded Size */
+            recorded_size: number;
+        };
         /**
          * InputFailure
          * @enum {string}
@@ -5789,6 +5902,24 @@ export interface components {
             /** Reporter */
             reporter: string;
             state: components["schemas"]["ReceiptState"];
+        };
+        /**
+         * InputReceiptView
+         * @description A historical receipt: evidence_class is always receipt_only.
+         */
+        InputReceiptView: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Evidence Class
+             * @default receipt_only
+             * @constant
+             */
+            evidence_class?: "receipt_only";
+            /** Reason */
+            reason?: string | null;
+            /** State */
+            state: string;
         };
         /** InspectedInstance */
         InspectedInstance: {
@@ -6117,6 +6248,17 @@ export interface components {
              * @default false
              */
             usable: boolean;
+        };
+        /** LeaseAssessment */
+        LeaseAssessment: {
+            /** Assignee Agent Id */
+            assignee_agent_id?: string | null;
+            /** @default recorded_metadata */
+            evidence_class?: components["schemas"]["EvidenceClass"];
+            /** Expires At */
+            expires_at?: string | null;
+            /** Live */
+            live: boolean;
         };
         /**
          * LeaseObservation
@@ -6583,6 +6725,13 @@ export interface components {
             };
             /** User */
             user: string | null;
+        };
+        /** NextStep */
+        NextStep: {
+            /** Code */
+            code: string;
+            /** Detail */
+            detail: string;
         };
         /** NodeOption */
         NodeOption: {
@@ -7402,6 +7551,15 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** Reason */
+        Reason: {
+            code: components["schemas"]["ResumabilityCause"];
+            /** Detail */
+            detail?: string | null;
+            evidence_class: components["schemas"]["EvidenceClass"];
+            /** Subject */
+            subject: string;
+        };
         /** ReceiptRequest */
         ReceiptRequest: {
             /** Attempt */
@@ -7486,6 +7644,51 @@ export interface components {
             lease_expires_at: string;
             /** Task Id */
             task_id: string;
+        };
+        /**
+         * ResumabilityCause
+         * @description Closed set of cause codes (spec 3.8).
+         * @enum {string}
+         */
+        ResumabilityCause: "task_unknown" | "task_terminal" | "attempt_mismatch" | "stale_preflight" | "no_artifacts" | "artifact_state_unobserved" | "artifact_unavailable" | "artifact_missing" | "artifact_truncated" | "artifact_corrupted" | "artifact_inaccessible" | "artifact_unknown" | "wip_local_only" | "checkpoint_store_not_visible" | "wip_unrecorded" | "input_capability_missing" | "decision_unresolved" | "acceptance_not_structured" | "lease_expired" | "lease_held_elsewhere";
+        /**
+         * ResumabilityDecision
+         * @enum {string}
+         */
+        ResumabilityDecision: "resumable" | "not_resumable" | "unknown" | "stale";
+        /**
+         * ResumabilityReport
+         * @description Bounded read-only assessment (spec 3.2). Grants nothing.
+         */
+        ResumabilityReport: {
+            /** Artifacts */
+            artifacts?: components["schemas"]["ArtifactAssessment"][];
+            /**
+             * Assessed At
+             * Format: date-time
+             */
+            assessed_at: string;
+            /** Attempt */
+            attempt: number;
+            /** Cause Codes */
+            cause_codes?: components["schemas"]["ResumabilityCause"][];
+            decision: components["schemas"]["ResumabilityDecision"];
+            /** Decision Changes */
+            decision_changes?: components["schemas"]["DecisionChange"][];
+            /** Inputs */
+            inputs?: components["schemas"]["InputAssessment"][];
+            lease: components["schemas"]["LeaseAssessment"];
+            /** Next Steps */
+            next_steps?: components["schemas"]["NextStep"][];
+            /** Reasons */
+            reasons?: components["schemas"]["Reason"][];
+            /** Task Id */
+            task_id: string;
+            /** Task Version */
+            task_version: string;
+            /** Unknowns */
+            unknowns?: string[];
+            wip: components["schemas"]["WipAssessment"];
         };
         /**
          * RetryClass
@@ -9252,6 +9455,18 @@ export interface components {
             /** Size */
             size: number | null;
         };
+        /** WipAssessment */
+        WipAssessment: {
+            availability?: components["schemas"]["Availability"] | null;
+            evidence_class: components["schemas"]["EvidenceClass"];
+            kind: components["schemas"]["WipKind"];
+            /** Ref */
+            ref?: string | null;
+            /** Summary */
+            summary?: string | null;
+            /** Transfer */
+            transfer?: ("not_a_transfer" | "attachment_verified" | "published_ref") | null;
+        };
         /** WipIn */
         WipIn: {
             /** Ref */
@@ -9259,6 +9474,11 @@ export interface components {
             /** Summary */
             summary: string;
         };
+        /**
+         * WipKind
+         * @enum {string}
+         */
+        WipKind: "published" | "local_only" | "unknown" | "absent";
         /** WorkerTemplate */
         WorkerTemplate: {
             defaults: components["schemas"]["TemplateDefaults"];
@@ -14819,6 +15039,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_resumability_api_tasks__task_id__resumability_get: {
+        parameters: {
+            query?: {
+                expected_attempt?: number | null;
+                expected_version?: string | null;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResumabilityReport"];
                 };
             };
             /** @description Validation Error */

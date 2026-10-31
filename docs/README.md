@@ -119,6 +119,10 @@ every new dependency is judged against it.
 - [Task inputs](specs/task-inputs.spec.md) — byte-exact upload of shared
   attachments, the inputs view and receipts, materialization by the NanoClaw
   channel, required inputs and `env_input_*` blocks
+- [Task resumability preflight](specs/task-resumability-preflight.spec.md) —
+  read-only assessment of task/attempt/lease state, WIP and attachment
+  availability before answer/requeue/release; metadata and receipts are not
+  current proof
 - [Worker read scope](specs/worker-read-scope.spec.md) — workers may only read
   tasks/artifacts they have leased and knowledge/events for those projects;
   orchestrators and admins stay global

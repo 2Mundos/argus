@@ -93,6 +93,12 @@ An input is in one of these states, recorded as evidence and never inferred:
 state, time, reporter). A failed materialization is a `failed` receipt with a
 reason code from 3.6 and no detail.
 
+A receipt is history, not current availability: a past `verified` or `consumed`
+does not prove the store still holds matching bytes. The
+[resumability preflight](task-resumability-preflight.spec.md) re-reads the
+attachment bytes (size and SHA-256) to tell that difference; it never upgrades
+a receipt to a current-read claim.
+
 ## 3.3 Receipts
 
 `POST /api/tasks/{id}/inputs/{artifact_id}/receipt` is a worker write
@@ -282,6 +288,11 @@ What the repository tests prove, and what they do not:
   its non-root user. That needs a Docker host and is an operator-run step
   ([task-inputs smoke](../runbooks/2026-10-30.task-inputs-smoke.ref.md)); the result of that step is recorded
   separately and this spec does not claim it.
+- The resumability integration test
+  (`integrations/nanoclaw/argus-resumability.test.ts`) grounds preflight
+  availability classes against the real `materializeTaskInputs` consumer with a
+  local HTTP stand-in. It still cannot cover a real Docker session container as
+  its non-root user, or a real forge read.
 
 # 4. Open Questions
 

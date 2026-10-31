@@ -9,6 +9,7 @@ from argus_core.continuation import (
     ObservationRequest,
 )
 from argus_core.delivery import Delivery
+from argus_core.resumability import DEFAULT_READ_BOUND, ResumabilityReport
 from argus_core.task_edit import TaskAttempt, TaskEdit
 from argus_core.tasks import (
     ENV_BLOCK_REASONS,
@@ -19,7 +20,7 @@ from argus_core.tasks import (
     TaskState,
     validate_milestone,
 )
-from fastapi import APIRouter, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import (
     BaseModel,
     Field,
@@ -31,6 +32,7 @@ from pydantic import (
 from argus_api.access import require_task_readable, worker_task_filter
 from argus_api.accounts import service as accounts
 from argus_api.accounts.routes import with_local_context
+from argus_api.artifacts.store import LocalArtifactStore
 from argus_api.db import utcnow
 from argus_api.deps import (
     AdminDep,
@@ -47,8 +49,15 @@ from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
 from argus_api.paging import DEFAULT_LIMIT, View
 from argus_api.settings import service as settings_svc
-from argus_api.tasks import changes, delivery, log, service, steers, views
+from argus_api.tasks import changes, delivery, log, resumability, service, steers, views
 from argus_api.tasks.views import TaskPage
+
+
+def _artifact_store(request: Request) -> LocalArtifactStore:
+    return request.app.state.artifacts
+
+
+StoreDep = Annotated[LocalArtifactStore, Depends(_artifact_store)]
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -539,6 +548,34 @@ async def get_continuation(
     async with db.read() as conn:
         await require_task_readable(conn, caller, task_id)
         return await service.continuation_of(conn, task_id)
+
+
+@router.get("/{task_id}/resumability")
+async def get_resumability(
+    task_id: str,
+    db: DbDep,
+    caller: CallerDep,
+    store: StoreDep,
+    expected_attempt: Annotated[int | None, Query(ge=0)] = None,
+    expected_version: Annotated[str | None, Query(min_length=1)] = None,
+) -> ResumabilityReport:
+    """Read-only resumability preflight: attempt/lease state, WIP class, and whether
+    shared attachments are currently available (size and SHA-256 re-read). Recorded
+    metadata and historical receipts do not prove current availability. Grants
+    nothing; never mutates. Optional `expected_attempt` / `expected_version` make a
+    mismatch `stale` instead of describing a newer state."""
+    async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
+        task = await service.get_task(conn, task_id)
+        return await resumability.assess(
+            conn,
+            task,
+            now=utcnow(),
+            expected_attempt=expected_attempt,
+            expected_version=expected_version,
+            store=store,
+            read_bound=DEFAULT_READ_BOUND,
+        )
 
 
 @router.patch("/{task_id}/continuation")

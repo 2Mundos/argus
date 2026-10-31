@@ -193,7 +193,10 @@ transcribe it into `attach_artifact`. Upload it byte-exact from where it lives:
 Create the task with `required_capabilities` including `task-inputs`, then set
 that `ref` (`attachment:<id>:<sha256>`) as the WIP reference with
 `update_task_continuation`; Argus refuses it otherwise. `list_task_inputs` shows the
-inputs and the workers' receipts. Until an operator has installed the current
+inputs and the workers' receipts. Before you answer, requeue or release so a new
+attempt starts elsewhere, call `task_resumability_preflight`: it is read-only and
+tells recorded metadata and receipts apart from a current byte/hash read; it
+grants nothing. Until an operator has installed the current
 NanoClaw channel, recreated the workers and added `task-inputs` to a pool, no
 worker can claim such a task; do not rely on a shared attachment for a retry
 before then.
