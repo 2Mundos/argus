@@ -145,7 +145,7 @@ async def claim_chat(
     agent_id: AgentDep,
     wait_s: Annotated[float, Query(ge=0, le=30)] = 0,
 ) -> AgentChatClaim | None:
-    """Long-poll for the next queued human message (claim_task pattern)."""
+    """Long-poll for the next queued message, human or system (claim_task pattern)."""
     await _require_internal_orchestrator(db, agent_id)
     disk_guard = request.app.state.disk_guard
     loop = asyncio.get_running_loop()

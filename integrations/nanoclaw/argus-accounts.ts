@@ -842,6 +842,11 @@ export type FailureKind =
       resetText?: string;
       source?: FailureSource;
     }
+  | {
+      kind: "auth_rejected";
+      reason: string;
+      source?: FailureSource;
+    }
   | { kind: "failed"; reason: string };
 
 /** Control characters folded to spaces, whitespace collapsed: the text classified (URLs and all, so a JSON envelope still parses). */
@@ -1055,6 +1060,7 @@ export function describeLogTail(logTail: string, lines = 3, limit = 300): string
 
 /** Fixed, non-sensitive reason for a structured auth expiry; never the notice or log text. */
 const STRUCTURED_AUTH_EXPIRED_REASON = "OpenAI/Codex authentication expired";
+const STRUCTURED_CLAUDE_AUTH_REASON = "Claude authentication failed";
 const STRUCTURED_CODEX_LIMIT_REASON = "Codex usage limit reached";
 
 /** The runner's placeholder when the provider's own message did not reach the notice. */
@@ -1083,9 +1089,15 @@ function rateLimitReason(resetsAt: unknown): {
  * kind:"rate_limit", notice?, reset_text?, resets_at?}` against a held `openai`
  * account, and `{provider:"claude", kind:"rate_limit", resets_at?}` against a held
  * `anthropic` account exhaust it (`codex`/`claude` are the NanoClaw engines; Argus
- * names the accounts by their vendor). Anything else (unknown value, other account
- * provider, bad shape) is not a decision: null. The reason is the sanitized notice
- * when given, else a fixed text; a reset counts only with a zone.
+ * names the accounts by their vendor). `{provider:"claude", kind:"auth_expired"}`
+ * against a held `anthropic` account is `auth_rejected`, never an exhaustion: the
+ * runner sends it only for a turn the SDK marked `authentication_failed`
+ * (overlays/claude-rate-limit.ts), so billing, rate-limit, organization or on-hold
+ * errors and any notice or log text never qualify; the channel records the
+ * rejection with the fixed reason and fails the attempt as usual. Anything else
+ * (unknown value, other account provider, bad shape) is not a decision: null. The
+ * reason is the sanitized notice when given, else a fixed text; a reset counts only
+ * with a zone.
  */
 export function classifyProviderFailure(
   value: unknown,
@@ -1100,6 +1112,13 @@ export function classifyProviderFailure(
     notice?: unknown;
     reset_text?: unknown;
   };
+  if (accountProvider === "anthropic" && provider === "claude" && kind === "auth_expired") {
+    return {
+      kind: "auth_rejected",
+      reason: STRUCTURED_CLAUDE_AUTH_REASON,
+      source: "structured",
+    };
+  }
   if (accountProvider === "openai" && provider === "codex" && kind === "auth_expired") {
     return {
       kind: "exhausted",

@@ -17,6 +17,7 @@ from argus_core.accounts import (
     AccountCreate,
     AccountLease,
     AccountUpdate,
+    AuthRejectedReport,
     ExhaustedReport,
     FallbackResult,
     LeaseRole,
@@ -484,6 +485,19 @@ async def exhausted(
     previous, reset_at = await _mark_exhausted(
         tx, agent_id, account_id, report.until, reason, cooldown, detail
     )
+    if report.reason_code == "auth_expired":
+        await _record_auth_rejected(
+            tx,
+            agent_id,
+            account_id,
+            task_id,
+            attempt,
+            role,
+            report.source,
+            _AUTH_REJECTED_REASONS.get(
+                account_row["provider"], "authentication expired"
+            ),
+        )
     await release(tx, agent_id, "exhausted", role)
     scope = await _scope(tx, task_id, role, report.runtime_providers, agent_id)
     allowed = scope.providers
@@ -522,6 +536,71 @@ async def exhausted(
         lease=None,
         earliest_reset=await earliest_reset(tx, role, allowed),
         task_blocked=True,
+    )
+
+
+_AUTH_REJECTED_REASONS = {
+    "openai": "OpenAI/Codex authentication expired",
+    "anthropic": "Claude authentication failed",
+    "copilot": "The executor CLI rejected the account credential",
+}
+
+
+async def auth_rejected(
+    tx: Tx,
+    agent_id: str,
+    account_id: str,
+    report: AuthRejectedReport,
+) -> None:
+    """Write `account.auth_rejected` without exhausting or releasing the lease."""
+    held = await _lease_on(tx.conn, agent_id, account_id, report.role)
+    if held is None:
+        raise ConflictError(
+            f"agent {agent_id} does not hold a lease on account {account_id}",
+            code="not_leased",
+        )
+    await tasks.check_lease(tx, report.task_id, report.attempt, agent_id)
+    async with tx.conn.execute(
+        "SELECT provider FROM accounts WHERE id = ?", (account_id,)
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        raise NotFoundError(f"account not found: {account_id}")
+    await _record_auth_rejected(
+        tx,
+        agent_id,
+        account_id,
+        report.task_id,
+        report.attempt,
+        report.role,
+        report.source,
+        _AUTH_REJECTED_REASONS.get(row["provider"], "authentication rejected"),
+    )
+
+
+async def _record_auth_rejected(
+    tx: Tx,
+    agent_id: str,
+    account_id: str,
+    task_id: str,
+    attempt: int,
+    role: LeaseRole,
+    source: str | None,
+    reason: str,
+) -> None:
+    await record(
+        tx,
+        f"agent:{agent_id}",
+        "account",
+        account_id,
+        "account.auth_rejected",
+        {
+            "task_id": task_id,
+            "attempt": attempt,
+            "role": role,
+            "source": source or "structured",
+            "reason": reason,
+        },
     )
 
 
@@ -1226,6 +1305,17 @@ def _usage_sql(since: str) -> str:
     )
 
 
+# Auth-health evidence (account-usage.spec.md 3.5), correlated on `a.id`; each is one
+# seek on its partial index from migration 0060.
+LAST_ACCEPTED_SQL = (
+    "(SELECT max(u.at) FROM account_usage u WHERE u.account_id = a.id"
+    " AND u.measurement = 'measured' AND u.output_tokens > 0)"
+)
+LAST_REJECTED_SQL = (
+    "(SELECT max(e.at) FROM events e WHERE e.subject_type = 'account'"
+    " AND e.subject_id = a.id AND e.kind = 'account.auth_rejected')"
+)
+
 _SELECT = (  # constant fragments only
     "SELECT a.*,"  # noqa: S608
     " (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
@@ -1237,7 +1327,9 @@ _SELECT = (  # constant fragments only
     "  'resets_at', q.resets_at, 'exhausted_until', q.exhausted_until,"
     "  'observed_at', q.observed_at, 'source', q.source))"
     "  FROM (SELECT * FROM account_quota WHERE account_id = a.id"
-    "   ORDER BY window_minutes IS NULL, window_minutes, window) q) AS quota"
+    "   ORDER BY window_minutes IS NULL, window_minutes, window) q) AS quota,"
+    " " + LAST_ACCEPTED_SQL + " AS last_accepted_at,"
+    " " + LAST_REJECTED_SQL + " AS last_rejected_at"
     " FROM accounts a"
 )
 
@@ -1278,4 +1370,7 @@ async def _to_account(
         json.loads(data["token_limits"]) if data["token_limits"] else None
     )
     data["config"] = json.loads(data["config"]) if data["config"] else None
+    for key in ("last_accepted_at", "last_rejected_at"):
+        raw = data.get(key)
+        data[key] = datetime.fromisoformat(raw) if raw else None
     return Account.model_validate(data)

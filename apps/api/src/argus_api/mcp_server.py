@@ -969,7 +969,9 @@ async def list_accounts(ctx: Context) -> dict:
     observed_at), `credit` (money left on a key, in USD, never tokens),
     `quota_status` (state known|stale|unknown, a `reason` code saying why a figure
     is missing, the last probe's outcome and code) and token usage. A missing figure
-    is unknown, never zero. Read-only; no credentials."""
+    is unknown, never zero. `last_accepted_at` / `last_rejected_at` are the latest
+    measured output and recorded authentication rejection (null when none).
+    Read-only; no credentials."""
     return {"accounts": await _call(ctx, "GET", "/accounts")}
 
 
