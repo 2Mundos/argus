@@ -81,6 +81,30 @@
             "title": "Labels",
             "type": "object"
           },
+          "last_accepted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Accepted At"
+          },
+          "last_rejected_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Rejected At"
+          },
           "max_leases": {
             "anyOf": [
               {
@@ -2126,6 +2150,52 @@
         ],
         "title": "Audience",
         "type": "string"
+      },
+      "AuthRejectedReport": {
+        "description": "Record that the provider rejected the stored credential (account usage 3.5).\n\nDoes not exhaust the account or change its state; only writes `account.auth_rejected`.",
+        "properties": {
+          "attempt": {
+            "minimum": 1.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "role": {
+            "default": "engine",
+            "enum": [
+              "engine",
+              "executor",
+              "repository"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "structured",
+                  "notice",
+                  "log"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempt"
+        ],
+        "title": "AuthRejectedReport",
+        "type": "object"
       },
       "AwaitingQuotaRequest": {
         "description": "An agent with no usable account asks for the work it cannot claim to wait.",
@@ -20536,6 +20606,57 @@
           }
         ],
         "summary": "Update Account",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/auth-rejected": {
+      "post": {
+        "description": "Record `account.auth_rejected` for a held account without exhausting it.",
+        "operationId": "report_auth_rejected_api_accounts__account_id__auth_rejected_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthRejectedReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Report Auth Rejected",
         "tags": [
           "accounts"
         ]

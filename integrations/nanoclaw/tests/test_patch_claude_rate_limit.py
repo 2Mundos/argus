@@ -80,16 +80,21 @@ def test_hooks_claude_and_the_poll_loop_once(tmp_path: Path) -> None:
     assert first.returncode == 0, first.stderr
     assert first.stdout.count("patched") == 3
     claude = (src / "providers" / "claude.ts").read_text()
-    assert "import { claudeRateLimitError } from './claude-rate-limit.js';" in claude
+    assert (
+        "import { claudeRateLimitError, claudeAuthExpiredError } from './claude-rate-limit.js';"
+        in claude
+    )
     assert "let rateLimited = false;" in claude
+    assert "let authFailed = false;" in claude
     assert ".error === 'rate_limit') rateLimited = true;" in claude
+    assert ".error === 'authentication_failed') authFailed = true;" in claude
     assert "claudeRateLimitError(m.result, rateLimited)" in claude
-    assert "error: rateLimit ?? (m.errors?.length" in claude
+    assert "claudeAuthExpiredError(authFailed)" in claude
+    assert "error: authExpired ?? rateLimit ?? (m.errors?.length" in claude
     assert "'auth_expired' | 'rate_limit'" in (src / "formatter.ts").read_text()
     poll = (src / "poll-loop.ts").read_text()
-    assert (
-        "if (providerName === 'claude') return claudeRateLimitFailure(error);" in poll
-    )
+    assert "claudeAuthExpiredFailure(error)" in poll
+    assert "claudeRateLimitFailure(error)" in poll
     assert "const limit = codexUsageLimitFailure(error);" in poll
     assert "from './providers/codex-usage-limit.js';" in poll
     assert "reset_text?: string;" in (src / "formatter.ts").read_text()
@@ -100,17 +105,97 @@ def test_hooks_claude_and_the_poll_loop_once(tmp_path: Path) -> None:
     assert {p: p.read_text() for p in src.rglob("*.ts")} == before
 
 
-def test_without_the_provider_failure_field_only_claude_is_hooked(
+def test_the_auth_mark_is_only_authentication_failed_and_lasts_one_turn(
     tmp_path: Path,
 ) -> None:
-    formatter = "export const FAILURE_NOTICE_FIELD = 'failureNotice';\n"
-    src = runner(tmp_path, formatter=formatter)
+    src = runner(tmp_path)
+    assert patch(tmp_path).returncode == 0
+    claude = (src / "providers" / "claude.ts").read_text()
+    setters = [
+        line.strip() for line in claude.splitlines() if "authFailed = true" in line
+    ]
+    assert setters == [
+        "if ((message as { error?: string }).error === 'authentication_failed')"
+        " authFailed = true;"
+    ]
+    read = claude.index("claudeAuthExpiredError(authFailed)")
+    reset = claude.index("authFailed = false;", read)
+    assert claude.index("let authFailed = false;") < claude.index("for await") < read
+    assert read < reset < claude.index("yield {", read)
+
+
+# NanoClaw 8fbacc91 (pristine): no providerFailure anywhere, the hooked spans verbatim.
+PINNED_FORMATTER_TS = """export const FAILURE_NOTICE_FIELD = 'failureNotice';
+
+export function isFailureNotice(msg: MessageInRow): boolean {
+  return false;
+}
+"""
+PINNED_POLL_LOOP_TS = """import {
+  extractRouting,
+  categorizeMessage,
+  FAILURE_NOTICE_FIELD,
+  isClearCommand,
+} from './formatter.js';
+import { stripHarnessTagArtifacts } from './harness-tag-strip.js';
+import { isUploadTraceCommand, uploadTrace } from './upload-trace.js';
+
+          if (failed) {
+            // A failed turn needs a visible notice even after a partial reply.
+            const notice = event.error ?? 'The agent run failed. Check the logs for details.';
+            if (sendsFailureNotice(routing)) await deliverErrorResult(routing, notice);
+            else log(`Error result — notice not sent on this route: ${notice}`);
+          }
+
+/** Send the dedicated provider error or a generic failure notice. */
+async function deliverErrorResult(routing: RoutingContext, text: string): Promise<void> {
+  log('Error result notice — delivering to channel');
+  await writeMessageOut({
+    thread_id: routing.threadId,
+    content: JSON.stringify({ text: stripHarnessTagArtifacts(text), [FAILURE_NOTICE_FIELD]: true }),
+  });
+}
+"""
+
+
+def test_a_pinned_runner_without_provider_failure_gets_the_plumbing(
+    tmp_path: Path,
+) -> None:
+    src = runner(tmp_path, formatter=PINNED_FORMATTER_TS)
+    (src / "poll-loop.ts").write_text(PINNED_POLL_LOOP_TS)
+    first = patch(tmp_path)
+    assert first.returncode == 0, first.stderr
+    assert first.stderr == ""
+    formatter = (src / "formatter.ts").read_text()
+    assert "export const PROVIDER_FAILURE_FIELD = 'providerFailure';" in formatter
+    assert "'auth_expired' | 'rate_limit'" in formatter
+    poll = (src / "poll-loop.ts").read_text()
+    assert "PROVIDER_FAILURE_FIELD,\n  type ProviderFailure," in poll
+    assert "function classifyProviderFailure(" in poll
+    assert "claudeAuthExpiredFailure(error)" in poll
+    assert "classifyProviderFailure(providerName, event.error)" in poll
+    assert "await deliverErrorResult(routing, notice, failure);" in poll
+    assert "...(failure ? { [PROVIDER_FAILURE_FIELD]: failure } : {})," in poll
+    assert poll.count("function classifyProviderFailure(") == 1
+
+    before = {p: p.read_text() for p in src.rglob("*.ts")}
+    again = patch(tmp_path)
+    assert (again.returncode, again.stdout) == (0, "")
+    assert {p: p.read_text() for p in src.rglob("*.ts")} == before
+
+
+def test_a_pinned_runner_whose_notice_code_moved_stops_the_install(
+    tmp_path: Path,
+) -> None:
+    src = runner(tmp_path, formatter=PINNED_FORMATTER_TS)
+    moved = PINNED_POLL_LOOP_TS.replace(
+        "await deliverErrorResult(routing, notice);", ""
+    )
+    (src / "poll-loop.ts").write_text(moved)
     result = patch(tmp_path)
-    assert result.returncode == 0
-    assert "notice text only" in result.stderr
-    assert "claudeRateLimitError" in (src / "providers" / "claude.ts").read_text()
-    assert (src / "formatter.ts").read_text() == formatter
-    assert (src / "poll-loop.ts").read_text() == POLL_LOOP_TS
+    assert result.returncode != 0
+    assert "upstream shape changed" in result.stderr
+    assert (src / "poll-loop.ts").read_text() == moved
 
 
 @pytest.mark.parametrize(
@@ -152,9 +237,7 @@ export interface ProviderFailure {
   resets_at?: string;
 }""",
 )
-CLAUDE_IMPORT = (
-    "import { claudeRateLimitFailure } from './providers/claude-rate-limit.js';\n"
-)
+CLAUDE_IMPORT = "import { claudeRateLimitFailure, claudeAuthExpiredFailure } from './providers/claude-rate-limit.js';\n"
 CODEX_IMPORT = (
     "import { codexUsageLimitFailure } from './providers/codex-usage-limit.js';\n"
 )
@@ -198,3 +281,60 @@ def test_a_checkout_patched_before_the_codex_hook_converges(
     assert got["poll-loop.ts"].count(CODEX_IMPORT) == 1
     again = patch(tmp_path / "old")
     assert (again.returncode, again.stdout) == (0, "")
+
+
+# claude.ts as the rate-limit-only version of this script left it, with the line
+# harness-usage.ts inserts inside the result hook: it must gain the auth half in place.
+CLAUDE_RATE_LIMIT_ONLY = (
+    CLAUDE_TS.replace(
+        "import { registerProvider } from './provider-registry.js';\n",
+        "import { registerProvider } from './provider-registry.js';\n"
+        "import { recordHarnessUsage } from './harness-usage.js';\n"
+        "import { claudeRateLimitError } from './claude-rate-limit.js';\n",
+    )
+    .replace(
+        "      let lastStreamActivityAt = 0;\n",
+        "      let lastStreamActivityAt = 0;\n"
+        "      let rateLimited = false; // this turn's SDK error: 'rate_limit'\n",
+    )
+    .replace(
+        "        } else if (message.type === 'assistant') {\n",
+        "        } else if (message.type === 'assistant') {\n"
+        "          if ((message as { error?: string }).error === 'rate_limit') rateLimited = true;\n",
+    )
+    .replace(
+        "          yield {\n            type: 'result',",
+        "          recordHarnessUsage('claude');\n"
+        "          // Argus: a quota block's error is only its one-line notice or a fixed text.\n"
+        "          const rateLimit = isError ? claudeRateLimitError(m.result, rateLimited) : undefined;\n"
+        "          rateLimited = false;\n"
+        "          yield {\n            type: 'result',",
+    )
+    .replace(
+        "text: resultAsError ? null",
+        "text: resultAsError || rateLimit ? null",
+    )
+    .replace(
+        "error: m.errors?.length",
+        "error: rateLimit ?? (m.errors?.length",
+    )
+    .replace("resultAsError || undefined,", "resultAsError || undefined),")
+)
+
+
+def test_a_rate_limit_only_claude_ts_gains_the_auth_hooks(tmp_path: Path) -> None:
+    src = runner(tmp_path, claude=CLAUDE_RATE_LIMIT_ONLY)
+    first = patch(tmp_path)
+    assert first.returncode == 0, first.stderr
+    claude = (src / "providers" / "claude.ts").read_text()
+    assert "recordHarnessUsage('claude');" in claude
+    assert claude.count("claudeAuthExpiredError") == 2
+    assert "let authFailed = false;" in claude
+    assert ".error === 'authentication_failed') authFailed = true;" in claude
+    assert "authExpired ?? rateLimit ?? (m.errors" in claude
+    assert "text: resultAsError || rateLimit || authExpired ? null" in claude
+    assert claude.count("rateLimited = false;") == 2  # declaration + per-turn reset
+    before = {p: p.read_text() for p in src.rglob("*.ts")}
+    again = patch(tmp_path)
+    assert (again.returncode, again.stdout) == (0, "")
+    assert {p: p.read_text() for p in src.rglob("*.ts")} == before

@@ -1,13 +1,17 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiosqlite
 import pytest
 from api_support import insert_agent
+from argus_api.accounts import service as accounts_service
 from argus_api.agents import service as _agents  # noqa: F401 - avoids an import cycle
 from argus_api.db import Database, MigrationError, ts
 from argus_api.db.migrate import Migration, load_migrations
+from argus_api.secrets import MemorySecretStore
 from argus_api.tasks import service as tasks
 from argus_api.tasks import steers
+from argus_core.accounts import AccountCreate
 from argus_core.tasks import TaskCreate
 
 
@@ -132,3 +136,138 @@ async def test_0057_marks_pending_steers_dispatched(tmp_path: Path) -> None:
         waiting.id: "unknown",
     }
     assert [a.steer_unknown for a in attempts] == [1]
+
+
+AUTH_HEALTH_INDEXES = ("account_usage_last_accepted", "events_account_auth_rejected")
+
+
+async def _accounts(db: Database, *names: str) -> list[str]:
+    store = MemorySecretStore()
+    ids = []
+    for name in names:
+        await store.put(name, {"api_key": f"key-{name}"})
+        async with db.write() as tx:
+            acct = await accounts_service.create_account(
+                tx,
+                name,
+                AccountCreate(
+                    name=name, provider="anthropic", secret_ref=f"sops:{name}"
+                ),
+                f"sops:{name}",
+                "admin:test",
+                store,
+            )
+        ids.append(acct.id)
+    return ids
+
+
+async def _fill(db: Database, account_ids: list[str], rows: int) -> None:
+    """`rows` usage rows and auth rejections per account, all qualifying evidence."""
+    async with db.write() as tx:
+        for account_id in account_ids:
+            await tx.conn.executemany(
+                "INSERT INTO account_usage (account_id, output_tokens, at)"
+                " VALUES (?, 1, ?)",
+                [
+                    (account_id, f"2026-01-01T00:00:{i % 60:02d}.{i:06d}Z")
+                    for i in range(rows)
+                ],
+            )
+            await tx.conn.executemany(
+                "INSERT INTO events (at, actor, subject_type, subject_id, kind, data)"
+                " VALUES (?, 'agent:a', 'account', ?, 'account.auth_rejected', '{}')",
+                [(f"2026-01-01T00:00:00.{i:06d}Z", account_id) for i in range(rows)],
+            )
+
+
+async def test_0060_auth_health_reads_use_the_partial_indexes(tmp_path: Path) -> None:
+    """The production read model (`_SELECT`) seeks both 0060 indexes per account."""
+    db = await Database.open(tmp_path / "argus.db")
+    [account_id] = await _accounts(db, "claude-1")
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "EXPLAIN QUERY PLAN " + accounts_service._SELECT + " WHERE a.id = :id",
+            {"id": account_id, "since": "2026-01-01T00:00:00Z"},
+        ) as cur,
+    ):
+        plan = [r[3] for r in await cur.fetchall()]
+    await db.close()
+    assert any(
+        d.startswith("SEARCH u USING INDEX account_usage_last_accepted (account_id=?")
+        for d in plan
+    ), plan
+    assert any(
+        d.startswith("SEARCH e USING COVERING INDEX events_account_auth_rejected")
+        and "subject_id=?" in d
+        and "kind=?" in d
+        for d in plan
+    ), plan
+
+
+async def test_0060_auth_health_lookup_is_bounded(tmp_path: Path) -> None:
+    """Per-account lookup cost does not grow with other accounts' history: the
+    SQLite VM steps for the target stay flat while the tables grow 100x."""
+    db = await Database.open(tmp_path / "argus.db")
+    target, *others = await _accounts(db, "target", "busy-1", "busy-2")
+    await _fill(db, [target], 5)
+    sql = (
+        f"SELECT {accounts_service.LAST_ACCEPTED_SQL},"
+        f" {accounts_service.LAST_REJECTED_SQL} FROM accounts a WHERE a.id = ?"
+    )
+
+    async def steps() -> int:
+        count = 0
+
+        def tick() -> int:
+            nonlocal count
+            count += 1
+            return 0
+
+        async with db.read() as conn:
+            await (await conn.execute(sql, (target,))).fetchall()  # warm the cache
+            await conn.set_progress_handler(tick, 1)
+            try:
+                async with conn.execute(sql, (target,)) as cur:
+                    row = await cur.fetchone()
+            finally:
+                await conn.set_progress_handler(None, 1)
+        assert row is not None and row[0] is not None and row[1] is not None
+        return count
+
+    await _fill(db, others, 50)
+    small = await steps()
+    await _fill(db, others, 5000)
+    large = await steps()
+    await db.close()
+    assert large <= small + 10, (small, large)
+
+
+async def test_0060_upgrade_keeps_data_and_reopen_is_a_no_op(tmp_path: Path) -> None:
+    path = tmp_path / "argus.db"
+    migrations = load_migrations()
+    assert migrations[59].name == "0060_account_auth_health_indexes.sql"
+    db = await Database.open(path, migrations=migrations[:59])
+    [account_id] = await _accounts(db, "claude-1")
+    await _fill(db, [account_id], 3)
+    await db.close()
+    assert await _user_version(path) == 59
+
+    for _ in range(2):  # the upgrade, then a reopen that must change nothing
+        db = await Database.open(path, migrations=migrations)
+        async with db.read() as conn:
+            async with conn.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'index'"
+                " AND name IN (?, ?) ORDER BY name",
+                AUTH_HEALTH_INDEXES,
+            ) as cur:
+                indexes = [tuple(r) for r in await cur.fetchall()]
+            acct = await accounts_service.get_account(
+                conn, account_id, datetime(2026, 1, 2, tzinfo=UTC)
+            )
+        await db.close()
+        assert await _user_version(path) == len(migrations)
+        assert [name for name, _ in indexes] == sorted(AUTH_HEALTH_INDEXES)
+        assert all("WHERE" in sql for _, sql in indexes)  # partial indexes
+        assert acct.last_accepted_at == datetime(2026, 1, 1, 0, 0, 2, 2, tzinfo=UTC)
+        assert acct.last_rejected_at == datetime(2026, 1, 1, 0, 0, 0, 2, tzinfo=UTC)

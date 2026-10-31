@@ -8,6 +8,11 @@
  * line (or a fixed text) as its error; the poll loop turns it into the structured providerFailure
  * `{provider:"claude", kind:"rate_limit", resets_at?}` and keeps the generic
  * channel text, so no other upstream detail leaves the container.
+ *
+ * A failed turn whose assistant message the SDK marked `authentication_failed`
+ * (and only that mark: not `billing_error`, `rate_limit` or any other error, and
+ * never text that merely contains the word) errors with that fixed marker, which
+ * becomes `{provider:"claude", kind:"auth_expired"}`. The mark lasts one turn.
  */
 
 /** The whole result, one line: `.` stops at a newline and `$` is the end of the text. */
@@ -36,6 +41,27 @@ export function claudeRateLimitError(
   const line = result?.trim() ?? "";
   if (CLAUDE_LIMIT_LINE.test(line)) return line;
   return sdkRateLimited ? CLAUDE_RATE_LIMITED : undefined;
+}
+
+/** SDK assistant.error when the stored credential was rejected (claude-accounts.spec.md). */
+export const CLAUDE_AUTH_FAILED = "authentication_failed";
+
+/** The `error` of a failed turn the SDK marked authentication_failed, or undefined. */
+export function claudeAuthExpiredError(sdkAuthFailed: boolean): string | undefined {
+  return sdkAuthFailed ? CLAUDE_AUTH_FAILED : undefined;
+}
+
+export interface ClaudeAuthExpiredFailure {
+  provider: "claude";
+  kind: "auth_expired";
+}
+
+/** The providerFailure for `claudeAuthExpiredError`; undefined for anything else. */
+export function claudeAuthExpiredFailure(
+  error: string | undefined,
+): ClaudeAuthExpiredFailure | undefined {
+  if (error === CLAUDE_AUTH_FAILED) return { provider: "claude", kind: "auth_expired" };
+  return undefined;
 }
 
 /** The providerFailure for an error `claudeRateLimitError` produced; undefined for anything else. */

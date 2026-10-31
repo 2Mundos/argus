@@ -17,6 +17,7 @@ from argus_core.accounts import (
     AccountCreate,
     AccountLease,
     AccountUpdate,
+    AuthRejectedReport,
     AwaitingQuotaRequest,
     AwaitingQuotaResult,
     CredentialUpdate,
@@ -545,6 +546,18 @@ async def report_exhausted(
             secrets,
             cooldown=timedelta(minutes=settings.account_cooldown_minutes),
         )
+
+
+@router.post("/{account_id}/auth-rejected", status_code=status.HTTP_204_NO_CONTENT)
+async def report_auth_rejected(
+    account_id: str,
+    body: AuthRejectedReport,
+    db: DbDep,
+    agent_id: AgentDep,
+) -> None:
+    """Record `account.auth_rejected` for a held account without exhausting it."""
+    async with db.write() as tx:
+        await service.auth_rejected(tx, agent_id, account_id, body)
 
 
 @router.post("/{account_id}/usage", status_code=status.HTTP_204_NO_CONTENT)

@@ -266,6 +266,8 @@ function world(opts: {
   leases: Array<AccountLease | "no_account">;
   tasks?: any[];
   exhaustedResponse?: (n: number) => any;
+  /** Status for `POST /accounts/{id}/auth-rejected` (default 204). */
+  authRejectedStatus?: number;
   heartbeatIntervalS?: number;
   rejectHeartbeat?: boolean;
   /** Answer an empty claim after this many ms (an idle long-poll) instead of hanging. */
@@ -371,6 +373,11 @@ function world(opts: {
         });
       }
       return json(200, { lease: null, earliest_reset: null, task_blocked: true });
+    }
+    if (/^\/accounts\/[^/]+\/auth-rejected$/.test(path)) {
+      const status = opts.authRejectedStatus ?? 204;
+      if (status === 204) return new Response(null, { status });
+      return json(status, { detail: { code: "not_leased", message: "not held" } });
     }
     if (path === "/tasks/claim") {
       const t = tasks.shift();
@@ -1570,6 +1577,130 @@ describe("structured providerFailure on a failure notice", () => {
     const { w } = await run([codexLease()], failure("The agent run failed. Check the logs."));
     expect(exhaustedCalls(w)).toEqual([]);
     expect(w.calls.some((c) => /\/tasks\/t1\/fail$/.test(c.path))).toBe(true);
+  });
+
+  describe("a structured Claude authentication_failed", () => {
+    const claude = { provider: "claude", kind: "auth_expired" };
+    const rejectedCalls = (w: ReturnType<typeof world>) =>
+      w.calls.filter((c) => /\/auth-rejected$/.test(c.path));
+    const failCall = (w: ReturnType<typeof world>, id = "t1") =>
+      w.calls.find((c) => c.path === `/tasks/${id}/fail`);
+
+    it("reports a safe auth rejection and fails the attempt without exhausting Claude", async () => {
+      const { w, h } = await run([lease("claude-1", "sk-ant-SYNTH-KEY")], structured(claude));
+      expect(rejectedCalls(w).map((c) => [c.method, c.path, c.body])).toEqual([
+        [
+          "POST",
+          "/accounts/a-claude-1/auth-rejected",
+          { task_id: "t1", attempt: 1, role: "engine", source: "structured" },
+        ],
+      ]);
+      expect(exhaustedCalls(w)).toEqual([]);
+      const fail = failCall(w)!;
+      expect(fail.body).toMatchObject({ attempt: 1, reason: "provider_failure" });
+      expect(fail.body.error).toBe("Claude authentication failed");
+      const order = w.calls.map((c) => c.path);
+      expect(order.indexOf("/accounts/a-claude-1/auth-rejected")).toBeLessThan(
+        order.indexOf("/tasks/t1/fail"),
+      );
+      const seen = JSON.stringify([w.calls.filter((c) => c.who === "argus"), h.inbound]);
+      for (const secret of ["SECRET-ERR-STRING", "sk-SYNTH", "sk-ant-SYNTH-KEY"]) {
+        expect(seen).not.toContain(secret);
+      }
+    });
+
+    it("still fails the attempt when the report is refused", async () => {
+      const w = world({
+        leases: [lease("claude-1", "sk-ant")],
+        tasks: [task()],
+        authRejectedStatus: 409,
+      });
+      const h = harness(w, true);
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length > 0);
+      await h.adapter.deliver("local", h.thread(), structured(claude) as any);
+      await until(() => failCall(w) !== undefined);
+      expect(rejectedCalls(w)).toHaveLength(1);
+      expect(exhaustedCalls(w)).toEqual([]);
+      expect(failCall(w)!.body.error).toBe("Claude authentication failed");
+    });
+
+    it("needs the held account to be anthropic", async () => {
+      const { w } = await run([codexLease(), "no_account"], structured(claude));
+      expect(rejectedCalls(w)).toEqual([]);
+      expect(exhaustedCalls(w)).toEqual([]);
+    });
+
+    it.each([
+      ["claude rate_limit", structured({ provider: "claude", kind: "rate_limit" })],
+      ["claude billing", structured({ provider: "claude", kind: "billing" })],
+      ["claude billing_error", structured({ provider: "claude", kind: "billing_error" })],
+      ["claude org", structured({ provider: "claude", kind: "org" })],
+      ["claude on_hold", structured({ provider: "claude", kind: "on_hold" })],
+      [
+        "claude authentication_failed kind",
+        structured({ provider: "claude", kind: "authentication_failed" }),
+      ],
+      ["providerFailure outside a notice", structured(claude, false)],
+      ["free-form marker", failure("authentication_failed")],
+      [
+        "free-form quoted notice",
+        failure('Claude said: "authentication_failed: OAuth token revoked"'),
+      ],
+      [
+        "free-form 401",
+        failure('Error: 401 {"type":"authentication_error","message":"invalid x-api-key"}'),
+      ],
+      ["free-form billing", failure("Credit balance is too low")],
+      ["free-form org", failure("Your organization has been disabled.")],
+      ["free-form on hold", failure("Your account is on hold. Contact support.")],
+    ])("%s is not an auth rejection", async (_name, msg) => {
+      const w = world({ leases: [lease("claude-1", "sk-ant")], tasks: [task()] });
+      const h = harness(w, true);
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length > 0);
+      await h.adapter.deliver("local", h.thread(), msg as any);
+      await new Promise((r) => setTimeout(r, 50));
+      await until(
+        () =>
+          !(msg as { content: { failureNotice: boolean } }).content.failureNotice ||
+          w.calls.some((c) => /\/exhausted$/.test(c.path) || /\/tasks\/t1\/fail$/.test(c.path)),
+      );
+      expect(rejectedCalls(w)).toEqual([]);
+    });
+
+    it("free-form auth words never exhaust Claude", async () => {
+      for (const text of [
+        "authentication_failed",
+        'Error: 401 {"type":"authentication_error"}',
+        "Your account is on hold.",
+      ]) {
+        const { w } = await run([lease("claude-1", "sk-ant")], failure(text));
+        expect(exhaustedCalls(w)).toEqual([]);
+        expect(failCall(w)).toBeDefined();
+      }
+    });
+
+    it("a later ordinary failure does not exhaust Claude", async () => {
+      const w = world({
+        leases: [lease("claude-1", "sk-ant"), lease("claude-1", "sk-ant")],
+        tasks: [task(), { ...task(), id: "t2", title: "Next" }],
+      });
+      const h = harness(w, true);
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length > 0);
+      await h.adapter.deliver("local", h.thread(), structured(claude) as any);
+      await until(() => failCall(w) !== undefined);
+      await until(() => h.inbound.length > 1);
+      await h.adapter.deliver("local", h.thread(), failure("The agent run failed. Tool crashed."));
+      await until(() => failCall(w, "t2") !== undefined);
+      expect(rejectedCalls(w)).toHaveLength(1);
+      expect(exhaustedCalls(w)).toEqual([]);
+      expect(failCall(w, "t2")!.body.error).toContain("Tool crashed");
+    });
   });
 
   it("classifyProviderFailure fails closed without an openai account", () => {
@@ -3192,6 +3323,13 @@ describe("Codex usage limit and expired login (account-selection.spec.md 3.6)", 
     ).toMatchObject({
       kind: "exhausted",
       code: "auth_expired",
+    });
+    expect(
+      classifyProviderFailure({ provider: "claude", kind: "auth_expired" }, "anthropic"),
+    ).toMatchObject({
+      kind: "auth_rejected",
+      reason: "Claude authentication failed",
+      source: "structured",
     });
     expect(classifyFailure("Error: 401 token_expired", "openai")).toMatchObject({
       kind: "exhausted",

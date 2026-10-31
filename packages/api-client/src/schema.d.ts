@@ -262,6 +262,26 @@ export interface paths {
         patch: operations["update_account_api_accounts__account_id__patch"];
         trace?: never;
     };
+    "/api/accounts/{account_id}/auth-rejected": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report Auth Rejected
+         * @description Record `account.auth_rejected` for a held account without exhausting it.
+         */
+        post: operations["report_auth_rejected_api_accounts__account_id__auth_rejected_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/credential": {
         parameters: {
             query?: never;
@@ -2853,6 +2873,10 @@ export interface components {
             labels: {
                 [key: string]: string;
             };
+            /** Last Accepted At */
+            last_accepted_at?: string | null;
+            /** Last Rejected At */
+            last_rejected_at?: string | null;
             /** Max Leases */
             max_leases: number | null;
             /** Name */
@@ -3548,6 +3572,26 @@ export interface components {
          * @enum {string}
          */
         Audience: "human" | "orchestrator" | "any";
+        /**
+         * AuthRejectedReport
+         * @description Record that the provider rejected the stored credential (account usage 3.5).
+         *
+         *     Does not exhaust the account or change its state; only writes `account.auth_rejected`.
+         */
+        AuthRejectedReport: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Role
+             * @default engine
+             * @enum {string}
+             */
+            role?: "engine" | "executor" | "repository";
+            /** Source */
+            source?: ("structured" | "notice" | "log") | null;
+            /** Task Id */
+            task_id: string;
+        };
         /**
          * AwaitingQuotaRequest
          * @description An agent with no usable account asks for the work it cannot claim to wait.
@@ -9999,6 +10043,39 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Account"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    report_auth_rejected_api_accounts__account_id__auth_rejected_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuthRejectedReport"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
