@@ -480,3 +480,68 @@ def test_classify_failure_tolerates_spaces_and_hyphens() -> None:
         == "gate_failed"
     )
     assert fleet_health.classify_failure("worker_fail", "boom") == "worker_fail"
+
+
+async def add_raw_usage(
+    db: Database,
+    task: str,
+    key: str,
+    attempt: int | None,
+    tokens: int | None,
+    cost: float | None,
+    measurement: str,
+) -> None:
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "INSERT INTO accounts (id, name, provider, kind, secret_ref, priority,"
+            " state, created_at, updated_at) SELECT 'acc', 'acc', 'anthropic',"
+            " 'api_key', 'sops:acc', 0, 'available', ?, ? WHERE NOT EXISTS"
+            " (SELECT 1 FROM accounts WHERE id = 'acc')",
+            (ts(NOW), ts(NOW)),
+        )
+        await tx.conn.execute(
+            "INSERT INTO account_usage (account_id, task_id, attempt, input_tokens,"
+            " output_tokens, cost_usd, at, measurement, run_key)"
+            " VALUES ('acc', ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                task,
+                attempt,
+                None if tokens is None else tokens,
+                None if tokens is None else 0,
+                cost,
+                ts(NOW),
+                measurement,
+                key,
+            ),
+        )
+
+
+async def test_executor_not_reported_row_disqualifies_measured_task(
+    db: Database,
+) -> None:
+    """A not_reported row on an attempt that also has a measured row is not measured."""
+    for i in range(MIN_SAMPLES):
+        await add_finished(db, f"ok{i}", "succeeded")
+        await add_raw_usage(db, f"ok{i}", f"e{i}", 1, 1000, 0.5, "measured")
+    await add_finished(db, "split", "succeeded")
+    await add_raw_usage(db, "split", "s-eng", 1, 9000, 0.9, "measured")
+    await add_raw_usage(db, "split", "s-exe", 1, None, None, "not_reported")
+    y = (await health(db)).yield_
+    assert y.measured_tasks == MIN_SAMPLES
+    assert y.tokens_per_succeeded == 1000.0
+    assert y.cost_per_succeeded == 0.5
+
+
+async def test_attempt_less_not_reported_row_disqualifies_measured_task(
+    db: Database,
+) -> None:
+    """A not_reported row with no attempt keeps the task out of the means."""
+    for i in range(MIN_SAMPLES):
+        await add_finished(db, f"ok{i}", "succeeded")
+        await add_raw_usage(db, f"ok{i}", f"n{i}", 1, 1000, 0.5, "measured")
+    await add_finished(db, "noatt", "succeeded")
+    await add_raw_usage(db, "noatt", "na-m", 1, 9000, 0.9, "measured")
+    await add_raw_usage(db, "noatt", "na-nr", None, None, None, "not_reported")
+    y = (await health(db)).yield_
+    assert y.measured_tasks == MIN_SAMPLES
+    assert y.tokens_per_succeeded == 1000.0

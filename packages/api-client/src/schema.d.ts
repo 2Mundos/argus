@@ -180,8 +180,9 @@ export interface paths {
          * @description Lease the best usable account and deliver its credential to a claimed task.
          *
          *     `runtime_providers` is required and states what the runtime can apply. The
-         *     caller must hold the live claim identified by `task_id` and `attempt`. One
-         *     active lease per role; `409 no_account` when none is usable. A `local` lease
+         *     caller must hold the live claim identified by `task_id` and `attempt`; only the
+         *     internal orchestrator may leave them out, for its engine (internal orchestrator
+         *     spec 3.1). One active lease per role; `409 no_account` when none is usable. A `local` lease
          *     whose credential names no `context_tokens` carries the window the local model's
          *     probe measured, so the harness can compact in time (local harness spec, "Harness orchestrates only").
          */
@@ -6076,7 +6077,7 @@ export interface components {
          */
         LeaseRequest: {
             /** Attempt */
-            attempt: number;
+            attempt?: number | null;
             /**
              * Reuse Held
              * @default false
@@ -6091,7 +6092,7 @@ export interface components {
             /** Runtime Providers */
             runtime_providers: string[];
             /** Task Id */
-            task_id: string;
+            task_id?: string | null;
         };
         /**
          * LeaseSettings

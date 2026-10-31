@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from api_support import FakeClock, insert_agent
+from argus_api.accounts import routes as account_routes
 from argus_api.accounts import service as accounts
 from argus_api.accounts.service import NoAccountError
 from argus_api.db import Database
@@ -783,3 +784,37 @@ def test_exhausted_returns_metadata_only_and_honors_runtime_provider_filter(
     assert body["next_account_name"] == "anthropic-fallback"
     assert "credential" not in body and body["lease"] is None
     assert "sk-ant-api03-next" not in result.text and "opaque-openai" not in result.text
+
+
+def test_only_the_internal_orchestrator_leases_without_a_task(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """internal-orchestrator.spec.md 3.1: it leases like any agent, with no task."""
+    agent = register(client)
+    client.post(
+        "/api/accounts",
+        json={
+            "name": "solo",
+            "provider": "anthropic",
+            "credential": {"api_key": "sk-ant-api03-solo"},
+        },
+    )
+    bare = {"runtime_providers": ["anthropic"]}
+    refused = client.post("/api/accounts/lease", json=bare, headers=agent)
+    assert refused.status_code == 422, refused.text
+    half = client.post(
+        "/api/accounts/lease", json={**bare, "task_id": "t"}, headers=agent
+    )
+    assert half.status_code == 422
+
+    async def system_pool(_conn: object, _agent_id: str | None) -> str:
+        return "orchestrator"
+
+    monkeypatch.setattr(account_routes, "agent_system_pool", system_pool)
+    leased = client.post("/api/accounts/lease", json=bare, headers=agent)
+    assert leased.status_code == 200, leased.text
+    assert leased.json()["name"] == "solo"
+    executor = client.post(
+        "/api/accounts/lease", json={**bare, "role": "executor"}, headers=agent
+    )
+    assert executor.status_code == 422

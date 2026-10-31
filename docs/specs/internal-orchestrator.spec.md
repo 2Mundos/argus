@@ -71,7 +71,11 @@ Getting a first account, worker and orchestrator is the
   ([account selection](account-selection.spec.md)), preferring the setting
   `orchestrator.model` (a harness engine/model; default: the best-priority
   harness-capable account's default model). If it cannot be served, ordinary
-  fallback applies.
+  fallback applies. Having no task, it leases its engine with no `task_id`
+  ([account selection](account-selection.spec.md)). The channel leases and
+  applies the account to its OneCLI agent (selective mode) before it claims the
+  first chat message, and retries with backoff while none is usable, so a turn
+  never runs on whatever the vault would inject by default.
 - The skill is loaded at session start from the server's
   `skill://argus-orchestrator/SKILL.md` resource, not baked into the image, so it
   always matches the running server.

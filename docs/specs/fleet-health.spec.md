@@ -65,6 +65,8 @@ dead-session recovery coverage and latency.
   zero. A task's token total (input plus output) and cost are known only when
   every measured row of the task reports that figure; a row with only cost or
   only input leaves the task's tokens unknown, and never adds a partial sum. A
+  task with any `not_reported` row (any attempt, including attempt-less rows,
+  engine or executor) is not fully measured and adds no figure. A
   mean needs `MIN_SAMPLES` measured tasks (else `null`). Migration
   `0046` indexes `account_usage.task_id`. The MCP tool `get_fleet_yield(window_hours)`
   (managers) returns this `yield` block.

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, call, type OnboardingStatus } from "../api";
+import { api, call, type OnboardingStatus, type TemplateCatalog } from "../api";
 import { useLiveData } from "../live";
 import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
@@ -17,6 +17,14 @@ export function firstIncompleteStep(status: OnboardingStatus): Step {
   if (!status.worker) return 2;
   if (!status.orchestrator) return 3;
   return 3;
+}
+
+/** Why the orchestrator cannot start on this node, or undefined when its template is ready. */
+export function orchestratorBlockers(catalog: TemplateCatalog): string[] | undefined {
+  const orch = catalog.templates.find((t) => t.id === "nanoclaw-orchestrator");
+  if (orch?.ready) return undefined;
+  const missing = (orch?.readiness ?? []).flatMap((r) => r.missing);
+  return missing.length ? missing : ["The internal orchestrator template is not ready."];
 }
 
 async function dismissOnboarding(): Promise<void> {
@@ -39,6 +47,10 @@ export function OnboardingWizard({
 }) {
   const { data: status, reload } = useLiveData(
     (signal) => call(api.GET("/api/onboarding", { signal })),
+    [],
+  );
+  const { data: catalog } = useLiveData(
+    (signal) => call(api.GET("/api/fleet/templates", { signal })),
     [],
   );
   const [step, setStep] = useState<Step>(initialStep ?? 1);
@@ -177,6 +189,7 @@ export function OnboardingWizard({
           {step === 3 && (
             <OrchestratorStep
               done={orchDone}
+              catalog={catalog}
               budget={budget}
               setBudget={setBudget}
               enabling={enabling}
@@ -286,12 +299,14 @@ function WorkerStep(props: { done: boolean; onDone: () => void; onSkip: () => vo
 
 function OrchestratorStep(props: {
   done: boolean;
+  catalog: TemplateCatalog | undefined;
   budget: string;
   setBudget: (v: string) => void;
   enabling: boolean;
   onEnable: () => void;
   onSkip: () => void;
 }) {
+  const blockers = props.catalog && orchestratorBlockers(props.catalog);
   return (
     <div className="onboarding-panel">
       <h3>Start the internal orchestrator</h3>
@@ -308,6 +323,20 @@ function OrchestratorStep(props: {
           <span className="spinner" aria-hidden="true" />
           Enabling the orchestrator… starting its container can take a moment.
         </p>
+      ) : !props.catalog ? (
+        <p className="busy" role="status" aria-live="polite">
+          <span className="spinner" aria-hidden="true" />
+          Checking whether the orchestrator can start on this node…
+        </p>
+      ) : blockers ? (
+        <>
+          <p className="error">The orchestrator cannot start on this node yet:</p>
+          <ul>
+            {blockers.map((b) => (
+              <li key={b}>{b}</li>
+            ))}
+          </ul>
+        </>
       ) : (
         <>
           <label>
