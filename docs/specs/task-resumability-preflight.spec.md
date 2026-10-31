@@ -237,6 +237,26 @@ A live lease is reported as `lease_held_elsewhere` with a reason that says
 "a live lease is held by \<agent\>" — informative even when the caller is that
 agent; it does not imply a different worker.
 
+## 3.9 Secrets and bounds
+
+Every free-text field (artifact notes and refs, WIP summary and ref, decision
+questions, the interruption detail, continuation `gaps`, artifact names) is
+redacted with `argus_core.redact` and bounded before it leaves, and nothing
+falls back to the raw value when redaction yields an empty string. No content
+bytes, no token, no host path outside the artifact store, no receipt reporter
+detail beyond ids. Availability is reported as a class, never as bytes or a
+digest an operator could confuse with content.
+
+## 3.10 Authority and effects
+
+The preflight grants nothing. `merge`, force-push, deploy and Production access
+are unchanged ([prompt-data isolation](prompt-data-isolation.spec.md),
+[task continuation 3.9](task-continuation.spec.md)). Its only effect is a read:
+no event, no row, no artifact, no lease, and no gate. In particular a
+`resumable` verdict does not authorize a merge, and a `not_resumable` verdict
+does not block anything — the existing answer, requeue and release paths behave
+exactly as before.
+
 # 4. Open Questions
 
 - Enforcement / TOCTOU: a separate authoritative policy that re-checks inside the
