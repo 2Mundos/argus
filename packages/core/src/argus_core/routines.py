@@ -78,6 +78,7 @@ class RoutineRun(BaseModel):
     task_id: str
     state: TaskState
     created_at: datetime
+    findings_filed: int
 
 
 class Routine(BaseModel):

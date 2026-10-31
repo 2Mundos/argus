@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import Generator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -563,3 +564,48 @@ def test_auto_findings_need_an_admin_through_the_api(client: TestClient) -> None
     res = client.put(PATH, json=body, headers={"Authorization": f"Bearer {token}"})
     assert (res.status_code, res.json()["detail"]["code"]) == (403, "admin_required")
     assert client.put(PATH, json=body, headers=ADMIN).status_code == 200
+
+
+# -- findings_filed ------------------------------------------------------------------
+
+
+async def _filed(db: Database, routine: Routine) -> dict[str, int]:
+    async with db.read() as conn:
+        detail = await service.get_routine(conn, routine.id, ts_now())
+    return {r.task_id: r.findings_filed for r in detail.last_runs}
+
+
+def ts_now() -> datetime:
+    return datetime.now(UTC)
+
+
+async def test_findings_filed_counts_filed_children_per_run(
+    db: Database, clock: FakeClock, projects: None
+) -> None:
+    routine = await _routine(db)
+    first = await _run_with(db, routine, [_finding("e1"), _finding("e2")])
+    clock.advance(3600)
+    # A repeat key is deduplicated: no child, nothing counted.
+    second = await _run_with(db, routine, [_finding("e1")])
+    clock.advance(3600)
+    third = await _run_with(db, routine, [])
+    assert await _filed(db, routine) == {first: 2, second: 0, third: 0}
+
+
+async def test_findings_filed_ignores_agent_created_children(
+    db: Database, projects: None
+) -> None:
+    routine = await _routine(db)
+    run_id = await _run_with(db, routine, [_finding("e1")])
+    async with db.write() as tx:
+        await tasks.create_task(
+            tx,
+            TaskCreate(
+                title="forged",
+                project="radar",
+                parent_id=run_id,
+                input={"routine_finding": {"routine": routine.id, "key": "e9"}},
+            ),
+            "agent:sneaky",
+        )
+    assert await _filed(db, routine) == {run_id: 1}

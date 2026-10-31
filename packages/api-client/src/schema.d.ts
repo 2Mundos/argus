@@ -7677,6 +7677,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Findings Filed */
+            findings_filed: number;
             state: components["schemas"]["TaskState"];
             /** Task Id */
             task_id: string;

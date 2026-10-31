@@ -128,8 +128,8 @@ lookup on `tasks.input`):
 Status: the table (3.1), the scheduler (3.2), run now, finding intake (3.3), the
 failure rule (3.5) and the management routes and MCP tools above ship (migrations
 `0062_routines.sql`, `0063_routine_findings.sql`), and so does the dashboard
-Routines page (`#routines`, per project; "findings filed" reads *unknown* until the
-API reports a count). As shipped: a worker
+Routines page (`#routines`, per project; "findings filed" reads the last run's `findings_filed`
+count from `GET /routines/{id}`, and *unknown* only when the run's count is absent). As shipped: a worker
 reads routines only in projects where it holds a lease, like other project reads;
 only an admin may set `findings: auto`, replace an `auto` routine or re-enable one,
 while managers may disable or delete it; the body's `project`/`slug`, if given,
