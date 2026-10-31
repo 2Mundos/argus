@@ -3384,6 +3384,19 @@
         "title": "CheckOut",
         "type": "object"
       },
+      "CheckState": {
+        "enum": [
+          "success",
+          "pending",
+          "failure",
+          "error",
+          "skipped",
+          "cancelled",
+          "unknown"
+        ],
+        "title": "CheckState",
+        "type": "string"
+      },
       "Checklist": {
         "properties": {
           "omitted": {
@@ -6282,7 +6295,7 @@
         "type": "object"
       },
       "Delivery": {
-        "description": "What Argus read of the task's pull request. Observed only: a merge neither\ncloses the task nor counts as acceptance.",
+        "description": "What Argus read of the task's pull request. Observed only: a merge neither\ncloses the task nor counts as acceptance. Green checks do not authorize merge.",
         "properties": {
           "accept_blocked": {
             "anyOf": [
@@ -6311,10 +6324,64 @@
             ],
             "title": "Accept Decision Id"
           },
+          "authorization": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryAuthorization"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "base": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ShaFact"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "checked_at": {
             "format": "date-time",
             "title": "Checked At",
             "type": "string"
+          },
+          "checklist": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryChecklist"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/DeliveryCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "checks_combined": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CheckState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "disclosures": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Disclosures",
+            "type": "array"
           },
           "flags": {
             "items": {
@@ -6323,6 +6390,26 @@
             },
             "title": "Flags",
             "type": "array"
+          },
+          "head": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ShaFact"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "merge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MergeFact"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "merged_at": {
             "anyOf": [
@@ -6336,12 +6423,54 @@
             ],
             "title": "Merged At"
           },
+          "partial": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Partial",
+            "type": "array"
+          },
           "pr": {
             "title": "Pr",
             "type": "string"
           },
           "pr_state": {
             "$ref": "#/components/schemas/PrState"
+          },
+          "required_gates": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequiredGates"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryReviewEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stale": {
+            "default": false,
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryTask"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -6354,6 +6483,173 @@
           "accept_blocked"
         ],
         "title": "Delivery",
+        "type": "object"
+      },
+      "DeliveryAuthorization": {
+        "properties": {
+          "accept_blocked": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_in_review",
+                  "checklist_pending",
+                  "no_review"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept Blocked"
+          },
+          "accept_decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept Decision Id"
+          },
+          "allow_merge": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Merge"
+          },
+          "notes": {
+            "default": "Green checks do not authorize merge. Merge is not acceptance. Authorization and checklist are separate from forge CI.",
+            "title": "Notes",
+            "type": "string"
+          },
+          "source": {
+            "const": "task",
+            "default": "task",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "title": "DeliveryAuthorization",
+        "type": "object"
+      },
+      "DeliveryCheck": {
+        "properties": {
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "kind": {
+            "enum": [
+              "status",
+              "check_run"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required"
+          },
+          "sha": {
+            "title": "Sha",
+            "type": "string"
+          },
+          "source": {
+            "const": "forge",
+            "default": "forge",
+            "title": "Source",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CheckState"
+          },
+          "target_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Url"
+          }
+        },
+        "required": [
+          "name",
+          "state",
+          "kind",
+          "sha",
+          "checked_at"
+        ],
+        "title": "DeliveryCheck",
+        "type": "object"
+      },
+      "DeliveryChecklist": {
+        "properties": {
+          "done": {
+            "title": "Done",
+            "type": "integer"
+          },
+          "pending": {
+            "title": "Pending",
+            "type": "integer"
+          },
+          "pending_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pending Ids",
+            "type": "array"
+          },
+          "source": {
+            "const": "task",
+            "default": "task",
+            "title": "Source",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pending",
+          "done",
+          "total"
+        ],
+        "title": "DeliveryChecklist",
         "type": "object"
       },
       "DeliveryEvidence": {
@@ -6405,6 +6701,111 @@
           "flags"
         ],
         "title": "DeliveryEvidence",
+        "type": "object"
+      },
+      "DeliveryReviewEvidence": {
+        "properties": {
+          "agentic_finding_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agentic Finding Count"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "forge_review_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forge Review Count"
+          },
+          "forge_reviews_for_head": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forge Reviews For Head"
+          },
+          "independent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IndependentReviewSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha"
+          },
+          "source": {
+            "$ref": "#/components/schemas/FactOrigin",
+            "default": "unknown"
+          }
+        },
+        "title": "DeliveryReviewEvidence",
+        "type": "object"
+      },
+      "DeliveryTask": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "source": {
+            "const": "task",
+            "default": "task",
+            "title": "Source",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "project"
+        ],
+        "title": "DeliveryTask",
         "type": "object"
       },
       "DependenciesRequest": {
@@ -8125,6 +8526,15 @@
         "title": "ExternalReads",
         "type": "object"
       },
+      "FactOrigin": {
+        "enum": [
+          "forge",
+          "task",
+          "unknown"
+        ],
+        "title": "FactOrigin",
+        "type": "string"
+      },
       "FactSource": {
         "description": "How far a runtime fact is proven, weakest first.",
         "enum": [
@@ -9287,6 +9697,51 @@
           "totals_by_decision_kind"
         ],
         "title": "InboxPage",
+        "type": "object"
+      },
+      "IndependentReviewSummary": {
+        "properties": {
+          "child_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Child Task Id"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "source": {
+            "const": "task",
+            "default": "task",
+            "title": "Source",
+            "type": "string"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          }
+        },
+        "title": "IndependentReviewSummary",
         "type": "object"
       },
       "InputFailure": {
@@ -10883,6 +11338,50 @@
           "triggered"
         ],
         "title": "LostSpike",
+        "type": "object"
+      },
+      "MergeFact": {
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "mergeable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mergeable"
+          },
+          "mergeable_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mergeable State"
+          },
+          "source": {
+            "$ref": "#/components/schemas/FactOrigin",
+            "default": "unknown"
+          }
+        },
+        "title": "MergeFact",
         "type": "object"
       },
       "Message": {
@@ -14754,6 +15253,35 @@
         "title": "RenewedLease",
         "type": "object"
       },
+      "RequiredGates": {
+        "description": "Present only when the forge disclosed required contexts (may be empty).",
+        "properties": {
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "contexts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Contexts",
+            "type": "array"
+          },
+          "source": {
+            "const": "forge",
+            "default": "forge",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contexts",
+          "checked_at"
+        ],
+        "title": "RequiredGates",
+        "type": "object"
+      },
       "RetryClass": {
         "description": "What kind of failure ended an attempt; it picks the retry (failure classes 3.2).",
         "enum": [
@@ -16217,6 +16745,50 @@
           "settings"
         ],
         "title": "SettingsResponse",
+        "type": "object"
+      },
+      "ShaFact": {
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha"
+          },
+          "source": {
+            "$ref": "#/components/schemas/FactOrigin",
+            "default": "unknown"
+          }
+        },
+        "title": "ShaFact",
         "type": "object"
       },
       "Source": {

@@ -44,4 +44,35 @@ describe("TaskDelivery", () => {
     render(<TaskDelivery delivery={base} />);
     expect(screen.queryByText(/pending review/)).toBeNull();
   });
+
+  it("surfaces exact-head checks, stale and partial without implying accept", () => {
+    render(
+      <TaskDelivery
+        delivery={{
+          ...base,
+          head: {
+            sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ref: "feat",
+            source: "forge",
+            checked_at: "2026-10-24T10:00:00Z",
+          },
+          checks_combined: "pending",
+          stale: true,
+          partial: ["reviews"],
+          authorization: {
+            allow_merge: false,
+            accept_decision_id: null,
+            accept_blocked: null,
+            notes: "Green checks do not authorize merge. Merge is not acceptance.",
+            source: "task",
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText(/checks pending/)).toBeTruthy();
+    expect(screen.getByText(/Stale head/)).toBeTruthy();
+    expect(screen.getByText(/Partial forge read: reviews/)).toBeTruthy();
+    expect(screen.getByText(/do not authorize merge/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
+  });
 });

@@ -230,9 +230,9 @@ Findings outside the gap list:
     the live value when known, else the stored one. A merged PR adds the
     `delivery_merged_pending_review` flag and nothing else: it neither accepts
     the review nor changes the suggested action. `ci` is always `unknown`
-    (Argus stores no CI result); it is an extension point, as are delivery
-    preflight or decision previews that may land later: added as optional
-    fields that read `unknown` when absent.
+    (Argus stores no CI result); it is an extension point, as is delivery
+    preflight: future evidence is added as optional fields that read `unknown`
+    when absent. Decision previews are available separately (3.2c).
   - *Forge reads:* opt-in with `forge=true` (default false: no network call). At
     most 5 rows per request are read (`forge_reads` in the response; rows past
     it get `error: "read_budget"`), concurrently, within a 6 s budget for the
@@ -446,6 +446,18 @@ Unavailable facts are present and `"unknown"` or `"stale"`, never omitted.
 Lists are capped (effects 20, checks 10, cancelled ids 20); `question.text` at 4,000.
 A race is expected: if another caller answers between preview and answer, the answer
 returns its existing `409 decision_not_open`, and a new preview shows `answered`.
+
+## 3.2d Delivery evidence for inbox reviews
+
+`get_task_delivery` / `GET /api/tasks/{id}/delivery` is the bounded, read-only
+projection of forge PR/head/base/mergeability, exact-head checks/statuses,
+optional required gates, review evidence, and (separately) Argus checklist and
+authorization ([task delivery](task-delivery.spec.md) 3.3–3.5). It is listed to
+anyone who can read the task. Inbox rows do **not** embed it: after `get_inbox`
+selects a `review` (or `in_review`) row, the orchestrator calls
+`get_task_delivery` for that task. Green checks do not authorize merge; merge is
+not acceptance. Partial forge failures and stale head are disclosed on the
+projection.
 
 ## 3.3 P1 — fleet
 
