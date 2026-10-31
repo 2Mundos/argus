@@ -141,7 +141,14 @@ def test_scale_up_work_and_scale_down(argus: httpx.Client) -> None:
         "instances to be recorded as terminated",
     )
     instances = instances_now()
-    assert {i["exit_reason"] for i in instances} <= {"all agents left", "exited (0)"}
+    # Scale-down drains the workers; the reconciler ends an idle drained instance
+    # as "drained" unless the worker leaves ("all agents left") or its container
+    # exits cleanly first. Any other reason (a crash, a lost agent) fails.
+    assert {i["exit_reason"] for i in instances} <= {
+        "drained",
+        "all agents left",
+        "exited (0)",
+    }
 
 
 NANOCLAW_DIR = os.environ.get("ARGUS_NANOCLAW_INSTALL_DIR")
@@ -237,6 +244,28 @@ K8S_NAMESPACE = os.environ.get("ARGUS_K8S_NAMESPACE", "workers")
 KIND_CLUSTER = os.environ.get("ARGUS_KIND_CLUSTER")  # load the image into kind
 
 
+def _k8s_diagnostics(api, argus: httpx.Client, pool: str) -> str:
+    """Why pods did not register: pod phase and container state, events, instances."""
+    lines = []
+    for pod in api.list_namespaced_pod(K8S_NAMESPACE).items:
+        statuses = (pod.status.container_statuses if pod.status else None) or []
+        states = [
+            cs.state.waiting or cs.state.terminated or cs.state.running
+            for cs in statuses
+            if cs.state
+        ]
+        lines.append(f"pod {pod.metadata.name}: {pod.status.phase} {states}")
+    lines += [
+        f"event {ev.involved_object.name}: {ev.reason}: {ev.message}"
+        for ev in api.list_namespaced_event(K8S_NAMESPACE).items
+    ]
+    lines += [
+        f"instance {i['id']}: {i['state']} {i.get('exit_reason')}"
+        for i in argus.get("/instances", params={"pool": pool}).json()
+    ]
+    return "\n".join(lines)
+
+
 @pytest.mark.skipif(
     not K8S_CONTEXT,
     reason="set ARGUS_K8S_CONTEXT (a kubeconfig context; use an isolated cluster such as kind)",
@@ -275,11 +304,18 @@ def test_kubernetes_target_scales_runs_work_and_cleans_up(argus: httpx.Client) -
     }
     try:
         assert argus.put(f"/pools/{pool}", json=body).status_code == 200
-        wait_for(
-            lambda: len(argus.get("/agents", params={"state": "active"}).json()) == 2,
-            120,
-            "two pods to register",
-        )
+        try:
+            wait_for(
+                lambda: (
+                    len(argus.get("/agents", params={"state": "active"}).json()) == 2
+                ),
+                120,
+                "two pods to register",
+            )
+        except AssertionError as exc:
+            raise AssertionError(
+                f"{exc}\n{_k8s_diagnostics(api, argus, pool)}"
+            ) from exc
         assert len(pods()) == 2
 
         ids = [
