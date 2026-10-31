@@ -217,6 +217,7 @@ async def test_inbox_decision_wakes_the_internal_orchestrator(
         claimed = await conversations.claim_next(tx, agent_id="orch", path=path)
     assert claimed is not None and claimed[0].kind == "updates"
     assert claimed[1].state == "delivered"
+    assert claimed[1].author == "system"
     assert all(state != "queued" for _, state in await _inbox_wakes(db))
 
     async with db.write() as tx:

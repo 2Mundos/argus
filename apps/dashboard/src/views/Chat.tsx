@@ -88,7 +88,11 @@ function orchestratorRegistration(
     return ended
       ? {
           word: ended.state === "lost" ? "Lost" : "Ended",
-          reason: ended.end_reason ?? "The orchestrator stopped heartbeating.",
+          reason:
+            ended.end_reason ??
+            (ended.state === "lost"
+              ? "The orchestrator stopped heartbeating."
+              : "The orchestrator left."),
           ok: false,
         }
       : { word: "Starting", reason: "Waiting for the orchestrator to register.", ok: false };
@@ -123,17 +127,32 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
     (signal) => call(api.GET("/api/conversations", { signal })),
     [],
   );
-  const { data: pools } = useLiveData((signal) => call(api.GET("/api/pools", { signal })), []);
-  const systemPool = pools?.find((p) => p.system === "orchestrator");
-  const { data: instances } = useLiveData(
+  const { data: poolsData, error: poolsError } = useLiveData(
+    (signal) => call(api.GET("/api/pools", { signal })),
+    [],
+  );
+  // `useLiveData` keeps the last result when a refetch fails; a failed read must not
+  // keep showing a registration the dashboard can no longer confirm.
+  const pools = poolsError ? undefined : poolsData;
+  const systemPool = poolsData?.find((p) => p.system === "orchestrator");
+  const { data: instancesData, error: instancesError } = useLiveData(
     (signal) =>
       systemPool
         ? call(api.GET("/api/instances", { params: { query: { pool: systemPool.name } }, signal }))
         : Promise.resolve([] as Instance[]),
     [systemPool?.name],
   );
-  const { data: agents } = useLiveData((signal) => call(api.GET("/api/agents", { signal })), []);
-  const { data: engines } = useLiveData((signal) => call(api.GET("/api/engines", { signal })), []);
+  const { data: agentsData, error: agentsError } = useLiveData(
+    (signal) => call(api.GET("/api/agents", { signal })),
+    [],
+  );
+  const { data: enginesData, error: enginesError } = useLiveData(
+    (signal) => call(api.GET("/api/engines", { signal })),
+    [],
+  );
+  const instances = instancesError ? undefined : instancesData;
+  const agents = agentsError ? undefined : agentsData;
+  const engines = enginesError ? undefined : enginesData;
   const now = useNow(5000);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string>();
@@ -241,11 +260,11 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
     }
   }
 
-  const liveness = orchestratorRegistration(pools, instances, agents, engines, now);
+  const registration = orchestratorRegistration(pools, instances, agents, engines, now);
   const status = (
-    <p className={`chat-status${liveness.ok ? " registered" : ""}`} role="status">
-      <span className="chat-status-word">Orchestrator: {liveness.word}</span>
-      <span className="muted small"> · {liveness.reason}</span>
+    <p className={`chat-status${registration.ok ? " registered" : ""}`} role="status">
+      <span className="chat-status-word">Orchestrator: {registration.word}</span>
+      <span className="muted small"> · {registration.reason}</span>
     </p>
   );
 

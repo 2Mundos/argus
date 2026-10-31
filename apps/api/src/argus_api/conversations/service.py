@@ -457,7 +457,7 @@ async def _cap_notice_target(conn: aiosqlite.Connection, now: datetime) -> str |
 async def claim_next(
     tx: Tx, *, agent_id: str, path, disk_guard: DiskGuard | None = None
 ) -> tuple[Conversation, Message] | None:
-    """Claim the oldest deliverable queued human message.
+    """Claim the oldest deliverable queued message (human or system).
 
     Delivery is idempotent by message id: a second claim of a delivered id is a no-op
     at the channel (it only sees queued rows here).

@@ -209,8 +209,9 @@ Getting a first account, worker and orchestrator is the
   stays. At 390 px the conversation list becomes a drawer.
 - **Verification limit.** The header status is registration and heartbeat
   evidence from the system pool, its instances and the orchestrator agent
-  (`Registered`, `Starting`, `Draining`, `Stale`, `Lost`, `Offline`,
-  `Unreachable`, `Status unknown` while a read loads or fails). It never says
+  (`Registered`, `Starting`, `Draining`, `Stale`, `Lost`, `Ended`
+  for a gone agent, `Offline`, `Unreachable`, and `Status unknown` while a read
+  loads or after one fails, even when an older result is still held). It never says
   "Live" or "ready": no API exposes the daily budget spend against its cap, so the
   header says the budget is unknown, and it shows harness account capacity only
   from the engine catalog (`leasable`; `busy` means at `max_leases`; executor-only
