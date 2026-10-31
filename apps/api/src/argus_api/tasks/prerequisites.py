@@ -131,7 +131,7 @@ async def collect(
     for dep_id in deps:
         dep = await service.get_task(conn, dep_id)
         ref = await delivery.reference(conn, dep)
-        login = await checker._token(conn, ref.provider) if ref is not None else None
+        login = await checker.login(conn, ref.provider) if ref is not None else None
         arts = await _collect_arts(conn, dep)
         snaps.append(_DepSnap(dep=dep, ref=ref, login=login, arts=arts))
     return Collected(
@@ -168,20 +168,6 @@ async def evaluate(
         omitted=list(collected.omitted),
         partial=partial,
     )
-
-
-async def prerequisites_of(
-    conn: aiosqlite.Connection,
-    checker: delivery.PrChecker,
-    store: LocalArtifactStore,
-    task: Task,
-    *,
-    expected_base: str | None = None,
-) -> PrerequisitesView:
-    """Collect then evaluate. Callers that hold a pool reader must only run
-    `collect` under it and call `evaluate` after the snapshot closes."""
-    collected = await collect(conn, checker, task, expected_base=expected_base)
-    return await evaluate(checker, store, collected)
 
 
 async def _item_from_snap(

@@ -185,7 +185,7 @@ class PrChecker:
         if hit and time.monotonic() - hit[0] < CACHE_S:
             state, merged_at, base_ref, head_sha = hit[1]
             return PrObservation(state, merged_at, hit[2], base_ref, head_sha)
-        login = await self._token(
+        login = await self.login(
             conn, ref.provider
         )  # read before any await that may be shared
         return await self.inspect_resolved(ref, login)
@@ -215,7 +215,7 @@ class PrChecker:
         )
         return PrObservation(state, merged_at, checked_at, base_ref, head_sha)
 
-    async def _token(
+    async def login(
         self, conn: aiosqlite.Connection, provider: str
     ) -> tuple[str, str] | None:
         async with conn.execute(

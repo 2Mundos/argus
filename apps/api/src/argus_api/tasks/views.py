@@ -195,17 +195,6 @@ def _snippet(text: str, terms: list[str]) -> MatchHit | None:
     return MatchHit(field="title", snippet=body, truncated=True)
 
 
-def match_hits(title: str, spec: str, terms: list[str]) -> list[MatchHit]:
-    hits: list[MatchHit] = []
-    for field, text in (("title", title), ("spec", spec)):
-        raw = _snippet(text, terms)
-        if raw is not None:
-            hits.append(
-                MatchHit(field=field, snippet=raw.snippet, truncated=raw.truncated)
-            )
-    return hits
-
-
 def _spec_snippet_from_window(
     window: str | None,
     pos: int | None,
