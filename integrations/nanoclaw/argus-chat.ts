@@ -338,7 +338,19 @@ export function createChatLoop(deps: ChatLoopDeps) {
     if (!conversationId) return false;
     const turn = active.get(conversationId);
     if (!turn) {
-      log.warn("Chat deliver with no turn in flight", { conversation: conversationId });
+      // A correction or late result after the turn ended, or a proactive post: it is
+      // still the orchestrator speaking in that conversation (spec 3.4), so post it.
+      try {
+        await deps.call("POST", `/agents/me/chat/${encodeURIComponent(conversationId)}`, {
+          body: text,
+          turn_id: null,
+        });
+      } catch (err) {
+        log.warn("Could not post a chat message outside a turn", {
+          conversation: conversationId,
+          err: String(err).slice(0, 200),
+        });
+      }
       return true; // claimed as chat so the task deliver path does not also run
     }
     const body: Record<string, unknown> = {

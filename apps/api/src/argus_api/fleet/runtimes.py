@@ -93,6 +93,12 @@ def container_spec(
         "ARGUS_BOOTSTRAP_TOKENS": ",".join(bootstrap_tokens),
         "ARGUS_INSTANCE_ID": instance_id,
         "ARGUS_POOL": pool.name,
+        # The host's persona and MCP wiring depend on it (internal orchestrator 3.1).
+        **(
+            {"ARGUS_AGENT_ROLE": "orchestrator"}
+            if pool.system == "orchestrator"
+            else {}
+        ),
         "ARGUS_CAPABILITIES": ",".join(pool.capabilities),
     }
     mounts: list[Mount] = []

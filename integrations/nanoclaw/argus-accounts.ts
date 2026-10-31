@@ -672,6 +672,8 @@ async function reconcileSecretAssignments(
     repositoryNames.forEach((name) => names.add(name));
   const secretIds = [...names].map((name) => secrets.find((secret) => secret.name === name)?.id);
   if (secretIds.some((id) => !id)) throw new Error("active lease secret is missing from OneCLI");
+  const mcp = secrets.find((secret) => secret.name === argusMcpSecretName(identifier));
+  if (mcp) secretIds.push(mcp.id);
   await onecli.call("PUT", `/agents/${agentId}/secrets`, { secretIds });
   await onecli.call("PATCH", `/agents/${agentId}/secret-mode`, { mode: "selective" });
 }
@@ -806,6 +808,9 @@ export async function applyLeasesDetailed(
       ids.push(secret.id);
     }
   }
+  // The orchestrator's Argus MCP token stays assigned beside its accounts.
+  const mcp = secrets.find((s) => s.name === argusMcpSecretName(target.identifier));
+  if (mcp) ids.push(mcp.id);
   await onecli.call("PUT", `/agents/${agent!.id}/secrets`, { secretIds: ids });
   await onecli.call("PATCH", `/agents/${agent!.id}/secret-mode`, { mode: "selective" });
   return { engine: prepared[0]!.mapping.engine, executorExpiresAt };
@@ -1205,4 +1210,75 @@ export function classifyLogTail(
     source: "log",
     ...rateLimitReason(last[2] ? parseResetTime(last[2], now) : last[1]),
   };
+}
+
+/** The OneCLI secret that carries the orchestrator's Argus agent token to `/mcp`. */
+export function argusMcpSecretName(identifier: string): string {
+  return `argus-${identifier}-mcp`;
+}
+
+/**
+ * The Argus MCP endpoint the sessions call, or null when NanoClaw would refuse it
+ * (plain HTTP to anything but loopback or `host.docker.internal`).
+ */
+export function argusMcpUrl(argusUrl: string): URL | null {
+  let url: URL;
+  try {
+    url = new URL(argusUrl);
+  } catch {
+    return null;
+  }
+  const loopback = ["localhost", "127.0.0.1", "[::1]", "host.docker.internal"].includes(
+    url.hostname,
+  );
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) return null;
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/mcp`;
+  url.search = "";
+  url.hash = "";
+  return url;
+}
+
+/**
+ * Store the orchestrator's agent token as a OneCLI generic secret for exactly the
+ * Argus `/mcp` endpoint and assign it to the agent group, so the gateway adds the
+ * bearer and the token never enters a session (internal orchestrator spec 3.1).
+ * Before any lease the group holds only this secret; leases keep it assigned.
+ */
+export async function applyArgusMcpSecret(
+  onecli: OneCliClient,
+  target: ApplyTarget,
+  token: string,
+  mcpUrl: URL,
+): Promise<void> {
+  if (!token || /[\r\n]/.test(token)) throw new Error("no usable Argus agent token");
+  try {
+    const agents: Array<{ id: string; identifier: string }> = await onecli.call("GET", "/agents");
+    let agent = agents.find((a) => a.identifier === target.identifier);
+    agent ??= await onecli.call("POST", "/agents", {
+      name: target.name,
+      identifier: target.identifier,
+    });
+    const secrets: Array<{ id: string; name: string }> = await onecli.call("GET", "/secrets");
+    const body = {
+      type: "generic",
+      name: argusMcpSecretName(target.identifier),
+      value: token,
+      hostPattern: mcpUrl.host,
+      pathPattern: mcpUrl.pathname,
+      injectionConfig: { headerName: "Authorization", valueFormat: "Bearer {value}" },
+    };
+    let secret = secrets.find((s) => s.name === body.name);
+    if (secret) await onecli.call("PATCH", `/secrets/${secret.id}`, body);
+    else secret = await onecli.call("POST", "/secrets", body);
+    const assigned: string[] = (await onecli.call("GET", `/agents/${agent!.id}/secrets`)) ?? [];
+    if (!assigned.includes(secret!.id)) {
+      await onecli.call("PUT", `/agents/${agent!.id}/secrets`, {
+        secretIds: [...assigned, secret!.id],
+      });
+    }
+    await onecli.call("PATCH", `/agents/${agent!.id}/secret-mode`, { mode: "selective" });
+  } catch {
+    // OneCLI error bodies can echo the request: never let the token reach a log.
+    throw new Error("could not apply the Argus MCP credential to OneCLI");
+  }
 }

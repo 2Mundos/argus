@@ -98,6 +98,25 @@ Getting a first account, worker and orchestrator is the
 - The skill is loaded at session start from the server's
   `skill://argus-orchestrator/SKILL.md` resource, not baked into the image, so it
   always matches the running server.
+- **Wiring.** Argus starts system-pool instances with `ARGUS_AGENT_ROLE=orchestrator`.
+  The host then:
+  - gives the agent group an orchestrator persona (not the worker's): it acts
+    only through the Argus MCP tools, reads the skill resource before acting,
+    never reports an action that no tool result confirmed, and leaves launching
+    or scaling workers to an admin (3.5);
+  - registers the Argus MCP server in the group's container config as an HTTP
+    server at `<ARGUS_URL>/mcp`, with no credential in it. The agent token is a
+    OneCLI generic secret `argus-<group>-mcp` (host of `ARGUS_URL`, path `/mcp`,
+    `Authorization: Bearer`), kept assigned beside the leased accounts, so the
+    gateway adds it and the token never enters the session. A plain-HTTP
+    `ARGUS_URL` other than loopback or `host.docker.internal` is refused (no MCP,
+    logged), as NanoClaw refuses it;
+  - does both before the first chat claim, and retries with backoff like the
+    account lease.
+- NanoClaw's self-modifying tools (`create_agent`, `install_packages`,
+  `add_mcp_server`) are not offered to any Argus agent: they need a NanoClaw
+  owner's approval, which an Argus host has none of, and invite reporting work
+  that never happened.
 
 ## 3.2 Conversations and messages
 
@@ -158,7 +177,7 @@ Getting a first account, worker and orchestrator is the
 - The **Updates** session runs the inbox loop of the skill: `get_inbox` → work it →
   `wait_for_events(inbox=true)` → repeat. Proactive posts ("3 reviews wait on a
   human", "the tasks from *Fix login* are done") are a `deliver()` to Updates.
-  Updates also accepts admin messages.
+  Updates also accepts admin messages. A reply the channel gets after its turn ended (a correction, a late result) or outside any turn is posted with no `turn_id`, never dropped.
 - **Inbox wake.** When a decision opens with audience `any` or `orchestrator` and
   `orchestrator.enabled` is true, Argus queues one message on Updates (`author:
   system`, `state: queued`) so the chat long-poll delivers it at once. The message
