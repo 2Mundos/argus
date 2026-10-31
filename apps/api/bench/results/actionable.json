@@ -1,0 +1,66 @@
+{
+  "journey": "actionable",
+  "outcome_ok": true,
+  "tasks_resolved": 10,
+  "for_human": 2,
+  "mcp_calls": 15,
+  "rest_calls": 0,
+  "by_name": {
+    "answer_decisions": {
+      "calls": 1,
+      "response_bytes": 3580
+    },
+    "get_inbox": {
+      "calls": 1,
+      "response_bytes": 71526
+    },
+    "get_tasks": {
+      "calls": 1,
+      "response_bytes": 11990
+    },
+    "list_artifacts": {
+      "calls": 4,
+      "response_bytes": 4413
+    },
+    "read_artifact": {
+      "calls": 4,
+      "response_bytes": 6814
+    },
+    "verify_artifact": {
+      "calls": 4,
+      "response_bytes": 1334
+    }
+  },
+  "tools_list_bytes": 64812,
+  "tools_list_by_scope": {
+    "worker": {
+      "tools": 34,
+      "bytes": 30414
+    },
+    "orchestrator": {
+      "tools": 77,
+      "bytes": 64812
+    },
+    "admin": {
+      "tools": 73,
+      "bytes": 55908
+    }
+  },
+  "request_bytes": 4216,
+  "response_bytes": 99657,
+  "context_bytes": 168685,
+  "context_tokens_estimate": 42171,
+  "wall_s": 0.079,
+  "triage": {
+    "summary+detail": {
+      "mcp_calls": 4,
+      "response_bytes": 245116,
+      "median_ms": 32.1
+    },
+    "actionable": {
+      "mcp_calls": 2,
+      "response_bytes": 160304,
+      "median_ms": 28.6
+    }
+  }
+}

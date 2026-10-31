@@ -1055,6 +1055,9 @@ Uses:
   runs; any other move out of the state a decision waits on (or into a terminal
   state) cancels it, e.g. a task cancelled while its question is open.
 
+`GET /decisions/{id}/preview` shows, read-only, what an answer would do ([MCP
+operations](mcp-operations.spec.md) 3.2c).
+
 `GET /decisions` is the inbox (open, oldest first); `POST
 /decisions/{id}/answer` takes `{choice, text}`. The dashboard renders the
 inbox. Chat notifications are a later, optional integration (single-node 3.5).

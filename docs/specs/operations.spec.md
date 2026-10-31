@@ -124,8 +124,10 @@ admission from an in-memory snapshot, and authenticated read-only visibility are
 implemented. The paused-claim foundations below are implemented but **dormant**
 (no production path calls them). **Still pending (not implemented):** `docker pause`
 / resume of paused containers and wiring the guard loop to the paused-claim API,
-shed, timeout exemption while paused, cgroup `io.stat` "wrote most" ranking,
-directory-size sampling for shed, and any host-disk filling. Do not treat
+shed, timeout exemption while paused, wiring ranked writers into pause/shed,
+and any host-disk filling. **Measurement foundation implemented** in
+``disk_guard_writer_ranking`` (cgroup ``io.stat`` parse/delta, bounded directory
+sample, deterministic ranking); still unwired from the guard loop. Do not treat
 pause/shed settings as live.
 
 One guard loop measures free space and acts in bands. The 64 MiB `disk` readiness
@@ -223,7 +225,10 @@ Kubernetes get the warn and refuse bands only.
 
 ### "Wrote most"
 
-*Pending — not implemented.*
+**Status — measurement foundation implemented (unwired).** Pause/shed callers
+will rank by cgroup v2 ``io.stat`` ``wbytes`` delta per container, sampled at
+pause time and at shed time, with a bounded directory-size sample at pause time
+for tie-break and display. Shed wiring is still pending.
 
 - Rank by the cgroup v2 `io.stat` `wbytes` delta per container, sampled at pause
   time and at shed time.

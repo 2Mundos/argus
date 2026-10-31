@@ -2440,9 +2440,9 @@ async def cancel(tx: Tx, task_id: str, actor: str) -> Task:
 
 async def approve(tx: Tx, task_id: str, actor: str) -> Task:
     row = await _row(tx.conn, task_id)
-    dep_states = await _states(tx.conn, await _deps(tx.conn, task_id))
-    deps_done = all(s is S.SUCCEEDED for s in dep_states.values())
-    await _apply(tx, row, Action.APPROVE, actor, deps_done=deps_done)
+    await _apply(
+        tx, row, Action.APPROVE, actor, deps_done=await _deps_done(tx.conn, task_id)
+    )
     return await get_task(tx.conn, task_id)
 
 
@@ -2456,8 +2456,7 @@ async def review(
     notes: str = "",
 ) -> Task:
     row = await _row(tx.conn, task_id)
-    if row["review"] == Review.HUMAN and reviewer is not Scope.ADMIN:
-        raise ForbiddenError("this task requires human review")
+    check_reviewer(row, reviewer)
     if accept:
         await _apply(tx, row, Action.ACCEPT, actor, data={"notes": notes})
     else:
@@ -3128,13 +3127,17 @@ async def _apply(
     automatic resume rule's fail with the cause, failure classes 3.2)."""
     old = S(row["state"])
     failures = row["failures"] if counts_failure else -1
-    ctx = TransitionContext(
-        failures=row["max_attempts"] if exhausted else failures,
-        max_attempts=row["max_attempts"],
-        review=review or Review(row["review"]),
-        deps_done=deps_done,
+    new = transition(
+        old,
+        action,
+        _context(
+            row,
+            deps_done=deps_done,
+            review=review,
+            failures=failures,
+            exhausted=exhausted,
+        ),
     )
-    new = transition(old, action, ctx)
     # strictly greater than the old version, so a transition always stales a pending edit
     bumped = ts(max(tx.now, datetime.fromisoformat(row["updated_at"]) + _TICK))
     fields: dict[str, Any] = {
@@ -3172,10 +3175,8 @@ async def _apply(
         await _ensure_usage_outcome(tx, row, action, data or {})
     # Decisions that waited on the old state are moot once the task leaves it
     # (an answered decision is already closed before its transition runs).
-    if new in TERMINAL:
-        await decisions.cancel_open(tx, "task", row["id"])
-    elif old in decisions.WAITS_IN and new is not old:
-        await decisions.cancel_open(tx, "task", row["id"], decisions.WAITS_IN[old])
+    if (moot := moot_decisions(old, new)) is not None:
+        await decisions.cancel_open(tx, "task", row["id"], moot[0])
     if old is S.CLAIMED and action in _INTERRUPTIONS:
         await cont.on_interruption(
             tx,
@@ -3215,6 +3216,67 @@ async def _apply(
             tx, row["created_by"].removeprefix("routine:"), row["id"]
         )
     return new
+
+
+def _context(
+    row: aiosqlite.Row,
+    *,
+    deps_done: bool = True,
+    review: Review | None = None,
+    failures: int | None = None,
+    exhausted: bool = False,
+) -> TransitionContext:
+    return TransitionContext(
+        failures=row["max_attempts"]
+        if exhausted
+        else row["failures"]
+        if failures is None
+        else failures,
+        max_attempts=row["max_attempts"],
+        review=review or Review(row["review"]),
+        deps_done=deps_done,
+    )
+
+
+def moot_decisions(
+    old: TaskState, new: TaskState
+) -> tuple[tuple[DecisionKind, ...] | None] | None:
+    """Which open decisions the move `old` -> `new` cancels: None for none,
+    `(None,)` for all of them, `(kinds,)` for those kinds."""
+    if new in TERMINAL:
+        return (None,)
+    if old in decisions.WAITS_IN and new is not old:
+        return (decisions.WAITS_IN[old],)
+    return None
+
+
+def check_reviewer(row: aiosqlite.Row, reviewer: Scope) -> None:
+    if row["review"] == Review.HUMAN and reviewer is not Scope.ADMIN:
+        raise ForbiddenError("this task requires human review")
+
+
+async def planned_state(
+    conn: aiosqlite.Connection, task_id: str, action: Action
+) -> tuple[aiosqlite.Row, TaskState]:
+    """The task row and the state `action` would move it to, without writing.
+    Raises InvalidTransitionError exactly as the real transition would."""
+    row = await _row(conn, task_id)
+    done = action is not Action.APPROVE or await _deps_done(conn, task_id)
+    return row, transition(S(row["state"]), action, _context(row, deps_done=done))
+
+
+def review_escalation(row: aiosqlite.Row) -> dict[str, Any] | None:
+    """The difficulty bump a rejected review earns, as `review` records it."""
+    return (
+        _escalation(row, "verification_failed")
+        .get("data", {})
+        .get("difficulty_escalated")
+    )
+
+
+async def _deps_done(conn: aiosqlite.Connection, task_id: str) -> bool:
+    states = await _states(conn, await _deps(conn, task_id))
+    return all(s is S.SUCCEEDED for s in states.values())
 
 
 def _interruption_reason(action: Action, data: dict[str, Any]) -> str:
