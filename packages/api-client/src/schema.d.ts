@@ -993,6 +993,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/decisions/{decision_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Decision
+         * @description What answering would do, read-only and advisory (it authorizes and executes
+         *     nothing). Takes the answer's `choice`, `text` and `request_id`; reports the
+         *     verdict, transition and effects the answer path would produce, and what stored
+         *     observations say about the decision's premise. A snapshot: compare
+         *     `snapshot.decision_version` to see staleness.
+         */
+        get: operations["preview_decision_api_decisions__decision_id__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/engines": {
         parameters: {
             query?: never;
@@ -4945,6 +4969,21 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** DecisionPreview */
+        DecisionPreview: {
+            advisory?: components["schemas"]["PreviewAdvisory"];
+            answer_outcome: components["schemas"]["PreviewAnswerOutcome"];
+            authorization: components["schemas"]["PreviewAuthorization"];
+            decision: components["schemas"]["PreviewDecisionFacts"];
+            premise_checks: components["schemas"]["PreviewPremiseChecks"];
+            proposal: components["schemas"]["PreviewProposal"];
+            question: components["schemas"]["PreviewQuestionFacts"];
+            snapshot: components["schemas"]["PreviewSnapshot"];
+            /** Task */
+            task: components["schemas"]["PreviewTaskFacts"] | "unknown" | null;
+            /** Transition */
+            transition: components["schemas"]["PreviewTransition"] | "unknown";
+        };
         /**
          * DecisionState
          * @enum {string}
@@ -7343,6 +7382,239 @@ export interface components {
             run_as: string;
             /** Task Id */
             task_id: string;
+        };
+        /** PreviewAdvisory */
+        PreviewAdvisory: {
+            /**
+             * Authorizes
+             * @default false
+             * @constant
+             */
+            authorizes?: false;
+            /**
+             * Executes
+             * @default false
+             * @constant
+             */
+            executes?: false;
+        };
+        /** PreviewAnswerOutcome */
+        PreviewAnswerOutcome: {
+            /** Error */
+            error?: {
+                [key: string]: string | number;
+            } | null;
+            /**
+             * Provenance
+             * @default derived
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
+            /**
+             * Result
+             * @enum {string}
+             */
+            result: "would_apply" | "replay" | "rejected" | "unknown";
+        };
+        /**
+         * PreviewAuthorization
+         * @description The verdict the answer path would give this caller now; not a grant.
+         */
+        PreviewAuthorization: {
+            /** Error */
+            error: string | null;
+            /**
+             * Provenance
+             * @default derived
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
+            /** Rule */
+            rule: string;
+            /** Would Allow */
+            would_allow: boolean;
+        };
+        /** PreviewDecisionFacts */
+        PreviewDecisionFacts: {
+            /** Audience */
+            audience: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decided At */
+            decided_at: string | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** Id */
+            id: string;
+            kind: components["schemas"]["DecisionKind"];
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Options */
+            options: string[] | null;
+            /**
+             * Provenance
+             * @default stored
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
+            /** Requested By */
+            requested_by: string;
+            state: components["schemas"]["DecisionState"];
+            /** Subject Id */
+            subject_id: string;
+            /** Subject Type */
+            subject_type: string;
+        };
+        /** PreviewEffect */
+        PreviewEffect: {
+            /** Detail */
+            detail: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Provenance
+             * @enum {string}
+             */
+            provenance: "stored" | "derived" | "unknown";
+        };
+        /** PreviewPremiseCheck */
+        PreviewPremiseCheck: {
+            /** Observed */
+            observed: string | null;
+            /** Observed At */
+            observed_at: string | null;
+            /** Premise */
+            premise: string | null;
+            /**
+             * Provenance
+             * @enum {string}
+             */
+            provenance: "stored" | "derived" | "unknown";
+            /** Recorded */
+            recorded: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "match" | "stale" | "unknown";
+            /** Subject */
+            subject: string;
+        };
+        /** PreviewPremiseChecks */
+        PreviewPremiseChecks: {
+            /** Checks */
+            checks: components["schemas"]["PreviewPremiseCheck"][];
+            /**
+             * Live Forge Checked
+             * @default false
+             * @constant
+             */
+            live_forge_checked?: false;
+        };
+        /** PreviewProposal */
+        PreviewProposal: {
+            /** Choice */
+            choice: string | null;
+            /** Error */
+            error: string | null;
+            /** Offered Option */
+            offered_option: boolean | null;
+            /**
+             * Provenance
+             * @default derived
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
+            /** Request Id */
+            request_id: string | null;
+            /** Text */
+            text: string;
+            /** Valid */
+            valid: boolean | "unknown";
+        };
+        /** PreviewQuestionFacts */
+        PreviewQuestionFacts: {
+            /** Full Length */
+            full_length: number;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Provenance
+             * @default stored
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
+            /** Redacted */
+            redacted: boolean;
+            /** Reference */
+            reference: {
+                [key: string]: string;
+            };
+            /** Text */
+            text: string;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** PreviewSnapshot */
+        PreviewSnapshot: {
+            /**
+             * Computed At
+             * Format: date-time
+             */
+            computed_at: string;
+            /** Decision Version */
+            decision_version: string;
+        };
+        /** PreviewTaskFacts */
+        PreviewTaskFacts: {
+            /** Attempt */
+            attempt: number;
+            /** Attempt Id */
+            attempt_id: number | null;
+            /** Claimed At */
+            claimed_at: string | null;
+            /** Claimed By */
+            claimed_by: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Provenance
+             * @default stored
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
+            state: components["schemas"]["TaskState"];
+            /** Version */
+            version: string;
+        };
+        /** PreviewTransition */
+        PreviewTransition: {
+            /** Decision */
+            decision: {
+                [key: string]: string | null;
+            };
+            /** Effects */
+            effects: components["schemas"]["PreviewEffect"][];
+            /**
+             * Provenance
+             * @default derived
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
         };
         /** PricingInfo */
         PricingInfo: {
@@ -11810,6 +12082,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnsweredDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_decision_api_decisions__decision_id__preview_get: {
+        parameters: {
+            query?: {
+                choice?: string | null;
+                text?: string;
+                request_id?: string | null;
+            };
+            header?: never;
+            path: {
+                decision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionPreview"];
                 };
             };
             /** @description Validation Error */

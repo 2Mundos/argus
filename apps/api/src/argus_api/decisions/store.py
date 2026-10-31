@@ -71,6 +71,21 @@ async def open_decision(
     return decision_id
 
 
+async def open_ids(
+    conn: aiosqlite.Connection,
+    subject_type: str,
+    subject_id: str,
+    kinds: tuple[DecisionKind, ...] | None = None,
+) -> list[str]:
+    sql = "SELECT id FROM decisions WHERE state = 'open' AND subject_type = ? AND subject_id = ?"
+    params: list[str] = [subject_type, subject_id]
+    if kinds is not None:
+        sql += f" AND kind IN ({','.join('?' * len(kinds))})"
+        params += list(kinds)
+    async with conn.execute(sql + " ORDER BY created_at, id", params) as cur:
+        return [r["id"] for r in await cur.fetchall()]
+
+
 async def cancel_open(
     tx: Tx,
     subject_type: str,
@@ -78,13 +93,7 @@ async def cancel_open(
     kinds: tuple[DecisionKind, ...] | None = None,
 ) -> list[str]:
     """Cancel open decisions that became moot; `kinds=None` means all of them."""
-    sql = "SELECT id FROM decisions WHERE state = 'open' AND subject_type = ? AND subject_id = ?"
-    params: list[str] = [subject_type, subject_id]
-    if kinds is not None:
-        sql += f" AND kind IN ({','.join('?' * len(kinds))})"
-        params += list(kinds)
-    async with tx.conn.execute(sql, params) as cur:
-        ids = [r["id"] for r in await cur.fetchall()]
+    ids = await open_ids(tx.conn, subject_type, subject_id, kinds)
     for decision_id in ids:
         await tx.conn.execute(
             "UPDATE decisions SET state = 'cancelled', decided_at = ?,"

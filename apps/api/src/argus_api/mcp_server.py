@@ -1393,6 +1393,27 @@ async def get_decision(ctx: Context, decision_id: str) -> dict:
 
 
 @tool(MANAGERS)
+async def preview_decision(
+    ctx: Context,
+    decision_id: str,
+    choice: str | None = None,
+    text: str = "",
+    request_id: str | None = None,
+) -> dict:
+    """See what answering would do, before you answer: whether you may, whether the
+    choice is valid, the task transition and side effects, and stored observations
+    that contradict the decision's premise (for example a PR head that moved). Read-only
+    and advisory: it authorizes and executes nothing, and makes no live forge call. A
+    snapshot; answer_decision still checks everything itself."""
+    return await _call(
+        ctx,
+        "GET",
+        f"/decisions/{decision_id}/preview",
+        params={"choice": choice, "text": text, "request_id": request_id},
+    )
+
+
+@tool(MANAGERS)
 async def answer_decision(
     ctx: Context,
     decision_id: str,

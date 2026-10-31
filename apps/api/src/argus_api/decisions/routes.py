@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from argus_api import inbox as inbox_module
 from argus_api import inbox_actions
 from argus_api.access import require_decision_readable, worker_decision_filter
+from argus_api.decisions import preview as preview_module
 from argus_api.decisions import service, store, views
 from argus_api.decisions.service import AnswerBatch, AnsweredDecision, AnswerOutcome
 from argus_api.decisions.views import DecisionPage
@@ -110,6 +111,26 @@ async def get_decision(decision_id: str, db: DbDep, caller: CallerDep) -> Decisi
     async with db.read() as conn:
         await require_decision_readable(conn, caller, decision_id)
         return await store.get(conn, decision_id)
+
+
+@router.get("/decisions/{decision_id}/preview")
+async def preview_decision(
+    decision_id: str,
+    db: DbDep,
+    caller: ManagerDep,
+    choice: str | None = None,
+    text: Annotated[str, Query(max_length=10_000)] = "",
+    request_id: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
+) -> preview_module.DecisionPreview:
+    """What answering would do, read-only and advisory (it authorizes and executes
+    nothing). Takes the answer's `choice`, `text` and `request_id`; reports the
+    verdict, transition and effects the answer path would produce, and what stored
+    observations say about the decision's premise. A snapshot: compare
+    `snapshot.decision_version` to see staleness."""
+    async with db.snapshot() as snap:
+        return await preview_module.preview(
+            snap, decision_id, caller, choice=choice, text=text, request_id=request_id
+        )
 
 
 @router.post("/decisions/{decision_id}/answer")
