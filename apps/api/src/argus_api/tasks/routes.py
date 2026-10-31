@@ -334,13 +334,17 @@ async def get_prerequisites(
     async with db.read() as conn:
         await require_task_readable(conn, caller, task_id)
         task = await service.get_task(conn, task_id)
-        return await prerequisites.prerequisites_of(
+        collected = await prerequisites.collect(
             conn,
             request.app.state.pr_checker,
-            request.app.state.artifacts,
             task,
             expected_base=expected_base,
         )
+    return await prerequisites.evaluate(
+        request.app.state.pr_checker,
+        request.app.state.artifacts,
+        collected,
+    )
 
 
 @router.post("/{task_id}/complete")

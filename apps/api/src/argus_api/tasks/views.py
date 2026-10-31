@@ -33,6 +33,11 @@ MAX_IDS = 50
 MAX_QUERY_TERMS = 8
 MAX_TERM_LEN = 64
 SNIPPET_MAX = 200
+# Larger than any stored spec; min(..., SENTINEL) means "no hit in spec".
+_SPEC_POS_SENTINEL = 1_000_000_000
+# Window large enough for _snippet centering when the hit is near the end.
+_SPEC_WINDOW_PAD = SNIPPET_MAX
+_SPEC_WINDOW_LEN = SNIPPET_MAX * 2
 
 
 class Refs(BaseModel):
@@ -201,6 +206,54 @@ def match_hits(title: str, spec: str, terms: list[str]) -> list[MatchHit]:
     return hits
 
 
+def _spec_snippet_from_window(
+    window: str | None,
+    pos: int | None,
+    spec_len: int,
+    terms: list[str],
+) -> MatchHit | None:
+    """Build a spec citation from a SQL-bounded window around the earliest hit."""
+    if window is None or pos is None or pos >= _SPEC_POS_SENTINEL:
+        return None
+    hit_at = pos - 1  # instr is 1-based
+    if spec_len <= SNIPPET_MAX:
+        raw = _snippet(window, terms)
+        if raw is None:
+            return None
+        return MatchHit(field="spec", snippet=raw.snippet, truncated=False)
+    half = SNIPPET_MAX // 2
+    start = max(0, hit_at - half)
+    end = min(spec_len, start + SNIPPET_MAX)
+    start = max(0, end - SNIPPET_MAX)
+    window_start = max(0, hit_at - _SPEC_WINDOW_PAD)
+    body = window[start - window_start : end - window_start]
+    if start > 0:
+        body = "..." + body[3:] if len(body) > 3 else "..." + body
+    if end < spec_len:
+        body = body[:-3] + "..." if len(body) > 3 else body + "..."
+    return MatchHit(field="spec", snippet=body, truncated=True)
+
+
+def _match_hits_from_row(row: aiosqlite.Row, terms: list[str]) -> list[MatchHit]:
+    hits: list[MatchHit] = []
+    title_hit = _snippet(row["title"], terms)
+    if title_hit is not None:
+        hits.append(
+            MatchHit(
+                field="title", snippet=title_hit.snippet, truncated=title_hit.truncated
+            )
+        )
+    spec_hit = _spec_snippet_from_window(
+        row["_spec_window"],
+        row["_spec_pos"],
+        int(row["_spec_len"] or 0),
+        terms,
+    )
+    if spec_hit is not None:
+        hits.append(spec_hit)
+    return hits
+
+
 async def list_tasks(
     snap: Snapshot,
     *,
@@ -222,7 +275,11 @@ async def list_tasks(
     limit = clamp(limit)
     terms = parse_query(q)
     filters: dict[str, Any] = {"states": sorted(states or []), "project": project}
-    filters |= {"kind": kind, "assignee": assignee, "archived": archived, "q": q}
+    filters |= {"kind": kind, "assignee": assignee, "archived": archived}
+    # Fingerprint `q` only when search is active, so cursors from builds without
+    # q stay valid when the client still omits q.
+    if terms is not None:
+        filters["q"] = q
     where = ["archived_at IS NOT NULL" if archived else "archived_at IS NULL"]
     params: list[Any] = []
     if task_scope is not None:
@@ -261,12 +318,29 @@ async def list_tasks(
     if (after := decode_cursor(cursor, filters)) is not None:
         where.append("(created_at, id) < (?, ?)")
         params += after
-    select = _LIST_SQL if terms is None else f"{_LIST_SQL}, spec"
-    async with conn.execute(
-        f"SELECT {select} FROM tasks WHERE {' AND '.join(where)}"  # noqa: S608
-        " ORDER BY created_at DESC, id DESC LIMIT ?",
-        [*params, limit + 1],
-    ) as cur:
+    if terms is None:
+        sql = (
+            f"SELECT {_LIST_SQL} FROM tasks WHERE {' AND '.join(where)}"  # noqa: S608
+            " ORDER BY created_at DESC, id DESC LIMIT ?"
+        )
+        list_params: list[Any] = [*params, limit + 1]
+    else:
+        pos_parts = ", ".join("nullif(instr(lower(spec), lower(?)), 0)" for _ in terms)
+        # min() with one arg is aggregate; always pass the sentinel too.
+        pos_expr = f"min({pos_parts}, {_SPEC_POS_SENTINEL})"
+        # SELECT placeholders (instr terms) bind before WHERE placeholders.
+        sql = (
+            f"SELECT {_LIST_SQL}, _spec_pos, _spec_len, "  # noqa: S608
+            f"CASE WHEN _spec_pos >= {_SPEC_POS_SENTINEL} THEN NULL "
+            f"ELSE substr(spec, max(1, _spec_pos - {_SPEC_WINDOW_PAD}), "
+            f"{_SPEC_WINDOW_LEN}) END AS _spec_window "
+            f"FROM (SELECT {_LIST_SQL}, spec, {pos_expr} AS _spec_pos, "
+            f"length(spec) AS _spec_len FROM tasks "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY created_at DESC, id DESC LIMIT ?)"
+        )
+        list_params = [*terms, *params, limit + 1]
+    async with conn.execute(sql, list_params) as cur:
         rows = list(await cur.fetchall())
     has_more = len(rows) > limit
     rows = rows[:limit]
@@ -363,13 +437,7 @@ async def _page(
             ),
         }
         if terms is not None:
-            # Spec may already be on the list row when searching; else load it.
-            spec = (
-                row["spec"]
-                if "spec" in row
-                else (await service.get_task(snap.conn, row["id"])).spec
-            )
-            common["matches"] = match_hits(row["title"], spec or "", terms)
+            common["matches"] = _match_hits_from_row(row, terms)
         if view == "summary":
             item: TaskSummary | TaskDetail = TaskSummary.model_validate(
                 {**dict(row), **common, "truncated": truncated}

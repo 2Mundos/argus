@@ -140,6 +140,33 @@ def test_cursor_mismatch_when_q_or_state_changes(client: TestClient) -> None:
     )
     assert res.status_code == 400
     assert res.json()["detail"]["code"] == "cursor_mismatch"
+    # Adding q to a previously q-less cursor is also a mismatch.
+    plain = ok(client.get("/api/tasks", params={"limit": 1}))
+    assert plain["next_cursor"]
+    res = client.get(
+        "/api/tasks",
+        params={"q": "cursor-mark", "cursor": plain["next_cursor"]},
+    )
+    assert res.status_code == 400
+    assert res.json()["detail"]["code"] == "cursor_mismatch"
+
+
+def test_q_less_cursor_pages_with_same_filters(client: TestClient) -> None:
+    """Regression: fingerprint must omit q when search is inactive so a cursor
+    from GET /api/tasks?limit=1 (no q) still pages with the same filters."""
+    ids = [create(client, title=f"plain-page-{n}")["id"] for n in range(3)]
+    page1 = ok(client.get("/api/tasks", params={"limit": 1}))
+    assert page1["next_cursor"]
+    assert page1["items"][0]["id"] == ids[-1]
+    assert "matches" not in page1["items"][0]
+    page2 = ok(
+        client.get(
+            "/api/tasks",
+            params={"limit": 1, "cursor": page1["next_cursor"]},
+        )
+    )
+    assert page2["items"][0]["id"] == ids[-2]
+    assert "matches" not in page2["items"][0]
 
 
 def test_worker_permission_boundary_on_items_and_total(client: TestClient) -> None:
@@ -203,6 +230,19 @@ def test_no_matches_vs_snippet_truncation(client: TestClient) -> None:
     assert len(m["snippet"]) <= 200
     assert "needle" in m["snippet"]
     assert m["snippet"].startswith("...") or m["snippet"].endswith("...")
+
+    # Hit deep in a long spec: SQL window must still find it and centre the snippet.
+    deep = ("filler-" * 10_000) + "deep-needle" + ("-tail" * 100)
+    assert len(deep) > 50_000
+    create(client, title="deep-spec", spec=deep)
+    page = ok(client.get("/api/tasks", params={"q": "deep-needle"}))
+    [row] = [t for t in page["items"] if t["title"] == "deep-spec"]
+    [m] = [x for x in row["matches"] if x["field"] == "spec"]
+    assert m["truncated"] is True
+    assert len(m["snippet"]) <= 200
+    assert "deep-needle" in m["snippet"]
+    # Centred: ellipses on both sides when the hit is far from either end.
+    assert m["snippet"].startswith("...") and m["snippet"].endswith("...")
 
 
 def test_invalid_q_bounds(client: TestClient) -> None:

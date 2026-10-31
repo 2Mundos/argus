@@ -54,8 +54,11 @@ When `q` is absent the response shape, totals and cursors are unchanged.
 - **Citations.** When `q` is set, each item carries `matches`: a list of
   `{field: "title"|"spec", snippet, truncated: bool}` for each matching field.
   Snippets are ≤ 200 characters, centred on the first hit, with ellipses when
-  cut (`truncated: true`). Citation identity is the item's existing `id` and
-  `version` (task `updated_at`). When `q` is absent, `matches` is omitted.
+  cut (`truncated: true`). For `spec`, the hit position and a bounded window are
+  computed in SQL so the list path never loads the full body into Python; title
+  stays in-row (titles are ≤ 200 characters). Citation identity is the item's
+  existing `id` and `version` (task `updated_at`). When `q` is absent, `matches`
+  is omitted.
 - **Empty vs truncated vs failed.** No matches → `items: []`, `total: 0` (not
   an error). Snippet cuts set `matches[].truncated` (and may appear in the
   row's `truncated` map). `omitted` keeps its projection meaning. A failed
@@ -77,7 +80,10 @@ Response shape:
   Cap `MAX_PREREQUISITES = 25` items; over-cap sets `omitted: ["dependencies"]`
   and `partial: true` — never silently drop.
 - **Access.** `require_task_readable` (unknown task → 404; worker not leased →
-  `403 not_leased`). Read connection only; no write transaction; no forge write.
+  `403 not_leased`). Read connection only for the snapshot (task, deps, refs,
+  artifact metadata); that snapshot is released before any forge HTTP or
+  artifact disk work, the same way [task delivery](task-delivery.spec.md)
+  keeps forge reads outside a write transaction. No forge write.
 - **Per item.**
   `{task_id, title, state, task_succeeded, verdict, why, evidence}` where
   `task_succeeded` is `state == "succeeded"` only and is **never** folded into

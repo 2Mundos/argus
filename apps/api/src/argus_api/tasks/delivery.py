@@ -188,6 +188,16 @@ class PrChecker:
         login = await self._token(
             conn, ref.provider
         )  # read before any await that may be shared
+        return await self.inspect_resolved(ref, login)
+
+    async def inspect_resolved(
+        self, ref: PrRef, login: tuple[str, str] | None
+    ) -> PrObservation:
+        """Like `inspect` when the account token was already read; no DB access."""
+        hit = self._cache.get(ref)
+        if hit and time.monotonic() - hit[0] < CACHE_S:
+            state, merged_at, base_ref, head_sha = hit[1]
+            return PrObservation(state, merged_at, hit[2], base_ref, head_sha)
         flight = self._flight.get(ref)
         if flight is None:
             flight = asyncio.create_task(self._fetch(ref, login))

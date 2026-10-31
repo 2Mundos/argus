@@ -2,6 +2,7 @@
 
 Forge is a mock httpx transport; no live forge."""
 
+import time
 from collections.abc import Generator
 from pathlib import Path
 
@@ -363,3 +364,56 @@ def test_mcp_get_task_prerequisites(client: TestClient) -> None:
         expected_base="other",
     )
     assert got["items"][0]["why"] == "base_mismatch"
+
+
+def test_read_snapshot_released_before_forge(client: TestClient) -> None:
+    """Forge runs after collect returns and with no pool reader held.
+
+    Records monotonic times: collect end, then each forge read. Asserts all
+    forge reads are after the snapshot and that every pool reader is free
+    while the mock transport runs (no DB read in flight across forge HTTP).
+    """
+    import argus_api.tasks.prerequisites as prereq
+
+    setup_repository(client)
+    marks: dict[str, object] = {"collect_done": None, "forge": []}
+    db = client.app.state.db  # ty: ignore[unresolved-attribute]
+    n_readers = len(db._all_readers)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        # All readers back in the queue ⇒ no db.read() is held across forge.
+        assert db._readers.qsize() == n_readers
+        marks["forge"].append(time.monotonic())  # ty: ignore[attr-defined]
+        return httpx.Response(200, json=pr_body())
+
+    forge(client, handler)
+    worker = worker_headers(client)
+    urls = [f"https://{HOST}/{OWNER}/{REPO}/pulls/{n}" for n in (12, 13, 14)]
+    deps = [
+        succeed(client, worker, title=f"dep-{n}", summary=f"Delivered in {url}")["id"]
+        for n, url in enumerate(urls)
+    ]
+    child = dependent(client, deps)
+
+    original = prereq.collect
+
+    async def wrapping_collect(*args, **kwargs):
+        collected = await original(*args, **kwargs)
+        marks["collect_done"] = time.monotonic()
+        return collected
+
+    prereq.collect = wrapping_collect  # ty: ignore[method-assign]
+    try:
+        client.app.state.pr_checker._cache.clear()  # ty: ignore[unresolved-attribute]
+        got = client.get(f"/api/tasks/{child['id']}/prerequisites").json()
+    finally:
+        prereq.collect = original  # ty: ignore[method-assign]
+
+    assert len(got["items"]) == 3
+    assert all(i["verdict"] == "satisfied" for i in got["items"])
+    assert marks["collect_done"] is not None
+    forge_times = marks["forge"]
+    assert isinstance(forge_times, list) and len(forge_times) == 3
+    done = marks["collect_done"]
+    assert isinstance(done, float)
+    assert all(t > done for t in forge_times)
