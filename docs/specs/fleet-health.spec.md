@@ -38,9 +38,14 @@ dead-session recovery coverage and latency.
   `live`/`running` are 0 and `last_heartbeat_at` is `null`). `live` = instances not
   terminated. `last_heartbeat_at` = max `agents.last_heartbeat_at` of live
   (`active`/`draining`) agents on the pool's instances.
+- **OOM streak.** Each pool carries `oom_streak`, its count of consecutive
+  OOM-killed session exits ([failure classes](failure-classes.spec.md) 3.2.1);
+  at 2 or more the pool's next OOM-killed session blocks as `env_oom`.
 - **Tasks by state** is the current `tasks` snapshot, not windowed, with every state.
 - **Failures** are `task.fail` and `task.expire` events in the window (retried
-  attempts count; it is attempts that fail, not only final failures). Reason comes
+  attempts count; it is attempts that fail, not only final failures), plus the
+  `task.block` events with `data.reason = env_oom` (an OOM-killed attempt that
+  promoted, [failure classes](failure-classes.spec.md) 3.2.1). Reason comes
   from `data.reason`; `classify_failure` in `fleet_health.py` is the only mapping:
   a system reason (`lease_expired`, `timeout`, `agent_ended`) or a worker's own
   code in the list is kept; a generic `worker_fail` is refined to `auth_missing`,

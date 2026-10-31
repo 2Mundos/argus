@@ -648,7 +648,9 @@ A **vanished** session is different from a quiet one. Once the channel has seen
 a session container for the injected task, if none remain for 90 s and no reply
 has arrived (and it is not mid-recycle or mid-resend), it fails the attempt with
 `reason: session_lost`, naming the container, exit code and a short redacted log
-excerpt ([stall visibility](stall-visibility.spec.md) 3.1). The full bounded
+excerpt ([stall visibility](stall-visibility.spec.md) 3.1), and `oom_kill: true`
+only when Docker's structured state of that same container says `OOMKilled` with
+exit 137 ([failure classes](failure-classes.spec.md) 3.2.1). The full bounded
 tail is the `stderr-tail` artifact and the inline excerpt is capped at 2 KiB
 (3.12.1). On a transient error the channel keeps the task and the next
 heartbeat (which renews the lease) repeats the same fail, one in flight at a
