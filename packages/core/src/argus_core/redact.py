@@ -43,7 +43,7 @@ _RULES: tuple[tuple[re.Pattern[str], str], ...] = tuple(
         (r"\bAIza[0-9A-Za-z_-]{35}", REDACTED, 0),
         # user:password@ in a URL
         (
-            r"(\b[a-z][a-z0-9+.-]{0,16}://[^\s/:@]+:)[^\s/@]+@",
+            r"(\b[a-z][a-z0-9+.-]{0,15}://[^\s/:@]+:)[^\s/@]+@",
             rf"\1{REDACTED}@",
             re.IGNORECASE,
         ),

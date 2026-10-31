@@ -99,6 +99,17 @@ def test_long_names_and_url_passwords_are_masked() -> None:
     )
 
 
+def test_url_scheme_is_bounded_to_16_characters() -> None:
+    scheme16, scheme17 = "a" + "b" * 15, "a" + "b" * 16
+    assert len(scheme16) == 16
+    assert len(scheme17) == 17
+    masked = redact(f"{scheme16}://bot:hunter2@host/x")
+    assert REDACTED in masked
+    assert "hunter2" not in masked
+    untouched = f"{scheme17}://bot:hunter2@host/x"
+    assert redact(untouched) == untouched
+
+
 def test_a_jwt_is_masked_where_a_run_starts() -> None:
     jwt = SECRETS["jwt"]
     for text in (jwt, f"jwt={jwt}", f"'{jwt}'", f"x.{jwt}"):
