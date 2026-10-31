@@ -24,6 +24,7 @@ from argus_core.continuation import (
     ContinuationUpdate,
     ObservationRequest,
 )
+from argus_core.task_drafts import PublishItem, TaskDraftBody
 from argus_core.task_edit import TaskChanges
 from argus_core.tasks import ExecutorModel, HarnessModel
 from fastapi import FastAPI
@@ -60,7 +61,9 @@ who may answer, what each answer does, what it holds up and labelled evidence: h
 only, nothing is executed); list_artifacts, verify_artifact and read_artifact
 check evidence; answer_decision or answer_decisions acts (give each answer a
 request_id, so retries are safe); get_tasks(ids) reads the effects back. edit_task changes a task's title, spec,
-acceptance, priority, capabilities, pins or dependencies (pass its `version`). Lists
+acceptance, priority, capabilities, pins or dependencies (pass its `version`). To
+assemble related tasks before any worker can claim them, create_task_draft each one
+(depends_on_drafts links drafts) and publish_task_drafts them together. Lists
 are paged: `total` counts every match, follow `next_cursor` while `has_more`. If a
 tool you need is missing, say which and stop; do not script REST around it.
 
@@ -1207,6 +1210,86 @@ async def set_task_dependencies(
         "PUT",
         f"/tasks/{task_id}/dependencies",
         json={"depends_on": depends_on, "expected_version": expected_version},
+    )
+
+
+@tool(MANAGERS)
+async def create_task_draft(ctx: Context, draft: TaskDraftBody) -> dict:
+    """Save a task definition as a draft: nothing can claim, list or count it until
+    publish_task_drafts. `draft` takes create_task's fields (same rules) plus
+    depends_on_drafts (ids of other drafts; depends_on stays for existing tasks).
+    Title, spec, acceptance and project may be filled in later; publish requires
+    them. Returns the draft with its `version`."""
+    return await _call(
+        ctx,
+        "POST",
+        "/task-drafts",
+        json=draft.model_dump(mode="json", exclude_unset=True),
+    )
+
+
+@tool(MANAGERS)
+async def list_task_drafts(ctx: Context) -> dict:
+    """Open drafts, oldest first ({items, total}; at most 200, always whole)."""
+    return await _call(ctx, "GET", "/task-drafts")
+
+
+@tool(MANAGERS)
+async def get_task_draft(ctx: Context, draft_id: str) -> dict:
+    """One draft, open or published (then with published_task_id)."""
+    return await _call(ctx, "GET", f"/task-drafts/{draft_id}")
+
+
+@tool(MANAGERS)
+async def edit_task_draft(
+    ctx: Context, draft_id: str, expected_version: str, changes: dict[str, Any]
+) -> dict:
+    """Patch an open draft's fields: a field you leave out is kept, null resets it.
+    Pass the draft's `version` as expected_version (409 stale_version carries the
+    current one); a published draft is 409 draft_published."""
+    return await _call(
+        ctx,
+        "PATCH",
+        f"/task-drafts/{draft_id}",
+        json={"expected_version": expected_version, "changes": changes},
+    )
+
+
+@tool(MANAGERS)
+async def discard_task_draft(ctx: Context, draft_id: str, expected_version: str) -> str:
+    """Delete an open draft (pass its `version`)."""
+    await _call(
+        ctx,
+        "DELETE",
+        f"/task-drafts/{draft_id}",
+        params={"expected_version": expected_version},
+    )
+    return "discarded"
+
+
+@tool(MANAGERS)
+async def publish_task_drafts(
+    ctx: Context,
+    idempotency_key: str,
+    drafts: list[PublishItem],
+    mode: Literal["atomic", "partial"] = "atomic",
+) -> dict:
+    """Publish up to 50 drafts ([{draft_id, expected_version}]) as tasks in one
+    transaction: depends_on_drafts become the new task ids, cycles are refused, and
+    each draft needs a project, spec, acceptance and capabilities some pool or agent
+    declares. mode "atomic" (default) publishes all or nothing (the error lists each
+    failing draft); "partial" publishes the valid ones and returns an outcome per
+    draft (published | rejected | skipped). Retrying with the same idempotency_key
+    and drafts returns the first answer (replayed: true) and creates nothing."""
+    return await _call(
+        ctx,
+        "POST",
+        "/task-drafts/publish",
+        json={
+            "idempotency_key": idempotency_key,
+            "mode": mode,
+            "drafts": [d.model_dump() for d in drafts],
+        },
     )
 
 

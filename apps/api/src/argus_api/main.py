@@ -60,6 +60,7 @@ from argus_api.runtime.service import RuntimeManager
 from argus_api.secrets import open_store
 from argus_api.settings.routes import router as settings_router
 from argus_api.tasks.delivery import PrChecker
+from argus_api.tasks.draft_routes import router as task_drafts_router
 from argus_api.tasks.routes import router as tasks_router
 
 log = logging.getLogger("argus")
@@ -270,6 +271,7 @@ app = FastAPI(
 api = APIRouter(prefix="/api")
 for router in (
     tasks_router,
+    task_drafts_router,
     model_trace_router,
     agents_router,
     admin_router,

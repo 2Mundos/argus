@@ -30,6 +30,7 @@ admin, about 18.7 KB of schema. The largest are `create_task` (1.4 KB),
 | List tasks | `GET /tasks?state&limit` (≤500) | `list_tasks(state, limit)` | no project/kind filter, cursor, total, or projection; every row carries full `spec` and `result` |
 | Read tasks | `GET /tasks/{id}` | `get_task` | one per call; no projection |
 | Edit a task | `PATCH /tasks/{id}` | `edit_task` | covered by [task edit](task-edit.spec.md): same fields, version precondition and errors |
+| Draft and publish tasks | `/task-drafts`, `POST /task-drafts/publish` | `create_task_draft` … `publish_task_drafts` | covered by [task drafts](task-drafts.spec.md): versioned drafts, idempotent publish, `atomic` or `partial` on both surfaces |
 | Unblock / retry | `POST /tasks/{id}/unblock`, `/retry` | — | **not exposed** |
 | Decisions | `GET /decisions?state&subject_id`, `GET /decisions/{id}` | `list_decisions()` (open only, no args) | filters **not exposed**; no project/kind filter; no `get_decision` |
 | Answer | `POST /decisions/{id}/answer` | `answer_decision` | a retry fails with `409 decision_not_open` (no idempotent replay); one at a time |

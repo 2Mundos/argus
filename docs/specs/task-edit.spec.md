@@ -19,6 +19,9 @@ thin callers of the same function with only `depends_on` set.
 # 2. Non-Goals
 
 - No change to creation, retry, cancel, approval, archive or PR management.
+  To assemble a definition before anything can claim it, draft and publish it
+  instead ([task drafts](task-drafts.spec.md)); editing a published task follows
+  this spec.
 - No editing of a running attempt: an edit never reaches a worker that already
   holds the task (3.4).
 - No edit history browser in the UI beyond the existing History list; the audit

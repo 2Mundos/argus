@@ -56,6 +56,10 @@ unchanged, including the `task_not_waiting` code.
   `task.dependency_failed`, as at creation.
 - Removing a `cancelled` or `failed` dependency is how a stranded task is
   released (gap 3): no other mechanism is added.
+- Tasks that depend on each other and do not exist yet are drafted and
+  published together ([task drafts](task-drafts.spec.md) 3.3): references between
+  drafts become edges to the real new task ids, with the same existence, cycle
+  and 100-dependency rules, in the publishing transaction.
 - A read-only [prerequisite evidence](task-discovery.spec.md) view reports
   whether each direct dependency is forge-merged or artifact-verified. It
   changes nothing here: readiness still keys only on `succeeded`.

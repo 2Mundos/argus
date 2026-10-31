@@ -2236,6 +2236,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/task-drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Drafts
+         * @description Open drafts, oldest first; at most 200 exist, so the list is whole.
+         */
+        get: operations["list_drafts_api_task_drafts_get"];
+        put?: never;
+        /**
+         * Create Draft
+         * @description Save a task definition that nothing can claim until it is published. Field
+         *     rules are the task's; title, spec, acceptance and project may wait for publish.
+         */
+        post: operations["create_draft_api_task_drafts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/task-drafts/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish Drafts
+         * @description Validate drafts and create their tasks in one transaction. `atomic` (the
+         *     default) publishes all or none; `partial` publishes each valid draft and reports
+         *     the others. In-batch `depends_on_drafts` become the new task ids. A repeat with
+         *     the same `idempotency_key` and request returns the stored answer.
+         */
+        post: operations["publish_drafts_api_task_drafts_publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/task-drafts/{draft_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Draft */
+        get: operations["get_draft_api_task_drafts__draft_id__get"];
+        put?: never;
+        post?: never;
+        /** Discard Draft */
+        delete: operations["discard_draft_api_task_drafts__draft_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Edit Draft
+         * @description Patch an open draft: omitted fields stay, `null` resets one. A stale
+         *     `expected_version` is 409 `stale_version`; a published draft 409
+         *     `draft_published`.
+         */
+        patch: operations["edit_draft_api_task_drafts__draft_id__patch"];
+        trace?: never;
+    };
     "/api/task-kinds": {
         parameters: {
             query?: never;
@@ -8219,6 +8291,63 @@ export interface components {
          * @enum {string}
          */
         ProposalState: "open" | "accepted" | "rejected" | "withdrawn";
+        /** PublishItem */
+        PublishItem: {
+            /** Draft Id */
+            draft_id: string;
+            /** Expected Version */
+            expected_version: string;
+        };
+        /** PublishOutcome */
+        PublishOutcome: {
+            /** Code */
+            code?: string | null;
+            /** Draft Id */
+            draft_id: string;
+            /**
+             * Errors
+             * @default []
+             */
+            errors?: string[];
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "published" | "rejected" | "skipped";
+            state?: components["schemas"]["TaskState"] | null;
+            /** Task Id */
+            task_id?: string | null;
+        };
+        /** PublishRequest */
+        PublishRequest: {
+            /** Drafts */
+            drafts: components["schemas"]["PublishItem"][];
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Mode
+             * @default atomic
+             * @enum {string}
+             */
+            mode?: "atomic" | "partial";
+        };
+        /** PublishResult */
+        PublishResult: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Items */
+            items: components["schemas"]["PublishOutcome"][];
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "atomic" | "partial";
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed?: boolean;
+        };
         /**
          * QuotaProbe
          * @description The latest quota probe of an account (one per account), whatever came of it.
@@ -9626,6 +9755,138 @@ export interface components {
             updated_at: string;
             /** Version */
             version: string;
+        };
+        /** TaskDraft */
+        TaskDraft: {
+            body: components["schemas"]["TaskDraftBody"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Id */
+            id: string;
+            /** Published At */
+            published_at?: string | null;
+            /** Published Task Id */
+            published_task_id?: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+            /** Version */
+            version: string;
+        };
+        /**
+         * TaskDraftBody
+         * @description `TaskCreate` with the same field rules, lenient only about completeness:
+         *     the title may be empty until publish (3.1). Unknown keys are refused.
+         */
+        TaskDraftBody: {
+            /**
+             * Acceptance
+             * @default []
+             */
+            acceptance?: string[];
+            /** Account Providers */
+            account_providers?: string[] | null;
+            /**
+             * Depends On
+             * @default []
+             */
+            depends_on?: string[];
+            /** Depends On Drafts */
+            depends_on_drafts?: string[];
+            difficulty?: components["schemas"]["Difficulty"] | null;
+            difficulty_source?: components["schemas"]["DifficultySource"] | null;
+            executor_model?: components["schemas"]["ExecutorModel"] | null;
+            /** Harness Account */
+            harness_account?: string | null;
+            harness_model?: components["schemas"]["HarnessModel"] | null;
+            /**
+             * Input
+             * @default {}
+             */
+            input?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Kind
+             * @default generic
+             */
+            kind?: string;
+            /**
+             * Knowledge
+             * @default []
+             */
+            knowledge?: string[];
+            /**
+             * Lease Ttl S
+             * @default 120
+             */
+            lease_ttl_s?: number;
+            /**
+             * Max Attempts
+             * @default 3
+             */
+            max_attempts?: number;
+            /** Parent Id */
+            parent_id?: string | null;
+            /**
+             * Priority
+             * @default 0
+             */
+            priority?: number;
+            /** Project */
+            project?: string | null;
+            /**
+             * Required Capabilities
+             * @default []
+             */
+            required_capabilities?: string[];
+            /**
+             * Requires Approval
+             * @default false
+             */
+            requires_approval?: boolean;
+            /** @default none */
+            review?: components["schemas"]["Review"];
+            /**
+             * Spec
+             * @default
+             */
+            spec?: string;
+            /** Timeout S */
+            timeout_s?: number | null;
+            /**
+             * Title
+             * @default
+             */
+            title?: string;
+        };
+        /**
+         * TaskDraftEdit
+         * @description A partial patch of the body: a key left out is kept, `null` resets it.
+         */
+        TaskDraftEdit: {
+            /** Changes */
+            changes: {
+                [key: string]: unknown;
+            };
+            /** Expected Version */
+            expected_version: string;
+        };
+        /** TaskDraftPage */
+        TaskDraftPage: {
+            /** Items */
+            items: components["schemas"]["TaskDraft"][];
+            /** Total */
+            total: number;
         };
         /**
          * TaskEdit
@@ -14789,6 +15050,189 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemSummary"];
+                };
+            };
+        };
+    };
+    list_drafts_api_task_drafts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDraftPage"];
+                };
+            };
+        };
+    };
+    create_draft_api_task_drafts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskDraftBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDraft"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_drafts_api_task_drafts_publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_draft_api_task_drafts__draft_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDraft"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discard_draft_api_task_drafts__draft_id__delete: {
+        parameters: {
+            query: {
+                expected_version: string;
+            };
+            header?: never;
+            path: {
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_draft_api_task_drafts__draft_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskDraftEdit"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDraft"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
