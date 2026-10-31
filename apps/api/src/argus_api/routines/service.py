@@ -63,14 +63,27 @@ async def get_routine(
         " ORDER BY created_at DESC, id DESC LIMIT ?",
         (f"routine:{routine_id}", LAST_RUNS),
     ) as cur:
-        runs = [
-            RoutineRun(
-                task_id=r["id"],
-                state=r["state"],
-                created_at=datetime.fromisoformat(r["created_at"]),
-            )
-            for r in await cur.fetchall()
-        ]
+        run_rows = list(await cur.fetchall())
+    # Intake files children of the run as `system`; dedup-suppressed entries are
+    # not children, and tasks an agent created with the same input do not count.
+    async with conn.execute(
+        "SELECT parent_id, COUNT(*) AS n FROM tasks"
+        " WHERE parent_id IN (SELECT value FROM json_each(?))"
+        " AND created_by = 'system'"
+        " AND json_extract(input, '$.routine_finding.routine') = ?"
+        " GROUP BY parent_id",
+        (json.dumps([r["id"] for r in run_rows]), routine_id),
+    ) as cur:
+        filed = {r["parent_id"]: r["n"] for r in await cur.fetchall()}
+    runs = [
+        RoutineRun(
+            task_id=r["id"],
+            state=r["state"],
+            created_at=datetime.fromisoformat(r["created_at"]),
+            findings_filed=filed.get(r["id"], 0),
+        )
+        for r in run_rows
+    ]
     return _to_routine(row, now).model_copy(update={"last_runs": runs})
 
 

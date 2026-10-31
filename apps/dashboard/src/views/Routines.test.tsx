@@ -84,7 +84,12 @@ function setup(list = routine(), detail: Record<string, unknown> = {}) {
     r1: {
       ...list,
       last_runs: [
-        { task_id: "abcdef1234567", state: "failed", created_at: "2026-01-01T14:00:00Z" },
+        {
+          task_id: "abcdef1234567",
+          state: "failed",
+          created_at: "2026-01-01T14:00:00Z",
+          findings_filed: 2,
+        },
       ],
       ...detail,
     },
@@ -148,17 +153,43 @@ describe("Routines rendering", () => {
     );
   });
 
-  it("never renders findings filed as a count", async () => {
+  it("shows the last run's findings filed as a number, including zero", async () => {
     setup();
     render(<Routines />);
+    expect(await screen.findByText("2 filed")).toBeTruthy();
+    cleanup();
+    setup(routine(), {
+      last_runs: [
+        {
+          task_id: "abcdef1234567",
+          state: "succeeded",
+          created_at: "2026-01-01T14:00:00Z",
+          findings_filed: 0,
+        },
+      ],
+    });
+    render(<Routines />);
+    expect(await screen.findByText("0 filed")).toBeTruthy();
+  });
+
+  it("shows unknown, never 0, when the count is missing or the detail failed", async () => {
+    setup(routine(), { last_runs: [] });
+    render(<Routines />);
     expect(await screen.findByText("unknown (not reported)")).toBeTruthy();
-    expect(screen.queryByText("0")).toBeNull();
+    expect(screen.queryByText(/\b0 filed/)).toBeNull();
+    cleanup();
+    setup();
+    mock.detailFails = true;
+    render(<Routines />);
+    expect(await screen.findByText("unknown (not reported)")).toBeTruthy();
+    expect(screen.queryByText(/\b0 filed/)).toBeNull();
   });
 
   it("shows a routine that never ran, and unknown for a missing run state", async () => {
     setup(routine({ last_run_at: null, last_task_id: null }));
     render(<Routines />);
     expect(await screen.findByText("not run yet")).toBeTruthy();
+    expect(screen.getByText("no runs yet")).toBeTruthy();
     cleanup();
     setup(routine(), { last_runs: [] });
     render(<Routines />);

@@ -6,6 +6,7 @@ export const STALL_CAUSE_COPY: Record<string, string> = {
   session_gone: "session container gone",
   silent_delegate_active: "delegate busy but silent",
   no_progress: "session running, no progress",
+  paused_disk: "paused by the disk guard (low disk)",
 };
 
 export function dur(s: number): string {

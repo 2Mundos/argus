@@ -196,9 +196,7 @@ function RoutineCard({ routine, onChanged }: { routine: Routine; onChanged: () =
         </dd>
         <dt>Findings</dt>
         <dd>
-          <span className="muted" title="No API reports how many findings a run filed yet">
-            unknown (not reported)
-          </span>{" "}
+          <FindingsFiled routine={routine} />{" "}
           <span className="muted small">mode: {routine.findings}</span>
         </dd>
       </dl>
@@ -226,6 +224,22 @@ function RoutineCard({ routine, onChanged }: { routine: Routine; onChanged: () =
       )}
     </li>
   );
+}
+
+/** The last run's filed count, read from the detail; unknown is never shown as 0. */
+function FindingsFiled({ routine }: { routine: Routine }) {
+  if (!routine.last_run_at && !routine.last_task_id) {
+    return <span className="muted">no runs yet</span>;
+  }
+  const filed = routine.last_runs?.find((r) => r.task_id === routine.last_task_id)?.findings_filed;
+  if (filed === undefined) {
+    return (
+      <span className="muted" title="The last run's count is not in the routine detail">
+        unknown (not reported)
+      </span>
+    );
+  }
+  return <span title="Findings filed by the last run">{filed} filed</span>;
 }
 
 function LastRun({ routine }: { routine: Routine }) {
