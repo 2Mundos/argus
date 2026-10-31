@@ -164,14 +164,28 @@ def test_base_mismatch_with_expected_base(client: TestClient) -> None:
 
 
 def test_merged_with_pending_reviews_stays_satisfied(client: TestClient) -> None:
+    # Merge is delivery evidence regardless of review state. Argus does not
+    # enumerate review bodies/approvals here (task-delivery owns that); a
+    # pending review therefore cannot downgrade delivery.
     setup_repository(client)
-    forge(client, lambda r: httpx.Response(200, json=pr_body()))
+    forge(
+        client,
+        lambda r: httpx.Response(
+            200,
+            json=pr_body(
+                mergeable_state="blocked",
+                review_comments=2,
+                requested_reviewers=[{"login": "reviewer"}],
+            ),
+        ),
+    )
     worker = worker_headers(client)
     dep = succeed(client, worker, summary=f"Delivered in {URL}")
     child = dependent(client, [dep["id"]])
     got = client.get(f"/api/tasks/{child['id']}/prerequisites").json()
     [item] = got["items"]
     assert item["verdict"] == "satisfied"
+    assert item["why"] == "merged"
     assert "review_state_is_not_delivery_proof" in item["evidence"]["notes"]
 
 
@@ -251,6 +265,52 @@ def test_artifact_verified_and_missing_corrupt(client: TestClient) -> None:
     [item] = got["items"]
     assert item["verdict"] == "unsatisfied"
     assert item["why"] == "artifact_missing"
+
+
+def test_artifact_over_byte_cap_is_unknown(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import argus_api.tasks.prerequisites as prereq
+    from argus_api.artifacts.service import key as artifact_key
+
+    monkeypatch.setattr(prereq, "ARTIFACT_BYTE_CAP", 4)
+    worker = worker_headers(client)
+    tid = client.post("/api/tasks", json={"project": "global", "title": "cap"}).json()[
+        "id"
+    ]
+    claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    payload = b"larger-than-cap"
+    up = client.post(
+        f"/api/tasks/{tid}/artifacts",
+        params={"attempt": claimed["attempt"], "name": "big.txt"},
+        content=payload,
+        headers={**worker, "Content-Type": "text/plain"},
+    )
+    assert up.status_code == 201, up.text
+    art = up.json()
+    assert art["size"] > 4
+    res = client.post(
+        f"/api/tasks/{tid}/complete",
+        json={
+            "attempt": claimed["attempt"],
+            "result": {"summary": "no pr", "artifacts": [art["id"]]},
+        },
+        headers=worker,
+    )
+    assert res.status_code == 200, res.text
+    dep = res.json()
+    child = dependent(client, [dep["id"]])
+    store = client.app.state.artifacts  # ty: ignore[unresolved-attribute]
+    path = store.path(artifact_key(tid, claimed["attempt"], "big.txt"))
+    assert path.is_file()
+    got = client.get(f"/api/tasks/{child['id']}/prerequisites").json()
+    [item] = got["items"]
+    [ev] = item["evidence"]["artifacts"]
+    assert ev["verified"] == "unknown"
+    assert item["verdict"] == "unknown"
+    assert item["why"] == "artifact_unverified"
+    assert f"artifact:{art['id']}" in got["partial"]
+    assert not (ev["verified"] == "unknown" and item["verdict"] == "satisfied")
 
 
 def test_no_reference_is_unknown(client: TestClient) -> None:
