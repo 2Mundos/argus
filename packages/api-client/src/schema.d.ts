@@ -5733,7 +5733,7 @@ export interface components {
             /** Project */
             project: string | null;
             /** Stall Cause */
-            stall_cause?: ("workspace_missing" | "session_gone" | "silent_delegate_active" | "no_progress" | "unknown") | null;
+            stall_cause?: ("workspace_missing" | "session_gone" | "silent_delegate_active" | "no_progress" | "paused_disk" | "unknown") | null;
             state: components["schemas"]["TaskState"] | null;
             /** Subject Id */
             subject_id: string;
@@ -8829,7 +8829,7 @@ export interface components {
             /** Spec */
             spec: string;
             /** Stall Cause */
-            stall_cause?: ("workspace_missing" | "session_gone" | "silent_delegate_active" | "no_progress" | "unknown") | null;
+            stall_cause?: ("workspace_missing" | "session_gone" | "silent_delegate_active" | "no_progress" | "paused_disk" | "unknown") | null;
             state: components["schemas"]["TaskState"];
             /** Timeout At */
             timeout_at: string | null;

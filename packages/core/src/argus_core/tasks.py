@@ -316,6 +316,9 @@ StallCause = Literal[
     "session_gone",
     "silent_delegate_active",
     "no_progress",
+    # The API's own disk guard paused the claim (operations.spec.md 3.5): derived
+    # from the server-side flag, never from a worker's observation.
+    "paused_disk",
     "unknown",
 ]
 
