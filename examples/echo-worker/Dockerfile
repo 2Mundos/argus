@@ -1,5 +1,5 @@
 FROM python:3.12-slim-trixie
 LABEL argus.worker="plain"
 COPY worker.py /worker.py
-USER nobody
+USER 65534:65534
 CMD ["python", "-u", "/worker.py"]
