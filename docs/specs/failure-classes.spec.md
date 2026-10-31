@@ -22,7 +22,8 @@ This spec:
 # 2. Non-Goals
 
 - No owned workspace or worktree (P2's workspace half) and no session resume
-  (P4). The `session` class keeps today's retry until P4 lands.
+  (P4): the automatic resume of 3.2 requeues the task into a new attempt and a
+  new session; it does not resume the old session's conversation.
 - No change to admission (`quota`, `account_unavailable`;
   [account selection](account-selection.spec.md)) or to difficulty escalation
   ([task difficulty](task-difficulty.spec.md)).
@@ -71,29 +72,63 @@ reasons and adds `failure_class` to each failure row and a count per class.
   and follow the rule below. `stalled`, `timeout` and `lease_expired` are not
   exits the host confirmed, and keep today's rule: requeue at once.
 - **Automatic resume rule** (for `session_lost` and `agent_ended`):
-  - A **confirmed exit** means the old container is confirmed gone. The
-    `session_lost` path already checks for it within 90 s
-    ([worker lifecycle](worker-lifecycle.spec.md) 3.8); that check is reused, no
-    new one is added.
-  - The first such fail of a task requeues it. It records `task.auto_resumed`
-    (new event; actor: the failing agent or the reaper; data `{attempt, reason}`)
-    in the fail transaction.
-  - A later such fail requeues only if **progress** was recorded for the claimed
-    attempt after the latest `task.auto_resumed`. Progress is a `task.progress`
-    event for that attempt; a milestone is one with `data.kind` set, so it counts
-    as well. Nothing else counts.
-  - Otherwise the task fails with the exit code and the stderr tail as its
-    `error`. The attempt is spent; a retry is the operator's act.
-  - `POST /tasks/{id}/retry` and unblock reset the rule: events before them are
-    ignored, as they reset `failures`.
-  - The rule is checkable from the events: `task.auto_resumed` and
-    `task.progress` for one task and attempt, no counter column.
-  - **Open point.** A completed turn counts only if it writes a `task.progress`
-    event. The spec says a plain reply is a progress note
-    ([worker lifecycle](worker-lifecycle.spec.md) 3.8), but a turn that ends with no
-    directive is left to the server, and it is not verified from the code that
-    every completed turn posts one. Until verified, a turn with no
-    `task.progress` is not progress.
+  - A **confirmed exit** means the old container is confirmed gone. No new check
+    is added; the existing evidence is reused:
+    - `session_lost`: the channel sends it only after its session listing has
+      shown no container for the attempt for 90 s
+      ([worker lifecycle](worker-lifecycle.spec.md) 3.8). That check is the
+      confirmation.
+    - `agent_ended` (the reaper ends a lost or departed agent): confirmed only
+      when the host's lease observations for this attempt, after its claim, saw
+      the session `gone` without a break for the same 90 s grace, up to the last
+      one (stall visibility 3.7). Each heartbeat's `gone` starts or extends
+      `tasks.session_gone_at` (migration `0059_task_session_gone_at.sql`); any
+      other session state, or a renewal without an observation, clears it, and a
+      claim or an expiry resets it. One `gone` listing (a container restart, a
+      gap) is not a confirmation. Without it, the exit is not confirmed and keeps
+      today's rule (requeue at once).
+    - `stalled`, `timeout` and `lease_expired` are never confirmed exits.
+  - The first confirmed exit of a task requeues it, as long as `max_attempts`
+    allows. It records `task.auto_resumed` (new event; actor: the failing agent,
+    or `system` for the reaper; data `{attempt, reason}`, no error text) in the
+    fail transaction.
+  - A later confirmed exit requeues only if **progress** was recorded for the
+    claimed attempt after the latest `task.auto_resumed`. Progress is a
+    `task.progress` event of this task whose `data.attempt` is the claimed
+    attempt (attempt numbers only grow within an epoch, and a late write of an
+    earlier attempt is refused). A milestone (`data.kind` set) is a
+    `task.progress` event and counts. Nothing else counts: heartbeats
+    and their `activity_at`, live log lines, failure notices, the
+    `progress_message` column (the server writes it too), and progress of
+    another task or an earlier attempt.
+  - Otherwise the task fails with the cause: the attempt is spent, the task is
+    `failed` whatever is left of `max_attempts`, and its `error` is the exit's own
+    text (for `session_lost` the exit code and the redacted stderr excerpt the
+    channel sends, at most 2 KiB, with the `stderr-tail` artifact as the full
+    tail; the server keeps at most 2,048 UTF-8 bytes, cut on a character
+    boundary). The reaper's own `error` is built from ids, times and enum names,
+    never session output. The `task.fail` (or
+    `task.expire`) event carries `auto_resume: "no_progress"`. A retry is the
+    operator's act.
+  - `POST /tasks/{id}/retry` and an operator's unblock (any actor but `system`:
+    the unblock route, an answered decision, a manager's runtime release) start a
+    new **recovery epoch**: events before the latest such `task.retried` or
+    `task.unblock` are ignored. Unblocks the server does on its own (a quota
+    wake, a finished runtime build) do not, so a crash loop that passes through
+    a quota wait stays bounded.
+  - The rule is checkable from the events: `task.auto_resumed`, `task.progress`,
+    `task.retried` and `task.unblock` for one task, no counter column. Each lookup is one seek on the partial index
+    `events_task_kind (subject_id, kind, id) WHERE subject_type = 'task'`
+    (migration `0058_events_task_kind.sql`), newest first or `LIMIT 1`; no scan of
+    the event log.
+  - The fail is fenced as every worker write (agent, attempt, state): a repeated
+    or late fail of the same attempt is a `409` and records nothing, so one exit
+    records at most one `task.auto_resumed`.
+  - **Plain replies (decided).** The channel posts every non-empty reply without
+    a directive as a progress note (`POST /tasks/{id}/progress`, coalesced to one
+    per 10 s), so a completed turn with text is progress through that
+    `task.progress` event. A turn with no text, or a note still coalescing when
+    the claim ends, posts nothing and is not progress.
 - `max_attempts` keeps its meaning: the cap on attempts that count.
 - **OOM.** `env_oom` blocks after 2 consecutive OOM-killed sessions on one pool.
   Before that, an OOM-killed session is a `session` attempt as today, with the
@@ -288,3 +323,49 @@ when the work is hard. Any other `FAIL:` is `worker_fail`.
   [worker efficiency](../drafts/2026-10-24.worker-efficiency.draft.md) draft.
 - Tests per layer: one per class action, the backoff schedule, each preflight
   reason, and the environment FAIL directive.
+- Automatic resume (3.2): `fail` and the reaper's `_expire_where` apply the rule
+  in the fail transaction (`_auto_resume`); migration
+  `0058_events_task_kind.sql` adds the partial index it seeks; the new event
+  `task.auto_resumed`. The channel's `reportExit` sends the fail once per
+  heartbeat: a transient error keeps the task, so the heartbeat renews its lease
+  (observed `gone`) and the next one repeats the same report, with one report in
+  flight at a time; a `409` or a rejection ends it, as does Argus ending the
+  claim. It logs the state Argus answered.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q apps/api/tests/test_auto_resume.py apps/api/tests/test_dead_session_recovery.py apps/api/tests/test_stall_causes.py apps/api/tests/test_tasks_service.py`
+  - `integrations/nanoclaw/provision.sh check` (vitest in a NanoClaw checkout;
+    the automatic resume half is `argus-auto-resume.test.ts`).
+  - `make check` runs the rest.
+- Verified, against a disposable SQLite database, a fake clock and the HTTP routes
+  through a test client:
+  - a crash loop resumes once, then fails with the cause and `auto_resume:
+    "no_progress"`;
+  - a progress note or a milestone of the claimed attempt earns one more resume;
+    heartbeats, live log lines, another task's progress and an earlier attempt's
+    progress do not;
+  - retry and an operator unblock start a new epoch, a `system` unblock does not;
+  - `stalled`, `timeout`, `lease_expired`, the quota fallback and an environment
+    block are unchanged;
+  - `agent_ended` follows the rule only after `gone` observations held for 90 s
+    after the claim, up to the last one; one `gone`, a shorter run, a run broken
+    by `running` or by a renewal without an observation, and a run dated before
+    the claim do not;
+  - concurrent and repeated fails record one `task.auto_resumed`, and a stale or
+    lost holder is refused;
+  - the error is capped in UTF-8 bytes without splitting a 2-, 3- or 4-byte
+    character, and the event carries no error text;
+  - `EXPLAIN QUERY PLAN` shows each read is one seek on `events_task_kind`.
+  - The channel tests (fake runtime, scripted Argus) cover one report with the
+    attempt and a redacted error, a transient error repeated on each heartbeat
+    with the lease renewed and the evidence read once, one report in flight when
+    heartbeats overlap, no repeat after a `409` or after Argus ends the claim, and
+    a plain reply posted as progress before the exit.
+- Not verified: real Docker sessions dying, a real NanoClaw host lost mid-claim,
+  and any deployed node.
+- Accepted as is: the server trusts a `session_lost` from the lease holder (the
+  channel's 90 s check is the confirmation; a fenced worker can only spend its
+  own attempt), and the rule's reads are separate `LIMIT 1` seeks rather than
+  one combined query.
