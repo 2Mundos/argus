@@ -3199,6 +3199,14 @@ def _apply_kind_defaults(body: TaskCreate, kind: TaskKind) -> TaskCreate:
     return body.model_copy(update=update)
 
 
+async def check_create(conn: aiosqlite.Connection, body: TaskCreate) -> None:
+    """The create rules that need no actor or parent: the kind and its input schema,
+    the project and pinned pages. Routine templates are checked with it on save
+    (routines spec 3.1)."""
+    body = _apply_kind_defaults(body, await kinds.get_kind(conn, body.kind))
+    await _check_project_and_pins(conn, body)
+
+
 async def _check_project_and_pins(conn: aiosqlite.Connection, body: TaskCreate) -> None:
     if body.project is not None:
         async with conn.execute(
