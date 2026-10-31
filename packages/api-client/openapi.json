@@ -1939,6 +1939,49 @@
         "title": "Artifact",
         "type": "object"
       },
+      "ArtifactEvidence": {
+        "properties": {
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          },
+          "verified": {
+            "enum": [
+              true,
+              false,
+              "unknown"
+            ],
+            "title": "Verified"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "sha256",
+          "size",
+          "verified",
+          "checked_at"
+        ],
+        "title": "ArtifactEvidence",
+        "type": "object"
+      },
       "ArtifactIn": {
         "additionalProperties": false,
         "description": "A caller's statement about an artifact. ContinuationProvenance and time are Argus's.",
@@ -10064,6 +10107,34 @@
         "title": "LostSpike",
         "type": "object"
       },
+      "MatchHit": {
+        "description": "A citation of where `q` hit; only present on list rows when `q` is set.",
+        "properties": {
+          "field": {
+            "enum": [
+              "title",
+              "spec"
+            ],
+            "title": "Field",
+            "type": "string"
+          },
+          "snippet": {
+            "title": "Snippet",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "field",
+          "snippet",
+          "truncated"
+        ],
+        "title": "MatchHit",
+        "type": "object"
+      },
       "Message": {
         "properties": {
           "author": {
@@ -12109,6 +12180,209 @@
           "platform"
         ],
         "title": "PrepareRequest",
+        "type": "object"
+      },
+      "PrerequisiteEvidence": {
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactEvidence"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "base_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Ref"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "merged_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged At"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "pr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr"
+          },
+          "pr_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "const": "forge",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "title": "PrerequisiteEvidence",
+        "type": "object"
+      },
+      "PrerequisiteItem": {
+        "properties": {
+          "evidence": {
+            "$ref": "#/components/schemas/PrerequisiteEvidence"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "task_succeeded": {
+            "title": "Task Succeeded",
+            "type": "boolean"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "verdict": {
+            "enum": [
+              "satisfied",
+              "unsatisfied",
+              "unknown"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "title",
+          "state",
+          "task_succeeded",
+          "verdict",
+          "why",
+          "evidence"
+        ],
+        "title": "PrerequisiteItem",
+        "type": "object"
+      },
+      "PrerequisitesView": {
+        "properties": {
+          "enforced": {
+            "const": false,
+            "default": false,
+            "title": "Enforced",
+            "type": "boolean"
+          },
+          "expected_base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Base"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PrerequisiteItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "omitted": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Omitted",
+            "type": "array"
+          },
+          "partial": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Partial",
+            "type": "array"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "version",
+          "expected_base",
+          "items"
+        ],
+        "title": "PrerequisitesView",
         "type": "object"
       },
       "PricingInfo": {
@@ -16280,6 +16554,20 @@
             "title": "Lease Ttl S",
             "type": "integer"
           },
+          "matches": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MatchHit"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matches"
+          },
           "max_attempts": {
             "title": "Max Attempts",
             "type": "integer"
@@ -17699,6 +17987,20 @@
               }
             ],
             "title": "Lease Expires At"
+          },
+          "matches": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MatchHit"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matches"
           },
           "max_attempts": {
             "title": "Max Attempts",
@@ -26824,7 +27126,7 @@
     },
     "/api/tasks": {
       "get": {
-        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`. Archived tasks\nare left out unless `archived=true`, which lists only those. Workers only see\ntasks they have leased.",
+        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`. Archived tasks\nare left out unless `archived=true`, which lists only those. Workers only see\ntasks they have leased. Optional `q` is literal substring search over title\nand spec (task discovery).",
         "operationId": "list_tasks_api_tasks_get",
         "parameters": [
           {
@@ -26958,6 +27260,22 @@
                 }
               ],
               "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
             }
           }
         ],
@@ -28673,6 +28991,70 @@
           }
         ],
         "summary": "Observe Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/prerequisites": {
+      "get": {
+        "description": "Evidence for each direct dependency: forge-merged on an expected base or a\nlisted artifact re-verified, distinguished from task_succeeded. Read-only;\nenforced is always false (task discovery).",
+        "operationId": "get_prerequisites_api_tasks__task_id__prerequisites_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_base",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expected Base"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrerequisitesView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Prerequisites",
         "tags": [
           "tasks"
         ]
