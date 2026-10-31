@@ -613,6 +613,8 @@ async def fail_task(
     reason: str,
     store: SecretStore,
     cooldown: timedelta = DEFAULT_COOLDOWN,
+    *,
+    oom_kill: bool = False,
 ) -> Task:
     """`POST /tasks/{id}/fail`. A `provider_failure` whose error is a known quota
     notice of the provider the agent's engine account belongs to is not a task
@@ -632,7 +634,9 @@ async def fail_task(
             held = await cur.fetchone()
     hit = classify_quota(error, held["provider"], tx.now) if held else None
     if held is None or hit is None:
-        return await tasks.fail(tx, agent_id, task_id, attempt, error, reason)
+        return await tasks.fail(
+            tx, agent_id, task_id, attempt, error, reason, oom_kill=oom_kill
+        )
     await tasks.check_lease(tx, task_id, attempt, agent_id, allow_expired=True)
     detail = _hit_detail(
         hit, "structured" if error.lstrip().startswith("{") else "notice"

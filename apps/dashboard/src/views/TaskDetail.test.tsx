@@ -102,6 +102,19 @@ describe("TaskDetail blocked reason", () => {
       render(<TaskDetail taskId="t1" onClose={() => {}} />);
     });
     expect(screen.queryByText("Blocked")).toBeNull();
+    expect(screen.queryByText("Last exit")).toBeNull();
+  });
+
+  it("shows the env_oom sentence and the OOM-killed fact", async () => {
+    mock.task = { ...base, state: "blocked", block_reason: "env_oom", oom_kill: true };
+    mock.trace = { executions: [], timeline: [] };
+    await act(async () => {
+      render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    });
+    expect(screen.getByText("Blocked").nextElementSibling?.textContent).toMatch(
+      /keep running out of memory/,
+    );
+    expect(screen.getByText("Last exit").nextElementSibling?.textContent).toMatch(/^OOM-killed/);
   });
 });
 

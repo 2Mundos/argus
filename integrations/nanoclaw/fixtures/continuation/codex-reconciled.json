@@ -96,6 +96,7 @@
     "switches": 0,
     "used": []
   },
+  "oom_kill": false,
   "origin_conversation_id": null,
   "output_at": null,
   "parent_id": null,

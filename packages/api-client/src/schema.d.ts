@@ -4002,6 +4002,11 @@ export interface components {
              *     }
              */
             models?: components["schemas"]["ModelsSummary"];
+            /**
+             * Oom Kill
+             * @default false
+             */
+            oom_kill?: boolean;
             /** Origin Conversation Id */
             origin_conversation_id?: string | null;
             /** Output At */
@@ -5345,6 +5350,11 @@ export interface components {
             attempt: number;
             /** Error */
             error: string;
+            /**
+             * Oom Kill
+             * @default false
+             */
+            oom_kill?: boolean;
             /**
              * Reason
              * @default worker_fail
@@ -6829,6 +6839,11 @@ export interface components {
             live: number;
             /** Name */
             name: string;
+            /**
+             * Oom Streak
+             * @default 0
+             */
+            oom_streak?: number;
             /** Running */
             running: number;
             /**
@@ -7994,6 +8009,11 @@ export interface components {
              *     }
              */
             models?: components["schemas"]["ModelsSummary"];
+            /**
+             * Oom Kill
+             * @default false
+             */
+            oom_kill?: boolean;
             /** Origin Conversation Id */
             origin_conversation_id?: string | null;
             /** Output At */
@@ -8297,6 +8317,11 @@ export interface components {
              *     }
              */
             models?: components["schemas"]["ModelsSummary"];
+            /**
+             * Oom Kill
+             * @default false
+             */
+            oom_kill?: boolean;
             /** Origin Conversation Id */
             origin_conversation_id?: string | null;
             /** Output At */
@@ -8560,6 +8585,11 @@ export interface components {
              *     }
              */
             models?: components["schemas"]["ModelsSummary"];
+            /**
+             * Oom Kill
+             * @default false
+             */
+            oom_kill?: boolean;
             /** Origin Conversation Id */
             origin_conversation_id?: string | null;
             /** Output At */

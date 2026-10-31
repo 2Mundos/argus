@@ -29,7 +29,7 @@ This spec:
   ([task difficulty](task-difficulty.spec.md)).
 - No classification of free-form error text on the server beyond what Fleet
   already does.
-- No new service; one nullable column.
+- No new service; one nullable column, and two counters for OOM (3.2.1).
 
 # 3. Decisions Made
 
@@ -132,7 +132,75 @@ reasons and adds `failure_class` to each failure row and a count per class.
 - `max_attempts` keeps its meaning: the cap on attempts that count.
 - **OOM.** `env_oom` blocks after 2 consecutive OOM-killed sessions on one pool.
   Before that, an OOM-killed session is a `session` attempt as today, with the
-  `oom_kill` fact recorded on the failure row.
+  `oom_kill` fact recorded on the failure row. 3.2.1 defines it.
+
+### 3.2.1 OOM evidence and the `env_oom` promotion
+
+- **Evidence.** Only the container runtime's own exit state of the exact session
+  container the channel saw for this claim counts. When the channel confirms a
+  `session_lost` (3.2), it reads `docker inspect` of that container (by the name
+  it listed, `seenSessionId`) as structured data: `State.Running`,
+  `State.ExitCode`, `State.OOMKilled` and `Name`. The session was OOM-killed only
+  when the container is not running, `OOMKilled` is the boolean `true`, the exit
+  code is exactly `137`, and the inspected `Name` is the container the channel
+  saw. Anything else is no evidence: exit 137 alone (a `SIGKILL`, a `docker kill`,
+  a `docker stop` past its grace), a stop Argus or the channel made (recycle,
+  resend, an ended claim: no `session_lost` is sent), any other exit code,
+  `OOMKilled` false or missing, a running container, an inspect that fails, times
+  out or answers unparsable output, and another container's state. Log and stderr
+  text, model output and error prose never set it, whatever they say ("Out of
+  memory", "OOMKilled"). Only container-cgroup kills are seen: a pool without a
+  memory limit, or a host-wide OOM kill, produces no evidence.
+- **The fact.** The channel adds `oom_kill: true` to `POST /tasks/{id}/fail` only
+  with that evidence; otherwise the field is absent. The server accepts it only
+  with `reason: session_lost` (`422` otherwise) and from the lease holder, fenced
+  as every fail (agent, attempt, state): a stale, repeated or foreign fail is a
+  `409` and records nothing, the streak included. The reaper never sets it. The
+  fact is stored on the task as `tasks.oom_kill` (`1` when the attempt that ended
+  last was OOM-killed, `0` after any other end of a claim and after a retry) and
+  in the `task.fail` or `task.block` event data as `oom_kill: true` with `pool`
+  and `oom_streak`.
+- **Pool.** The pool is the server's: the failing agent's `agents.instance_id` →
+  `instances.pool`. The request names no pool, and a field it adds is ignored. An
+  agent outside any pool records the fact but has no streak and never promotes.
+- **Streak.** `pools.oom_streak` counts the pool's consecutive OOM-killed session
+  exits. Per pool, never across pools; every task on the pool shares it. An
+  evidence-bearing `session_lost` fail adds one. Any other end of an attempt by an
+  agent of the pool sets it to 0: a `complete`, any other `fail` (a
+  `session_lost` without the fact included) and a reaper expiry (`stalled`,
+  `timeout`, `lease_expired`, `agent_ended`). Admission fails (`quota`,
+  `account_unavailable`), blocks and releases never ran to an outcome and leave
+  it. An operator's unblock of an `env_oom` block (any actor but `system`) and a
+  change of the pool's `memory_mb` set it to 0; a retry does not.
+- **Promotion.** The streak is read and written in the fail's own
+  `Database.write()` transaction, after the fence, so concurrent fails on one
+  pool are serialized by the single writer: none is counted twice or skipped,
+  and at most one decides each step. With the streak after this fail:
+  - below 2, the attempt is a `session` exit under 3.2 (spent, the automatic
+    resume rule and its progress gate apply unchanged);
+  - at 2 or more, when attempts are left (`failures + 1 < max_attempts`), the
+    task is `blocked` as `env_oom` (class `environment`) instead: the attempt is
+    spent (`failures + 1`), no further one is, and no `task.auto_resumed` is
+    recorded. The block happens before the progress gate is read: a human
+    decides next. The claim is released as for any block; `error` keeps the
+    exit's own text (container, exit code, the redacted excerpt), the
+    `stderr-tail` artifact and the checkpoint/WIP are untouched. The `task.block`
+    event carries `reason: env_oom`, `cause: session_lost`, `oom_kill`, `pool`,
+    `oom_streak` and `error`;
+  - on the last attempt the task fails as today: the cap wins over a block, and
+    the fact is still recorded and the streak counted.
+  The streak stays at 2 or more after a promotion, so the pool's next OOM-killed
+  session blocks too, until an operator unblocks or the pool's memory changes.
+- **Unblock and retry.** Unblocking an `env_oom` task requeues it with its
+  `failures` kept and starts a new recovery epoch (3.2), and resets the pool's
+  streak; the next OOM-killed session of the pool is a `session` exit again
+  (one automatic resume at most without progress), the one after it blocks
+  again. `max_attempts` bounds the whole loop, so it cannot crash-loop; nothing
+  bypasses the cap or the progress gate.
+- **Visibility.** The task read model carries `oom_kill`, `block_reason: env_oom`
+  and the preserved `error`; the inbox shows the block. Fleet health lists each
+  pool's `oom_streak` and groups the promoted blocks as `env_oom` (class
+  `environment`) next to the `session_lost` fails ([fleet health](fleet-health.spec.md)).
 
 ## 3.3 Channel preflight
 
@@ -295,8 +363,9 @@ when the work is hard. Any other `FAIL:` is `worker_fail`.
   start?
 - Is blocking on the first `worker_fail` too strict for tasks that would pass on a
   plain retry? Re-check after two weeks against the baseline.
-- Is 2 consecutive OOM-killed sessions the right threshold for `env_oom`? Should
-  it count per pool or per task, and over what window?
+- Is 2 consecutive OOM-killed sessions the right threshold for `env_oom`? It is
+  owner policy, kept as a constant (`OOM_PROMOTE_STREAK`). The scope is decided:
+  per pool, consecutive outcomes, no time window (3.2.1).
 
 # 5. Constraints
 
@@ -331,6 +400,13 @@ when the work is hard. Any other `FAIL:` is `worker_fail`.
   (observed `gone`) and the next one repeats the same report, with one report in
   flight at a time; a `409` or a rejection ends it, as does Argus ending the
   claim. It logs the state Argus answered.
+- OOM (3.2.1): migration `0061_oom_streak.sql` adds `tasks.oom_kill` and
+  `pools.oom_streak`; `FailRequest.oom_kill`; `env_oom` (`ENV_OOM`) in
+  `FAILURE_CLASS` as `environment` and in Fleet `REASONS`, but not in
+  `ENV_BLOCK_REASONS`: a worker cannot send it as a block; `PoolHealth.oom_streak`; `Task.oom_kill`; the channel's
+  `readSessionEvidence` reads `OOMKilled` and `Name`, and `reportExit` sends the
+  fact with each repeat of the same report. The operator smoke is the
+  [OOM smoke](../runbooks/2026-10-31.oom-smoke.ref.md) runbook.
 
 ## Verification boundary
 
@@ -363,8 +439,18 @@ when the work is hard. Any other `FAIL:` is `worker_fail`.
     with the lease renewed and the evidence read once, one report in flight when
     heartbeats overlap, no repeat after a `409` or after Argus ends the claim, and
     a plain reply posted as progress before the exit.
+  - OOM (3.2.1, `apps/api/tests/test_oom_promotion.py`, the channel's
+    `argus-oom.test.ts` with a fake `docker inspect`): the fact only for
+    `OOMKilled` true, exit 137 and the seen container; none for exit 137 alone,
+    a kill, a stop, another code, a failed or slow inspect, a foreign container
+    or log text; the first OOM keeps 3.2 with and without progress; the second
+    on one pool blocks `env_oom` with the accounting above; a non-OOM outcome,
+    another pool, a stale fail and the reaper do not promote; unblock and a
+    memory change reset, a retry does not; the cap still ends the loop.
 - Not verified: real Docker sessions dying, a real NanoClaw host lost mid-claim,
-  and any deployed node.
+  whether Docker sets `OOMKilled` when a non-init process of the session is
+  killed (the [OOM smoke](../runbooks/2026-10-31.oom-smoke.ref.md) checks the
+  init case on a disposable container), and any deployed node.
 - Accepted as is: the server trusts a `session_lost` from the lease holder (the
   channel's 90 s check is the confirmation; a fenced worker can only spend its
   own attempt), and the rule's reads are separate `LIMIT 1` seeks rather than

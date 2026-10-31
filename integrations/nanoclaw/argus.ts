@@ -113,6 +113,7 @@ import {
   boundHead,
   boundTail,
   inlineExcerpt,
+  isOomKill,
   readSessionEvidence,
   redactSessionTail,
   type SessionEvidence,
@@ -259,6 +260,9 @@ export interface RuntimeHooks {
   /** Whether the Argus agent group directory exists: ENOENT is "missing", any other error "unknown". */
   workspaceState?(): Promise<"ok" | "missing" | "unknown">;
 }
+
+/** A confirmed session exit as reported on `fail`: `oomKill` sends `oom_kill` (3.2.1). */
+type ExitFacts = { error: string; oomKill: boolean };
 
 /** What the host saw for the claimed lease on one heartbeat (stall visibility 3.7). */
 export interface LeaseObservation {
@@ -1709,7 +1713,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
    * `lease_expired`. So the task is kept, its lease renewed, and each heartbeat repeats the
    * same report until Argus answers. A repeat is safe: Argus answers 409 once one landed.
    */
-  let exitReport: { taskId: string; attempt: number; error: string } | null = null;
+  let exitReport: (ExitFacts & { taskId: string; attempt: number }) | null = null;
   let exitReporting: Claim | null = null; // one report in flight, however heartbeats overlap
   let resending = false; // mid-inject / mid-resend: skip session-lost watchdog
   let sessionState: LeaseObservation["session"] = "unknown"; // what watchSession saw last
@@ -1795,7 +1799,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     if (!task || !sessionCarriesTask || !cfg.runtime?.sessions) return;
     if (exitReporting === task || reportFor(task)) {
       sessionState = "gone"; // confirmed already: only the report is left
-      if (exitReporting !== task) await reportExit(task, async () => reportFor(task)!.error);
+      if (exitReporting !== task) await reportExit(task, async () => reportFor(task)!);
       return;
     }
     // Mid-recycle / mid-resend: containers are stopped on purpose.
@@ -1826,15 +1830,20 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     await reportExit(task, () => exitError(task, seenSessionId!));
   }
 
-  /** The confirmed exit's error: container, exit code and a redacted excerpt of its tail. */
-  async function exitError(task: Claim, missingId: string): Promise<string> {
+  /**
+   * The confirmed exit's error (container, exit code and a redacted excerpt of its tail) and
+   * whether the kernel OOM-killed that container: only structured inspect state sets it.
+   */
+  async function exitError(task: Claim, missingId: string): Promise<ExitFacts> {
     const sessionEvidence = cfg.runtime?.sessionEvidence;
     let exitCode: number | null = null;
     let tail: SessionTail | null = null;
+    let oomKill = false;
     if (sessionEvidence) {
       try {
         const evidence = await sessionEvidence(missingId);
         exitCode = evidence.exitCode;
+        oomKill = isOomKill(evidence, missingId);
         tail = sessionTail(evidence);
       } catch {
         /* still fail the attempt */
@@ -1852,8 +1861,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       task: task.id,
       container: missingId,
       exitCode,
+      oomKill,
     });
-    return error;
+    return { error, oomKill };
   }
 
   /**
@@ -1862,15 +1872,17 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
    * transient error keeps the task: the heartbeat renews the lease and the next one repeats
    * the report (never a sleep inside the heartbeat). A conflict or a rejection is final.
    */
-  async function reportExit(task: Claim, error: () => Promise<string>): Promise<void> {
+  async function reportExit(task: Claim, facts: () => Promise<ExitFacts>): Promise<void> {
     exitReporting = task; // before the first await: an overlapping heartbeat skips
     try {
-      const report = { taskId: task.id, attempt: task.attempt, error: await error() };
+      const { error, oomKill } = await facts();
+      const report = { taskId: task.id, attempt: task.attempt, error, oomKill };
       exitReport = report;
       const { data } = await client.call("POST", `/tasks/${task.id}/fail`, {
         attempt: task.attempt,
         error: report.error,
         reason: "session_lost",
+        ...(report.oomKill ? { oom_kill: true } : {}),
       });
       const state = (data as { state?: string } | null)?.state;
       log.info("Argus recorded the session exit", { task: task.id, attempt: task.attempt, state });
@@ -1897,7 +1909,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   }
 
   /** The confirmed exit of this attempt still to be recorded, if any. */
-  function reportFor(task: Claim): { error: string } | null {
+  function reportFor(task: Claim): ExitFacts | null {
     return exitReport?.taskId === task.id && exitReport.attempt === task.attempt
       ? exitReport
       : null;

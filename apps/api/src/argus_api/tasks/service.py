@@ -38,6 +38,7 @@ from argus_core.kinds import TaskKind
 from argus_core.quota import failure_class
 from argus_core.task_edit import CLEARABLE, TaskAttempt, TaskChanges, editable_fields
 from argus_core.tasks import (
+    ENV_OOM,
     TERMINAL,
     Action,
     ExecutorModel,
@@ -115,6 +116,9 @@ AUTO_RESUME_REASONS = frozenset({"session_lost", "agent_ended"})
 EXIT_ERROR_MAX = 2048
 # The channel's session grace (worker lifecycle 3.8): how long `gone` must hold.
 SESSION_GONE_STABLE_S = 90
+# Consecutive OOM-killed sessions on one pool that block as `env_oom` (failure
+# classes 3.2.1). Owner policy.
+OOM_PROMOTE_STREAK = 2
 
 
 # -- reads -------------------------------------------------------------------
@@ -1018,6 +1022,7 @@ async def complete(
     row = await _owned(tx, task_id, attempt, agent_id)
     kind = await kinds.get_kind(tx.conn, row["kind"])
     kinds.validate(kind.result_schema, result.data, "result.data")
+    await _oom_outcome(tx, agent_id, oom_kill=False)
     await _check_artifacts(tx.conn, task_id, result.artifacts)
     have = cont.load(row)
     held = merge_acceptance(have.checklist, json.loads(row["acceptance"]))
@@ -1177,6 +1182,8 @@ async def fail(
     attempt: int,
     error: str,
     reason: str = "worker_fail",
+    *,
+    oom_kill: bool = False,
 ) -> Task:
     """Fail the attempt with the worker's own text.
 
@@ -1190,7 +1197,13 @@ async def fail(
     `failures` stays. The task returns to ready when some agent can run it now (a
     free account slot, or an idle agent holding a fitting lease); otherwise it waits
     as `awaiting_quota` until `wake_waiting` frees it, instead of bouncing between
-    agents that cannot lease an account (account selection 3.6)."""
+    agents that cannot lease an account (account selection 3.6).
+
+    `oom_kill` is the channel's evidence that the `session_lost` session was
+    OOM-killed; the pool's streak of them may block the task as `env_oom`
+    (failure classes 3.2.1)."""
+    if oom_kill and reason != "session_lost":
+        raise ValidationFailedError("oom_kill is only valid with reason session_lost")
     row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
     quota = reason in ADMISSION_REASONS
     if quota and await manages_accounts(tx.conn) and not await can_serve(tx, row):
@@ -1211,17 +1224,48 @@ async def fail(
     failures = row["failures"] + 1
     retries = failures < row["max_attempts"]
     kind = retry_class(reason)
+    oom = None if quota else await _oom_outcome(tx, agent_id, oom_kill=oom_kill)
     if reason == "session_lost":
         # The channel saw the container gone for 90 s: a confirmed exit.
         error = _cap_utf8(error, EXIT_ERROR_MAX)
+        fact: dict[str, Any] = {}
+        if oom_kill:
+            fact = {"oom_kill": True}
+            if oom:
+                fact |= {"pool": oom[0], "oom_streak": oom[1]}
+        if oom_kill and oom and oom[1] >= OOM_PROMOTE_STREAK and retries:
+            # The pool's sessions keep running out of memory: another attempt
+            # there would too, so a human decides (failure classes 3.2.1).
+            await _apply(
+                tx,
+                row,
+                Action.BLOCK,
+                f"agent:{agent_id}",
+                set_={
+                    "error": error,
+                    "failures": failures,
+                    "block_reason": ENV_OOM,
+                    "oom_kill": 1,
+                },
+                data={
+                    "error": error,
+                    "reason": ENV_OOM,
+                    "cause": reason,
+                    "retry_class": RetryClass.ENVIRONMENT,
+                }
+                | fact,
+            )
+            return await get_task(tx.conn, task_id)
         resume = await _auto_resume(tx, row, retries=retries)
         await _apply(
             tx,
             row,
             Action.FAIL,
             f"agent:{agent_id}",
-            set_={"error": error, "failures": failures} | harder.get("set", {}),
+            set_={"error": error, "failures": failures, "oom_kill": int(oom_kill)}
+            | harder.get("set", {}),
             data={"error": error, "reason": reason, "retry_class": kind}
+            | fact
             | resume.data
             | harder.get("data", {}),
             exhausted=resume.exhausted,
@@ -1284,6 +1328,40 @@ def _escalation(row: aiosqlite.Row, reason: str) -> dict[str, dict[str, Any]]:
             "difficulty_escalated": {"from": current, "to": target, "reason": reason}
         },
     }
+
+
+_AGENT_POOL_SQL = (
+    "SELECT i.pool FROM agents a JOIN instances i ON i.id = a.instance_id"
+    " WHERE a.id = ?"
+)
+
+
+async def _oom_outcome(
+    tx: Tx, agent_id: str | None, *, oom_kill: bool
+) -> tuple[str, int] | None:
+    """Count an attempt's end on its agent's pool (failure classes 3.2.1): an
+    OOM-killed session adds one to the streak, any other outcome resets it.
+    Returns the pool and its streak, or None for an agent outside any pool."""
+    if agent_id is None:
+        return None
+    async with tx.conn.execute(_AGENT_POOL_SQL, (agent_id,)) as cur:
+        found = await cur.fetchone()
+    if found is None or found[0] is None:
+        return None
+    async with tx.conn.execute(
+        "UPDATE pools SET oom_streak = CASE WHEN ? THEN oom_streak + 1 ELSE 0 END"
+        " WHERE name = ? RETURNING oom_streak",
+        (int(oom_kill), found[0]),
+    ) as cur:
+        streak = await cur.fetchone()
+    return None if streak is None else (found[0], streak[0])
+
+
+async def reset_oom_streak(tx: Tx, pool: str) -> None:
+    """The pool's sessions get a fresh count (an unblock, a memory change)."""
+    await tx.conn.execute(
+        "UPDATE pools SET oom_streak = 0 WHERE name = ? AND oom_streak > 0", (pool,)
+    )
 
 
 async def block(
@@ -1444,6 +1522,17 @@ async def await_quota_ready(
 async def unblock(tx: Tx, task_id: str, actor: str) -> Task:
     row = await _row(tx.conn, task_id)
     await _apply(tx, row, Action.UNBLOCK, actor, set_={"block_reason": None})
+    if row["block_reason"] == ENV_OOM and actor != "system":
+        # The operator answered the pool's OOM block (failure classes 3.2.1).
+        async with tx.conn.execute(
+            "SELECT json_extract(data, '$.pool') FROM events"
+            " WHERE subject_type = 'task' AND subject_id = ? AND kind = 'task.block'"
+            " ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        ) as cur:
+            found = await cur.fetchone()
+        if found and found[0]:
+            await reset_oom_streak(tx, found[0])
     return await get_task(tx.conn, task_id)
 
 
@@ -1467,7 +1556,8 @@ async def retry(tx: Tx, task_id: str, actor: str) -> Task:
         " assignee_agent_id = NULL, lease_expires_at = NULL, timeout_at = NULL,"
         " progress_message = NULL, progress_percent = NULL, progress_at = NULL,"
         " progress_kind = NULL, progress_data = NULL, output_at = NULL,"
-        " block_reason = NULL, archived_at = NULL, updated_at = ? WHERE id = ?",
+        " block_reason = NULL, archived_at = NULL, oom_kill = 0, updated_at = ?"
+        " WHERE id = ?",
         (S.READY, ts(tx.now), task_id),
     )
     await tx.conn.execute("DELETE FROM task_log WHERE task_id = ?", (task_id,))
@@ -2714,6 +2804,7 @@ async def _expire_where(
                     else _NOT_CONFIRMED
                 )
                 data |= resume.data
+                await _oom_outcome(tx, row["assignee_agent_id"], oom_kill=False)
                 await _apply(
                     tx,
                     row,
@@ -2958,6 +3049,7 @@ async def _apply(
             "assignee_agent_id": None,
             "lease_expires_at": None,
             "timeout_at": None,
+            "oom_kill": (set_ or {}).get("oom_kill", 0),
         }
     assignments = ", ".join(f"{k} = ?" for k in fields)
     await tx.conn.execute(

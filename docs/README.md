@@ -210,6 +210,9 @@ every new dependency is judged against it.
 - [Session quota smoke](runbooks/2026-10-30.session-quota-smoke.ref.md) — operator-run
   Docker check that NanoClaw sessions carry pool `--cpus`/`--memory`; ASSIST
   procedure when no daemon is available; not yet run
+- [OOM evidence smoke](runbooks/2026-10-31.oom-smoke.ref.md) — disposable
+  `--memory 64m` probe, `OOMKilled`/`ExitCode` via the channel's reader, `docker kill`
+  negative control; not yet run
 
 ### Reports
 
