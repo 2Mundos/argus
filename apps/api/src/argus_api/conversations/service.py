@@ -307,7 +307,7 @@ async def post_human_message(
 async def _next_claimable(
     conn: aiosqlite.Connection, now: datetime, path
 ) -> aiosqlite.Row | None:
-    """Oldest queued human message that may start a turn now, or None.
+    """Oldest queued message (human or system) that may start a turn now, or None.
 
     A conversation runs one turn at a time, at most `orchestrator.max_concurrent_turns`
     chat conversations run at once (Updates is extra), and a delivered turn older than
