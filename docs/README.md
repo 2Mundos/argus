@@ -208,6 +208,19 @@ every new dependency is judged against it.
   (item 3 shipped for steers)
 - [Verification boundary](drafts/2026-10-29.verification-boundary.draft.md) — a
   spec subsection stating what was verified, at which level and versions
+- [Model-facing evals](drafts/2026-10-31.model-facing-evals.draft.md) — run real
+  models against the real MCP tool text, persona and worker prompt; cases from
+  real failures, controls, baselines; not in CI
+- [Test hygiene checks](drafts/2026-10-31.test-hygiene-lint.draft.md) — a lint
+  step that rejects sleeps, polling, wall-clock asserts, retries and unreasoned
+  skips or suppressions in tests, and clock reads beside `tx.now`
+- [Replay engine](drafts/2026-10-31.replay-engine.draft.md) — a dev-only worker
+  that plays back a recorded attempt through the real API, with no model
+- [Worktree dev isolation](drafts/2026-10-31.worktree-dev-isolation.draft.md) —
+  state and ports per worktree, seeded from a pruned read-only copy of the
+  preview database that cannot start workers
+- [Changed-only checks](drafts/2026-10-31.changed-only-checks.draft.md) — a
+  pre-push run of only the checks the changed files can affect
 
 ### Runbooks
 
