@@ -79,13 +79,16 @@ ATTEMPTS_SQL = (
 # come from distinct (task, attempt) pairs with any usage row (account usage 3.10).
 USAGE_SQL = (
     "SELECT u.task_id,"
-    # Tokens only when a measured row actually reported some; cost-only measured
-    # (legal: tokens OR cost) must stay NULL, never coalesce into an invented 0.
-    " sum(CASE WHEN u.measurement = 'measured'"
-    "     AND (u.input_tokens IS NOT NULL OR u.output_tokens IS NOT NULL)"
-    "     THEN coalesce(u.input_tokens, 0) + coalesce(u.output_tokens, 0) END)"
-    " AS tokens,"
-    " sum(CASE WHEN u.measurement = 'measured' THEN u.cost_usd END) AS cost,"
+    # A task's tokens and cost are known only when every measured row reports them (a
+    # row may be cost-only or input-only). A partial sum would count the missing figure
+    # as zero, so it stays NULL instead.
+    " CASE WHEN count(CASE WHEN u.measurement = 'measured'"
+    "     AND (u.input_tokens IS NULL OR u.output_tokens IS NULL) THEN 1 END) = 0"
+    "   THEN sum(CASE WHEN u.measurement = 'measured'"
+    "     THEN u.input_tokens + u.output_tokens END) END AS tokens,"
+    " CASE WHEN count(CASE WHEN u.measurement = 'measured' AND u.cost_usd IS NULL"
+    "     THEN 1 END) = 0"
+    "   THEN sum(CASE WHEN u.measurement = 'measured' THEN u.cost_usd END) END AS cost,"
     " (SELECT count(*) FROM ("
     "   SELECT attempt FROM account_usage a"
     "   WHERE a.task_id = u.task_id AND a.attempt IS NOT NULL GROUP BY a.attempt"
