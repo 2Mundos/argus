@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import aiosqlite
 from argus_core import (
     claude_auth,
     codex_auth,
@@ -47,6 +48,7 @@ from argus_api.deps import (
 from argus_api.errors import ForbiddenError, ValidationFailedError
 from argus_api.orchestrator import SYSTEM_MARKER, agent_system_pool
 from argus_api.secrets import SecretStoreError, ref_name
+from argus_api.settings import service as settings_service
 from argus_api.tasks import service as tasks
 
 log = logging.getLogger(__name__)
@@ -453,6 +455,7 @@ async def lease_account(
     db: DbDep,
     agent_id: AgentDep,
     secrets: SecretsDep,
+    settings: SettingsDep,
 ) -> AccountLease:
     """Lease the best usable account and deliver its credential to a claimed task.
 
@@ -463,11 +466,19 @@ async def lease_account(
     whose credential names no `context_tokens` carries the window the local model's
     probe measured, so the harness can compact in time (local harness spec, "Harness orchestrates only")."""
     async with db.write() as tx:
-        if body.task_id is None and (
-            body.role != "engine"
-            or await agent_system_pool(tx.conn, agent_id) != SYSTEM_MARKER
-        ):
-            raise ValidationFailedError("task_id and attempt are required")
+        prefer = None
+        if body.task_id is None:
+            await _require_orchestrator_engine(tx.conn, agent_id, body.role)
+            prefer = service.orchestrator_preference(
+                (
+                    await settings_service.get_setting(
+                        tx.conn,
+                        settings.model_policy_path,
+                        settings_service.GLOBAL,
+                        service.ORCHESTRATOR_MODEL_KEY,
+                    )
+                ).value
+            )
         leased = await service.lease(
             tx,
             agent_id,
@@ -477,8 +488,18 @@ async def lease_account(
             reuse_held=body.reuse_held,
             task_id=body.task_id,
             attempt=body.attempt,
+            prefer=prefer,
         )
     return await with_local_context(request, leased)
+
+
+async def _require_orchestrator_engine(
+    conn: aiosqlite.Connection, agent_id: str, role: str
+) -> None:
+    """Only the internal orchestrator's engine may lease or report with no task
+    (internal orchestrator spec 3.1); anyone else must name its live claim."""
+    if role != "engine" or await agent_system_pool(conn, agent_id) != SYSTEM_MARKER:
+        raise ValidationFailedError("task_id and attempt are required")
 
 
 async def with_local_context(request: Request, leased: AccountLease) -> AccountLease:
@@ -542,9 +563,9 @@ async def report_exhausted(
     The caller must hold the live claim identified by `task_id` and `attempt`;
     `runtime_providers` controls which fallback metadata may be returned. Obtain
     any next credential through `/accounts/lease`."""
-    if body.task_id is None or body.attempt is None:
-        raise ValidationFailedError("task_id and attempt are required")
     async with db.write() as tx:
+        if body.task_id is None:
+            await _require_orchestrator_engine(tx.conn, agent_id, body.role)
         return await service.exhausted(
             tx,
             agent_id,
@@ -564,6 +585,8 @@ async def report_auth_rejected(
 ) -> None:
     """Record `account.auth_rejected` for a held account without exhausting it."""
     async with db.write() as tx:
+        if body.task_id is None:
+            await _require_orchestrator_engine(tx.conn, agent_id, body.role)
         await service.auth_rejected(tx, agent_id, account_id, body)
 
 

@@ -239,8 +239,10 @@ def test_sanitize_notice_drops_tokens_and_query_strings() -> None:
 async def test_exhausted_report_needs_a_claim_and_custom_is_an_engine(
     db: Database, store: MemorySecretStore, clock: FakeClock
 ) -> None:
+    # No claim at all is the internal orchestrator's form, refused for anyone else
+    # by the route (test_the_internal_orchestrator_fails_over_without_a_task).
     with pytest.raises(ValueError):
-        ExhaustedReport(runtime_providers=["openai"])  # type: ignore[call-arg]
+        ExhaustedReport(runtime_providers=["openai"], task_id="t")
     with pytest.raises(ValueError):
         ExhaustedReport(runtime_providers=["openai"], task_id="t", attempt=0)
     await store.put("c", {"api_key": "k"})

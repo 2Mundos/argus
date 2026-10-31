@@ -589,6 +589,17 @@
             "title": "Lease Id",
             "type": "string"
           },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -2155,9 +2166,16 @@
         "description": "Record that the provider rejected the stored credential (account usage 3.5).\n\nDoes not exhaust the account or change its state; only writes `account.auth_rejected`.",
         "properties": {
           "attempt": {
-            "minimum": 1.0,
-            "title": "Attempt",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
           },
           "role": {
             "default": "engine",
@@ -2186,14 +2204,17 @@
             "title": "Source"
           },
           "task_id": {
-            "title": "Task Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
           }
         },
-        "required": [
-          "task_id",
-          "attempt"
-        ],
         "title": "AuthRejectedReport",
         "type": "object"
       },
@@ -7201,9 +7222,16 @@
         "description": "Mark a held account exhausted for the caller's live task claim.\n\n`runtime_providers` declares which fallback account metadata the runtime can\nuse. The response never carries the next credential.",
         "properties": {
           "attempt": {
-            "minimum": 1.0,
-            "title": "Attempt",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
           },
           "reason": {
             "default": "",
@@ -7289,8 +7317,15 @@
             "title": "Source"
           },
           "task_id": {
-            "title": "Task Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
           },
           "until": {
             "anyOf": [
@@ -7306,9 +7341,7 @@
           }
         },
         "required": [
-          "runtime_providers",
-          "task_id",
-          "attempt"
+          "runtime_providers"
         ],
         "title": "ExhaustedReport",
         "type": "object"

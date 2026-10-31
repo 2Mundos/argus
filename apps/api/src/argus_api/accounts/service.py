@@ -38,7 +38,7 @@ from argus_core.custom_accounts import (
     serves_role,
 )
 from argus_core.quota import QuotaHit, classify_quota, sanitize_notice
-from argus_core.tasks import Task
+from argus_core.tasks import HarnessModel, Task
 
 from argus_api.accounts import usage
 from argus_api.accounts.eligibility import engine_pool
@@ -293,6 +293,7 @@ async def lease(
     reuse_held: bool = False,
     task_id: str | None,
     attempt: int | None,
+    prefer: HarnessModel | None = None,
 ) -> AccountLease:
     """Lease the best usable account for `role`, ranked globally by priority (then
     least leased, then name); the local model is a tier below every cloud account,
@@ -303,7 +304,9 @@ async def lease(
     lease replaces the previous one of the same role. Raises NoAccountError.
 
     Without `task_id` (the internal orchestrator's engine; the route checks who may)
-    nothing narrows the runtime's providers and the ranking is the plain one."""
+    no task narrows the providers. `prefer` (its `orchestrator.model`) is tried
+    first on its own provider; when that cannot serve, the plain ranking applies.
+    A lease on the preferred provider carries the preferred `model`."""
     if not runtime_providers:
         raise ValidationFailedError("runtime_providers must be non-empty")
     if task_id is None or attempt is None:
@@ -315,16 +318,22 @@ async def lease(
         prefer_local = await _prefer_local(tx, task_id, role)
     allowed = scope.providers
     await release(tx, agent_id, "replaced", role)
-    result = await _try_lease(
-        tx,
-        agent_id,
-        store,
-        role,
-        allowed,
-        reuse_held=reuse_held,
-        prefer_local=prefer_local,
-        only_account=scope.account,
-    )
+    result = None
+    if prefer is not None and allowed is not None and prefer.provider in allowed:
+        result = await _try_lease(tx, agent_id, store, role, [prefer.provider])
+        if result is not None:
+            result = result.model_copy(update={"model": prefer.model})
+    if result is None:
+        result = await _try_lease(
+            tx,
+            agent_id,
+            store,
+            role,
+            allowed,
+            reuse_held=reuse_held,
+            prefer_local=prefer_local,
+            only_account=scope.account,
+        )
     if result is None:
         reset = await earliest_reset(tx, role, allowed)
         raise NoAccountError(
@@ -341,6 +350,21 @@ async def lease(
             {"id": result.account_id, "name": result.name, "provider": result.provider},
         )
     return result
+
+
+ORCHESTRATOR_MODEL_KEY = "orchestrator.model"
+
+
+def orchestrator_preference(value: object) -> HarnessModel | None:
+    """`orchestrator.model` as a harness pin: `<engine>/<model>` with a harness
+    engine (`claude`, `codex`). Anything else is no preference (ordinary ranking)."""
+    if not isinstance(value, str) or "/" not in value:
+        return None
+    engine, model = value.split("/", 1)
+    try:
+        return HarnessModel.model_validate({"engine": engine, "model": model})
+    except ValueError:
+        return None
 
 
 async def _holds_engine(tx: Tx, agent_id: str) -> bool:
@@ -460,9 +484,11 @@ async def exhausted(
     back to the best remaining usable account of any provider (priority order, no
     preference for the previous provider). With nothing left, the agent's task (if
     given) is blocked as `awaiting_quota` and resumes when one frees up. The task
-    keeps its attempt and failures either way."""
-    if report.task_id is None or report.attempt is None:
-        raise ConflictError("task_id and attempt are required")
+    keeps its attempt and failures either way.
+
+    Without a task (the internal orchestrator's engine; the route checks who may)
+    nothing narrows the fallback, nothing is blocked, and the failover event is on
+    the agent."""
     held = await _lease_on(tx.conn, agent_id, account_id, report.role)
     if held is None:
         raise ConflictError(
@@ -472,7 +498,8 @@ async def exhausted(
     task_id = report.task_id
     attempt = report.attempt
     # Fence before any write: a stale or expired claim must not exhaust anything.
-    await tasks.check_lease(tx, task_id, attempt, agent_id)
+    if task_id is not None and attempt is not None:
+        await tasks.check_lease(tx, task_id, attempt, agent_id)
     async with tx.conn.execute(
         "SELECT provider FROM accounts WHERE id = ?", (account_id,)
     ) as cur:
@@ -508,16 +535,15 @@ async def exhausted(
             ),
         )
     await release(tx, agent_id, "exhausted", role)
-    scope = await _scope(tx, task_id, role, report.runtime_providers, agent_id)
+    if task_id is None:
+        scope = _Scope(report.runtime_providers, None, None)
+        prefer_local = False
+    else:
+        scope = await _scope(tx, task_id, role, report.runtime_providers, agent_id)
+        prefer_local = await _prefer_local(tx, task_id, role)
     allowed = scope.providers
     next_candidate = _only(
-        await _ranked(
-            tx,
-            agent_id,
-            role,
-            allowed,
-            prefer_local=await _prefer_local(tx, task_id, role),
-        ),
+        await _ranked(tx, agent_id, role, allowed, prefer_local=prefer_local),
         scope.account,
     )
     # The switch itself happens at the next claim, through a lease bound to it.
@@ -539,6 +565,10 @@ async def exhausted(
             next_account_id=next_candidate[0]["id"],
             next_account_name=next_candidate[0]["name"],
             next_provider=next_candidate[0]["provider"],
+        )
+    if task_id is None or attempt is None:
+        return FallbackResult(
+            lease=None, earliest_reset=await earliest_reset(tx, role, allowed)
         )
     await tasks.block(tx, agent_id, task_id, attempt, tasks.AWAITING_QUOTA)
     return FallbackResult(
@@ -568,7 +598,8 @@ async def auth_rejected(
             f"agent {agent_id} does not hold a lease on account {account_id}",
             code="not_leased",
         )
-    await tasks.check_lease(tx, report.task_id, report.attempt, agent_id)
+    if report.task_id is not None and report.attempt is not None:
+        await tasks.check_lease(tx, report.task_id, report.attempt, agent_id)
     async with tx.conn.execute(
         "SELECT provider FROM accounts WHERE id = ?", (account_id,)
     ) as cur:
@@ -591,8 +622,8 @@ async def _record_auth_rejected(
     tx: Tx,
     agent_id: str,
     account_id: str,
-    task_id: str,
-    attempt: int,
+    task_id: str | None,
+    attempt: int | None,
     role: LeaseRole,
     source: str | None,
     reason: str,
@@ -806,8 +837,8 @@ async def _mark_exhausted(
 async def _failover(
     tx: Tx,
     agent_id: str,
-    task_id: str,
-    attempt: int,
+    task_id: str | None,
+    attempt: int | None,
     from_name: str,
     to_name: str | None,
     reason: str,
@@ -831,8 +862,15 @@ async def _failover(
         **{k: v for k, v in (detail or {}).items() if k != "reset_at"},
         "reset_at": reset_at.isoformat() if reset_at else None,
     }
-    await record(tx, f"agent:{agent_id}", "task", task_id, "account.failover", data)
-    if to_id is not None:  # a switch happened (model observability 3.4)
+    if task_id is None or attempt is None:
+        # The internal orchestrator's engine: no task to put the event on.
+        await record(
+            tx, f"agent:{agent_id}", "agent", agent_id, "account.failover", data
+        )
+    else:
+        await record(tx, f"agent:{agent_id}", "task", task_id, "account.failover", data)
+    if to_id is not None and task_id is not None and attempt is not None:
+        # a switch happened (model observability 3.4)
         await modeltrace.record_account_switch(
             tx, agent_id, task_id, attempt, from_id, to_id, reason
         )
