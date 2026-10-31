@@ -67,17 +67,28 @@ A bounded, typed report with no free content bytes:
 | `decision` | `resumable` \| `not_resumable` \| `unknown` \| `stale` |
 | `cause_codes` | Closed `ResumabilityCause` values that drove `decision` |
 | `reasons` | Each: `code`, `subject`, `evidence_class`, bounded redacted `detail` |
-| `artifacts[]` | Per known continuation / attachment artifact assessment |
+| `artifacts[]` | Per known continuation / attachment artifact assessment.
+  Budget is split: at most 15 continuation artifacts and 5 attachments
+  (20 total). `inputs[]` is the authoritative list for attachments; an
+  attachment may appear in `artifacts[]` as a convenience summary only. |
 | `wip` | Published / local_only / unknown assessment |
 | `inputs[]` | Shared attachments with receipts, availability, consumer path,
   and `required` (true only when `continuation.wip.ref` names that
-  attachment as `attachment:<id>:<sha256>`) |
+  attachment as `attachment:<id>:<sha256>`). The required input is always
+  included even when the list is capped at 20 (an optional entry is dropped
+  if needed). A load failure still emits a bounded `InputAssessment` (or an
+  `unknowns` entry naming the artifact id) so the operator can see it. |
 | `lease` | Holder, expiry, and whether the lease is live for this attempt |
+| `interruption` | Bounded reuse of continuation `interruption` (attempt, reason,
+  redacted detail, at), or null |
 | `decision_changes[]` / `unknowns[]` | Decisions and gaps relative to the attempt |
 | `next_steps[]` | Bounded, typed hints (not commands) |
 
-Caps (hard): 20 artifacts, 20 inputs, 10 reasons, 5 next steps, free text at
-300 characters, and the serialised response must stay small enough for MCP.
+Caps (hard): 20 artifacts (15 continuation + 5 attachments), 20 inputs, 10
+reasons, 5 next steps, free text at 300 characters, and the serialised response
+must stay small enough for MCP. Truncating `reasons` prefers deciding /
+required-input codes (`task_terminal`, `input_capability_missing`, required
+attachment failures, staleness) before optional ones.
 
 ## 3.3 Evidence classes
 
@@ -95,13 +106,16 @@ Every claim carries exactly one evidence class:
 
 Recorded metadata and historical receipts **never** imply current availability.
 A preflight proves nothing about a different attempt than the one it read.
+Never claim `current_read` without actually reading a store key.
 
 ## 3.4 Availability verification for attachments
 
 For artifacts with `source = attachment` (and only those) the preflight re-reads
-the stored bytes through the existing local artifact store and hashes them —
-reusing `argus_api.artifacts.service.verify` / `_path` / `key`, not a second
-reader. Classification:
+the stored bytes through the existing local artifact store and hashes them. It
+reuses `argus_api.artifacts.service._path` / `key` and the same recorded
+size / SHA-256 comparison that `verify` performs, but it does **not** call
+`verify` itself: `verify` is unbounded, and the preflight must stay inside the
+read bound below. Classification:
 
 | Availability | When |
 | --- | --- |
@@ -138,7 +152,9 @@ Derived from `continuation.wip` and artifacts:
 - `unknown` when the ref names `checkpoint:<id>:<sha256>` — the checkpoint store
   is node-local and invisible to the server (`checkpoint_store_not_visible`).
 - A WIP `attachment:<id>:<sha256>` reference is verified like 3.4 and is the
-  sole **required** shared input (see 3.6).
+  sole **required** shared input (see 3.6). When the attachment row is absent
+  or is not an attachment, the claim is `unobserved` / `artifact_unknown` (no
+  store read happened, so never `current_read`).
 
 Always add an explicit reason that a workspace path or a checkpoint id is **not**
 a transfer to another attempt.
@@ -162,56 +178,64 @@ An optional shared input (not the required WIP attachment) that is missing,
 truncated, corrupted, inaccessible or unknown is still reported with its
 availability, cause code and reason so the operator can see it, but it must
 **not** set `required_inputs_ok = false` and must not by itself make
-`decision` `not_resumable` (aligned with [task inputs 3.6](task-inputs.spec.md):
-an optional shared input that fails never blocks the attempt). Only the required
-WIP attachment ref (and a required WIP attachment that fails verification)
-drives that block. Do not add another consumer. Receipts stay history; they are
-never upgraded to `current_read`.
+`decision` `not_resumable` or `unknown` (aligned with
+[task inputs 3.6](task-inputs.spec.md): an optional shared input that fails
+never blocks the attempt). A bare `artifact_unknown` from an optional input is
+reported, not deciding. Only the required WIP attachment ref (and a required
+WIP attachment that fails verification) drives that block. For a required
+input, `required_inputs_ok = false` only for the definite failures (`missing`,
+`truncated`, `corrupted`, `inaccessible`); `unknown` (e.g. over the read bound)
+sets only `required_unobserved`. Do not add another consumer. Receipts stay
+history; they are never upgraded to `current_read`.
 
 ## 3.7 Attempt and decision changes
 
 Which decisions were decided at or after the attempt started, which are
-unresolved, and which artifacts were observed after the attempt started. The
-response says the preflight describes the attempt it read and is `stale` when the
-caller's `expected_attempt` / `expected_version` no longer match. Reuse the
-continuation view's `premise_outdated`, `gaps` and `interruption`.
+unresolved, and which continuation artifacts were observed at or after the
+attempt started (`observed_after_attempt_start` on each continuation entry in
+`artifacts[]`, derived from that artifact's own `attempt` relative to the
+report's task attempt — no extra query). The response says the preflight
+describes the attempt it read and is `stale` when the caller's
+`expected_attempt` / `expected_version` no longer match. Reuse the
+continuation view's `premise_outdated`, `gaps` and `interruption` (the latter
+as the bounded `interruption` field: attempt, reason, redacted detail, at).
 
 ## 3.8 Decision codes
 
 Closed `ResumabilityCause` enum, at minimum:
 
 `task_unknown`, `task_terminal`, `attempt_mismatch`, `stale_preflight`,
-`no_artifacts`, `artifact_state_unobserved`, `artifact_unavailable`,
+`no_artifacts`, `artifact_state_unobserved`,
 `artifact_missing`, `artifact_truncated`, `artifact_corrupted`,
 `artifact_inaccessible`, `artifact_unknown`, `wip_local_only`,
 `checkpoint_store_not_visible`, `wip_unrecorded`, `input_capability_missing`,
 `decision_unresolved`, `acceptance_not_structured`, `lease_expired`,
 `lease_held_elsewhere`.
 
-`decision` is derived from them:
+`decision` is derived from them in this order (order-independent over the cause
+set):
 
-- `resumable` only when everything required is `current_read` / available and
-  nothing required is missing;
-- `not_resumable` when a **required** input is missing / corrupted / truncated /
-  inaccessible (`required_inputs_ok` is false), or when `task_terminal` /
-  `artifact_unavailable` / `input_capability_missing` apply. Bare
-  `artifact_missing` / `artifact_truncated` / `artifact_corrupted` /
-  `artifact_inaccessible` codes from an optional input are reported but do not
-  decide `not_resumable` by themselves;
-- `unknown` when any required fact is unobserved;
-- `stale` when the caller's premise does not match.
+1. `stale` when the caller's premise does not match (`attempt_mismatch` /
+   `stale_preflight`);
+2. `not_resumable` when a **required** input has a definite failure
+   (`required_inputs_ok` is false: missing / corrupted / truncated /
+   inaccessible), or when `task_terminal` / `input_capability_missing` apply.
+   Bare `artifact_missing` / `artifact_truncated` / `artifact_corrupted` /
+   `artifact_inaccessible` codes from an optional input are reported but do not
+   decide `not_resumable` by themselves;
+3. `unknown` when a required fact is unobserved (`required_unobserved`, e.g. a
+   required input that is `too_large` / otherwise `unknown`), or when a
+   task-wide unobserved cause applies (`task_unknown`,
+   `artifact_state_unobserved`, `checkpoint_store_not_visible`, `wip_unrecorded`,
+   `wip_local_only`, `decision_unresolved`, `acceptance_not_structured`,
+   `lease_expired`, `lease_held_elsewhere`, `no_artifacts`). A bare
+   `artifact_unknown` from an optional input does not decide;
+4. `resumable` only when everything required is `current_read` / available and
+   nothing required is missing.
 
-## 3.9 Secrets and bounds
-
-Free text (artifact notes, WIP summary, decision questions) is redacted with
-`argus_core.redact` and bounded before it leaves. No content bytes, no token, no
-host path outside the artifact store, no receipt reporter detail beyond ids.
-
-## 3.10 Authority and effects
-
-The preflight grants nothing. `merge`, force-push, deploy and Production access
-are unchanged ([prompt-data isolation](prompt-data-isolation.spec.md),
-[task continuation 3.9](task-continuation.spec.md)). Its only effect is a read.
+A live lease is reported as `lease_held_elsewhere` with a reason that says
+"a live lease is held by \<agent\>" — informative even when the caller is that
+agent; it does not imply a different worker.
 
 # 4. Open Questions
 
@@ -242,7 +266,9 @@ are unchanged ([prompt-data isolation](prompt-data-isolation.spec.md),
 - `apps/api/src/argus_api/tasks/routes.py`: `GET /{task_id}/resumability`.
 - `apps/api/src/argus_api/mcp_server.py`: `task_resumability_preflight`.
 - Tests: `apps/api/tests/test_resumability_preflight.py`,
-  `integrations/nanoclaw/argus-resumability.test.ts`.
+  `integrations/nanoclaw/argus-resumability.test.ts`,
+  fixture `integrations/nanoclaw/fixtures/resumability/availability.json`
+  (regenerated with `ARGUS_UPDATE_FIXTURES=1`; CI fails if stale).
 - `make openapi` regenerates the client schema.
 
 ## Verification boundary

@@ -3616,6 +3616,8 @@ export interface components {
             kind: string;
             /** Note */
             note?: string | null;
+            /** Observed After Attempt Start */
+            observed_after_attempt_start?: boolean | null;
             /** Observed Sha256 */
             observed_sha256?: string | null;
             /** Observed Size */
@@ -6040,6 +6042,23 @@ export interface components {
             /** Draining */
             draining: number;
         };
+        /**
+         * InterruptionAssessment
+         * @description Bounded reuse of continuation.interruption (spec 3.7).
+         */
+        InterruptionAssessment: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Attempt */
+            attempt: number;
+            /** Detail */
+            detail?: string | null;
+            /** Reason */
+            reason: string;
+        };
         /** IssuedToken */
         IssuedToken: {
             /**
@@ -7655,7 +7674,7 @@ export interface components {
          * @description Closed set of cause codes (spec 3.8).
          * @enum {string}
          */
-        ResumabilityCause: "task_unknown" | "task_terminal" | "attempt_mismatch" | "stale_preflight" | "no_artifacts" | "artifact_state_unobserved" | "artifact_unavailable" | "artifact_missing" | "artifact_truncated" | "artifact_corrupted" | "artifact_inaccessible" | "artifact_unknown" | "wip_local_only" | "checkpoint_store_not_visible" | "wip_unrecorded" | "input_capability_missing" | "decision_unresolved" | "acceptance_not_structured" | "lease_expired" | "lease_held_elsewhere";
+        ResumabilityCause: "task_unknown" | "task_terminal" | "attempt_mismatch" | "stale_preflight" | "no_artifacts" | "artifact_state_unobserved" | "artifact_missing" | "artifact_truncated" | "artifact_corrupted" | "artifact_inaccessible" | "artifact_unknown" | "wip_local_only" | "checkpoint_store_not_visible" | "wip_unrecorded" | "input_capability_missing" | "decision_unresolved" | "acceptance_not_structured" | "lease_expired" | "lease_held_elsewhere";
         /**
          * ResumabilityDecision
          * @enum {string}
@@ -7682,6 +7701,7 @@ export interface components {
             decision_changes?: components["schemas"]["DecisionChange"][];
             /** Inputs */
             inputs?: components["schemas"]["InputAssessment"][];
+            interruption?: components["schemas"]["InterruptionAssessment"] | null;
             lease: components["schemas"]["LeaseAssessment"];
             /** Next Steps */
             next_steps?: components["schemas"]["NextStep"][];

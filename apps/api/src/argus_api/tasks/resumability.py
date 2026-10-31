@@ -1,8 +1,10 @@
 """Read-only task resumability preflight (docs/specs/task-resumability-preflight.spec.md).
 
 Assesses attempt/lease state, WIP, and attachment availability. Never writes.
-Attachment hashing reuses the local artifact store path/key and runs outside any
-write transaction. Recorded metadata and receipts never imply current availability.
+Attachment hashing reuses the local artifact store path/key and runs a bounded
+reader outside any write transaction (same recorded size/SHA-256 comparison as
+`artifacts.service.verify`, which is unbounded and is not called). Recorded
+metadata and receipts never imply current availability.
 """
 
 from __future__ import annotations
@@ -23,12 +25,14 @@ from argus_core.continuation import (
 from argus_core.redact import redact
 from argus_core.resumability import (
     DEFAULT_READ_BOUND,
+    DEFINITE_UNAVAILABLE,
     DETAIL_MAX,
-    MAX_ARTIFACTS,
+    INPUT_NAME_MAX,
+    MAX_ATTACHMENT_ARTIFACTS,
+    MAX_CONTINUATION_ARTIFACTS,
     MAX_DECISION_CHANGES,
     MAX_INPUTS,
     MAX_NEXT_STEPS,
-    MAX_REASONS,
     MAX_UNKNOWNS,
     TEXT_MAX,
     ArtifactAssessment,
@@ -38,6 +42,7 @@ from argus_core.resumability import (
     EvidenceClass,
     InputAssessment,
     InputReceiptView,
+    InterruptionAssessment,
     LeaseAssessment,
     NextStep,
     Reason,
@@ -48,6 +53,7 @@ from argus_core.resumability import (
     WipKind,
     classify_artifact,
     derive_decision,
+    select_reasons,
 )
 from argus_core.tasks import TERMINAL, Task
 
@@ -89,6 +95,56 @@ def _reason(
         evidence_class=evidence_class,
         detail=_clip(detail, DETAIL_MAX),
     )
+
+
+def _mark_required(
+    avail: Availability,
+    *,
+    required_inputs_ok: bool,
+    required_unobserved: bool,
+) -> tuple[bool, bool]:
+    """Update required-input flags for one assessed availability.
+
+    Definite failures flip `required_inputs_ok`; `unknown` only sets
+    `required_unobserved`.
+    """
+    if avail in DEFINITE_UNAVAILABLE:
+        return False, required_unobserved
+    if avail is Availability.UNKNOWN:
+        return required_inputs_ok, True
+    return required_inputs_ok, required_unobserved
+
+
+def _cap_inputs(
+    inputs: list[InputAssessment], *, required_aid: str | None
+) -> list[InputAssessment]:
+    """Keep at most MAX_INPUTS, always pinning the required attachment if present."""
+    if len(inputs) <= MAX_INPUTS:
+        return inputs
+    required = [i for i in inputs if i.required or i.artifact_id == required_aid]
+    optional = [i for i in inputs if not (i.required or i.artifact_id == required_aid)]
+    # Deduplicate required while preserving order.
+    seen: set[str] = set()
+    pinned: list[InputAssessment] = []
+    for i in required:
+        if i.artifact_id in seen:
+            continue
+        seen.add(i.artifact_id)
+        pinned.append(i)
+    out = pinned[:MAX_INPUTS]
+    room = MAX_INPUTS - len(out)
+    if room > 0:
+        out.extend(optional[:room])
+    return out
+
+
+def _observed_after_attempt(
+    a: ContinuationArtifact, *, task_attempt: int
+) -> bool | None:
+    """Whether the artifact's own attempt is at or after the report's attempt."""
+    if a.attempt is None:
+        return None
+    return a.attempt >= task_attempt
 
 
 async def _read_attachment(
@@ -248,6 +304,7 @@ async def assess(
     causes: list[ResumabilityCause] = []
     reasons: list[Reason] = []
     artifacts_out: list[ArtifactAssessment] = []
+    attachment_artifacts: list[ArtifactAssessment] = []
     unknowns: list[str] = []
     next_steps: list[NextStep] = []
 
@@ -315,7 +372,7 @@ async def assess(
                 ResumabilityCause.LEASE_HELD_ELSEWHERE,
                 f"agent:{task.assignee_agent_id}",
                 EvidenceClass.RECORDED_METADATA,
-                "a live lease is held; release before starting elsewhere",
+                f"a live lease is held by {task.assignee_agent_id}",
             )
         )
     lease = LeaseAssessment(
@@ -324,11 +381,24 @@ async def assess(
         live=live,
     )
 
+    # -- interruption (bounded reuse of continuation.interruption) ---------------
+    interruption: InterruptionAssessment | None = None
+    if cont.interruption is not None:
+        cut = cont.interruption
+        interruption = InterruptionAssessment(
+            attempt=cut.attempt,
+            reason=_clip(cut.reason) or "",
+            detail=_clip(cut.detail, DETAIL_MAX),
+            at=cut.at,
+        )
+
     # -- continuation artifacts (remote: never current-read) ---------------------
     if not cont.artifacts and cont.wip is None:
         causes.append(ResumabilityCause.NO_ARTIFACTS)
-        unknowns.append("no_artifacts")
-    for a in cont.artifacts[:MAX_ARTIFACTS]:
+        gap = _clip("no_artifacts")
+        if gap:
+            unknowns.append(gap)
+    for a in cont.artifacts[:MAX_CONTINUATION_ARTIFACTS]:
         if a.state is ArtifactState.UNKNOWN:
             causes.append(ResumabilityCause.ARTIFACT_STATE_UNOBSERVED)
             reasons.append(
@@ -342,12 +412,15 @@ async def assess(
         artifacts_out.append(
             ArtifactAssessment(
                 kind=a.kind.value,
-                ref=_clip(a.ref) or a.ref[:TEXT_MAX],
+                ref=_clip(a.ref) or "",
                 state=a.state.value,
                 provenance=a.provenance.value,
                 availability=Availability.UNKNOWN,
                 evidence_class=EvidenceClass.RECORDED_METADATA,
                 note=_clip(a.note),
+                observed_after_attempt_start=_observed_after_attempt(
+                    a, task_attempt=task.attempt
+                ),
             )
         )
 
@@ -391,22 +464,46 @@ async def assess(
     required_inputs_ok = True
     required_unobserved = False
     by_id: dict[str, Artifact] = {}
-
-    for item in listed.inputs[:MAX_INPUTS]:
+    # Walk every listed input so a required attachment past the first MAX_INPUTS
+    # is still assessed; the output list is capped with the required one pinned.
+    for item in listed.inputs:
         is_required = required_aid is not None and item.id == required_aid
         try:
             art = await get_artifact(conn, item.id)
         except Exception:
             if is_required:
-                required_inputs_ok = False
                 required_unobserved = True
             causes.append(ResumabilityCause.ARTIFACT_UNKNOWN)
             reasons.append(
                 _reason(
                     ResumabilityCause.ARTIFACT_UNKNOWN,
                     f"attachment:{item.id}",
-                    EvidenceClass.UNKNOWN,
+                    EvidenceClass.UNOBSERVED,
                     "artifact row could not be loaded",
+                )
+            )
+            gap = _clip(f"artifact_row_unreadable:{item.id}")
+            if gap:
+                unknowns.append(gap)
+            inputs_out.append(
+                InputAssessment(
+                    artifact_id=item.id,
+                    name=_clip(item.name, INPUT_NAME_MAX) or "",
+                    recorded_size=item.size,
+                    recorded_sha256=item.sha256,
+                    availability=Availability.UNKNOWN,
+                    evidence_class=EvidenceClass.UNOBSERVED,
+                    receipts=[
+                        InputReceiptView(
+                            attempt=r.attempt,
+                            state=r.state.value,
+                            reason=r.reason.value if r.reason else None,
+                        )
+                        for r in item.receipts[:20]
+                    ],
+                    consumer_path=consumer,
+                    capability=capability,
+                    required=is_required,
                 )
             )
             continue
@@ -423,15 +520,18 @@ async def assess(
                     cause,
                     f"attachment:{art.id}",
                     ev,
-                    f"name={art.name}; recorded_size={art.size}",
+                    f"name={_clip(art.name, INPUT_NAME_MAX) or ''}; "
+                    f"recorded_size={art.size}",
                 )
             )
-        if is_required and avail is not Availability.AVAILABLE:
-            required_inputs_ok = False
-            if avail is Availability.UNKNOWN:
+        if is_required:
+            required_inputs_ok, required_unobserved = _mark_required(
+                avail,
+                required_inputs_ok=required_inputs_ok,
+                required_unobserved=required_unobserved,
+            )
+            if ev is EvidenceClass.UNKNOWN or ev is EvidenceClass.UNOBSERVED:
                 required_unobserved = True
-        if is_required and ev is EvidenceClass.UNKNOWN:
-            required_unobserved = True
         receipts = [
             InputReceiptView(
                 attempt=r.attempt,
@@ -443,7 +543,7 @@ async def assess(
         inputs_out.append(
             InputAssessment(
                 artifact_id=art.id,
-                name=art.name,
+                name=_clip(art.name, INPUT_NAME_MAX) or "",
                 recorded_size=art.size,
                 recorded_sha256=art.sha256,
                 availability=avail,
@@ -454,11 +554,11 @@ async def assess(
                 required=is_required,
             )
         )
-        if len(artifacts_out) < MAX_ARTIFACTS:
-            artifacts_out.append(
+        if len(attachment_artifacts) < MAX_ATTACHMENT_ARTIFACTS:
+            attachment_artifacts.append(
                 ArtifactAssessment(
                     kind="attachment",
-                    ref=art.name,
+                    ref=_clip(art.name) or "",
                     artifact_id=art.id,
                     state="attached",
                     provenance="orchestrator",
@@ -471,6 +571,11 @@ async def assess(
                 )
             )
 
+    inputs_out = _cap_inputs(inputs_out, required_aid=required_aid)
+    artifacts_out = (artifacts_out + attachment_artifacts)[
+        : MAX_CONTINUATION_ARTIFACTS + MAX_ATTACHMENT_ARTIFACTS
+    ]
+
     # -- WIP ---------------------------------------------------------------------
     wip_model = cont.wip
     if wip_model is None:
@@ -482,7 +587,9 @@ async def assess(
             )
         else:
             causes.append(ResumabilityCause.WIP_UNRECORDED)
-            unknowns.append("wip_unrecorded")
+            gap = _clip("wip_unrecorded")
+            if gap:
+                unknowns.append(gap)
             wip = WipAssessment(
                 kind=WipKind.ABSENT,
                 evidence_class=EvidenceClass.UNOBSERVED,
@@ -524,22 +631,47 @@ async def assess(
                 except Exception:
                     art = None
             if art is None or art.source is not ArtifactSource.ATTACHMENT:
-                causes.append(ResumabilityCause.ARTIFACT_MISSING)
-                required_inputs_ok = False
+                # No store read happened — do not claim current_read.
+                causes.append(ResumabilityCause.ARTIFACT_UNKNOWN)
+                required_unobserved = True
                 reasons.append(
                     _reason(
-                        ResumabilityCause.ARTIFACT_MISSING,
+                        ResumabilityCause.ARTIFACT_UNKNOWN,
                         f"attachment:{aid}",
-                        EvidenceClass.CURRENT_READ,
-                        "WIP attachment reference has no matching attachment",
+                        EvidenceClass.UNOBSERVED,
+                        "WIP attachment reference has no matching attachment row",
                     )
                 )
+                gap = _clip(f"artifact_unknown:{aid}")
+                if gap:
+                    unknowns.append(gap)
+                # Ensure the required input is visible even when the row is gone
+                # and it was never in list_inputs.
+                if not any(i.artifact_id == aid for i in inputs_out):
+                    inputs_out = _cap_inputs(
+                        [
+                            *inputs_out,
+                            InputAssessment(
+                                artifact_id=aid,
+                                name="",
+                                recorded_size=0,
+                                recorded_sha256=expect_sha,
+                                availability=Availability.UNKNOWN,
+                                evidence_class=EvidenceClass.UNOBSERVED,
+                                receipts=[],
+                                consumer_path=consumer,
+                                capability=capability,
+                                required=True,
+                            ),
+                        ],
+                        required_aid=aid,
+                    )
                 wip = WipAssessment(
                     kind=WipKind.UNKNOWN,
                     ref=_clip(ref),
                     summary=summary,
-                    availability=Availability.MISSING,
-                    evidence_class=EvidenceClass.CURRENT_READ,
+                    availability=Availability.UNKNOWN,
+                    evidence_class=EvidenceClass.UNOBSERVED,
                     transfer="not_a_transfer",
                 )
             elif art.sha256 != expect_sha:
@@ -570,10 +702,11 @@ async def assess(
                     reasons.append(
                         _reason(cause, f"attachment:{aid}", ev, "WIP attachment ref")
                     )
-                if avail is not Availability.AVAILABLE:
-                    required_inputs_ok = False
-                    if avail is Availability.UNKNOWN:
-                        required_unobserved = True
+                required_inputs_ok, required_unobserved = _mark_required(
+                    avail,
+                    required_inputs_ok=required_inputs_ok,
+                    required_unobserved=required_unobserved,
+                )
                 wip = WipAssessment(
                     kind=WipKind.PUBLISHED
                     if avail is Availability.AVAILABLE
@@ -652,7 +785,9 @@ async def assess(
             )
         )
     for gap in cont.gaps[:MAX_UNKNOWNS]:
-        unknowns.append(gap[:TEXT_MAX])
+        clipped = _clip(gap)
+        if clipped:
+            unknowns.append(clipped)
         if gap == "acceptance_not_structured":
             causes.append(ResumabilityCause.ACCEPTANCE_NOT_STRUCTURED)
         elif gap.startswith("decision_unresolved:"):
@@ -683,6 +818,7 @@ async def assess(
             )
         )
 
+    required_subject = f"attachment:{required_aid}" if required_aid else None
     return ResumabilityReport(
         task_id=task.id,
         attempt=task.attempt,
@@ -690,11 +826,12 @@ async def assess(
         assessed_at=now,
         decision=decision,
         cause_codes=uniq_causes[:20],
-        reasons=reasons[:MAX_REASONS],
-        artifacts=artifacts_out[:MAX_ARTIFACTS],
+        reasons=select_reasons(reasons, required_subject=required_subject),
+        artifacts=artifacts_out,
         wip=wip,
-        inputs=inputs_out[:MAX_INPUTS],
+        inputs=inputs_out,
         lease=lease,
+        interruption=interruption,
         decision_changes=decision_changes[:MAX_DECISION_CHANGES],
         unknowns=unknowns[:MAX_UNKNOWNS],
         next_steps=next_steps[:MAX_NEXT_STEPS],

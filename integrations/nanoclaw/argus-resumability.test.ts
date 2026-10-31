@@ -1,11 +1,16 @@
 /**
  * Grounds task-resumability-preflight.spec.md availability classes against the real
- * materializeTaskInputs consumer (not a mock). An `available` preflight claim must be
- * confirmed by byte count and SHA-256 in the group dir; anything else must not be
- * reported as available. Does not change argus-inputs.ts behaviour.
+ * materializeTaskInputs consumer (not a mock). Expected preflight classes come from
+ * integrations/nanoclaw/fixtures/resumability/availability.json, produced by
+ * apps/api/tests/test_resumability_preflight.py via real classify_artifact.
+ *
+ * An `available` preflight claim must be confirmed by byte count and SHA-256 in the
+ * group dir; anything else must not be reported as available. Does not change
+ * argus-inputs.ts behaviour.
  *
  * Not covered here (see the spec's Verification boundary): a real Docker session
  * container reading the mounted directory as its non-root user, and a real forge read.
+ * WIP classification is owned by the Python preflight tests.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -13,11 +18,36 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { type InputsSource, materializeTaskInputs, TASK_INPUTS_DIR } from "./argus-inputs.js";
 
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 
+const FIXTURE = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "fixtures/resumability/availability.json",
+);
+
+interface FixtureCase {
+  case: string;
+  availability: "available" | "missing" | "truncated" | "corrupted" | "inaccessible" | "unknown";
+  evidence_class: string;
+  cause: string | null;
+  recorded_size: number;
+  recorded_sha256: string;
+  observed_size: number | null;
+  observed_sha256: string | null;
+  error: string | null;
+}
+
+interface FixtureFile {
+  cases: FixtureCase[];
+}
+
+const fixture = JSON.parse(readFileSync(FIXTURE, "utf8")) as FixtureFile;
+
+/** Map a classify_artifact case to how the local HTTP stand-in serves content. */
 type ContentBehaviour =
   | { kind: "available" }
   | { kind: "missing" }
@@ -25,30 +55,25 @@ type ContentBehaviour =
   | { kind: "corrupted" }
   | { kind: "inaccessible"; status: 403 | 500 };
 
-/** Conservative preflight classification for a shared attachment (spec 3.4). */
-function preflightAvailability(behaviour: ContentBehaviour): {
-  availability: "available" | "missing" | "truncated" | "corrupted" | "inaccessible" | "unknown";
-  evidence_class: "current_read" | "unknown" | "unobserved";
-} {
-  switch (behaviour.kind) {
+function behaviourFor(c: FixtureCase): ContentBehaviour {
+  switch (c.availability) {
     case "available":
-      return { availability: "available", evidence_class: "current_read" };
+      return { kind: "available" };
     case "missing":
-      return { availability: "missing", evidence_class: "current_read" };
+      return { kind: "missing" };
     case "truncated":
-      return { availability: "truncated", evidence_class: "current_read" };
+      return { kind: "truncated" };
     case "corrupted":
-      return { availability: "corrupted", evidence_class: "current_read" };
+      return { kind: "corrupted" };
     case "inaccessible":
-      return { availability: "inaccessible", evidence_class: "current_read" };
+    case "unknown":
+      return { kind: "inaccessible", status: 403 };
   }
 }
 
 interface Served {
   bytes: Buffer;
   behaviour: ContentBehaviour;
-  recordedSize: number;
-  recordedSha: string;
 }
 
 /** Local Argus stand-in: inputs list + content, matching preflight cases. */
@@ -70,12 +95,7 @@ class FakeArgus {
 
   add(taskId: string, name: string, bytes: Buffer, behaviour: ContentBehaviour) {
     const id = randomUUID();
-    this.artifacts.set(id, {
-      bytes,
-      behaviour,
-      recordedSize: bytes.length,
-      recordedSha: sha(bytes),
-    });
+    this.artifacts.set(id, { bytes, behaviour });
     const item = {
       id,
       task_id: taskId,
@@ -90,7 +110,7 @@ class FakeArgus {
       ],
     };
     this.items.push(item);
-    return { item, preflight: preflightAvailability(behaviour) };
+    return item;
   }
 
   source(): InputsSource {
@@ -174,138 +194,65 @@ async function materialize(taskId: string, groupDir: string, artifactId?: string
   });
 }
 
-describe("preflight availability vs materializeTaskInputs", () => {
-  it("available: materializer verifies bytes and hash in the group dir", async () => {
-    const taskId = randomUUID();
-    const bytes = Buffer.from("resumability-available-payload\n");
-    const { item, preflight } = fake.add(taskId, "ok.txt", bytes, { kind: "available" });
-    expect(preflight.availability).toBe("available");
-
-    const groupDir = group();
-    const result = await materialize(taskId, groupDir, item.id, item.sha256);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    const hit = result.inputs.find((i) => i.artifact_id === item.id);
-    expect(hit?.state).toBe("verified");
-    expect(hit?.path).toBeTruthy();
-    const onDisk = readFileSync(hit!.path!);
-    expect(onDisk.length).toBe(bytes.length);
-    expect(sha(onDisk)).toBe(item.sha256);
-    // Conservative: only available claims are confirmed this way.
-    expect(preflight.availability === "available").toBe(true);
+describe("preflight availability fixture vs materializeTaskInputs", () => {
+  it("fixture is present and sorted", () => {
+    expect(fixture.cases.length).toBeGreaterThan(0);
+    const names = fixture.cases.map((c) => c.case);
+    expect(names).toEqual([...names].sort());
   });
 
-  it("missing: content 404; preflight is not available", async () => {
+  for (const c of fixture.cases) {
+    it(`${c.case}: materializer confirms bytes/hash only when fixture says available`, async () => {
+      const taskId = randomUUID();
+      const bytes = Buffer.from("0123456789abcdef");
+      expect(bytes.length).toBe(c.recorded_size);
+      expect(sha(bytes)).toBe(c.recorded_sha256);
+
+      const item = fake.add(taskId, `${c.case}.txt`, bytes, behaviourFor(c));
+      const groupDir = group();
+      const result = await materialize(taskId, groupDir, item.id, item.sha256);
+
+      if (c.availability === "available") {
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        const hit = result.inputs.find((i) => i.artifact_id === item.id);
+        expect(hit?.state).toBe("verified");
+        expect(hit?.path).toBeTruthy();
+        const onDisk = readFileSync(hit!.path!);
+        expect(onDisk.length).toBe(bytes.length);
+        expect(sha(onDisk)).toBe(item.sha256);
+      } else {
+        expect(c.availability).not.toBe("available");
+        expect(result.ok).toBe(false);
+      }
+    });
+  }
+
+  it("a verified receipt alone does not make the materializer succeed when bytes are gone", async () => {
+    const missing = fixture.cases.find((c) => c.case === "missing");
+    expect(missing?.availability).toBe("missing");
+    expect(missing?.evidence_class).toBe("current_read");
+
     const taskId = randomUUID();
-    const bytes = Buffer.from("gone\n");
-    const { item, preflight } = fake.add(taskId, "gone.txt", bytes, { kind: "missing" });
-    expect(preflight.availability).toBe("missing");
-    expect(preflight.availability).not.toBe("available");
-
-    const result = await materialize(taskId, group(), item.id, item.sha256);
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.reason).toMatch(/env_input_/);
-  });
-
-  it("truncated: short body; preflight is not available", async () => {
-    const taskId = randomUUID();
-    const bytes = Buffer.from("0123456789abcdef\n");
-    const { item, preflight } = fake.add(taskId, "short.txt", bytes, { kind: "truncated" });
-    expect(preflight.availability).toBe("truncated");
-    expect(preflight.availability).not.toBe("available");
-
-    const result = await materialize(taskId, group(), item.id, item.sha256);
-    expect(result.ok).toBe(false);
-  });
-
-  it("corrupted: same-size flipped bytes; preflight is not available", async () => {
-    const taskId = randomUUID();
-    const bytes = Buffer.from("same-length-corrupt!!\n");
-    const { item, preflight } = fake.add(taskId, "bad.txt", bytes, { kind: "corrupted" });
-    expect(preflight.availability).toBe("corrupted");
-    expect(preflight.availability).not.toBe("available");
+    const bytes = Buffer.from("0123456789abcdef");
+    const item = fake.add(taskId, "hist.txt", bytes, { kind: "missing" });
+    expect(item.receipts?.[0]).toMatchObject({ state: "verified" });
 
     const result = await materialize(taskId, group(), item.id, item.sha256);
     expect(result.ok).toBe(false);
   });
 
-  it("inaccessible: 403/500; preflight is not available", async () => {
-    for (const status of [403, 500] as const) {
+  it("never treats a non-available fixture class as confirmed on disk", async () => {
+    for (const c of fixture.cases.filter((x) => x.availability !== "available")) {
       fake.items = [];
       fake.artifacts.clear();
       const taskId = randomUUID();
-      const bytes = Buffer.from("locked\n");
-      const { item, preflight } = fake.add(taskId, `locked-${status}.txt`, bytes, {
-        kind: "inaccessible",
-        status,
-      });
-      expect(preflight.availability).toBe("inaccessible");
-      expect(preflight.availability).not.toBe("available");
-
-      const result = await materialize(taskId, group(), item.id, item.sha256);
-      expect(result.ok).toBe(false);
-    }
-  });
-
-  it("local_only WIP: preflight is not available and materializer is not the path", async () => {
-    // No shared inputs: the materializer has nothing to fetch; local WIP is not a transfer.
-    const taskId = randomUUID();
-    const preflight = {
-      wip: {
-        kind: "local_only" as const,
-        transfer: "not_a_transfer" as const,
-        evidence_class: "recorded_metadata" as const,
-        availability: null,
-      },
-      decision: "unknown" as const,
-      cause_codes: ["wip_local_only"],
-    };
-    expect(preflight.wip.kind).toBe("local_only");
-    expect(preflight.wip.transfer).toBe("not_a_transfer");
-    expect(preflight.cause_codes).toContain("wip_local_only");
-
-    const groupDir = group();
-    const result = await materialize(taskId, groupDir);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.inputs).toEqual([]);
-    // Materializer did not create a transfer directory for local-only WIP.
-    expect(existsSync(path.join(groupDir, TASK_INPUTS_DIR, taskId))).toBe(false);
-  });
-
-  it("a verified receipt alone does not make the materializer succeed when bytes are gone", async () => {
-    const taskId = randomUUID();
-    const bytes = Buffer.from("receipt-only\n");
-    const { item, preflight } = fake.add(taskId, "hist.txt", bytes, { kind: "missing" });
-    // Receipts in the listing are history; preflight availability is missing.
-    expect(item.receipts?.[0]).toMatchObject({ state: "verified" });
-    expect(preflight.availability).toBe("missing");
-    expect(preflight.evidence_class).toBe("current_read");
-
-    const result = await materialize(taskId, group(), item.id, item.sha256);
-    expect(result.ok).toBe(false);
-  });
-
-  it("never treats a non-available preflight class as confirmed on disk", async () => {
-    const taskId = randomUUID();
-    const cases: ContentBehaviour[] = [
-      { kind: "missing" },
-      { kind: "truncated" },
-      { kind: "corrupted" },
-      { kind: "inaccessible", status: 403 },
-    ];
-    for (const behaviour of cases) {
-      fake.items = [];
-      fake.artifacts.clear();
-      const bytes = Buffer.from(`case-${behaviour.kind}\n`);
-      const { item, preflight } = fake.add(taskId, `${behaviour.kind}.txt`, bytes, behaviour);
-      expect(preflight.availability).not.toBe("available");
+      const bytes = Buffer.from("0123456789abcdef");
+      const item = fake.add(taskId, `${c.case}.txt`, bytes, behaviourFor(c));
       const groupDir = group();
       const result = await materialize(taskId, groupDir, item.id, item.sha256);
       const dir = path.join(groupDir, TASK_INPUTS_DIR, taskId);
       if (existsSync(dir)) {
-        // A partial/failed write must not look like a verified available transfer.
         const marker = path.join(dir, "manifest.json");
         if (existsSync(marker)) {
           const manifest = JSON.parse(readFileSync(marker, "utf8")) as {
@@ -318,7 +265,7 @@ describe("preflight availability vs materializeTaskInputs", () => {
           }
         }
       }
-      expect(result.ok && preflight.availability === "available").toBe(false);
+      expect(result.ok).toBe(false);
     }
   });
 });

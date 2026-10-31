@@ -6,12 +6,21 @@ import hashlib
 import json
 import os
 import sqlite3
+import subprocess
+import tempfile
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from argus_api.main import app
+from argus_core.resumability import classify_artifact
 from fastapi.testclient import TestClient
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+AVAILABILITY_FIXTURE = (
+    REPO_ROOT / "integrations/nanoclaw/fixtures/resumability/availability.json"
+)
 
 ADMIN_TOKEN = "test-admin-token-" + "r" * 32
 ADMIN = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
@@ -653,3 +662,461 @@ def test_worker_and_manager_responses_identical(
     worker_body = preflight(client, task["id"], headers=w).content
     manager_body = preflight(client, task["id"], headers=ADMIN).content
     assert worker_body == manager_body
+
+
+# -- review follow-up #2 -------------------------------------------------------
+
+
+def test_required_too_large_is_unknown(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Required input over the read bound → decision unknown (not not_resumable)."""
+    orch = register(client, "orchestrator")
+    task = new_task(
+        client,
+        required_capabilities=["task-inputs"],
+        acceptance=["ship it"],
+    )
+    required = share(client, task, "big-required.txt", b"x" * 64)
+    client.patch(
+        f"/api/tasks/{task['id']}/continuation",
+        json={
+            "expected_revision": 0,
+            "reason": "wip-input",
+            "artifacts": [
+                {
+                    "kind": "branch",
+                    "ref": "feature/ready",
+                    "state": "open",
+                    "head_sha": "abc1234",
+                }
+            ],
+            "wip": {
+                "summary": "required over bound",
+                "ref": f"attachment:{required['id']}:{required['sha256']}",
+            },
+        },
+        headers=orch,
+    )
+    monkeypatch.setattr("argus_api.tasks.routes.DEFAULT_READ_BOUND", 4)
+    body = preflight(client, task["id"]).json()
+    by_id = {i["artifact_id"]: i for i in body["inputs"]}
+    assert by_id[required["id"]]["availability"] == "unknown"
+    assert by_id[required["id"]]["required"] is True
+    assert body["decision"] == "unknown"
+
+
+def test_required_input_pinned_past_inputs_cap(client: TestClient) -> None:
+    """A required attachment past the twentieth listed input still appears in inputs[]."""
+    orch = register(client, "orchestrator")
+    task = new_task(
+        client,
+        required_capabilities=["task-inputs"],
+        acceptance=["ship it"],
+    )
+    for i in range(20):
+        share(client, task, f"opt-{i:02d}.txt", f"optional-{i}\n".encode())
+    required = share(client, task, "required-last.txt", b"required-pinned\n")
+    client.patch(
+        f"/api/tasks/{task['id']}/continuation",
+        json={
+            "expected_revision": 0,
+            "reason": "pin-required",
+            "artifacts": [
+                {
+                    "kind": "branch",
+                    "ref": "feature/ready",
+                    "state": "open",
+                    "head_sha": "abc1234",
+                }
+            ],
+            "wip": {
+                "summary": "required past cap",
+                "ref": f"attachment:{required['id']}:{required['sha256']}",
+            },
+        },
+        headers=orch,
+    )
+    body = preflight(client, task["id"]).json()
+    assert len(body["inputs"]) <= 20
+    hit = next(i for i in body["inputs"] if i["artifact_id"] == required["id"])
+    assert hit["required"] is True
+    assert hit["availability"] == "available"
+
+
+def test_required_input_load_failure_emits_assessment(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """get_artifact failure for a required input still yields an InputAssessment."""
+    orch = register(client, "orchestrator")
+    task, required, _optional = _seed_required_optional(client, orch)
+    real_get = __import__(
+        "argus_api.artifacts.service", fromlist=["get_artifact"]
+    ).get_artifact
+
+    async def boom(conn, artifact_id: str):
+        if artifact_id == required["id"]:
+            raise RuntimeError("simulated row load failure")
+        return await real_get(conn, artifact_id)
+
+    monkeypatch.setattr("argus_api.tasks.resumability.get_artifact", boom)
+    body = preflight(client, task["id"]).json()
+    hit = next(i for i in body["inputs"] if i["artifact_id"] == required["id"])
+    assert hit["required"] is True
+    assert hit["availability"] == "unknown"
+    assert hit["evidence_class"] == "unobserved"
+    assert any("artifact_row_unreadable" in u for u in body["unknowns"])
+    assert body["decision"] == "unknown"
+
+
+def test_wip_missing_attachment_row_is_unobserved(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """WIP attachment:<id> with no row must not claim current_read."""
+    orch = register(client, "orchestrator")
+    task = new_task(
+        client,
+        required_capabilities=["task-inputs"],
+        acceptance=["ship it"],
+    )
+    art = share(client, task, "gone.txt", b"will-delete-row\n")
+    patch = client.patch(
+        f"/api/tasks/{task['id']}/continuation",
+        json={
+            "expected_revision": 0,
+            "reason": "missing-row",
+            "artifacts": [
+                {
+                    "kind": "branch",
+                    "ref": "feature/ready",
+                    "state": "open",
+                    "head_sha": "abc1234",
+                }
+            ],
+            "wip": {
+                "summary": "points at nothing",
+                "ref": f"attachment:{art['id']}:{art['sha256']}",
+            },
+        },
+        headers=orch,
+    )
+    assert patch.status_code == 200, patch.text
+    # Drop the artifact row (and store file) so the WIP ref has no matching row.
+    for p in (tmp_path / "artifacts").rglob("*"):
+        if p.is_file() and p.name == art["name"]:
+            p.unlink()
+            break
+    db_exec(tmp_path, "DELETE FROM artifacts WHERE id = ?", (art["id"],))
+    body = preflight(client, task["id"]).json()
+    assert body["wip"]["availability"] == "unknown"
+    assert body["wip"]["evidence_class"] == "unobserved"
+    assert "artifact_unknown" in body["cause_codes"]
+    hit = next(i for i in body["inputs"] if i["artifact_id"] == art["id"])
+    assert hit["required"] is True
+    assert hit["evidence_class"] == "unobserved"
+    assert body["decision"] == "unknown"
+
+
+def test_optional_unknown_does_not_decide(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Optional input over the bound + required available → not unknown from that."""
+    orch = register(client, "orchestrator")
+    monkeypatch.setattr("argus_api.tasks.routes.DEFAULT_READ_BOUND", 8)
+    task = new_task(
+        client,
+        required_capabilities=["task-inputs"],
+        acceptance=["ship it"],
+    )
+    required = share(client, task, "req.txt", b"tiny")
+    optional = share(client, task, "opt-big.txt", b"z" * 64)
+    client.patch(
+        f"/api/tasks/{task['id']}/continuation",
+        json={
+            "expected_revision": 0,
+            "reason": "optional-unknown",
+            "artifacts": [
+                {
+                    "kind": "branch",
+                    "ref": "feature/ready",
+                    "state": "open",
+                    "head_sha": "abc1234",
+                }
+            ],
+            "wip": {
+                "summary": "small required",
+                "ref": f"attachment:{required['id']}:{required['sha256']}",
+            },
+        },
+        headers=orch,
+    )
+    body = preflight(client, task["id"]).json()
+    by_id = {i["artifact_id"]: i for i in body["inputs"]}
+    assert by_id[required["id"]]["availability"] == "available"
+    assert by_id[optional["id"]]["availability"] == "unknown"
+    assert by_id[optional["id"]]["required"] is False
+    assert "artifact_unknown" in body["cause_codes"]
+    assert body["decision"] == "resumable"
+
+
+def test_artifacts_budget_keeps_attachments(client: TestClient) -> None:
+    """Continuation artifacts must not hide all attachments from artifacts[]."""
+    orch = register(client, "orchestrator")
+    task = new_task(client, required_capabilities=["task-inputs"])
+    arts = [share(client, task, f"a{i}.txt", f"body-{i}\n".encode()) for i in range(3)]
+    client.patch(
+        f"/api/tasks/{task['id']}/continuation",
+        json={
+            "expected_revision": 0,
+            "reason": "fill-continuation",
+            "artifacts": [
+                {"kind": "commit", "ref": f"{i:040x}", "state": "unknown"}
+                for i in range(20)
+            ],
+        },
+        headers=orch,
+    )
+    body = preflight(client, task["id"]).json()
+    assert len(body["artifacts"]) <= 20
+    cont = [a for a in body["artifacts"] if a["kind"] != "attachment"]
+    atts = [a for a in body["artifacts"] if a["kind"] == "attachment"]
+    assert len(cont) <= 15
+    assert len(atts) >= 1
+    assert {a["id"] for a in arts} == {i["artifact_id"] for i in body["inputs"]}
+
+
+def test_interruption_and_observed_after_attempt(client: TestClient) -> None:
+    """Report reuses interruption and marks continuation artifacts vs attempt."""
+    orch = register(client, "orchestrator")
+    w = register(client)
+    task = new_task(client, acceptance=["ship it"])
+    claimed = claim(client, w)
+    client.patch(
+        f"/api/tasks/{task['id']}/continuation",
+        json={
+            "expected_revision": claimed["continuation"]["revision"],
+            "reason": "seed-art",
+            "artifacts": [
+                {
+                    "kind": "branch",
+                    "ref": "feature/x",
+                    "state": "open",
+                    "head_sha": "abc1234",
+                }
+            ],
+        },
+        headers=orch,
+    )
+    # Release creates an interruption on the continuation.
+    rel = client.post(
+        f"/api/tasks/{task['id']}/release",
+        json={"reason": "recycle", "attempt": claimed["attempt"]},
+        headers=ADMIN,
+    )
+    assert rel.status_code == 200, rel.text
+    body = preflight(client, task["id"]).json()
+    assert body["interruption"] is not None
+    assert "attempt" in body["interruption"]
+    assert "reason" in body["interruption"]
+    assert "at" in body["interruption"]
+    cont_arts = [a for a in body["artifacts"] if a["kind"] == "branch"]
+    assert cont_arts
+    assert "observed_after_attempt_start" in cont_arts[0]
+
+
+def test_live_lease_reason_names_holder(client: TestClient) -> None:
+    w = register(client)
+    task = new_task(client)
+    claimed = claim(client, w)
+    body = preflight(client, task["id"]).json()
+    assert "lease_held_elsewhere" in body["cause_codes"]
+    detail = next(
+        r["detail"] for r in body["reasons"] if r["code"] == "lease_held_elsewhere"
+    )
+    assert "a live lease is held by" in detail
+    assert claimed["assignee_agent_id"] in detail or "agent:" in str(
+        body["lease"]["assignee_agent_id"]
+    )
+
+
+def test_reasons_prefer_required_when_truncated(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """When many reasons exist, a required-input failure is kept under the cap."""
+    orch = register(client, "orchestrator")
+    task = new_task(
+        client,
+        required_capabilities=["task-inputs"],
+        acceptance=["ship it"],
+    )
+    required = share(client, task, "need.txt", b"need\n")
+    # Many optional missing + many unobserved continuation artifacts → >10 reasons.
+    for i in range(8):
+        art = share(client, task, f"opt{i}.txt", f"o{i}\n".encode())
+        stored_file(tmp_path, art).unlink()
+    client.patch(
+        f"/api/tasks/{task['id']}/continuation",
+        json={
+            "expected_revision": 0,
+            "reason": "many-reasons",
+            "artifacts": [
+                {"kind": "commit", "ref": f"{i:040x}", "state": "unknown"}
+                for i in range(12)
+            ],
+            "wip": {
+                "summary": "required gone",
+                "ref": f"attachment:{required['id']}:{required['sha256']}",
+            },
+        },
+        headers=orch,
+    )
+    stored_file(tmp_path, required).unlink()
+    body = preflight(client, task["id"]).json()
+    assert len(body["reasons"]) <= 10
+    assert any(
+        r["code"] == "artifact_missing" and required["id"] in r["subject"]
+        for r in body["reasons"]
+    )
+    assert body["decision"] == "not_resumable"
+
+
+# -- NanoClaw availability fixture (producer; vitest consumes) -----------------
+
+
+def _availability_cases() -> list[dict[str, Any]]:
+    """Real classify_artifact outputs for every store-read case the materializer covers."""
+    recorded_size = 16
+    recorded_sha = sha(b"0123456789abcdef")
+    cases: list[tuple[str, dict[str, Any]]] = [
+        (
+            "available",
+            {
+                "recorded_size": recorded_size,
+                "recorded_sha256": recorded_sha,
+                "observed_size": recorded_size,
+                "observed_sha256": recorded_sha,
+                "error": None,
+            },
+        ),
+        (
+            "missing",
+            {
+                "recorded_size": recorded_size,
+                "recorded_sha256": recorded_sha,
+                "observed_size": None,
+                "observed_sha256": None,
+                "error": "missing",
+            },
+        ),
+        (
+            "truncated",
+            {
+                "recorded_size": recorded_size,
+                "recorded_sha256": recorded_sha,
+                "observed_size": recorded_size - 5,
+                "observed_sha256": None,
+                "error": None,
+            },
+        ),
+        (
+            "corrupted",
+            {
+                "recorded_size": recorded_size,
+                "recorded_sha256": recorded_sha,
+                "observed_size": recorded_size,
+                "observed_sha256": sha(b"x123456789abcdef"),
+                "error": None,
+            },
+        ),
+        (
+            "inaccessible_permission",
+            {
+                "recorded_size": recorded_size,
+                "recorded_sha256": recorded_sha,
+                "observed_size": None,
+                "observed_sha256": None,
+                "error": "permission",
+            },
+        ),
+        (
+            "is_directory",
+            {
+                "recorded_size": recorded_size,
+                "recorded_sha256": recorded_sha,
+                "observed_size": None,
+                "observed_sha256": None,
+                "error": "is_directory",
+            },
+        ),
+        (
+            "too_large",
+            {
+                "recorded_size": recorded_size,
+                "recorded_sha256": recorded_sha,
+                "observed_size": None,
+                "observed_sha256": None,
+                "error": "too_large",
+            },
+        ),
+        (
+            "os_error",
+            {
+                "recorded_size": recorded_size,
+                "recorded_sha256": recorded_sha,
+                "observed_size": None,
+                "observed_sha256": None,
+                "error": "os_error",
+            },
+        ),
+    ]
+    out: list[dict[str, Any]] = []
+    for name, kwargs in cases:
+        avail, ev, cause = classify_artifact(**kwargs)
+        out.append(
+            {
+                "case": name,
+                **kwargs,
+                "availability": avail.value,
+                "evidence_class": ev.value,
+                "cause": cause.value if cause is not None else None,
+            }
+        )
+    out.sort(key=lambda c: c["case"])
+    return out
+
+
+def _write_availability_fixture(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, dir=path.parent
+    ) as tmp:
+        json.dump(payload, tmp, indent=2, sort_keys=True)
+        tmp.write("\n")
+        tmp_path = Path(tmp.name)
+    subprocess.run(
+        ["pnpm", "exec", "biome", "check", "--write", str(tmp_path)],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+    )
+    tmp_path.replace(path)
+
+
+def test_availability_fixture_matches_classify_artifact() -> None:
+    """Producer for integrations/nanoclaw/fixtures/resumability/availability.json.
+
+    Regenerated with ARGUS_UPDATE_FIXTURES=1; otherwise CI fails on drift.
+    """
+    payload = {"cases": _availability_cases()}
+    if os.environ.get("ARGUS_UPDATE_FIXTURES") == "1":
+        _write_availability_fixture(AVAILABILITY_FIXTURE, payload)
+        return
+    assert AVAILABILITY_FIXTURE.is_file(), (
+        f"{AVAILABILITY_FIXTURE} missing. "
+        "Re-run with ARGUS_UPDATE_FIXTURES=1 to create it."
+    )
+    on_disk = json.loads(AVAILABILITY_FIXTURE.read_text())
+    assert payload == on_disk, (
+        f"{AVAILABILITY_FIXTURE} drifted from classify_artifact. "
+        "Re-run with ARGUS_UPDATE_FIXTURES=1 if the change is intentional."
+    )

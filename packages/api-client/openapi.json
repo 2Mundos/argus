@@ -1978,6 +1978,17 @@
             ],
             "title": "Note"
           },
+          "observed_after_attempt_start": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed After Attempt Start"
+          },
           "observed_sha256": {
             "anyOf": [
               {
@@ -9235,6 +9246,45 @@
         "title": "InstancesOverview",
         "type": "object"
       },
+      "InterruptionAssessment": {
+        "additionalProperties": false,
+        "description": "Bounded reuse of continuation.interruption (spec 3.7).",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "reason": {
+            "maxLength": 300,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "reason",
+          "at"
+        ],
+        "title": "InterruptionAssessment",
+        "type": "object"
+      },
       "IssuedToken": {
         "properties": {
           "expires_at": {
@@ -13671,7 +13721,6 @@
           "stale_preflight",
           "no_artifacts",
           "artifact_state_unobserved",
-          "artifact_unavailable",
           "artifact_missing",
           "artifact_truncated",
           "artifact_corrupted",
@@ -13746,6 +13795,16 @@
             "maxItems": 20,
             "title": "Inputs",
             "type": "array"
+          },
+          "interruption": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InterruptionAssessment"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "lease": {
             "$ref": "#/components/schemas/LeaseAssessment"

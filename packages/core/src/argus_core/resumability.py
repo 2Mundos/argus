@@ -13,6 +13,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 MAX_ARTIFACTS = 20
+# Split of the artifacts[] budget (spec 3.2): continuation first, then
+# attachments. `inputs[]` remains the authoritative list for attachments.
+MAX_CONTINUATION_ARTIFACTS = 15
+MAX_ATTACHMENT_ARTIFACTS = 5
 MAX_INPUTS = 20
 MAX_REASONS = 10
 MAX_NEXT_STEPS = 5
@@ -20,10 +24,13 @@ MAX_DECISION_CHANGES = 20
 MAX_UNKNOWNS = 20
 TEXT_MAX = 300
 DETAIL_MAX = 300
+INPUT_NAME_MAX = 200
 
 # Default bound for a current-read hash of one attachment (bytes). Larger files
 # are classified `unknown` without reading past the bound.
 DEFAULT_READ_BOUND = 32 * 1024 * 1024
+
+assert MAX_CONTINUATION_ARTIFACTS + MAX_ATTACHMENT_ARTIFACTS == MAX_ARTIFACTS
 
 
 class EvidenceClass(StrEnum):
@@ -63,7 +70,6 @@ class ResumabilityCause(StrEnum):
     STALE_PREFLIGHT = "stale_preflight"
     NO_ARTIFACTS = "no_artifacts"
     ARTIFACT_STATE_UNOBSERVED = "artifact_state_unobserved"
-    ARTIFACT_UNAVAILABLE = "artifact_unavailable"
     ARTIFACT_MISSING = "artifact_missing"
     ARTIFACT_TRUNCATED = "artifact_truncated"
     ARTIFACT_CORRUPTED = "artifact_corrupted"
@@ -119,6 +125,9 @@ class ArtifactAssessment(BaseModel):
     observed_size: int | None = None
     observed_sha256: str | None = Field(default=None, max_length=64)
     note: str | None = Field(default=None, max_length=TEXT_MAX)
+    # Continuation artifacts only: True when the artifact's own `attempt` is at
+    # or after the task attempt this report describes. None when attempt is unset.
+    observed_after_attempt_start: bool | None = None
 
 
 class InputReceiptView(BaseModel):
@@ -136,7 +145,7 @@ class InputAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     artifact_id: str = Field(max_length=64)
-    name: str = Field(max_length=200)
+    name: str = Field(max_length=INPUT_NAME_MAX)
     recorded_size: int
     recorded_sha256: str = Field(max_length=64)
     availability: Availability
@@ -185,6 +194,17 @@ class DecisionChange(BaseModel):
     relative_to_attempt: Literal["at_or_after", "before", "unresolved"]
 
 
+class InterruptionAssessment(BaseModel):
+    """Bounded reuse of continuation.interruption (spec 3.7)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempt: int
+    reason: str = Field(max_length=TEXT_MAX)
+    detail: str | None = Field(default=None, max_length=DETAIL_MAX)
+    at: datetime
+
+
 class NextStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -210,6 +230,7 @@ class ResumabilityReport(BaseModel):
     wip: WipAssessment
     inputs: list[InputAssessment] = Field(default_factory=list, max_length=MAX_INPUTS)
     lease: LeaseAssessment
+    interruption: InterruptionAssessment | None = None
     decision_changes: list[DecisionChange] = Field(
         default_factory=list, max_length=MAX_DECISION_CHANGES
     )
@@ -291,6 +312,17 @@ def classify_artifact(
     return Availability.AVAILABLE, EvidenceClass.CURRENT_READ, None
 
 
+# Definite store-read failures for a *required* input (spec 3.8). `unknown` is
+# not among them — it only sets `required_unobserved`.
+DEFINITE_UNAVAILABLE = frozenset(
+    {
+        Availability.MISSING,
+        Availability.TRUNCATED,
+        Availability.CORRUPTED,
+        Availability.INACCESSIBLE,
+    }
+)
+
 # Bare attachment availability codes (missing/truncated/corrupted/inaccessible)
 # are never deciding by themselves: an unavailable *optional* input is reported
 # as a cause and a reason, never as a block. `required_inputs_ok` already
@@ -298,7 +330,6 @@ def classify_artifact(
 _NOT_RESUMABLE = frozenset(
     {
         ResumabilityCause.TASK_TERMINAL,
-        ResumabilityCause.ARTIFACT_UNAVAILABLE,
         ResumabilityCause.INPUT_CAPABILITY_MISSING,
     }
 )
@@ -308,11 +339,12 @@ _STALE = frozenset(
         ResumabilityCause.STALE_PREFLIGHT,
     }
 )
+# Task-wide unobserved facts only. A bare `artifact_unknown` from an optional
+# input is reported, not deciding (spec 3.8 / 3.6).
 _UNKNOWN = frozenset(
     {
         ResumabilityCause.TASK_UNKNOWN,
         ResumabilityCause.ARTIFACT_STATE_UNOBSERVED,
-        ResumabilityCause.ARTIFACT_UNKNOWN,
         ResumabilityCause.CHECKPOINT_STORE_NOT_VISIBLE,
         ResumabilityCause.WIP_UNRECORDED,
         ResumabilityCause.DECISION_UNRESOLVED,
@@ -324,6 +356,54 @@ _UNKNOWN = frozenset(
     }
 )
 
+# Reasons that must survive truncation when they are deciding / required-input.
+_PREFERRED_REASON_CODES = frozenset(
+    {
+        ResumabilityCause.TASK_TERMINAL,
+        ResumabilityCause.INPUT_CAPABILITY_MISSING,
+        ResumabilityCause.ATTEMPT_MISMATCH,
+        ResumabilityCause.STALE_PREFLIGHT,
+        ResumabilityCause.ARTIFACT_MISSING,
+        ResumabilityCause.ARTIFACT_TRUNCATED,
+        ResumabilityCause.ARTIFACT_CORRUPTED,
+        ResumabilityCause.ARTIFACT_INACCESSIBLE,
+        ResumabilityCause.ARTIFACT_UNKNOWN,
+    }
+)
+
+
+def select_reasons(
+    reasons: list[Reason],
+    *,
+    required_subject: str | None = None,
+    limit: int = MAX_REASONS,
+) -> list[Reason]:
+    """Keep up to `limit` reasons, preferring deciding / required-input ones."""
+    if len(reasons) <= limit:
+        return reasons
+
+    def preferred(r: Reason) -> bool:
+        if r.code in _PREFERRED_REASON_CODES and (
+            required_subject is None
+            or r.code
+            in (
+                ResumabilityCause.TASK_TERMINAL,
+                ResumabilityCause.INPUT_CAPABILITY_MISSING,
+                ResumabilityCause.ATTEMPT_MISMATCH,
+                ResumabilityCause.STALE_PREFLIGHT,
+            )
+            or r.subject == required_subject
+        ):
+            return True
+        return required_subject is not None and r.subject == required_subject
+
+    first = [r for r in reasons if preferred(r)]
+    rest = [r for r in reasons if not preferred(r)]
+    out = first[:limit]
+    if len(out) < limit:
+        out.extend(rest[: limit - len(out)])
+    return out
+
 
 def derive_decision(
     causes: list[ResumabilityCause],
@@ -333,6 +413,10 @@ def derive_decision(
 ) -> ResumabilityDecision:
     """Map cause codes and required-input status to the top-level decision.
 
+    Order (order-independent over the cause set; spec 3.8):
+      stale > not_resumable (definite blocker) > unknown (required fact
+      unobserved) > resumable.
+
     `resumable` only when nothing blocks and every *required* input was a
     successful current read. Stale beats everything else when the caller's
     premise mismatches.
@@ -341,8 +425,12 @@ def derive_decision(
     inaccessible) do not decide `not_resumable` by themselves: that follows
     `required_inputs_ok`, which only reflects the required WIP attachment ref
     (if any). An unavailable optional input is reported as a cause and a
-    reason, never as a block. `task_terminal`, `artifact_unavailable` and
-    `input_capability_missing` remain `not_resumable`.
+    reason, never as a block. `task_terminal` and `input_capability_missing`
+    remain `not_resumable`.
+
+    `unknown` follows `required_unobserved` or a task-wide unobserved cause
+    (`_UNKNOWN`). A bare `artifact_unknown` from an optional input does not
+    decide.
     """
     codes = set(causes)
     if codes & _STALE:
