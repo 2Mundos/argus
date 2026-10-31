@@ -197,6 +197,15 @@ async def effective_model_policy(
     return policy, setting.revision or model_policy.revision(policy)
 
 
+def _check_scope(defn: SettingDefinition, scope: str) -> None:
+    allowed = "global" if scope == GLOBAL else "project"
+    if allowed not in defn.scopes:
+        raise ValidationFailedError(
+            f"{defn.key} cannot be set at {allowed} scope",
+            code="scope_not_allowed",
+        )
+
+
 async def put_setting(
     tx: Tx,
     path: Path,
@@ -208,12 +217,7 @@ async def put_setting(
     defn = registry.definition(key)
     if defn is None:
         raise ValidationFailedError(f"unknown setting key: {key}", code="unknown_key")
-    allowed = "global" if scope == GLOBAL else "project"
-    if allowed not in defn.scopes:
-        raise ValidationFailedError(
-            f"{key} cannot be set at {allowed} scope",
-            code="scope_not_allowed",
-        )
+    _check_scope(defn, scope)
     await _require_project(tx.conn, scope)
 
     if key == MODELS_KEY and scope == GLOBAL:
@@ -266,6 +270,7 @@ async def reset_setting(
     defn = registry.definition(key)
     if defn is None:
         raise ValidationFailedError(f"unknown setting key: {key}", code="unknown_key")
+    _check_scope(defn, scope)
     await _require_project(tx.conn, scope)
 
     if key == MODELS_KEY and scope == GLOBAL:

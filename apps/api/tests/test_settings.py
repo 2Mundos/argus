@@ -112,6 +112,32 @@ def test_project_override_inherits_and_resets(client: TestClient) -> None:
     assert reset.json()["value"]["mode"] == "different_provider"
 
 
+def test_global_only_key_is_scope_not_allowed_at_project_scope(
+    client: TestClient,
+) -> None:
+    client.put(
+        "/api/projects/demo",
+        json={"name": "Demo", "description": "d"},
+        headers=ADMIN,
+    )
+    put = client.put(
+        "/api/projects/demo/settings/orchestrator.enabled",
+        json={"value": True},
+        headers=ADMIN,
+    )
+    assert put.status_code == 422, put.text
+    assert put.json()["detail"]["code"] == "scope_not_allowed"
+
+    reset = client.delete(
+        "/api/projects/demo/settings/orchestrator.enabled", headers=ADMIN
+    )
+    assert reset.status_code == 422, reset.text
+    assert reset.json()["detail"]["code"] == "scope_not_allowed"
+
+    ok = client.delete("/api/projects/demo/settings/review.independent", headers=ADMIN)
+    assert ok.status_code == 200, ok.text
+
+
 def test_unknown_key_and_bad_value_are_422(client: TestClient) -> None:
     assert (
         client.put("/api/settings/nope", json={"value": 1}, headers=ADMIN).status_code
