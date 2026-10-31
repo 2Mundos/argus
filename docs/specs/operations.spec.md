@@ -142,7 +142,8 @@ database, reaper, reconciler, disk (64 MiB), secrets.
 
 Admission settings (validated at startup): `ARGUS_DISK_GUARD_ENABLED` (`true`),
 `ARGUS_DISK_GUARD_INTERVAL_S` (`5`, must be `> 0`), and the four byte thresholds
-above. Startup requires `clear > warn > resume > refuse >= 0` and `interval > 0`;
+above. An empty or whitespace-only value for a boolean setting means that setting's
+default. Startup requires `clear > warn > resume > refuse >= 0` and `interval > 0`;
 otherwise Argus refuses to start with a message that names the bad setting.
 `ARGUS_DISK_GUARD_PAUSE`, `..._SHED_AFTER_S`, and `..._FAIL_PAUSE_COUNT` belong to
 the pending pause/shed slice and are not introduced here.
@@ -151,6 +152,11 @@ the pending pause/shed slice and are not introduced here.
   above 2.5 GiB. Equality at a threshold does not change state (`free < warn`
   enters warn; `free > clear` exits; `free < refuse` refuses; `free > resume`
   readmits). Between refuse and resume the refusal holds.
+- **Warning event persistence.** One `disk.warn` event is recorded per warn
+  episode, carrying the free space measured when the episode began. A failed
+  event write is logged and retried on the next pass until it succeeds (never
+  duplicated); it never fails the pass, so a healthy boot with a warning band
+  and an unhealthy event write still serves traffic.
 - **Failed / unknown measurement.** A failed `stat` / `statvfs` / Docker-info
   query is state **unknown**, distinct from a measured 0. Unknown refuses new
   claims (fail closed). `ops.disk_free` returns 0 on `OSError`, so the guard must
@@ -217,6 +223,10 @@ Kubernetes get the warn and refuse bands only.
 
 Judged separately; the worst one decides. Paths on the same `st_dev` form one group
 and one episode; a group containing the data directory counts as the data directory.
+The admission slice needs no per-group role: the 64 MiB readiness check reads the
+data directory alone and limits use the worst free among groups. The role union
+(and the data-directory-strictness rule) becomes load-bearing only for pause and
+shed, which are pending.
 Unknown beats every measured free; otherwise the minimum free among applicable
 groups decides the band. Bounded: a constant number of `stat` / `statvfs` /
 Docker-info calls per pass; no directory walks; Docker query with a short timeout.
@@ -226,20 +236,28 @@ Docker-info calls per pass; no directory walks; Docker query with a short timeou
   not applicable. A configured root that does not exist yet is absent (holds no
   data) and counts as not applicable, not as a failed measurement.
 - The Docker data root (`DockerRootDir`): applicable only when a local unix-socket
-  daemon is configured (socket present / `DOCKER_HOST` is unset or `unix://`);
-  remote or not configured → not applicable. A `DockerRootDir` this process cannot
-  `stat` does not share its filesystem (the API-in-a-container case) → not
-  applicable. An unreadable Docker-info answer from an applicable daemon → unknown
-  (not a measured 0), which refuses claims.
+  daemon is configured (socket present / `DOCKER_HOST` is unset or `unix://`,
+  using Argus's configured docker socket when `DOCKER_HOST` is unset); remote or
+  not configured → not applicable. A `DockerRootDir` this process cannot `stat`
+  does not share its filesystem (the API-in-a-container case) → not applicable. A
+  path that `stat`s but whose `statvfs` fails stays unknown and refuses claims.
+  An unreadable Docker-info answer from an applicable daemon → unknown (not a
+  measured 0), which refuses claims.
 
 ### Visibility
 
 An authenticated surface (system summary) reports, per root role (`data`,
 `instances`, `docker`), applicability (`measured` / `unknown` / `stale` /
 `not_applicable`), free bytes when known, band, plus global claim admission
-(`admitted` / `refused`) and warn-episode state. It must not include filesystem
-paths, `st_dev` values, container/daemon identifiers, or the Docker root path.
-`/readyz` and `/healthz` stay unauthenticated and carry no paths or identifiers.
+(`admitted` / `refused`) and warn-episode state. When the guard is disabled,
+measurement is `disabled` (not a measured free of null). Per-root `band` is the
+instantaneous free-space band for that root; global `claim_admission` is latched
+hysteresis (refuse until free clears the resume edge, and refuse while unknown
+or stale). An operator can therefore see a root band of `warn` (or even `ok`)
+next to `claim_admission: refused` — the band is not the admission latch. It must
+not include filesystem paths, `st_dev` values, container/daemon identifiers, or
+the Docker root path. `/readyz` and `/healthz` stay unauthenticated and carry no
+paths or identifiers.
 
 ### Verification boundary
 

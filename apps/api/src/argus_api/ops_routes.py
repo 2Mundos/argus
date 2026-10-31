@@ -107,12 +107,17 @@ class DiskGuardRootOut(BaseModel):
 
 
 class DiskGuardOut(BaseModel):
-    """Authenticated disk-guard visibility; no paths or device identifiers."""
+    """Authenticated disk-guard visibility; no paths or device identifiers.
+
+    Per-root `band` is instantaneous free-space for that root. Global
+    `claim_admission` is latched hysteresis, so a root may show band "warn"
+    (or "ok") while claim_admission is still "refused".
+    """
 
     enabled: bool
     claim_admission: Literal["admitted", "refused"]
     warn_episode: bool
-    measurement: Literal["measured", "unknown", "stale"]
+    measurement: Literal["measured", "unknown", "stale", "disabled"]
     free_bytes: int | None = None
     roots: list[DiskGuardRootOut]
 
