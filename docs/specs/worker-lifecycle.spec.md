@@ -1116,6 +1116,15 @@ inbox. Chat notifications are a later, optional integration (single-node 3.5).
   the cap. Existing code-unit slices elsewhere (for example the 2000-character
   `error.slice(0, 2000)` on fail) are unchanged and out of scope.
 - **Redaction** runs before the cap, as today.
+- **Provider API error.** A generic failure notice ("The agent run failed") that
+  no quota pattern explains names the newest `api_error` that the group's Claude
+  transcripts (`data/v2-sessions/<group>/.claude-shared/projects/*/*.jsonl`, last
+  64 KiB of each) recorded since the claim: `(api: Claude API error <status>
+  (<type>))`, in place of the `(log: …)` cause. Only the HTTP status and the
+  provider's error type token are read, never message text. Without such a
+  record the log cause applies as before. The internal orchestrator's chat
+  reply names it the same way, bounded by the turn's start
+  ([internal orchestrator](internal-orchestrator.spec.md) 3.1).
 - **Verification boundary.** Implemented in the NanoClaw hook
   (`integrations/nanoclaw/argus-stderr-tail.ts`) and covered offline: unit
   tests for the caps, the code-point cut, and redaction before the cap, and

@@ -656,7 +656,10 @@ describe("createArgusAdapter orchestrator accounts", () => {
 });
 
 describe("createArgusAdapter orchestrator failures", () => {
-  async function orchestrator(opts: Parameters<typeof fakeChatArgus>[0]) {
+  async function orchestrator(
+    opts: Parameters<typeof fakeChatArgus>[0],
+    lastApiError?: ArgusConfig["lastApiError"],
+  ) {
     const fake = fakeChatArgus(opts);
     const vault = fakeVault();
     const inbound: any[] = [];
@@ -675,6 +678,7 @@ describe("createArgusAdapter orchestrator failures", () => {
         selectEngine: async () => false,
         selectModel,
       },
+      lastApiError,
     } as ArgusConfig);
     live.push(adapter);
     await adapter.setup({
@@ -726,6 +730,19 @@ describe("createArgusAdapter orchestrator failures", () => {
     await h.fail(LIMIT);
     expect(h.replies().at(-1)?.body.body).toBe(noAccountReply("2099-01-01T00:00:00Z"));
     expect(h.inbound).toHaveLength(1);
+  });
+
+  it("names the provider's API error behind a generic failure", async () => {
+    const since: number[] = [];
+    const h = await orchestrator({}, async (s) => {
+      since.push(s);
+      return { status: 401, type: "authentication_error" };
+    });
+    await h.fail(undefined);
+    expect(h.replies().at(-1)?.body.body).toBe(
+      "The agent run failed: Claude API error 401 (authentication_error).",
+    );
+    expect(since[0]).toBeGreaterThan(0); // bounded by the turn's start
   });
 
   it("records a rejected credential and names the account", async () => {

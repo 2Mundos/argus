@@ -16,7 +16,9 @@ import {
   boundHead,
   boundTail,
   type DockerRun,
+  describeApiError,
   inlineExcerpt,
+  lastClaudeApiError,
   readSessionEvidence,
   redactSessionTail,
   type SessionEvidence,
@@ -398,4 +400,42 @@ describe("stderr-tail artifact on a generic failure (synthetic log)", () => {
     expect(up!.contentType).toContain("truncated=false; complete=false");
     expect(up!.body).not.toContain("SYNTHSECRET1");
   }, 15_000);
+});
+
+describe("lastClaudeApiError", () => {
+  const record = (timestamp: string, status: number, type: string) =>
+    JSON.stringify({
+      type: "system",
+      subtype: "api_error",
+      level: "error",
+      timestamp,
+      error: {
+        status,
+        message: `${status} {"type":"error","error":{"type":"${type}","message":"invalid x-api-key sk-ant-SECRET"}}`,
+      },
+    });
+
+  it("takes the newest error since the turn, status and type only", async () => {
+    const { mkdtemp, mkdir, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const root = await mkdtemp(path.join(tmpdir(), "argus-api-error-"));
+    await mkdir(path.join(root, "-workspace-agent"));
+    await writeFile(
+      path.join(root, "-workspace-agent", "s1.jsonl"),
+      [
+        '{"type":"user","message":"hello"}',
+        record("2026-10-31T12:00:00.000Z", 529, "overloaded_error"),
+        record("2026-10-31T12:15:21.824Z", 401, "authentication_error"),
+        "not json",
+      ].join("\n"),
+    );
+    const fact = await lastClaudeApiError(root, Date.parse("2026-10-31T12:10:00Z"));
+    expect(fact).toEqual({ status: 401, type: "authentication_error" });
+    expect(describeApiError(fact!)).toBe("Claude API error 401 (authentication_error)");
+    expect(JSON.stringify(fact)).not.toContain("SECRET");
+    // Nothing after the turn started: no cause.
+    expect(await lastClaudeApiError(root, Date.parse("2026-10-31T13:00:00Z"))).toBeNull();
+    expect(await lastClaudeApiError(path.join(root, "missing"), 0)).toBeNull();
+  });
 });
