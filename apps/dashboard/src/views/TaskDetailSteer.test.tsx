@@ -97,17 +97,25 @@ afterEach(cleanup);
 
 const steerButton = () => screen.queryByRole("button", { name: "Steer" });
 
+async function openSteerComposer() {
+  const btn = await screen.findByRole("button", { name: /^(Steer|Close steer)$/ });
+  // Retry without toggling shut: assignee / attempt effects can lag the first click.
+  await waitFor(() => {
+    if (btn.getAttribute("aria-expanded") !== "true") fireEvent.click(btn);
+    expect(screen.getByPlaceholderText("Steer this attempt…")).toBeTruthy();
+  });
+}
+
 describe("TaskDetail actions-row steer", () => {
   it("opens the composer for a claimed task on the current attempt", async () => {
     render(<TaskDetail taskId="t1" onClose={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Steer" }));
-    expect(await screen.findByPlaceholderText("Steer this attempt…")).toBeTruthy();
+    await openSteerComposer();
   });
 
   it("sends the trimmed message and reloads the list", async () => {
     render(<TaskDetail taskId="t1" onClose={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Steer" }));
-    const box = await screen.findByPlaceholderText("Steer this attempt…");
+    await openSteerComposer();
+    const box = screen.getByPlaceholderText("Steer this attempt…");
     await waitFor(() => expect(mock.steerReads).toBeGreaterThan(0));
     const reads = mock.steerReads;
     fireEvent.change(box, { target: { value: "  use the cache  " } });
@@ -123,8 +131,8 @@ describe("TaskDetail actions-row steer", () => {
 
   it("closes on Escape", async () => {
     render(<TaskDetail taskId="t1" onClose={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Steer" }));
-    fireEvent.keyDown(await screen.findByPlaceholderText("Steer this attempt…"), {
+    await openSteerComposer();
+    fireEvent.keyDown(screen.getByPlaceholderText("Steer this attempt…"), {
       key: "Escape",
     });
     expect(screen.queryByPlaceholderText("Steer this attempt…")).toBeNull();

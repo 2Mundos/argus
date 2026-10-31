@@ -66,6 +66,7 @@ afterEach(() => {
   cleanup();
   calls.paths = [];
   openWorker.mockClear();
+  localStorage.clear();
 });
 
 describe("WorkersSidebar", () => {
@@ -73,15 +74,43 @@ describe("WorkersSidebar", () => {
     renderRail();
     expect(await screen.findByRole("complementary", { name: "Running workers" })).toBeTruthy();
     expect(screen.getByText("Workers")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Open worker abc12345/i })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /Open worker nanoclaw-socket-abc12345 \(running\)/i }),
+    ).toBeTruthy();
     expect(screen.queryByText("Live log")).toBeNull();
     expect(document.querySelector(".rail-log")).toBeNull();
     expect(calls.paths.filter((p) => p === "/api/agents").length).toBeGreaterThan(0);
   });
 
+  it("collapses the rail and remembers it", async () => {
+    renderRail();
+    fireEvent.click(await screen.findByRole("button", { name: "Collapse workers" }));
+    const icon = screen.getByRole("button", { name: "Open worker nanoclaw-socket-abc12345" });
+    expect(icon.getAttribute("title")).toBe("nanoclaw-socket-abc12345");
+    expect(screen.queryByText("1")).toBeNull();
+    expect(localStorage.getItem("argus.workers-rail")).toBe("collapsed");
+
+    cleanup();
+    renderRail();
+    expect(
+      await screen.findByRole("button", { name: "Open worker nanoclaw-socket-abc12345" }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Expand workers" }));
+    expect(
+      await screen.findByRole("button", {
+        name: /Open worker nanoclaw-socket-abc12345 \(running\)/i,
+      }),
+    ).toBeTruthy();
+    expect(localStorage.getItem("argus.workers-rail")).toBe("open");
+  });
+
   it("opens the worker panel from a rail chip", async () => {
     renderRail();
-    fireEvent.click(await screen.findByRole("button", { name: /Open worker abc12345/i }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Open worker nanoclaw-socket-abc12345 \(running\)/i,
+      }),
+    );
     expect(openWorker).toHaveBeenCalledWith("agent-w1");
   });
 });
