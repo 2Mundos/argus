@@ -8727,6 +8727,11 @@
           "recorded_size": {
             "title": "Recorded Size",
             "type": "integer"
+          },
+          "required": {
+            "default": false,
+            "title": "Required",
+            "type": "boolean"
           }
         },
         "required": [

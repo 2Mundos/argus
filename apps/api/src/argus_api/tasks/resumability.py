@@ -16,6 +16,7 @@ import aiosqlite
 import anyio
 from argus_core.continuation import (
     ArtifactState,
+    ContinuationArtifact,
     ContinuationProvenance,
     EffectiveContinuation,
 )
@@ -193,13 +194,40 @@ async def _read_attachment(
         return avail, ev, cause, None, None
 
 
-def _published_artifact(cont: EffectiveContinuation) -> bool:
-    return any(
+def _is_published_cover(a: ContinuationArtifact) -> bool:
+    """Non-worker, observed forge-style artifact that can cover published WIP."""
+    return (
         a.provenance is not ContinuationProvenance.WORKER
         and a.state is not ArtifactState.UNKNOWN
         and (a.head_sha is not None or a.kind.value in ("pr", "branch", "commit"))
-        for a in cont.artifacts
     )
+
+
+def _published_artifact(cont: EffectiveContinuation, *, wip_ref: str | None) -> bool:
+    """Whether a published artifact covers WIP.
+
+    When `wip_ref` is set, only an artifact whose `ref` equals it counts (or,
+    for a `pr` artifact, whose `head_sha` or `ref` equals the WIP ref). When
+    `wip_ref` is None, any published artifact is enough.
+    """
+    for a in cont.artifacts:
+        if not _is_published_cover(a):
+            continue
+        if wip_ref is None:
+            return True
+        if a.ref == wip_ref:
+            return True
+        if a.kind.value == "pr" and (a.head_sha == wip_ref or a.ref == wip_ref):
+            return True
+    return False
+
+
+def _required_attachment_id(wip_ref: str | None) -> str | None:
+    """The sole required shared input, if WIP names `attachment:<id>:<sha256>`."""
+    if not wip_ref:
+        return None
+    m = _ATTACHMENT_REF.fullmatch(wip_ref)
+    return m.group(1) if m else None
 
 
 async def assess(
@@ -210,10 +238,13 @@ async def assess(
     expected_attempt: int | None,
     expected_version: str | None,
     store: LocalArtifactStore,
+    manager: bool,
     read_bound: int = DEFAULT_READ_BOUND,
 ) -> ResumabilityReport:
     """Read-only assessment. Callers hold a read connection; hashing uses the store
-    only and never writes. One bad artifact becomes a reason, never a raise."""
+    only and never writes. One bad artifact becomes a reason, never a raise.
+    `manager` is the caller's view for `list_inputs` (no manager-only facts for
+    workers)."""
     causes: list[ResumabilityCause] = []
     reasons: list[Reason] = []
     artifacts_out: list[ArtifactAssessment] = []
@@ -321,7 +352,12 @@ async def assess(
         )
 
     # -- inputs (shared attachments): receipts + current-read --------------------
-    listed = await inputs_mod.list_inputs(conn, task.id, manager=True)
+    # Only the WIP `attachment:<id>:<sha256>` (if any) is required; other shared
+    # inputs are assessed for the operator but never flip required_inputs_ok.
+    required_aid = _required_attachment_id(
+        cont.wip.ref if cont.wip is not None else None
+    )
+    listed = await inputs_mod.list_inputs(conn, task.id, manager=manager)
     caps = task.required_capabilities
     has_cap = INPUTS_CAPABILITY in caps
     if listed.inputs and not has_cap:
@@ -357,10 +393,13 @@ async def assess(
     by_id: dict[str, Artifact] = {}
 
     for item in listed.inputs[:MAX_INPUTS]:
+        is_required = required_aid is not None and item.id == required_aid
         try:
             art = await get_artifact(conn, item.id)
         except Exception:
-            required_inputs_ok = False
+            if is_required:
+                required_inputs_ok = False
+                required_unobserved = True
             causes.append(ResumabilityCause.ARTIFACT_UNKNOWN)
             reasons.append(
                 _reason(
@@ -387,11 +426,11 @@ async def assess(
                     f"name={art.name}; recorded_size={art.size}",
                 )
             )
-        if avail is not Availability.AVAILABLE:
+        if is_required and avail is not Availability.AVAILABLE:
             required_inputs_ok = False
             if avail is Availability.UNKNOWN:
                 required_unobserved = True
-        if ev is EvidenceClass.UNKNOWN:
+        if is_required and ev is EvidenceClass.UNKNOWN:
             required_unobserved = True
         receipts = [
             InputReceiptView(
@@ -412,6 +451,7 @@ async def assess(
                 receipts=receipts,
                 consumer_path=consumer,
                 capability=capability,
+                required=is_required,
             )
         )
         if len(artifacts_out) < MAX_ARTIFACTS:
@@ -434,7 +474,7 @@ async def assess(
     # -- WIP ---------------------------------------------------------------------
     wip_model = cont.wip
     if wip_model is None:
-        if _published_artifact(cont):
+        if _published_artifact(cont, wip_ref=None):
             wip = WipAssessment(
                 kind=WipKind.PUBLISHED,
                 evidence_class=EvidenceClass.RECORDED_METADATA,
@@ -532,6 +572,8 @@ async def assess(
                     )
                 if avail is not Availability.AVAILABLE:
                     required_inputs_ok = False
+                    if avail is Availability.UNKNOWN:
+                        required_unobserved = True
                 wip = WipAssessment(
                     kind=WipKind.PUBLISHED
                     if avail is Availability.AVAILABLE
@@ -544,7 +586,17 @@ async def assess(
                     if avail is Availability.AVAILABLE
                     else "not_a_transfer",
                 )
-        elif _published_artifact(cont):
+        elif _published_artifact(cont, wip_ref=ref):
+            if ref is None:
+                # Informational only — do not add WIP_UNRECORDED to cause_codes.
+                reasons.append(
+                    _reason(
+                        ResumabilityCause.WIP_UNRECORDED,
+                        "wip",
+                        EvidenceClass.RECORDED_METADATA,
+                        "wip.ref is absent; published because some covering artifact exists",
+                    )
+                )
             wip = WipAssessment(
                 kind=WipKind.PUBLISHED,
                 ref=_clip(ref),
@@ -559,7 +611,9 @@ async def assess(
                     ResumabilityCause.WIP_LOCAL_ONLY,
                     _clip(ref) or "wip",
                     EvidenceClass.RECORDED_METADATA,
-                    "a workspace path or local sha is not a transfer to another attempt",
+                    "a workspace path or local sha is not a transfer to another attempt"
+                    if ref
+                    else "wip.ref is absent and no covering published artifact exists",
                 )
             )
             next_steps.append(

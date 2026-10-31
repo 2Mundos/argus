@@ -69,7 +69,9 @@ A bounded, typed report with no free content bytes:
 | `reasons` | Each: `code`, `subject`, `evidence_class`, bounded redacted `detail` |
 | `artifacts[]` | Per known continuation / attachment artifact assessment |
 | `wip` | Published / local_only / unknown assessment |
-| `inputs[]` | Shared attachments with receipts, availability and consumer path |
+| `inputs[]` | Shared attachments with receipts, availability, consumer path,
+  and `required` (true only when `continuation.wip.ref` names that
+  attachment as `attachment:<id>:<sha256>`) |
 | `lease` | Holder, expiry, and whether the lease is live for this attempt |
 | `decision_changes[]` / `unknowns[]` | Decisions and gaps relative to the attempt |
 | `next_steps[]` | Bounded, typed hints (not commands) |
@@ -123,31 +125,48 @@ A remote artifact (branch / PR / commit) is never read by the preflight: it is
 
 Derived from `continuation.wip` and artifacts:
 
-- `published` when an artifact with provenance other than `worker_reported` and a
-  non-`unknown` state covers it (branch / PR / commit with a head).
-- `local_only` when the WIP ref is a local sha/path, or the ref is absent and
-  there is no covering artifact.
+- When `wip.ref` is set, `published` only if a non-`worker_reported` artifact
+  with a non-`unknown` state **covers that ref**: its `ref` equals the WIP ref,
+  or (for a `pr` artifact) its `head_sha` or `ref` equals the WIP ref. An
+  unrelated published PR/branch does not cover a different WIP ref — that stays
+  `local_only` (`wip_local_only`).
+- When `wip.ref` is `None` (or WIP itself is absent but forge artifacts exist),
+  `published` if **some** covering published artifact exists; the reason detail
+  says that `wip.ref` is absent and publication rests on that artifact set.
+- `local_only` when the WIP ref is a local sha/path, or the ref has no covering
+  artifact.
 - `unknown` when the ref names `checkpoint:<id>:<sha256>` — the checkpoint store
   is node-local and invisible to the server (`checkpoint_store_not_visible`).
-- A WIP `attachment:<id>:<sha256>` reference is verified like 3.4.
+- A WIP `attachment:<id>:<sha256>` reference is verified like 3.4 and is the
+  sole **required** shared input (see 3.6).
 
 Always add an explicit reason that a workspace path or a checkpoint id is **not**
 a transfer to another attempt.
 
 ## 3.6 Inputs
 
-For each shared attachment of the task (`list_inputs`):
+For each shared attachment of the task (`list_inputs`, using the caller's
+manager/worker view — never a managers-only fact for a worker):
 
 - the recorded artifact metadata;
 - its latest receipts per attempt/state as `receipt_only`;
 - the current availability from 3.4;
+- `required: bool` — `true` only when `continuation.wip.ref` is
+  `attachment:<artifact id>:<sha256>` naming this input; otherwise `false`;
 - the supported consumer path: `task_inputs_materializer` (NanoClaw
   `materializeTaskInputs`, which needs the `task-inputs` capability — check the
   task's `required_capabilities` and report `capability_not_required` /
   `capability_unknown` when it does not advertise it) or `none`.
 
-Do not add another consumer. Receipts stay history; they are never upgraded to
-`current_read`.
+An optional shared input (not the required WIP attachment) that is missing,
+truncated, corrupted, inaccessible or unknown is still reported with its
+availability, cause code and reason so the operator can see it, but it must
+**not** set `required_inputs_ok = false` and must not by itself make
+`decision` `not_resumable` (aligned with [task inputs 3.6](task-inputs.spec.md):
+an optional shared input that fails never blocks the attempt). Only the required
+WIP attachment ref (and a required WIP attachment that fails verification)
+drives that block. Do not add another consumer. Receipts stay history; they are
+never upgraded to `current_read`.
 
 ## 3.7 Attempt and decision changes
 
@@ -173,8 +192,12 @@ Closed `ResumabilityCause` enum, at minimum:
 
 - `resumable` only when everything required is `current_read` / available and
   nothing required is missing;
-- `not_resumable` when a required input is missing / corrupted / truncated /
-  inaccessible, or the task is terminal;
+- `not_resumable` when a **required** input is missing / corrupted / truncated /
+  inaccessible (`required_inputs_ok` is false), or when `task_terminal` /
+  `artifact_unavailable` / `input_capability_missing` apply. Bare
+  `artifact_missing` / `artifact_truncated` / `artifact_corrupted` /
+  `artifact_inaccessible` codes from an optional input are reported but do not
+  decide `not_resumable` by themselves;
 - `unknown` when any required fact is unobserved;
 - `stale` when the caller's premise does not match.
 

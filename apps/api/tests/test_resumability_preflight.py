@@ -332,7 +332,7 @@ def test_wip_published_local_checkpoint_and_attachment(
 ) -> None:
     orch = register(client, "orchestrator")
 
-    # published
+    # published — WIP ref must be covered by a matching artifact
     t1 = new_task(client)
     client.patch(
         f"/api/tasks/{t1['id']}/continuation",
@@ -341,12 +341,18 @@ def test_wip_published_local_checkpoint_and_attachment(
             "reason": "pr",
             "artifacts": [
                 {
+                    "kind": "branch",
+                    "ref": "feature/x",
+                    "state": "open",
+                    "head_sha": "abc1234",
+                },
+                {
                     "kind": "pr",
                     "ref": "42",
                     "state": "open",
                     "head_sha": "abc1234",
                     "url": "https://example.test/pr/42",
-                }
+                },
             ],
             "wip": {"summary": "on the PR", "ref": "feature/x"},
         },
@@ -498,3 +504,152 @@ def test_response_caps_and_capability_missing(client: TestClient) -> None:
         assert inp["consumer_path"] == "none"
         assert inp["capability"] == "capability_not_required"
     assert {a["id"] for a in arts} == {i["artifact_id"] for i in body["inputs"]}
+
+
+# -- required vs optional inputs -----------------------------------------------
+
+
+def _seed_required_optional(
+    client: TestClient, orch: dict[str, str]
+) -> tuple[dict, dict, dict]:
+    """Task with acceptance + branch so gaps do not force `unknown`."""
+    task = new_task(
+        client,
+        required_capabilities=["task-inputs"],
+        acceptance=["ship it"],
+    )
+    required = share(client, task, "required.txt", b"required-bytes\n")
+    optional = share(client, task, "optional.txt", b"optional-bytes\n")
+    patch = client.patch(
+        f"/api/tasks/{task['id']}/continuation",
+        json={
+            "expected_revision": 0,
+            "reason": "wip-input",
+            "artifacts": [
+                {
+                    "kind": "branch",
+                    "ref": "feature/ready",
+                    "state": "open",
+                    "head_sha": "abc1234",
+                }
+            ],
+            "wip": {
+                "summary": "required attachment",
+                "ref": f"attachment:{required['id']}:{required['sha256']}",
+            },
+        },
+        headers=orch,
+    )
+    assert patch.status_code == 200, patch.text
+    return task, required, optional
+
+
+def test_optional_missing_input_does_not_block(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Optional shared input missing + required available → resumable."""
+    orch = register(client, "orchestrator")
+    task, required, optional = _seed_required_optional(client, orch)
+    stored_file(tmp_path, optional).unlink()
+    body = preflight(client, task["id"]).json()
+    assert body["decision"] == "resumable"
+    by_id = {i["artifact_id"]: i for i in body["inputs"]}
+    assert by_id[required["id"]]["availability"] == "available"
+    assert by_id[required["id"]]["required"] is True
+    assert by_id[optional["id"]]["availability"] == "missing"
+    assert by_id[optional["id"]]["required"] is False
+    assert "artifact_missing" in body["cause_codes"]
+    assert sum(1 for i in body["inputs"] if i["required"]) == 1
+
+
+def test_required_missing_input_is_not_resumable(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """When the missing input is the WIP-required one → not_resumable."""
+    orch = register(client, "orchestrator")
+    task, required, optional = _seed_required_optional(client, orch)
+    stored_file(tmp_path, required).unlink()
+    body = preflight(client, task["id"]).json()
+    assert body["decision"] == "not_resumable"
+    by_id = {i["artifact_id"]: i for i in body["inputs"]}
+    assert by_id[required["id"]]["availability"] == "missing"
+    assert by_id[required["id"]]["required"] is True
+    assert by_id[optional["id"]]["availability"] == "available"
+    assert by_id[optional["id"]]["required"] is False
+
+
+def test_wip_ref_must_match_covering_artifact(client: TestClient) -> None:
+    """Unrelated PR does not cover a WIP branch ref; matching branch does."""
+    orch = register(client, "orchestrator")
+
+    t1 = new_task(client)
+    client.patch(
+        f"/api/tasks/{t1['id']}/continuation",
+        json={
+            "expected_revision": 0,
+            "reason": "unrelated-pr",
+            "artifacts": [
+                {
+                    "kind": "pr",
+                    "ref": "99",
+                    "state": "open",
+                    "head_sha": "abc1234",
+                    "url": "https://example.test/pr/99",
+                }
+            ],
+            "wip": {"summary": "other branch", "ref": "feature/uncovered"},
+        },
+        headers=orch,
+    )
+    uncovered = preflight(client, t1["id"]).json()
+    assert uncovered["wip"]["kind"] == "local_only"
+    assert "wip_local_only" in uncovered["cause_codes"]
+
+    t2 = new_task(client)
+    client.patch(
+        f"/api/tasks/{t2['id']}/continuation",
+        json={
+            "expected_revision": 0,
+            "reason": "matching-branch",
+            "artifacts": [
+                {
+                    "kind": "branch",
+                    "ref": "feature/covered",
+                    "state": "open",
+                    "head_sha": "def5678",
+                }
+            ],
+            "wip": {"summary": "same branch", "ref": "feature/covered"},
+        },
+        headers=orch,
+    )
+    covered = preflight(client, t2["id"]).json()
+    assert covered["wip"]["kind"] == "published"
+    assert covered["wip"]["transfer"] == "published_ref"
+
+
+def test_worker_and_manager_responses_identical(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Worker and manager preflight bodies are byte-identical for the same task."""
+    from datetime import UTC, datetime
+
+    task = new_task(client, required_capabilities=["task-inputs"])
+    share(client, task, "shared.txt", b"same-for-both\n")
+    # Unshared attachment exists so manager list_inputs would compute a count
+    # workers must never see — the preflight must not expose or diverge on it.
+    res = client.post(
+        f"/api/tasks/{task['id']}/attachments",
+        params={"name": "private.txt", "worker_readable": "false"},
+        content=b"managers-only\n",
+        headers={**ADMIN, "Content-Type": "text/plain; charset=utf-8"},
+    )
+    assert res.status_code == 201, res.text
+    w = register(client)
+    claim(client, w, caps=["task-inputs"])
+
+    frozen = datetime(2026, 10, 31, 12, 0, 0, tzinfo=UTC)
+    monkeypatch.setattr("argus_api.tasks.routes.utcnow", lambda: frozen)
+    worker_body = preflight(client, task["id"], headers=w).content
+    manager_body = preflight(client, task["id"], headers=ADMIN).content
+    assert worker_body == manager_body

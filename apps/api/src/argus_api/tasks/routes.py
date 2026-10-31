@@ -29,7 +29,11 @@ from pydantic import (
     model_validator,
 )
 
-from argus_api.access import require_task_readable, worker_task_filter
+from argus_api.access import (
+    is_global_reader,
+    require_task_readable,
+    worker_task_filter,
+)
 from argus_api.accounts import service as accounts
 from argus_api.accounts.routes import with_local_context
 from argus_api.artifacts.store import LocalArtifactStore
@@ -574,6 +578,7 @@ async def get_resumability(
             expected_attempt=expected_attempt,
             expected_version=expected_version,
             store=store,
+            manager=is_global_reader(caller),
             read_bound=DEFAULT_READ_BOUND,
         )
 

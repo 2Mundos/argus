@@ -287,6 +287,6 @@ Tool errors read `<status> <code>: <message>`.
 | --- | --- | --- |
 | `409 stale_version` / `stale_pool` / `stale_continuation` | Changed since you read it. | Re-read, re-decide, retry. |
 | `409 decision_not_open` | Already answered or cancelled. | `get_decision` to see by whom; do not re-answer. |
-| `409 task_not_editable`, `task_not_failed`, `task_not_claimed` | Wrong state for that action. | `get_tasks` and pick the action for its state. |
+| `409 task_not_editable` / `409 task_not_failed` / `409 task_not_claimed` | Wrong state for that action. | `get_tasks` and pick the action for its state. |
 | `403` "this decision is for: human" | Not yours. | Leave it for a human. |
 | `422 dependency_cycle`, `invalid_pool`, `cursor_mismatch` | Bad request. | Fix the arguments; do not retry as is. |

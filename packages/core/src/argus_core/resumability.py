@@ -146,6 +146,10 @@ class InputAssessment(BaseModel):
     capability: Literal["required", "capability_not_required", "capability_unknown"] = (
         "capability_unknown"
     )
+    # True only when continuation WIP names this attachment
+    # (`attachment:<id>:<sha256>`). Optional shared inputs are still assessed but
+    # never flip `required_inputs_ok` / the top-level decision.
+    required: bool = False
 
 
 class WipAssessment(BaseModel):
@@ -287,13 +291,13 @@ def classify_artifact(
     return Availability.AVAILABLE, EvidenceClass.CURRENT_READ, None
 
 
+# Bare attachment availability codes (missing/truncated/corrupted/inaccessible)
+# are never deciding by themselves: an unavailable *optional* input is reported
+# as a cause and a reason, never as a block. `required_inputs_ok` already
+# reflects only the required WIP attachment (if any).
 _NOT_RESUMABLE = frozenset(
     {
         ResumabilityCause.TASK_TERMINAL,
-        ResumabilityCause.ARTIFACT_MISSING,
-        ResumabilityCause.ARTIFACT_TRUNCATED,
-        ResumabilityCause.ARTIFACT_CORRUPTED,
-        ResumabilityCause.ARTIFACT_INACCESSIBLE,
         ResumabilityCause.ARTIFACT_UNAVAILABLE,
         ResumabilityCause.INPUT_CAPABILITY_MISSING,
     }
@@ -329,8 +333,16 @@ def derive_decision(
 ) -> ResumabilityDecision:
     """Map cause codes and required-input status to the top-level decision.
 
-    `resumable` only when nothing blocks and every required input was a successful
-    current read. Stale beats everything else when the caller's premise mismatches.
+    `resumable` only when nothing blocks and every *required* input was a
+    successful current read. Stale beats everything else when the caller's
+    premise mismatches.
+
+    Attachment availability codes (missing / truncated / corrupted /
+    inaccessible) do not decide `not_resumable` by themselves: that follows
+    `required_inputs_ok`, which only reflects the required WIP attachment ref
+    (if any). An unavailable optional input is reported as a cause and a
+    reason, never as a block. `task_terminal`, `artifact_unavailable` and
+    `input_capability_missing` remain `not_resumable`.
     """
     codes = set(causes)
     if codes & _STALE:

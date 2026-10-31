@@ -5880,6 +5880,11 @@ export interface components {
             recorded_sha256: string;
             /** Recorded Size */
             recorded_size: number;
+            /**
+             * Required
+             * @default false
+             */
+            required?: boolean;
         };
         /**
          * InputFailure
