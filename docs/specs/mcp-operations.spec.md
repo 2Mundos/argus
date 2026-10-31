@@ -33,6 +33,7 @@ admin, about 18.7 KB of schema. The largest are `create_task` (1.4 KB),
 | Unblock / retry | `POST /tasks/{id}/unblock`, `/retry` | — | **not exposed** |
 | Decisions | `GET /decisions?state&subject_id`, `GET /decisions/{id}` | `list_decisions()` (open only, no args) | filters **not exposed**; no project/kind filter; no `get_decision` |
 | Answer | `POST /decisions/{id}/answer` | `answer_decision` | a retry fails with `409 decision_not_open` (no idempotent replay); one at a time |
+| Preview | `GET /decisions/{id}/preview?choice&text&request_id` | `preview_decision` | read-only, advisory; see 3.2c |
 | Artifacts | `GET /tasks/{id}/artifacts`, `GET /artifacts/{id}/content` | upload only | list and read **not exposed**; no range read; no integrity check |
 | Agents | `GET /agents`, `/agents/{id}`, `POST /agents/{id}/drain` | `list_agents` | get and drain **not exposed** |
 | Pools | `GET/PUT /pools/{name}`, scale, launch | `list_pools`, `scale_pool`, `launch_worker` | `PUT` replaces the whole pool and has no precondition; `launch_worker` requires `expected_desired_replicas` or `unconditional` ([worker launch 3](worker-launch.spec.md)) |
@@ -251,6 +252,77 @@ Findings outside the gap list:
 
 `report_task_models` (agents), `get_task_models` and `get_agent_models` (any
 token) wrap the model trace endpoints ([spec](model-observability.spec.md)).
+
+## 3.2c Decision preview
+
+A manager can see what an answer would do before giving it. `GET
+/api/decisions/{id}/preview?choice&text&request_id` (MCP `preview_decision(decision_id,
+choice?, text?, request_id?)`) takes the arguments `answer_decision` takes (`text` ≤10,000
+characters, else 422) and answers `200` with a snapshot. Callers: the same managers as
+`answer_decision` (orchestrator or admin; others get the same 403). An unknown id is 404.
+It is **advisory**: the response always carries `advisory: {authorizes: false, executes:
+false}`. It writes nothing (no row, event, audit entry or lease), calls no network (not the
+forge) and opens a read snapshot only. It adds no parameter to the answer path.
+
+**No drift.** The preview calls the answer path's own functions: the audience rule
+(`_check_audience`), the choice and text validator, the replay test (`_same_answer`), the
+mapping from a decision and answer to its effect (`effect_of`, which `_apply_answer` also
+dispatches on), the task state machine (`transition`), the reviewer rule and the
+moot-decision selection (`WAITS_IN`, terminal states). A change to the answer rules changes
+the preview.
+
+**Response.** Every section says where its facts come from: `provenance` is `stored` (a DB
+row), `derived` (computed from stored rows by the answer path's code) or `unknown`, with
+`observed_at` (the source row's timestamp; the snapshot's `now` for derived facts).
+Unavailable facts are present and `"unknown"` or `"stale"`, never omitted.
+
+- `snapshot`: `{computed_at, decision_version}`. `decision_version` is the decision's
+  `decided_at` or `created_at`, plus its state; a caller compares it with a later preview
+  to see that the decision moved. The answer path does not use it: it revalidates
+  permissions and state in its own transaction.
+- `decision`: id, kind, subject_type, subject_id, state, audience, created_at, decided_at,
+  decided_by, options, requested_by (all stored).
+- `question`: `{reference: {id, kind}, text, truncated, full_length, redacted}`. `text` is
+  the question after the shared `redact()` helper, cut to 4,000 characters; `reference`
+  is always present so a caller can read the whole item with `get_decision`.
+- `proposal`: `{choice, text, request_id, valid, error, offered_option}`. `valid` is the
+  answer path's validator verdict (`error` is its `code`, for example `invalid_choice`);
+  `offered_option` says whether `choice` is one of `options` (`null` for free-text
+  questions). With neither choice nor text, `valid` is `"unknown"` and no transition is
+  computed. The echoed text is redacted and capped at 1,000 characters.
+- `authorization`: `{would_allow, rule, error}`: the verdict the answer path would produce
+  for this caller now (`human` audience needs an admin; `orchestrator` and `any` need an
+  orchestrator or admin; a human-reviewed task needs an admin to review). It is a report, not
+  a grant.
+- `answer_outcome`: what the answer path would return now: `would_apply` (decision open
+  and the answer valid and allowed), `replay` (not open, `request_id` given and same
+  caller, choice and text: `replayed: true`), or `rejected` with `error` `{status, code}`
+  (`409 decision_not_open` for an answered or cancelled decision, or `403`/`422`).
+- `transition`: for an open decision with a valid proposal, `{decision: {from: open, to:
+  answered, choice}, effects}`. Each effect is `{kind, detail, provenance}`: `task_state`
+  (`from`/`to`, from `transition()`; `ready` after `blocked` or `in_review` is the
+  requeue), `clarification_added`, `knowledge_saved` (requested via `save_to_knowledge`
+  is not previewed: unknown), `decisions_cancelled` (ids, ≤20, of the other open decisions
+  the move makes moot), `difficulty_escalation` (a review rejection, as `_escalation`
+  computes), `knowledge_proposal` (accepted or rejected), `pool_scale` (from the decision
+  payload), `routine_reenabled`. Whatever needs a write to know (for example the effect
+  of a pool scale beyond its payload, or later side effects of the task becoming ready)
+  is an effect of kind `unknown` with a reason. An attempt is never cancelled by an
+  answer: a decision waits on a task that is not claimed.
+- `task`: for a task subject, `{id, state, attempt, attempt_id, claimed_by, claimed_at,
+  version}` from the task row and its latest `task_attempts` row (stored).
+- `premise_checks`: `{live_forge_checked: false, checks}`. Only stored data is used: the
+  task's continuation PR and commit artifacts (`head_sha`, `state`, `observed_at`) and
+  its `reconciliation` entries. The premise a decision names is a `head_sha` in its
+  payload or hexadecimal hashes (7 to 40 characters) in its question. Each check is
+  `{subject, premise, recorded, observed_at, status}` with `status` `match`, `stale` (the
+  heads differ, or a reconciliation entry records a moved head or a no-longer-merged
+  PR) or `unknown` (no premise or no stored observation). At most 10 checks.
+- `advisory`: `{authorizes: false, executes: false}`.
+
+Lists are capped (effects 20, checks 10, cancelled ids 20); `question.text` at 4,000.
+A race is expected: if another caller answers between preview and answer, the answer
+returns its existing `409 decision_not_open`, and a new preview shows `answered`.
 
 ## 3.3 P1 — fleet
 

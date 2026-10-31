@@ -5544,6 +5544,74 @@
         "title": "DecisionPage",
         "type": "object"
       },
+      "DecisionPreview": {
+        "properties": {
+          "advisory": {
+            "$ref": "#/components/schemas/PreviewAdvisory"
+          },
+          "answer_outcome": {
+            "$ref": "#/components/schemas/PreviewAnswerOutcome"
+          },
+          "authorization": {
+            "$ref": "#/components/schemas/PreviewAuthorization"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/PreviewDecisionFacts"
+          },
+          "premise_checks": {
+            "$ref": "#/components/schemas/PreviewPremiseChecks"
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/PreviewProposal"
+          },
+          "question": {
+            "$ref": "#/components/schemas/PreviewQuestionFacts"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/PreviewSnapshot"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewTaskFacts"
+              },
+              {
+                "const": "unknown",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
+          },
+          "transition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewTransition"
+              },
+              {
+                "const": "unknown",
+                "type": "string"
+              }
+            ],
+            "title": "Transition"
+          }
+        },
+        "required": [
+          "snapshot",
+          "decision",
+          "question",
+          "proposal",
+          "authorization",
+          "answer_outcome",
+          "transition",
+          "task",
+          "premise_checks"
+        ],
+        "title": "DecisionPreview",
+        "type": "object"
+      },
       "DecisionState": {
         "enum": [
           "open",
@@ -12109,6 +12177,625 @@
           "platform"
         ],
         "title": "PrepareRequest",
+        "type": "object"
+      },
+      "PreviewAdvisory": {
+        "properties": {
+          "authorizes": {
+            "const": false,
+            "default": false,
+            "title": "Authorizes",
+            "type": "boolean"
+          },
+          "executes": {
+            "const": false,
+            "default": false,
+            "title": "Executes",
+            "type": "boolean"
+          }
+        },
+        "title": "PreviewAdvisory",
+        "type": "object"
+      },
+      "PreviewAnswerOutcome": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "provenance": {
+            "default": "derived",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "would_apply",
+              "replay",
+              "rejected",
+              "unknown"
+            ],
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "PreviewAnswerOutcome",
+        "type": "object"
+      },
+      "PreviewAuthorization": {
+        "description": "The verdict the answer path would give this caller now; not a grant.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "provenance": {
+            "default": "derived",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "rule": {
+            "title": "Rule",
+            "type": "string"
+          },
+          "would_allow": {
+            "title": "Would Allow",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "would_allow",
+          "rule",
+          "error"
+        ],
+        "title": "PreviewAuthorization",
+        "type": "object"
+      },
+      "PreviewDecisionFacts": {
+        "properties": {
+          "audience": {
+            "title": "Audience",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DecisionKind"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "provenance": {
+            "default": "stored",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "requested_by": {
+            "title": "Requested By",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DecisionState"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_type": {
+            "title": "Subject Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "subject_type",
+          "subject_id",
+          "state",
+          "audience",
+          "options",
+          "requested_by",
+          "decided_by",
+          "created_at",
+          "decided_at",
+          "observed_at"
+        ],
+        "title": "PreviewDecisionFacts",
+        "type": "object"
+      },
+      "PreviewEffect": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "provenance": {
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "detail",
+          "provenance"
+        ],
+        "title": "PreviewEffect",
+        "type": "object"
+      },
+      "PreviewPremiseCheck": {
+        "properties": {
+          "observed": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "premise": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Premise"
+          },
+          "provenance": {
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "recorded": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded"
+          },
+          "status": {
+            "enum": [
+              "match",
+              "stale",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "premise",
+          "recorded",
+          "observed",
+          "observed_at",
+          "status",
+          "provenance"
+        ],
+        "title": "PreviewPremiseCheck",
+        "type": "object"
+      },
+      "PreviewPremiseChecks": {
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/PreviewPremiseCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "live_forge_checked": {
+            "const": false,
+            "default": false,
+            "title": "Live Forge Checked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "checks"
+        ],
+        "title": "PreviewPremiseChecks",
+        "type": "object"
+      },
+      "PreviewProposal": {
+        "properties": {
+          "choice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Choice"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "offered_option": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offered Option"
+          },
+          "provenance": {
+            "default": "derived",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "valid": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "const": "unknown",
+                "type": "string"
+              }
+            ],
+            "title": "Valid"
+          }
+        },
+        "required": [
+          "choice",
+          "text",
+          "request_id",
+          "valid",
+          "error",
+          "offered_option"
+        ],
+        "title": "PreviewProposal",
+        "type": "object"
+      },
+      "PreviewQuestionFacts": {
+        "properties": {
+          "full_length": {
+            "title": "Full Length",
+            "type": "integer"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "provenance": {
+            "default": "stored",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "redacted": {
+            "title": "Redacted",
+            "type": "boolean"
+          },
+          "reference": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Reference",
+            "type": "object"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "reference",
+          "text",
+          "truncated",
+          "full_length",
+          "redacted",
+          "observed_at"
+        ],
+        "title": "PreviewQuestionFacts",
+        "type": "object"
+      },
+      "PreviewSnapshot": {
+        "properties": {
+          "computed_at": {
+            "format": "date-time",
+            "title": "Computed At",
+            "type": "string"
+          },
+          "decision_version": {
+            "title": "Decision Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "computed_at",
+          "decision_version"
+        ],
+        "title": "PreviewSnapshot",
+        "type": "object"
+      },
+      "PreviewTaskFacts": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "attempt_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt Id"
+          },
+          "claimed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed At"
+          },
+          "claimed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed By"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "provenance": {
+            "default": "stored",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "attempt",
+          "attempt_id",
+          "claimed_by",
+          "claimed_at",
+          "version",
+          "observed_at"
+        ],
+        "title": "PreviewTaskFacts",
+        "type": "object"
+      },
+      "PreviewTransition": {
+        "properties": {
+          "decision": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Decision",
+            "type": "object"
+          },
+          "effects": {
+            "items": {
+              "$ref": "#/components/schemas/PreviewEffect"
+            },
+            "title": "Effects",
+            "type": "array"
+          },
+          "provenance": {
+            "default": "derived",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "effects"
+        ],
+        "title": "PreviewTransition",
         "type": "object"
       },
       "PricingInfo": {
@@ -23058,6 +23745,99 @@
           }
         ],
         "summary": "Answer Decision",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/api/decisions/{decision_id}/preview": {
+      "get": {
+        "description": "What answering would do, read-only and advisory (it authorizes and executes\nnothing). Takes the answer's `choice`, `text` and `request_id`; reports the\nverdict, transition and effects the answer path would produce, and what stored\nobservations say about the decision's premise. A snapshot: compare\n`snapshot.decision_version` to see staleness.",
+        "operationId": "preview_decision_api_decisions__decision_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "decision_id",
+            "required": true,
+            "schema": {
+              "title": "Decision Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "choice",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Choice"
+            }
+          },
+          {
+            "in": "query",
+            "name": "text",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 10000,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "request_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Preview Decision",
         "tags": [
           "decisions"
         ]
