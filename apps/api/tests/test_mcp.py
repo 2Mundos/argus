@@ -12,6 +12,7 @@ import pytest
 from argus_api import mcp_server
 from argus_api.artifacts.store import LocalArtifactStore
 from argus_api.main import app
+from argus_api.secrets import MemorySecretStore
 from argus_core.auth import Scope
 from fastapi.testclient import TestClient
 from mcp.server.mcpserver.exceptions import ToolError
@@ -1001,3 +1002,55 @@ def test_unknown_steer_outcome_over_mcp_matches_rest(client: TestClient) -> None
     again = tool(client, second, "claim_task", wait_s=0)["task"]
     assert again["id"] == task_id and again["steer_unknown"] == 1
     assert "look" not in json.dumps(again)
+
+
+def test_list_accounts_reports_auth_health_through_mcp(client: TestClient) -> None:
+    """The MCP read model carries `last_accepted_at` / `last_rejected_at` per account
+    (account-usage.spec.md 3.5), read through the tool and not the REST response."""
+    app.state.secrets = MemorySecretStore()
+    admin = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+    ids = [
+        client.post(
+            "/api/accounts",
+            json={
+                "name": name,
+                "provider": "anthropic",
+                "priority": priority,
+                "credential": {"api_key": f"sk-ant-api03-{name}"},
+            },
+            headers=admin,
+        ).json()["id"]
+        for name, priority in (("claude-a", 100), ("claude-b", 90))
+    ]
+    boot = client.post(
+        "/api/agents/bootstrap-tokens", json={"role": "worker"}, headers=admin
+    ).json()
+    reg = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
+    worker = {"Authorization": f"Bearer {reg.json()['token']}"}
+    client.post("/api/tasks", json={"project": "global", "title": "t"}, headers=admin)
+    task = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    lease = client.post(
+        "/api/accounts/lease",
+        json={
+            "runtime_providers": ["anthropic"],
+            "role": "engine",
+            "task_id": task["id"],
+            "attempt": task["attempt"],
+        },
+        headers=worker,
+    ).json()["account_id"]
+    sent = client.post(
+        f"/api/accounts/{lease}/auth-rejected",
+        json={"task_id": task["id"], "attempt": task["attempt"], "role": "engine"},
+        headers=worker,
+    )
+    assert sent.status_code == 204, sent.text
+
+    listed = {
+        a["id"]: a for a in tool(client, ADMIN_TOKEN, "list_accounts")["accounts"]
+    }
+    assert set(listed) == set(ids)
+    assert listed[lease]["last_rejected_at"] is not None
+    assert listed[lease]["last_accepted_at"] is None
+    [other] = [a for i, a in listed.items() if i != lease]
+    assert (other["last_rejected_at"], other["last_accepted_at"]) == (None, None)

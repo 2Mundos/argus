@@ -11,10 +11,10 @@ import asyncio
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from argus_api.config import Settings
 from argus_api.db import Database
@@ -53,6 +53,10 @@ class RootSample:
     applicability: Applicability
     free_bytes: int | None = None
     st_dev: int | None = None
+    # Internal only: which probe failed when applicability is unknown.
+    # Distinguishes "path not visible" (stat → docker not_applicable) from
+    # "path visible but free space unreadable" (statvfs → stay unknown).
+    probe_error: Literal["stat", "statvfs"] | None = None
 
 
 @dataclass(frozen=True)
@@ -78,16 +82,25 @@ class Thresholds:
         return max(3 * self.interval_s, MIN_STALE_WINDOW_S)
 
 
+Measurement = Literal["measured", "unknown", "stale", "disabled"]
+
+
 @dataclass(frozen=True)
 class Snapshot:
-    """Redacted view claim paths and authenticated ops read."""
+    """Redacted view claim paths and authenticated ops read.
+
+    Per-root `band` (via root_band) is the instantaneous free-space band for that
+    root. Global `claim_admission` is latched hysteresis: after refuse/unknown/stale
+    it stays refused until free clears the resume edge. An operator can therefore
+    see a root band of "warn" (or even "ok") next to claim_admission "refused".
+    """
 
     enabled: bool
     claim_admission: ClaimAdmission
     warn_episode: bool
     roots: tuple[RootSample, ...]
     free_bytes: int | None = None  # worst measured free; never 0 for unknown
-    measurement: Literal["measured", "unknown", "stale"] = "unknown"
+    measurement: Measurement = "unknown"
 
 
 @dataclass
@@ -99,8 +112,13 @@ class _Machine:
     last_success_mono: float | None = None
     roots: tuple[RootSample, ...] = ()
     free_bytes: int | None = None
-    measurement: Literal["measured", "unknown", "stale"] = "unknown"
+    measurement: Measurement = "unknown"
     warn_just_entered: bool = False
+    # Captured when the episode was entered; used for the warn event payload
+    # (including retries after a failed write) so the event reflects entry state.
+    warn_entry_free_bytes: int | None = None
+    warn_entry_measurement: Measurement | None = None
+    warn_entry_claim_admission: ClaimAdmission | None = None
 
 
 def _instant_band(free: int, thresholds: Thresholds) -> Band:
@@ -155,14 +173,16 @@ def measure_path(
         st = stat(path)
     except FileNotFoundError:
         # An optional root that does not exist yet (first use) holds no data:
-        # absent, not a failed measurement.
-        return RootSample(role, "not_applicable" if missing_is_absent else "unknown")
+        # absent, not a failed measurement. Otherwise this is a failed stat.
+        if missing_is_absent:
+            return RootSample(role, "not_applicable")
+        return RootSample(role, "unknown", probe_error="stat")
     except OSError:
-        return RootSample(role, "unknown")
+        return RootSample(role, "unknown", probe_error="stat")
     try:
         vfs = statvfs(path)
     except OSError:
-        return RootSample(role, "unknown")
+        return RootSample(role, "unknown", probe_error="statvfs")
     free = vfs.f_bavail * vfs.f_frsize
     return RootSample(role, "measured", free_bytes=free, st_dev=st.st_dev)
 
@@ -197,11 +217,12 @@ def measure_roots(
     else:
         # A DockerRootDir this process cannot stat does not share its filesystem
         # (the investigation's container case): not applicable, not a failed
-        # measurement that would refuse every claim.
+        # measurement that would refuse every claim. A stat-able path whose
+        # statvfs fails stays unknown and refuses claims.
         sample = measure_path(docker_root.path, "docker", stat=stat, statvfs=statvfs)
         samples.append(
             RootSample("docker", "not_applicable")
-            if sample.applicability == "unknown"
+            if sample.probe_error == "stat"
             else sample
         )
     return tuple(samples)
@@ -211,12 +232,11 @@ def measure_roots(
 class _Group:
     st_dev: int
     free_bytes: int
-    roles: frozenset[RootRole]
     unknown: bool = False
 
 
 def group_by_device(samples: tuple[RootSample, ...]) -> list[_Group]:
-    """Dedup by st_dev; a group containing data counts as the data dir."""
+    """Dedup measured roots by st_dev; unknown roots stay their own groups."""
     by_dev: dict[int, _Group] = {}
     unknowns: list[RootSample] = []
     for s in samples:
@@ -227,17 +247,13 @@ def group_by_device(samples: tuple[RootSample, ...]) -> list[_Group]:
             continue
         g = by_dev.get(s.st_dev)
         if g is None:
-            by_dev[s.st_dev] = _Group(s.st_dev, s.free_bytes, frozenset({s.role}))
+            by_dev[s.st_dev] = _Group(s.st_dev, s.free_bytes)
         else:
-            by_dev[s.st_dev] = _Group(
-                s.st_dev, s.free_bytes, g.roles | {s.role}, g.unknown
-            )
+            # Same device: one filesystem; the worst measured free decides.
+            by_dev[s.st_dev] = _Group(s.st_dev, min(g.free_bytes, s.free_bytes))
     groups = list(by_dev.values())
     # Unknown applicable roots participate as their own worst-case group.
-    groups.extend(
-        _Group(st_dev=-1, free_bytes=0, roles=frozenset({u.role}), unknown=True)
-        for u in unknowns
-    )
+    groups.extend(_Group(st_dev=-1, free_bytes=0, unknown=True) for _ in unknowns)
     return groups
 
 
@@ -266,9 +282,17 @@ def advance(
     refused = machine.refused
     warn_just_entered = False
     last_success = machine.last_success_mono
-    measurement: Literal["measured", "unknown", "stale"] = status
+    measurement: Measurement = status
+    was_stale = (
+        last_success is not None and (now - last_success) > thresholds.stale_after_s
+    )
 
     if status == "measured" and free is not None:
+        # Snapshot marks stale without latching `_Machine.refused`. Re-entering
+        # measured after a stale gap must treat admission as refused so only
+        # free > resume clears the dead band (not a mid-band value).
+        if was_stale:
+            refused = True
         last_success = now
         if free < thresholds.warn_bytes and not warn_episode:
             warn_episode = True
@@ -280,6 +304,20 @@ def advance(
         elif free > thresholds.resume_bytes:
             refused = False
         # else: hold refusal between refuse and resume
+        # Carry a pending warn flag until the event write succeeds, even if the
+        # episode has already cleared (otherwise the episode's only event is lost).
+        entry_free = None
+        entry_meas: Measurement | None = None
+        entry_adm: ClaimAdmission | None = None
+        if machine.warn_just_entered:
+            warn_just_entered = True
+            entry_free = machine.warn_entry_free_bytes
+            entry_meas = machine.warn_entry_measurement
+            entry_adm = machine.warn_entry_claim_admission
+        elif warn_just_entered:
+            entry_free = free
+            entry_meas = "measured"
+            entry_adm = "refused" if refused else "admitted"
         return _Machine(
             warn_episode=warn_episode,
             refused=refused,
@@ -288,10 +326,13 @@ def advance(
             free_bytes=free,
             measurement="measured",
             warn_just_entered=warn_just_entered,
+            warn_entry_free_bytes=entry_free,
+            warn_entry_measurement=entry_meas,
+            warn_entry_claim_admission=entry_adm,
         )
 
     # Unknown this pass: refuse; hold warn episode; maybe mark stale.
-    if last_success is None or (now - last_success) > thresholds.stale_after_s:
+    if last_success is None or was_stale:
         measurement = "stale" if last_success is not None else "unknown"
         roots = tuple(
             replace(s, applicability="stale") if s.applicability == "measured" else s
@@ -308,12 +349,26 @@ def advance(
         # Hold last measured free for stale visibility; never invent 0 for unknown.
         free_bytes=machine.free_bytes,
         measurement=measurement,
-        warn_just_entered=False,
+        # Preserve pending warn until a successful record clears it.
+        warn_just_entered=machine.warn_just_entered,
+        warn_entry_free_bytes=machine.warn_entry_free_bytes
+        if machine.warn_just_entered
+        else None,
+        warn_entry_measurement=machine.warn_entry_measurement
+        if machine.warn_just_entered
+        else None,
+        warn_entry_claim_admission=machine.warn_entry_claim_admission
+        if machine.warn_just_entered
+        else None,
     )
 
 
-# RootSample.band needs thresholds — make it a function instead.
 def root_band(sample: RootSample, thresholds: Thresholds) -> Band | None:
+    """Instantaneous per-root band from free bytes; not the latched claim gate.
+
+    Claim admission uses hysteresis (refuse/resume). This band can show "warn"
+    or "ok" while global claim_admission is still "refused".
+    """
     if sample.free_bytes is None or sample.applicability not in ("measured", "stale"):
         return None
     return _instant_band(sample.free_bytes, thresholds)
@@ -332,17 +387,24 @@ class DiskGuard:
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _stat: StatFn = field(default=os.stat, repr=False)
     _statvfs: StatvfsFn = field(default=os.statvfs, repr=False)
-    _docker_root: DockerRootFn = field(default=default_docker_root, repr=False)
+    _docker_root: DockerRootFn | None = field(default=None, repr=False)
     _clock: ClockFn = field(default=time.monotonic, repr=False)
+    # Injectable seam for the warn-event INSERT (tests); default writes via db.
+    _write_warn: Callable[[dict[str, Any]], Awaitable[None]] | None = field(
+        default=None, repr=False
+    )
 
     def __post_init__(self) -> None:
         self.thresholds = Thresholds.from_settings(self.settings)
         self.enabled = self.settings.disk_guard_enabled
+        if self._docker_root is None:
+            socket_path = self.settings.nanoclaw_docker_socket
+            self._docker_root = lambda: default_docker_root(socket_path=socket_path)
         if not self.enabled:
             self._machine = _Machine(
                 warn_episode=False,
                 refused=False,
-                measurement="measured",
+                measurement="disabled",
                 free_bytes=None,
                 roots=(
                     RootSample("data", "not_applicable"),
@@ -360,7 +422,7 @@ class DiskGuard:
                 warn_episode=False,
                 roots=m.roots,
                 free_bytes=None,
-                measurement="measured",
+                measurement="disabled",
             )
         # Re-evaluate staleness against the clock without measuring.
         now = self._clock()
@@ -407,6 +469,7 @@ class DiskGuard:
             if self.settings.nanoclaw_instances_root
             else None
         )
+        assert self._docker_root is not None
         docker = self._docker_root()
         return measure_roots(
             data_dir=self.settings.data_dir,
@@ -416,36 +479,83 @@ class DiskGuard:
             statvfs=self._statvfs,
         )
 
+    def _all_unknown_samples(self) -> tuple[RootSample, ...]:
+        """Synthetic fail-closed pass when measurement raises unexpectedly."""
+        instances: RootSample = (
+            RootSample("instances", "unknown")
+            if self.settings.nanoclaw_instances_root
+            else RootSample("instances", "not_applicable")
+        )
+        return (
+            RootSample("data", "unknown"),
+            instances,
+            RootSample("docker", "unknown"),
+        )
+
+    async def _write_warn_event(self, payload: dict[str, Any]) -> None:
+        """Persist one disk.warn event. Overridable via `_write_warn` for tests."""
+        if self._write_warn is not None:
+            await self._write_warn(payload)
+            return
+        async with self.db.write() as tx:
+            await record(
+                tx,
+                ACTOR,
+                "system",
+                "disk",
+                WARN_EVENT,
+                payload,
+            )
+
     async def measure_once(self) -> Snapshot:
-        """One bounded pass; may write a single warn event (never while measuring)."""
+        """One bounded pass; may write a single warn event (never while measuring).
+
+        Sampling and admission advance always commit to `_machine`. A warn-event
+        INSERT failure is logged and leaves the pending entry for exactly-once
+        retry; it does not fail the pass (so API startup stays up when only the
+        event write is unhealthy).
+        """
         if not self.enabled:
             return self.snapshot()
-        samples = await asyncio.to_thread(self._measure_sync)
+        try:
+            samples = await asyncio.to_thread(self._measure_sync)
+        except Exception:
+            log.exception("disk guard measurement failed")
+            samples = self._all_unknown_samples()
+        # Hold the lock across advance + optional event write so concurrent
+        # measure_once calls cannot both take the same pending warn entry.
         async with self._lock:
             prev = self._machine
             self._machine = advance(prev, samples, self.thresholds, now=self._clock())
-            entered = self._machine.warn_just_entered
-            self._machine.warn_just_entered = False
             snap = self.snapshot()
-        if entered:
-            async with self.db.write() as tx:
-                await record(
-                    tx,
-                    ACTOR,
-                    "system",
-                    "disk",
-                    WARN_EVENT,
-                    {
-                        "measurement": snap.measurement,
-                        "free_bytes": snap.free_bytes,
-                        "claim_admission": snap.claim_admission,
-                    },
-                )
+            if self._machine.warn_just_entered:
+                payload = {
+                    "measurement": self._machine.warn_entry_measurement,
+                    "free_bytes": self._machine.warn_entry_free_bytes,
+                    "claim_admission": self._machine.warn_entry_claim_admission,
+                }
+                try:
+                    await self._write_warn_event(payload)
+                except Exception:
+                    # Leave warn_just_entered set so the next pass retries the
+                    # entry snapshot exactly once; measurement already advanced.
+                    log.exception("disk guard warn event write failed")
+                else:
+                    # Clear only after a successful record so a failed write can
+                    # retry without losing the episode's only event (and without
+                    # duplicating).
+                    self._machine.warn_just_entered = False
+                    self._machine.warn_entry_free_bytes = None
+                    self._machine.warn_entry_measurement = None
+                    self._machine.warn_entry_claim_admission = None
         return snap
 
     async def run(self) -> None:
         """Background loop: measure, record LoopStats, continue on errors."""
         while True:
+            # The lifespan already measured once; wait one interval before the
+            # next pass so startup is not measured twice.
+            await asyncio.sleep(self.thresholds.interval_s)
             started = time.monotonic()
             try:
                 await self.measure_once()
@@ -455,4 +565,3 @@ class DiskGuard:
             except Exception:
                 log.exception("disk guard pass failed")
                 self.stats.record(time.monotonic() - started, ok=False)
-            await asyncio.sleep(self.thresholds.interval_s)

@@ -87,10 +87,13 @@ async def test_0057_marks_pending_steers_dispatched(tmp_path: Path) -> None:
     db = await Database.open(path, migrations=migrations[:56])
     await insert_agent(db, "a")
     async with db.write() as tx:
+        # claim writes a column that a later migration adds; borrow it for the setup
+        await tx.conn.execute("ALTER TABLE tasks ADD COLUMN session_gone_at TEXT")
         task = await tasks.create_task(
             tx, TaskCreate(project="global", title="t"), "admin:test"
         )
         await tasks.claim(tx, "a", [])
+        await tx.conn.execute("ALTER TABLE tasks DROP COLUMN session_gone_at")
         await tx.conn.execute(
             "UPDATE agents SET runtime = '{\"features\": [\"steer\"]}' WHERE id = 'a'"
         )
@@ -177,8 +180,8 @@ async def _fill(db: Database, account_ids: list[str], rows: int) -> None:
             )
 
 
-async def test_0058_auth_health_reads_use_the_partial_indexes(tmp_path: Path) -> None:
-    """The production read model (`_SELECT`) seeks both 0058 indexes per account."""
+async def test_0060_auth_health_reads_use_the_partial_indexes(tmp_path: Path) -> None:
+    """The production read model (`_SELECT`) seeks both 0060 indexes per account."""
     db = await Database.open(tmp_path / "argus.db")
     [account_id] = await _accounts(db, "claude-1")
     async with (
@@ -202,7 +205,7 @@ async def test_0058_auth_health_reads_use_the_partial_indexes(tmp_path: Path) ->
     ), plan
 
 
-async def test_0058_auth_health_lookup_is_bounded(tmp_path: Path) -> None:
+async def test_0060_auth_health_lookup_is_bounded(tmp_path: Path) -> None:
     """Per-account lookup cost does not grow with other accounts' history: the
     SQLite VM steps for the target stay flat while the tables grow 100x."""
     db = await Database.open(tmp_path / "argus.db")
@@ -240,15 +243,15 @@ async def test_0058_auth_health_lookup_is_bounded(tmp_path: Path) -> None:
     assert large <= small + 10, (small, large)
 
 
-async def test_0058_upgrade_keeps_data_and_reopen_is_a_no_op(tmp_path: Path) -> None:
+async def test_0060_upgrade_keeps_data_and_reopen_is_a_no_op(tmp_path: Path) -> None:
     path = tmp_path / "argus.db"
     migrations = load_migrations()
-    assert migrations[57].name == "0058_account_auth_health_indexes.sql"
-    db = await Database.open(path, migrations=migrations[:57])
+    assert migrations[59].name == "0060_account_auth_health_indexes.sql"
+    db = await Database.open(path, migrations=migrations[:59])
     [account_id] = await _accounts(db, "claude-1")
     await _fill(db, [account_id], 3)
     await db.close()
-    assert await _user_version(path) == 57
+    assert await _user_version(path) == 59
 
     for _ in range(2):  # the upgrade, then a reopen that must change nothing
         db = await Database.open(path, migrations=migrations)

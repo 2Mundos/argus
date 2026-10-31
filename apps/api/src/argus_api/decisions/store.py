@@ -61,6 +61,13 @@ async def open_decision(
             "subject_id": subject_id,
         },
     )
+    # Lazy: conversations imports settings, which imports knowledge, which imports
+    # this module. A top-level import would cycle.
+    from argus_api.conversations.service import queue_inbox_wake
+
+    await queue_inbox_wake(
+        tx, decision_id=decision_id, kind=str(kind), audience=str(audience)
+    )
     return decision_id
 
 

@@ -23,9 +23,6 @@ const { createProvider } = await import("./factory.js");
 const { claudeRuntimeContract } = await import("../provider-contracts/claude.js");
 const { MEMORY_SESSION_HOOK } = await import("../memory/session-hook.js");
 const { CLAUDE_AUTH_FAILED } = await import("./claude-rate-limit.js");
-// The poll-loop hook needs the runner's providerFailure plumbing (NanoClaw add-codex);
-// without it only the claude.ts hook is installed (patch-claude-rate-limit.py).
-const hasProviderFailure = "PROVIDER_FAILURE_FIELD" in (await import("../formatter.js"));
 
 const GENERIC = "The agent run failed. Check the logs for details.";
 const LINE = "You've hit your session limit · resets 2am (UTC)";
@@ -203,27 +200,21 @@ it("the mark does not outlive its turn", async () => {
   expect(out.map((r) => r.error)).toEqual([CLAUDE_AUTH_FAILED, "boom"]);
 });
 
-it.skipIf(!hasProviderFailure)(
-  "an authentication_failed turn ships the generic text plus providerFailure claude/auth_expired",
-  async () => {
-    erroredTurn(CLAUDE_AUTH_FAILED, AUTH_TEXT);
-    const sent = await delivered();
-    expect(sent).toEqual([
-      {
-        text: GENERIC,
-        failureNotice: true,
-        providerFailure: { provider: "claude", kind: "auth_expired" },
-      },
-    ]);
-    expect(JSON.stringify(sent)).not.toContain("private-customer");
-  },
-);
+it("an authentication_failed turn ships the generic text plus providerFailure claude/auth_expired", async () => {
+  erroredTurn(CLAUDE_AUTH_FAILED, AUTH_TEXT);
+  const sent = await delivered();
+  expect(sent).toEqual([
+    {
+      text: GENERIC,
+      failureNotice: true,
+      providerFailure: { provider: "claude", kind: "auth_expired" },
+    },
+  ]);
+  expect(JSON.stringify(sent)).not.toContain("private-customer");
+});
 
-it.skipIf(!hasProviderFailure).each(NOT_AUTH)(
-  "%s ships no auth_expired providerFailure",
-  async (_name, error, text) => {
-    erroredTurn(error, text);
-    const [sent] = await delivered();
-    expect((sent?.providerFailure as { kind?: string } | undefined)?.kind).not.toBe("auth_expired");
-  },
-);
+it.each(NOT_AUTH)("%s ships no auth_expired providerFailure", async (_name, error, text) => {
+  erroredTurn(error, text);
+  const [sent] = await delivered();
+  expect((sent?.providerFailure as { kind?: string } | undefined)?.kind).not.toBe("auth_expired");
+});

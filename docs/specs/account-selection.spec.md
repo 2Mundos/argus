@@ -231,7 +231,9 @@ isolation or sandbox/TLS restrictions.
     `^You('|’)ve hit your (session|usage|weekly) limit · resets .+$` line, or
     that the SDK marked `rate_limit`, into that structured `providerFailure`
     (`resets_at` only for a UTC clock time) with the generic notice text; no
-    other upstream text reaches the channel. The patch asserts its anchors in
+    other upstream text reaches the channel. The pinned runner has no
+    `providerFailure` plumbing; the patch adds the content field, the classifier
+    and the notice carrying it, so the signal does not depend on add-codex. The patch asserts its anchors in
     NanoClaw's code, so upstream drift stops the install. On exhaustion it reports the account,
     leases the next one, recycles the runtime and resends the task on the same
     attempt, and it does not report a failure. If Argus itself recognised a

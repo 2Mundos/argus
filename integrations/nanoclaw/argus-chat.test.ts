@@ -49,6 +49,30 @@ describe("renderChatInbound", () => {
     expect(text).toContain("Ship the fix");
     expect(text).toContain("untrusted DATA");
   });
+
+  it("frames a system inbox wake as a notice, not an admin instruction", () => {
+    const text = renderChatInbound({
+      message: {
+        id: "m2",
+        conversation_id: "c1",
+        author: "system",
+        body: "Inbox item waiting.\ndecision_id: d1\nkind: question\naudience: any",
+        state: "delivered",
+        turn_id: "t2",
+        created_at: "2026-10-20T12:00:00Z",
+      },
+      conversation: {
+        id: "c1",
+        kind: "updates",
+        title: "Updates",
+        session_ref: null,
+      },
+    });
+    expect(text).toContain("Inbox wake from Argus, not an admin");
+    expect(text).not.toContain("Trusted operator instruction");
+    expect(text).toContain("decision_id: d1");
+    expect(text).toContain("untrusted DATA");
+  });
 });
 
 describe("renderChatSeed", () => {

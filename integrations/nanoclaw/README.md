@@ -291,9 +291,9 @@ worker provider list (the retired `account_providers` / `executor_providers` /
    the SDK marked `rate_limit`, reaches the channel as the generic "The agent run
    failed" notice plus the structured `providerFailure`
    `{provider:"claude", kind:"rate_limit", resets_at?}`; no other upstream text
-   leaves the container. (A runner without NanoClaw's add-codex
-   `providerFailure` field gets only the `claude.ts` hook and the line itself is
-   the notice.) A generic notice also counts when the agent log tail (optional
+   leaves the container. (The pinned runner has no `providerFailure` plumbing:
+   the patch adds the content field, `classifyProviderFailure` and the notice that
+   carries it, so the signal travels with or without add-codex.) A generic notice also counts when the agent log tail (optional
    `agentLogTail` hook of the channel config) holds `Rate limit [..] (resets ..)`
    or that line. This host wires the hook to the redacted `docker logs` tail of the
    group's session containers (the runtime hooks `sessions` and

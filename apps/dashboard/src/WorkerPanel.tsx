@@ -13,12 +13,6 @@ export function workerKind(agent: Agent | undefined): WorkerKind {
   return agent.claimed_tasks > 0 ? "busy" : "idle";
 }
 
-/** nanoclaw-socket-d6f8e4c0 → d6f8e4c0; otherwise keep a short label. */
-export function workerShortName(name: string): string {
-  const tail = name.split("-").pop();
-  return tail && /^[a-f0-9]{6,}$/i.test(tail) ? tail.slice(0, 8) : name.slice(0, 14);
-}
-
 export function agentIdFromActor(actor: string): string | null {
   const [kind, id] = actor.split(":", 2);
   return kind === "agent" && id ? id : null;
@@ -55,6 +49,7 @@ export function useWorkerPanel(): WorkerPanelContextValue {
   return ctx;
 }
 
+/** Chip label: agent name (e.g. `nanoclaw-socket-d6f8e4c0`), else a short id. */
 export function workerLabel(agent: Agent | undefined, agentId: string): string {
-  return agent ? workerShortName(agent.name) : shortId(agentId);
+  return agent?.name || shortId(agentId);
 }

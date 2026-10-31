@@ -1302,7 +1302,7 @@ def _usage_sql(since: str) -> str:
 
 
 # Auth-health evidence (account-usage.spec.md 3.5), correlated on `a.id`; each is one
-# seek on its partial index from migration 0058.
+# seek on its partial index from migration 0060.
 LAST_ACCEPTED_SQL = (
     "(SELECT max(u.at) FROM account_usage u WHERE u.account_id = a.id"
     " AND u.measurement = 'measured' AND u.output_tokens > 0)"

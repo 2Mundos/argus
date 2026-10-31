@@ -11,8 +11,10 @@ whose assistant message the SDK marked `authentication_failed` (that value only,
 after every result) errors with the fixed marker instead, which becomes
 `{provider:"claude", kind:"auth_expired"}`.
 The poll-loop and formatter hooks extend the providerFailure plumbing of NanoClaw's add-codex
-skill; a runner without it only gets the claude.ts hook, whose error then reaches the
-channel as the notice text. Idempotent: every hook is "ensure this exact text", and an
+skill. The runner at the pinned commit has none, so this script first adds the minimal
+plumbing itself (the `providerFailure` content field, `classifyProviderFailure`, and the
+failure notice carrying it), so the structured signal travels runner -> channel with or
+without add-codex. Idempotent: every hook is "ensure this exact text", and an
 anchor that is missing or ambiguous stops the install (the upstream shape changed).
 Upgrading: a hook also rewrites the text an earlier version of this script wrote, so a
 checkout patched before the Codex usage-limit hook (#74) converges instead of stopping.
@@ -81,6 +83,30 @@ RESULT_NEW = r"""          const resultAsError = hint ? `${candidate}\n${hint}` 
             error: authExpired ?? rateLimit ?? (m.errors?.length ? m.errors.join('\n') : resultAsError || undefined),
           };
 """
+RATE_FLAG = "      let rateLimited = false; // this turn's SDK error: 'rate_limit'\n"
+AUTH_FLAG = (
+    "      let authFailed = false; // assistant.error: 'authentication_failed'\n"
+)
+RATE_MARK = (
+    "          if ((message as { error?: string }).error === 'rate_limit')"
+    " rateLimited = true;\n"
+)
+AUTH_MARK = (
+    "          if ((message as { error?: string }).error === 'authentication_failed')"
+    " authFailed = true;\n"
+)
+RATE_IMPORT = "import { claudeRateLimitError } from './claude-rate-limit.js';\n"
+AUTH_IMPORT = "import { claudeRateLimitError, claudeAuthExpiredError } from './claude-rate-limit.js';\n"
+# The result hook before the auth mark, in pieces: harness-usage.ts puts a line inside it.
+RATE_RESULT = (
+    "          const rateLimit = isError ? claudeRateLimitError(m.result, rateLimited) : undefined;\n"
+    "          rateLimited = false;\n"
+)
+AUTH_RESULT = (
+    RATE_RESULT
+    + "          const authExpired = isError ? claudeAuthExpiredError(authFailed) : undefined;\n"
+    "          authFailed = false;\n"
+)
 KIND = """export type ProviderFailureKind = 'auth_expired';
 
 export interface ProviderFailure {
@@ -135,6 +161,64 @@ CODEX_IMPORT = (
 POLL_IMPORTS = POLL_IMPORT + CLAUDE_IMPORT + CODEX_IMPORT
 
 
+# The providerFailure plumbing a runner without NanoClaw's add-codex lacks (the pinned commit).
+FAILURE_FIELD = "export const FAILURE_NOTICE_FIELD = 'failureNotice';\n"
+FAILURE_FIELD_NEW = (
+    FAILURE_FIELD
+    + "\n/** Content field carrying the structured provider failure next to a generic notice. */\n"
+    + "export const PROVIDER_FAILURE_FIELD = 'providerFailure';\n\n"
+    + KIND_NEW
+    + "\n"
+)
+POLL_FIELD_IMPORT = "  FAILURE_NOTICE_FIELD,\n"
+POLL_FIELD_IMPORT_NEW = (
+    POLL_FIELD_IMPORT + "  PROVIDER_FAILURE_FIELD,\n  type ProviderFailure,\n"
+)
+DELIVER = "/** Send the dedicated provider error or a generic failure notice. */\n"
+DELIVER_NEW = CLASSIFY + "  return undefined;\n}\n\n" + DELIVER
+FAILURE_CALL = """            const notice = event.error ?? 'The agent run failed. Check the logs for details.';
+            if (sendsFailureNotice(routing)) await deliverErrorResult(routing, notice);
+"""
+FAILURE_CALL_NEW = """            // A recognised provider failure ships structured, with the generic text only.
+            const failure = classifyProviderFailure(providerName, event.error);
+            const notice =
+              failure || !event.error ? 'The agent run failed. Check the logs for details.' : event.error;
+            if (sendsFailureNotice(routing)) await deliverErrorResult(routing, notice, failure);
+"""
+DELIVER_SIG = "async function deliverErrorResult(routing: RoutingContext, text: string): Promise<void> {\n"
+DELIVER_SIG_NEW = (
+    "async function deliverErrorResult(\n  routing: RoutingContext,\n  text: string,\n"
+    "  failure?: ProviderFailure,\n): Promise<void> {\n"
+)
+DELIVER_CONTENT = "    content: JSON.stringify({ text: stripHarnessTagArtifacts(text), [FAILURE_NOTICE_FIELD]: true }),\n"
+DELIVER_CONTENT_NEW = (
+    "    content: JSON.stringify({\n      text: stripHarnessTagArtifacts(text),\n"
+    "      [FAILURE_NOTICE_FIELD]: true,\n"
+    "      ...(failure ? { [PROVIDER_FAILURE_FIELD]: failure } : {}),\n    }),\n"
+)
+
+
+def add_provider_failure_plumbing(root: Path) -> None:
+    """Minimal providerFailure support for a runner that has none; a no-op where it exists."""
+    runner = root / RUNNER
+    if "PROVIDER_FAILURE_FIELD" not in (runner / "formatter.ts").read_text():
+        edit(
+            root, "formatter.ts", [("failure field", FAILURE_FIELD, FAILURE_FIELD_NEW)]
+        )
+    if "function classifyProviderFailure" not in (runner / "poll-loop.ts").read_text():
+        edit(
+            root,
+            "poll-loop.ts",
+            [
+                ("formatter import", POLL_FIELD_IMPORT, POLL_FIELD_IMPORT_NEW),
+                ("classifyProviderFailure stub", DELIVER, DELIVER_NEW),
+                ("failure notice", FAILURE_CALL, FAILURE_CALL_NEW),
+                ("failure notice signature", DELIVER_SIG, DELIVER_SIG_NEW),
+                ("failure notice content", DELIVER_CONTENT, DELIVER_CONTENT_NEW),
+            ],
+        )
+
+
 def main(root: Path) -> None:
     edit(
         root,
@@ -154,32 +238,33 @@ def main(root: Path) -> None:
                 "turn flag",
                 LOOP,
                 LOOP.replace(
-                    "      for await",
-                    "      let rateLimited = false; // this turn's SDK error: 'rate_limit'\n"
-                    "      let authFailed = false; // assistant.error: 'authentication_failed'\n"
-                    "      for await",
+                    "      for await", RATE_FLAG + AUTH_FLAG + "      for await"
                 ),
+                (LOOP.replace("      for await", RATE_FLAG + "      for await"),),
             ),
             (
                 "assistant error",
                 ASSISTANT,
-                ASSISTANT
-                + "          if ((message as { error?: string }).error === 'rate_limit')"
-                " rateLimited = true;\n"
-                + "          if ((message as { error?: string }).error === 'authentication_failed')"
-                " authFailed = true;\n",
+                ASSISTANT + RATE_MARK + AUTH_MARK,
+                (ASSISTANT + RATE_MARK,),
             ),
             ("result error", RESULT, RESULT_NEW),
+            # An earlier install wrote the pieces below without the auth half.
+            ("auth import", RATE_IMPORT, AUTH_IMPORT),
+            ("auth result flag", RATE_RESULT, AUTH_RESULT),
+            (
+                "auth result text",
+                "text: resultAsError || rateLimit ? null",
+                "text: resultAsError || rateLimit || authExpired ? null",
+            ),
+            (
+                "auth result error",
+                "error: rateLimit ?? (m.errors",
+                "error: authExpired ?? rateLimit ?? (m.errors",
+            ),
         ],
     )
-    formatter = (root / RUNNER / "formatter.ts").read_text()
-    if "PROVIDER_FAILURE_FIELD" not in formatter:
-        print(
-            "warning: the agent runner has no providerFailure field (NanoClaw add-codex);"
-            " a Claude quota block reaches Argus as notice text only",
-            file=sys.stderr,
-        )
-        return
+    add_provider_failure_plumbing(root)
     edit(
         root,
         "formatter.ts",
