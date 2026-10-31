@@ -207,6 +207,18 @@ export function parseUsage(executor, stdoutText) {
   }
 }
 
+/** claude: the model of the first stream-json `system/init` event; null when absent. Never throws. */
+export function parseClaudeInitModel(stdoutText) {
+  try {
+    const init = jsonObjects(String(stdoutText ?? "")).find(
+      (o) => o.type === "system" && o.subtype === "init",
+    );
+    return typeof init?.model === "string" && init.model ? init.model.slice(0, 100) : null;
+  } catch {
+    return null;
+  }
+}
+
 const part = (x) => String(x ?? "none").replace(/[^A-Za-z0-9._-]/g, "_");
 
 /**

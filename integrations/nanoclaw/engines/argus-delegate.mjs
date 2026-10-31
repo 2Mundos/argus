@@ -39,6 +39,7 @@ import { implementationScope, loadPolicy, selectModel } from "./model-policy.mjs
 import {
   appendAuthRejectedRecord,
   appendUsageRecord,
+  parseClaudeInitModel,
   parseUsage,
   runKey,
   runKeyHash,
@@ -1266,6 +1267,11 @@ async function runAttempt(
   const exit = timedOut ? 124 : interrupted || jsonFail || code !== 0 ? 1 : 0;
   const taskId = taskIdEarly;
   const usage = parseUsage(executor, stdoutText);
+  // Only what the CLI printed: Claude's init model, else the dominant modelUsage entry.
+  const observedModel =
+    executor === "claude"
+      ? (parseClaudeInitModel(stdoutText) ?? usage.model ?? null)
+      : (usage.model ?? null);
   const key = runKeyEarly;
   // The delegate always runs as the executor role: it reports against the executor account.
   const accountId = accountIdEarly;
@@ -1357,8 +1363,8 @@ async function runAttempt(
         provider: snapshot.context?.executor_account_provider ?? null,
         requested_model: selection.requested_model ?? null,
         configured_model: selection.configured_model ?? null,
-        observed_model: usage.model ?? null,
-        evidence: usage.model ? "cli_output" : "not_reported",
+        observed_model: observedModel,
+        evidence: observedModel ? "cli_output" : "not_reported",
         account_id: accountId,
         delegation_id: path.basename(reportFile, ".json"),
         run_key: key,

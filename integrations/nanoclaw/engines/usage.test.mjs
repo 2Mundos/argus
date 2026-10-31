@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
-import { parseUsage, runKey, runKeyHash } from "./usage.mjs";
+import { parseClaudeInitModel, parseUsage, runKey, runKeyHash } from "./usage.mjs";
 
 const claudeReal = fs.readFileSync(
   new URL("./fixtures/claude-result.json", import.meta.url),
@@ -142,4 +142,24 @@ test("run_key is stable, distinguishes runs and stays within the API limit", () 
   assert.match(long, /^r1:[a-f0-9]{64}$/);
   assert.ok(long.length <= 200);
   assert.match(runKeyHash(a), /^[a-f0-9]{16}$/);
+});
+
+test("parseClaudeInitModel reads the first system/init model", () => {
+  const out = [
+    '{"type":"system","subtype":"init","model":"claude-first"}',
+    '{"type":"system","subtype":"init","model":"claude-second"}',
+  ].join("\n");
+  assert.equal(parseClaudeInitModel(out), "claude-first");
+});
+
+test("parseClaudeInitModel is null without an init model", () => {
+  assert.equal(parseClaudeInitModel('{"type":"result","result":"ok"}'), null);
+  assert.equal(parseClaudeInitModel('{"type":"system","subtype":"init"}'), null);
+  assert.equal(parseClaudeInitModel(undefined), null);
+});
+
+test("parseClaudeInitModel never throws on malformed output", () => {
+  assert.equal(parseClaudeInitModel("not json {"), null);
+  assert.equal(parseClaudeInitModel('{"type":"system","subtype":"init","model":'), null);
+  assert.equal(parseClaudeInitModel('{"type":"system","subtype":"init","model":42}'), null);
 });
