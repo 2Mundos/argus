@@ -455,3 +455,71 @@ def test_preview_over_http_and_mcp_and_rights(client: TestClient) -> None:
         client.get(f"/api/decisions/{asked['id']}", headers=ADMIN_H).json()["state"]
         == "open"
     )
+
+
+async def _question_decision(db: Database, question: str) -> tuple[str, str]:
+    task = await create(db, review=Review.ORCHESTRATOR)
+    claimed = await claim(db)
+    async with db.write() as tx:
+        await tasks.complete(tx, A, task.id, claimed.attempt, DONE)
+        async with tx.conn.execute(
+            "SELECT id FROM decisions WHERE subject_id = ?", (task.id,)
+        ) as cur:
+            [(decision_id,)] = await cur.fetchall()
+        await tx.conn.execute(
+            "UPDATE decisions SET question = ? WHERE id = ?", (question, decision_id)
+        )
+    return task.id, decision_id
+
+
+async def _statuses(db: Database, decision_id: str) -> list[str]:
+    p = await preview(db, decision_id, ORCH, choice="accept")
+    return [c.status for c in p.premise_checks.checks]
+
+
+async def _store_ref(db: Database, task_id: str, ref: str, head_sha: str) -> None:
+    async with db.write() as tx:
+        await cont.store(
+            tx,
+            task_id,
+            await cont.current(tx, task_id),
+            Continuation(
+                artifacts=[
+                    ContinuationArtifact(
+                        kind=ArtifactKind.PR,
+                        ref=ref,
+                        head_sha=head_sha,
+                        state=ArtifactState.OPEN,
+                        provenance=ContinuationProvenance.RUNTIME,
+                        observed_at=datetime(2026, 1, 2, tzinfo=UTC),
+                    )
+                ]
+            ),
+            "t",
+            "t",
+        )
+
+
+async def test_unrelated_pr_is_not_reported_stale(db: Database) -> None:
+    task_id, did = await _question_decision(db, "Review PR 42 at head abc1234def5678")
+    await _store_ref(db, task_id, "99", "fed9876cba4321")
+    assert await _statuses(db, did) == ["unknown"]
+
+
+async def test_same_pr_changed_head_same_head_and_abbreviation(db: Database) -> None:
+    task_id, did = await _question_decision(db, "Review PR 42 at head abc1234def5678")
+    await _store_ref(db, task_id, "42", "fed9876cba4321")
+    assert await _statuses(db, did) == ["stale"]
+    await _store_ref(db, task_id, "42", "abc1234def5678aaaa")  # question abbreviates
+    assert await _statuses(db, did) == ["match"]
+
+
+async def test_multiple_prs_and_ambiguous_references(db: Database) -> None:
+    task_id, did = await _question_decision(
+        db, "Compare PR 42 at abc1234 with PR 99 at fed9876"
+    )
+    await _store_ref(db, task_id, "42", "abc1234def5678")
+    assert await _statuses(db, did) == ["match", "unknown"]
+    task2, did2 = await _question_decision(db, "Is abc1234 still good?")
+    await _store_ref(db, task2, "7", "fed9876cba4321")
+    assert await _statuses(db, did2) == ["unknown"]

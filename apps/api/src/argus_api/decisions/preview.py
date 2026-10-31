@@ -440,6 +440,35 @@ def _other_effects(decision: Decision, effect: Effect, add) -> None:
             add("routine_unchanged", f"routine {decision.subject_id} stays disabled")
 
 
+_PR_MENTION = re.compile(
+    r"(?:\bPR\b|\bpull request\b|\bpull/|#)\s*#?(\d+)", re.IGNORECASE
+)
+
+
+def _pr_number(ref: str) -> str | None:
+    m = re.fullmatch(r"#?(\d+)", ref.strip())
+    return m.group(1) if m else None
+
+
+def _premise_pairs(
+    question: str, payload_sha: str | None
+) -> list[tuple[str, str | None]]:
+    """(sha, PR number) pairs; the PR is the nearest preceding mention, else the
+    only mention, else None (association unknown)."""
+    mentions = [(m.start(), m.group(1)) for m in _PR_MENTION.finditer(question)]
+    only = mentions[0][1] if len({n for _, n in mentions}) == 1 else None
+    out: dict[str, str | None] = {}
+    if payload_sha:
+        out[payload_sha] = only
+    else:
+        for m in _HEX.finditer(question):
+            before = [n for pos, n in mentions if pos < m.start()]
+            out.setdefault(m.group(0), before[-1] if before else only)
+            if len(out) >= 5:
+                break
+    return list(out.items())
+
+
 def _premise(decision: Decision, task_row) -> PreviewPremiseChecks:
     if task_row is None:
         return PreviewPremiseChecks(
@@ -456,10 +485,8 @@ def _premise(decision: Decision, task_row) -> PreviewPremiseChecks:
             ]
         )
     payload_sha = (decision.payload or {}).get("head_sha")
-    premises = (
-        [payload_sha]
-        if isinstance(payload_sha, str) and payload_sha
-        else list(dict.fromkeys(_HEX.findall(decision.question)))[:5]
+    pairs = _premise_pairs(
+        decision.question, payload_sha if isinstance(payload_sha, str) else None
     )
     contract = cont.load(task_row)
     stored = [
@@ -468,12 +495,12 @@ def _premise(decision: Decision, task_row) -> PreviewPremiseChecks:
         if a.kind in (ArtifactKind.PR, ArtifactKind.COMMIT) and a.head_sha
     ]
     checks: list[PreviewPremiseCheck] = []
-    if not premises or not stored:
-        reason = "names no head" if not premises else "has no stored observation"
+
+    def unknown(subject: str, sha: str | None) -> None:
         checks.append(
             PreviewPremiseCheck(
-                subject=f"decision {reason}",
-                premise=premises[0] if premises else None,
+                subject=subject,
+                premise=sha,
                 recorded=None,
                 observed=None,
                 observed_at=None,
@@ -481,10 +508,35 @@ def _premise(decision: Decision, task_row) -> PreviewPremiseChecks:
                 provenance="unknown",
             )
         )
-    for sha in premises:
-        for a in stored:
+
+    if not pairs or not stored:
+        unknown(
+            "decision names no head"
+            if not pairs
+            else "decision has no stored observation",
+            pairs[0][0] if pairs else None,
+        )
+        pairs = []
+    for sha, pr_ref in pairs:
+        same = [
+            a
+            for a in stored
+            if a.head_sha is not None
+            and (a.head_sha.startswith(sha) or sha.startswith(a.head_sha))
+        ]
+        # A SHA names its own commit: a prefix match is a match whatever the ref.
+        # Staleness is only asserted for the PR the question actually names.
+        named = (
+            [
+                a
+                for a in stored
+                if a.kind is ArtifactKind.PR and _pr_number(a.ref) == pr_ref
+            ]
+            if pr_ref is not None
+            else []
+        )
+        for a in same or named:
             assert a.head_sha is not None
-            same = a.head_sha.startswith(sha) or sha.startswith(a.head_sha)
             checks.append(
                 PreviewPremiseCheck(
                     subject=redact(f"{a.kind.value} {a.ref}")[:300],
@@ -496,6 +548,8 @@ def _premise(decision: Decision, task_row) -> PreviewPremiseChecks:
                     provenance="stored",
                 )
             )
+        if not same and not named:
+            unknown("premise cannot be tied to a stored PR or commit", sha)
     checks.extend(
         PreviewPremiseCheck(
             subject=redact(r.subject),
