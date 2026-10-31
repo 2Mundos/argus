@@ -75,6 +75,8 @@ every new dependency is judged against it.
 - [Fleet health](specs/fleet-health.spec.md) — the Fleet tab: pool liveness, queue
   and run time, success rate, failures by reason, with `no data` when unknown
   Screenshot: [2026-10-20.fleet-health.screenshot.png](evidence/2026-10-20.fleet-health.screenshot.png)
+- [OneCLI cleanup](specs/onecli-cleanup.spec.md) — opt-in, dry-run-first deletion
+  of the OneCLI agent and secrets of terminated NanoClaw instances
 - [Workspace cleanup](specs/workspace-cleanup.spec.md) — opt-in, dry-run-first
   deletion of terminated NanoClaw instance directories after their unpublished git
   work is archived and verified
