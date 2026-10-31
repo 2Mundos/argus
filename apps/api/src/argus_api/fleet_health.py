@@ -97,7 +97,9 @@ USAGE_SQL = (
     "   SELECT attempt FROM account_usage a"
     "   WHERE a.task_id = u.task_id AND a.attempt IS NOT NULL"
     "   GROUP BY a.attempt HAVING max(a.measurement = 'measured')"
-    " )) AS measured_attempts"
+    " )) AS measured_attempts,"
+    # Any not_reported row, whatever its attempt (or none), disqualifies the task.
+    " count(CASE WHEN u.measurement <> 'measured' THEN 1 END) AS unmeasured"
     " FROM account_usage u"
     " WHERE u.task_id IN (SELECT value FROM json_each(?)) GROUP BY u.task_id"
 )
@@ -360,7 +362,7 @@ async def fleet_health(
             session_lost = await rows(SESSION_LOST_SQL, since, until, MAX_ROWS)
             attempt_counts = dict(await rows(ATTEMPTS_SQL, since, until))
             usage = {
-                r[0]: (r[1], r[2], r[3], r[4])
+                r[0]: (r[1], r[2], r[3], r[4], r[5])
                 for r in await rows(USAGE_SQL, json.dumps([r["id"] for r in finished]))
             }
         finally:
@@ -424,10 +426,10 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if len(values) >= MIN_SAMPLES else None
 
 
-def _fully_measured(row: tuple[int | None, float | None, int, int]) -> bool:
+def _fully_measured(row: tuple[int | None, float | None, int, int, int]) -> bool:
     """True when the task has measured figures and no not_reported attempt."""
-    tokens, cost, attempts, measured = row
-    if attempts > measured:
+    tokens, cost, attempts, measured, unmeasured = row
+    if unmeasured or attempts > measured:
         return False
     return tokens is not None or cost is not None or measured > 0
 
@@ -436,7 +438,7 @@ def _yield(
     window: int,
     counts: dict[str, int],
     finished: list[Any],
-    usage: dict[str, tuple[int | None, float | None, int, int]],
+    usage: dict[str, tuple[int | None, float | None, int, int, int]],
 ) -> Yield:
     attempts, completions = counts.get("task.claim", 0), counts.get("task.complete", 0)
     # Means only over fully measured tasks (never count an unreported attempt as 0).
@@ -470,9 +472,9 @@ def _yield(
         measured_tasks=len(ok) + len(bad),
         measured_attempts=measured_attempts,
         not_reported_attempts=max(0, attempt_rows - measured_attempts),
-        tokens_per_succeeded=_mean([float(t) for t, _, _, _ in ok if t is not None]),
-        tokens_per_failed=_mean([float(t) for t, _, _, _ in bad if t is not None]),
-        cost_per_succeeded=_mean([c for _, c, _, _ in ok if c is not None]),
+        tokens_per_succeeded=_mean([float(t) for t, _, _, _, _ in ok if t is not None]),
+        tokens_per_failed=_mean([float(t) for t, _, _, _, _ in bad if t is not None]),
+        cost_per_succeeded=_mean([c for _, c, _, _, _ in ok if c is not None]),
     )
 
 
