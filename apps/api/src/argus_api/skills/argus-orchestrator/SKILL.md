@@ -133,7 +133,9 @@ giving any worker more access:
    enables it with dry-run off, can remove a terminated worker's workspace after
    the minimum age. Record the branch, the worker and the attempt in the task's
    notes or a follow-up spec before any retry: `retry_task` resets the attempt
-   counters and deletes the task log.
+   counters and deletes the task log. That record is provenance only: a branch,
+   worker, attempt, continuation note or host-local path does not make the
+   unpublished bytes readable by another worker.
 3. Change the requirement only where the state allows it. If the task is
    `ready`, `pending` or `awaiting_approval`, `edit_task` can add
    `repository:write` (pass `expected_version`); in `ready` a worker may claim it
@@ -142,9 +144,14 @@ giving any worker more access:
    edit lands, and Argus has no claim hold for that. Leave it `failed` and report
    the limitation. In `blocked`, `claimed`, `in_review` or any terminal state the
    requirements are fixed. A replacement task with `repository:write` is a
-   separate decision: create it only with the task owner's authorization, after
-   the WIP is saved or recorded (step 2). Name the original task and branch in its
-   spec, and do not assume it can reuse that worker's workspace.
+   separate decision: create it only with the task owner's authorization, and
+   only when the unpublished bytes are preserved, a supported reader or
+   materializer exists for the replacement runtime, and the replacement runtime
+   has verified the consumed byte count and SHA. A `worker_readable` flag alone
+   does not prove that path. Verify before you requeue or replace; otherwise keep
+   the work `blocked` or `failed` and report the limitation. Name the original
+   task and branch in its spec, and do not assume it can reuse that worker's
+   workspace.
 4. Publish only through an authorized host-side path. Ask a human admin to
    deliver the preserved work with the host's own delivery. Never copy host
    credentials, tokens or an authenticated remote into a worker, a spec or an
