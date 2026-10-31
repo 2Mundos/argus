@@ -23,6 +23,7 @@ const Fleet = lazy(() => import("./views/Fleet").then((m) => ({ default: m.Fleet
 const Inbox = lazy(() => import("./views/Inbox").then((m) => ({ default: m.Inbox })));
 const Knowledge = lazy(() => import("./views/Knowledge").then((m) => ({ default: m.Knowledge })));
 const Pools = lazy(() => import("./views/Pools").then((m) => ({ default: m.Pools })));
+const Routines = lazy(() => import("./views/Routines").then((m) => ({ default: m.Routines })));
 const Settings = lazy(() => import("./views/Settings").then((m) => ({ default: m.Settings })));
 const Tasks = lazy(() => import("./views/Tasks").then((m) => ({ default: m.Tasks })));
 
@@ -33,6 +34,7 @@ const TABS = {
   tasks: "Tasks",
   workers: "Workers",
   knowledge: "Knowledge",
+  routines: "Routines",
   setup: "Setup",
 } as const;
 type Tab = keyof typeof TABS;
@@ -68,7 +70,7 @@ const LEGACY: Record<string, string> = {
 };
 
 type Route =
-  | { tab: "chat" | "dashboard" | "inbox" | "knowledge" }
+  | { tab: "chat" | "dashboard" | "inbox" | "knowledge" | "routines" }
   | { tab: "tasks"; taskId: string | null }
   | { tab: "workers"; sub: WorkersSub }
   | { tab: "setup"; sub: SetupSub };
@@ -99,7 +101,13 @@ export function parseRoute(): Route {
     const sub = leaf && leaf in SETUP_SUB ? (leaf as SetupSub) : "settings";
     return { tab: "setup", sub };
   }
-  if (head === "inbox" || head === "knowledge" || head === "dashboard" || head === "chat") {
+  if (
+    head === "inbox" ||
+    head === "knowledge" ||
+    head === "routines" ||
+    head === "dashboard" ||
+    head === "chat"
+  ) {
     return { tab: head };
   }
   // Empty/invalid: Shell may rewrite to #chat when the orchestrator is on.
@@ -131,6 +139,7 @@ const PAGES: { href: string; label: string }[] = [
   { href: "#workers/pools", label: "Pools" },
   { href: "#setup/accounts", label: "Accounts" },
   { href: "#knowledge", label: "Knowledge" },
+  { href: "#routines", label: "Routines" },
   { href: "#workers/fleet", label: "Fleet" },
   { href: "#setup/engines", label: "Engines" },
   { href: "#setup/cost", label: "Cost" },
@@ -214,6 +223,7 @@ function isCurrent(href: string, route: Route): boolean {
   if (href === "#tasks") return route.tab === "tasks";
   if (href === "#inbox") return route.tab === "inbox";
   if (href === "#knowledge") return route.tab === "knowledge";
+  if (href === "#routines") return route.tab === "routines";
   if (href === "#workers/agents") return route.tab === "workers" && route.sub === "agents";
   if (href === "#workers/pools") return route.tab === "workers" && route.sub === "pools";
   if (href === "#workers/fleet") return route.tab === "workers" && route.sub === "fleet";
@@ -380,6 +390,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
           <p className="nav-label">More</p>
           <nav aria-label="More">
             <NavLink href="#knowledge" current={isCurrent("#knowledge", route)} label="Knowledge" />
+            <NavLink href="#routines" current={isCurrent("#routines", route)} label="Routines" />
             <NavLink
               href="#workers/fleet"
               current={isCurrent("#workers/fleet", route)}
@@ -522,6 +533,8 @@ function RouteView({
       return <Tasks />;
     case "knowledge":
       return <Knowledge />;
+    case "routines":
+      return <Routines />;
     case "workers":
       if (route.sub === "pools") return <Pools />;
       if (route.sub === "fleet") return <Fleet />;
