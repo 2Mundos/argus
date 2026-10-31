@@ -572,6 +572,44 @@ cat >/dev/null; echo '{"is_error":true,"result":"failed"}'`,
   assert.equal(selection.to_model, "opus");
 });
 
+test("claude observed model comes from the system/init event, else not_reported", async (t) => {
+  const s = sandbox(t);
+  const terminalExecution = async (stdoutLines) => {
+    s.fake(
+      "claude",
+      `if [ "$1" = "--version" ]; then echo v; exit 0; fi
+cat >/dev/null; ${stdoutLines.map((l) => `echo '${l}'`).join("; ")}`,
+    );
+    const relayFile = path.join(s.dir, `task-log-${Math.random().toString(36).slice(2)}.jsonl`);
+    // An explicit policy snapshot carries the task and attempt the relay needs, so the
+    // test does not depend on the host's /workspace/agent policy file being present.
+    const { policySnapshot } = await import("./model-policy.mjs");
+    const snapshot = policySnapshot(
+      { harness: {}, implementation: { claude: ["sonnet"] } },
+      { task_id: "task1", attempt: 1 },
+    );
+    const file = path.join(s.dir, "policy.json");
+    fs.writeFileSync(file, JSON.stringify(snapshot));
+    await run(["claude", "--cwd", s.work], {
+      env: {
+        ...s.env,
+        ANTHROPIC_API_KEY: "x",
+        ARGUS_MODEL_POLICY_FILE: file,
+        ARGUS_TASK_LOG_FILE: relayFile,
+      },
+    });
+    const records = fs.readFileSync(relayFile, "utf8").trim().split("\n").map(JSON.parse);
+    return records.filter((r) => r.models?.executions?.length).at(-1).models.executions[0];
+  };
+  const init = '{"type":"system","subtype":"init","model":"claude-init-model"}';
+  const withInit = await terminalExecution([init, '{"type":"result","result":"ok"}']);
+  assert.equal(withInit.observed_model, "claude-init-model");
+  assert.equal(withInit.evidence, "cli_output");
+  const neither = await terminalExecution(['{"type":"result","result":"ok"}']);
+  assert.equal(neither.observed_model, null);
+  assert.equal(neither.evidence, "not_reported");
+});
+
 test("invalid policies and invalid retry requests fail before CLI execution", async (t) => {
   const s = sandbox(t);
   const marker = path.join(s.dir, "ran");
