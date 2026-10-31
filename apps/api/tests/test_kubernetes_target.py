@@ -1,7 +1,9 @@
 """KubernetesTarget against an in-memory CoreV1Api (no cluster needed)."""
 
 import json
+import re
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace as NS
 
 import pytest
@@ -17,6 +19,10 @@ from argus_api.fleet.targets import (
 from argus_core.fleet import PoolUpsert
 from kubernetes.client.exceptions import ApiException
 from pydantic import ValidationError
+
+ECHO_DOCKERFILE = (
+    Path(__file__).resolve().parents[3] / "examples/echo-worker/Dockerfile"
+)
 
 NS_NAME = "workers"
 
@@ -114,6 +120,16 @@ def api() -> FakeCoreV1:
 @pytest.fixture
 def target(api: FakeCoreV1) -> KubernetesTarget:
     return KubernetesTarget("kind-test", NS_NAME, api=api)
+
+
+def test_echo_worker_image_runs_as_a_numeric_user() -> None:
+    # The pod sets runAsNonRoot without runAsUser, so the kubelet can only verify
+    # a numeric image USER; a name such as `nobody` leaves the pod unstartable
+    # (CreateContainerConfigError) and the worker never registers.
+    users = re.findall(r"^USER\s+(\S+)", ECHO_DOCKERFILE.read_text(), re.M)
+    assert users
+    assert re.fullmatch(r"[1-9]\d*(:\d+)?", users[-1]), users[-1]
+    assert pod_manifest(spec(), NS_NAME)["spec"]["securityContext"]["runAsNonRoot"]
 
 
 def test_manifest_is_a_hardened_one_shot_pod() -> None:

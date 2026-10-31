@@ -563,3 +563,60 @@ def test_crash_loop_over_the_api(client: TestClient) -> None:
     resumed = [e for e in items if e["kind"] == "task.auto_resumed"]
     assert sorted(e["data"]["attempt"] for e in resumed) == [1, 2]
     assert all(MARKER not in json.dumps(e["data"]) for e in resumed)
+
+
+@pytest.mark.parametrize("release", ["decision", "runtime_release"])
+def test_operator_release_starts_a_new_epoch_over_the_api(
+    client: TestClient, release: str
+) -> None:
+    """An answered decision and a manager's runtime rebuild are operator unblocks:
+    after one the crash loop is bounded again from zero, not still exhausted."""
+    boot = client.post("/api/agents/bootstrap-tokens", json={"role": "worker"}).json()
+    reg = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
+    h = {"Authorization": f"Bearer {reg.json()['token']}"}
+    task_id = client.post(
+        "/api/tasks",
+        json={"title": "t", "project": "alpha", "spec": "s", "max_attempts": 10},
+    ).json()["id"]
+
+    def claim_() -> int:
+        claimed = client.post("/api/tasks/claim", json={}, headers=h).json()
+        assert claimed["id"] == task_id
+        return claimed["attempt"]
+
+    def exit_(attempt: int) -> str:
+        r = client.post(
+            f"/api/tasks/{task_id}/fail",
+            json={"attempt": attempt, "error": "exited", "reason": "session_lost"},
+            headers=h,
+        )
+        assert r.status_code == 200, r.text
+        return r.json()["state"]
+
+    assert exit_(claim_()) == "ready"  # the one resume of this epoch
+    attempt = claim_()
+    if release == "decision":
+        ask = client.post(
+            f"/api/tasks/{task_id}/ask",
+            json={"attempt": attempt, "question": "which way?"},
+            headers=h,
+        )
+        assert ask.status_code == 201, ask.text
+        answered = client.post(
+            f"/api/decisions/{ask.json()['id']}/answer", json={"text": "this way"}
+        )
+        assert answered.status_code == 200, answered.text
+    else:
+        held = client.post(
+            "/api/runtime/hold",
+            json={"task_id": task_id, "attempt": attempt, "error": "no docker"},
+            headers=h,
+        )
+        assert held.status_code == 204, held.text
+        assert client.get(f"/api/tasks/{task_id}").json()["state"] == "blocked"
+        rebuilt = client.post("/api/projects/alpha/runtime/rebuild")
+        assert rebuilt.status_code == 200, rebuilt.text
+    assert client.get(f"/api/tasks/{task_id}").json()["state"] == "ready"
+    # Without the new epoch this exit would fail the task (no progress since the
+    # resume); with it, the task resumes again.
+    assert exit_(claim_()) == "ready"
