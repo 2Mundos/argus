@@ -144,6 +144,9 @@ Getting a first account, worker and orchestrator is the
   such decision queues another. Audience `human` does not wake it. If Updates
   already holds 20 queued messages, the decision still opens and the notice is
   skipped. The channel frames that `system` message as a server notice.
+  A wake turn that is never answered expires like any stale turn; that does not
+  confirm the decision was answered. The inbox wait of the skill stays the
+  fallback for any decision still open.
 - At most **one turn in flight per conversation**; later messages queue behind it.
   At most `orchestrator.max_concurrent_turns` (default 2) conversation turns run at
   once, plus the Updates loop.
@@ -204,6 +207,17 @@ Getting a first account, worker and orchestrator is the
   sits beside the thread; the thread and composer are centred with the
   orchestrator status and conversation cost in the header; the right worker rail
   stays. At 390 px the conversation list becomes a drawer.
+- **Verification limit.** The header status is registration and heartbeat
+  evidence from the system pool, its instances and the orchestrator agent
+  (`Registered`, `Starting`, `Draining`, `Stale`, `Lost`, `Ended`
+  for a gone agent, `Offline`, `Unreachable`, and `Status unknown` while a read
+  loads or after one fails, even when an older result is still held). It never says
+  "Live" or "ready": no API exposes the daily budget spend against its cap, so the
+  header says the budget is unknown, and it shows harness account capacity only
+  from the engine catalog (`leasable`; `busy` means at `max_leases`; executor-only
+  and repository accounts do not count; missing data is unknown, not free).
+  Showing a verified ready/capped state needs a readiness signal from the API and
+  is separate work.
 - Replies render as Markdown; task, decision and agent ids render as the existing
   chips (links). No action buttons.
 

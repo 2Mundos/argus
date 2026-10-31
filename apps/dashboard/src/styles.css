@@ -1756,6 +1756,31 @@ main > section.chat-page.chat-off {
 .chat-thread {
   flex: 1;
 }
+.chat-thread-head {
+  display: grid;
+  justify-items: center;
+  gap: 0.15rem;
+}
+.chat-status {
+  margin: 0;
+  font-size: 0.85rem;
+  text-align: center;
+}
+.chat-status-word::before {
+  content: "";
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0.4rem;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.chat-status.registered .chat-status-word::before {
+  background: var(--muted);
+}
+.chat-msg-meta {
+  margin: 0;
+}
 .chat-thread-title {
   margin: 0;
   padding: 0.9rem 1rem 0.2rem;

@@ -563,7 +563,7 @@ export interface paths {
         };
         /**
          * Claim Chat
-         * @description Long-poll for the next queued human message (claim_task pattern).
+         * @description Long-poll for the next queued message, human or system (claim_task pattern).
          */
         get: operations["claim_chat_api_agents_me_chat_get"];
         put?: never;

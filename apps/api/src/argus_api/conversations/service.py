@@ -307,7 +307,7 @@ async def post_human_message(
 async def _next_claimable(
     conn: aiosqlite.Connection, now: datetime, path
 ) -> aiosqlite.Row | None:
-    """Oldest queued human message that may start a turn now, or None.
+    """Oldest queued message (human or system) that may start a turn now, or None.
 
     A conversation runs one turn at a time, at most `orchestrator.max_concurrent_turns`
     chat conversations run at once (Updates is extra), and a delivered turn older than
@@ -457,7 +457,7 @@ async def _cap_notice_target(conn: aiosqlite.Connection, now: datetime) -> str |
 async def claim_next(
     tx: Tx, *, agent_id: str, path, disk_guard: DiskGuard | None = None
 ) -> tuple[Conversation, Message] | None:
-    """Claim the oldest deliverable queued human message.
+    """Claim the oldest deliverable queued message (human or system).
 
     Delivery is idempotent by message id: a second claim of a delivered id is a no-op
     at the channel (it only sees queued rows here).

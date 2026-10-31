@@ -217,6 +217,7 @@ async def test_inbox_decision_wakes_the_internal_orchestrator(
         claimed = await conversations.claim_next(tx, agent_id="orch", path=path)
     assert claimed is not None and claimed[0].kind == "updates"
     assert claimed[1].state == "delivered"
+    assert claimed[1].author == "system"
     assert all(state != "queued" for _, state in await _inbox_wakes(db))
 
     async with db.write() as tx:
@@ -246,6 +247,81 @@ async def test_inbox_decision_wakes_the_internal_orchestrator(
             requested_by=f"agent:{A}",
         )
     assert len([b for b, s in await _inbox_wakes(db) if s == "queued"]) == 1
+
+
+async def _open_review(db: Database, task_id: str, audience=Audience.ANY) -> str:
+    async with db.write() as tx:
+        return await decision_store.open_decision(
+            tx,
+            subject_type="task",
+            subject_id=task_id,
+            kind=DecisionKind.REVIEW,
+            question="Review it",
+            options=["accept", "reject"],
+            audience=audience,
+            requested_by=f"agent:{A}",
+        )
+
+
+async def test_inbox_wake_skipped_at_the_queue_cap_but_decision_opens(
+    db: Database, tmp_path: Path
+) -> None:
+    path = tmp_path / "models.json"
+    await create(db)
+    task = await claim(db)
+    async with db.write() as tx:
+        await settings_service.put_setting(
+            tx, path, "global", "orchestrator.enabled", True, "admin:t"
+        )
+        conv_id = await orchestrator.ensure_updates_conversation(tx, "admin:t")
+        for i in range(conversations.MAX_QUEUED):
+            await tx.conn.execute(
+                "INSERT INTO messages (id, conversation_id, author, body, state,"
+                " truncated, turn_id, created_at, delivered_at) VALUES (?, ?,"
+                " 'admin:t', 'hi', 'queued', 0, NULL, ?, NULL)",
+                (f"m{i}", conv_id, f"2026-01-01T00:00:{i:02d}Z"),
+            )
+
+    decision_id = await _open_review(db, task.id, Audience.ORCHESTRATOR)
+
+    assert await _inbox_wakes(db) == []
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT count(*) FROM messages WHERE conversation_id = ?", (conv_id,)
+        ) as cur,
+    ):
+        row = await cur.fetchone()
+    assert row is not None and row[0] == conversations.MAX_QUEUED
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT state FROM decisions WHERE id = ?", (decision_id,)) as cur,
+    ):
+        row = await cur.fetchone()
+    assert row is not None and row["state"] == "open"
+
+
+async def test_inbox_wake_skips_safely_without_an_updates_conversation(
+    db: Database, tmp_path: Path
+) -> None:
+    path = tmp_path / "models.json"
+    await create(db)
+    task = await claim(db)
+    async with db.write() as tx:
+        await settings_service.put_setting(
+            tx, path, "global", "orchestrator.enabled", True, "admin:t"
+        )
+        await tx.conn.execute("DELETE FROM conversations WHERE kind = 'updates'")
+
+    decision_id = await _open_review(db, task.id)
+
+    assert await _inbox_wakes(db) == []
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT state FROM decisions WHERE id = ?", (decision_id,)) as cur,
+    ):
+        row = await cur.fetchone()
+    assert row is not None and row["state"] == "open"
 
 
 async def test_decision_becomes_moot_when_task_moves_on(db: Database) -> None:

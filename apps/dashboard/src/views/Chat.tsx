@@ -1,12 +1,121 @@
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
-import { api, call, type Message } from "../api";
+import {
+  type Agent,
+  api,
+  call,
+  type EngineCatalog,
+  type Instance,
+  type Message,
+  type Pool,
+} from "../api";
+import { DateChip } from "../DateChip";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
+import { useNow } from "./Activity";
 
 function messageRole(author: string): "human" | "orchestrator" | "system" {
   if (author === "system") return "system";
   if (author.startsWith("orchestrator:")) return "orchestrator";
   return "human";
+}
+
+type Registration = { word: string; reason: string; ok: boolean };
+
+/** Mirrors `agents.service.LOST_AFTER_S` (3 x the 30 s heartbeat). */
+const STALE_AFTER_MS = 90_000;
+
+function harnessCapacity(engines: EngineCatalog | undefined): string {
+  if (!engines) return "Account capacity unknown.";
+  const sums = engines.engines.flatMap((e) =>
+    e.layers.filter((l) => l.layer === "harness" && l.accounts).map((l) => l.accounts),
+  );
+  if (sums.some((a) => (a?.leasable ?? 0) > 0)) return "A harness account is free.";
+  if (sums.some((a) => (a?.busy ?? 0) > 0)) return "Every harness account is busy.";
+  return "No harness account is free.";
+}
+
+/**
+ * Registration and heartbeat evidence for the internal orchestrator, from its system
+ * pool, instances and agent. This is not readiness: the daily budget and the spend
+ * against it are not exposed to the dashboard, so they stay unknown, and a loading
+ * or failed read is never treated as healthy.
+ */
+function orchestratorRegistration(
+  pools: Pool[] | undefined,
+  instances: Instance[] | undefined,
+  agents: Agent[] | undefined,
+  engines: EngineCatalog | undefined,
+  now: number,
+): Registration {
+  const unknown = "Budget unknown.";
+  if (!pools || !instances || !agents) {
+    return { word: "Status unknown", reason: "Loading registration state.", ok: false };
+  }
+  const pool = pools.find((p) => p.system === "orchestrator");
+  if (!pool) {
+    return { word: "Starting", reason: "The orchestrator pool is not created yet.", ok: false };
+  }
+  if (pool.status === "unreachable") {
+    return {
+      word: "Unreachable",
+      reason: pool.last_error ?? "The orchestrator pool's node cannot be reached.",
+      ok: false,
+    };
+  }
+  if (pool.status !== "ok" || pool.last_error) {
+    return {
+      word: "Offline",
+      reason: pool.last_error ?? `The orchestrator pool is ${pool.status}.`,
+      ok: false,
+    };
+  }
+  const running = instances.filter((i) => i.state === "running");
+  if (running.length === 0) {
+    const failed = instances.find((i) => i.last_error);
+    return {
+      word: "Starting",
+      reason: failed?.last_error ?? "No instance is running yet. Messages queue until it is.",
+      ok: false,
+    };
+  }
+  const ids = new Set(running.map((i) => i.id));
+  const mine = agents.filter(
+    (a) => a.role === "orchestrator" && a.instance_id && ids.has(a.instance_id),
+  );
+  const current = mine.find((a) => a.state === "active" || a.state === "draining");
+  if (!current) {
+    const ended = mine.find((a) => a.state === "lost" || a.state === "gone");
+    return ended
+      ? {
+          word: ended.state === "lost" ? "Lost" : "Ended",
+          reason:
+            ended.end_reason ??
+            (ended.state === "lost"
+              ? "The orchestrator stopped heartbeating."
+              : "The orchestrator left."),
+          ok: false,
+        }
+      : { word: "Starting", reason: "Waiting for the orchestrator to register.", ok: false };
+  }
+  if (
+    current.state === "draining" ||
+    running.some((i) => i.id === current.instance_id && i.draining)
+  ) {
+    return { word: "Draining", reason: "It is shutting down; messages queue.", ok: false };
+  }
+  const age = now - new Date(current.last_heartbeat_at).getTime();
+  if (age > STALE_AFTER_MS) {
+    return {
+      word: "Stale",
+      reason: `No heartbeat for ${Math.round(age / 1000)} s. Messages queue until it returns.`,
+      ok: false,
+    };
+  }
+  return {
+    word: "Registered",
+    reason: `Heartbeat ${Math.max(0, Math.round(age / 1000))} s ago. Readiness is not checked. ${unknown} ${harnessCapacity(engines)}`,
+    ok: true,
+  };
 }
 
 export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void }) {
@@ -18,6 +127,33 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
     (signal) => call(api.GET("/api/conversations", { signal })),
     [],
   );
+  const { data: poolsData, error: poolsError } = useLiveData(
+    (signal) => call(api.GET("/api/pools", { signal })),
+    [],
+  );
+  // `useLiveData` keeps the last result when a refetch fails; a failed read must not
+  // keep showing a registration the dashboard can no longer confirm.
+  const pools = poolsError ? undefined : poolsData;
+  const systemPool = poolsData?.find((p) => p.system === "orchestrator");
+  const { data: instancesData, error: instancesError } = useLiveData(
+    (signal) =>
+      systemPool
+        ? call(api.GET("/api/instances", { params: { query: { pool: systemPool.name } }, signal }))
+        : Promise.resolve([] as Instance[]),
+    [systemPool?.name],
+  );
+  const { data: agentsData, error: agentsError } = useLiveData(
+    (signal) => call(api.GET("/api/agents", { signal })),
+    [],
+  );
+  const { data: enginesData, error: enginesError } = useLiveData(
+    (signal) => call(api.GET("/api/engines", { signal })),
+    [],
+  );
+  const instances = instancesError ? undefined : instancesData;
+  const agents = agentsError ? undefined : agentsData;
+  const engines = enginesError ? undefined : enginesData;
+  const now = useNow(5000);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string>();
   const [draft, setDraft] = useState("");
@@ -124,6 +260,14 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
     }
   }
 
+  const registration = orchestratorRegistration(pools, instances, agents, engines, now);
+  const status = (
+    <p className={`chat-status${registration.ok ? " registered" : ""}`} role="status">
+      <span className="chat-status-word">Orchestrator: {registration.word}</span>
+      <span className="muted small"> · {registration.reason}</span>
+    </p>
+  );
+
   const composer = (
     <form className="chat-composer-wrap" onSubmit={(e) => void send(e)}>
       <div className="chat-composer">
@@ -188,18 +332,28 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
       {showHome ? (
         <div className="chat-stage chat-home">
           <div className="chat-home-center">
+            {status}
             <h1>What should we work on?</h1>
             {composer}
           </div>
         </div>
       ) : (
         <div className="chat-stage chat-thread">
-          <h2 className="chat-thread-title">{selected?.title}</h2>
+          <header className="chat-thread-head">
+            <h2 className="chat-thread-title">{selected?.title}</h2>
+            {status}
+            {selected?.cost_usd != null && (
+              <span className="muted small">~${selected.cost_usd.toFixed(2)} this thread</span>
+            )}
+          </header>
           <div className="chat-messages" ref={scroller}>
             {items.map((m) => {
               const role = messageRole(m.author);
               return (
-                <article key={m.id} className={`chat-msg chat-msg-${role}`} title={m.created_at}>
+                <article key={m.id} className={`chat-msg chat-msg-${role}`}>
+                  <p className="muted small chat-msg-meta">
+                    {m.author} · <DateChip at={m.created_at} />
+                  </p>
                   <Markdown>{m.body}</Markdown>
                   {m.truncated && <p className="muted small">Truncated</p>}
                 </article>
