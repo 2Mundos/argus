@@ -92,21 +92,47 @@ A run reports findings in its result data:
 - Dashboard: a Routines section per project, listing schedule, next run, last run
   with its task state, findings filed, and enable/run-now actions.
 
-Status: the table (3.1) and the management routes and MCP tools above ship
-(migration `0062_routines.sql`). Run now, the scheduler (3.2), finding intake
-(3.3) and the dashboard section do not yet. As shipped: a worker reads routines
-only in projects where it holds a lease, like other project reads; only an admin
-may set `findings: auto`, replace an `auto` routine or re-enable one, while
-managers may disable or delete it; the body's `project`/`slug`, if given, must
-match the path; a template's title defaults to the routine's; `next_run_at` is
-null while disabled, but the three-slot preview is always computed;
-`DELETE` records `routine.deleted`.
+Status: the table (3.1), the scheduler (3.2), run now, the failure rule (3.5) and
+the management routes and MCP tools above ship (migration `0062_routines.sql`).
+Finding intake (3.3) and the dashboard section do not yet. As shipped: a worker
+reads routines only in projects where it holds a lease, like other project reads;
+only an admin may set `findings: auto`, replace an `auto` routine or re-enable one,
+while managers may disable or delete it; the body's `project`/`slug`, if given,
+must match the path; a template's title defaults to the routine's; `next_run_at` is
+null while disabled, but the three-slot preview is always computed; `DELETE`
+records `routine.deleted`. For runs:
+
+- `run_at` is `tx.now` of the transaction that starts the run; the title suffix is
+  that time on the routine's clock, `(YYYY-MM-DD HH:MM <timezone>)`, with the
+  title cut to fit 200 characters. `routine.run` and `routine.skipped` carry
+  `trigger` (`schedule` | `manual`); a skip also carries `previous_task_id`.
+- A scheduled skip still moves `next_run_at` to the next slot. A template that no
+  longer passes the create rules at run time (a removed kind) is skipped with
+  `routine.skipped {reason: create_failed, error}`, without holding back other
+  routines.
+- `POST /api/routines/{id}/run` (managers; `run_routine` over MCP) answers `200
+  {routine_id, task_id, skipped: null}` when it creates a run, and `200
+  {routine_id, task_id: null, skipped: previous_running}` when the overlap rule
+  skips it (the skip is recorded too). It works on a disabled routine and while
+  `routines.enabled` is off, never changes `next_run_at`, and is `404` for an
+  unknown routine and `422` for a template that no longer validates.
+- While `routines.enabled` is off the scheduler touches nothing, so turning it on
+  gives each due routine one catch-up run.
 
 ## 3.5 Failure
 
 A failed run is a failed task, retried by the normal rules. After 3 consecutive
 failed runs the routine is disabled with `routine.disabled {reason:
 consecutive_failures}` and appears in the inbox.
+
+As shipped: the check runs in the transaction that moves a run task to `failed`.
+It counts the routine's latest 3 run tasks created since the routine was last
+saved or re-enabled, so a success, an edit or a re-enable starts the count afresh;
+a cancelled run breaks the streak. Disabling records `routine.disabled {reason:
+consecutive_failures, task_ids}` as `system` and opens a human `policy` decision on
+the routine (inbox group `routine:<project>`). Approving it re-enables the routine;
+rejecting leaves it disabled; enabling, saving with `enabled: true` or deleting the
+routine cancels the open question.
 
 # 4. Open Questions
 

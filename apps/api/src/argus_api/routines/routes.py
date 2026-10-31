@@ -5,12 +5,17 @@ from typing import Annotated
 
 from argus_core.auth import Scope
 from argus_core.knowledge import SLUG_PATTERN
-from argus_core.routines import Routine, RoutineEnabled, RoutineWrite
+from argus_core.routines import (
+    Routine,
+    RoutineEnabled,
+    RoutineRunResult,
+    RoutineWrite,
+)
 from fastapi import APIRouter, Path, Response, status
 
 from argus_api.access import require_project_readable
 from argus_api.deps import CallerDep, DbDep, ManagerDep
-from argus_api.routines import service
+from argus_api.routines import runs, service
 
 router = APIRouter(tags=["routines"])
 Slug = Annotated[str, Path(pattern=SLUG_PATTERN)]
@@ -68,3 +73,13 @@ async def delete_routine(
     async with db.write() as tx:
         await service.delete(tx, slug, routine, caller.actor)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/routines/{routine_id}/run")
+async def run_routine(
+    routine_id: str, db: DbDep, caller: ManagerDep
+) -> RoutineRunResult:
+    """Run it now, even while disabled or paused. If its previous run is still
+    open, nothing is created: `skipped: previous_running` (a `routine.skipped`)."""
+    async with db.write() as tx:
+        return await runs.run_now(tx, routine_id, caller.actor)

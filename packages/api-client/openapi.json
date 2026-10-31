@@ -13765,6 +13765,44 @@
         "title": "RoutineRun",
         "type": "object"
       },
+      "RoutineRunResult": {
+        "description": "`POST /routines/{id}/run`: the run task, or why none was created.",
+        "properties": {
+          "routine_id": {
+            "title": "Routine Id",
+            "type": "string"
+          },
+          "skipped": {
+            "anyOf": [
+              {
+                "const": "previous_running",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipped"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          }
+        },
+        "required": [
+          "routine_id",
+          "task_id"
+        ],
+        "title": "RoutineRunResult",
+        "type": "object"
+      },
       "RoutineWrite": {
         "additionalProperties": false,
         "description": "`PUT /projects/{slug}/routines/{routine}`: the whole routine. `project` and\n`slug` are optional echoes of the path and must match it.",
@@ -26183,6 +26221,54 @@
           }
         ],
         "summary": "Get Routine",
+        "tags": [
+          "routines"
+        ]
+      }
+    },
+    "/api/routines/{routine_id}/run": {
+      "post": {
+        "description": "Run it now, even while disabled or paused. If its previous run is still\nopen, nothing is created: `skipped: previous_running` (a `routine.skipped`).",
+        "operationId": "run_routine_api_routines__routine_id__run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "routine_id",
+            "required": true,
+            "schema": {
+              "title": "Routine Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutineRunResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Run Routine",
         "tags": [
           "routines"
         ]

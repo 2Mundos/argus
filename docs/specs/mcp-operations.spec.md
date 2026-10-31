@@ -130,7 +130,8 @@ Findings outside the gap list:
     task: `{key, project, subject_type, subject_id, title, open_decisions,
     oldest_age_s, stalled_tasks}`. A task's rows form the group `task:<id>`; open
     pool decisions form `pool` (project `null`); knowledge proposals form
-    `knowledge_proposal:<project>`. `open_decisions` counts rows with an open
+    `knowledge_proposal:<project>`; a [routine](routines.spec.md) disabled after
+    failed runs forms `routine:<project>`. `open_decisions` counts rows with an open
     decision, `oldest_age_s` is the age of the group's oldest row, and
     `stalled_tasks` is the number of distinct tasks in the group's `blocks`.
     Groups follow the requested order (`impact`: `stalled_tasks` desc, then age).

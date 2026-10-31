@@ -84,6 +84,7 @@ from argus_api.errors import (
 from argus_api.events import record
 from argus_api.kinds import service as kinds
 from argus_api.modeltrace import service as modeltrace
+from argus_api.routines import failures as routine_failures
 from argus_api.runtime.gate import claim_gate
 from argus_api.tasks import continuation as cont
 from argus_api.tasks import steers
@@ -3102,6 +3103,10 @@ async def _apply(
         await _promote_dependents(tx, row["id"])
     elif new in (S.FAILED, S.CANCELLED):
         await _flag_dependents(tx, row["id"], new)
+    if new is S.FAILED and row["created_by"].startswith("routine:"):
+        await routine_failures.after_failed_run(
+            tx, row["created_by"].removeprefix("routine:")
+        )
     return new
 
 

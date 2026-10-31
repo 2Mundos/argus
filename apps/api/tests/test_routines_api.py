@@ -277,12 +277,12 @@ def test_auto_findings_are_admin_only(client: TestClient) -> None:
 
 def test_mcp_tools_share_the_rest_rules(client: TestClient) -> None:
     worker, orch = register(client), register(client, "orchestrator")
-    names = {"list_routines", "get_routine", "upsert_routine", "set_routine_enabled"}
+    managed = {"upsert_routine", "set_routine_enabled", "run_routine"}
+    names = {"list_routines", "get_routine"} | managed
     assert names <= listed(client, orch)
     assert names <= listed(client, ADMIN_TOKEN)
     assert {"list_routines", "get_routine"} <= listed(client, worker)
-    assert not {"upsert_routine", "set_routine_enabled"} & listed(client, worker)
-    assert "run_routine" not in listed(client, ADMIN_TOKEN)
+    assert not managed & listed(client, worker)
 
     auto = tool(
         client,
