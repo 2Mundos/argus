@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import { type ArgusConfig, createArgusAdapter } from "./argus.js";
+import { OneCliClient } from "./argus-accounts.js";
 import {
   chatThread,
   createChatLoop,
@@ -400,7 +401,7 @@ describe("createChatLoop", () => {
 
 type Call = { method: string; path: string; body: any };
 
-function fakeChatArgus() {
+function fakeChatArgus(opts: { leaseFails?: number } = {}) {
   const calls: Call[] = [];
   const queue: any[] = [
     {
@@ -452,6 +453,23 @@ function fakeChatArgus() {
         );
       });
     }
+    if (path === "/accounts/lease") {
+      if (opts.leaseFails && opts.leaseFails-- > 0) {
+        return new Response(JSON.stringify({ detail: { code: "no_account" } }), { status: 409 });
+      }
+      return new Response(
+        JSON.stringify({
+          lease_id: "l1",
+          account_id: "a1",
+          name: "claude main",
+          provider: "anthropic",
+          kind: "api_key",
+          role: "engine",
+          credential: { api_key: "sk-ant-api03-main" },
+        }),
+        { status: 200 },
+      );
+    }
     if (path === "/agents/me/chat/c1") {
       return new Response(JSON.stringify({ id: "r1", body: body?.body }), { status: 200 });
     }
@@ -502,5 +520,74 @@ describe("createArgusAdapter orchestrator mode", () => {
       turn_id: "turn-1",
       usage: { input_tokens: 1, output_tokens: 2 },
     });
+  });
+});
+
+/** A OneCLI vault that records the assignment and mode of the one agent. */
+function fakeVault() {
+  const state = { secretIds: [] as string[], mode: "all", secrets: [] as any[] };
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    const path = new URL(url).pathname.replace(/^\/api/, "");
+    const method = init.method ?? "GET";
+    const body = init.body ? JSON.parse(init.body as string) : undefined;
+    const ok = (data: unknown) => new Response(JSON.stringify(data), { status: 200 });
+    if (path === "/agents" && method === "GET") return ok([{ id: "oa", identifier: "g" }]);
+    if (path === "/secrets" && method === "GET") return ok(state.secrets);
+    if (path === "/secrets" && method === "POST") {
+      const secret = { id: `s${state.secrets.length}`, ...body };
+      state.secrets.push(secret);
+      return ok(secret);
+    }
+    if (path === "/agents/oa/secrets") state.secretIds = body.secretIds;
+    if (path === "/agents/oa/secret-mode") state.mode = body.mode;
+    return ok({});
+  }) as unknown as typeof fetch;
+  return { state, onecli: new OneCliClient("http://127.0.0.1:10254", fetchImpl) };
+}
+
+describe("createArgusAdapter orchestrator accounts", () => {
+  it("leases and applies its engine before it claims chat (spec 3.1)", async () => {
+    const fake = fakeChatArgus({ leaseFails: 1 });
+    const vault = fakeVault();
+    const inbound: any[] = [];
+    const selectEngine = vi.fn(async () => false);
+    const adapter = createArgusAdapter({
+      url: "http://argus.test",
+      bootstrapToken: "argus_boot_x",
+      capabilities: [],
+      name: "orch",
+      fetch: fake.fetchImpl,
+      claimWaitS: 1,
+      accounts: {
+        models: true,
+        onecli: vault.onecli,
+        resolveTarget: async () => ({ identifier: "g", name: "orch" }),
+        selectEngine,
+      },
+    } as ArgusConfig);
+    live.push(adapter);
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      await adapter.setup({
+        onInbound: async (_p: string, _t: string | null, m: any) => void inbound.push(m),
+        onInboundEvent: vi.fn(),
+        onMetadata: vi.fn(),
+        onAction: vi.fn(),
+      } as unknown as ChannelSetup);
+      await vi.waitFor(() =>
+        expect(fake.calls.filter((c) => c.path === "/accounts/lease").length).toBe(1),
+      );
+      // No account yet: chat is not claimed.
+      expect(fake.calls.some((c) => c.path.startsWith("/agents/me/chat?"))).toBe(false);
+      await vi.advanceTimersByTimeAsync(6_000);
+    } finally {
+      vi.useRealTimers();
+    }
+    await vi.waitFor(() => expect(inbound.length).toBe(1));
+    const leased = fake.calls.filter((c) => c.path === "/accounts/lease");
+    expect(leased.at(-1)?.body).toEqual({ runtime_providers: expect.any(Array) });
+    expect(vault.state.mode).toBe("selective");
+    expect(vault.state.secretIds).toHaveLength(1);
+    expect(selectEngine).toHaveBeenCalledWith("claude");
   });
 });
