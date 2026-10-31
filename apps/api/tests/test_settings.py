@@ -149,6 +149,30 @@ def test_models_project_override_merges(client: TestClient) -> None:
     assert partial["value"] == model_policy.validate_partial(override)
 
 
+def test_global_models_write_records_previous_policy(client: TestClient) -> None:
+    got = client.get("/api/settings", headers=ADMIN).json()
+    before = next(s for s in got["settings"] if s["key"] == "models")["value"]
+    new = {**before, "harness": {**before["harness"], "claude": ["claude-opus-5-5"]}}
+    assert new != before
+
+    res = client.put("/api/settings/models", json={"value": new}, headers=ADMIN)
+    assert res.status_code == 200, res.text
+
+    events = client.get(
+        "/api/events", params={"kind": "settings.changed"}, headers=ADMIN
+    ).json()
+    rows = events["items"] if isinstance(events, dict) else events
+    changes = [
+        e
+        for e in rows
+        if e["data"]["key"] == "models" and e["data"]["scope"] == "global"
+    ]
+    newest = max(changes, key=lambda e: e["id"])["data"]
+    assert newest["from"] == before
+    assert newest["to"] == res.json()["value"]
+    assert newest["to"] == new
+
+
 def test_claim_carries_effective_model_policy(client: TestClient) -> None:
     client.put(
         "/api/projects/demo", json={"name": "Demo", "description": "d"}, headers=ADMIN
