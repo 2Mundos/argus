@@ -93,8 +93,10 @@ A run reports findings in its result data:
   with its task state, findings filed, and enable/run-now actions.
 
 Status: the table (3.1), the scheduler (3.2), run now, the failure rule (3.5) and
-the management routes and MCP tools above ship (migration `0062_routines.sql`).
-Finding intake (3.3) and the dashboard section do not yet. As shipped: a worker
+the management routes and MCP tools above ship (migration `0062_routines.sql`),
+and so does the dashboard Routines page (`#routines`, per project; "findings
+filed" reads *unknown* until finding intake reports it). Finding intake (3.3)
+does not yet. As shipped: a worker
 reads routines only in projects where it holds a lease, like other project reads;
 only an admin may set `findings: auto`, replace an `auto` routine or re-enable one,
 while managers may disable or delete it; the body's `project`/`slug`, if given,

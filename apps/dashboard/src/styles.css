@@ -3711,3 +3711,54 @@ button.link.account-name {
 .dialog.copilot-import p {
   overflow-wrap: anywhere;
 }
+
+.routine-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+.routine-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  min-width: 0;
+}
+.routine-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+}
+.routine-head h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.routine-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.35rem 1rem;
+  margin: 0.75rem 0;
+}
+.routine-facts dt {
+  color: var(--muted);
+}
+.routine-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.routine-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+@media (max-width: 720px) {
+  .routine-facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .routine-facts dd {
+    margin-bottom: 0.4rem;
+  }
+}
