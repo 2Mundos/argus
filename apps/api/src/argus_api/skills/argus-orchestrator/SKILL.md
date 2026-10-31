@@ -136,11 +136,15 @@ giving any worker more access:
    counters and deletes the task log.
 3. Change the requirement only where the state allows it. If the task is
    `ready`, `pending` or `awaiting_approval`, `edit_task` can add
-   `repository:write` (pass `expected_version`). If it is `failed`, `retry_task`
-   first (it becomes `ready`), then `edit_task`. In `blocked`, `claimed`,
-   `in_review` or any other terminal state, the requirements are fixed: create a
-   follow-up task with `repository:write`, name the original task and its branch
-   in the spec, and do not assume it can reuse that worker's workspace.
+   `repository:write` (pass `expected_version`); in `ready` a worker may claim it
+   first, so check the state again. Do not `retry_task` a `failed` task just to
+   open an edit window: it becomes `ready` and a worker can claim it before your
+   edit lands, and Argus has no claim hold for that. Leave it `failed` and report
+   the limitation. In `blocked`, `claimed`, `in_review` or any terminal state the
+   requirements are fixed. A replacement task with `repository:write` is a
+   separate decision: create it only with the task owner's authorization, after
+   the WIP is saved or recorded (step 2). Name the original task and branch in its
+   spec, and do not assume it can reuse that worker's workspace.
 4. Publish only through an authorized host-side path. Ask a human admin to
    deliver the preserved work with the host's own delivery. Never copy host
    credentials, tokens or an authenticated remote into a worker, a spec or an
