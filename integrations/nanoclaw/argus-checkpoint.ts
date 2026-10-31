@@ -191,6 +191,9 @@ async function hashFile(file: string): Promise<{ sha256: string; bytes: number }
   }
 }
 
+/** Every git step's time limit (task-checkpoint spec 3.6); a step past it is env_checkpoint_limit. */
+export const GIT_STEP_TIMEOUT_MS = 30_000;
+
 /** Raw git output (patches may be binary and need their final newline) straight to a file. */
 async function gitToFile(
   args: string[],
@@ -209,7 +212,7 @@ async function gitToFile(
   const { stdout } = await run(
     "git",
     ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args],
-    { cwd, env, timeout: 60_000, encoding: "buffer", maxBuffer: 1024 * 1024 * 1024 },
+    { cwd, env, timeout: GIT_STEP_TIMEOUT_MS, encoding: "buffer", maxBuffer: 1024 * 1024 * 1024 },
   );
   await writeFile(file, stdout, { mode: 0o600, flag: "wx" });
 }
