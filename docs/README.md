@@ -140,6 +140,9 @@ every new dependency is judged against it.
   exact-head checks/statuses, mergeability, review evidence; checklist and
   authorization separate) on REST, MCP and the dashboard; a merge is flagged for
   review, never accepted; green does not authorize merge.
+- [Task discovery and prerequisite evidence](specs/task-discovery.spec.md) —
+  bounded task text search with citations, and a read-only view of whether
+  dependencies are forge-merged or artifact-verified (distinct from `succeeded`)
 - [Task continuation](specs/task-continuation.spec.md) — one typed contract per task:
   phase, artifacts with provenance, checklist evidence, effective decisions, gaps;
   contract first, narrative as history

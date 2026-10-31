@@ -53,7 +53,17 @@ from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
 from argus_api.paging import DEFAULT_LIMIT, View
 from argus_api.settings import service as settings_svc
-from argus_api.tasks import changes, delivery, log, resumability, service, steers, views
+from argus_api.tasks import (
+    changes,
+    delivery,
+    log,
+    prerequisites,
+    resumability,
+    service,
+    steers,
+    views,
+)
+from argus_api.tasks.prerequisites import PrerequisitesView
 from argus_api.tasks.views import TaskPage
 
 
@@ -198,16 +208,18 @@ async def list_tasks(
     view: View = "summary",
     limit: int = DEFAULT_LIMIT,
     cursor: str | None = None,
+    q: str | None = None,
 ) -> TaskPage:
     """Tasks newest first, in pages (max 100). `assignee` is the agent holding a
     task now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read
     instead: no other filter, no paging, unknown ids in `missing`. Archived tasks
     are left out unless `archived=true`, which lists only those. Workers only see
-    tasks they have leased."""
+    tasks they have leased. Optional `q` is literal substring search over title
+    and spec (task discovery)."""
     scope = worker_task_filter(caller)
     async with db.snapshot() as snap:
         if ids is not None:
-            if state or project or kind or assignee or archived or cursor:
+            if state or project or kind or assignee or archived or cursor or q:
                 raise ValidationFailedError(
                     "ids is a batch read; it takes no other filter or cursor",
                     code="ids_exclusive",
@@ -224,6 +236,7 @@ async def list_tasks(
             limit=limit,
             cursor=cursor,
             task_scope=scope,
+            q=q,
         )
 
 
@@ -319,6 +332,33 @@ async def get_delivery(
         await require_task_readable(conn, caller, task_id)
         task = await service.get_task(conn, task_id)
         return await delivery.delivery_of(conn, request.app.state.pr_checker, task)
+
+
+@router.get("/{task_id}/prerequisites")
+async def get_prerequisites(
+    task_id: str,
+    request: Request,
+    db: DbDep,
+    caller: CallerDep,
+    expected_base: str | None = None,
+) -> PrerequisitesView:
+    """Evidence for each direct dependency: forge-merged on an expected base or a
+    listed artifact re-verified, distinguished from task_succeeded. Read-only;
+    enforced is always false (task discovery)."""
+    async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
+        task = await service.get_task(conn, task_id)
+        collected = await prerequisites.collect(
+            conn,
+            request.app.state.pr_checker,
+            task,
+            expected_base=expected_base,
+        )
+    return await prerequisites.evaluate(
+        request.app.state.pr_checker,
+        request.app.state.artifacts,
+        collected,
+    )
 
 
 @router.post("/{task_id}/complete")

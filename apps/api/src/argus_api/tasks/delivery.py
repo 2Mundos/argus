@@ -116,6 +116,17 @@ class ForgeSnapshot:
     checked_at: datetime = field(default_factory=utcnow)
 
 
+@dataclass(frozen=True)
+class PrObservation:
+    """Forge facts for one PR, including base/head for prerequisite evidence."""
+
+    state: PrState
+    merged_at: datetime | None
+    checked_at: datetime
+    base_ref: str | None
+    head_sha: str | None
+
+
 def parse_repository(url: str) -> tuple[str, str, str] | None:
     """`https://host/owner/repo[.git]` -> lowercase (host, owner, repo)."""
     parts = urlsplit(url)
@@ -328,7 +339,15 @@ class PrChecker:
         hit = self._cache.get(ref)
         if hit and time.monotonic() - hit[0] < CACHE_S:
             return hit[1]
-        login = await self._token(conn, ref.provider)
+        login = await self.login(conn, ref.provider)
+        return await self.snapshot_resolved(ref, login)
+
+    async def snapshot_resolved(
+        self, ref: PrRef, login: tuple[str, str] | None
+    ) -> ForgeSnapshot:
+        hit = self._cache.get(ref)
+        if hit and time.monotonic() - hit[0] < CACHE_S:
+            return hit[1]
         flight = self._flight.get(ref)
         if flight is None:
             flight = asyncio.create_task(self._fetch_all(ref, login))
@@ -341,7 +360,21 @@ class PrChecker:
         self._cache[ref] = (time.monotonic(), snap)
         return snap
 
-    async def _token(
+    async def inspect(self, conn: aiosqlite.Connection, ref: PrRef) -> PrObservation:
+        snap = await self.snapshot(conn, ref)
+        return PrObservation(
+            snap.pr_state, snap.merged_at, snap.checked_at, snap.base_ref, snap.head_sha
+        )
+
+    async def inspect_resolved(
+        self, ref: PrRef, login: tuple[str, str] | None
+    ) -> PrObservation:
+        snap = await self.snapshot_resolved(ref, login)
+        return PrObservation(
+            snap.pr_state, snap.merged_at, snap.checked_at, snap.base_ref, snap.head_sha
+        )
+
+    async def login(
         self, conn: aiosqlite.Connection, provider: str
     ) -> tuple[str, str] | None:
         async with conn.execute(

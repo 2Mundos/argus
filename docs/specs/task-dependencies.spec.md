@@ -56,6 +56,9 @@ unchanged, including the `task_not_waiting` code.
   `task.dependency_failed`, as at creation.
 - Removing a `cancelled` or `failed` dependency is how a stranded task is
   released (gap 3): no other mechanism is added.
+- A read-only [prerequisite evidence](task-discovery.spec.md) view reports
+  whether each direct dependency is forge-merged or artifact-verified. It
+  changes nothing here: readiness still keys only on `succeeded`.
 
 ## 3.2 Stuck dependents in the inbox
 
@@ -73,6 +76,9 @@ unchanged, including the `task_not_waiting` code.
 - Whether a dependent's claim should carry its dependencies' result summaries,
   so a worker does not have to read them with `get_tasks`. Decide once workers
   ask for it.
+- Whether readiness should require merged/verified delivery evidence rather
+  than only `succeeded` is tracked in [task discovery](task-discovery.spec.md)
+  §3.4 / §4 (`enforced: false`); this spec does not invent that policy.
 
 # 5. Constraints
 
