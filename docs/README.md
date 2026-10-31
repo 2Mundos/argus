@@ -119,6 +119,10 @@ every new dependency is judged against it.
 - [Task inputs](specs/task-inputs.spec.md) — byte-exact upload of shared
   attachments, the inputs view and receipts, materialization by the NanoClaw
   channel, required inputs and `env_input_*` blocks
+- [Task resumability preflight](specs/task-resumability-preflight.spec.md) —
+  read-only assessment of task/attempt/lease state, WIP and attachment
+  availability before answer/requeue/release; metadata and receipts are not
+  current proof
 - [Worker read scope](specs/worker-read-scope.spec.md) — workers may only read
   tasks/artifacts they have leased and knowledge/events for those projects;
   orchestrators and admins stay global
@@ -132,9 +136,10 @@ every new dependency is judged against it.
   choices, version-checked saves, field-level errors
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes
   that say whether an upgrade can be rolled back, the tagged image
-- [Task delivery](specs/task-delivery.spec.md) — read-only PR state (open, merged,
-  closed, unknown) of a task's delivery on REST, MCP and the dashboard; a merge is
-  flagged for review, never accepted.
+- [Task delivery](specs/task-delivery.spec.md) — read-only PR projection (state,
+  exact-head checks/statuses, mergeability, review evidence; checklist and
+  authorization separate) on REST, MCP and the dashboard; a merge is flagged for
+  review, never accepted; green does not authorize merge.
 - [Task discovery and prerequisite evidence](specs/task-discovery.spec.md) —
   bounded task text search with citations, and a read-only view of whether
   dependencies are forge-merged or artifact-verified (distinct from `succeeded`)

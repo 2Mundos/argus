@@ -659,12 +659,39 @@ async def get_task_continuation(ctx: Context, task_id: str) -> dict:
 
 
 @tool(ANYONE)
+async def task_resumability_preflight(
+    ctx: Context,
+    task_id: str,
+    expected_attempt: int | None = None,
+    expected_version: str | None = None,
+) -> dict:
+    """Read-only resumability preflight for a task: attempt/lease state, WIP class
+    (published vs local_only vs unknown), and whether shared attachments are currently
+    available by re-reading size and SHA-256. Recorded metadata and historical
+    receipts do not prove current availability. Grants nothing: no merge, deploy or
+    Production access. Optional expected_attempt / expected_version make a mismatch
+    `stale` instead of describing a newer state. The REST route enforces the task
+    read rule (managers global; workers only tasks they hold or held)."""
+    return await _call(
+        ctx,
+        "GET",
+        f"/tasks/{task_id}/resumability",
+        params={
+            "expected_attempt": expected_attempt,
+            "expected_version": expected_version,
+        },
+    )
+
+
+@tool(ANYONE)
 async def get_task_delivery(ctx: Context, task_id: str) -> dict | None:
-    """The state of the task's pull request as the forge shows it: pr, pr_state
-    (open | merged | closed | unknown; unknown means it could not be read, not open),
-    merged_at, checked_at. A merged PR carries the flag delivery_merged_pending_review
-    and, only when the task awaits review with its checklist done, accept_decision_id
-    (answer it with choice accept). Merged is not accepted. null: no unambiguous PR."""
+    """Bounded read-only delivery projection for a task's PR (inbox review evidence).
+    Top-level: pr, pr_state (open|merged|closed|unknown; unknown means unread, not open),
+    merged_at, checked_at, flags, accept_decision_id / accept_blocked.
+    Additive: task, head/base (source+sha+checked_at), merge, exact-head checks/statuses
+    (pending|skipped|failed|…), checks_combined, required_gates (null when unknown),
+    review evidence, checklist and authorization separately, stale, partial, disclosures.
+    Green checks do not authorize merge; merge is not acceptance. null: no unambiguous PR."""
     return await _call(ctx, "GET", f"/tasks/{task_id}/delivery")
 
 

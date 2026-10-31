@@ -98,12 +98,16 @@ question is cancelled). Use it only when the question no longer applies.
 Before `accept`:
 
 1. `get_tasks([id], view="detail")`: read the spec, acceptance and `result`.
-2. `get_task_continuation(id)`: every checklist item `done` with evidence;
+2. `get_task_delivery(id)`: forge PR/head/base, exact-head checks/statuses,
+   mergeability, review evidence; checklist and authorization are separate
+   fields. Treat `partial` and `stale` as incomplete evidence. Green checks do
+   not authorize merge; merged is not accepted.
+3. `get_task_continuation(id)`: every checklist item `done` with evidence;
    `gaps` lists what Argus does not know. Merged is not accepted.
-3. `list_artifacts(id)`, then `verify_artifact` on each artifact you rely on
+4. `list_artifacts(id)`, then `verify_artifact` on each artifact you rely on
    (`ok` only means the bytes are intact) and `read_artifact` to read it.
    Follow `next_offset` until it is null.
-4. `get_task_log(id)` if the result is thin or contradicts the artifacts.
+5. `get_task_log(id)` if the result is thin or contradicts the artifacts.
 
 Accept only if the acceptance criteria are met on the evidence. Otherwise
 reject with notes that say exactly what is missing. The notes become part of
@@ -198,7 +202,10 @@ transcribe it into `attach_artifact`. Upload it byte-exact from where it lives:
 Create the task with `required_capabilities` including `task-inputs`, then set
 that `ref` (`attachment:<id>:<sha256>`) as the WIP reference with
 `update_task_continuation`; Argus refuses it otherwise. `list_task_inputs` shows the
-inputs and the workers' receipts. Until an operator has installed the current
+inputs and the workers' receipts. Before you answer, requeue or release so a new
+attempt starts elsewhere, call `task_resumability_preflight`: it is read-only and
+tells recorded metadata and receipts apart from a current byte/hash read; it
+grants nothing. Until an operator has installed the current
 NanoClaw channel, recreated the workers and added `task-inputs` to a pool, no
 worker can claim such a task; do not rely on a shared attachment for a retry
 before then.
@@ -289,6 +296,6 @@ Tool errors read `<status> <code>: <message>`.
 | --- | --- | --- |
 | `409 stale_version` / `stale_pool` / `stale_continuation` | Changed since you read it. | Re-read, re-decide, retry. |
 | `409 decision_not_open` | Already answered or cancelled. | `get_decision` to see by whom; do not re-answer. |
-| `409 task_not_editable`, `task_not_failed`, `task_not_claimed` | Wrong state for that action. | `get_tasks` and pick the action for its state. |
+| `409 task_not_editable` / `409 task_not_failed` / `409 task_not_claimed` | Wrong state for that action. | `get_tasks` and pick the action for its state. |
 | `403` "this decision is for: human" | Not yours. | Leave it for a human. |
 | `422 dependency_cycle`, `invalid_pool`, `cursor_mismatch` | Bad request. | Fix the arguments; do not retry as is. |

@@ -1,0 +1,92 @@
+{
+  "cases": [
+    {
+      "availability": "available",
+      "case": "available",
+      "cause": null,
+      "error": null,
+      "evidence_class": "current_read",
+      "observed_sha256": "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f",
+      "observed_size": 16,
+      "recorded_sha256": "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f",
+      "recorded_size": 16
+    },
+    {
+      "availability": "corrupted",
+      "case": "corrupted",
+      "cause": "artifact_corrupted",
+      "error": null,
+      "evidence_class": "current_read",
+      "observed_sha256": "0f53b409ea2e4b5389d146c28dac17c16894213aaf0b10850ff53a973e84a13a",
+      "observed_size": 16,
+      "recorded_sha256": "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f",
+      "recorded_size": 16
+    },
+    {
+      "availability": "inaccessible",
+      "case": "inaccessible_permission",
+      "cause": "artifact_inaccessible",
+      "error": "permission",
+      "evidence_class": "current_read",
+      "observed_sha256": null,
+      "observed_size": null,
+      "recorded_sha256": "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f",
+      "recorded_size": 16
+    },
+    {
+      "availability": "inaccessible",
+      "case": "is_directory",
+      "cause": "artifact_inaccessible",
+      "error": "is_directory",
+      "evidence_class": "current_read",
+      "observed_sha256": null,
+      "observed_size": null,
+      "recorded_sha256": "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f",
+      "recorded_size": 16
+    },
+    {
+      "availability": "missing",
+      "case": "missing",
+      "cause": "artifact_missing",
+      "error": "missing",
+      "evidence_class": "current_read",
+      "observed_sha256": null,
+      "observed_size": null,
+      "recorded_sha256": "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f",
+      "recorded_size": 16
+    },
+    {
+      "availability": "inaccessible",
+      "case": "os_error",
+      "cause": "artifact_inaccessible",
+      "error": "os_error",
+      "evidence_class": "current_read",
+      "observed_sha256": null,
+      "observed_size": null,
+      "recorded_sha256": "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f",
+      "recorded_size": 16
+    },
+    {
+      "availability": "unknown",
+      "case": "too_large",
+      "cause": "artifact_unknown",
+      "error": "too_large",
+      "evidence_class": "unknown",
+      "observed_sha256": null,
+      "observed_size": null,
+      "recorded_sha256": "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f",
+      "recorded_size": 16
+    },
+    {
+      "availability": "truncated",
+      "case": "truncated",
+      "cause": "artifact_truncated",
+      "error": null,
+      "evidence_class": "current_read",
+      "observed_sha256": null,
+      "observed_size": 11,
+      "recorded_sha256": "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f",
+      "recorded_size": 16
+    }
+  ]
+}

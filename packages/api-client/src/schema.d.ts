@@ -2856,6 +2856,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/resumability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Resumability
+         * @description Read-only resumability preflight: attempt/lease state, WIP class, and whether
+         *     shared attachments are currently available (size and SHA-256 re-read). Recorded
+         *     metadata and historical receipts do not prove current availability. Grants
+         *     nothing; never mutates. Optional `expected_attempt` / `expected_version` make a
+         *     mismatch `stale` instead of describing a newer state.
+         */
+        get: operations["get_resumability_api_tasks__task_id__resumability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/retry": {
         parameters: {
             query?: never;
@@ -3750,6 +3774,36 @@ export interface components {
             verified: true | false | "unknown";
         };
         /**
+         * ArtifactAssessment
+         * @description One artifact as assessed: recorded facts plus optional current-read.
+         */
+        ArtifactAssessment: {
+            /** Artifact Id */
+            artifact_id?: string | null;
+            availability: components["schemas"]["Availability"];
+            evidence_class: components["schemas"]["EvidenceClass"];
+            /** Kind */
+            kind: string;
+            /** Note */
+            note?: string | null;
+            /** Observed After Attempt Start */
+            observed_after_attempt_start?: boolean | null;
+            /** Observed Sha256 */
+            observed_sha256?: string | null;
+            /** Observed Size */
+            observed_size?: number | null;
+            /** Provenance */
+            provenance?: string | null;
+            /** Recorded Sha256 */
+            recorded_sha256?: string | null;
+            /** Recorded Size */
+            recorded_size?: number | null;
+            /** Ref */
+            ref: string;
+            /** State */
+            state?: string | null;
+        };
+        /**
          * ArtifactIn
          * @description A caller's statement about an artifact. ContinuationProvenance and time are Argus's.
          */
@@ -3859,6 +3913,12 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /**
+         * Availability
+         * @description Current store state for an attachment (spec 3.4).
+         * @enum {string}
+         */
+        Availability: "available" | "missing" | "truncated" | "corrupted" | "inaccessible" | "unknown";
         /**
          * AwaitingQuotaRequest
          * @description An agent with no usable account asks for the work it cannot claim to wait.
@@ -4115,6 +4175,11 @@ export interface components {
             /** Status */
             status: string;
         };
+        /**
+         * CheckState
+         * @enum {string}
+         */
+        CheckState: "success" | "pending" | "failure" | "error" | "skipped" | "cancelled" | "unknown";
         /** Checklist */
         Checklist: {
             /** Omitted */
@@ -4447,6 +4512,12 @@ export interface components {
             /** Version */
             version: string | null;
         };
+        /**
+         * ConsumerPath
+         * @description The only supported cross-attempt consumer for attachment bytes.
+         * @enum {string}
+         */
+        ConsumerPath: "task_inputs_materializer" | "none";
         /** ContinuationArtifact */
         ContinuationArtifact: {
             /** Attempt */
@@ -4945,6 +5016,27 @@ export interface components {
              */
             text?: string;
         };
+        /** DecisionChange */
+        DecisionChange: {
+            /** Decided At */
+            decided_at?: string | null;
+            /** Decision Id */
+            decision_id: string;
+            /**
+             * Premise Outdated
+             * @default false
+             */
+            premise_outdated?: boolean;
+            /** Question */
+            question: string;
+            /**
+             * Relative To Attempt
+             * @enum {string}
+             */
+            relative_to_attempt: "at_or_after" | "before" | "unresolved";
+            /** Status */
+            status: string;
+        };
         /** DecisionDetail */
         DecisionDetail: {
             /** Age S */
@@ -5091,25 +5183,112 @@ export interface components {
         /**
          * Delivery
          * @description What Argus read of the task's pull request. Observed only: a merge neither
-         *     closes the task nor counts as acceptance.
+         *     closes the task nor counts as acceptance. Green checks do not authorize merge.
          */
         Delivery: {
             /** Accept Blocked */
             accept_blocked: ("not_in_review" | "checklist_pending" | "no_review") | null;
             /** Accept Decision Id */
             accept_decision_id: string | null;
+            authorization?: components["schemas"]["DeliveryAuthorization"] | null;
+            base?: components["schemas"]["ShaFact"] | null;
             /**
              * Checked At
              * Format: date-time
              */
             checked_at: string;
+            checklist?: components["schemas"]["DeliveryChecklist"] | null;
+            /** Checks */
+            checks?: components["schemas"]["DeliveryCheck"][];
+            checks_combined?: components["schemas"]["CheckState"] | null;
+            /** Disclosures */
+            disclosures?: string[];
             /** Flags */
             flags: "delivery_merged_pending_review"[];
+            head?: components["schemas"]["ShaFact"] | null;
+            merge?: components["schemas"]["MergeFact"] | null;
             /** Merged At */
             merged_at: string | null;
+            /** Partial */
+            partial?: string[];
             /** Pr */
             pr: string;
             pr_state: components["schemas"]["PrState"];
+            required_gates?: components["schemas"]["RequiredGates"] | null;
+            review?: components["schemas"]["DeliveryReviewEvidence"] | null;
+            /**
+             * Stale
+             * @default false
+             */
+            stale?: boolean;
+            task?: components["schemas"]["DeliveryTask"] | null;
+        };
+        /** DeliveryAuthorization */
+        DeliveryAuthorization: {
+            /** Accept Blocked */
+            accept_blocked?: ("not_in_review" | "checklist_pending" | "no_review") | null;
+            /** Accept Decision Id */
+            accept_decision_id?: string | null;
+            /** Allow Merge */
+            allow_merge?: boolean | null;
+            /**
+             * Notes
+             * @default Green checks do not authorize merge. Merge is not acceptance. Authorization and checklist are separate from forge CI.
+             */
+            notes?: string;
+            /**
+             * Source
+             * @default task
+             * @constant
+             */
+            source?: "task";
+        };
+        /** DeliveryCheck */
+        DeliveryCheck: {
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /** Description */
+            description?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "status" | "check_run";
+            /** Name */
+            name: string;
+            /** Required */
+            required?: boolean | null;
+            /** Sha */
+            sha: string;
+            /**
+             * Source
+             * @default forge
+             * @constant
+             */
+            source?: "forge";
+            state: components["schemas"]["CheckState"];
+            /** Target Url */
+            target_url?: string | null;
+        };
+        /** DeliveryChecklist */
+        DeliveryChecklist: {
+            /** Done */
+            done: number;
+            /** Pending */
+            pending: number;
+            /** Pending Ids */
+            pending_ids?: string[];
+            /**
+             * Source
+             * @default task
+             * @constant
+             */
+            source?: "task";
+            /** Total */
+            total: number;
         };
         /** DeliveryEvidence */
         DeliveryEvidence: {
@@ -5125,6 +5304,37 @@ export interface components {
              */
             status: "unknown" | "stale" | "conflict" | "fresh";
             stored: components["schemas"]["Evidence"];
+        };
+        /** DeliveryReviewEvidence */
+        DeliveryReviewEvidence: {
+            /** Agentic Finding Count */
+            agentic_finding_count?: number | null;
+            /** Checked At */
+            checked_at?: string | null;
+            /** Forge Review Count */
+            forge_review_count?: number | null;
+            /** Forge Reviews For Head */
+            forge_reviews_for_head?: number | null;
+            independent?: components["schemas"]["IndependentReviewSummary"] | null;
+            /** Sha */
+            sha?: string | null;
+            /** @default unknown */
+            source?: components["schemas"]["FactOrigin"];
+        };
+        /** DeliveryTask */
+        DeliveryTask: {
+            /** Id */
+            id: string;
+            /** Project */
+            project: string;
+            /**
+             * Source
+             * @default task
+             * @constant
+             */
+            source?: "task";
+            /** State */
+            state: string;
         };
         /** DependenciesRequest */
         DependenciesRequest: {
@@ -5500,6 +5710,12 @@ export interface components {
             /** Value */
             value: string | null;
         };
+        /**
+         * EvidenceClass
+         * @description How a claim was established (spec 3.3).
+         * @enum {string}
+         */
+        EvidenceClass: "recorded_metadata" | "receipt_only" | "current_read" | "unobserved" | "unknown";
         /** Execution */
         Execution: {
             /** Account Id */
@@ -5702,6 +5918,11 @@ export interface components {
             /** Timed Out */
             timed_out: number;
         };
+        /**
+         * FactOrigin
+         * @enum {string}
+         */
+        FactOrigin: "forge" | "task" | "unknown";
         /**
          * FactSource
          * @description How far a runtime fact is proven, weakest first.
@@ -6060,6 +6281,48 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /** IndependentReviewSummary */
+        IndependentReviewSummary: {
+            /** Child Task Id */
+            child_task_id?: string | null;
+            /** Head Sha */
+            head_sha?: string | null;
+            /**
+             * Source
+             * @default task
+             * @constant
+             */
+            source?: "task";
+            /** Verdict */
+            verdict?: string | null;
+        };
+        /** InputAssessment */
+        InputAssessment: {
+            /** Artifact Id */
+            artifact_id: string;
+            availability: components["schemas"]["Availability"];
+            /**
+             * Capability
+             * @default capability_unknown
+             * @enum {string}
+             */
+            capability?: "required" | "capability_not_required" | "capability_unknown";
+            consumer_path: components["schemas"]["ConsumerPath"];
+            evidence_class: components["schemas"]["EvidenceClass"];
+            /** Name */
+            name: string;
+            /** Receipts */
+            receipts?: components["schemas"]["InputReceiptView"][];
+            /** Recorded Sha256 */
+            recorded_sha256: string;
+            /** Recorded Size */
+            recorded_size: number;
+            /**
+             * Required
+             * @default false
+             */
+            required?: boolean;
+        };
         /**
          * InputFailure
          * @enum {string}
@@ -6081,6 +6344,24 @@ export interface components {
             /** Reporter */
             reporter: string;
             state: components["schemas"]["ReceiptState"];
+        };
+        /**
+         * InputReceiptView
+         * @description A historical receipt: evidence_class is always receipt_only.
+         */
+        InputReceiptView: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Evidence Class
+             * @default receipt_only
+             * @constant
+             */
+            evidence_class?: "receipt_only";
+            /** Reason */
+            reason?: string | null;
+            /** State */
+            state: string;
         };
         /** InspectedInstance */
         InspectedInstance: {
@@ -6195,6 +6476,23 @@ export interface components {
             };
             /** Draining */
             draining: number;
+        };
+        /**
+         * InterruptionAssessment
+         * @description Bounded reuse of continuation.interruption (spec 3.7).
+         */
+        InterruptionAssessment: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Attempt */
+            attempt: number;
+            /** Detail */
+            detail?: string | null;
+            /** Reason */
+            reason: string;
         };
         /** IssuedToken */
         IssuedToken: {
@@ -6409,6 +6707,17 @@ export interface components {
              * @default false
              */
             usable: boolean;
+        };
+        /** LeaseAssessment */
+        LeaseAssessment: {
+            /** Assignee Agent Id */
+            assignee_agent_id?: string | null;
+            /** @default recorded_metadata */
+            evidence_class?: components["schemas"]["EvidenceClass"];
+            /** Expires At */
+            expires_at?: string | null;
+            /** Live */
+            live: boolean;
         };
         /**
          * LeaseObservation
@@ -6646,6 +6955,17 @@ export interface components {
             snippet: string;
             /** Truncated */
             truncated: boolean;
+        };
+        /** MergeFact */
+        MergeFact: {
+            /** Checked At */
+            checked_at?: string | null;
+            /** Mergeable */
+            mergeable?: boolean | null;
+            /** Mergeable State */
+            mergeable_state?: string | null;
+            /** @default unknown */
+            source?: components["schemas"]["FactOrigin"];
         };
         /** Message */
         Message: {
@@ -6904,6 +7224,13 @@ export interface components {
             };
             /** Reason */
             reason: string;
+        };
+        /** NextStep */
+        NextStep: {
+            /** Code */
+            code: string;
+            /** Detail */
+            detail: string;
         };
         /** NodeOption */
         NodeOption: {
@@ -8028,6 +8355,15 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** Reason */
+        Reason: {
+            code: components["schemas"]["ResumabilityCause"];
+            /** Detail */
+            detail?: string | null;
+            evidence_class: components["schemas"]["EvidenceClass"];
+            /** Subject */
+            subject: string;
+        };
         /** ReceiptRequest */
         ReceiptRequest: {
             /** Attempt */
@@ -8112,6 +8448,71 @@ export interface components {
             lease_expires_at: string;
             /** Task Id */
             task_id: string;
+        };
+        /**
+         * RequiredGates
+         * @description Present only when the forge disclosed required contexts (may be empty).
+         */
+        RequiredGates: {
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /** Contexts */
+            contexts: string[];
+            /**
+             * Source
+             * @default forge
+             * @constant
+             */
+            source?: "forge";
+        };
+        /**
+         * ResumabilityCause
+         * @description Closed set of cause codes (spec 3.8).
+         * @enum {string}
+         */
+        ResumabilityCause: "task_unknown" | "task_terminal" | "attempt_mismatch" | "stale_preflight" | "no_artifacts" | "artifact_state_unobserved" | "artifact_missing" | "artifact_truncated" | "artifact_corrupted" | "artifact_inaccessible" | "artifact_unknown" | "wip_local_only" | "checkpoint_store_not_visible" | "wip_unrecorded" | "input_capability_missing" | "decision_unresolved" | "acceptance_not_structured" | "lease_expired" | "lease_held_elsewhere";
+        /**
+         * ResumabilityDecision
+         * @enum {string}
+         */
+        ResumabilityDecision: "resumable" | "not_resumable" | "unknown" | "stale";
+        /**
+         * ResumabilityReport
+         * @description Bounded read-only assessment (spec 3.2). Grants nothing.
+         */
+        ResumabilityReport: {
+            /** Artifacts */
+            artifacts?: components["schemas"]["ArtifactAssessment"][];
+            /**
+             * Assessed At
+             * Format: date-time
+             */
+            assessed_at: string;
+            /** Attempt */
+            attempt: number;
+            /** Cause Codes */
+            cause_codes?: components["schemas"]["ResumabilityCause"][];
+            decision: components["schemas"]["ResumabilityDecision"];
+            /** Decision Changes */
+            decision_changes?: components["schemas"]["DecisionChange"][];
+            /** Inputs */
+            inputs?: components["schemas"]["InputAssessment"][];
+            interruption?: components["schemas"]["InterruptionAssessment"] | null;
+            lease: components["schemas"]["LeaseAssessment"];
+            /** Next Steps */
+            next_steps?: components["schemas"]["NextStep"][];
+            /** Reasons */
+            reasons?: components["schemas"]["Reason"][];
+            /** Task Id */
+            task_id: string;
+            /** Task Version */
+            task_version: string;
+            /** Unknowns */
+            unknowns?: string[];
+            wip: components["schemas"]["WipAssessment"];
         };
         /**
          * RetryClass
@@ -8639,6 +9040,17 @@ export interface components {
             scope: string;
             /** Settings */
             settings: components["schemas"]["SettingValue"][];
+        };
+        /** ShaFact */
+        ShaFact: {
+            /** Checked At */
+            checked_at?: string | null;
+            /** Ref */
+            ref?: string | null;
+            /** Sha */
+            sha?: string | null;
+            /** @default unknown */
+            source?: components["schemas"]["FactOrigin"];
         };
         /**
          * Source
@@ -9900,6 +10312,18 @@ export interface components {
             /** Size */
             size: number | null;
         };
+        /** WipAssessment */
+        WipAssessment: {
+            availability?: components["schemas"]["Availability"] | null;
+            evidence_class: components["schemas"]["EvidenceClass"];
+            kind: components["schemas"]["WipKind"];
+            /** Ref */
+            ref?: string | null;
+            /** Summary */
+            summary?: string | null;
+            /** Transfer */
+            transfer?: ("not_a_transfer" | "attachment_verified" | "published_ref") | null;
+        };
         /** WipIn */
         WipIn: {
             /** Ref */
@@ -9907,6 +10331,11 @@ export interface components {
             /** Summary */
             summary: string;
         };
+        /**
+         * WipKind
+         * @enum {string}
+         */
+        WipKind: "published" | "local_only" | "unknown" | "absent";
         /** WorkerTemplate */
         WorkerTemplate: {
             defaults: components["schemas"]["TemplateDefaults"];
@@ -15537,6 +15966,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_resumability_api_tasks__task_id__resumability_get: {
+        parameters: {
+            query?: {
+                expected_attempt?: number | null;
+                expected_version?: string | null;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResumabilityReport"];
                 };
             };
             /** @description Validation Error */

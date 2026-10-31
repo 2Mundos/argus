@@ -2350,6 +2350,141 @@
         "title": "Artifact",
         "type": "object"
       },
+      "ArtifactAssessment": {
+        "additionalProperties": false,
+        "description": "One artifact as assessed: recorded facts plus optional current-read.",
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Id"
+          },
+          "availability": {
+            "$ref": "#/components/schemas/Availability"
+          },
+          "evidence_class": {
+            "$ref": "#/components/schemas/EvidenceClass"
+          },
+          "kind": {
+            "maxLength": 64,
+            "title": "Kind",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "observed_after_attempt_start": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed After Attempt Start"
+          },
+          "observed_sha256": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Sha256"
+          },
+          "observed_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Size"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance"
+          },
+          "recorded_sha256": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded Sha256"
+          },
+          "recorded_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded Size"
+          },
+          "ref": {
+            "maxLength": 300,
+            "title": "Ref",
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "required": [
+          "kind",
+          "ref",
+          "availability",
+          "evidence_class"
+        ],
+        "title": "ArtifactAssessment",
+        "type": "object"
+      },
       "ArtifactEvidence": {
         "properties": {
           "checked_at": {
@@ -2712,6 +2847,19 @@
         ],
         "title": "Authority",
         "type": "object"
+      },
+      "Availability": {
+        "description": "Current store state for an attachment (spec 3.4).",
+        "enum": [
+          "available",
+          "missing",
+          "truncated",
+          "corrupted",
+          "inaccessible",
+          "unknown"
+        ],
+        "title": "Availability",
+        "type": "string"
       },
       "AwaitingQuotaRequest": {
         "description": "An agent with no usable account asks for the work it cannot claim to wait.",
@@ -3426,6 +3574,19 @@
         ],
         "title": "CheckOut",
         "type": "object"
+      },
+      "CheckState": {
+        "enum": [
+          "success",
+          "pending",
+          "failure",
+          "error",
+          "skipped",
+          "cancelled",
+          "unknown"
+        ],
+        "title": "CheckState",
+        "type": "string"
       },
       "Checklist": {
         "properties": {
@@ -4484,6 +4645,15 @@
         ],
         "title": "ComponentView",
         "type": "object"
+      },
+      "ConsumerPath": {
+        "description": "The only supported cross-attempt consumer for attachment bytes.",
+        "enum": [
+          "task_inputs_materializer",
+          "none"
+        ],
+        "title": "ConsumerPath",
+        "type": "string"
       },
       "ContinuationArtifact": {
         "additionalProperties": false,
@@ -5843,6 +6013,60 @@
         "title": "DecisionAnswer",
         "type": "object"
       },
+      "DecisionChange": {
+        "additionalProperties": false,
+        "properties": {
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decision_id": {
+            "maxLength": 64,
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "premise_outdated": {
+            "default": false,
+            "title": "Premise Outdated",
+            "type": "boolean"
+          },
+          "question": {
+            "maxLength": 300,
+            "title": "Question",
+            "type": "string"
+          },
+          "relative_to_attempt": {
+            "enum": [
+              "at_or_after",
+              "before",
+              "unresolved"
+            ],
+            "title": "Relative To Attempt",
+            "type": "string"
+          },
+          "status": {
+            "maxLength": 32,
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision_id",
+          "status",
+          "question",
+          "relative_to_attempt"
+        ],
+        "title": "DecisionChange",
+        "type": "object"
+      },
       "DecisionDetail": {
         "properties": {
           "age_s": {
@@ -6325,7 +6549,7 @@
         "type": "object"
       },
       "Delivery": {
-        "description": "What Argus read of the task's pull request. Observed only: a merge neither\ncloses the task nor counts as acceptance.",
+        "description": "What Argus read of the task's pull request. Observed only: a merge neither\ncloses the task nor counts as acceptance. Green checks do not authorize merge.",
         "properties": {
           "accept_blocked": {
             "anyOf": [
@@ -6354,10 +6578,64 @@
             ],
             "title": "Accept Decision Id"
           },
+          "authorization": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryAuthorization"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "base": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ShaFact"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "checked_at": {
             "format": "date-time",
             "title": "Checked At",
             "type": "string"
+          },
+          "checklist": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryChecklist"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/DeliveryCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "checks_combined": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CheckState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "disclosures": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Disclosures",
+            "type": "array"
           },
           "flags": {
             "items": {
@@ -6366,6 +6644,26 @@
             },
             "title": "Flags",
             "type": "array"
+          },
+          "head": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ShaFact"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "merge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MergeFact"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "merged_at": {
             "anyOf": [
@@ -6379,12 +6677,54 @@
             ],
             "title": "Merged At"
           },
+          "partial": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Partial",
+            "type": "array"
+          },
           "pr": {
             "title": "Pr",
             "type": "string"
           },
           "pr_state": {
             "$ref": "#/components/schemas/PrState"
+          },
+          "required_gates": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequiredGates"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryReviewEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stale": {
+            "default": false,
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryTask"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -6397,6 +6737,173 @@
           "accept_blocked"
         ],
         "title": "Delivery",
+        "type": "object"
+      },
+      "DeliveryAuthorization": {
+        "properties": {
+          "accept_blocked": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_in_review",
+                  "checklist_pending",
+                  "no_review"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept Blocked"
+          },
+          "accept_decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept Decision Id"
+          },
+          "allow_merge": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Merge"
+          },
+          "notes": {
+            "default": "Green checks do not authorize merge. Merge is not acceptance. Authorization and checklist are separate from forge CI.",
+            "title": "Notes",
+            "type": "string"
+          },
+          "source": {
+            "const": "task",
+            "default": "task",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "title": "DeliveryAuthorization",
+        "type": "object"
+      },
+      "DeliveryCheck": {
+        "properties": {
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "kind": {
+            "enum": [
+              "status",
+              "check_run"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required"
+          },
+          "sha": {
+            "title": "Sha",
+            "type": "string"
+          },
+          "source": {
+            "const": "forge",
+            "default": "forge",
+            "title": "Source",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CheckState"
+          },
+          "target_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Url"
+          }
+        },
+        "required": [
+          "name",
+          "state",
+          "kind",
+          "sha",
+          "checked_at"
+        ],
+        "title": "DeliveryCheck",
+        "type": "object"
+      },
+      "DeliveryChecklist": {
+        "properties": {
+          "done": {
+            "title": "Done",
+            "type": "integer"
+          },
+          "pending": {
+            "title": "Pending",
+            "type": "integer"
+          },
+          "pending_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pending Ids",
+            "type": "array"
+          },
+          "source": {
+            "const": "task",
+            "default": "task",
+            "title": "Source",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pending",
+          "done",
+          "total"
+        ],
+        "title": "DeliveryChecklist",
         "type": "object"
       },
       "DeliveryEvidence": {
@@ -6448,6 +6955,111 @@
           "flags"
         ],
         "title": "DeliveryEvidence",
+        "type": "object"
+      },
+      "DeliveryReviewEvidence": {
+        "properties": {
+          "agentic_finding_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agentic Finding Count"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "forge_review_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forge Review Count"
+          },
+          "forge_reviews_for_head": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forge Reviews For Head"
+          },
+          "independent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IndependentReviewSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha"
+          },
+          "source": {
+            "$ref": "#/components/schemas/FactOrigin",
+            "default": "unknown"
+          }
+        },
+        "title": "DeliveryReviewEvidence",
+        "type": "object"
+      },
+      "DeliveryTask": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "source": {
+            "const": "task",
+            "default": "task",
+            "title": "Source",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "project"
+        ],
+        "title": "DeliveryTask",
         "type": "object"
       },
       "DependenciesRequest": {
@@ -7450,6 +8062,18 @@
         "title": "Evidence",
         "type": "object"
       },
+      "EvidenceClass": {
+        "description": "How a claim was established (spec 3.3).",
+        "enum": [
+          "recorded_metadata",
+          "receipt_only",
+          "current_read",
+          "unobserved",
+          "unknown"
+        ],
+        "title": "EvidenceClass",
+        "type": "string"
+      },
       "Execution": {
         "properties": {
           "account_id": {
@@ -8167,6 +8791,15 @@
         ],
         "title": "ExternalReads",
         "type": "object"
+      },
+      "FactOrigin": {
+        "enum": [
+          "forge",
+          "task",
+          "unknown"
+        ],
+        "title": "FactOrigin",
+        "type": "string"
       },
       "FactSource": {
         "description": "How far a runtime fact is proven, weakest first.",
@@ -9332,6 +9965,118 @@
         "title": "InboxPage",
         "type": "object"
       },
+      "IndependentReviewSummary": {
+        "properties": {
+          "child_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Child Task Id"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "source": {
+            "const": "task",
+            "default": "task",
+            "title": "Source",
+            "type": "string"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          }
+        },
+        "title": "IndependentReviewSummary",
+        "type": "object"
+      },
+      "InputAssessment": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "maxLength": 64,
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "availability": {
+            "$ref": "#/components/schemas/Availability"
+          },
+          "capability": {
+            "default": "capability_unknown",
+            "enum": [
+              "required",
+              "capability_not_required",
+              "capability_unknown"
+            ],
+            "title": "Capability",
+            "type": "string"
+          },
+          "consumer_path": {
+            "$ref": "#/components/schemas/ConsumerPath"
+          },
+          "evidence_class": {
+            "$ref": "#/components/schemas/EvidenceClass"
+          },
+          "name": {
+            "maxLength": 200,
+            "title": "Name",
+            "type": "string"
+          },
+          "receipts": {
+            "items": {
+              "$ref": "#/components/schemas/InputReceiptView"
+            },
+            "maxItems": 20,
+            "title": "Receipts",
+            "type": "array"
+          },
+          "recorded_sha256": {
+            "maxLength": 64,
+            "title": "Recorded Sha256",
+            "type": "string"
+          },
+          "recorded_size": {
+            "title": "Recorded Size",
+            "type": "integer"
+          },
+          "required": {
+            "default": false,
+            "title": "Required",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "name",
+          "recorded_size",
+          "recorded_sha256",
+          "availability",
+          "evidence_class",
+          "consumer_path"
+        ],
+        "title": "InputAssessment",
+        "type": "object"
+      },
       "InputFailure": {
         "enum": [
           "unavailable",
@@ -9379,6 +10124,45 @@
           "reporter"
         ],
         "title": "InputReceipt",
+        "type": "object"
+      },
+      "InputReceiptView": {
+        "additionalProperties": false,
+        "description": "A historical receipt: evidence_class is always receipt_only.",
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "evidence_class": {
+            "const": "receipt_only",
+            "default": "receipt_only",
+            "title": "Evidence Class",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "state": {
+            "maxLength": 32,
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "state"
+        ],
+        "title": "InputReceiptView",
         "type": "object"
       },
       "InspectedInstance": {
@@ -9780,6 +10564,45 @@
           "draining"
         ],
         "title": "InstancesOverview",
+        "type": "object"
+      },
+      "InterruptionAssessment": {
+        "additionalProperties": false,
+        "description": "Bounded reuse of continuation.interruption (spec 3.7).",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "reason": {
+            "maxLength": 300,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "reason",
+          "at"
+        ],
+        "title": "InterruptionAssessment",
         "type": "object"
       },
       "IssuedToken": {
@@ -10309,6 +11132,48 @@
           "usable"
         ],
         "title": "LayerState",
+        "type": "object"
+      },
+      "LeaseAssessment": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee_agent_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Agent Id"
+          },
+          "evidence_class": {
+            "$ref": "#/components/schemas/EvidenceClass",
+            "default": "recorded_metadata"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "live": {
+            "title": "Live",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "live"
+        ],
+        "title": "LeaseAssessment",
         "type": "object"
       },
       "LeaseObservation": {
@@ -10954,6 +11819,50 @@
           "truncated"
         ],
         "title": "MatchHit",
+        "type": "object"
+      },
+      "MergeFact": {
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "mergeable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mergeable"
+          },
+          "mergeable_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mergeable State"
+          },
+          "source": {
+            "$ref": "#/components/schemas/FactOrigin",
+            "default": "unknown"
+          }
+        },
+        "title": "MergeFact",
         "type": "object"
       },
       "Message": {
@@ -11649,6 +12558,27 @@
           "reason"
         ],
         "title": "NextAction",
+        "type": "object"
+      },
+      "NextStep": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 64,
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "maxLength": 300,
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "detail"
+        ],
+        "title": "NextStep",
         "type": "object"
       },
       "NodeOption": {
@@ -14788,6 +15718,41 @@
         "title": "ReadinessOut",
         "type": "object"
       },
+      "Reason": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ResumabilityCause"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "evidence_class": {
+            "$ref": "#/components/schemas/EvidenceClass"
+          },
+          "subject": {
+            "maxLength": 300,
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "subject",
+          "evidence_class"
+        ],
+        "title": "Reason",
+        "type": "object"
+      },
       "ReceiptRequest": {
         "additionalProperties": false,
         "properties": {
@@ -15026,6 +15991,180 @@
           "lease_expires_at"
         ],
         "title": "RenewedLease",
+        "type": "object"
+      },
+      "RequiredGates": {
+        "description": "Present only when the forge disclosed required contexts (may be empty).",
+        "properties": {
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "contexts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Contexts",
+            "type": "array"
+          },
+          "source": {
+            "const": "forge",
+            "default": "forge",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contexts",
+          "checked_at"
+        ],
+        "title": "RequiredGates",
+        "type": "object"
+      },
+      "ResumabilityCause": {
+        "description": "Closed set of cause codes (spec 3.8).",
+        "enum": [
+          "task_unknown",
+          "task_terminal",
+          "attempt_mismatch",
+          "stale_preflight",
+          "no_artifacts",
+          "artifact_state_unobserved",
+          "artifact_missing",
+          "artifact_truncated",
+          "artifact_corrupted",
+          "artifact_inaccessible",
+          "artifact_unknown",
+          "wip_local_only",
+          "checkpoint_store_not_visible",
+          "wip_unrecorded",
+          "input_capability_missing",
+          "decision_unresolved",
+          "acceptance_not_structured",
+          "lease_expired",
+          "lease_held_elsewhere"
+        ],
+        "title": "ResumabilityCause",
+        "type": "string"
+      },
+      "ResumabilityDecision": {
+        "enum": [
+          "resumable",
+          "not_resumable",
+          "unknown",
+          "stale"
+        ],
+        "title": "ResumabilityDecision",
+        "type": "string"
+      },
+      "ResumabilityReport": {
+        "additionalProperties": false,
+        "description": "Bounded read-only assessment (spec 3.2). Grants nothing.",
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactAssessment"
+            },
+            "maxItems": 20,
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "assessed_at": {
+            "format": "date-time",
+            "title": "Assessed At",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "cause_codes": {
+            "items": {
+              "$ref": "#/components/schemas/ResumabilityCause"
+            },
+            "maxItems": 20,
+            "title": "Cause Codes",
+            "type": "array"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/ResumabilityDecision"
+          },
+          "decision_changes": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionChange"
+            },
+            "maxItems": 20,
+            "title": "Decision Changes",
+            "type": "array"
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/InputAssessment"
+            },
+            "maxItems": 20,
+            "title": "Inputs",
+            "type": "array"
+          },
+          "interruption": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InterruptionAssessment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lease": {
+            "$ref": "#/components/schemas/LeaseAssessment"
+          },
+          "next_steps": {
+            "items": {
+              "$ref": "#/components/schemas/NextStep"
+            },
+            "maxItems": 5,
+            "title": "Next Steps",
+            "type": "array"
+          },
+          "reasons": {
+            "items": {
+              "$ref": "#/components/schemas/Reason"
+            },
+            "maxItems": 10,
+            "title": "Reasons",
+            "type": "array"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "task_version": {
+            "title": "Task Version",
+            "type": "string"
+          },
+          "unknowns": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Unknowns",
+            "type": "array"
+          },
+          "wip": {
+            "$ref": "#/components/schemas/WipAssessment"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempt",
+          "task_version",
+          "assessed_at",
+          "decision",
+          "wip",
+          "lease"
+        ],
+        "title": "ResumabilityReport",
         "type": "object"
       },
       "RetryClass": {
@@ -16491,6 +17630,50 @@
           "settings"
         ],
         "title": "SettingsResponse",
+        "type": "object"
+      },
+      "ShaFact": {
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha"
+          },
+          "source": {
+            "$ref": "#/components/schemas/FactOrigin",
+            "default": "unknown"
+          }
+        },
+        "title": "ShaFact",
         "type": "object"
       },
       "Source": {
@@ -20511,6 +21694,73 @@
         "title": "Verification",
         "type": "object"
       },
+      "WipAssessment": {
+        "additionalProperties": false,
+        "properties": {
+          "availability": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Availability"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence_class": {
+            "$ref": "#/components/schemas/EvidenceClass"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WipKind"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "transfer": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_a_transfer",
+                  "attachment_verified",
+                  "published_ref"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transfer"
+          }
+        },
+        "required": [
+          "kind",
+          "evidence_class"
+        ],
+        "title": "WipAssessment",
+        "type": "object"
+      },
       "WipIn": {
         "additionalProperties": false,
         "properties": {
@@ -20538,6 +21788,16 @@
         ],
         "title": "WipIn",
         "type": "object"
+      },
+      "WipKind": {
+        "enum": [
+          "published",
+          "local_only",
+          "unknown",
+          "absent"
+        ],
+        "title": "WipKind",
+        "type": "string"
       },
       "WorkerTemplate": {
         "properties": {
@@ -30834,6 +32094,88 @@
           }
         ],
         "summary": "Release Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/resumability": {
+      "get": {
+        "description": "Read-only resumability preflight: attempt/lease state, WIP class, and whether\nshared attachments are currently available (size and SHA-256 re-read). Recorded\nmetadata and historical receipts do not prove current availability. Grants\nnothing; never mutates. Optional `expected_attempt` / `expected_version` make a\nmismatch `stale` instead of describing a newer state.",
+        "operationId": "get_resumability_api_tasks__task_id__resumability_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_attempt",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expected Attempt"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expected Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumabilityReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Resumability",
         "tags": [
           "tasks"
         ]
