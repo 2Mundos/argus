@@ -46,9 +46,11 @@ import type { ChannelAdapter, ChannelDefaults, ChannelSetup, OutboundMessage } f
 import {
   type AccountLease,
   type ApplyTarget,
+  applyArgusMcpSecret,
   applyLeases,
   applyLeasesDetailed,
   applyRepositoryLease,
+  argusMcpUrl,
   CURSOR_EXPIRY_MARGIN_MS,
   type CustomLeaseSettings,
   classifyFailure,
@@ -370,6 +372,11 @@ export interface ArgusConfig {
      * policy's default for `engine` on `provider`. Resolves true when it changed.
      */
     selectModel?: (engine: string, provider: string, model: string | null) => Promise<boolean>;
+    /**
+     * Register the Argus MCP server (`url`, no credential: the gateway adds it) in
+     * the agent group's container config (internal orchestrator spec 3.1).
+     */
+    setArgusMcp?: (url: string) => Promise<void>;
     /**
      * Stop the group's running session containers and resolve only once each has
      * exited, so the next one starts with the stubs of the account just applied.
@@ -1727,6 +1734,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let chat: ReturnType<typeof createChatLoop> | null = null;
   let orchestratorEngineReady = false;
   let orchestratorLeasing: Promise<void> | null = null;
+  let orchestratorMcpReady = false;
   let orchestratorSwitchedAt = 0;
   let lastProgressAt = 0;
   let pendingProgress: { task: Claim; text: string } | null = null;
@@ -3049,12 +3057,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const acc = cfg.accounts;
       let backoff = 5_000;
       while (!stopped) {
-        if (!acc?.models) break;
         try {
+          if (acc && !orchestratorMcpReady) await connectArgusMcp(acc);
+          if (!acc?.models) break;
           await applyOrchestratorLease(acc);
           break;
         } catch (err) {
-          log.warn("The orchestrator could not lease an account (will retry)", {
+          log.warn("The orchestrator could not get its tools or an account (will retry)", {
             message: err instanceof Error ? err.message : String(err),
           });
           await sleep(backoff);
@@ -3066,6 +3075,25 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       orchestratorLeasing = null;
     });
     return orchestratorLeasing;
+  }
+
+  /**
+   * Give the orchestrator's sessions the Argus MCP tools: the agent token goes into
+   * OneCLI for `/mcp` only, the server URL into the group's config. Without a URL
+   * NanoClaw accepts, chat runs without tools and the log says why.
+   */
+  async function connectArgusMcp(acc: NonNullable<ArgusConfig["accounts"]>): Promise<void> {
+    const url = argusMcpUrl(cfg.url);
+    if (!url) {
+      log.warn("ARGUS_URL is not HTTPS (or loopback): the orchestrator gets no Argus MCP tools", {
+        url: cfg.url,
+      });
+    } else {
+      await applyArgusMcpSecret(acc.onecli, await acc.resolveTarget(), client.token, url);
+      await acc.setArgusMcp?.(url.href);
+      log.info("Argus MCP tools wired for the orchestrator", { url: url.href });
+    }
+    orchestratorMcpReady = true;
   }
 
   /**
@@ -4137,6 +4165,21 @@ export function accountsFromEnv(): ArgusConfig["accounts"] {
         }
       }
       return changed;
+    },
+    async setArgusMcp(url: string): Promise<void> {
+      const { identifier: groupId } = await resolveTarget();
+      const { getContainerConfig, updateContainerConfigJson } = await import(
+        "../db/container-configs.js"
+      );
+      const config = await getContainerConfig(groupId);
+      // Stored as JSON text; keep whatever other servers the group already has.
+      let servers: Record<string, unknown> = {};
+      try {
+        const parsed = config?.mcp_servers ? JSON.parse(config.mcp_servers) : {};
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) servers = parsed;
+      } catch {}
+      servers.argus = { type: "http", url };
+      await updateContainerConfigJson(groupId, "mcp_servers", servers);
     },
     async selectModel(engine: string, provider: string, model: string | null): Promise<boolean> {
       const { identifier: groupId } = await resolveTarget();

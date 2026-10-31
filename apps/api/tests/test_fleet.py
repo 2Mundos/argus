@@ -863,3 +863,15 @@ async def test_terminating_does_not_notify_until_confirmed(
     await reconcile_pool(db, "web", registry, SETTINGS, seen.append)  # stops it
     await reconcile_pool(db, "web", registry, SETTINGS, seen.append)  # confirms
     assert seen == [inst.id]
+
+
+def test_only_the_system_pool_runs_as_orchestrator() -> None:
+    """internal-orchestrator.spec.md 3.1: the host picks persona and MCP by role."""
+    from argus_api.fleet.runtimes import container_spec
+
+    pool = _pool_from_upsert("sbx", _sandboxed_pool(agent_image_archive="/srv/a.tar"))
+    worker = container_spec(pool, "i-1", ["argus_boot_x"], "http://argus")
+    assert "ARGUS_AGENT_ROLE" not in worker.env
+    system = pool.model_copy(update={"system": "orchestrator"})
+    orchestrator = container_spec(system, "i-1", ["argus_boot_x"], "http://argus")
+    assert orchestrator.env["ARGUS_AGENT_ROLE"] == "orchestrator"

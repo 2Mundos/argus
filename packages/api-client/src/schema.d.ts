@@ -3752,27 +3752,6 @@ export interface components {
              */
             worker_readable?: boolean;
         };
-        /** ArtifactEvidence */
-        ArtifactEvidence: {
-            /**
-             * Checked At
-             * Format: date-time
-             */
-            checked_at: string;
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Sha256 */
-            sha256: string;
-            /** Size */
-            size: number;
-            /**
-             * Verified
-             * @enum {unknown}
-             */
-            verified: true | false | "unknown";
-        };
         /**
          * ArtifactAssessment
          * @description One artifact as assessed: recorded facts plus optional current-read.
@@ -3802,6 +3781,27 @@ export interface components {
             ref: string;
             /** State */
             state?: string | null;
+        };
+        /** ArtifactEvidence */
+        ArtifactEvidence: {
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size */
+            size: number;
+            /**
+             * Verified
+             * @enum {unknown}
+             */
+            verified: true | false | "unknown";
         };
         /**
          * ArtifactIn
