@@ -37,7 +37,8 @@ default `UTC`), `template` (json), `findings` (`off` | `approval` | `auto`),
 
 `template` holds the task fields a creator may set today: `kind`, `title`, `spec`,
 `acceptance`, `input`, `required_capabilities`, `priority`, `review`, difficulty
-and model pins. It is validated with the task create rules when the routine is
+and model pins, plus the finding intake's `dedup_window` and `max_findings` (3.3),
+which stay out of the run task. It is validated with the task create rules when the routine is
 saved, so a bad template fails on save, not at 3 a.m.
 
 ## 3.2 Scheduler
@@ -79,6 +80,38 @@ A run reports findings in its result data:
 - At most `max_findings` per run (template field, default 10); the rest are counted
   in `routine.findings_truncated`.
 
+As shipped (migration `0063_routine_findings.sql` indexes the `(routine, key)`
+lookup on `tasks.input`):
+
+- Intake runs in the transaction that moves a run task to `succeeded` (after its
+  review, if it has one), with the routine's current mode; a failed or cancelled
+  run, an `off` routine or a deleted routine files nothing.
+- Template fields `max_findings` (integer, 1..100, default 10) and `dedup_window`
+  (integer seconds, 60..31536000, default 604800 = 7 days; booleans and strings are
+  refused) are validated on save, returned as saved, and never reach a task body.
+- Each entry takes `key` (1..200 characters), `title`, `spec`, `acceptance`
+  (strings) and `priority` (integer, -1000..1000) and nothing else: other fields
+  (`project`, `prompt_trust`, `kind`, `input`, ...) are ignored. The child is a
+  `generic` task created by `system` with `parent_id` the run, the routine's
+  project and `input = {routine_finding: {routine, key}}`; the task create rules
+  apply. Entries are taken in order; a later entry with a key already seen in the
+  same result is dropped.
+- An entry that is not an object, fails those rules or cannot be created is
+  skipped; a run's skips are one `routine.findings_skipped {task_id, skipped:
+  [{index, error}]}` on the routine (`index` null when `findings` is not a list),
+  with the error location and message but not the value. A malformed result never
+  fails the completion.
+- Dedup counts only finding tasks Argus created (`created_by: system`), so a task
+  an agent creates with `input.routine_finding` suppresses nothing. "Closed" is the
+  terminal task's last transition (`updated_at`), compared with `tx.now -
+  dedup_window`. `routine.finding_seen {task_id}` is recorded on the existing task
+  by `system`, with the repeating run's task id.
+- Repeats and skipped entries do not use up `max_findings`. Once it is reached,
+  the remaining entries (and any past the first 1000) are not examined:
+  `routine.findings_truncated {task_id, count}` on the routine counts them.
+- Concurrent completions are serialized by the single writer, so one key yields
+  one task.
+
 ## 3.4 API, MCP, dashboard
 
 - `GET /api/projects/{slug}/routines`, `GET /api/routines/{id}` (with the last runs).
@@ -92,9 +125,10 @@ A run reports findings in its result data:
 - Dashboard: a Routines section per project, listing schedule, next run, last run
   with its task state, findings filed, and enable/run-now actions.
 
-Status: the table (3.1), the scheduler (3.2), run now, the failure rule (3.5) and
-the management routes and MCP tools above ship (migration `0062_routines.sql`).
-Finding intake (3.3) and the dashboard section do not yet. As shipped: a worker
+Status: the table (3.1), the scheduler (3.2), run now, finding intake (3.3), the
+failure rule (3.5) and the management routes and MCP tools above ship (migrations
+`0062_routines.sql`, `0063_routine_findings.sql`). The dashboard section does not
+yet. As shipped: a worker
 reads routines only in projects where it holds a lease, like other project reads;
 only an admin may set `findings: auto`, replace an `auto` routine or re-enable one,
 while managers may disable or delete it; the body's `project`/`slug`, if given,

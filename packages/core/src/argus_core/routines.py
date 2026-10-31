@@ -3,14 +3,16 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from argus_core.tasks import TaskState
 
 Findings = Literal["off", "approval", "auto"]
 
-# The task fields a routine template may set (routines spec 3.1).
-TEMPLATE_FIELDS = frozenset(
+# Template fields that steer finding intake (3.3); never part of a task body.
+INTAKE_FIELDS = frozenset({"dedup_window", "max_findings"})
+# The task fields a routine template may set (routines spec 3.1), and the intake's.
+TEMPLATE_FIELDS = INTAKE_FIELDS | frozenset(
     {
         "kind",
         "title",
@@ -25,6 +27,29 @@ TEMPLATE_FIELDS = frozenset(
         "executor_model",
     }
 )
+
+
+class FindingIntake(BaseModel):
+    """The template's intake fields, with their defaults (routines spec 3.3)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    # Seconds after a finding task closes during which its key stays deduplicated.
+    dedup_window: StrictInt = Field(default=7 * 24 * 3600, ge=60, le=365 * 24 * 3600)
+    max_findings: StrictInt = Field(default=10, ge=1, le=100)
+
+
+class Finding(BaseModel):
+    """One entry of a run's `result.data.findings`. Untrusted: any other field
+    (project, prompt_trust, ...) is ignored; the task create rules apply on top."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    key: StrictStr = Field(min_length=1, max_length=200)
+    title: StrictStr
+    spec: StrictStr = ""
+    acceptance: list[StrictStr] = []
+    priority: StrictInt = Field(default=0, ge=-1000, le=1000)
 
 
 class RoutineWrite(BaseModel):

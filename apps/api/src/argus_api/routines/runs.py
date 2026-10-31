@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 import aiosqlite
-from argus_core.routines import RoutineRunResult
+from argus_core.routines import INTAKE_FIELDS, RoutineRunResult
 from argus_core.tasks import TERMINAL, TaskCreate, TaskState
 from pydantic import ValidationError
 
@@ -146,8 +146,10 @@ async def _running(conn: aiosqlite.Connection, task_id: str) -> bool:
 
 def _run_body(row: aiosqlite.Row, run_at: datetime) -> TaskCreate:
     """The run task: the template, titled with the run time on the routine's clock,
-    with `input.routine` (routines spec 3.2)."""
-    template = json.loads(row["template"])
+    with `input.routine` (routines spec 3.2). The intake fields stay behind."""
+    template = {
+        k: v for k, v in json.loads(row["template"]).items() if k not in INTAKE_FIELDS
+    }
     tz = parse_timezone(row["timezone"])
     suffix = f" ({run_at.astimezone(tz):%Y-%m-%d %H:%M} {tz.key})"
     title = (template.get("title") or row["title"])[: TITLE_MAX - len(suffix)]
