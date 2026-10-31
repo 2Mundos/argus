@@ -118,7 +118,8 @@ class OneCliCleaner:
         }
         async with self.db.write() as tx:
             await record(tx, "system", "system", "onecli", "onecli.cleanup", data)
-        log.info("onecli cleanup %s", data)
+        # Fixed text only: the counts and names are in the event, not the log.
+        log.info("onecli cleanup run recorded (onecli.cleanup event)")
         return data
 
     async def loop(self) -> None:
