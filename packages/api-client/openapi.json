@@ -9494,9 +9494,16 @@
         "description": "Lease the best usable account globally (priority, then least leased).\n\nThe retired `providers` list is accepted and ignored: no caller-side order or\nallowlist restricts selection.",
         "properties": {
           "attempt": {
-            "minimum": 1.0,
-            "title": "Attempt",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
           },
           "reuse_held": {
             "default": false,
@@ -9522,14 +9529,19 @@
             "type": "array"
           },
           "task_id": {
-            "title": "Task Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
           }
         },
         "required": [
-          "runtime_providers",
-          "task_id",
-          "attempt"
+          "runtime_providers"
         ],
         "title": "LeaseRequest",
         "type": "object"
@@ -20287,7 +20299,7 @@
     },
     "/api/accounts/lease": {
       "post": {
-        "description": "Lease the best usable account and deliver its credential to a claimed task.\n\n`runtime_providers` is required and states what the runtime can apply. The\ncaller must hold the live claim identified by `task_id` and `attempt`. One\nactive lease per role; `409 no_account` when none is usable. A `local` lease\nwhose credential names no `context_tokens` carries the window the local model's\nprobe measured, so the harness can compact in time (local harness spec, \"Harness orchestrates only\").",
+        "description": "Lease the best usable account and deliver its credential to a claimed task.\n\n`runtime_providers` is required and states what the runtime can apply. The\ncaller must hold the live claim identified by `task_id` and `attempt`; only the\ninternal orchestrator may leave them out, for its engine (internal orchestrator\nspec 3.1). One active lease per role; `409 no_account` when none is usable. A `local` lease\nwhose credential names no `context_tokens` carries the window the local model's\nprobe measured, so the harness can compact in time (local harness spec, \"Harness orchestrates only\").",
         "operationId": "lease_account_api_accounts_lease_post",
         "requestBody": {
           "content": {

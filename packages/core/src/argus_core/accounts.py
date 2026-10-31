@@ -414,9 +414,17 @@ class LeaseRequest(BaseModel):
     # CLI of the same provider runs on the engine's own credential). Otherwise the
     # executor lease is an ordinary separate one.
     reuse_held: bool = False
-    # Credential delivery is bound to the active claim that needs it.
-    task_id: str
-    attempt: int = Field(ge=1)
+    # Credential delivery is bound to the active claim that needs it. Only the
+    # internal orchestrator, which runs conversations instead of tasks, leases its
+    # engine without one (internal orchestrator spec 3.1).
+    task_id: str | None = None
+    attempt: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def claim_given_whole(self) -> "LeaseRequest":
+        if (self.task_id is None) != (self.attempt is None):
+            raise ValueError("give both task_id and attempt, or neither")
+        return self
 
 
 class AccountLease(BaseModel):

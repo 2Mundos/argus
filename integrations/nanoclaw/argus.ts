@@ -1694,6 +1694,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let loop: Promise<void> | null = null;
   let agentRole: "orchestrator" | "worker" = cfg.role ?? "worker";
   let chat: ReturnType<typeof createChatLoop> | null = null;
+  let orchestratorEngineReady = false;
   let lastProgressAt = 0;
   let pendingProgress: { task: Claim; text: string } | null = null;
   let progressTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3000,6 +3001,52 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   }
 
   /**
+   * The internal orchestrator leases its engine like any agent, with no task
+   * (internal orchestrator spec 3.1). Until it holds one the chat loop does not
+   * claim: an unleased OneCLI agent stays in "all" mode and sends whatever stale
+   * credential wins, which Anthropic answers with 401.
+   */
+  async function leaseOrchestratorEngine(): Promise<void> {
+    const acc = cfg.accounts;
+    if (!acc?.models) {
+      orchestratorEngineReady = true;
+      return;
+    }
+    let backoff = 5_000;
+    while (!stopped) {
+      try {
+        const lease = (
+          await client.call("POST", "/accounts/lease", {
+            runtime_providers: runtimeProviders("engine"),
+          })
+        ).data as AccountLease;
+        const target = await acc.resolveTarget();
+        const { engine } = await applyLeasesDetailed(
+          acc.onecli,
+          target,
+          [lease],
+          cfg.fetch ?? fetch,
+        );
+        engineInUse = engine;
+        await acc.selectEngine?.(engine);
+        orchestratorEngineReady = true;
+        log.info("Orchestrator account leased and applied", {
+          account: lease.name,
+          provider: lease.provider,
+        });
+        return;
+      } catch (err) {
+        await client.call("POST", "/accounts/release").catch(() => undefined);
+        log.warn("The orchestrator could not lease an account (will retry)", {
+          message: err instanceof Error ? err.message : String(err),
+        });
+        await sleep(backoff);
+        backoff = Math.min(backoff * 2, 300_000);
+      }
+    }
+  }
+
+  /**
    * Apply the engine lease, plus an executor lease when the engine is of another
    * provider than the executor's, so the vault holds exactly the accounts the
    * agent holds. Then move the harness to the engine's provider and report it.
@@ -3653,6 +3700,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       heartbeatTimer = setInterval(() => void heartbeat(), Math.max(interval, 1) * 1000);
       heartbeatTimer.unref?.();
       if (agentRole === "orchestrator") {
+        orchestratorEngineReady = false;
+        void leaseOrchestratorEngine();
         chat = createChatLoop({
           call: (method, path, body, signal) => client.call(method, path, body, signal),
           onInbound: async (platformId, threadId, message) => {
@@ -3660,7 +3709,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           },
           platformId: PLATFORM_ID,
           isStopped: () => stopped,
-          isDraining: () => draining,
+          isDraining: () => draining || !orchestratorEngineReady,
           maxConcurrentTurns: cfg.maxConcurrentTurns ?? DEFAULT_MAX_CONCURRENT_TURNS,
           claimWaitS: cfg.claimWaitS ?? undefined,
           log,
