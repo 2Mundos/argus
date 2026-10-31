@@ -245,6 +245,7 @@ function QuietClaimCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () 
     last_signal_source: item.last_signal_source,
     stall_cause: item.stall_cause,
   });
+  const quietSentence = quietLine.charAt(0).toUpperCase() + quietLine.slice(1);
 
   async function release() {
     setBusy(true);
@@ -266,8 +267,8 @@ function QuietClaimCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () 
   return (
     <article className="card quiet-claim">
       <p>
-        <TaskLabel title={item.title ?? shortId(item.subject_id)} project={item.project} /> is{" "}
-        {quietLine}
+        <TaskLabel title={item.title ?? shortId(item.subject_id)} project={item.project} />:{" "}
+        {quietSentence}
       </p>
       {error && <p className="error">{error}</p>}
       <div className="actions left">
