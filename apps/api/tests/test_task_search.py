@@ -184,9 +184,10 @@ def test_false_positives_and_substring_behavior(client: TestClient) -> None:
     create(client, title="pct-miss", spec="50x paid")
     page = ok(client.get("/api/tasks", params={"q": "50%"}))
     assert [t["id"] for t in page["items"]] == [pct["id"]]
-    create(client, title="underscore-lit", spec="snake_case_name")
-    page = ok(client.get("/api/tasks", params={"q": "snakeXcase_name"}))
-    assert page["items"] == []
+    # `_` in q is literal; unescaped LIKE `_` would match the X in snakeXcase_name
+    create(client, title="underscore-lit", spec="snakeXcase_name")
+    page = ok(client.get("/api/tasks", params={"q": "snake_case_name"}))
+    assert page["items"] == [] and page["total"] == 0
 
 
 def test_no_matches_vs_snippet_truncation(client: TestClient) -> None:
