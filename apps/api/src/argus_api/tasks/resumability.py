@@ -464,6 +464,20 @@ async def assess(
     required_inputs_ok = True
     required_unobserved = False
     by_id: dict[str, Artifact] = {}
+    # Authoritative current-read per attachment id (inputs loop). WIP reuses this
+    # instead of hashing again; assessed_ids also covers failed get_artifact so
+    # the WIP missing-row path does not duplicate reasons / unknowns.
+    reads_by_id: dict[
+        str,
+        tuple[
+            Availability,
+            EvidenceClass,
+            ResumabilityCause | None,
+            int | None,
+            str | None,
+        ],
+    ] = {}
+    assessed_ids: set[str] = set()
     # Walk every listed input so a required attachment past the first MAX_INPUTS
     # is still assessed; the output list is capped with the required one pinned.
     for item in listed.inputs:
@@ -471,6 +485,7 @@ async def assess(
         try:
             art = await get_artifact(conn, item.id)
         except Exception:
+            assessed_ids.add(item.id)
             if is_required:
                 required_unobserved = True
             causes.append(ResumabilityCause.ARTIFACT_UNKNOWN)
@@ -510,9 +525,11 @@ async def assess(
         if art.source is not ArtifactSource.ATTACHMENT:
             continue
         by_id[art.id] = art
+        assessed_ids.add(art.id)
         avail, ev, cause, obs_size, obs_sha = await _read_attachment(
             store, art, read_bound=read_bound
         )
+        reads_by_id[art.id] = (avail, ev, cause, obs_size, obs_sha)
         if cause is not None:
             causes.append(cause)
             reasons.append(
@@ -624,101 +641,155 @@ async def assess(
             required_unobserved = True
         elif ref and (m := _ATTACHMENT_REF.fullmatch(ref)):
             aid, expect_sha = m.group(1), m.group(2)
-            art = by_id.get(aid)
-            if art is None:
-                try:
-                    art = await get_artifact(conn, aid)
-                except Exception:
-                    art = None
-            if art is None or art.source is not ArtifactSource.ATTACHMENT:
-                # No store read happened — do not claim current_read.
-                causes.append(ResumabilityCause.ARTIFACT_UNKNOWN)
-                required_unobserved = True
-                reasons.append(
-                    _reason(
-                        ResumabilityCause.ARTIFACT_UNKNOWN,
-                        f"attachment:{aid}",
-                        EvidenceClass.UNOBSERVED,
-                        "WIP attachment reference has no matching attachment row",
-                    )
-                )
-                gap = _clip(f"artifact_unknown:{aid}")
-                if gap:
-                    unknowns.append(gap)
-                # Ensure the required input is visible even when the row is gone
-                # and it was never in list_inputs.
-                if not any(i.artifact_id == aid for i in inputs_out):
-                    inputs_out = _cap_inputs(
-                        [
-                            *inputs_out,
-                            InputAssessment(
-                                artifact_id=aid,
-                                name="",
-                                recorded_size=0,
-                                recorded_sha256=expect_sha,
-                                availability=Availability.UNKNOWN,
-                                evidence_class=EvidenceClass.UNOBSERVED,
-                                receipts=[],
-                                consumer_path=consumer,
-                                capability=capability,
-                                required=True,
-                            ),
-                        ],
-                        required_aid=aid,
-                    )
-                wip = WipAssessment(
-                    kind=WipKind.UNKNOWN,
-                    ref=_clip(ref),
-                    summary=summary,
-                    availability=Availability.UNKNOWN,
-                    evidence_class=EvidenceClass.UNOBSERVED,
-                    transfer="not_a_transfer",
-                )
-            elif art.sha256 != expect_sha:
-                causes.append(ResumabilityCause.ARTIFACT_CORRUPTED)
-                required_inputs_ok = False
-                reasons.append(
-                    _reason(
-                        ResumabilityCause.ARTIFACT_CORRUPTED,
-                        f"attachment:{aid}",
-                        EvidenceClass.RECORDED_METADATA,
-                        "WIP ref sha256 does not match the recorded attachment",
-                    )
-                )
-                wip = WipAssessment(
-                    kind=WipKind.UNKNOWN,
-                    ref=_clip(ref),
-                    summary=summary,
-                    availability=Availability.CORRUPTED,
-                    evidence_class=EvidenceClass.RECORDED_METADATA,
-                    transfer="not_a_transfer",
-                )
-            else:
-                avail, ev, cause, _, _ = await _read_attachment(
-                    store, art, read_bound=read_bound
-                )
-                if cause is not None:
-                    causes.append(cause)
+            if aid in assessed_ids:
+                # Inputs loop already assessed this id (read or failed load).
+                # Reuse that result; do not re-hash or duplicate reasons/unknowns.
+                art = by_id.get(aid)
+                if (
+                    art is not None
+                    and art.source is ArtifactSource.ATTACHMENT
+                    and art.sha256 != expect_sha
+                ):
+                    causes.append(ResumabilityCause.ARTIFACT_CORRUPTED)
+                    required_inputs_ok = False
                     reasons.append(
-                        _reason(cause, f"attachment:{aid}", ev, "WIP attachment ref")
+                        _reason(
+                            ResumabilityCause.ARTIFACT_CORRUPTED,
+                            f"attachment:{aid}",
+                            EvidenceClass.RECORDED_METADATA,
+                            "WIP ref sha256 does not match the recorded attachment",
+                        )
                     )
-                required_inputs_ok, required_unobserved = _mark_required(
-                    avail,
-                    required_inputs_ok=required_inputs_ok,
-                    required_unobserved=required_unobserved,
-                )
-                wip = WipAssessment(
-                    kind=WipKind.PUBLISHED
-                    if avail is Availability.AVAILABLE
-                    else WipKind.UNKNOWN,
-                    ref=_clip(ref),
-                    summary=summary,
-                    availability=avail,
-                    evidence_class=ev,
-                    transfer="attachment_verified"
-                    if avail is Availability.AVAILABLE
-                    else "not_a_transfer",
-                )
+                    wip = WipAssessment(
+                        kind=WipKind.UNKNOWN,
+                        ref=_clip(ref),
+                        summary=summary,
+                        availability=Availability.CORRUPTED,
+                        evidence_class=EvidenceClass.RECORDED_METADATA,
+                        transfer="not_a_transfer",
+                    )
+                elif art is not None and art.source is ArtifactSource.ATTACHMENT:
+                    avail, ev, _, _, _ = reads_by_id[aid]
+                    wip = WipAssessment(
+                        kind=WipKind.PUBLISHED
+                        if avail is Availability.AVAILABLE
+                        else WipKind.UNKNOWN,
+                        ref=_clip(ref),
+                        summary=summary,
+                        availability=avail,
+                        evidence_class=ev,
+                        transfer="attachment_verified"
+                        if avail is Availability.AVAILABLE
+                        else "not_a_transfer",
+                    )
+                else:
+                    wip = WipAssessment(
+                        kind=WipKind.UNKNOWN,
+                        ref=_clip(ref),
+                        summary=summary,
+                        availability=Availability.UNKNOWN,
+                        evidence_class=EvidenceClass.UNOBSERVED,
+                        transfer="not_a_transfer",
+                    )
+            else:
+                art = by_id.get(aid)
+                if art is None:
+                    try:
+                        art = await get_artifact(conn, aid)
+                    except Exception:
+                        art = None
+                if art is None or art.source is not ArtifactSource.ATTACHMENT:
+                    # No store read happened — do not claim current_read.
+                    causes.append(ResumabilityCause.ARTIFACT_UNKNOWN)
+                    required_unobserved = True
+                    reasons.append(
+                        _reason(
+                            ResumabilityCause.ARTIFACT_UNKNOWN,
+                            f"attachment:{aid}",
+                            EvidenceClass.UNOBSERVED,
+                            "WIP attachment reference has no matching attachment row",
+                        )
+                    )
+                    gap = _clip(f"artifact_unknown:{aid}")
+                    if gap:
+                        unknowns.append(gap)
+                    # Ensure the required input is visible even when the row is gone
+                    # and it was never in list_inputs.
+                    if not any(i.artifact_id == aid for i in inputs_out):
+                        inputs_out = _cap_inputs(
+                            [
+                                *inputs_out,
+                                InputAssessment(
+                                    artifact_id=aid,
+                                    name="",
+                                    recorded_size=0,
+                                    recorded_sha256=expect_sha,
+                                    availability=Availability.UNKNOWN,
+                                    evidence_class=EvidenceClass.UNOBSERVED,
+                                    receipts=[],
+                                    consumer_path=consumer,
+                                    capability=capability,
+                                    required=True,
+                                ),
+                            ],
+                            required_aid=aid,
+                        )
+                    wip = WipAssessment(
+                        kind=WipKind.UNKNOWN,
+                        ref=_clip(ref),
+                        summary=summary,
+                        availability=Availability.UNKNOWN,
+                        evidence_class=EvidenceClass.UNOBSERVED,
+                        transfer="not_a_transfer",
+                    )
+                elif art.sha256 != expect_sha:
+                    causes.append(ResumabilityCause.ARTIFACT_CORRUPTED)
+                    required_inputs_ok = False
+                    reasons.append(
+                        _reason(
+                            ResumabilityCause.ARTIFACT_CORRUPTED,
+                            f"attachment:{aid}",
+                            EvidenceClass.RECORDED_METADATA,
+                            "WIP ref sha256 does not match the recorded attachment",
+                        )
+                    )
+                    wip = WipAssessment(
+                        kind=WipKind.UNKNOWN,
+                        ref=_clip(ref),
+                        summary=summary,
+                        availability=Availability.CORRUPTED,
+                        evidence_class=EvidenceClass.RECORDED_METADATA,
+                        transfer="not_a_transfer",
+                    )
+                else:
+                    # Not seen in inputs — single authoritative read for this id.
+                    avail, ev, cause, _, _ = await _read_attachment(
+                        store, art, read_bound=read_bound
+                    )
+                    if cause is not None:
+                        causes.append(cause)
+                        reasons.append(
+                            _reason(
+                                cause, f"attachment:{aid}", ev, "WIP attachment ref"
+                            )
+                        )
+                    required_inputs_ok, required_unobserved = _mark_required(
+                        avail,
+                        required_inputs_ok=required_inputs_ok,
+                        required_unobserved=required_unobserved,
+                    )
+                    wip = WipAssessment(
+                        kind=WipKind.PUBLISHED
+                        if avail is Availability.AVAILABLE
+                        else WipKind.UNKNOWN,
+                        ref=_clip(ref),
+                        summary=summary,
+                        availability=avail,
+                        evidence_class=ev,
+                        transfer="attachment_verified"
+                        if avail is Availability.AVAILABLE
+                        else "not_a_transfer",
+                    )
         elif _published_artifact(cont, wip_ref=ref):
             if ref is None:
                 # Informational only — do not add WIP_UNRECORDED to cause_codes.

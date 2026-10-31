@@ -86,9 +86,12 @@ A bounded, typed report with no free content bytes:
 
 Caps (hard): 20 artifacts (15 continuation + 5 attachments), 20 inputs, 10
 reasons, 5 next steps, free text at 300 characters, and the serialised response
-must stay small enough for MCP. Truncating `reasons` prefers deciding /
-required-input codes (`task_terminal`, `input_capability_missing`, required
-attachment failures, staleness) before optional ones.
+must stay small enough for MCP. Truncating `reasons` prefers always-deciding
+codes (`task_terminal`, `attempt_mismatch`, `stale_preflight`,
+`input_capability_missing`) and required-input failures (attachment cause codes
+whose subject is the required WIP attachment) before optional artifact noise.
+When there is no required attachment, optional `artifact_*` reasons are not
+preferred.
 
 ## 3.3 Evidence classes
 
@@ -111,11 +114,13 @@ Never claim `current_read` without actually reading a store key.
 ## 3.4 Availability verification for attachments
 
 For artifacts with `source = attachment` (and only those) the preflight re-reads
-the stored bytes through the existing local artifact store and hashes them. It
-reuses `argus_api.artifacts.service._path` / `key` and the same recorded
-size / SHA-256 comparison that `verify` performs, but it does **not** call
-`verify` itself: `verify` is unbounded, and the preflight must stay inside the
-read bound below. Classification:
+the stored bytes through the existing local artifact store and hashes them once
+per artifact id in a request (a WIP `attachment:<id>:<sha256>` reuses the
+inputs-loop result for that id; it does not hash again). It reuses
+`argus_api.artifacts.service._path` / `key` and the same recorded size /
+SHA-256 comparison that `verify` performs, but it does **not** call `verify`
+itself: `verify` is unbounded, and the preflight must stay inside the read
+bound below. Classification:
 
 | Availability | When |
 | --- | --- |

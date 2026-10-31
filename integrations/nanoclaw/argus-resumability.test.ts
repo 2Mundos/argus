@@ -13,7 +13,7 @@
  * WIP classification is owned by the Python preflight tests.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -267,14 +267,5 @@ describe("preflight availability fixture vs materializeTaskInputs", () => {
       }
       expect(result.ok).toBe(false);
     }
-  });
-});
-
-describe("additive helper smoke", () => {
-  it("can write a tiny fixture without touching argus-inputs exports", () => {
-    const d = group();
-    const p = path.join(d, "note.txt");
-    writeFileSync(p, "ok");
-    expect(readFileSync(p, "utf8")).toBe("ok");
   });
 });

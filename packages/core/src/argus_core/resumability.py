@@ -356,13 +356,20 @@ _UNKNOWN = frozenset(
     }
 )
 
-# Reasons that must survive truncation when they are deciding / required-input.
-_PREFERRED_REASON_CODES = frozenset(
+# Always-deciding codes: preferred under truncation even with no required subject.
+_ALWAYS_DECIDING_REASON_CODES = frozenset(
     {
         ResumabilityCause.TASK_TERMINAL,
         ResumabilityCause.INPUT_CAPABILITY_MISSING,
         ResumabilityCause.ATTEMPT_MISMATCH,
         ResumabilityCause.STALE_PREFLIGHT,
+    }
+)
+# Attachment availability codes preferred only when they are a required-input
+# failure (subject matches the required WIP attachment). Optional artifact noise
+# must not crowd out deciding codes when there is no required subject.
+_REQUIRED_INPUT_FAILURE_CODES = frozenset(
+    {
         ResumabilityCause.ARTIFACT_MISSING,
         ResumabilityCause.ARTIFACT_TRUNCATED,
         ResumabilityCause.ARTIFACT_CORRUPTED,
@@ -383,16 +390,12 @@ def select_reasons(
         return reasons
 
     def preferred(r: Reason) -> bool:
-        if r.code in _PREFERRED_REASON_CODES and (
-            required_subject is None
-            or r.code
-            in (
-                ResumabilityCause.TASK_TERMINAL,
-                ResumabilityCause.INPUT_CAPABILITY_MISSING,
-                ResumabilityCause.ATTEMPT_MISMATCH,
-                ResumabilityCause.STALE_PREFLIGHT,
-            )
-            or r.subject == required_subject
+        if r.code in _ALWAYS_DECIDING_REASON_CODES:
+            return True
+        if (
+            required_subject is not None
+            and r.code in _REQUIRED_INPUT_FAILURE_CODES
+            and r.subject == required_subject
         ):
             return True
         return required_subject is not None and r.subject == required_subject
