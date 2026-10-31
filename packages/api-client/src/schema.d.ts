@@ -2288,7 +2288,8 @@ export interface paths {
          *     task now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read
          *     instead: no other filter, no paging, unknown ids in `missing`. Archived tasks
          *     are left out unless `archived=true`, which lists only those. Workers only see
-         *     tasks they have leased.
+         *     tasks they have leased. Optional `q` is literal substring search over title
+         *     and spec (task discovery).
          */
         get: operations["list_tasks_api_tasks_get"];
         put?: never;
@@ -2784,6 +2785,28 @@ export interface paths {
          *     the attempt like every worker write.
          */
         post: operations["observe_task_api_tasks__task_id__observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/prerequisites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Prerequisites
+         * @description Evidence for each direct dependency: forge-merged on an expected base or a
+         *     listed artifact re-verified, distinguished from task_succeeded. Read-only;
+         *     enforced is always false (task discovery).
+         */
+        get: operations["get_prerequisites_api_tasks__task_id__prerequisites_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3728,6 +3751,27 @@ export interface components {
              * @default false
              */
             worker_readable?: boolean;
+        };
+        /** ArtifactEvidence */
+        ArtifactEvidence: {
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size */
+            size: number;
+            /**
+             * Verified
+             * @enum {unknown}
+             */
+            verified: true | false | "unknown";
         };
         /**
          * ArtifactAssessment
@@ -6897,6 +6941,21 @@ export interface components {
             /** Window Hours */
             window_hours: number;
         };
+        /**
+         * MatchHit
+         * @description A citation of where `q` hit; only present on list rows when `q` is set.
+         */
+        MatchHit: {
+            /**
+             * Field
+             * @enum {string}
+             */
+            field: "title" | "spec";
+            /** Snippet */
+            snippet: string;
+            /** Truncated */
+            truncated: boolean;
+        };
         /** MergeFact */
         MergeFact: {
             /** Checked At */
@@ -7709,6 +7768,65 @@ export interface components {
             run_as: string;
             /** Task Id */
             task_id: string;
+        };
+        /** PrerequisiteEvidence */
+        PrerequisiteEvidence: {
+            /** Artifacts */
+            artifacts?: components["schemas"]["ArtifactEvidence"][];
+            /** Base Ref */
+            base_ref?: string | null;
+            /** Checked At */
+            checked_at?: string | null;
+            /** Head Sha */
+            head_sha?: string | null;
+            /** Merged At */
+            merged_at?: string | null;
+            /** Notes */
+            notes?: string[];
+            /** Pr */
+            pr?: string | null;
+            pr_state?: components["schemas"]["PrState"] | null;
+            /** Source */
+            source?: "forge" | null;
+        };
+        /** PrerequisiteItem */
+        PrerequisiteItem: {
+            evidence: components["schemas"]["PrerequisiteEvidence"];
+            state: components["schemas"]["TaskState"];
+            /** Task Id */
+            task_id: string;
+            /** Task Succeeded */
+            task_succeeded: boolean;
+            /** Title */
+            title: string;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "satisfied" | "unsatisfied" | "unknown";
+            /** Why */
+            why: string;
+        };
+        /** PrerequisitesView */
+        PrerequisitesView: {
+            /**
+             * Enforced
+             * @default false
+             * @constant
+             */
+            enforced?: false;
+            /** Expected Base */
+            expected_base: string | null;
+            /** Items */
+            items: components["schemas"]["PrerequisiteItem"][];
+            /** Omitted */
+            omitted?: string[];
+            /** Partial */
+            partial?: string[];
+            /** Task Id */
+            task_id: string;
+            /** Version */
+            version: string;
         };
         /** PreviewAdvisory */
         PreviewAdvisory: {
@@ -9437,6 +9555,8 @@ export interface components {
             lease_expires_at: string | null;
             /** Lease Ttl S */
             lease_ttl_s: number;
+            /** Matches */
+            matches?: components["schemas"]["MatchHit"][] | null;
             /** Max Attempts */
             max_attempts: number;
             /**
@@ -9852,6 +9972,8 @@ export interface components {
             kind: string;
             /** Lease Expires At */
             lease_expires_at: string | null;
+            /** Matches */
+            matches?: components["schemas"]["MatchHit"][] | null;
             /** Max Attempts */
             max_attempts: number;
             /**
@@ -14769,6 +14891,7 @@ export interface operations {
                 view?: "summary" | "detail";
                 limit?: number;
                 cursor?: string | null;
+                q?: string | null;
             };
             header?: never;
             path?: never;
@@ -15740,6 +15863,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_prerequisites_api_tasks__task_id__prerequisites_get: {
+        parameters: {
+            query?: {
+                expected_base?: string | null;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrerequisitesView"];
                 };
             };
             /** @description Validation Error */

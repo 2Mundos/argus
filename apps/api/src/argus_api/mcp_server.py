@@ -695,6 +695,23 @@ async def get_task_delivery(ctx: Context, task_id: str) -> dict | None:
     return await _call(ctx, "GET", f"/tasks/{task_id}/delivery")
 
 
+@tool(ANYONE)
+async def get_task_prerequisites(
+    ctx: Context, task_id: str, expected_base: str | None = None
+) -> dict:
+    """Evidence for each direct dependency of a task: whether it is forge-merged
+    (optionally on expected_base) or has a listed artifact re-verified on disk.
+    task_succeeded is reported separately and is never folded into verdict.
+    enforced is always false; depends_on semantics are unchanged. unknown when the
+    forge or artifact cannot be read — never inferred from titles or closed PRs."""
+    return await _call(
+        ctx,
+        "GET",
+        f"/tasks/{task_id}/prerequisites",
+        params={"expected_base": expected_base},
+    )
+
+
 @tool(AGENTS)
 async def report_observations(
     ctx: Context, task_id: str, attempt: int, observations: ObservationRequest
@@ -1125,10 +1142,14 @@ async def list_tasks(
     view: ViewArg = "summary",
     limit: int = 25,
     cursor: str | None = None,
+    q: str | None = None,
 ) -> dict:
     """List tasks, newest first, in pages (limit ≤ 100). Summary rows carry state
     and ids (decisions, artifacts, dependencies), not the spec or result.
-    `assignee` (an agent id) narrows to the tasks that agent holds now."""
+    `assignee` (an agent id) narrows to the tasks that agent holds now.
+    Optional `q` is literal case-insensitive substring search over title and spec
+    (at most 8 whitespace-separated terms ≤ 64 chars); matching rows carry
+    `matches` snippets. Text match is not duplicate detection."""
     return await _call(
         ctx,
         "GET",
@@ -1141,6 +1162,7 @@ async def list_tasks(
             "view": view,
             "limit": limit,
             "cursor": cursor,
+            "q": q,
         },
     )
 

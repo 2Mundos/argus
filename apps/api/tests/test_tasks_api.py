@@ -346,7 +346,9 @@ def test_list_columns_skip_task_bodies() -> None:
 
 
 def test_list_columns_cover_summary_fields() -> None:
-    computed = {"version", "models", "age_s", "truncated"} | set(Refs.model_fields)
+    computed = {"version", "models", "age_s", "truncated", "matches"} | set(
+        Refs.model_fields
+    )
     assert set(TaskSummary.model_fields) - computed <= set(LIST_COLUMNS)
 
 
