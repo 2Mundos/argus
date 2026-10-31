@@ -413,7 +413,8 @@ def test_read_snapshot_released_before_forge(client: TestClient) -> None:
     assert all(i["verdict"] == "satisfied" for i in got["items"])
     assert marks["collect_done"] is not None
     forge_times = marks["forge"]
-    assert isinstance(forge_times, list) and len(forge_times) == 3
+    # Each PR is read with its status, check runs and reviews: four reads apiece.
+    assert isinstance(forge_times, list) and len(forge_times) == 3 * 4
     done = marks["collect_done"]
     assert isinstance(done, float)
     assert all(t > done for t in forge_times)

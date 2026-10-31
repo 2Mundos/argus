@@ -1,5 +1,6 @@
 """Task drafts and their publication (docs/specs/task-drafts.spec.md)."""
 
+import sqlite3
 import threading
 from collections.abc import Generator
 from pathlib import Path
@@ -384,7 +385,7 @@ async def test_open_drafts_are_limited(db: Database, monkeypatch) -> None:
 
 
 async def test_drafts_survive_a_restart(tmp_path: Path) -> None:
-    path = tmp_path / "argus.db"
+    path = tmp_path / "restart.db"
     db = await Database.open(path)
     d = await new(db, **complete(title="kept"))
     await db.close()
@@ -400,7 +401,7 @@ async def test_drafts_survive_a_restart(tmp_path: Path) -> None:
 
 
 async def test_0065_upgrade_keeps_data_and_is_idempotent(tmp_path: Path) -> None:
-    path = tmp_path / "argus.db"
+    path = tmp_path / "upgrade.db"  # not the `db` fixture's file
     migrations = load_migrations()
     assert migrations[64].name == "0065_task_drafts.sql"
     db = await Database.open(path, migrations=migrations[:64])
@@ -418,10 +419,10 @@ async def test_0065_upgrade_keeps_data_and_is_idempotent(tmp_path: Path) -> None
         assert await all_tasks(db) == [old.id]
         await db.close()
 
+    with sqlite3.connect(path) as raw:  # the SQL itself is safe to run again
+        raw.executescript(migrations[64].sql)
     db = await Database.open(path, migrations=migrations)
     try:
-        async with db.write() as tx:  # the SQL itself is safe to run again
-            await tx.conn.executescript(migrations[64].sql)
         d = await new(db, **complete(depends_on=[old.id]))
         [out] = (await publish(db, "k", d)).items
         assert await deps_of(db, out.task_id or "") == [old.id]
@@ -478,7 +479,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestCli
 
 
 def test_draft_tools_are_for_managers_only(client: TestClient) -> None:
-    assert DRAFT_TOOLS <= set(audiences)
+    assert set(audiences) >= DRAFT_TOOLS
     for name in DRAFT_TOOLS:
         assert Scope.WORKER not in audiences[name]
     assert not DRAFT_TOOLS & listed(client, register(client))
@@ -518,7 +519,10 @@ def test_rest_round_trip_as_admin(client: TestClient) -> None:
         json={"expected_version": "2000-01-01T00:00:00+00:00", "changes": {"x": 1}},
         headers=ADMIN,
     )
-    assert (stale.status_code, stale.json()["code"]) == (409, "stale_version")
+    assert (stale.status_code, stale.json()["detail"]["code"]) == (
+        409,
+        "stale_version",
+    )
     body = {
         "idempotency_key": "rest-1",
         "drafts": [

@@ -15223,6 +15223,158 @@
         "title": "ProposalState",
         "type": "string"
       },
+      "PublishItem": {
+        "properties": {
+          "draft_id": {
+            "minLength": 1,
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "expected_version": {
+            "minLength": 1,
+            "title": "Expected Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draft_id",
+          "expected_version"
+        ],
+        "title": "PublishItem",
+        "type": "object"
+      },
+      "PublishOutcome": {
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "draft_id": {
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "errors": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "outcome": {
+            "enum": [
+              "published",
+              "rejected",
+              "skipped"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          }
+        },
+        "required": [
+          "draft_id",
+          "outcome"
+        ],
+        "title": "PublishOutcome",
+        "type": "object"
+      },
+      "PublishRequest": {
+        "properties": {
+          "drafts": {
+            "items": {
+              "$ref": "#/components/schemas/PublishItem"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Drafts",
+            "type": "array"
+          },
+          "idempotency_key": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "mode": {
+            "default": "atomic",
+            "enum": [
+              "atomic",
+              "partial"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "drafts"
+        ],
+        "title": "PublishRequest",
+        "type": "object"
+      },
+      "PublishResult": {
+        "properties": {
+          "idempotency_key": {
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PublishOutcome"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "mode": {
+            "enum": [
+              "atomic",
+              "partial"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "mode",
+          "items"
+        ],
+        "title": "PublishResult",
+        "type": "object"
+      },
       "QuotaProbe": {
         "description": "The latest quota probe of an account (one per account), whatever came of it.",
         "properties": {
@@ -19525,6 +19677,316 @@
           "complexity"
         ],
         "title": "TaskDetail",
+        "type": "object"
+      },
+      "TaskDraft": {
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/TaskDraftBody"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "published_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Task Id"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "updated_by": {
+            "title": "Updated By",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "body",
+          "version",
+          "created_by",
+          "created_at",
+          "updated_by",
+          "updated_at"
+        ],
+        "title": "TaskDraft",
+        "type": "object"
+      },
+      "TaskDraftBody": {
+        "additionalProperties": false,
+        "description": "`TaskCreate` with the same field rules, lenient only about completeness:\nthe title may be empty until publish (3.1). Unknown keys are refused.",
+        "properties": {
+          "acceptance": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Acceptance",
+            "type": "array"
+          },
+          "account_providers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Providers"
+          },
+          "depends_on": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "depends_on_drafts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Depends On Drafts",
+            "type": "array"
+          },
+          "difficulty": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Difficulty"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "difficulty_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DifficultySource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "executor_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutorModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "harness_account": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Account"
+          },
+          "harness_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HarnessModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Input",
+            "type": "object"
+          },
+          "kind": {
+            "default": "generic",
+            "title": "Kind",
+            "type": "string"
+          },
+          "knowledge": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Knowledge",
+            "type": "array"
+          },
+          "lease_ttl_s": {
+            "default": 120,
+            "maximum": 3600.0,
+            "minimum": 10.0,
+            "title": "Lease Ttl S",
+            "type": "integer"
+          },
+          "max_attempts": {
+            "default": 3,
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "priority": {
+            "default": 0,
+            "title": "Priority",
+            "type": "integer"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "required_capabilities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Capabilities",
+            "type": "array"
+          },
+          "requires_approval": {
+            "default": false,
+            "title": "Requires Approval",
+            "type": "boolean"
+          },
+          "review": {
+            "$ref": "#/components/schemas/Review",
+            "default": "none"
+          },
+          "spec": {
+            "default": "",
+            "maxLength": 200000,
+            "title": "Spec",
+            "type": "string"
+          },
+          "timeout_s": {
+            "anyOf": [
+              {
+                "maximum": 604800.0,
+                "minimum": 60.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout S"
+          },
+          "title": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "title": "TaskDraftBody",
+        "type": "object"
+      },
+      "TaskDraftEdit": {
+        "description": "A partial patch of the body: a key left out is kept, `null` resets it.",
+        "properties": {
+          "changes": {
+            "additionalProperties": true,
+            "minProperties": 1,
+            "title": "Changes",
+            "type": "object"
+          },
+          "expected_version": {
+            "minLength": 1,
+            "title": "Expected Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_version",
+          "changes"
+        ],
+        "title": "TaskDraftEdit",
+        "type": "object"
+      },
+      "TaskDraftPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TaskDraft"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "TaskDraftPage",
         "type": "object"
       },
       "TaskEdit": {
@@ -29909,6 +30371,276 @@
         "summary": "System",
         "tags": [
           "operations"
+        ]
+      }
+    },
+    "/api/task-drafts": {
+      "get": {
+        "description": "Open drafts, oldest first; at most 200 exist, so the list is whole.",
+        "operationId": "list_drafts_api_task_drafts_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDraftPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Drafts",
+        "tags": [
+          "task-drafts"
+        ]
+      },
+      "post": {
+        "description": "Save a task definition that nothing can claim until it is published. Field\nrules are the task's; title, spec, acceptance and project may wait for publish.",
+        "operationId": "create_draft_api_task_drafts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskDraftBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDraft"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Draft",
+        "tags": [
+          "task-drafts"
+        ]
+      }
+    },
+    "/api/task-drafts/publish": {
+      "post": {
+        "description": "Validate drafts and create their tasks in one transaction. `atomic` (the\ndefault) publishes all or none; `partial` publishes each valid draft and reports\nthe others. In-batch `depends_on_drafts` become the new task ids. A repeat with\nthe same `idempotency_key` and request returns the stored answer.",
+        "operationId": "publish_drafts_api_task_drafts_publish_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Publish Drafts",
+        "tags": [
+          "task-drafts"
+        ]
+      }
+    },
+    "/api/task-drafts/{draft_id}": {
+      "delete": {
+        "operationId": "discard_draft_api_task_drafts__draft_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_version",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Expected Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Discard Draft",
+        "tags": [
+          "task-drafts"
+        ]
+      },
+      "get": {
+        "operationId": "get_draft_api_task_drafts__draft_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDraft"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Draft",
+        "tags": [
+          "task-drafts"
+        ]
+      },
+      "patch": {
+        "description": "Patch an open draft: omitted fields stay, `null` resets one. A stale\n`expected_version` is 409 `stale_version`; a published draft 409\n`draft_published`.",
+        "operationId": "edit_draft_api_task_drafts__draft_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskDraftEdit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDraft"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Edit Draft",
+        "tags": [
+          "task-drafts"
         ]
       }
     },
