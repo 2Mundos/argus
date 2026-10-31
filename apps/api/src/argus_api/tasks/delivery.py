@@ -145,6 +145,20 @@ async def reference(conn: aiosqlite.Connection, task: Task) -> PrRef | None:
     return extract(texts, artifacts, repos.get(task.project), set(repos.values()))
 
 
+@dataclass(frozen=True)
+class PrObservation:
+    """Forge facts for one PR, including base/head for prerequisite evidence."""
+
+    state: PrState
+    merged_at: datetime | None
+    checked_at: datetime
+    base_ref: str | None
+    head_sha: str | None
+
+
+_Fetch = tuple[PrState, datetime | None, str | None, str | None]
+
+
 class PrChecker:
     """Reads one PR from its forge. Concurrent reads of the same PR share one request and a
     result is reused for CACHE_S seconds, so a polling dashboard cannot hammer the forge."""
@@ -156,15 +170,21 @@ class PrChecker:
     ) -> None:
         self.secrets = secrets
         self.transport = transport
-        self._flight: dict[PrRef, asyncio.Task[tuple[PrState, datetime | None]]] = {}
-        self._cache: dict[PrRef, tuple[float, PrState, datetime | None, datetime]] = {}
+        self._flight: dict[PrRef, asyncio.Task[_Fetch]] = {}
+        self._cache: dict[PrRef, tuple[float, _Fetch, datetime]] = {}
 
     async def check(
         self, conn: aiosqlite.Connection, ref: PrRef
     ) -> tuple[PrState, datetime | None, datetime]:
+        obs = await self.inspect(conn, ref)
+        return obs.state, obs.merged_at, obs.checked_at
+
+    async def inspect(self, conn: aiosqlite.Connection, ref: PrRef) -> PrObservation:
+        """Same cache and coalescing as `check`, plus base_ref and head_sha."""
         hit = self._cache.get(ref)
         if hit and time.monotonic() - hit[0] < CACHE_S:
-            return hit[1], hit[2], hit[3]
+            state, merged_at, base_ref, head_sha = hit[1]
+            return PrObservation(state, merged_at, hit[2], base_ref, head_sha)
         login = await self._token(
             conn, ref.provider
         )  # read before any await that may be shared
@@ -174,12 +194,16 @@ class PrChecker:
             self._flight[ref] = flight
             flight.add_done_callback(lambda _: self._flight.pop(ref, None))
         try:
-            state, merged_at = await asyncio.shield(flight)
+            state, merged_at, base_ref, head_sha = await asyncio.shield(flight)
         except Exception:  # unreachable by design; unknown beats an error page
-            state, merged_at = PrState.UNKNOWN, None
+            state, merged_at, base_ref, head_sha = PrState.UNKNOWN, None, None, None
         checked_at = utcnow()
-        self._cache[ref] = (time.monotonic(), state, merged_at, checked_at)
-        return state, merged_at, checked_at
+        self._cache[ref] = (
+            time.monotonic(),
+            (state, merged_at, base_ref, head_sha),
+            checked_at,
+        )
+        return PrObservation(state, merged_at, checked_at, base_ref, head_sha)
 
     async def _token(
         self, conn: aiosqlite.Connection, provider: str
@@ -197,11 +221,9 @@ class PrChecker:
                 return str(value.get("username", "")), value["token"]
         return None
 
-    async def _fetch(
-        self, ref: PrRef, login: tuple[str, str] | None
-    ) -> tuple[PrState, datetime | None]:
+    async def _fetch(self, ref: PrRef, login: tuple[str, str] | None) -> _Fetch:
         if login is None:
-            return PrState.UNKNOWN, None
+            return PrState.UNKNOWN, None, None, None
         path = f"repos/{ref.owner}/{ref.repo}/pulls/{ref.number}"
         github = ref.provider == "github"
         url = (
@@ -217,17 +239,23 @@ class PrChecker:
             ) as client:
                 res = await client.get(url, headers=headers, auth=basic)
             if res.status_code != 200:
-                return PrState.UNKNOWN, None
+                return PrState.UNKNOWN, None, None, None
             body = res.json()
+            base = body.get("base") if isinstance(body.get("base"), dict) else {}
+            head = body.get("head") if isinstance(body.get("head"), dict) else {}
+            base_ref = base.get("ref") if isinstance(base.get("ref"), str) else None
+            head_sha = head.get("sha") if isinstance(head.get("sha"), str) else None
             if body.get("merged") is True:
                 raw = body.get("merged_at")
-                return PrState.MERGED, datetime.fromisoformat(raw) if raw else None
-            return {"open": PrState.OPEN, "closed": PrState.CLOSED}.get(
+                merged_at = datetime.fromisoformat(raw) if raw else None
+                return PrState.MERGED, merged_at, base_ref, head_sha
+            state = {"open": PrState.OPEN, "closed": PrState.CLOSED}.get(
                 body.get("state"), PrState.UNKNOWN
-            ), None
+            )
+            return state, None, base_ref, head_sha
         except (httpx.HTTPError, ValueError, AttributeError, TypeError):
             log.info("pr state unavailable for %s", ref.url)  # no credential in it
-            return PrState.UNKNOWN, None
+            return PrState.UNKNOWN, None, None, None
 
 
 async def accept_offer(

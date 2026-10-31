@@ -2,12 +2,14 @@
 
 `summary` carries state and references (ids), never the spec or result bodies;
 `detail` carries the whole task with each long free-text field cut to TEXT_CAP.
+Optional `q` is literal substring search over title and spec
+(docs/specs/task-discovery.spec.md).
 """
 
 import json
 from collections import defaultdict
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import aiosqlite
 from argus_core.model_trace import ModelsSummary
@@ -28,12 +30,23 @@ from argus_api.paging import (
 from argus_api.tasks import service
 
 MAX_IDS = 50
+MAX_QUERY_TERMS = 8
+MAX_TERM_LEN = 64
+SNIPPET_MAX = 200
 
 
 class Refs(BaseModel):
     depends_on: list[str]
     decision_ids: list[str]  # open decisions on the task
     artifact_ids: list[str]  # every attempt's, oldest first
+
+
+class MatchHit(BaseModel):
+    """A citation of where `q` hit; only present on list rows when `q` is set."""
+
+    field: Literal["title", "spec"]
+    snippet: str
+    truncated: bool
 
 
 class TaskSummary(Refs):
@@ -62,6 +75,7 @@ class TaskSummary(Refs):
     version: str  # updated_at; pass it back as expected_version
     age_s: int  # since creation
     truncated: dict[str, int] = {}  # field -> full length in bytes
+    matches: list[MatchHit] | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
 class TaskDetail(Task, TaskSummary):
@@ -130,6 +144,63 @@ LIST_COLUMNS = (
 _LIST_SQL = ", ".join(LIST_COLUMNS)
 
 
+def parse_query(q: str | None) -> list[str] | None:
+    """Whitespace-separated literal terms, or None when `q` was not passed."""
+    if q is None:
+        return None
+    stripped = q.strip()
+    if not stripped:
+        raise ValidationFailedError("q is empty after strip", code="query_empty")
+    terms = stripped.split()
+    if len(terms) > MAX_QUERY_TERMS or any(len(t) > MAX_TERM_LEN for t in terms):
+        raise ValidationFailedError(
+            f"q takes at most {MAX_QUERY_TERMS} terms of {MAX_TERM_LEN} characters",
+            code="query_too_broad",
+        )
+    return terms
+
+
+def _like_term(term: str) -> str:
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _snippet(text: str, terms: list[str]) -> MatchHit | None:
+    """Centred ≤ SNIPPET_MAX chars on the earliest case-insensitive hit, or None."""
+    lower = text.lower()
+    hit_at: int | None = None
+    for term in terms:
+        at = lower.find(term.lower())
+        if at >= 0 and (hit_at is None or at < hit_at):
+            hit_at = at
+    if hit_at is None:
+        return None
+    if len(text) <= SNIPPET_MAX:
+        return MatchHit(
+            field="title", snippet=text, truncated=False
+        )  # field set by caller
+    half = SNIPPET_MAX // 2
+    start = max(0, hit_at - half)
+    end = min(len(text), start + SNIPPET_MAX)
+    start = max(0, end - SNIPPET_MAX)
+    body = text[start:end]
+    if start > 0:
+        body = "..." + body[3:] if len(body) > 3 else "..." + body
+    if end < len(text):
+        body = body[:-3] + "..." if len(body) > 3 else body + "..."
+    return MatchHit(field="title", snippet=body, truncated=True)
+
+
+def match_hits(title: str, spec: str, terms: list[str]) -> list[MatchHit]:
+    hits: list[MatchHit] = []
+    for field, text in (("title", title), ("spec", spec)):
+        raw = _snippet(text, terms)
+        if raw is not None:
+            hits.append(
+                MatchHit(field=field, snippet=raw.snippet, truncated=raw.truncated)
+            )
+    return hits
+
+
 async def list_tasks(
     snap: Snapshot,
     *,
@@ -142,13 +213,16 @@ async def list_tasks(
     limit: int = 25,
     cursor: str | None = None,
     task_scope: tuple[str, list[str]] | None = None,
+    q: str | None = None,
 ) -> TaskPage:
     """Newest first, keyset-paged on (created_at, id). Archived tasks are left out
     unless `archived` asks for exactly those. `task_scope` is an optional SQL
-    fragment (worker lease grants) that further restricts which tasks appear."""
+    fragment (worker lease grants) that further restricts which tasks appear.
+    `q` is optional literal substring search over title and spec."""
     limit = clamp(limit)
+    terms = parse_query(q)
     filters: dict[str, Any] = {"states": sorted(states or []), "project": project}
-    filters |= {"kind": kind, "assignee": assignee, "archived": archived}
+    filters |= {"kind": kind, "assignee": assignee, "archived": archived, "q": q}
     where = ["archived_at IS NOT NULL" if archived else "archived_at IS NULL"]
     params: list[Any] = []
     if task_scope is not None:
@@ -168,6 +242,14 @@ async def list_tasks(
     if assignee is not None:
         where.append("assignee_agent_id = ?")
         params.append(assignee)
+    if terms is not None:
+        for term in terms:
+            where.append(
+                "(lower(title) LIKE '%' || lower(?) || '%' ESCAPE '\\'"
+                " OR lower(spec) LIKE '%' || lower(?) || '%' ESCAPE '\\')"
+            )
+            liked = _like_term(term)
+            params += [liked, liked]
     conn = snap.conn
     async with conn.execute(
         f"SELECT count(*) FROM tasks WHERE {' AND '.join(where)}",  # noqa: S608
@@ -179,15 +261,16 @@ async def list_tasks(
     if (after := decode_cursor(cursor, filters)) is not None:
         where.append("(created_at, id) < (?, ?)")
         params += after
+    select = _LIST_SQL if terms is None else f"{_LIST_SQL}, spec"
     async with conn.execute(
-        f"SELECT {_LIST_SQL} FROM tasks WHERE {' AND '.join(where)}"  # noqa: S608
+        f"SELECT {select} FROM tasks WHERE {' AND '.join(where)}"  # noqa: S608
         " ORDER BY created_at DESC, id DESC LIMIT ?",
         [*params, limit + 1],
     ) as cur:
         rows = list(await cur.fetchall())
     has_more = len(rows) > limit
     rows = rows[:limit]
-    page = await _page(snap, rows, view)
+    page = await _page(snap, rows, view, terms=terms)
     if has_more:
         last = rows[-1]
         page.has_more = True
@@ -252,7 +335,13 @@ async def refs(conn: aiosqlite.Connection, ids: list[str]) -> dict[str, Refs]:
     return {i: Refs.model_validate(found[i]) for i in ids}
 
 
-async def _page(snap: Snapshot, rows: list[aiosqlite.Row], view: View) -> TaskPage:
+async def _page(
+    snap: Snapshot,
+    rows: list[aiosqlite.Row],
+    view: View,
+    *,
+    terms: list[str] | None = None,
+) -> TaskPage:
     ids = [r["id"] for r in rows]
     by_id = await refs(snap.conn, ids) if rows else {}
     models = await modeltrace.summaries(snap.conn, ids) if rows else {}
@@ -260,7 +349,7 @@ async def _page(snap: Snapshot, rows: list[aiosqlite.Row], view: View) -> TaskPa
     omitted: set[str] = set()
     for row in rows:
         truncated: dict[str, int] = {}
-        common = {
+        common: dict[str, Any] = {
             **by_id[row["id"]].model_dump(),
             "version": row["updated_at"],
             "models": models[row["id"]],
@@ -273,6 +362,14 @@ async def _page(snap: Snapshot, rows: list[aiosqlite.Row], view: View) -> TaskPa
                 row["progress_message"], "progress_message", truncated
             ),
         }
+        if terms is not None:
+            # Spec may already be on the list row when searching; else load it.
+            spec = (
+                row["spec"]
+                if "spec" in row
+                else (await service.get_task(snap.conn, row["id"])).spec
+            )
+            common["matches"] = match_hits(row["title"], spec or "", terms)
         if view == "summary":
             item: TaskSummary | TaskDetail = TaskSummary.model_validate(
                 {**dict(row), **common, "truncated": truncated}
