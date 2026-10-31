@@ -13749,6 +13749,10 @@
             "title": "Created At",
             "type": "string"
           },
+          "findings_filed": {
+            "title": "Findings Filed",
+            "type": "integer"
+          },
           "state": {
             "$ref": "#/components/schemas/TaskState"
           },
@@ -13760,7 +13764,8 @@
         "required": [
           "task_id",
           "state",
-          "created_at"
+          "created_at",
+          "findings_filed"
         ],
         "title": "RoutineRun",
         "type": "object"
