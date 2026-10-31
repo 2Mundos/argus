@@ -140,13 +140,15 @@ async def create_task(
     *,
     as_worker: str | None = None,
     hourly_limit: int | None = None,
+    untrusted: bool = False,
 ) -> Task:
     """Create a task.
 
     `as_worker` (an agent id) limits creation to subtasks of a task that agent
     currently holds (3.6). `hourly_limit` is the policy gate (3.10): past that
     many tasks by `actor` in the last hour, the task waits for human approval
-    instead of being refused.
+    instead of being refused. `untrusted` gives the task `worker` prompt trust
+    without forcing approval (routine findings, routines spec 3.3).
     """
     if body.parent_id is not None:
         parent = await _row(tx.conn, body.parent_id)
@@ -172,6 +174,8 @@ async def create_task(
     # injected prompts cannot silently become ready work for another agent.
     if as_worker is not None:
         body = body.model_copy(update={"requires_approval": True})
+        prompt_trust = PromptTrust.WORKER
+    elif untrusted:
         prompt_trust = PromptTrust.WORKER
     else:
         prompt_trust = PromptTrust.ORCHESTRATOR
@@ -3106,6 +3110,13 @@ async def _apply(
     if new is S.FAILED and row["created_by"].startswith("routine:"):
         await routine_failures.after_failed_run(
             tx, row["created_by"].removeprefix("routine:")
+        )
+    elif new is S.SUCCEEDED and row["created_by"].startswith("routine:"):
+        # Imported here: intake creates tasks, so it imports this module.
+        from argus_api.routines import findings as routine_findings
+
+        await routine_findings.after_succeeded_run(
+            tx, row["created_by"].removeprefix("routine:"), row["id"]
         )
     return new
 
