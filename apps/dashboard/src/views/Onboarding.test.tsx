@@ -1,8 +1,23 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OnboardingStatus } from "../api";
-import { firstIncompleteStep, OnboardingWizard, shouldAutoOpen } from "./Onboarding";
+import type { OnboardingStatus, TemplateCatalog } from "../api";
+import {
+  firstIncompleteStep,
+  OnboardingWizard,
+  orchestratorBlockers,
+  shouldAutoOpen,
+} from "./Onboarding";
+
+function orchestratorCatalog(ready: boolean, missing: string[][] = []): TemplateCatalog {
+  return {
+    templates: [
+      { id: "nanoclaw-orchestrator", ready, readiness: missing.map((m) => ({ missing: m })) },
+    ],
+    nodes: [],
+    public_url_configured: true,
+  } as unknown as TemplateCatalog;
+}
 
 const mock = vi.hoisted(() => ({
   status: {
@@ -11,6 +26,7 @@ const mock = vi.hoisted(() => ({
     orchestrator: false,
     dismissed: false,
   } as OnboardingStatus,
+  catalog: undefined as unknown as TemplateCatalog,
   put: vi.fn(async () => ({ key: "onboarding.dismissed", value: true, source: "global" })),
 }));
 
@@ -23,7 +39,7 @@ vi.mock("../api", () => ({
     if (path === "/api/onboarding") return { ...mock.status };
     if (path === "/api/settings/{key}") return mock.put();
     if (path === "/api/fleet/templates") {
-      return { templates: [], nodes: [], public_url_configured: true };
+      return mock.catalog;
     }
     return {};
   },
@@ -73,6 +89,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  mock.catalog = orchestratorCatalog(true);
   mock.status = {
     account: false,
     worker: false,
@@ -109,6 +126,26 @@ describe("firstIncompleteStep", () => {
     expect(
       firstIncompleteStep({ account: true, worker: true, orchestrator: false, dismissed: false }),
     ).toBe(3);
+  });
+});
+
+describe("orchestratorBlockers", () => {
+  it("is undefined when the orchestrator template is ready", () => {
+    expect(orchestratorBlockers(orchestratorCatalog(true))).toBeUndefined();
+  });
+
+  it("lists the missing facts of every readiness entry", () => {
+    expect(
+      orchestratorBlockers(
+        orchestratorCatalog(false, [["no docker socket"], ["image absent", "no gateway"]]),
+      ),
+    ).toEqual(["no docker socket", "image absent", "no gateway"]);
+  });
+
+  it("falls back to a generic message when nothing is listed", () => {
+    expect(orchestratorBlockers(orchestratorCatalog(false))).toEqual([
+      "The internal orchestrator template is not ready.",
+    ]);
   });
 });
 
@@ -149,5 +186,15 @@ describe("OnboardingWizard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Enable orchestrator" }));
     await waitFor(() => expect(mock.put).toHaveBeenCalled());
     expect(mock.put.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("shows the blockers instead of the enable form when the template is not ready", async () => {
+    mock.status = { account: true, worker: true, orchestrator: false, dismissed: false };
+    mock.catalog = orchestratorCatalog(false, [["no docker socket"]]);
+    render(<OnboardingWizard open initialStep={3} onClose={() => {}} />);
+    expect(await screen.findByText("no docker socket")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Enable orchestrator" })).toBeNull();
+    expect(screen.queryByLabelText(/Daily budget/)).toBeNull();
+    expect(mock.put).not.toHaveBeenCalled();
   });
 });
