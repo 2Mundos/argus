@@ -7,7 +7,14 @@ from typing import Any
 from uuid import uuid4
 
 import aiosqlite
-from argus_core.routines import TEMPLATE_FIELDS, Routine, RoutineRun, RoutineWrite
+from argus_core.routines import (
+    INTAKE_FIELDS,
+    TEMPLATE_FIELDS,
+    FindingIntake,
+    Routine,
+    RoutineRun,
+    RoutineWrite,
+)
 from argus_core.tasks import TaskCreate
 from pydantic import ValidationError
 
@@ -263,9 +270,11 @@ async def _check_template(
             code="unknown_template_field",
             details=[f"template.{key}: not a template field" for key in unknown],
         )
+    task_fields = {k: v for k, v in template.items() if k not in INTAKE_FIELDS}
     try:
+        intake = FindingIntake.model_validate(template)
         body = TaskCreate.model_validate(
-            {"title": title} | template | {"project": project}
+            {"title": title} | task_fields | {"project": project}
         )
     except ValidationError as exc:
         errors = [
@@ -276,7 +285,9 @@ async def _check_template(
             "invalid template: " + "; ".join(errors), details=errors
         ) from exc
     await tasks.check_create(conn, body)
-    return body.model_dump(mode="json", include=set(template))
+    return body.model_dump(mode="json", include=set(task_fields)) | intake.model_dump(
+        include=set(template) & INTAKE_FIELDS
+    )
 
 
 async def _record_disabled(tx: Tx, actor: str, routine_id: str) -> None:

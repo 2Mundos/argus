@@ -39,6 +39,7 @@ from argus_api.engines.routes import router as engines_router
 from argus_api.errors import DomainError
 from argus_api.eventlog.routes import router as events_router
 from argus_api.fleet import reconciler
+from argus_api.fleet.onecli_cleanup import OneCliCleaner
 from argus_api.fleet.reconciler import FleetSettings
 from argus_api.fleet.routes import router as fleet_router
 from argus_api.fleet.targets import TargetRegistry
@@ -221,6 +222,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             *(
                 [asyncio.create_task(app.state.disk_guard.run())]
                 if settings.disk_guard_enabled
+                else []
+            ),
+            *(
+                [
+                    asyncio.create_task(
+                        OneCliCleaner(
+                            db,
+                            settings.onecli_cleanup_url,
+                            settings.onecli_cleanup_api_key,
+                            dry_run=settings.onecli_cleanup_dry_run,
+                            interval_s=settings.onecli_cleanup_interval_s,
+                        ).loop()
+                    )
+                ]
+                if settings.onecli_cleanup_url
                 else []
             ),
         ]

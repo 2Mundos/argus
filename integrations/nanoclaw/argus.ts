@@ -111,10 +111,13 @@ import {
   sessionRepositoryProbe,
 } from "./argus-repo-preflight.js";
 import {
+  type ApiErrorFact,
   boundHead,
   boundTail,
+  describeApiError,
   inlineExcerpt,
   isOomKill,
+  lastClaudeApiError,
   readSessionEvidence,
   redactSessionTail,
   type SessionEvidence,
@@ -396,6 +399,8 @@ export interface ArgusConfig {
    * providerFailure can show an exhausted account.
    */
   agentLogTail?: () => Promise<string | SessionEvidence>;
+  /** The newest Claude API error the group's sessions recorded since a time (failure cause). */
+  lastApiError?: (sinceMs: number) => Promise<ApiErrorFact | null>;
   /**
    * One session per attempt: close the session of `thread` (null: the top-level session
    * of the old shared wiring) so NanoClaw never resolves it again, then stop its
@@ -1685,6 +1690,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let selectedModels: ModelSelection | null = null;
   let previousHarnessModel: string | null = null;
   let currentClaim: ArgusTask | null = null;
+  let claimedAt = 0; // when currentClaim was taken (ms), bounds the API error search
   let currentText: string | null = null; // what the agent was sent, to re-send after a switch
   // Renders the task for the account held now (a switch to local adds its rules).
   let renderCurrent: (() => string) | null = null;
@@ -2394,9 +2400,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         );
         if (quota) f = quota;
         else {
-          // Not a limit: say what the log last said instead of the bare placeholder.
-          const cause = describeLogTail(tail.text);
-          if (cause) f = { ...f, reason: `${f.reason} (log: ${cause})`.slice(0, 1000) };
+          // Not a limit: name the provider's error, else what the log last said.
+          const api = await cfg.lastApiError?.(claimedAt).catch(() => null);
+          const cause = api ? describeApiError(api) : describeLogTail(tail.text);
+          if (cause)
+            f = { ...f, reason: `${f.reason} (${api ? "api" : "log"}: ${cause})`.slice(0, 1000) };
         }
       } catch (err) {
         log.warn("Could not read the agent log tail", { err });
@@ -2876,6 +2884,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       taskDone = resolve;
     });
     currentClaim = task;
+    claimedAt = cfg.now?.() ?? Date.now();
     switchFailure = null;
     if (!(await ensureRuntime(task))) return;
     if (!(await ensureAccount(task))) {
@@ -3171,6 +3180,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           log.warn("Could not report the account's authentication rejection", { err }),
         );
       reply = authRejectedReply(held);
+    } else if (f.kind === "failed" && isGenericFailureNotice(text)) {
+      const api = await cfg.lastApiError?.(turn?.startedAt ?? 0).catch(() => null);
+      if (api) reply = `The agent run failed: ${describeApiError(api)}.`;
     }
     await chat.deliverChat(threadId, reply, null, null);
   }
@@ -4593,6 +4605,12 @@ export function fromEnv(): ChannelAdapter | null {
     closeSession: closeSessionFromEnv,
     agentLogTail:
       runtime?.sessionEvidence && runtime.sessions ? sessionLogTail(runtime) : undefined,
+    lastApiError: async (sinceMs) => {
+      const group = await argusGroup();
+      if (!group) return null;
+      const projects = path.resolve("data", "v2-sessions", group.id, ".claude-shared", "projects");
+      return lastClaudeApiError(projects, sinceMs);
+    },
     selectModels: modelsFromEnv(),
     delegateLogFile: async () => {
       const dir = await argusGroupDir();

@@ -92,7 +92,9 @@ Getting a first account, worker and orchestrator is the
   lease succeeds (3.3, offline). The failover event is on the agent, not a task.
   A rejected credential records `account.auth_rejected` (no task), does not
   exhaust the account, and the reply names the account so an admin can sign it
-  in again. Any other failure is replied as it came.
+  in again. Any other failure is replied as it came, naming the provider's API
+  error when the session recorded one ([worker lifecycle](worker-lifecycle.spec.md)
+  3.12.1, "Provider API error").
 - The skill is loaded at session start from the server's
   `skill://argus-orchestrator/SKILL.md` resource, not baked into the image, so it
   always matches the running server.

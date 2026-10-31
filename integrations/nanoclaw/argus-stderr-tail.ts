@@ -179,3 +179,99 @@ export async function readSessionEvidence(
     return { exitCode, logTail: "", truncated: false, complete: false, ...state };
   }
 }
+
+/** The newest provider API error a Claude session recorded: structured fields only. */
+export interface ApiErrorFact {
+  status: number;
+  /** The provider's error type token (e.g. `authentication_error`), when it names one. */
+  type: string | null;
+}
+
+/** Bytes read from the end of each transcript: the errors are the last records. */
+const TRANSCRIPT_TAIL_BYTES = 64 * 1024;
+const ERROR_TYPE = /^[a-z][a-z_]{0,39}$/;
+
+/**
+ * The newest `api_error` that a Claude transcript under `projectsDir` recorded at or
+ * after `sinceMs`, or null. Only the HTTP status and the error type token are taken,
+ * never the message text, so no prompt or credential can leak (failure classes:
+ * the generic run-failed notice says nothing about the cause).
+ */
+export async function lastClaudeApiError(
+  projectsDir: string,
+  sinceMs: number,
+): Promise<ApiErrorFact | null> {
+  const { readdir, stat, open } = await import("node:fs/promises");
+  const path = await import("node:path");
+  let best: { at: number; fact: ApiErrorFact } | null = null;
+  let projects: string[];
+  try {
+    projects = await readdir(projectsDir);
+  } catch {
+    return null;
+  }
+  for (const project of projects) {
+    const dir = path.join(projectsDir, project);
+    let files: string[];
+    try {
+      files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      const full = path.join(dir, file);
+      try {
+        const info = await stat(full);
+        if (info.mtimeMs < sinceMs) continue;
+        const start = Math.max(0, info.size - TRANSCRIPT_TAIL_BYTES);
+        const handle = await open(full, "r");
+        try {
+          const buf = Buffer.alloc(info.size - start);
+          await handle.read(buf, 0, buf.length, start);
+          for (const line of buf.toString("utf8").split("\n")) {
+            const found = apiErrorRecord(line, sinceMs);
+            if (found && (!best || found.at > best.at)) best = found;
+          }
+        } finally {
+          await handle.close();
+        }
+      } catch {}
+    }
+  }
+  return best?.fact ?? null;
+}
+
+function apiErrorRecord(line: string, sinceMs: number): { at: number; fact: ApiErrorFact } | null {
+  if (!line.includes('"api_error"')) return null;
+  let rec: {
+    type?: unknown;
+    subtype?: unknown;
+    timestamp?: unknown;
+    error?: { status?: unknown; message?: unknown };
+  } | null;
+  try {
+    rec = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (rec?.type !== "system" || rec?.subtype !== "api_error") return null;
+  const at = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : Number.NaN;
+  const status = rec.error?.status;
+  if (!Number.isFinite(at) || at < sinceMs || typeof status !== "number") return null;
+  if (!Number.isInteger(status)) return null;
+  let type: string | null = null;
+  const message = rec.error?.message;
+  if (typeof message === "string") {
+    const body = message.slice(message.indexOf("{"));
+    try {
+      const t = JSON.parse(body)?.error?.type;
+      if (typeof t === "string" && ERROR_TYPE.test(t)) type = t;
+    } catch {}
+  }
+  return { at, fact: { status, type } };
+}
+
+/** One line for a reply or task error: `Claude API error 401 (authentication_error)`. */
+export function describeApiError(fact: ApiErrorFact): string {
+  return `Claude API error ${fact.status}${fact.type ? ` (${fact.type})` : ""}`;
+}

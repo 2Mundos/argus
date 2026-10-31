@@ -98,6 +98,10 @@ class Settings:
     # `stalled` and retried. 0 disables (stall-visibility 3.6).
     stall_fail_s: int = 3600
     # Workspace cleanup (workspace-cleanup.spec.md 3.1): off, and dry-run when on.
+    onecli_cleanup_url: str | None = None
+    onecli_cleanup_api_key: str | None = None
+    onecli_cleanup_dry_run: bool = True
+    onecli_cleanup_interval_s: float = 3600.0
     workspace_cleanup_enabled: bool = False
     workspace_cleanup_dry_run: bool = True
     workspace_cleanup_archive_root: str | None = None
@@ -251,6 +255,14 @@ class Settings:
             ),
             quiet_claim_s=int(os.environ.get("ARGUS_QUIET_CLAIM_S", 1200)),
             stall_fail_s=int(os.environ.get("ARGUS_STALL_FAIL_S", 3600)),
+            onecli_cleanup_url=os.environ.get("ARGUS_ONECLI_CLEANUP_URL") or None,
+            onecli_cleanup_api_key=os.environ.get("ARGUS_ONECLI_CLEANUP_API_KEY")
+            or None,
+            onecli_cleanup_dry_run=os.environ.get("ARGUS_ONECLI_CLEANUP_DRY_RUN")
+            != "false",
+            onecli_cleanup_interval_s=float(
+                os.environ.get("ARGUS_ONECLI_CLEANUP_INTERVAL_S", 3600)
+            ),
             workspace_cleanup_enabled=os.environ.get("ARGUS_WORKSPACE_CLEANUP_ENABLED")
             == "true",
             workspace_cleanup_dry_run=os.environ.get("ARGUS_WORKSPACE_CLEANUP_DRY_RUN")

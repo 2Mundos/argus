@@ -44,7 +44,9 @@ Related: [worker lifecycle](worker-lifecycle.spec.md), [knowledge](knowledge.spe
    set at create and never updated. Orchestrator/admin creates → `orchestrator`.
    Worker creates (always a subtask of a held task) → `worker`. Parent trust does
    not propagate upward; a worker child under an orchestrator parent stays
-   `worker`.
+   `worker`. Tasks filed from a routine run's findings are `worker` too
+   ([routines](routines.spec.md) 3.3); only an admin-set `auto` routine files
+   them `ready` without approval.
 5. **Worker children await approval.** Worker-created subtasks force
    `requires_approval` and start in `awaiting_approval`, even if the body asked
    for `requires_approval=false`. Injected child prompts cannot silently become
