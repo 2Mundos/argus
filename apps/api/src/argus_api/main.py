@@ -51,6 +51,7 @@ from argus_api.onboarding import router as onboarding_router
 from argus_api.ops import LoopStats, ReadinessCache
 from argus_api.ops_routes import probes as probes_router
 from argus_api.ops_routes import router as ops_router
+from argus_api.routines.routes import router as routines_router
 from argus_api.runtime.docker import CliDocker
 from argus_api.runtime.routes import router as runtime_router
 from argus_api.runtime.service import RuntimeManager
@@ -268,6 +269,7 @@ for router in (
     conversations_router,
     ops_router,
     runtime_router,
+    routines_router,
 ):
     api.include_router(router)
 app.include_router(api)

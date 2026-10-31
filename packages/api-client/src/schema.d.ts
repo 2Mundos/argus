@@ -1843,6 +1843,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{slug}/routines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Routines */
+        get: operations["list_routines_api_projects__slug__routines_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{slug}/routines/{routine}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Routine
+         * @description Create or replace. `findings: auto`, or changing an `auto` routine, is admin only.
+         */
+        put: operations["put_routine_api_projects__slug__routines__routine__put"];
+        post?: never;
+        /**
+         * Delete Routine
+         * @description Remove the routine; its run tasks stay.
+         */
+        delete: operations["delete_routine_api_projects__slug__routines__routine__delete"];
+        options?: never;
+        head?: never;
+        /** Patch Routine */
+        patch: operations["patch_routine_api_projects__slug__routines__routine__patch"];
+        trace?: never;
+    };
     "/api/projects/{slug}/runtime": {
         parameters: {
             query?: never;
@@ -1938,6 +1980,26 @@ export interface paths {
          *     Settings tab when editing a partial `models` override.
          */
         get: operations["get_project_override_api_projects__slug__settings__key__override_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/routines/{routine_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Routine
+         * @description The routine, its next three slots and its most recent run tasks.
+         */
+        get: operations["get_routine_api_routines__routine_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7529,6 +7591,111 @@ export interface components {
              */
             touches_sensitive?: boolean;
         };
+        /** Routine */
+        Routine: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Findings
+             * @enum {string}
+             */
+            findings: "off" | "approval" | "auto";
+            /** Id */
+            id: string;
+            /** Last Run At */
+            last_run_at: string | null;
+            /**
+             * Last Runs
+             * @default []
+             */
+            last_runs?: components["schemas"]["RoutineRun"][];
+            /** Last Task Id */
+            last_task_id: string | null;
+            /** Next Run At */
+            next_run_at: string | null;
+            /** Next Slots */
+            next_slots: string[];
+            /** Project */
+            project: string;
+            /** Schedule */
+            schedule: string;
+            /** Slug */
+            slug: string;
+            /** Template */
+            template: {
+                [key: string]: unknown;
+            };
+            /** Timezone */
+            timezone: string;
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** RoutineEnabled */
+        RoutineEnabled: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** RoutineRun */
+        RoutineRun: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            state: components["schemas"]["TaskState"];
+            /** Task Id */
+            task_id: string;
+        };
+        /**
+         * RoutineWrite
+         * @description `PUT /projects/{slug}/routines/{routine}`: the whole routine. `project` and
+         *     `slug` are optional echoes of the path and must match it.
+         */
+        RoutineWrite: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled?: boolean;
+            /**
+             * Findings
+             * @default approval
+             * @enum {string}
+             */
+            findings?: "off" | "approval" | "auto";
+            /** Project */
+            project?: string | null;
+            /** Schedule */
+            schedule: string;
+            /** Slug */
+            slug?: string | null;
+            /**
+             * Template
+             * @default {}
+             */
+            template?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Timezone
+             * @default UTC
+             */
+            timezone?: string;
+            /** Title */
+            title: string;
+        };
         /**
          * RoutingOptions
          * @description OpenRouter provider routing. A list or a comma-separated string is accepted.
@@ -12775,6 +12942,139 @@ export interface operations {
             };
         };
     };
+    list_routines_api_projects__slug__routines_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Routine"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_routine_api_projects__slug__routines__routine__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                routine: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutineWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Routine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_routine_api_projects__slug__routines__routine__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                routine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_routine_api_projects__slug__routines__routine__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                routine: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutineEnabled"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Routine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_project_runtime_api_projects__slug__runtime_get: {
         parameters: {
             query?: never;
@@ -12992,6 +13292,37 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_routine_api_routines__routine_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                routine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Routine"];
                 };
             };
             /** @description Validation Error */

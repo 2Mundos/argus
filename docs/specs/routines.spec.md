@@ -92,6 +92,16 @@ A run reports findings in its result data:
 - Dashboard: a Routines section per project, listing schedule, next run, last run
   with its task state, findings filed, and enable/run-now actions.
 
+Status: the table (3.1) and the management routes and MCP tools above ship
+(migration `0062_routines.sql`). Run now, the scheduler (3.2), finding intake
+(3.3) and the dashboard section do not yet. As shipped: a worker reads routines
+only in projects where it holds a lease, like other project reads; only an admin
+may set `findings: auto`, replace an `auto` routine or re-enable one, while
+managers may disable or delete it; the body's `project`/`slug`, if given, must
+match the path; a template's title defaults to the routine's; `next_run_at` is
+null while disabled, but the three-slot preview is always computed;
+`DELETE` records `routine.deleted`.
+
 ## 3.5 Failure
 
 A failed run is a failed task, retried by the normal rules. After 3 consecutive

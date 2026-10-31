@@ -1596,6 +1596,68 @@ async def reset_setting(ctx: Context, key: str, project: str | None = None) -> d
     return await _call(ctx, "DELETE", path)
 
 
+# -- routines ---------------------------------------------------------------------------
+
+
+@tool(ANYONE)
+async def list_routines(ctx: Context, project: str) -> list[dict]:
+    """A project's routines: schedule, timezone, template, findings mode, `enabled`,
+    `next_run_at` and `next_slots` (the next three slots, UTC, enabled or not)."""
+    return await _call(ctx, "GET", f"/projects/{project}/routines")
+
+
+@tool(ANYONE)
+async def get_routine(ctx: Context, routine_id: str) -> dict:
+    """One routine with its next three slots and its most recent run tasks."""
+    return await _call(ctx, "GET", f"/routines/{routine_id}")
+
+
+@tool(MANAGERS)
+async def upsert_routine(
+    ctx: Context,
+    project: str,
+    slug: str,
+    title: str,
+    schedule: str,
+    template: dict | None = None,
+    timezone: str = "UTC",
+    findings: Literal["off", "approval", "auto"] = "approval",
+    enabled: bool = True,
+) -> dict:
+    """Create or replace a routine. `schedule` is 5-field cron or @hourly, @daily,
+    @weekly in the IANA `timezone`. `template` holds task fields (kind, title, spec,
+    acceptance, input, required_capabilities, priority, review, difficulty,
+    harness_model, executor_model), checked with the task create rules; a bad one is
+    a 422 on save. `findings: auto`, or changing an auto routine, is admin only."""
+    return await _call(
+        ctx,
+        "PUT",
+        f"/projects/{project}/routines/{slug}",
+        json={
+            "title": title,
+            "schedule": schedule,
+            "timezone": timezone,
+            "template": template or {},
+            "findings": findings,
+            "enabled": enabled,
+        },
+    )
+
+
+@tool(MANAGERS)
+async def set_routine_enabled(
+    ctx: Context, project: str, slug: str, enabled: bool
+) -> dict:
+    """Enable or disable a routine. Enabling recomputes `next_run_at` from now;
+    enabling an `auto` routine is admin only."""
+    return await _call(
+        ctx,
+        "PATCH",
+        f"/projects/{project}/routines/{slug}",
+        json={"enabled": enabled},
+    )
+
+
 # -- preferred models -------------------------------------------------------------------
 
 
