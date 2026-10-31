@@ -5,6 +5,7 @@ import asyncio
 from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx2 as httpx
 import pytest
@@ -335,7 +336,7 @@ async def test_github_pr_reads_check_runs_and_bearer() -> None:
     assert snap.required_contexts == ["build"]
     assert snap.checks[0].required is True
     assert snap.forge_reviews_for_head == 1
-    assert any("api.github.com" in u for u in seen)
+    assert any(urlparse(u).hostname == "api.github.com" for u in seen)
     assert any(u.endswith("/pulls/3") for u in seen)
 
 
