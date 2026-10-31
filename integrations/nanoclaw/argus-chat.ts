@@ -153,7 +153,19 @@ export type ActiveChatTurn = {
   conv: ChatConversation;
   /** The first inbound carried a history seed (the session was rebuilt). */
   seeded: boolean;
+  /** When the turn was first injected (ms since epoch). */
+  startedAt: number;
+  /** What was injected, kept so the turn can be sent again once (`resend`). */
+  inbound: ChatInbound | null;
+  resent: boolean;
   done: () => void;
+};
+
+type ChatInbound = {
+  id: string;
+  kind: "chat";
+  timestamp: string;
+  content: { text: string; sender: string; senderId: string };
 };
 
 /**
@@ -229,6 +241,9 @@ export function createChatLoop(deps: ChatLoopDeps) {
       kind: conv.kind,
       conv,
       seeded: false,
+      startedAt: Date.now(),
+      inbound: null,
+      resent: false,
       done: () => {
         clearTimeout(timer);
         resolveDone();
@@ -242,7 +257,7 @@ export function createChatLoop(deps: ChatLoopDeps) {
       const ts = claim.message.created_at
         ? new Date(claim.message.created_at).toISOString()
         : new Date().toISOString();
-      await deps.onInbound(deps.platformId, thread, {
+      turn.inbound = {
         id: `argus-chat-${claim.message.id}`,
         kind: "chat",
         timestamp: ts,
@@ -251,7 +266,8 @@ export function createChatLoop(deps: ChatLoopDeps) {
           sender: "argus",
           senderId: `argus:${deps.platformId}`,
         },
-      });
+      };
+      await deps.onInbound(deps.platformId, thread, turn.inbound);
       if (seed) {
         turn.seeded = true;
         seeded.add(conv.id);
@@ -369,6 +385,24 @@ export function createChatLoop(deps: ChatLoopDeps) {
     return true;
   }
 
+  /**
+   * Inject an in-flight turn again, once, with `note` before it (after an account
+   * switch). False when there is no such turn or it was already sent again.
+   */
+  async function resend(threadId: string | null, note: string): Promise<boolean> {
+    const conversationId = parseChatThread(threadId);
+    const turn = conversationId ? active.get(conversationId) : undefined;
+    if (!turn?.inbound || turn.resent) return false;
+    turn.resent = true;
+    const first = turn.inbound;
+    await deps.onInbound(deps.platformId, chatThread(turn.conversationId), {
+      ...first,
+      id: `${first.id}-r1`,
+      content: { ...first.content, text: `${note}\n\n${first.content.text}` },
+    });
+    return true;
+  }
+
   function stop(): void {
     abort?.abort();
     for (const t of active.values()) t.done();
@@ -379,6 +413,7 @@ export function createChatLoop(deps: ChatLoopDeps) {
     loop,
     stop,
     deliverChat,
+    resend,
     active,
     inFlightChatTurns,
   };

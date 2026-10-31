@@ -47,8 +47,9 @@ isolation or sandbox/TLS restrictions.
   `providers` field is accepted and ignored. Every credential-bearing lease is
   bound to `task_id` and `attempt` and requires that task to be currently claimed
   by the caller with an unexpired lease. The one exception is the internal
-  orchestrator's engine lease: an agent of the system pool may omit both (only
-  for `role: engine`), since it runs conversations, not tasks
+  orchestrator's engine: an agent of the system pool may omit both (only for
+  `role: engine`) on the lease, `exhausted` and `auth-rejected`, since it runs
+  conversations, not tasks
   ([internal orchestrator](internal-orchestrator.spec.md) 3.1); any other caller
   gets `422`. NanoClaw claims first, then leases and
   applies the engine credential; it does not fetch credentials while idle. An

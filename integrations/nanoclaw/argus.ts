@@ -67,6 +67,7 @@ import {
 import { CHANGES_RELAY_FILE, createChangesRelay } from "./argus-changes-relay.js";
 import {
   type ChatTurnUsage,
+  chatThread,
   createChatLoop,
   DEFAULT_MAX_CONCURRENT_TURNS,
   parseChatThread,
@@ -164,6 +165,24 @@ const CLAIM_WAIT_S = 20;
 const MAX_PAGE_CHARS = 4000;
 const MAX_PAGES_INLINED = 3;
 const MAX_RESENDS = 3; // account switches for one attempt before giving up
+
+/** Before a chat turn sent again on another account (internal orchestrator spec 3.1). */
+const SWITCH_NOTE =
+  "[Argus] The previous run hit a provider limit and the account was switched. Please answer this message.";
+
+const PROVIDER_NAMES: Record<string, string> = { anthropic: "Claude", openai: "OpenAI" };
+
+/** The chat reply when no account can serve the orchestrator. */
+export function noAccountReply(earliestReset: string | null): string {
+  const when = earliestReset ? ` The earliest reset is ${earliestReset}.` : "";
+  return `No account can serve the orchestrator right now: every one is at its limit.${when} Chat resumes on its own once an account is back; send this message again then.`;
+}
+
+/** The chat reply when the provider rejected the orchestrator account's credential. */
+export function authRejectedReply(held: { name: string; provider: string }): string {
+  const provider = PROVIDER_NAMES[held.provider] ?? held.provider;
+  return `${provider} rejected the credential of account "${held.name}". An admin should sign it in again under Accounts, then send this message again.`;
+}
 const REBALANCE_MS = 60_000; // task-bound re-evaluation for priority recovery
 const RUNTIME_VERIFY_MS = 120_000; // how long to look for the session container after injecting a task
 const RECYCLE_TIMEOUT_MS = 30_000; // wait for the old container to exit after an account rotation
@@ -342,6 +361,12 @@ export interface ArgusConfig {
      * provider name. Resolves true when the harness changed.
      */
     selectEngine?: (engine: string) => Promise<boolean>;
+    /**
+     * The internal orchestrator's harness model (internal orchestrator spec 3.1):
+     * `model` when its lease carries one (`orchestrator.model`), else the host
+     * policy's default for `engine` on `provider`. Resolves true when it changed.
+     */
+    selectModel?: (engine: string, provider: string, model: string | null) => Promise<boolean>;
     /**
      * Stop the group's running session containers and resolve only once each has
      * exited, so the next one starts with the stubs of the account just applied.
@@ -1695,6 +1720,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let agentRole: "orchestrator" | "worker" = cfg.role ?? "worker";
   let chat: ReturnType<typeof createChatLoop> | null = null;
   let orchestratorEngineReady = false;
+  let orchestratorLeasing: Promise<void> | null = null;
+  let orchestratorSwitchedAt = 0;
   let lastProgressAt = 0;
   let pendingProgress: { task: Claim; text: string } | null = null;
   let progressTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3004,46 +3031,148 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
    * The internal orchestrator leases its engine like any agent, with no task
    * (internal orchestrator spec 3.1). Until it holds one the chat loop does not
    * claim: an unleased OneCLI agent stays in "all" mode and sends whatever stale
-   * credential wins, which Anthropic answers with 401.
+   * credential wins, which Anthropic answers with 401. Retries with backoff while
+   * no account can serve; one loop at a time.
    */
-  async function leaseOrchestratorEngine(): Promise<void> {
-    const acc = cfg.accounts;
-    if (!acc?.models) {
+  function leaseOrchestratorEngine(): Promise<void> {
+    orchestratorEngineReady = false;
+    orchestratorLeasing ??= (async () => {
+      const acc = cfg.accounts;
+      let backoff = 5_000;
+      while (!stopped) {
+        if (!acc?.models) break;
+        try {
+          await applyOrchestratorLease(acc);
+          break;
+        } catch (err) {
+          log.warn("The orchestrator could not lease an account (will retry)", {
+            message: err instanceof Error ? err.message : String(err),
+          });
+          await sleep(backoff);
+          backoff = Math.min(backoff * 2, 300_000);
+        }
+      }
       orchestratorEngineReady = true;
-      return;
+    })().finally(() => {
+      orchestratorLeasing = null;
+    });
+    return orchestratorLeasing;
+  }
+
+  /**
+   * Lease the orchestrator's engine and make it the only credential, harness and
+   * model its sessions use. Resolves true when running sessions were stopped for a
+   * new harness or model. A lease that cannot be applied is given back.
+   */
+  async function applyOrchestratorLease(
+    acc: NonNullable<ArgusConfig["accounts"]>,
+  ): Promise<boolean> {
+    const lease = (
+      await client.call("POST", "/accounts/lease", {
+        runtime_providers: runtimeProviders("engine"),
+      })
+    ).data as AccountLease;
+    try {
+      const target = await acc.resolveTarget();
+      const { engine } = await applyLeasesDetailed(acc.onecli, target, [lease], cfg.fetch ?? fetch);
+      engineInUse = engine;
+      const harness = (await acc.selectEngine?.(engine)) ?? false;
+      const model = (await acc.selectModel?.(engine, lease.provider, lease.model ?? null)) ?? false;
+      account = { id: lease.account_id, name: lease.name, provider: lease.provider };
+      activeAccountLeases = [lease];
+      log.info("Orchestrator account leased and applied", {
+        account: lease.name,
+        provider: lease.provider,
+        model: lease.model ?? null,
+      });
+      return harness || model;
+    } catch (err) {
+      await client.call("POST", "/accounts/release").catch(() => undefined);
+      throw err;
     }
-    let backoff = 5_000;
-    while (!stopped) {
+  }
+
+  /**
+   * A chat turn's run failed (its failure notice reached `deliver`). A provider limit
+   * exhausts the account, moves to the next and sends the turn again once; with none
+   * left the reply says so and chat waits for an account. A turn that started on an
+   * account since replaced is only sent again. A rejected credential is recorded and
+   * named in the reply. Anything else is replied as it came (spec 3.1).
+   */
+  async function handleChatFailure(
+    threadId: string,
+    text: string,
+    providerFailure: unknown,
+  ): Promise<void> {
+    if (!chat) return;
+    const conversationId = parseChatThread(threadId);
+    const turn = conversationId ? chat.active.get(conversationId) : undefined;
+    const again = (note: string) => chat?.resend(threadId, note) ?? Promise.resolve(false);
+    if (turn && turn.startedAt < orchestratorSwitchedAt && (await again(SWITCH_NOTE))) return;
+    const textual = classifyFailure(text, account?.provider);
+    const f: FailureKind =
+      textual.kind === "failed"
+        ? (classifyProviderFailure(providerFailure, account?.provider) ?? textual)
+        : textual;
+    let reply = text;
+    const acc = cfg.accounts;
+    if (f.kind === "exhausted" && acc?.models && account) {
+      const spent = account;
+      account = null;
+      orchestratorEngineReady = false;
       try {
-        const lease = (
-          await client.call("POST", "/accounts/lease", {
-            runtime_providers: runtimeProviders("engine"),
-          })
-        ).data as AccountLease;
-        const target = await acc.resolveTarget();
-        const { engine } = await applyLeasesDetailed(
-          acc.onecli,
-          target,
-          [lease],
-          cfg.fetch ?? fetch,
-        );
-        engineInUse = engine;
-        await acc.selectEngine?.(engine);
-        orchestratorEngineReady = true;
-        log.info("Orchestrator account leased and applied", {
-          account: lease.name,
-          provider: lease.provider,
+        const { data } = await client.call("POST", `/accounts/${spent.id}/exhausted`, {
+          until: f.until,
+          reason: f.reason,
+          reason_code: f.code ?? "quota_exhausted",
+          reset_status: f.resetStatus ?? (f.until ? "stated" : "absent"),
+          reset_text: f.resetText,
+          source: f.source ?? "notice",
+          role: "engine",
+          runtime_providers: runtimeProviders("engine"),
         });
-        return;
+        log.warn(
+          `account_failover ${JSON.stringify({
+            from: spent.name,
+            to: data.next_account_name ?? null,
+            reason: f.reason,
+            orchestrator: true,
+          })}`,
+        );
+        if (data.next_account_id) {
+          const stoppedSessions = await applyOrchestratorLease(acc);
+          orchestratorSwitchedAt = Date.now();
+          orchestratorEngineReady = true;
+          if (stoppedSessions) {
+            // The other turns' sessions were stopped with the old harness or model.
+            for (const other of [...chat.active.values()]) {
+              if (other.conversationId !== conversationId)
+                await chat.resend(chatThread(other.conversationId), SWITCH_NOTE);
+            }
+          }
+          if (await again(SWITCH_NOTE)) return;
+        } else {
+          reply = noAccountReply(data.earliest_reset ?? null);
+        }
       } catch (err) {
-        await client.call("POST", "/accounts/release").catch(() => undefined);
-        log.warn("The orchestrator could not lease an account (will retry)", {
+        log.warn("The orchestrator could not switch accounts", {
           message: err instanceof Error ? err.message : String(err),
         });
-        await sleep(backoff);
-        backoff = Math.min(backoff * 2, 300_000);
       }
+      if (!orchestratorEngineReady) void leaseOrchestratorEngine();
+    } else if (f.kind === "auth_rejected" && account) {
+      const held = account;
+      await client
+        .call("POST", `/accounts/${held.id}/auth-rejected`, {
+          role: "engine",
+          source: f.source ?? "structured",
+        })
+        .catch((err) =>
+          log.warn("Could not report the account's authentication rejection", { err }),
+        );
+      reply = authRejectedReply(held);
     }
+    await chat.deliverChat(threadId, reply, null, null);
   }
 
   /**
@@ -3764,6 +3893,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         // a task claim, a chat turn has no directive to parse, so plain prose is the answer.
         if (/^\s*PROGRESS\s*:/.test(text)) return undefined;
         const meta = typeof content === "object" ? content : undefined;
+        if (meta?.failureNotice === true) {
+          await handleChatFailure(threadId!, text.trim(), meta.providerFailure);
+          return undefined;
+        }
         const usage = meta?.usage as ChatTurnUsage | undefined;
         const title = typeof meta?.title === "string" ? meta.title : null;
         await chat.deliverChat(threadId, text.trim(), usage ?? null, title);
@@ -3992,6 +4125,30 @@ export function accountsFromEnv(): ArgusConfig["accounts"] {
         }
       }
       return changed;
+    },
+    async selectModel(engine: string, provider: string, model: string | null): Promise<boolean> {
+      const { identifier: groupId } = await resolveTarget();
+      const { getContainerConfig, updateContainerConfigScalars } = await import(
+        "../db/container-configs.js"
+      );
+      const { getSessionsByAgentGroup } = await import("../db/sessions.js");
+      const { killContainer } = await import("../container-runner.js");
+      const pin = model ? { engine, model } : null;
+      const chosen = selectHarnessModel(
+        loadPolicy(),
+        engine,
+        { spec: "", harness_model: pin },
+        provider,
+      ).configured_model;
+      if (!chosen) return false; // no chain for this engine: leave the model as it is
+      const config = await getContainerConfig(groupId);
+      if (!config || config.model === chosen) return false;
+      await updateContainerConfigScalars(groupId, { model: chosen });
+      for (const session of await getSessionsByAgentGroup(groupId)) {
+        if (session.status === "active")
+          killContainer(session.id, "argus: orchestrator model changed");
+      }
+      return true;
     },
     async recycleRuntime(): Promise<void> {
       const { identifier: groupId } = await resolveTarget();

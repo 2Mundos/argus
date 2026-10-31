@@ -818,3 +818,111 @@ def test_only_the_internal_orchestrator_leases_without_a_task(
         "/api/accounts/lease", json={**bare, "role": "executor"}, headers=agent
     )
     assert executor.status_code == 422
+
+
+def _as_internal_orchestrator(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def system_pool(_conn: object, _agent_id: str | None) -> str:
+        return "orchestrator"
+
+    monkeypatch.setattr(account_routes, "agent_system_pool", system_pool)
+
+
+def _account(client: TestClient, name: str, provider: str, priority: int) -> dict:
+    credential = (
+        {"api_key": f"sk-ant-api03-{name}"}
+        if provider == "anthropic"
+        else {"auth_mode": "apikey", "OPENAI_API_KEY": f"sk-proj-{name}"}
+    )
+    res = client.post(
+        "/api/accounts",
+        json={
+            "name": name,
+            "provider": provider,
+            "priority": priority,
+            "credential": credential,
+        },
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+BOTH = {"runtime_providers": ["anthropic", "openai"]}
+
+
+def test_the_internal_orchestrator_fails_over_without_a_task(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """internal-orchestrator.spec.md 3.1: a limit moves it to the next account."""
+    agent = register(client)
+    first = _account(client, "first", "anthropic", 100)
+    _account(client, "second", "anthropic", 90)
+    report = {"reason": QUOTA, **BOTH}
+    refused = client.post(
+        f"/api/accounts/{first['id']}/exhausted", json=report, headers=agent
+    )
+    assert refused.status_code == 422  # a worker must name its claim
+
+    _as_internal_orchestrator(monkeypatch)
+    assert (
+        client.post("/api/accounts/lease", json=BOTH, headers=agent).json()["name"]
+        == "first"
+    )
+    res = client.post(
+        f"/api/accounts/{first['id']}/exhausted", json=report, headers=agent
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["next_account_name"] == "second"
+    assert res.json()["task_blocked"] is False
+    assert (
+        client.post("/api/accounts/lease", json=BOTH, headers=agent).json()["name"]
+        == "second"
+    )
+    events = client.get("/api/events", params={"kind": "account.failover"}).json()
+    failover = next(e for e in events if e["kind"] == "account.failover")
+    assert failover["subject_type"] == "agent"
+    assert failover["data"]["task_id"] is None
+
+    # Nothing left: the earliest reset, and no task to block.
+    accounts = client.get("/api/accounts").json()
+    second_id = next(a["id"] for a in accounts if a["name"] == "second")
+    last = client.post(
+        f"/api/accounts/{second_id}/exhausted", json=report, headers=agent
+    ).json()
+    assert last["next_account_id"] is None and last["task_blocked"] is False
+    rejected = client.post(
+        f"/api/accounts/{second_id}/auth-rejected", json={}, headers=agent
+    )
+    assert rejected.status_code == 409  # released by the exhaustion: not held
+
+
+def test_the_internal_orchestrator_prefers_its_model(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """internal-orchestrator.spec.md 3.1: `orchestrator.model` is a preference."""
+    agent = register(client)
+    _as_internal_orchestrator(monkeypatch)
+    _account(client, "claude-main", "anthropic", 100)
+    codex = _account(client, "codex-main", "openai", 10)
+
+    def lease() -> dict:
+        res = client.post("/api/accounts/lease", json=BOTH, headers=agent)
+        assert res.status_code == 200, res.text
+        return res.json()
+
+    assert (lease()["name"], lease()["model"]) == ("claude-main", None)
+    put = client.put(
+        "/api/settings/orchestrator.model", json={"value": "codex/gpt-5.5-codex"}
+    )
+    assert put.status_code == 200, put.text
+    preferred = lease()
+    assert (preferred["name"], preferred["model"]) == ("codex-main", "gpt-5.5-codex")
+    # The preferred provider cannot serve: the plain ranking, and no model.
+    client.post(
+        f"/api/accounts/{codex['id']}/exhausted",
+        json={"reason": QUOTA, **BOTH},
+        headers=agent,
+    )
+    assert (lease()["name"], lease()["model"]) == ("claude-main", None)
+    # A value that names no harness engine is no preference.
+    client.put("/api/settings/orchestrator.model", json={"value": "gemini/pro"})
+    assert lease()["name"] == "claude-main"

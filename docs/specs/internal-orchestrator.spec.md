@@ -76,6 +76,23 @@ Getting a first account, worker and orchestrator is the
   applies the account to its OneCLI agent (selective mode) before it claims the
   first chat message, and retries with backoff while none is usable, so a turn
   never runs on whatever the vault would inject by default.
+- **Model preference.** `orchestrator.model` is `<engine>/<model>` with a harness
+  engine (`claude`, `codex`). The task-less lease first tries that engine's
+  provider; when none of its accounts can serve, the ordinary ranking applies.
+  A lease on the preferred provider carries `model`, and the channel configures
+  it; otherwise it configures the host model policy's default harness model for
+  the leased engine. Any other value is no preference.
+- **Failover.** A chat turn whose run fails on a provider limit reports the
+  account exhausted with no `task_id` (system pool engine only, like the lease),
+  leases the next account, applies it and sends that turn again once, prefixed
+  with a switch notice; the failure is not posted as the reply. If the switch
+  stopped sessions (a new harness or model), the other turns in flight are sent
+  again too, and a turn that started before the switch is only sent again. With
+  no account left, the reply names the earliest reset and chat waits until a
+  lease succeeds (3.3, offline). The failover event is on the agent, not a task.
+  A rejected credential records `account.auth_rejected` (no task), does not
+  exhaust the account, and the reply names the account so an admin can sign it
+  in again. Any other failure is replied as it came.
 - The skill is loaded at session start from the server's
   `skill://argus-orchestrator/SKILL.md` resource, not baked into the image, so it
   always matches the running server.
