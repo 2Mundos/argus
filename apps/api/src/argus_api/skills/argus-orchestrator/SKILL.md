@@ -109,7 +109,7 @@ the next attempt's spec.
 | You see | Do |
 | --- | --- |
 | `pending` row with `failed_dependencies` | `retry_task` the dependency, or `set_task_dependencies` to drop it. |
-| `failed` task | `get_tasks(view="detail")` for `error`, `get_task_log`; fix the cause (`edit_task` the spec, difficulty or pins), then `retry_task`. |
+| `failed` task | `get_tasks(view="detail")` for `error`, `get_task_log`. `edit_task` is refused on a failed task, and `retry_task` returns it to `ready`, where a claim can follow at once. Read the log first (a retry deletes it). If the spec, difficulty, pins or capabilities need fixing, create a corrected follow-up task instead of retrying. |
 | `blocked` as `awaiting_quota` | `list_accounts` / `refresh_account_quota`; it wakes when an account can serve. Tell a human if every account is exhausted. |
 | `blocked` as `runtime_failed` | `get_project_runtime(project)`; read the `failed` reasons. Fixing it is an admin action. |
 | `claimed` but silent | `get_task_log(id)` and the agent in `list_agents`. To take it back, `release_task(id, reason, attempt)` (no attempt counted). |
@@ -118,6 +118,33 @@ the next attempt's spec.
 `edit_task` only changes what the task's `editable_fields` allow: everything
 while `ready`, `pending` or `awaiting_approval`, only `priority` while
 `blocked`, `claimed` or `in_review`, nothing once finished.
+
+### A task that cannot publish: missing `repository:write`
+
+A task without `repository:write` gets no repository credential, so its push
+fails. Its unpublished work may exist only on the worker that made it: the
+channel checkpoints work only for `repository:write` tasks. Recover without
+giving any worker more access:
+
+1. Read the task with `get_tasks(ids, view="detail")`, and its `editable_fields`.
+   Do not work around a refused edit.
+2. Preserve the work. Do not cancel, recycle or drain the worker that holds it
+   until the work is saved or delivered. Workspace cleanup, once an operator
+   enables it with dry-run off, can remove a terminated worker's workspace after
+   the minimum age. Record the branch, the worker and the attempt in the task's
+   notes or a follow-up spec before any retry: `retry_task` resets the attempt
+   counters and deletes the task log.
+3. Change the requirement only where the state allows it. If the task is
+   `ready`, `pending` or `awaiting_approval`, `edit_task` can add
+   `repository:write` (pass `expected_version`). If it is `failed`, `retry_task`
+   first (it becomes `ready`), then `edit_task`. In `blocked`, `claimed`,
+   `in_review` or any other terminal state, the requirements are fixed: create a
+   follow-up task with `repository:write`, name the original task and its branch
+   in the spec, and do not assume it can reuse that worker's workspace.
+4. Publish only through an authorized host-side path. Ask a human admin to
+   deliver the preserved work with the host's own delivery. Never copy host
+   credentials, tokens or an authenticated remote into a worker, a spec or an
+   `attach_artifact`, and never waive a gate to get past the failure.
 
 ## Creating and routing work
 
@@ -132,7 +159,10 @@ while `ready`, `pending` or `awaiting_approval`, only `priority` while
   the executor and model. Omit it and Argus infers it conservatively.
 - `depends_on` to order tasks; `parent_id` to group subtasks.
 - `knowledge`: page ids the worker should read first (`search_knowledge`).
-- `required_capabilities` only if a pool must provide them.
+- `required_capabilities`: what the task needs from a worker. A worker claims the
+  task only if its capabilities include every entry. Set `repository:write` on
+  any task that checks out, changes, tests or pushes a repository, and leave it
+  empty only for work that needs no repository (see "Repository work").
 - Leave `harness_model`, `executor_model` and `harness_account` out unless
   the goal requires a specific model or account. A pin disables the fallback
   chain, and the task waits if that provider cannot serve.
@@ -156,6 +186,41 @@ inputs and the workers' receipts. Until an operator has installed the current
 NanoClaw channel, recreated the workers and added `task-inputs` to a pool, no
 worker can claim such a task; do not rely on a shared attachment for a retry
 before then.
+
+### Repository work
+
+Three things look alike and are not the same:
+
+- **Pool or agent capabilities** (the pool's configured capabilities, the
+  `ARGUS_CAPABILITIES` of a worker) say what a worker can serve. A pool that
+  advertises `repository:write` does not give every task repository access.
+- **Task `required_capabilities`** say what one task needs. A task with `[]` is
+  claimable by any worker, and NanoClaw takes no repository lease for it: no
+  repository credential is applied, so `git push` and `argus-github-api create`
+  fail for lack of a credential. That is the designed result, not a worker fault.
+- **Forge authentication** is a task-scoped `repository` account lease that
+  NanoClaw takes and applies through OneCLI, and only when the task carries
+  `repository:write`. A preflight then proves the credential for that one
+  repository. A capability string carries no credential; it only turns this
+  lease on.
+
+For a task that works in a repository, set `required_capabilities` to
+`["repository:write"]`. The code checks no other repository capability: there is
+no read-only lease, so a read-only checkout also takes `repository:write`.
+
+| Work | Requirement |
+| --- | --- |
+| Checkout and read | `repository:write` |
+| Code changes, project gates (`make check`) | `repository:write`; the work happens in the task workspace |
+| Commit, push, open or update a PR (`argus-github-api`) | `repository:write` |
+| Shared input files | add `task-inputs` (see the input rules above) |
+
+The coding run goes through `argus-delegate` on the worker and needs no
+capability of its own.
+
+Before you create the task, check two things. The project must have a repository
+configured, or the task blocks with `env_repository_unconfigured`. And the pool
+must advertise every capability the task lists, or no worker claims it.
 
 `route_task` says where a piece of work should run, and `run_local` runs a
 small bounded completion on the local model. Use them for quick, low-risk,
