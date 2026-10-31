@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
-import { type ArgusConfig, createArgusAdapter } from "./argus.js";
+import {
+  type ArgusConfig,
+  authRejectedReply,
+  createArgusAdapter,
+  noAccountReply,
+} from "./argus.js";
 import { OneCliClient } from "./argus-accounts.js";
 import {
   chatThread,
@@ -442,7 +447,10 @@ describe("createChatLoop", () => {
 
 type Call = { method: string; path: string; body: any };
 
-function fakeChatArgus(opts: { leaseFails?: number } = {}) {
+function fakeChatArgus(
+  opts: { leaseFails?: number; accounts?: string[]; exhausted?: Record<string, unknown> } = {},
+) {
+  const accounts = [...(opts.accounts ?? ["a1"])];
   const calls: Call[] = [];
   const queue: any[] = [
     {
@@ -498,16 +506,30 @@ function fakeChatArgus(opts: { leaseFails?: number } = {}) {
       if (opts.leaseFails && opts.leaseFails-- > 0) {
         return new Response(JSON.stringify({ detail: { code: "no_account" } }), { status: 409 });
       }
+      const id = accounts.length > 1 ? accounts.shift()! : accounts[0]!;
       return new Response(
         JSON.stringify({
-          lease_id: "l1",
-          account_id: "a1",
-          name: "claude main",
+          lease_id: `l-${id}`,
+          account_id: id,
+          name: `claude ${id}`,
           provider: "anthropic",
           kind: "api_key",
           role: "engine",
           credential: { api_key: "sk-ant-api03-main" },
         }),
+        { status: 200 },
+      );
+    }
+    if (path.endsWith("/exhausted")) {
+      return new Response(
+        JSON.stringify(
+          opts.exhausted ?? {
+            next_account_id: accounts[0],
+            next_account_name: `claude ${accounts[0]}`,
+            next_provider: "anthropic",
+            task_blocked: false,
+          },
+        ),
         { status: 200 },
       );
     }
@@ -630,5 +652,89 @@ describe("createArgusAdapter orchestrator accounts", () => {
     expect(vault.state.mode).toBe("selective");
     expect(vault.state.secretIds).toHaveLength(1);
     expect(selectEngine).toHaveBeenCalledWith("claude");
+  });
+});
+
+describe("createArgusAdapter orchestrator failures", () => {
+  async function orchestrator(opts: Parameters<typeof fakeChatArgus>[0]) {
+    const fake = fakeChatArgus(opts);
+    const vault = fakeVault();
+    const inbound: any[] = [];
+    const selectModel = vi.fn(async () => false);
+    const adapter = createArgusAdapter({
+      url: "http://argus.test",
+      bootstrapToken: "argus_boot_x",
+      capabilities: [],
+      name: "orch",
+      fetch: fake.fetchImpl,
+      claimWaitS: 1,
+      accounts: {
+        models: true,
+        onecli: vault.onecli,
+        resolveTarget: async () => ({ identifier: "g", name: "orch" }),
+        selectEngine: async () => false,
+        selectModel,
+      },
+    } as ArgusConfig);
+    live.push(adapter);
+    await adapter.setup({
+      onInbound: async (_p: string, _t: string | null, m: any) => void inbound.push(m),
+      onInboundEvent: vi.fn(),
+      onMetadata: vi.fn(),
+      onAction: vi.fn(),
+    } as unknown as ChannelSetup);
+    // The chat loop looks again a second after the account is applied.
+    await vi.waitFor(() => expect(inbound.length).toBe(1), { timeout: 5_000 });
+    const fail = (providerFailure: unknown) =>
+      adapter.deliver!("local", chatThread("c1"), {
+        content: {
+          text: "The agent run failed. Check the logs for details.",
+          failureNotice: true,
+          providerFailure,
+        },
+      } as any);
+    const replies = () =>
+      fake.calls.filter((c) => c.method === "POST" && c.path === "/agents/me/chat/c1");
+    return { fake, inbound, fail, replies, selectModel };
+  }
+
+  const LIMIT = { provider: "claude", kind: "rate_limit", resets_at: "2099-01-01T00:00:00Z" };
+
+  it("exhausts the account, switches and sends the turn again", async () => {
+    const h = await orchestrator({ accounts: ["a1", "a2"] });
+    await h.fail(LIMIT);
+    const exhausted = h.fake.calls.find((c) => c.path === "/accounts/a1/exhausted");
+    expect(exhausted?.body).toMatchObject({ role: "engine", reason_code: "quota_exhausted" });
+    expect(exhausted?.body.task_id).toBeUndefined();
+    expect(h.fake.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(2);
+    expect(h.inbound).toHaveLength(2);
+    expect(h.inbound[1].id).toBe(`${h.inbound[0].id}-r1`);
+    expect(h.inbound[1].content.text).toContain("account was switched");
+    expect(h.inbound[1].content.text).toContain("Plan the rollout");
+    expect(h.replies()).toHaveLength(0); // the failure is not the answer
+    expect(h.selectModel).toHaveBeenLastCalledWith("claude", "anthropic", null);
+
+    // A second failure of the same turn is not sent a third time.
+    await h.fail(LIMIT);
+    expect(h.inbound).toHaveLength(2);
+  });
+
+  it("replies with the earliest reset when no account is left", async () => {
+    const h = await orchestrator({
+      exhausted: { next_account_id: null, earliest_reset: "2099-01-01T00:00:00Z" },
+    });
+    await h.fail(LIMIT);
+    expect(h.replies().at(-1)?.body.body).toBe(noAccountReply("2099-01-01T00:00:00Z"));
+    expect(h.inbound).toHaveLength(1);
+  });
+
+  it("records a rejected credential and names the account", async () => {
+    const h = await orchestrator({});
+    await h.fail({ provider: "claude", kind: "auth_expired" });
+    const rejected = h.fake.calls.find((c) => c.path === "/accounts/a1/auth-rejected");
+    expect(rejected?.body).toEqual({ role: "engine", source: "structured" });
+    expect(h.replies().at(-1)?.body.body).toBe(
+      authRejectedReply({ name: "claude a1", provider: "anthropic" }),
+    );
   });
 });

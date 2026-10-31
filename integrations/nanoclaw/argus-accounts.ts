@@ -32,6 +32,8 @@ export interface AccountLease {
   role?: "engine" | "executor" | "repository";
   /** Custom accounts: where and how to call for this role (no secret). */
   settings?: CustomLeaseSettings | null;
+  /** Internal orchestrator: the `orchestrator.model` harness model, on its provider. */
+  model?: string | null;
 }
 
 /** How a provider's account becomes a OneCLI secret. */

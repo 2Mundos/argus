@@ -439,6 +439,9 @@ class AccountLease(BaseModel):
     credential: dict[str, Any]
     # `custom` accounts: base URL, model and `provider` block for this role.
     settings: LeaseSettings | None = None
+    # Internal orchestrator only: the harness model `orchestrator.model` names, set
+    # when this lease is on that model's provider (internal orchestrator spec 3.1).
+    model: str | None = None
 
 
 class ExhaustedReport(BaseModel):
@@ -454,8 +457,9 @@ class ExhaustedReport(BaseModel):
     # Which of the agent's leases hit the limit (it may hold one account twice).
     role: LeaseRole = "engine"
     # The task the agent was working on: blocked as `awaiting_quota` if nothing is left.
-    task_id: str
-    attempt: int = Field(ge=1)
+    # Both absent only for the internal orchestrator's engine (internal orchestrator 3.1).
+    task_id: str | None = None
+    attempt: int | None = Field(default=None, ge=1)
     # Provenance of the report (account selection 3.6). All optional: omitted, the
     # server classifies `reason` itself.
     source: Literal["structured", "notice", "log"] | None = None
@@ -466,6 +470,8 @@ class ExhaustedReport(BaseModel):
     @model_validator(mode="after")
     def _reset_status_matches_until(self) -> "ExhaustedReport":
         """`stated` is a zoned time; `absent` and `ambiguous` carry none."""
+        if (self.task_id is None) != (self.attempt is None):
+            raise ValueError("give both task_id and attempt, or neither")
         if self.reset_status == "stated":
             if self.until is None or self.until.tzinfo is None:
                 raise ValueError("reset_status 'stated' needs a time with a zone")
@@ -480,10 +486,17 @@ class AuthRejectedReport(BaseModel):
     Does not exhaust the account or change its state; only writes `account.auth_rejected`.
     """
 
-    task_id: str
-    attempt: int = Field(ge=1)
+    # Both absent only for the internal orchestrator's engine (internal orchestrator 3.1).
+    task_id: str | None = None
+    attempt: int | None = Field(default=None, ge=1)
     role: LeaseRole = "engine"
     source: Literal["structured", "notice", "log"] | None = None
+
+    @model_validator(mode="after")
+    def claim_given_whole(self) -> "AuthRejectedReport":
+        if (self.task_id is None) != (self.attempt is None):
+            raise ValueError("give both task_id and attempt, or neither")
+        return self
 
 
 class AwaitingQuotaRequest(BaseModel):

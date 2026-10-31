@@ -3113,6 +3113,8 @@ export interface components {
             kind: components["schemas"]["AccountKind"];
             /** Lease Id */
             lease_id: string;
+            /** Model */
+            model?: string | null;
             /** Name */
             name: string;
             /** Provider */
@@ -3643,7 +3645,7 @@ export interface components {
          */
         AuthRejectedReport: {
             /** Attempt */
-            attempt: number;
+            attempt?: number | null;
             /**
              * Role
              * @default engine
@@ -3653,7 +3655,7 @@ export interface components {
             /** Source */
             source?: ("structured" | "notice" | "log") | null;
             /** Task Id */
-            task_id: string;
+            task_id?: string | null;
         };
         /**
          * AwaitingQuotaRequest
@@ -5374,7 +5376,7 @@ export interface components {
          */
         ExhaustedReport: {
             /** Attempt */
-            attempt: number;
+            attempt?: number | null;
             /**
              * Reason
              * @default
@@ -5397,7 +5399,7 @@ export interface components {
             /** Source */
             source?: ("structured" | "notice" | "log") | null;
             /** Task Id */
-            task_id: string;
+            task_id?: string | null;
             /** Until */
             until?: string | null;
         };
