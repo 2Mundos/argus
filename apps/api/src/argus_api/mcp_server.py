@@ -55,7 +55,9 @@ returns fallback metadata; call lease_account to receive the next credential.
 
 As an orchestrator, work the inbox: get_inbox lists what waits (blocked, in review,
 awaiting approval) with decision and artifact ids; list_decisions(view="detail") or
-get_decision reads the questions; list_artifacts, verify_artifact and read_artifact
+get_decision reads the questions (get_inbox(view="actionable") gives, per row,
+who may answer, what each answer does, what it holds up and labelled evidence: hints
+only, nothing is executed); list_artifacts, verify_artifact and read_artifact
 check evidence; answer_decision or answer_decisions acts (give each answer a
 request_id, so retries are safe); get_tasks(ids) reads the effects back. edit_task changes a task's title, spec,
 acceptance, priority, capabilities, pins or dependencies (pass its `version`). Lists
@@ -1050,7 +1052,8 @@ async def get_inbox(
     decision_kinds: list[DecisionKindArg] | None = None,
     blocking_only: bool = False,
     order: Literal["age", "impact"] = "age",
-    view: ViewArg = "summary",
+    view: Literal["summary", "detail", "actionable"] = "summary",
+    forge: bool = False,
     limit: int = 25,
     cursor: str | None = None,
 ) -> dict:
@@ -1061,7 +1064,14 @@ async def get_inbox(
     has `blocks` (the tasks it holds up) and `impact`; `groups` count open decisions,
     oldest age and stalled tasks per project/task. blocking_only=true keeps rows that
     block a task. Totals by state and decision kind cover every match. view=detail
-    adds each task and decision in full."""
+    adds each task and decision in full. view=actionable adds `actionable` per row
+    (at most 25 rows, 64 KB): the question and spec excerpt (cut text names its
+    full read), authority (`caller_may_attempt` is not a grant; the real call is
+    re-checked), each option's effect, direct/transitive impact, checklist, WIP,
+    transfer and delivery evidence with `source` (worker_claim is unverified) and
+    `status`, and a `next` hint Argus never executes. forge=true adds up to 5 live
+    PR reads, after `snapshot_at` and outside it (`external`); a stored state they
+    contradict is `conflict`."""
     return await _call(
         ctx,
         "GET",
@@ -1073,6 +1083,7 @@ async def get_inbox(
             "blocking_only": blocking_only,
             "order": order,
             "view": view,
+            "forge": forge or None,
             "limit": limit,
             "cursor": cursor,
         },
@@ -1381,6 +1392,27 @@ async def list_decisions(
 async def get_decision(ctx: Context, decision_id: str) -> dict:
     """Read one decision in full: question, options, payload, answer."""
     return await _call(ctx, "GET", f"/decisions/{decision_id}")
+
+
+@tool(MANAGERS)
+async def preview_decision(
+    ctx: Context,
+    decision_id: str,
+    choice: str | None = None,
+    text: str = "",
+    request_id: str | None = None,
+) -> dict:
+    """See what answering would do, before you answer: whether you may, whether the
+    choice is valid, the task transition and side effects, and stored observations
+    that contradict the decision's premise (for example a PR head that moved). Read-only
+    and advisory: it authorizes and executes nothing, and makes no live forge call. A
+    snapshot; answer_decision still checks everything itself."""
+    return await _call(
+        ctx,
+        "GET",
+        f"/decisions/{decision_id}/preview",
+        params={"choice": choice, "text": text, "request_id": request_id},
+    )
 
 
 @tool(MANAGERS)

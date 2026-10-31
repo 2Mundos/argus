@@ -901,6 +901,417 @@
         "title": "AccountsSummary",
         "type": "object"
       },
+      "Actionable": {
+        "properties": {
+          "authority": {
+            "$ref": "#/components/schemas/Authority"
+          },
+          "checklist": {
+            "$ref": "#/components/schemas/Checklist"
+          },
+          "ci": {
+            "$ref": "#/components/schemas/Evidence"
+          },
+          "decision_state_changed": {
+            "default": false,
+            "title": "Decision State Changed",
+            "type": "boolean"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/DeliveryEvidence"
+          },
+          "effects": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Effect"
+                },
+                "type": "array"
+              },
+              {
+                "const": "unknown",
+                "type": "string"
+              }
+            ],
+            "title": "Effects"
+          },
+          "impact": {
+            "$ref": "#/components/schemas/Impact"
+          },
+          "next": {
+            "$ref": "#/components/schemas/NextAction"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spec_excerpt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transfer": {
+            "$ref": "#/components/schemas/Evidence"
+          },
+          "wip": {
+            "$ref": "#/components/schemas/Evidence"
+          }
+        },
+        "required": [
+          "question",
+          "spec_excerpt",
+          "options",
+          "authority",
+          "effects",
+          "next",
+          "impact",
+          "checklist",
+          "wip",
+          "transfer",
+          "delivery",
+          "ci"
+        ],
+        "title": "Actionable",
+        "type": "object"
+      },
+      "ActionableInboxItem": {
+        "properties": {
+          "actionable": {
+            "$ref": "#/components/schemas/Actionable"
+          },
+          "age_s": {
+            "title": "Age S",
+            "type": "integer"
+          },
+          "artifact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Artifact Ids",
+            "type": "array"
+          },
+          "attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Audience"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "blocks": {
+            "items": {
+              "$ref": "#/components/schemas/BlockedTask"
+            },
+            "title": "Blocks",
+            "type": "array"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
+          },
+          "decision_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failed_dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failed Dependencies",
+            "type": "array"
+          },
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "impact": {
+            "title": "Impact",
+            "type": "integer"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "last_signal_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Signal At"
+          },
+          "last_signal_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Signal Source"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "stall_cause": {
+            "anyOf": [
+              {
+                "enum": [
+                  "workspace_missing",
+                  "session_gone",
+                  "silent_delegate_active",
+                  "no_progress",
+                  "paused_disk",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stall Cause"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_type": {
+            "title": "Subject Type",
+            "type": "string"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "subject_type",
+          "subject_id",
+          "title",
+          "project",
+          "state",
+          "kind",
+          "attempt",
+          "version",
+          "decision_id",
+          "decision_kind",
+          "audience",
+          "age_s",
+          "group",
+          "blocks",
+          "impact",
+          "artifact_ids",
+          "failed_dependencies",
+          "actionable"
+        ],
+        "title": "ActionableInboxItem",
+        "type": "object"
+      },
+      "ActionableInboxPage": {
+        "properties": {
+          "authority_note": {
+            "default": "Hints only: Argus executes nothing from this view. answer_decision, task actions and reviews re-check scope, audience, state and options on the call.",
+            "title": "Authority Note",
+            "type": "string"
+          },
+          "external": {
+            "$ref": "#/components/schemas/ExternalReads"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/InboxGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActionableInboxItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "omitted": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Omitted",
+            "type": "array"
+          },
+          "snapshot_at": {
+            "format": "date-time",
+            "title": "Snapshot At",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "totals_by_decision_kind": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Totals By Decision Kind",
+            "type": "object"
+          },
+          "totals_by_state": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Totals By State",
+            "type": "object"
+          }
+        },
+        "required": [
+          "total",
+          "has_more",
+          "next_cursor",
+          "omitted",
+          "items",
+          "groups",
+          "totals_by_state",
+          "totals_by_decision_kind",
+          "snapshot_at",
+          "external"
+        ],
+        "title": "ActionableInboxPage",
+        "type": "object"
+      },
       "AdminToken": {
         "properties": {
           "created_at": {
@@ -2218,6 +2629,47 @@
         "title": "AuthRejectedReport",
         "type": "object"
       },
+      "Authority": {
+        "properties": {
+          "answerable_by": {
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            },
+            "title": "Answerable By",
+            "type": "array"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Audience"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "caller_may_attempt": {
+            "title": "Caller May Attempt",
+            "type": "boolean"
+          },
+          "caller_role": {
+            "$ref": "#/components/schemas/Scope"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "audience",
+          "answerable_by",
+          "caller_role",
+          "caller_may_attempt",
+          "reason"
+        ],
+        "title": "Authority",
+        "type": "object"
+      },
       "AwaitingQuotaRequest": {
         "description": "An agent with no usable account asks for the work it cannot claim to wait.",
         "properties": {
@@ -2944,6 +3396,47 @@
         ],
         "title": "CheckState",
         "type": "string"
+      },
+      "Checklist": {
+        "properties": {
+          "omitted": {
+            "title": "Omitted",
+            "type": "integer"
+          },
+          "pending": {
+            "items": {
+              "$ref": "#/components/schemas/PendingItem"
+            },
+            "title": "Pending",
+            "type": "array"
+          },
+          "pending_count": {
+            "title": "Pending Count",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "structured",
+              "unstructured",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state",
+          "total",
+          "pending_count",
+          "pending",
+          "omitted"
+        ],
+        "title": "Checklist",
+        "type": "object"
       },
       "ChecklistItem": {
         "additionalProperties": false,
@@ -5557,6 +6050,74 @@
         "title": "DecisionPage",
         "type": "object"
       },
+      "DecisionPreview": {
+        "properties": {
+          "advisory": {
+            "$ref": "#/components/schemas/PreviewAdvisory"
+          },
+          "answer_outcome": {
+            "$ref": "#/components/schemas/PreviewAnswerOutcome"
+          },
+          "authorization": {
+            "$ref": "#/components/schemas/PreviewAuthorization"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/PreviewDecisionFacts"
+          },
+          "premise_checks": {
+            "$ref": "#/components/schemas/PreviewPremiseChecks"
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/PreviewProposal"
+          },
+          "question": {
+            "$ref": "#/components/schemas/PreviewQuestionFacts"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/PreviewSnapshot"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewTaskFacts"
+              },
+              {
+                "const": "unknown",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
+          },
+          "transition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewTransition"
+              },
+              {
+                "const": "unknown",
+                "type": "string"
+              }
+            ],
+            "title": "Transition"
+          }
+        },
+        "required": [
+          "snapshot",
+          "decision",
+          "question",
+          "proposal",
+          "authorization",
+          "answer_outcome",
+          "transition",
+          "task",
+          "premise_checks"
+        ],
+        "title": "DecisionPreview",
+        "type": "object"
+      },
       "DecisionState": {
         "enum": [
           "open",
@@ -6091,6 +6652,57 @@
         "title": "DeliveryChecklist",
         "type": "object"
       },
+      "DeliveryEvidence": {
+        "properties": {
+          "flags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Flags",
+            "type": "array"
+          },
+          "headline": {
+            "$ref": "#/components/schemas/Evidence"
+          },
+          "live": {
+            "$ref": "#/components/schemas/Evidence"
+          },
+          "pr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr"
+          },
+          "status": {
+            "enum": [
+              "unknown",
+              "stale",
+              "conflict",
+              "fresh"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "stored": {
+            "$ref": "#/components/schemas/Evidence"
+          }
+        },
+        "required": [
+          "status",
+          "pr",
+          "headline",
+          "stored",
+          "live",
+          "flags"
+        ],
+        "title": "DeliveryEvidence",
+        "type": "object"
+      },
       "DeliveryReviewEvidence": {
         "properties": {
           "agentic_finding_count": {
@@ -6510,6 +7122,24 @@
           "mean"
         ],
         "title": "Durations",
+        "type": "object"
+      },
+      "Effect": {
+        "properties": {
+          "choice": {
+            "title": "Choice",
+            "type": "string"
+          },
+          "effect": {
+            "title": "Effect",
+            "type": "string"
+          }
+        },
+        "required": [
+          "choice",
+          "effect"
+        ],
+        "title": "Effect",
         "type": "object"
       },
       "EffectiveContinuation": {
@@ -7092,6 +7722,90 @@
           "timed_out"
         ],
         "title": "EventWait",
+        "type": "object"
+      },
+      "Evidence": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_requested",
+                  "no_reference",
+                  "read_budget",
+                  "timeout",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "worker_claim",
+                  "stored_observation",
+                  "live_forge"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "status": {
+            "enum": [
+              "unknown",
+              "stale",
+              "conflict",
+              "fresh"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "value",
+          "source",
+          "observed_at",
+          "status"
+        ],
+        "title": "Evidence",
         "type": "object"
       },
       "Execution": {
@@ -7745,6 +8459,71 @@
           "runtime_providers"
         ],
         "title": "ExhaustedReport",
+        "type": "object"
+      },
+      "ExternalReads": {
+        "properties": {
+          "budget_s": {
+            "title": "Budget S",
+            "type": "number"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "in_snapshot": {
+            "const": false,
+            "default": false,
+            "title": "In Snapshot",
+            "type": "boolean"
+          },
+          "max_reads": {
+            "title": "Max Reads",
+            "type": "integer"
+          },
+          "reads": {
+            "title": "Reads",
+            "type": "integer"
+          },
+          "requested": {
+            "title": "Requested",
+            "type": "boolean"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "timed_out": {
+            "title": "Timed Out",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requested",
+          "started_at",
+          "finished_at",
+          "budget_s",
+          "max_reads",
+          "reads",
+          "timed_out"
+        ],
+        "title": "ExternalReads",
         "type": "object"
       },
       "FactOrigin": {
@@ -8513,6 +9292,48 @@
           "source"
         ],
         "title": "ImageChoice",
+        "type": "object"
+      },
+      "Impact": {
+        "properties": {
+          "direct": {
+            "$ref": "#/components/schemas/ImpactList"
+          },
+          "transitive": {
+            "$ref": "#/components/schemas/ImpactList"
+          }
+        },
+        "required": [
+          "direct",
+          "transitive"
+        ],
+        "title": "Impact",
+        "type": "object"
+      },
+      "ImpactList": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BlockedTask"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "omitted": {
+            "title": "Omitted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "items",
+          "omitted"
+        ],
+        "title": "ImpactList",
         "type": "object"
       },
       "InboxGroup": {
@@ -11223,6 +12044,41 @@
         "title": "NanoclawOptions",
         "type": "object"
       },
+      "NextAction": {
+        "properties": {
+          "action": {
+            "enum": [
+              "answer_decision",
+              "escalate_to_human",
+              "unblock_task",
+              "retry_dependency",
+              "inspect_stall",
+              "reread",
+              "none"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "args": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Args",
+            "type": "object"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "args",
+          "reason"
+        ],
+        "title": "NextAction",
+        "type": "object"
+      },
       "NodeOption": {
         "properties": {
           "available": {
@@ -11805,6 +12661,38 @@
         ],
         "title": "PageState",
         "type": "string"
+      },
+      "PendingItem": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "worker_claim",
+              "stored_observation",
+              "live_forge"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ItemStatus"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "status",
+          "source"
+        ],
+        "title": "PendingItem",
+        "type": "object"
       },
       "Pool": {
         "properties": {
@@ -12608,6 +13496,625 @@
           "platform"
         ],
         "title": "PrepareRequest",
+        "type": "object"
+      },
+      "PreviewAdvisory": {
+        "properties": {
+          "authorizes": {
+            "const": false,
+            "default": false,
+            "title": "Authorizes",
+            "type": "boolean"
+          },
+          "executes": {
+            "const": false,
+            "default": false,
+            "title": "Executes",
+            "type": "boolean"
+          }
+        },
+        "title": "PreviewAdvisory",
+        "type": "object"
+      },
+      "PreviewAnswerOutcome": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "provenance": {
+            "default": "derived",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "would_apply",
+              "replay",
+              "rejected",
+              "unknown"
+            ],
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "PreviewAnswerOutcome",
+        "type": "object"
+      },
+      "PreviewAuthorization": {
+        "description": "The verdict the answer path would give this caller now; not a grant.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "provenance": {
+            "default": "derived",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "rule": {
+            "title": "Rule",
+            "type": "string"
+          },
+          "would_allow": {
+            "title": "Would Allow",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "would_allow",
+          "rule",
+          "error"
+        ],
+        "title": "PreviewAuthorization",
+        "type": "object"
+      },
+      "PreviewDecisionFacts": {
+        "properties": {
+          "audience": {
+            "title": "Audience",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DecisionKind"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "provenance": {
+            "default": "stored",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "requested_by": {
+            "title": "Requested By",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DecisionState"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_type": {
+            "title": "Subject Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "subject_type",
+          "subject_id",
+          "state",
+          "audience",
+          "options",
+          "requested_by",
+          "decided_by",
+          "created_at",
+          "decided_at",
+          "observed_at"
+        ],
+        "title": "PreviewDecisionFacts",
+        "type": "object"
+      },
+      "PreviewEffect": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "provenance": {
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "detail",
+          "provenance"
+        ],
+        "title": "PreviewEffect",
+        "type": "object"
+      },
+      "PreviewPremiseCheck": {
+        "properties": {
+          "observed": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "premise": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Premise"
+          },
+          "provenance": {
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "recorded": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded"
+          },
+          "status": {
+            "enum": [
+              "match",
+              "stale",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "premise",
+          "recorded",
+          "observed",
+          "observed_at",
+          "status",
+          "provenance"
+        ],
+        "title": "PreviewPremiseCheck",
+        "type": "object"
+      },
+      "PreviewPremiseChecks": {
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/PreviewPremiseCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "live_forge_checked": {
+            "const": false,
+            "default": false,
+            "title": "Live Forge Checked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "checks"
+        ],
+        "title": "PreviewPremiseChecks",
+        "type": "object"
+      },
+      "PreviewProposal": {
+        "properties": {
+          "choice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Choice"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "offered_option": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offered Option"
+          },
+          "provenance": {
+            "default": "derived",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "valid": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "const": "unknown",
+                "type": "string"
+              }
+            ],
+            "title": "Valid"
+          }
+        },
+        "required": [
+          "choice",
+          "text",
+          "request_id",
+          "valid",
+          "error",
+          "offered_option"
+        ],
+        "title": "PreviewProposal",
+        "type": "object"
+      },
+      "PreviewQuestionFacts": {
+        "properties": {
+          "full_length": {
+            "title": "Full Length",
+            "type": "integer"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "provenance": {
+            "default": "stored",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "redacted": {
+            "title": "Redacted",
+            "type": "boolean"
+          },
+          "reference": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Reference",
+            "type": "object"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "reference",
+          "text",
+          "truncated",
+          "full_length",
+          "redacted",
+          "observed_at"
+        ],
+        "title": "PreviewQuestionFacts",
+        "type": "object"
+      },
+      "PreviewSnapshot": {
+        "properties": {
+          "computed_at": {
+            "format": "date-time",
+            "title": "Computed At",
+            "type": "string"
+          },
+          "decision_version": {
+            "title": "Decision Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "computed_at",
+          "decision_version"
+        ],
+        "title": "PreviewSnapshot",
+        "type": "object"
+      },
+      "PreviewTaskFacts": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "attempt_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt Id"
+          },
+          "claimed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed At"
+          },
+          "claimed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed By"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "provenance": {
+            "default": "stored",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "attempt",
+          "attempt_id",
+          "claimed_by",
+          "claimed_at",
+          "version",
+          "observed_at"
+        ],
+        "title": "PreviewTaskFacts",
+        "type": "object"
+      },
+      "PreviewTransition": {
+        "properties": {
+          "decision": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Decision",
+            "type": "object"
+          },
+          "effects": {
+            "items": {
+              "$ref": "#/components/schemas/PreviewEffect"
+            },
+            "title": "Effects",
+            "type": "array"
+          },
+          "provenance": {
+            "default": "derived",
+            "enum": [
+              "stored",
+              "derived",
+              "unknown"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "effects"
+        ],
+        "title": "PreviewTransition",
         "type": "object"
       },
       "PricingInfo": {
@@ -14677,6 +16184,15 @@
         ],
         "title": "ScaleResult",
         "type": "object"
+      },
+      "Scope": {
+        "enum": [
+          "worker",
+          "orchestrator",
+          "admin"
+        ],
+        "title": "Scope",
+        "type": "string"
       },
       "SearchHit": {
         "properties": {
@@ -18530,6 +20046,41 @@
           }
         },
         "title": "TerminateRequest",
+        "type": "object"
+      },
+      "Text": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text",
+          "bytes",
+          "truncated",
+          "ref"
+        ],
+        "title": "Text",
         "type": "object"
       },
       "TitleSource": {
@@ -23635,6 +25186,99 @@
         ]
       }
     },
+    "/api/decisions/{decision_id}/preview": {
+      "get": {
+        "description": "What answering would do, read-only and advisory (it authorizes and executes\nnothing). Takes the answer's `choice`, `text` and `request_id`; reports the\nverdict, transition and effects the answer path would produce, and what stored\nobservations say about the decision's premise. A snapshot: compare\n`snapshot.decision_version` to see staleness.",
+        "operationId": "preview_decision_api_decisions__decision_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "decision_id",
+            "required": true,
+            "schema": {
+              "title": "Decision Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "choice",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Choice"
+            }
+          },
+          {
+            "in": "query",
+            "name": "text",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 10000,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "request_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Preview Decision",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
     "/api/engines": {
       "get": {
         "description": "Engines, executors and the local model: axes, auth methods and the three\nreadiness facts (installed, authenticated, validated). Read-only.",
@@ -24370,7 +26014,7 @@
     },
     "/api/inbox": {
       "get": {
-        "description": "What waits on a manager, oldest first (`order=impact`: most blocked tasks\nfirst) and grouped by project and task (`groups`): blocked, in-review and\nawaiting-approval tasks with their open decision, pending tasks stuck behind a\nfailed or cancelled dependency (`failed_dependencies`), plus open decisions\nabout pools and knowledge. `state` keeps only task rows in those states;\n`blocking_only` keeps rows that block at least one task (`blocks`, `impact`).",
+        "description": "What waits on a manager, oldest first (`order=impact`: most blocked tasks\nfirst) and grouped by project and task (`groups`): blocked, in-review and\nawaiting-approval tasks with their open decision, pending tasks stuck behind a\nfailed or cancelled dependency (`failed_dependencies`), plus open decisions\nabout pools and knowledge. `state` keeps only task rows in those states;\n`blocking_only` keeps rows that block at least one task (`blocks`, `impact`).\n`view=actionable` adds to each row what acting on it takes (authority, effects,\nimpact, evidence, a suggested next action; advisory only); `forge=true` adds\nbounded live PR reads to it, outside the snapshot.",
         "operationId": "inbox_api_inbox_get",
         "parameters": [
           {
@@ -24459,10 +26103,21 @@
               "default": "summary",
               "enum": [
                 "summary",
-                "detail"
+                "detail",
+                "actionable"
               ],
               "title": "View",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "forge",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Forge",
+              "type": "boolean"
             }
           },
           {
@@ -24497,7 +26152,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/InboxPage"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ActionableInboxPage"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InboxPage"
+                    }
+                  ],
+                  "title": "Response Inbox Api Inbox Get"
                 }
               }
             },

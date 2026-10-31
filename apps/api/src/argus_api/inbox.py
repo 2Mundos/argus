@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 from argus_core.decisions import Audience, DecisionKind
 from argus_core.tasks import StallCause, TaskState
-from pydantic import BaseModel
+from pydantic import BaseModel, PrivateAttr
 
 from argus_api.db import Snapshot
 from argus_api.decisions import store as decisions
@@ -29,6 +29,7 @@ from argus_api.tasks import views as tasks
 from argus_api.tasks.views import TaskDetail
 
 Order = Literal["age", "impact"]
+InboxView = Literal["summary", "detail", "actionable"]  # actionable: inbox_actions
 
 
 class BlockedTask(BaseModel):
@@ -62,6 +63,7 @@ class InboxItem(BaseModel):
     stall_cause: StallCause | None = None  # quiet claims (stall visibility 3.7)
     task: TaskDetail | None = None  # view=detail only
     decision: DecisionDetail | None = None  # view=detail only
+    _cursor: str = PrivateAttr(default="")  # resumes after this row (budget cuts)
 
 
 class InboxGroup(BaseModel):
@@ -149,13 +151,17 @@ async def inbox(
     view: View = "summary",
     limit: int = 25,
     cursor: str | None = None,
+    projection: dict[str, Any] | None = None,
 ) -> InboxPage:
     """Oldest first, or most impactful first with `order="impact"`. `states` keeps
-    only task rows in those states; `blocking_only` keeps rows that block a task."""
+    only task rows in those states; `blocking_only` keeps rows that block a task.
+    `projection` (the actionable view's options) binds the cursors to it too."""
     limit = clamp(limit)
     filters: dict[str, Any] = {"project": project, "states": sorted(states or [])}
     filters |= {"decision_kinds": sorted(decision_kinds or [])}
     filters |= {"blocking_only": blocking_only, "order": order}
+    if projection is not None:
+        filters["projection"] = projection
     where, params = ["1 = 1"], []
     if blocking_only:
         where.append("impact >= 1")
@@ -224,6 +230,7 @@ async def inbox(
                 "failed_dependencies": stuck.get(r["subject_id"], []),
             }
         )
+        item._cursor = encode_cursor(_cursor_key(r, order), filters)
         if sig := last_signals.get(r["subject_id"]):
             item.last_signal_at, item.last_signal_source, item.stall_cause = sig
         if view == "detail":

@@ -993,6 +993,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/decisions/{decision_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Decision
+         * @description What answering would do, read-only and advisory (it authorizes and executes
+         *     nothing). Takes the answer's `choice`, `text` and `request_id`; reports the
+         *     verdict, transition and effects the answer path would produce, and what stored
+         *     observations say about the decision's premise. A snapshot: compare
+         *     `snapshot.decision_version` to see staleness.
+         */
+        get: operations["preview_decision_api_decisions__decision_id__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/engines": {
         parameters: {
             query?: never;
@@ -1305,6 +1329,9 @@ export interface paths {
          *     failed or cancelled dependency (`failed_dependencies`), plus open decisions
          *     about pools and knowledge. `state` keeps only task rows in those states;
          *     `blocking_only` keeps rows that block at least one task (`blocks`, `impact`).
+         *     `view=actionable` adds to each row what acting on it takes (authority, effects,
+         *     impact, evidence, a suggested next action; advisory only); `forge=true` adds
+         *     bounded live PR reads to it, outside the snapshot.
          */
         get: operations["inbox_api_inbox_get"];
         put?: never;
@@ -3241,6 +3268,105 @@ export interface components {
              */
             no_credential: number;
         };
+        /** Actionable */
+        Actionable: {
+            authority: components["schemas"]["Authority"];
+            checklist: components["schemas"]["Checklist"];
+            ci: components["schemas"]["Evidence"];
+            /**
+             * Decision State Changed
+             * @default false
+             */
+            decision_state_changed?: boolean;
+            delivery: components["schemas"]["DeliveryEvidence"];
+            /** Effects */
+            effects: components["schemas"]["Effect"][] | "unknown";
+            impact: components["schemas"]["Impact"];
+            next: components["schemas"]["NextAction"];
+            /** Options */
+            options: string[] | null;
+            question: components["schemas"]["Text"] | null;
+            spec_excerpt: components["schemas"]["Text"] | null;
+            transfer: components["schemas"]["Evidence"];
+            wip: components["schemas"]["Evidence"];
+        };
+        /** ActionableInboxItem */
+        ActionableInboxItem: {
+            actionable: components["schemas"]["Actionable"];
+            /** Age S */
+            age_s: number;
+            /** Artifact Ids */
+            artifact_ids: string[];
+            /** Attempt */
+            attempt: number | null;
+            audience: components["schemas"]["Audience"] | null;
+            /** Blocks */
+            blocks: components["schemas"]["BlockedTask"][];
+            decision?: components["schemas"]["DecisionDetail"] | null;
+            /** Decision Id */
+            decision_id: string | null;
+            decision_kind: components["schemas"]["DecisionKind"] | null;
+            /** Failed Dependencies */
+            failed_dependencies: string[];
+            /** Group */
+            group: string;
+            /** Impact */
+            impact: number;
+            /** Kind */
+            kind: string | null;
+            /** Last Signal At */
+            last_signal_at?: string | null;
+            /** Last Signal Source */
+            last_signal_source?: string | null;
+            /** Project */
+            project: string | null;
+            /** Stall Cause */
+            stall_cause?: ("workspace_missing" | "session_gone" | "silent_delegate_active" | "no_progress" | "paused_disk" | "unknown") | null;
+            state: components["schemas"]["TaskState"] | null;
+            /** Subject Id */
+            subject_id: string;
+            /** Subject Type */
+            subject_type: string;
+            task?: components["schemas"]["TaskDetail"] | null;
+            /** Title */
+            title: string | null;
+            /** Version */
+            version: string | null;
+        };
+        /** ActionableInboxPage */
+        ActionableInboxPage: {
+            /**
+             * Authority Note
+             * @default Hints only: Argus executes nothing from this view. answer_decision, task actions and reviews re-check scope, audience, state and options on the call.
+             */
+            authority_note?: string;
+            external: components["schemas"]["ExternalReads"];
+            /** Groups */
+            groups: components["schemas"]["InboxGroup"][];
+            /** Has More */
+            has_more: boolean;
+            /** Items */
+            items: components["schemas"]["ActionableInboxItem"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Omitted */
+            omitted: string[];
+            /**
+             * Snapshot At
+             * Format: date-time
+             */
+            snapshot_at: string;
+            /** Total */
+            total: number;
+            /** Totals By Decision Kind */
+            totals_by_decision_kind: {
+                [key: string]: number;
+            };
+            /** Totals By State */
+            totals_by_state: {
+                [key: string]: number;
+            };
+        };
         /** AdminToken */
         AdminToken: {
             /**
@@ -3678,6 +3804,17 @@ export interface components {
             /** Task Id */
             task_id?: string | null;
         };
+        /** Authority */
+        Authority: {
+            /** Answerable By */
+            answerable_by: components["schemas"]["Scope"][];
+            audience: components["schemas"]["Audience"] | null;
+            /** Caller May Attempt */
+            caller_may_attempt: boolean;
+            caller_role: components["schemas"]["Scope"];
+            /** Reason */
+            reason: string;
+        };
         /**
          * AwaitingQuotaRequest
          * @description An agent with no usable account asks for the work it cannot claim to wait.
@@ -3939,6 +4076,22 @@ export interface components {
          * @enum {string}
          */
         CheckState: "success" | "pending" | "failure" | "error" | "skipped" | "cancelled" | "unknown";
+        /** Checklist */
+        Checklist: {
+            /** Omitted */
+            omitted: number;
+            /** Pending */
+            pending: components["schemas"]["PendingItem"][];
+            /** Pending Count */
+            pending_count: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "structured" | "unstructured" | "unknown";
+            /** Total */
+            total: number;
+        };
         /** ChecklistItem */
         ChecklistItem: {
             /** Evidence */
@@ -4821,6 +4974,21 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** DecisionPreview */
+        DecisionPreview: {
+            advisory?: components["schemas"]["PreviewAdvisory"];
+            answer_outcome: components["schemas"]["PreviewAnswerOutcome"];
+            authorization: components["schemas"]["PreviewAuthorization"];
+            decision: components["schemas"]["PreviewDecisionFacts"];
+            premise_checks: components["schemas"]["PreviewPremiseChecks"];
+            proposal: components["schemas"]["PreviewProposal"];
+            question: components["schemas"]["PreviewQuestionFacts"];
+            snapshot: components["schemas"]["PreviewSnapshot"];
+            /** Task */
+            task: components["schemas"]["PreviewTaskFacts"] | "unknown" | null;
+            /** Transition */
+            transition: components["schemas"]["PreviewTransition"] | "unknown";
+        };
         /**
          * DecisionState
          * @enum {string}
@@ -4991,6 +5159,21 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** DeliveryEvidence */
+        DeliveryEvidence: {
+            /** Flags */
+            flags: string[];
+            headline: components["schemas"]["Evidence"];
+            live: components["schemas"]["Evidence"];
+            /** Pr */
+            pr: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "unknown" | "stale" | "conflict" | "fresh";
+            stored: components["schemas"]["Evidence"];
+        };
         /** DeliveryReviewEvidence */
         DeliveryReviewEvidence: {
             /** Agentic Finding Count */
@@ -5126,6 +5309,13 @@ export interface components {
             source: string;
             /** Window Hours */
             window_hours: number;
+        };
+        /** Effect */
+        Effect: {
+            /** Choice */
+            choice: string;
+            /** Effect */
+            effect: string;
         };
         /**
          * EffectiveContinuation
@@ -5368,6 +5558,27 @@ export interface components {
             /** Timed Out */
             timed_out: boolean;
         };
+        /** Evidence */
+        Evidence: {
+            /** Error */
+            error?: ("not_requested" | "no_reference" | "read_budget" | "timeout" | "unavailable") | null;
+            /** Observed At */
+            observed_at: string | null;
+            /** Source */
+            source: ("worker_claim" | "stored_observation" | "live_forge") | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "unknown" | "stale" | "conflict" | "fresh";
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated?: boolean;
+            /** Value */
+            value: string | null;
+        };
         /** Execution */
         Execution: {
             /** Account Id */
@@ -5546,6 +5757,29 @@ export interface components {
             task_id?: string | null;
             /** Until */
             until?: string | null;
+        };
+        /** ExternalReads */
+        ExternalReads: {
+            /** Budget S */
+            budget_s: number;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * In Snapshot
+             * @default false
+             * @constant
+             */
+            in_snapshot?: false;
+            /** Max Reads */
+            max_reads: number;
+            /** Reads */
+            reads: number;
+            /** Requested */
+            requested: boolean;
+            /** Started At */
+            started_at: string | null;
+            /** Timed Out */
+            timed_out: number;
         };
         /**
          * FactOrigin
@@ -5811,6 +6045,20 @@ export interface components {
             image: string;
             /** Source */
             source: string;
+        };
+        /** Impact */
+        Impact: {
+            direct: components["schemas"]["ImpactList"];
+            transitive: components["schemas"]["ImpactList"];
+        };
+        /** ImpactList */
+        ImpactList: {
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["BlockedTask"][];
+            /** Omitted */
+            omitted: number;
         };
         /** InboxGroup */
         InboxGroup: {
@@ -6738,6 +6986,20 @@ export interface components {
             /** User */
             user: string | null;
         };
+        /** NextAction */
+        NextAction: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "answer_decision" | "escalate_to_human" | "unblock_task" | "retry_dependency" | "inspect_stall" | "reread" | "none";
+            /** Args */
+            args: {
+                [key: string]: string;
+            };
+            /** Reason */
+            reason: string;
+        };
         /** NodeOption */
         NodeOption: {
             /** Available */
@@ -6981,6 +7243,19 @@ export interface components {
          * @enum {string}
          */
         PageState: "active" | "archived";
+        /** PendingItem */
+        PendingItem: {
+            /** Id */
+            id: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "worker_claim" | "stored_observation" | "live_forge";
+            status: components["schemas"]["ItemStatus"];
+            /** Text */
+            text: string;
+        };
         /** Pool */
         Pool: {
             /**
@@ -7261,6 +7536,239 @@ export interface components {
             run_as: string;
             /** Task Id */
             task_id: string;
+        };
+        /** PreviewAdvisory */
+        PreviewAdvisory: {
+            /**
+             * Authorizes
+             * @default false
+             * @constant
+             */
+            authorizes?: false;
+            /**
+             * Executes
+             * @default false
+             * @constant
+             */
+            executes?: false;
+        };
+        /** PreviewAnswerOutcome */
+        PreviewAnswerOutcome: {
+            /** Error */
+            error?: {
+                [key: string]: string | number;
+            } | null;
+            /**
+             * Provenance
+             * @default derived
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
+            /**
+             * Result
+             * @enum {string}
+             */
+            result: "would_apply" | "replay" | "rejected" | "unknown";
+        };
+        /**
+         * PreviewAuthorization
+         * @description The verdict the answer path would give this caller now; not a grant.
+         */
+        PreviewAuthorization: {
+            /** Error */
+            error: string | null;
+            /**
+             * Provenance
+             * @default derived
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
+            /** Rule */
+            rule: string;
+            /** Would Allow */
+            would_allow: boolean;
+        };
+        /** PreviewDecisionFacts */
+        PreviewDecisionFacts: {
+            /** Audience */
+            audience: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decided At */
+            decided_at: string | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** Id */
+            id: string;
+            kind: components["schemas"]["DecisionKind"];
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Options */
+            options: string[] | null;
+            /**
+             * Provenance
+             * @default stored
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
+            /** Requested By */
+            requested_by: string;
+            state: components["schemas"]["DecisionState"];
+            /** Subject Id */
+            subject_id: string;
+            /** Subject Type */
+            subject_type: string;
+        };
+        /** PreviewEffect */
+        PreviewEffect: {
+            /** Detail */
+            detail: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Provenance
+             * @enum {string}
+             */
+            provenance: "stored" | "derived" | "unknown";
+        };
+        /** PreviewPremiseCheck */
+        PreviewPremiseCheck: {
+            /** Observed */
+            observed: string | null;
+            /** Observed At */
+            observed_at: string | null;
+            /** Premise */
+            premise: string | null;
+            /**
+             * Provenance
+             * @enum {string}
+             */
+            provenance: "stored" | "derived" | "unknown";
+            /** Recorded */
+            recorded: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "match" | "stale" | "unknown";
+            /** Subject */
+            subject: string;
+        };
+        /** PreviewPremiseChecks */
+        PreviewPremiseChecks: {
+            /** Checks */
+            checks: components["schemas"]["PreviewPremiseCheck"][];
+            /**
+             * Live Forge Checked
+             * @default false
+             * @constant
+             */
+            live_forge_checked?: false;
+        };
+        /** PreviewProposal */
+        PreviewProposal: {
+            /** Choice */
+            choice: string | null;
+            /** Error */
+            error: string | null;
+            /** Offered Option */
+            offered_option: boolean | null;
+            /**
+             * Provenance
+             * @default derived
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
+            /** Request Id */
+            request_id: string | null;
+            /** Text */
+            text: string;
+            /** Valid */
+            valid: boolean | "unknown";
+        };
+        /** PreviewQuestionFacts */
+        PreviewQuestionFacts: {
+            /** Full Length */
+            full_length: number;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Provenance
+             * @default stored
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
+            /** Redacted */
+            redacted: boolean;
+            /** Reference */
+            reference: {
+                [key: string]: string;
+            };
+            /** Text */
+            text: string;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** PreviewSnapshot */
+        PreviewSnapshot: {
+            /**
+             * Computed At
+             * Format: date-time
+             */
+            computed_at: string;
+            /** Decision Version */
+            decision_version: string;
+        };
+        /** PreviewTaskFacts */
+        PreviewTaskFacts: {
+            /** Attempt */
+            attempt: number;
+            /** Attempt Id */
+            attempt_id: number | null;
+            /** Claimed At */
+            claimed_at: string | null;
+            /** Claimed By */
+            claimed_by: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Provenance
+             * @default stored
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
+            state: components["schemas"]["TaskState"];
+            /** Version */
+            version: string;
+        };
+        /** PreviewTransition */
+        PreviewTransition: {
+            /** Decision */
+            decision: {
+                [key: string]: string | null;
+            };
+            /** Effects */
+            effects: components["schemas"]["PreviewEffect"][];
+            /**
+             * Provenance
+             * @default derived
+             * @enum {string}
+             */
+            provenance?: "stored" | "derived" | "unknown";
         };
         /** PricingInfo */
         PricingInfo: {
@@ -8001,6 +8509,11 @@ export interface components {
             decision_id?: string | null;
             pool: components["schemas"]["Pool"];
         };
+        /**
+         * Scope
+         * @enum {string}
+         */
+        Scope: "worker" | "orchestrator" | "admin";
         /** SearchHit */
         SearchHit: {
             /** Page Id */
@@ -9196,6 +9709,17 @@ export interface components {
              * @default true
              */
             requeue?: boolean;
+        };
+        /** Text */
+        Text: {
+            /** Bytes */
+            bytes: number;
+            /** Ref */
+            ref: string | null;
+            /** Text */
+            text: string;
+            /** Truncated */
+            truncated: boolean;
         };
         /**
          * TitleSource
@@ -11755,6 +12279,41 @@ export interface operations {
             };
         };
     };
+    preview_decision_api_decisions__decision_id__preview_get: {
+        parameters: {
+            query?: {
+                choice?: string | null;
+                text?: string;
+                request_id?: string | null;
+            };
+            header?: never;
+            path: {
+                decision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_engines_api_engines_get: {
         parameters: {
             query?: never;
@@ -12168,7 +12727,8 @@ export interface operations {
                 decision_kind?: components["schemas"]["DecisionKind"][] | null;
                 blocking_only?: boolean;
                 order?: "age" | "impact";
-                view?: "summary" | "detail";
+                view?: "summary" | "detail" | "actionable";
+                forge?: boolean;
                 limit?: number;
                 cursor?: string | null;
             };
@@ -12184,7 +12744,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["InboxPage"];
+                    "application/json": components["schemas"]["ActionableInboxPage"] | components["schemas"]["InboxPage"];
                 };
             };
             /** @description Validation Error */

@@ -33,6 +33,7 @@ admin, about 18.7 KB of schema. The largest are `create_task` (1.4 KB),
 | Unblock / retry | `POST /tasks/{id}/unblock`, `/retry` | — | **not exposed** |
 | Decisions | `GET /decisions?state&subject_id`, `GET /decisions/{id}` | `list_decisions()` (open only, no args) | filters **not exposed**; no project/kind filter; no `get_decision` |
 | Answer | `POST /decisions/{id}/answer` | `answer_decision` | a retry fails with `409 decision_not_open` (no idempotent replay); one at a time |
+| Preview | `GET /decisions/{id}/preview?choice&text&request_id` | `preview_decision` | read-only, advisory; see 3.2c |
 | Artifacts | `GET /tasks/{id}/artifacts`, `GET /artifacts/{id}/content` | upload only | list and read **not exposed**; no range read; no integrity check |
 | Agents | `GET /agents`, `/agents/{id}`, `POST /agents/{id}/drain` | `list_agents` | get and drain **not exposed** |
 | Pools | `GET/PUT /pools/{name}`, scale, launch | `list_pools`, `scale_pool`, `launch_worker` | `PUT` replaces the whole pool and has no precondition; `launch_worker` requires `expected_desired_replicas` or `unconditional` ([worker launch 3](worker-launch.spec.md)) |
@@ -147,6 +148,121 @@ Findings outside the gap list:
     error message). Retrying failed items resends them with the `request_id`
     first generated for that item, so a retry never duplicates an answer.
     Accept/reject and audience rules are unchanged.
+- **Actionable projection** (opt-in): `GET /api/inbox?view=actionable` → MCP
+  `get_inbox(view="actionable", forge?)`. It is a projection of the same rows,
+  filters, order, totals and groups as the inbox above, not a second inbox.
+  Without `view=actionable` the request and response are unchanged, field for
+  field. It lets an orchestrator decide what to do next from one call, instead
+  of `get_inbox` plus `get_decision`/`get_tasks`/`get_task_continuation`/
+  `get_task_delivery` per row. Everything in it is read-only and advisory.
+  - *Rows:* each item is the ordinary inbox row (`task` and `decision` stay
+    `null`, as in `summary`) plus `actionable`:
+    `{question, spec_excerpt, options, authority, effects, next, impact,
+    checklist, wip, transfer, delivery, ci, decision_state_changed}`.
+    `question` is the open decision's text and `spec_excerpt` the task spec's
+    start (the original spec, before its `## Clarifications`). Both are
+    `{text, bytes, truncated, ref}`: `text` is the whole value when it fits
+    the cap (question 2 KB, excerpt 512 B), else its start with `truncated:
+    true` and `ref` naming the whole-item read (`GET /api/decisions/<id>`,
+    `GET /api/tasks/<id>`). `bytes` is the full length. Free text is redacted
+    (`argus_core.redact`) before it is cut.
+  - *Authority:* `{audience, answerable_by, caller_role, caller_may_attempt,
+    reason}`. `answerable_by` is the scopes the decision's audience admits
+    (`human`: `admin`; `orchestrator`/`any`: `orchestrator`, `admin`); a review of
+    a task with `review: human` admits `admin` only, as the review transition
+    does. A row without an open decision is answerable by its task action
+    (`unblock_task`, `retry_task`, …), which any manager may call. Nothing here
+    is a grant: the server re-checks authority, state and options on the real
+    call, and `caller_may_attempt` only says the call is not refused up front.
+  - *Next action:* `next: {action, args, reason}` is a hint built from stored
+    facts, never executed by Argus and never an approval. Actions: `answer_decision`
+    (with `decision_id` and, for a known option set, no preselected choice),
+    `escalate_to_human` (the caller may not answer), `unblock_task`,
+    `retry_dependency` (a failed or cancelled dependency), `inspect_stall` (a
+    quiet claim: `get_task_log`, `steer_task` or `release_task`), `reread` (the
+    decision changed during the read) or `none`. A merged PR never yields
+    "accept"; the review stays the existing decision
+    ([task delivery](task-delivery.spec.md) 3.4).
+  - *Effects:* one `{choice, effect}` per option, from the existing answer
+    rules (`decisions.service._apply_answer`): question → the answer becomes a
+    clarification and the task returns to `ready`; approval/task policy →
+    `approve` starts the task, anything else cancels it; review → `accept`
+    succeeds the task, `reject` returns it to `ready` with the notes in its spec
+    (no failure counted); pool policy → `approve` applies the requested scale,
+    `reject` keeps it; routine policy → `approve` re-enables it; knowledge →
+    `accept` applies the proposal, `reject` discards it. A kind or subject the
+    rules do not cover is `effects: "unknown"`; a row without a decision has `[]`.
+  - *Impact:* `{direct, transitive}`, each `{count, items, omitted}` over
+    non-terminal tasks reachable through `task_deps` from the row's task.
+    `direct` is the tasks that depend on it; `transitive` everything reachable
+    beyond them. A task reachable by several paths is counted once, a direct
+    dependent is never repeated in `transitive`, the row's task is in neither,
+    and cycles end. `items` ({id, title, state}) are capped at 10 per list;
+    `omitted` = `count − len(items)`. The row's own `blocks` and `impact` keep
+    their meaning above.
+  - *Continuation:* `checklist: {state, total, pending_count, pending,
+    omitted}` from the effective continuation ([task
+    continuation](task-continuation.spec.md)): `state` is `structured`,
+    `unstructured` or `unknown` (not a task); `pending` lists at most 10 items
+    not `done` ({id, text ≤200 B, status, source}).
+    `wip` is the stored WIP; `transfer` is consumer-transfer evidence: a
+    `checkpoint:<id>:<sha256>` WIP reference
+    ([task checkpoint](task-checkpoint.spec.md) 3.4) or an `env_checkpoint_*`
+    block reason. Either is `unknown` when nothing is stored.
+  - *Evidence values* (`wip`, `transfer`, `ci`, and the parts of `delivery`) are
+    `{value, source, observed_at, status, error}`. `source` is `worker_claim`
+    (sent by the worker holding the task: continuation provenance
+    `worker_reported` or `runtime_observed`, which Argus has not checked),
+    `stored_observation` (recorded by Argus or an orchestrator: `argus_event`,
+    `orchestrator`) or `live_forge` (read from the forge during this request).
+    A worker claim is what the worker said, never presented as verified. `status`
+    is `unknown` (nothing known; `value` null), `stale` (stored and observed more
+    than 1 h before `snapshot_at`, or no time recorded), `fresh` (a live read, or
+    stored within 1 h), or `conflict` (see delivery). Checklist items carry the
+    same `source`.
+  - *Delivery and CI:* `delivery: {status, headline, stored, live, flags}`.
+    `stored` is the newest PR artifact in the continuation (state and observation
+    time as recorded). `live` is read only with `forge=true`, through
+    `tasks.delivery.reference` and the app's `PrChecker` (its 5 s timeout, 15 s
+    cache and shared requests; no other credential path). When both are known and
+    their states differ, `status` is `conflict`, both values are shown with their
+    times, and `headline` is the newer (the live read). Otherwise `headline` is
+    the live value when known, else the stored one. A merged PR adds the
+    `delivery_merged_pending_review` flag and nothing else: it neither accepts
+    the review nor changes the suggested action. `ci` is always `unknown`
+    (Argus stores no CI result); it is an extension point, as is delivery
+    preflight: future evidence is added as optional fields that read `unknown`
+    when absent. Decision previews are available separately (3.2c).
+  - *Forge reads:* opt-in with `forge=true` (default false: no network call). At
+    most 5 rows per request are read (`forge_reads` in the response; rows past
+    it get `error: "read_budget"`), concurrently, within a 6 s budget for the
+    whole request. They run after the DB snapshot is closed, on a separate read
+    connection, never inside a transaction. A read that fails or runs out of
+    time leaves `live` as `unknown` with an `error` class: `timeout`,
+    `unavailable` (the checker returned unknown: no credential, HTTP error,
+    network), `no_reference` (no unambiguous PR), `read_budget`, or
+    `not_requested` (`forge` was false). No
+    credential, request URL, response body or exception text is returned.
+  - *Two clocks:* `snapshot_at` is the time of the one DB read transaction that
+    produced every stored value, total and group on the page. `external` says how
+    live values were obtained: `{in_snapshot: false, requested, started_at,
+    finished_at, budget_s, reads, timed_out}`. Each live value carries its own
+    `observed_at`, taken when the forge answered; it is not part of the atomic
+    snapshot.
+  - *Answered during inspection:* after the external reads, the open decisions
+    on the page are read again. A decision no longer open has
+    `decision_state_changed: true` and `next.action = "reread"`; the row still
+    shows the snapshot's question so the change is visible, not hidden.
+  - *Budgets and pages:* `limit` is capped at 25 in this view. Rows are added while the page's JSON stays under 64 KB (at least one
+    row); a page cut short has `has_more: true` and a `next_cursor` after its
+    last row, and says `budget_cut` in `omitted`. `total`, totals and groups
+    still cover every match. The cursor carries `view` and `forge`, so it is
+    refused (`cursor_mismatch`) with other projection options. Truncation is
+    always explicit: `truncated`/`ref` on text, `omitted` counts on lists.
+  - *Authorization and errors:* manager scope, as `GET /api/inbox` (a worker gets
+    403). A forge failure never fails the request. Invalid parameters are 422; a
+    bad cursor is `400 invalid_cursor` or `cursor_mismatch`. Decision payloads,
+    pool `env`, account data and artifact contents are never included.
 - **`GET /api/tasks`** gains `project`, `kind`, repeated `state`, `view` and
   `cursor`. It always returns the page envelope. The dashboard moves to the new
   shape in the same PR, so the generated client keeps a single response type.
@@ -252,7 +368,86 @@ Findings outside the gap list:
 `report_task_models` (agents), `get_task_models` and `get_agent_models` (any
 token) wrap the model trace endpoints ([spec](model-observability.spec.md)).
 
-## 3.2c Delivery evidence for inbox reviews
+## 3.2c Decision preview
+
+A manager can see what an answer would do before giving it. `GET
+/api/decisions/{id}/preview?choice&text&request_id` (MCP `preview_decision(decision_id,
+choice?, text?, request_id?)`) takes the arguments `answer_decision` takes (`text` ≤10,000
+characters, else 422) and answers `200` with a snapshot. Callers: the same managers as
+`answer_decision` (orchestrator or admin; others get the same 403). An unknown id is 404.
+It is **advisory**: the response always carries `advisory: {authorizes: false, executes:
+false}`. It writes nothing (no row, event, audit entry or lease), calls no network (not the
+forge) and opens a read snapshot only. It adds no parameter to the answer path.
+
+**No drift.** The preview calls the answer path's own functions: the audience rule
+(`_check_audience`), the choice and text validator, the replay test (`_same_answer`), the
+mapping from a decision and answer to its effect (`effect_of`, which `_apply_answer` also
+dispatches on), the task state machine (`transition`), the reviewer rule and the
+moot-decision selection (`WAITS_IN`, terminal states). A change to the answer rules changes
+the preview.
+
+**Response.** Every section says where its facts come from: `provenance` is `stored` (a DB
+row), `derived` (computed from stored rows by the answer path's code) or `unknown`, with
+`observed_at` (the source row's timestamp; the snapshot's `now` for derived facts).
+Unavailable facts are present and `"unknown"` or `"stale"`, never omitted.
+
+- `snapshot`: `{computed_at, decision_version}`. `decision_version` is the decision's
+  `decided_at` or `created_at`, plus its state; a caller compares it with a later preview
+  to see that the decision moved. The answer path does not use it: it revalidates
+  permissions and state in its own transaction.
+- `decision`: id, kind, subject_type, subject_id, state, audience, created_at, decided_at,
+  decided_by, options, requested_by (all stored).
+- `question`: `{reference: {id, kind}, text, truncated, full_length, redacted}`. `text` is
+  the question after the shared `redact()` helper, cut to 4,000 characters; `reference`
+  is always present so a caller can read the whole item with `get_decision`.
+- `proposal`: `{choice, text, request_id, valid, error, offered_option}`. `valid` is the
+  answer path's validator verdict (`error` is its `code`, for example `invalid_choice`);
+  `offered_option` says whether `choice` is one of `options` (`null` for free-text
+  questions). With neither choice nor text, `valid` is `"unknown"` and no transition is
+  computed. The echoed text is redacted and capped at 1,000 characters.
+- `authorization`: `{would_allow, rule, error}`: the verdict the answer path would produce
+  for this caller now (`human` audience needs an admin; `orchestrator` and `any` need an
+  orchestrator or admin; a human-reviewed task needs an admin to review). It is a report, not
+  a grant.
+- `answer_outcome`: what the answer path would return now: `would_apply` (decision open
+  and the answer valid and allowed), `replay` (not open, `request_id` given and same
+  caller, choice and text: `replayed: true`), or `rejected` with `error` `{status, code}`
+  (`409 decision_not_open` for an answered or cancelled decision, or `403`/`422`).
+- `transition`: for an open decision with a valid proposal, `{decision: {from: open, to:
+  answered, choice}, effects}`. Each effect is `{kind, detail, provenance}`: `task_state`
+  (`from`/`to`, from `transition()`; `ready` after `blocked` or `in_review` is the
+  requeue), `clarification_added`, `knowledge_saved` (requested via `save_to_knowledge`
+  is not previewed: unknown), `decisions_cancelled` (ids, ≤20, of the other open decisions
+  the move makes moot), `difficulty_escalation` (a review rejection, as `_escalation`
+  computes), `knowledge_proposal` (accepted or rejected), `pool_scale` (from the decision
+  payload), `routine_reenabled`. Whatever needs a write to know (for example the effect
+  of a pool scale beyond its payload, or later side effects of the task becoming ready)
+  is an effect of kind `unknown` with a reason. An attempt is never cancelled by an
+  answer: a decision waits on a task that is not claimed.
+- `task`: for a task subject, `{id, state, attempt, attempt_id, claimed_by, claimed_at,
+  version}` from the task row and its latest `task_attempts` row (stored).
+- `premise_checks`: `{live_forge_checked: false, checks}`. Only stored data is used: the
+  task's continuation PR and commit artifacts (`head_sha`, `state`, `observed_at`) and
+  its `reconciliation` entries. The premise a decision names is a `head_sha` in its
+  payload or hexadecimal hashes (7 to 40 characters, not part of a hyphenated id such
+  as a UUID) in its question. Heads compare by prefix either way. A SHA bound to a
+  named PR (`PR 42`, `#42`, `owner/repo#42` or a PR URL) is compared only with that
+  PR's stored head; another artifact at the same SHA never stands in for it, and a
+  number stored for several repositories the question does not tell apart is
+  `unknown`. A SHA with no PR named is a `match` only when the stored heads it
+  prefixes are one commit, else `unknown`; never `stale`. Each check is
+  `{subject, premise, recorded, observed_at, status}` with `status` `match`, `stale` (the
+  heads differ in an observation not older than the decision, or a reconciliation
+  entry records a moved head or a no-longer-merged PR) or `unknown` (no premise, no
+  stored observation, an ambiguous reference, or differing heads observed before the
+  decision was asked). At most 10 checks.
+- `advisory`: `{authorizes: false, executes: false}`.
+
+Lists are capped (effects 20, checks 10, cancelled ids 20); `question.text` at 4,000.
+A race is expected: if another caller answers between preview and answer, the answer
+returns its existing `409 decision_not_open`, and a new preview shows `answered`.
+
+## 3.2d Delivery evidence for inbox reviews
 
 `get_task_delivery` / `GET /api/tasks/{id}/delivery` is the bounded, read-only
 projection of forge PR/head/base/mergeability, exact-head checks/statuses,
@@ -429,6 +624,44 @@ that is −69%, in 16 calls instead of 32. The orchestrator's `tools/list` is
 heartbeat's `runtime`). The inbox journey is unchanged in calls; its context is
 78,669 bytes, the larger `tools/list` included.
 
+**Measured for the actionable projection** (`results/actionable.json`). On
+today's tree the bench needed two fixes before it ran at all: its MCP calls now
+send an allowlisted `Host`, and completed filler tasks report evidence for
+their acceptance items, so they succeed instead of waiting for review. The seed
+is otherwise unchanged. Method:
+
+- *Triage* is the inbox read alone, over every project, 25 rows a page:
+  `get_inbox` summary and then `view=detail`, against `view=actionable`. Calls
+  and bytes come from one run. Latency is the median of 20 in-process runs
+  (TestClient, no network, no `forge`), so it measures server work only.
+- The *journey* is the step 4 journey. The actionable variant takes questions,
+  options and authority from the rows and skips `list_decisions`. It is run
+  next to `answers` on the same tree and must reach the same outcome.
+
+| | Summary + detail | Actionable | Change |
+| --- | ---: | ---: | ---: |
+| Triage MCP calls | 4 | 2 | −2 |
+| Triage response bytes | 245,116 | 160,304 | −35% |
+| Triage median latency | 32.1 ms | 28.6 ms | −11% |
+| Journey MCP calls (`answers` / `actionable`) | 16 | 15 | −1 |
+| Journey inbox reads, bytes | 23,107 | 71,526 | +210% |
+| Journey context bytes (est. tokens) | 120,410 (30,102) | 168,685 (42,171) | +40% |
+
+As a REST page, the 12 alpha rows weigh 10.8 KB as a summary, 63.9 KB in
+detail and 42.3 KB actionable. Each actionable block is about 2.9 KB. Its
+largest parts are the spec excerpt (0.6 KB), the delivery evidence (0.4 KB,
+four evidence objects even when all are unknown) and the checklist (0.3 KB).
+MCP sizes are larger because the result is sent both as text and as
+structured content.
+
+- **Triage:** the projection replaces the summary-plus-detail pair. It halves
+  the calls and is a third smaller than the detail view.
+- **Narrow journey:** when the agent only needs the questions, it costs more.
+  Summary plus question details are 23 KB, against 72 KB for the projection.
+- **Schema cost:** `view=actionable` and `forge` add 613 bytes to the
+  orchestrator's and the admin's `tools/list`, which is 64,812 bytes (77 tools)
+  for the orchestrator. The worker's list does not change.
+
 # 4. Open Questions
 
 - **Worker dependency reads:** workers no longer have global task reads (see
@@ -470,6 +703,9 @@ Delivered as small PRs, in order (all done):
    runtime; `env` redaction; `PATCH /pools` with `expected_version`;
    `inspect_pool`; the instance tools; `drain_agent`; recycle in the reconciler.
 6. **P1 wait:** `GET /events?after&wait_s`, and `wait_for_events`.
+7. **Actionable inbox:** `view=actionable` and `forge` on `GET /inbox` and
+   `get_inbox` (`inbox_actions.py`, no migration), and the actionable benchmark
+   run.
 
 Each PR updates worker lifecycle 3.7's tool list, regenerates the OpenAPI client,
 and adds tests for its part of the following:
