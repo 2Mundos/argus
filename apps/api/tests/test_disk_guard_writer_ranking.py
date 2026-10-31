@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -228,22 +229,36 @@ async def test_bounded_sample_cancelled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bounded_sample_propagates_task_cancel(tmp_path: Path) -> None:
-    inst = tmp_path / "inst"
-    inst.mkdir()
+async def test_bounded_sample_propagates_task_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    release = threading.Event()
+    finished = threading.Event()
 
-    async def run() -> None:
-        task = asyncio.create_task(
-            sample_instance_directory_bounded(
-                str(tmp_path), "inst", os.geteuid(), timeout_s=30.0
-            )
-        )
-        await asyncio.sleep(0)
+    def blocked_sample(*_args: object, **_kwargs: object) -> DirectorySizeSample:
+        loop.call_soon_threadsafe(started.set)
+        release.wait()
+        finished.set()
+        return DirectorySizeSample(0, "measured", "measured")
+
+    monkeypatch.setattr(
+        "argus_api.disk_guard_writer_ranking.sample_instance_directory",
+        blocked_sample,
+    )
+
+    task = asyncio.create_task(
+        sample_instance_directory_bounded("/tmp", "inst", os.geteuid(), timeout_s=30.0)
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
         task.cancel()
-        await task
-
-    with pytest.raises(asyncio.CancelledError):
-        await run()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 1.0)
 
 
 def test_live_cgroup_io_stat_labeled_real_host() -> None:

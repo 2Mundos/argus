@@ -104,6 +104,14 @@ is progress. With no observer, no network or a failed report, the recorded
 contract stands and unknown stays unknown. Reconciliation is settled by an
 explicit orchestrator update. Argus never creates branches or PRs for the worker.
 
+Separately, the read-only
+[resumability preflight](task-resumability-preflight.spec.md)
+(`GET /tasks/{id}/resumability`, MCP `task_resumability_preflight`) assesses
+what is currently true about attempt/lease state, published versus local WIP
+and attachment availability versus recorded metadata and historical receipts.
+It does not mutate and does not replace `POST /observations`: that path stays
+the way runtimes report live forge and environment facts.
+
 ## 3.4 Rendering: contract first, narrative as history
 
 `renderTask` splits the spec at `## Clarifications`. Inside the untrusted data

@@ -202,7 +202,10 @@ transcribe it into `attach_artifact`. Upload it byte-exact from where it lives:
 Create the task with `required_capabilities` including `task-inputs`, then set
 that `ref` (`attachment:<id>:<sha256>`) as the WIP reference with
 `update_task_continuation`; Argus refuses it otherwise. `list_task_inputs` shows the
-inputs and the workers' receipts. Until an operator has installed the current
+inputs and the workers' receipts. Before you answer, requeue or release so a new
+attempt starts elsewhere, call `task_resumability_preflight`: it is read-only and
+tells recorded metadata and receipts apart from a current byte/hash read; it
+grants nothing. Until an operator has installed the current
 NanoClaw channel, recreated the workers and added `task-inputs` to a pool, no
 worker can claim such a task; do not rely on a shared attachment for a retry
 before then.
@@ -293,6 +296,6 @@ Tool errors read `<status> <code>: <message>`.
 | --- | --- | --- |
 | `409 stale_version` / `stale_pool` / `stale_continuation` | Changed since you read it. | Re-read, re-decide, retry. |
 | `409 decision_not_open` | Already answered or cancelled. | `get_decision` to see by whom; do not re-answer. |
-| `409 task_not_editable`, `task_not_failed`, `task_not_claimed` | Wrong state for that action. | `get_tasks` and pick the action for its state. |
+| `409 task_not_editable` / `409 task_not_failed` / `409 task_not_claimed` | Wrong state for that action. | `get_tasks` and pick the action for its state. |
 | `403` "this decision is for: human" | Not yours. | Leave it for a human. |
 | `422 dependency_cycle`, `invalid_pool`, `cursor_mismatch` | Bad request. | Fix the arguments; do not retry as is. |
