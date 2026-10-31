@@ -34,6 +34,7 @@ from argus_api.tasks import continuation as cont
 from argus_api.tasks import delivery
 
 NO_INDEPENDENT_REVIEWER = "no_independent_reviewer"
+NO_REVIEW_HEAD = "no_review_head"
 CODE_REVIEW_KIND = "code_review"
 _SHA = re.compile(r"^[0-9a-f]{7,40}$")
 _REVIEW_OPTIONS = ("accept", "reject")
@@ -232,6 +233,22 @@ def _findings_text(findings: list[Any]) -> str:
     return "\n".join(lines) if lines else "- (no details)"
 
 
+async def _block(tx: Tx, parent: aiosqlite.Row, reason: str, actor: str) -> None:
+    """Leave the parent in_review with a visible block_reason (no silent skip)."""
+    await tx.conn.execute(
+        "UPDATE tasks SET block_reason = ?, updated_at = ? WHERE id = ?",
+        (reason, ts(tx.now), parent["id"]),
+    )
+    await record(
+        tx,
+        actor,
+        "task",
+        parent["id"],
+        "review.independent_blocked",
+        {"reason": reason},
+    )
+
+
 async def spawn_reviewer(
     tx: Tx,
     parent: aiosqlite.Row,
@@ -249,6 +266,11 @@ async def spawn_reviewer(
     """
     from argus_api.tasks import service as tasks_svc
 
+    if head_sha is None:
+        # The reviewer's input must name the commit it reviews; without one the
+        # gate blocks visibly rather than inventing a head.
+        await _block(tx, parent, NO_REVIEW_HEAD, actor)
+        return None
     author_models, author_providers = await authors(tx.conn, parent["id"])
     usable = await usable_providers(tx.conn, ts(tx.now))
     harness, executor = pick_reviewer(
@@ -260,26 +282,15 @@ async def spawn_reviewer(
         exclude_models=exclude_models,
     )
     if harness is None and executor is None:
-        await tx.conn.execute(
-            "UPDATE tasks SET block_reason = ?, updated_at = ? WHERE id = ?",
-            (NO_INDEPENDENT_REVIEWER, ts(tx.now), parent["id"]),
-        )
-        await record(
-            tx,
-            actor,
-            "task",
-            parent["id"],
-            "review.independent_blocked",
-            {"reason": NO_INDEPENDENT_REVIEWER},
-        )
+        await _block(tx, parent, NO_INDEPENDENT_REVIEWER, actor)
         return None
-    # Clear a prior no-reviewer block if we found one this time.
-    if parent["block_reason"] == NO_INDEPENDENT_REVIEWER:
+    # Clear a prior gate block if we found a reviewer this time.
+    if parent["block_reason"] in (NO_INDEPENDENT_REVIEWER, NO_REVIEW_HEAD):
         await tx.conn.execute(
             "UPDATE tasks SET block_reason = NULL WHERE id = ?", (parent["id"],)
         )
     title = f"Independent review of {parent['title']!r}"
-    sha = head_sha or "unknown"
+    sha = head_sha
     body = TaskCreate(
         title=title[:200],
         spec=(
