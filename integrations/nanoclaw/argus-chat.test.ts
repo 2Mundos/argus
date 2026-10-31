@@ -100,6 +100,47 @@ describe("renderChatSeed", () => {
 });
 
 describe("createChatLoop", () => {
+  it("gives the inbound a millisecond ISO timestamp, whatever precision Argus sent", async () => {
+    let claimed = false;
+    const stamps: string[] = [];
+    let stopped = false;
+    const loop = createChatLoop({
+      call: async (method, path, _body, signal) => {
+        if (method === "GET" && path.startsWith("/agents/me/chat?")) {
+          if (claimed) await hang(signal);
+          claimed = true;
+          return {
+            status: 200,
+            data: {
+              message: {
+                id: "m1",
+                conversation_id: "c1",
+                author: "admin:a",
+                body: "Do it",
+                state: "delivered",
+                turn_id: "turn-1",
+                created_at: "2026-10-31T12:16:18.389852+00:00",
+              },
+              conversation: { id: "c1", kind: "chat", title: "Goal", session_ref: "argus-chat:c1" },
+            },
+          };
+        }
+        return { status: 200, data: {} };
+      },
+      onInbound: async (_p, _t, m) => void stamps.push(m.timestamp),
+      platformId: "local",
+      isStopped: () => stopped,
+      claimWaitS: 1,
+      sleep: async () => undefined,
+      log: { info: () => undefined, warn: () => undefined },
+    });
+    const running = loop.loop();
+    await vi.waitFor(() => expect(stamps).toEqual(["2026-10-31T12:16:18.389Z"]));
+    stopped = true;
+    loop.stop();
+    await running;
+  });
+
   it("claims, injects, and posts a reply with usage", async () => {
     const calls: { method: string; path: string; body?: unknown }[] = [];
     let claimOnce = true;
