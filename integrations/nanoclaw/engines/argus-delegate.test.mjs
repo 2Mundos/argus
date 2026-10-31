@@ -581,8 +581,22 @@ test("claude observed model comes from the system/init event, else not_reported"
 cat >/dev/null; ${stdoutLines.map((l) => `echo '${l}'`).join("; ")}`,
     );
     const relayFile = path.join(s.dir, `task-log-${Math.random().toString(36).slice(2)}.jsonl`);
+    // An explicit policy snapshot carries the task and attempt the relay needs, so the
+    // test does not depend on the host's /workspace/agent policy file being present.
+    const { policySnapshot } = await import("./model-policy.mjs");
+    const snapshot = policySnapshot(
+      { harness: {}, implementation: { claude: ["sonnet"] } },
+      { task_id: "task1", attempt: 1 },
+    );
+    const file = path.join(s.dir, "policy.json");
+    fs.writeFileSync(file, JSON.stringify(snapshot));
     await run(["claude", "--cwd", s.work], {
-      env: { ...s.env, ANTHROPIC_API_KEY: "x", ARGUS_TASK_LOG_FILE: relayFile },
+      env: {
+        ...s.env,
+        ANTHROPIC_API_KEY: "x",
+        ARGUS_MODEL_POLICY_FILE: file,
+        ARGUS_TASK_LOG_FILE: relayFile,
+      },
     });
     const records = fs.readFileSync(relayFile, "utf8").trim().split("\n").map(JSON.parse);
     return records.filter((r) => r.models?.executions?.length).at(-1).models.executions[0];
