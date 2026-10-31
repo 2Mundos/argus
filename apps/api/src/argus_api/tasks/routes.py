@@ -104,6 +104,10 @@ class FailRequest(BaseModel):
     `account_unavailable` is a lease or apply error: admission, like `quota`, so it
     spends no attempt. The
     difficulty raisers are `context_overflow` and `verification_failed`."""
+    oom_kill: bool = False
+    """The channel's evidence that the `session_lost` session was OOM-killed:
+    Docker's `OOMKilled` with exit 137 on the container it saw (failure classes
+    3.2.1). Only valid with `session_lost`."""
 
 
 class DependenciesRequest(BaseModel):
@@ -468,6 +472,7 @@ async def fail_task(
             body.reason,
             secrets,
             timedelta(minutes=settings.account_cooldown_minutes),
+            oom_kill=body.oom_kill,
         )
 
 

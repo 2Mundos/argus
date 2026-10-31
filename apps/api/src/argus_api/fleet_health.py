@@ -42,6 +42,7 @@ REASONS = (
     "account_unavailable",
     "agent_ended",
     "session_lost",
+    "env_oom",
     "other",
 )
 
@@ -63,7 +64,10 @@ FAILURES_SQL = (
     "   AND c.subject_id = e.subject_id AND c.kind = 'task.claim'"
     "   AND c.at <= e.at) AS claim_at FROM events e"
     " JOIN tasks t ON t.id = e.subject_id"
-    " WHERE e.kind IN ('task.fail', 'task.expire') AND e.at >= ? AND e.at <= ?"
+    " WHERE e.kind IN ('task.fail', 'task.expire', 'task.block')"
+    # A block is a failure only when an OOM-killed attempt promoted (3.2.1).
+    " AND (e.kind <> 'task.block' OR json_extract(e.data, '$.reason') = 'env_oom')"
+    " AND e.at >= ? AND e.at <= ?"
     " ORDER BY e.at DESC, e.id DESC LIMIT ?"
 )
 ATTEMPTS_SQL = (
@@ -142,6 +146,7 @@ class PoolHealth(BaseModel):
     live: int  # instances not terminated
     running: int
     last_heartbeat_at: datetime | None  # None: no live agent has reported ("no data")
+    oom_streak: int = 0  # consecutive OOM-killed sessions (failure classes 3.2.1)
     source: str = "pools, instances, agents.last_heartbeat_at"
 
 
@@ -338,7 +343,7 @@ async def fleet_health(
                 await rows("SELECT state, count(*) FROM tasks GROUP BY state"),
             )
             pools = await rows(
-                "SELECT name, status, desired_replicas FROM pools ORDER BY name"
+                "SELECT name, status, desired_replicas, oom_streak FROM pools ORDER BY name"
             )
             instances = {
                 (pool, state): n
@@ -374,8 +379,9 @@ async def fleet_health(
                 if heartbeats.get(name)
                 else None
             ),
+            oom_streak=oom_streak,
         )
-        for name, status, desired in pools
+        for name, status, desired, oom_streak in pools
     ]
     queue = [
         _seconds(r["created_at"], r["first_claim"])

@@ -3283,6 +3283,11 @@
               "used": []
             }
           },
+          "oom_kill": {
+            "default": false,
+            "title": "Oom Kill",
+            "type": "boolean"
+          },
           "origin_conversation_id": {
             "anyOf": [
               {
@@ -7260,6 +7265,11 @@
             "minLength": 1,
             "title": "Error",
             "type": "string"
+          },
+          "oom_kill": {
+            "default": false,
+            "title": "Oom Kill",
+            "type": "boolean"
           },
           "reason": {
             "default": "worker_fail",
@@ -11449,6 +11459,11 @@
             "title": "Name",
             "type": "string"
           },
+          "oom_streak": {
+            "default": 0,
+            "title": "Oom Streak",
+            "type": "integer"
+          },
           "running": {
             "title": "Running",
             "type": "integer"
@@ -14888,6 +14903,11 @@
               "used": []
             }
           },
+          "oom_kill": {
+            "default": false,
+            "title": "Oom Kill",
+            "type": "boolean"
+          },
           "origin_conversation_id": {
             "anyOf": [
               {
@@ -15871,6 +15891,11 @@
               "used": []
             }
           },
+          "oom_kill": {
+            "default": false,
+            "title": "Oom Kill",
+            "type": "boolean"
+          },
           "origin_conversation_id": {
             "anyOf": [
               {
@@ -16792,6 +16817,11 @@
               "switches": 0,
               "used": []
             }
+          },
+          "oom_kill": {
+            "default": false,
+            "title": "Oom Kill",
+            "type": "boolean"
           },
           "origin_conversation_id": {
             "anyOf": [

@@ -272,11 +272,16 @@ ENV_BLOCK_REASONS = frozenset(
     }
 )
 
+# Argus's own block for a pool's consecutive OOM-killed sessions (failure classes
+# 3.2.1); never one a worker may send, so it is not in ENV_BLOCK_REASONS.
+ENV_OOM = "env_oom"
+
 # The one map from a failure reason to its class; a reason not listed is `task`.
 FAILURE_CLASS: dict[str, RetryClass] = {
     "quota": RetryClass.ADMISSION,
     "account_unavailable": RetryClass.ADMISSION,
     **dict.fromkeys(ENV_BLOCK_REASONS, RetryClass.ENVIRONMENT),
+    ENV_OOM: RetryClass.ENVIRONMENT,
     "provider_failure": RetryClass.TRANSIENT,
     "channel_error": RetryClass.TRANSIENT,
     "runtime_switch_failed": RetryClass.TRANSIENT,
@@ -488,6 +493,8 @@ class Task(BaseModel):
     result: TaskResult | None
     error: str | None
     block_reason: str | None
+    # The attempt that ended last was OOM-killed (failure classes 3.2.1).
+    oom_kill: bool = False
     failure_class: FailureClass | None = None
     progress_message: str | None
     progress_percent: int | None

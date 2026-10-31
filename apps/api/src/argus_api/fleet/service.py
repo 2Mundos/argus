@@ -89,6 +89,11 @@ async def upsert_pool(
         " agents_per_instance = excluded.agents_per_instance,"
         " desired_replicas = excluded.desired_replicas,"
         " max_replicas = excluded.max_replicas, config = excluded.config,"
+        # A memory change gives the pool's sessions a fresh OOM count (failure
+        # classes 3.2.1).
+        " oom_streak = CASE WHEN json_extract(pools.config, '$.memory_mb')"
+        " IS json_extract(excluded.config, '$.memory_mb') THEN pools.oom_streak"
+        " ELSE 0 END,"
         " updated_at = excluded.updated_at",
         (
             name,
