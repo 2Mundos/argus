@@ -380,3 +380,114 @@ def test_independent_review_skips_without_delivery(client: TestClient) -> None:
     ).json()
     rows = events["items"] if isinstance(events, dict) else events
     assert any(e["subject_id"] == claimed["id"] for e in rows), events
+
+
+def test_independent_review_blocks_when_delivery_has_no_head_sha(
+    client: TestClient,
+) -> None:
+    # A PR without a commit SHA cannot pin a reviewer's input (head_sha is required),
+    # so the gate blocks visibly instead of failing completion with a 422.
+    client.put(
+        "/api/projects/demo", json={"name": "Demo", "description": "d"}, headers=ADMIN
+    )
+    acc = client.post(
+        "/api/accounts",
+        json={
+            "name": "claude-1",
+            "provider": "anthropic",
+            "kind": "api_key",
+            "priority": 10,
+            "credential": {"api_key": "sk-ant-api03-fake"},
+        },
+        headers=ADMIN,
+    )
+    assert acc.status_code == 201, acc.text
+    client.put(
+        "/api/settings/review.independent",
+        json={"value": {"mode": "different_model", "max_rounds": 3}},
+        headers=ADMIN,
+    )
+    client.put(
+        "/api/models",
+        json={
+            "harness": {"claude": ["claude-opus-5-5", "claude-sonnet-5-5"]},
+            "implementation": {"claude": ["claude-opus-5-5"]},
+        },
+        headers=ADMIN,
+    )
+    client.post(
+        "/api/tasks",
+        json={
+            "title": "Ship feature",
+            "project": "demo",
+            "spec": "implement",
+            "acceptance": ["done"],
+        },
+        headers=ADMIN,
+    )
+    boot = client.post(
+        "/api/agents/bootstrap-tokens", json={"role": "worker"}, headers=ADMIN
+    ).json()
+    agent = client.post(
+        "/api/agents/register",
+        json={"bootstrap_token": boot["token"], "capabilities": []},
+    ).json()
+    headers = bearer(agent["token"])
+    claimed = client.post(
+        "/api/tasks/claim", json={"capabilities": [], "wait_s": 0}, headers=headers
+    ).json()
+    client.post(
+        f"/api/tasks/{claimed['id']}/models",
+        json={
+            "attempt": claimed["attempt"],
+            "executions": [
+                {
+                    "key": "h1",
+                    "layer": "harness",
+                    "state": "succeeded",
+                    "engine": "claude",
+                    "provider": "anthropic",
+                    "configured_model": "claude-sonnet-5-5",
+                    "observed_model": "claude-sonnet-5-5",
+                    "evidence": "cli_output",
+                }
+            ],
+        },
+        headers=headers,
+    )
+    res = client.post(
+        f"/api/tasks/{claimed['id']}/complete",
+        json={
+            "attempt": claimed["attempt"],
+            "result": {
+                "summary": "shipped",
+                "data": {"pr": "https://git.example/o/r/pulls/1"},
+                "checklist": [
+                    {
+                        "id": item_id("done"),
+                        "status": "done",
+                        "evidence": "see PR",
+                    }
+                ],
+            },
+        },
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    parent = res.json()
+    assert parent["state"] == "in_review", parent
+    assert parent["block_reason"] == "no_review_head", parent
+    children = client.get(
+        "/api/tasks",
+        params={"project": "demo", "kind": "code_review"},
+        headers=ADMIN,
+    ).json()
+    assert not [t for t in children["items"] if t.get("parent_id") == claimed["id"]]
+    events = client.get(
+        "/api/events",
+        params={"kind": "review.independent_blocked"},
+        headers=ADMIN,
+    ).json()
+    rows = events["items"] if isinstance(events, dict) else events
+    blocked = [e for e in rows if e["subject_id"] == claimed["id"]]
+    assert blocked and blocked[0]["data"]["reason"] == "no_review_head", events

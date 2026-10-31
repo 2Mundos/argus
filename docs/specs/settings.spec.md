@@ -124,7 +124,10 @@ different model**, with `different_provider` shown as "…from a different provi
   `review.independent_void {reason: same_model}`, and a new reviewer is chosen.
 - **No silent skip.** If no eligible reviewer model has a usable account, the task
   stays `in_review` with `block_reason: no_independent_reviewer` and appears in the
-  inbox. After `max_rounds` of `request_changes`, a `review` decision for a human
+  inbox. A delivery that names a PR but no commit SHA cannot name the reviewed head
+  (`code_review` input requires `head_sha`), so the task stays `in_review` with
+  `block_reason: no_review_head` and `review.independent_blocked {reason:
+  no_review_head}`, and no child is created. After `max_rounds` of `request_changes`, a `review` decision for a human
   is opened instead of another round.
 - **Timing.** The mode is read when the task completes. Turning it on does not
   reopen succeeded tasks; turning it off lets a waiting gate pass on the next
