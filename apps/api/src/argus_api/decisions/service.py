@@ -1,6 +1,7 @@
 """Asking and answering decisions; answers drive task transitions (3.10)."""
 
 from datetime import datetime
+from enum import StrEnum
 
 from argus_core.auth import Scope
 from argus_core.decisions import (
@@ -70,19 +71,13 @@ async def answer(
 ) -> AnsweredDecision:
     decision = await store.get(tx.conn, decision_id)
     if decision.state is not DecisionState.OPEN:
-        if body.request_id is not None and _same_answer(decision, body, caller):
+        if body.request_id is not None and same_answer(decision, body, caller):
             return AnsweredDecision(**decision.model_dump(), replayed=True)
         raise ConflictError(
             f"decision {decision_id} is {decision.state}", code="decision_not_open"
         )
-    _check_audience(decision.audience, caller.scope)
-    if decision.options is not None and body.choice not in decision.options:
-        raise ValidationFailedError(
-            f"choice must be one of: {', '.join(decision.options)}",
-            code="invalid_choice",
-        )
-    if decision.options is None and not body.text:
-        raise ValidationFailedError("this question needs a text answer")
+    check_audience(decision.audience, caller.scope)
+    check_answer(decision, body)
 
     # Close the decision first: the transition below would otherwise cancel it
     # as moot (store.WAITS_IN).
@@ -178,7 +173,7 @@ async def answer_many(
     return outcomes
 
 
-def _same_answer(decision: Decision, body: DecisionAnswer, caller: Identity) -> bool:
+def same_answer(decision: Decision, body: DecisionAnswer, caller: Identity) -> bool:
     return (
         decision.state is DecisionState.ANSWERED
         and decision.request_id == body.request_id
@@ -188,12 +183,48 @@ def _same_answer(decision: Decision, body: DecisionAnswer, caller: Identity) -> 
     )
 
 
+class Effect(StrEnum):
+    """What answering does to the decision's subject. The answer path and the
+    preview both dispatch on this, so they cannot disagree."""
+
+    CLARIFY = "clarify"  # question: add the answer to the spec, unblock the task
+    KNOWLEDGE_ACCEPT = "knowledge_accept"
+    KNOWLEDGE_REJECT = "knowledge_reject"
+    POOL_SCALE_APPROVE = "pool_scale_approve"
+    POOL_SCALE_REJECT = "pool_scale_reject"
+    ROUTINE_REENABLE = "routine_reenable"
+    ROUTINE_STAY_OFF = "routine_stay_off"
+    TASK_APPROVE = "task_approve"
+    TASK_CANCEL = "task_cancel"
+    REVIEW_ACCEPT = "review_accept"
+    REVIEW_REJECT = "review_reject"
+
+
+def effect_of(decision: Decision, choice: str | None) -> Effect:
+    match decision.kind:
+        case DecisionKind.QUESTION:
+            return Effect.CLARIFY
+        case DecisionKind.KNOWLEDGE:
+            accept = choice == "accept"
+            return Effect.KNOWLEDGE_ACCEPT if accept else Effect.KNOWLEDGE_REJECT
+        case DecisionKind.POLICY if decision.subject_type == "pool":
+            approve = choice == "approve"
+            return Effect.POOL_SCALE_APPROVE if approve else Effect.POOL_SCALE_REJECT
+        case DecisionKind.POLICY if decision.subject_type == "routine":
+            approve = choice == "approve"
+            return Effect.ROUTINE_REENABLE if approve else Effect.ROUTINE_STAY_OFF
+        case DecisionKind.APPROVAL | DecisionKind.POLICY:
+            return Effect.TASK_APPROVE if choice == "approve" else Effect.TASK_CANCEL
+        case DecisionKind.REVIEW:
+            return Effect.REVIEW_ACCEPT if choice == "accept" else Effect.REVIEW_REJECT
+
+
 async def _apply_answer(
     tx: Tx, decision: Decision, body: DecisionAnswer, caller: Identity
 ) -> None:
     task_id = decision.subject_id
-    match decision.kind:
-        case DecisionKind.QUESTION:
+    match effect_of(decision, body.choice):
+        case Effect.CLARIFY:
             answer_text = " — ".join(x for x in (body.choice, body.text) if x)
             await tasks.add_clarification(
                 tx,
@@ -220,41 +251,52 @@ async def _apply_answer(
                     actor=caller.actor,
                 )
             await tasks.unblock(tx, task_id, caller.actor)
-        case DecisionKind.KNOWLEDGE:
+        case Effect.KNOWLEDGE_ACCEPT | Effect.KNOWLEDGE_REJECT as effect:
             await knowledge.resolve_proposal(
                 tx,
                 decision.subject_id,
-                accept=body.choice == "accept",
+                accept=effect is Effect.KNOWLEDGE_ACCEPT,
                 actor=caller.actor,
             )
-        case DecisionKind.POLICY if decision.subject_type == "pool":
+        case Effect.POOL_SCALE_APPROVE | Effect.POOL_SCALE_REJECT as effect:
             await fleet.apply_scale_decision(
                 tx,
                 decision.subject_id,
                 decision.payload or {},
-                approve=body.choice == "approve",
+                approve=effect is Effect.POOL_SCALE_APPROVE,
                 actor=caller.actor,
             )
-        case DecisionKind.POLICY if decision.subject_type == "routine":
-            if body.choice == "approve":
-                await routines.reenable(tx, decision.subject_id, caller.actor)
-        case DecisionKind.APPROVAL | DecisionKind.POLICY:
-            if body.choice == "approve":
-                await tasks.approve(tx, task_id, caller.actor)
-            else:
-                await tasks.cancel(tx, task_id, caller.actor)
-        case DecisionKind.REVIEW:
+        case Effect.ROUTINE_REENABLE:
+            await routines.reenable(tx, decision.subject_id, caller.actor)
+        case Effect.ROUTINE_STAY_OFF:
+            pass
+        case Effect.TASK_APPROVE:
+            await tasks.approve(tx, task_id, caller.actor)
+        case Effect.TASK_CANCEL:
+            await tasks.cancel(tx, task_id, caller.actor)
+        case Effect.REVIEW_ACCEPT | Effect.REVIEW_REJECT as effect:
             await tasks.review(
                 tx,
                 task_id,
                 caller.actor,
                 caller.scope,
-                accept=body.choice == "accept",
+                accept=effect is Effect.REVIEW_ACCEPT,
                 notes=body.text,
             )
 
 
-def _check_audience(audience: Audience, scope: Scope) -> None:
+def check_answer(decision: Decision, body: DecisionAnswer) -> None:
+    """The choice and text rules of the answer path (raises 422)."""
+    if decision.options is not None and body.choice not in decision.options:
+        raise ValidationFailedError(
+            f"choice must be one of: {', '.join(decision.options)}",
+            code="invalid_choice",
+        )
+    if decision.options is None and not body.text:
+        raise ValidationFailedError("this question needs a text answer")
+
+
+def check_audience(audience: Audience, scope: Scope) -> None:
     allowed = {
         Audience.HUMAN: {Scope.ADMIN},
         Audience.ORCHESTRATOR: {Scope.ORCHESTRATOR, Scope.ADMIN},

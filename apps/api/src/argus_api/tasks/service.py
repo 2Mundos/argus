@@ -423,6 +423,7 @@ async def claim(
             "progress_data": None,
             "output_at": None,
             "session_gone_at": None,
+            "paused_disk_at": None,
             "lease_expires_at": _deadline(tx.now, row["lease_ttl_s"]),
             "timeout_at": (
                 _deadline(tx.now, timeout)
@@ -2439,9 +2440,9 @@ async def cancel(tx: Tx, task_id: str, actor: str) -> Task:
 
 async def approve(tx: Tx, task_id: str, actor: str) -> Task:
     row = await _row(tx.conn, task_id)
-    dep_states = await _states(tx.conn, await _deps(tx.conn, task_id))
-    deps_done = all(s is S.SUCCEEDED for s in dep_states.values())
-    await _apply(tx, row, Action.APPROVE, actor, deps_done=deps_done)
+    await _apply(
+        tx, row, Action.APPROVE, actor, deps_done=await _deps_done(tx.conn, task_id)
+    )
     return await get_task(tx.conn, task_id)
 
 
@@ -2455,8 +2456,7 @@ async def review(
     notes: str = "",
 ) -> Task:
     row = await _row(tx.conn, task_id)
-    if row["review"] == Review.HUMAN and reviewer is not Scope.ADMIN:
-        raise ForbiddenError("this task requires human review")
+    check_reviewer(row, reviewer)
     if accept:
         await _apply(tx, row, Action.ACCEPT, actor, data={"notes": notes})
     else:
@@ -2503,13 +2503,14 @@ async def expire_stalled(
     activity, claim) is older than `stall_after_s`, however healthy their
     heartbeats. A session that stopped working but still answers its lease would
     otherwise hold the task until the wall-clock timeout. Counts as a failure.
-    0 disables; the attempt must already be flagged quiet, so the inbox warned first."""
+    0 disables; the attempt must already be flagged quiet, so the inbox warned first.
+    A claim the disk guard paused is skipped: its silence is the guard's doing."""
     if stall_after_s <= 0:
         return []
     cutoff = tx.now - timedelta(seconds=stall_after_s)
     return await _expire_where(
         tx,
-        "quiet_at IS NOT NULL AND ? IS NOT NULL",
+        "quiet_at IS NOT NULL AND paused_disk_at IS NULL AND ? IS NOT NULL",
         ts(tx.now),
         "stalled",
         failed,
@@ -2522,6 +2523,81 @@ async def expire_agent_leases(tx: Tx, agent_id: str) -> list[str]:
 
     All or nothing: the caller ends the agent in the same savepoint."""
     return await _expire_where(tx, "assignee_agent_id = ?", agent_id, "agent_ended")
+
+
+# -- disk guard pause (operations.spec.md 3.5) ------------------------------------
+# Dormant: nothing calls these yet. The server-side disk guard alone sets and clears
+# `paused_disk_at`; no route, tool, heartbeat or observation reaches them.
+
+PAUSED_DISK = "paused_disk"
+
+
+@dataclass(frozen=True)
+class PausedLease(RenewedLease):
+    reason: str = PAUSED_DISK
+
+
+async def mark_paused_disk(tx: Tx, claims: list[tuple[str, int]]) -> list[str]:
+    """Flag (task id, attempt) claims the guard paused; a pair that is not the
+    current claimed attempt is skipped. Returns the ids newly flagged."""
+    marked: list[str] = []
+    for task_id, attempt in claims:
+        cur = await tx.conn.execute(
+            "UPDATE tasks SET paused_disk_at = ? WHERE id = ? AND attempt = ?"
+            " AND state = 'claimed' AND paused_disk_at IS NULL",
+            (ts(tx.now), task_id, attempt),
+        )
+        if cur.rowcount:
+            marked.append(task_id)
+    return marked
+
+
+async def clear_paused_disk(
+    tx: Tx, claims: list[tuple[str, int]] | None = None
+) -> list[str]:
+    """Unflag the given paused claims (attempt-checked), or every one with `None`.
+
+    The pause's silence is not the session's: the quiet clock restarts at resume
+    (`activity_at = tx.now`, `quiet_at` cleared), so a claim is never flagged or
+    expired for time it spent paused. Returns the ids cleared."""
+    where = "state = 'claimed' AND paused_disk_at IS NOT NULL"
+    sets = "paused_disk_at = NULL, quiet_at = NULL, activity_at = ?"
+    if claims is None:
+        async with tx.conn.execute(
+            f"UPDATE tasks SET {sets} WHERE {where} RETURNING id",  # noqa: S608
+            (ts(tx.now),),
+        ) as cur:
+            return sorted(r["id"] for r in await cur.fetchall())
+    cleared: list[str] = []
+    for task_id, attempt in claims:
+        cur = await tx.conn.execute(
+            f"UPDATE tasks SET {sets} WHERE {where} AND id = ? AND attempt = ?",  # noqa: S608
+            (ts(tx.now), task_id, attempt),
+        )
+        if cur.rowcount:
+            cleared.append(task_id)
+    return cleared
+
+
+async def renew_paused_disk(tx: Tx) -> list[PausedLease]:
+    """Extend every paused claim's still-valid lease by its `lease_ttl_s`, reason
+    `paused_disk`: a paused session cannot heartbeat. A lease already past its
+    deadline is not revived; `timeout_s` still applies (open question 4)."""
+    async with tx.conn.execute(
+        "SELECT id, attempt, lease_ttl_s FROM tasks WHERE state = 'claimed'"
+        " AND paused_disk_at IS NOT NULL AND lease_expires_at > ? ORDER BY id",
+        (ts(tx.now),),
+    ) as cur:
+        rows = await cur.fetchall()
+    renewed: list[PausedLease] = []
+    for row in rows:
+        deadline = tx.now + timedelta(seconds=row["lease_ttl_s"])
+        await tx.conn.execute(
+            "UPDATE tasks SET lease_expires_at = ? WHERE id = ?",
+            (ts(deadline), row["id"]),
+        )
+        renewed.append(PausedLease(row["id"], row["attempt"], deadline))
+    return renewed
 
 
 # Reaper interval is 10 s (reaper.REAP_INTERVAL_S); three missed passes.
@@ -2537,10 +2613,15 @@ def stall_cause(
     observation: str | None,
     observation_at: str | None,
     claimed_at: str | None = None,
+    paused_disk_at: str | None = None,
 ) -> tuple[StallCause, str | None]:
     """Why a claim is silent, from the host's newest observation (3.7), with the
     observation time. Absent, stale (older than three heartbeats) or from before
-    this attempt's claim: `unknown`. Descriptive only: no decision reads it."""
+    this attempt's claim: `unknown`. A claim the disk guard paused is `paused_disk`
+    whatever the host saw: the API knows, it paused it (operations.spec.md 3.5).
+    Descriptive only: no decision reads it."""
+    if paused_disk_at is not None:
+        return "paused_disk", None
     if observation is None or observation_at is None:
         return "unknown", None
     at = datetime.fromisoformat(observation_at)
@@ -2562,13 +2643,17 @@ def stall_cause(
 
 def _stall_cause(tx: Tx, row: aiosqlite.Row) -> tuple[StallCause, str | None]:
     return stall_cause(
-        tx.now, row["observation"], row["observation_at"], row["claimed_at"]
+        tx.now,
+        row["observation"],
+        row["observation_at"],
+        row["claimed_at"],
+        row["paused_disk_at"],
     )
 
 
 _QUIET_SIGNALS = (
     "SELECT t.id, t.quiet_at, t.activity_at, t.progress_at, t.output_at, a.claimed_at,"
-    " t.observation, t.observation_at, t.state"
+    " t.observation, t.observation_at, t.paused_disk_at, t.state"
     " FROM tasks t"
     " LEFT JOIN task_attempts a ON a.task_id = t.id AND a.attempt = t.attempt"
 )
@@ -2582,7 +2667,8 @@ class QuietFacts(NamedTuple):
 
 
 def quiet_facts_from_row(row: aiosqlite.Row | None, now: datetime) -> QuietFacts:
-    """Quiet facts exist only while the task is claimed."""
+    """Quiet facts exist only while the task is claimed. A cause is given for a
+    quiet claim, or for one the disk guard paused (`paused_disk`)."""
     if row is None:
         return QuietFacts(None, None, None, None)
     claimed = row["state"] == "claimed"
@@ -2600,10 +2686,15 @@ def quiet_facts_from_row(row: aiosqlite.Row | None, now: datetime) -> QuietFacts
             output_at=row["output_at"],
             claimed_at=row["claimed_at"],
         )
+    paused_disk_at = row["paused_disk_at"] if claimed else None
     stall: StallCause | None = None
-    if quiet_at is not None:
+    if quiet_at is not None or paused_disk_at is not None:
         stall = stall_cause(
-            now, row["observation"], row["observation_at"], row["claimed_at"]
+            now,
+            row["observation"],
+            row["observation_at"],
+            row["claimed_at"],
+            paused_disk_at,
         )[0]
     return QuietFacts(quiet_at, last_at, last_source, stall)
 
@@ -2706,11 +2797,13 @@ async def flag_quiet(
 ) -> list[str]:
     """Flag claimed tasks with no signal for `quiet_after_s` (stall visibility).
 
-    Sets `quiet_at` once per silence and emits `task.quiet`. Never expires."""
+    Sets `quiet_at` once per silence and emits `task.quiet`. Never expires. A claim
+    the disk guard paused is skipped (operations.spec.md 3.5)."""
     async with tx.conn.execute(
         "SELECT t.*, a.claimed_at FROM tasks t"
         " JOIN task_attempts a ON a.task_id = t.id AND a.attempt = t.attempt"
-        " WHERE t.state = 'claimed' AND t.quiet_at IS NULL ORDER BY t.id"
+        " WHERE t.state = 'claimed' AND t.quiet_at IS NULL"
+        " AND t.paused_disk_at IS NULL ORDER BY t.id"
     ) as cur:
         rows = await cur.fetchall()
     quieted: list[str] = []
@@ -2723,7 +2816,8 @@ async def flag_quiet(
         try:
             async with tx.savepoint():
                 await tx.conn.execute(
-                    "UPDATE tasks SET quiet_at = ? WHERE id = ? AND quiet_at IS NULL",
+                    "UPDATE tasks SET quiet_at = ? WHERE id = ? AND quiet_at IS NULL"
+                    " AND paused_disk_at IS NULL",
                     (ts(tx.now), row["id"]),
                 )
                 await record(
@@ -3033,13 +3127,17 @@ async def _apply(
     automatic resume rule's fail with the cause, failure classes 3.2)."""
     old = S(row["state"])
     failures = row["failures"] if counts_failure else -1
-    ctx = TransitionContext(
-        failures=row["max_attempts"] if exhausted else failures,
-        max_attempts=row["max_attempts"],
-        review=review or Review(row["review"]),
-        deps_done=deps_done,
+    new = transition(
+        old,
+        action,
+        _context(
+            row,
+            deps_done=deps_done,
+            review=review,
+            failures=failures,
+            exhausted=exhausted,
+        ),
     )
-    new = transition(old, action, ctx)
     # strictly greater than the old version, so a transition always stales a pending edit
     bumped = ts(max(tx.now, datetime.fromisoformat(row["updated_at"]) + _TICK))
     fields: dict[str, Any] = {
@@ -3054,6 +3152,7 @@ async def _apply(
             "assignee_agent_id": None,
             "lease_expires_at": None,
             "timeout_at": None,
+            "paused_disk_at": None,  # a disk pause belongs to one attempt
             "oom_kill": (set_ or {}).get("oom_kill", 0),
         }
     assignments = ", ".join(f"{k} = ?" for k in fields)
@@ -3076,10 +3175,8 @@ async def _apply(
         await _ensure_usage_outcome(tx, row, action, data or {})
     # Decisions that waited on the old state are moot once the task leaves it
     # (an answered decision is already closed before its transition runs).
-    if new in TERMINAL:
-        await decisions.cancel_open(tx, "task", row["id"])
-    elif old in decisions.WAITS_IN and new is not old:
-        await decisions.cancel_open(tx, "task", row["id"], decisions.WAITS_IN[old])
+    if (moot := moot_decisions(old, new)) is not None:
+        await decisions.cancel_open(tx, "task", row["id"], moot[0])
     if old is S.CLAIMED and action in _INTERRUPTIONS:
         await cont.on_interruption(
             tx,
@@ -3119,6 +3216,67 @@ async def _apply(
             tx, row["created_by"].removeprefix("routine:"), row["id"]
         )
     return new
+
+
+def _context(
+    row: aiosqlite.Row,
+    *,
+    deps_done: bool = True,
+    review: Review | None = None,
+    failures: int | None = None,
+    exhausted: bool = False,
+) -> TransitionContext:
+    return TransitionContext(
+        failures=row["max_attempts"]
+        if exhausted
+        else row["failures"]
+        if failures is None
+        else failures,
+        max_attempts=row["max_attempts"],
+        review=review or Review(row["review"]),
+        deps_done=deps_done,
+    )
+
+
+def moot_decisions(
+    old: TaskState, new: TaskState
+) -> tuple[tuple[DecisionKind, ...] | None] | None:
+    """Which open decisions the move `old` -> `new` cancels: None for none,
+    `(None,)` for all of them, `(kinds,)` for those kinds."""
+    if new in TERMINAL:
+        return (None,)
+    if old in decisions.WAITS_IN and new is not old:
+        return (decisions.WAITS_IN[old],)
+    return None
+
+
+def check_reviewer(row: aiosqlite.Row, reviewer: Scope) -> None:
+    if row["review"] == Review.HUMAN and reviewer is not Scope.ADMIN:
+        raise ForbiddenError("this task requires human review")
+
+
+async def planned_state(
+    conn: aiosqlite.Connection, task_id: str, action: Action
+) -> tuple[aiosqlite.Row, TaskState]:
+    """The task row and the state `action` would move it to, without writing.
+    Raises InvalidTransitionError exactly as the real transition would."""
+    row = await _row(conn, task_id)
+    done = action is not Action.APPROVE or await _deps_done(conn, task_id)
+    return row, transition(S(row["state"]), action, _context(row, deps_done=done))
+
+
+def review_escalation(row: aiosqlite.Row) -> dict[str, Any] | None:
+    """The difficulty bump a rejected review earns, as `review` records it."""
+    return (
+        _escalation(row, "verification_failed")
+        .get("data", {})
+        .get("difficulty_escalated")
+    )
+
+
+async def _deps_done(conn: aiosqlite.Connection, task_id: str) -> bool:
+    states = await _states(conn, await _deps(conn, task_id))
+    return all(s is S.SUCCEEDED for s in states.values())
 
 
 def _interruption_reason(action: Action, data: dict[str, Any]) -> str:

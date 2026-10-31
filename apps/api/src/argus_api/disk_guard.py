@@ -2,7 +2,8 @@
 
 Measures free space on the data directory, optional instances root, and local
 Docker data root; keeps an in-memory hysteresis snapshot that claim paths read.
-Pause/shed are intentionally absent from this slice.
+Pause/shed are intentionally absent from this slice. Writer-ranking
+measurements live in ``disk_guard_writer_ranking`` (still unwired here).
 """
 
 from __future__ import annotations

@@ -121,10 +121,14 @@ investigation found a flaw, the corrected rule is stated and flagged **Decision*
 `instances_root` when configured, local Docker `DockerRootDir`), `st_dev` dedup,
 warn/refuse hysteresis, one warning event per warn episode, typed `disk_low` claim
 admission from an in-memory snapshot, and authenticated read-only visibility are
-implemented. **Still pending (not implemented):** `docker pause` / resume of paused
-containers, shed, paused leases / `paused_disk` heartbeat reason, timeout exemption
-while paused, cgroup `io.stat` "wrote most" ranking, directory-size sampling for
-shed, and any host-disk filling. Do not treat pause/shed settings as live.
+implemented. The paused-claim foundations below are implemented but **dormant**
+(no production path calls them). **Still pending (not implemented):** `docker pause`
+/ resume of paused containers and wiring the guard loop to the paused-claim API,
+shed, timeout exemption while paused, wiring ranked writers into pause/shed,
+and any host-disk filling. **Measurement foundation implemented** in
+``disk_guard_writer_ranking`` (cgroup ``io.stat`` parse/delta, bounded directory
+sample, deterministic ranking); still unwired from the guard loop. Do not treat
+pause/shed settings as live.
 
 One guard loop measures free space and acts in bands. The 64 MiB `disk` readiness
 check in 3.1 stays unchanged: data directory only, no effect from guard bands. The
@@ -177,19 +181,34 @@ the pending pause/shed slice and are not introduced here.
 
 ### Pause, leases, and stall detection
 
-*Pending — not implemented in the admission slice.*
+**Status — foundations implemented, dormant.** The state and the reaper rules
+below exist; nothing calls the guard-side API yet. *Still pending:* `docker pause`
+/ resume and shed, and the guard loop calling the API.
 
-- A pause renews the claim's lease with an explicit `paused_disk` heartbeat reason,
-  so the lease is not treated as lost. Heartbeats have no reason field today, and
-  `LeaseObservation` `session` is a closed enum (`running|gone|unknown`), so the
-  reason/session value is new.
+- **Guard-authoritative state.** The pause lives in the database: nullable
+  `tasks.paused_disk_at`, set and cleared only by the server-side service API
+  (`mark_paused_disk` / `clear_paused_disk`, per `(task id, attempt)`; clear also
+  takes "all"). Each touches only the current attempt of a `claimed` task. No HTTP
+  route, MCP tool, heartbeat field or `LeaseObservation` value sets, clears or
+  implies it; `LeaseObservation` is unchanged. Every claim exit (complete, fail,
+  release, expire, requeue, …) and every new claim clear it, so it never reaches
+  another attempt.
+- A paused session cannot heartbeat, so the guard renews paused claims' leases
+  itself (`renew_paused_disk`, reason `paused_disk`), each by its `lease_ttl_s`.
+  An already expired lease is not revived; an unrenewed paused lease expires as
+  any other.
 - A heartbeat alone does not stop quiet or stalled: a paused container stops
-  writing `activity_at`. Therefore the guard exposes the set of task ids it has
-  paused to the reaper; quiet and `expire_stalled` skip those claims.
-- `stall_cause` gains `paused_disk` for visibility only. No worker reports the
-  pause as authority; the API knows because it issued `docker pause`.
+  writing `activity_at`. `flag_quiet` and `expire_stalled` skip claims with
+  `paused_disk_at` set, as a SQL condition in their own write transaction, so a
+  pause or resume and an expiry never interleave.
+- **Resume restarts the quiet clock.** Clearing the pause sets `activity_at` to
+  the resume time and clears `quiet_at`: time spent paused never counts toward
+  quiet or stalled. No other worker signal is written.
+- `stall_cause` gains `paused_disk` for visibility only, derived from the column,
+  never from an observation (task read, inbox, expiry errors and events). No worker
+  reports the pause as authority; the API knows because it paused the claim.
 - The wall-clock `timeout_s` is not exempt while paused unless the owner decides
-  so (open question).
+  so (open question): a paused claim still times out.
 
 ### Who runs the loop
 
@@ -206,7 +225,10 @@ Kubernetes get the warn and refuse bands only.
 
 ### "Wrote most"
 
-*Pending — not implemented.*
+**Status — measurement foundation implemented (unwired).** Pause/shed callers
+will rank by cgroup v2 ``io.stat`` ``wbytes`` delta per container, sampled at
+pause time and at shed time, with a bounded directory-size sample at pause time
+for tie-break and display. Shed wiring is still pending.
 
 - Rank by the cgroup v2 `io.stat` `wbytes` delta per container, sampled at pause
   time and at shed time.

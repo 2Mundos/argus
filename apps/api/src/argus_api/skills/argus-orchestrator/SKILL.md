@@ -70,7 +70,12 @@ tokens. With an orchestrator token, ask a human admin for those changes.
 
 `get_inbox` returns rows with `state`, `decision_id`, `decision_kind`,
 `audience` and `artifact_ids`, plus totals by state and decision kind. Read the
-questions with `list_decisions(view="detail")` or `get_decision(id)`.
+questions with `list_decisions(view="detail")` or `get_decision(id)`, or in one
+call with `get_inbox(view="actionable")`: per row, the question, who may answer
+(`caller_may_attempt` is not a grant), each option's effect, direct and
+transitive impact, and evidence labelled by `source` (`worker_claim` is
+unverified) and `status`. `forge=true` adds a few live PR reads (a stored state
+they contradict is `conflict`). Its `next` is a hint; decide yourself.
 
 | Decision kind | Options | Effect of the answer |
 | --- | --- | --- |
