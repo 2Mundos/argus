@@ -401,8 +401,9 @@ when the work is hard. Any other `FAIL:` is `worker_fail`.
   flight at a time; a `409` or a rejection ends it, as does Argus ending the
   claim. It logs the state Argus answered.
 - OOM (3.2.1): migration `0060_oom_streak.sql` adds `tasks.oom_kill` and
-  `pools.oom_streak`; `FailRequest.oom_kill`; `env_oom` in `ENV_BLOCK_REASONS`
-  and Fleet `REASONS`; `PoolHealth.oom_streak`; `Task.oom_kill`; the channel's
+  `pools.oom_streak`; `FailRequest.oom_kill`; `env_oom` (`ENV_OOM`) in
+  `FAILURE_CLASS` as `environment` and in Fleet `REASONS`, but not in
+  `ENV_BLOCK_REASONS`: a worker cannot send it as a block; `PoolHealth.oom_streak`; `Task.oom_kill`; the channel's
   `readSessionEvidence` reads `OOMKilled` and `Name`, and `reportExit` sends the
   fact with each repeat of the same report. The operator smoke is the
   [OOM smoke](../runbooks/2026-10-31.oom-smoke.ref.md) runbook.
