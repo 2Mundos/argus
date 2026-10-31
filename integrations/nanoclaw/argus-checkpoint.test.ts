@@ -17,11 +17,12 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   acquireLease,
   checkpointRef,
   checkpointTaskWorkspace,
+  GIT_STEP_TIMEOUT_MS,
   parseCheckpointRef,
   restoreTaskWorkspace,
 } from "./argus-checkpoint.js";
@@ -32,6 +33,39 @@ import {
   TASK_WORKSPACES_DIR,
   taskWorkspacePath,
 } from "./argus-workspace.js";
+
+// Patch steps (gitToFile) run git directly, not through the injected runner: observe them at
+// the process boundary. They are the only callers that ask for a buffer.
+const patchSteps = vi.hoisted(() => ({
+  seen: [] as { timeout?: number }[],
+  kill: false,
+}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const { promisify: p } = await import("node:util");
+  const real = p(actual.execFile) as (...a: unknown[]) => Promise<unknown>;
+  const execFile = Object.assign(actual.execFile.bind(actual), {
+    [p.custom]: (file: string, args: string[], opts: { encoding?: string; timeout?: number }) => {
+      if (opts?.encoding === "buffer") {
+        patchSteps.seen.push({ timeout: opts.timeout });
+        if (patchSteps.kill)
+          return Promise.reject(
+            Object.assign(new Error("Command failed: git diff"), {
+              killed: true,
+              signal: "SIGTERM",
+              code: null,
+            }),
+          );
+      }
+      return real(file, args, opts);
+    },
+  });
+  return { ...actual, execFile };
+});
+afterEach(() => {
+  patchSteps.seen.length = 0;
+  patchSteps.kill = false;
+});
 
 const REPO = "https://git.example.test/org/repo.git";
 const NODE = "node-a";
@@ -596,6 +630,32 @@ describe("leases, concurrency and limits", () => {
       reason: "env_checkpoint_limit",
     });
     expect(readdirSync(taskStore(w))).toEqual([]);
+  });
+
+  it("gives the patch steps the spec's 30 s git limit", async () => {
+    expect(GIT_STEP_TIMEOUT_MS).toBe(30_000);
+    const w = await world();
+    expect(await ckpt(w)).toMatchObject({ ok: true, empty: false });
+    expect(patchSteps.seen).toEqual([
+      { timeout: GIT_STEP_TIMEOUT_MS },
+      { timeout: GIT_STEP_TIMEOUT_MS },
+    ]);
+  });
+
+  it("reports a patch step past its time limit as a limit, leaving no partial checkpoint", async () => {
+    const w = await world();
+    patchSteps.kill = true;
+    expect(await ckpt(w)).toMatchObject({ ok: false, reason: "env_checkpoint_limit" });
+    expect(patchSteps.seen.length).toBeGreaterThan(0);
+    expect(readdirSync(taskStore(w))).toEqual([]);
+  });
+
+  it("reports a restore-time patch comparison past its time limit as a limit", async () => {
+    const w = await world();
+    expect(await ckpt(w)).toMatchObject({ ok: true, empty: false });
+    patchSteps.kill = true;
+    expect(await restore(w)).toMatchObject({ ok: false, reason: "env_checkpoint_limit" });
+    expect(existsSync(wsB(w))).toBe(false);
   });
 
   it("keeps the newest three checkpoints of a task and only that task's", async () => {
