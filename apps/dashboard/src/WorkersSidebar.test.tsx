@@ -6,14 +6,17 @@ import styles from "./styles.css?raw";
 import { WorkerPanelProvider } from "./WorkerPanel";
 import { WorkersSidebar } from "./WorkersSidebar";
 
-const calls = vi.hoisted(() => ({ paths: [] as string[] }));
+const calls = vi.hoisted(() => ({
+  paths: [] as string[],
+  agents: undefined as Agent[] | undefined,
+}));
 const openWorker = vi.hoisted(() => vi.fn());
 
 vi.mock("./api", () => ({
   api: { GET: (path: string) => path },
   call: async (path: string) => {
     calls.paths.push(path);
-    if (path === "/api/agents") return [liveWorker];
+    if (path === "/api/agents") return calls.agents ?? [liveWorker];
     throw new Error(`unexpected ${path}`);
   },
 }));
@@ -65,6 +68,7 @@ function renderRail(selectedId: string | null = null) {
 afterEach(() => {
   cleanup();
   calls.paths = [];
+  calls.agents = undefined;
   openWorker.mockClear();
   localStorage.clear();
 });
@@ -112,6 +116,56 @@ describe("WorkersSidebar", () => {
       }),
     );
     expect(openWorker).toHaveBeenCalledWith("agent-w1");
+  });
+});
+
+describe("WorkersSidebar quiet and ended workers", () => {
+  it("shows state quiet with the age of quiet_since, not the heartbeat age", async () => {
+    calls.agents = [{ ...liveWorker, quiet_since: "2026-10-29T14:35:00Z" }];
+    renderRail();
+    const chip = await screen.findByRole("button", {
+      name: /Open worker nanoclaw-socket-abc12345 \(quiet\)/i,
+    });
+    expect(chip.getAttribute("title")).toContain("quiet");
+    expect(chip.querySelector(".worker-age")?.textContent).toBe("25m");
+    expect(chip.textContent).not.toContain("10s");
+  });
+
+  it("lists at most eight ended workers, newest first, dimmed with end_reason", async () => {
+    const ended = (n: number): Agent => ({
+      ...liveWorker,
+      id: `agent-e${n}`,
+      name: `ended-${n}`,
+      state: "lost",
+      claimed_tasks: 0,
+      ended_at: `2026-10-29T${String(n).padStart(2, "0")}:00:00Z`,
+      end_reason: `reason-${n}`,
+    });
+    calls.agents = [liveWorker, ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(ended)];
+    renderRail();
+    await screen.findByRole("button", { name: /Open worker ended-10/i });
+    const chips = [...document.querySelectorAll(".worker-chip.worker-ended")];
+    expect(chips.map((c) => c.querySelector(".worker-name")?.textContent)).toEqual([
+      "ended-10",
+      "ended-9",
+      "ended-8",
+      "ended-7",
+      "ended-6",
+      "ended-5",
+      "ended-4",
+      "ended-3",
+    ]);
+    expect(chips[0]?.querySelector(".worker-end-reason")?.textContent).toBe("reason-10");
+    expect(screen.queryByText("reason-2")).toBeNull();
+  });
+
+  it("omits the end reason when it is null", async () => {
+    calls.agents = [
+      { ...liveWorker, state: "gone", ended_at: "2026-10-29T14:00:00Z", end_reason: null },
+    ];
+    renderRail();
+    await screen.findByRole("button", { name: /Open worker nanoclaw-socket-abc12345/i });
+    expect(document.querySelector(".worker-end-reason")).toBeNull();
   });
 });
 
