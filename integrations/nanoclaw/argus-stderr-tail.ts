@@ -85,6 +85,17 @@ export interface SessionEvidence {
   truncated?: boolean;
   /** See SessionTail.complete; absent means not known to be complete. */
   complete?: boolean;
+  /** `State.OOMKilled` from `docker inspect`; absent when not read. Never from the logs. */
+  oomKilled?: boolean;
+  /** The inspected container's name (without the leading "/"); absent when not read. */
+  container?: string;
+}
+
+/** True only for the kernel OOM kill of `container` (failure classes 3.2.1). */
+export function isOomKill(evidence: SessionEvidence, container: string): boolean {
+  return (
+    evidence.oomKilled === true && evidence.exitCode === 137 && evidence.container === container
+  );
 }
 
 /** The tail as stored in the `stderr-tail` artifact. */
@@ -130,15 +141,23 @@ export async function readSessionEvidence(
   lines = SESSION_LOG_TAIL_LINES,
 ): Promise<SessionEvidence> {
   let exitCode: number | null = null;
+  const state: Pick<SessionEvidence, "oomKilled" | "container"> = {};
   try {
     const raw = (
-      await run(["inspect", "--format", "{{.State.ExitCode}}|{{.State.Running}}", containerId])
+      await run([
+        "inspect",
+        "--format",
+        "{{.State.ExitCode}}|{{.State.Running}}|{{.State.OOMKilled}}|{{.Name}}",
+        containerId,
+      ])
     ).stdout.trim();
-    const [code, running] = raw.split("|");
+    const [code, running, oom, name] = raw.split("|");
     if (running !== "true" && code !== undefined && code !== "") {
       exitCode = Number.parseInt(code, 10);
       if (Number.isNaN(exitCode)) exitCode = null;
     }
+    if (oom === "true" || oom === "false") state.oomKilled = oom === "true";
+    if (name) state.container = name.replace(/^\//, "");
   } catch {
     /* container may already be removed */
   }
@@ -154,8 +173,9 @@ export async function readSessionEvidence(
       logTail: tail.text,
       truncated: tail.truncated,
       complete: !tail.truncated && read < lines,
+      ...state,
     };
   } catch {
-    return { exitCode, logTail: "", truncated: false, complete: false };
+    return { exitCode, logTail: "", truncated: false, complete: false, ...state };
   }
 }

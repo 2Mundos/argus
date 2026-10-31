@@ -54,6 +54,7 @@ cp "$here/argus-stall-causes.test.ts" "$target/src/channels/argus-stall-causes.t
 cp "$here/argus-auto-resume.test.ts" "$target/src/channels/argus-auto-resume.test.ts"
 cp "$here/argus-stderr-tail.ts" "$target/src/channels/argus-stderr-tail.ts"
 cp "$here/argus-stderr-tail.test.ts" "$target/src/channels/argus-stderr-tail.test.ts"
+cp "$here/argus-oom.test.ts" "$target/src/channels/argus-oom.test.ts"
 cp "$here/argus-claim-isolation.test.ts" "$target/src/channels/argus-claim-isolation.test.ts"
 mkdir -p "$target/src/channels/fixtures"
 rm -rf "$target/src/channels/fixtures/continuation"
