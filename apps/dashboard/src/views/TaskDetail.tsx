@@ -344,6 +344,12 @@ export function TaskDetail({
                 <dd>{blockReasonText(task.block_reason)}</dd>
               </>
             )}
+            {task.oom_kill && (
+              <>
+                <dt>Last exit</dt>
+                <dd>OOM-killed (the kernel reported it out of memory)</dd>
+              </>
+            )}
             <dt>Kind</dt>
             <dd>{task.kind}</dd>
             <dt>Difficulty</dt>

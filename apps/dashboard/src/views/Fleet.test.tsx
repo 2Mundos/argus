@@ -65,6 +65,7 @@ function health(over: Record<string, unknown> = {}) {
         live: 1,
         running: 1,
         last_heartbeat_at: null,
+        oom_streak: 2,
         source: "agents.last_heartbeat_at",
       },
     ],
@@ -195,6 +196,8 @@ describe("Fleet", () => {
     const link = screen.getByRole("link", { name: "Build it" });
     expect(link.getAttribute("href")).toBe("#tasks/t-9");
     expect(screen.getByText("auth_missing: login")).toBeTruthy();
+    const pools = screen.getByRole("columnheader", { name: "OOM streak" }).closest("table");
+    expect(pools?.querySelector("tbody tr")?.lastElementChild?.textContent).toBe("2");
   });
 
   it("shows yield with its usage coverage, no data when unknown", async () => {

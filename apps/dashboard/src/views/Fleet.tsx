@@ -94,12 +94,13 @@ function Body({ h }: { h: FleetHealth }) {
             <th>Live / desired</th>
             <th>Running</th>
             <th>Last heartbeat</th>
+            <th>OOM streak</th>
           </tr>
         </thead>
         <tbody>
           {h.pools.length === 0 && (
             <tr>
-              <td colSpan={5}>{NO_DATA}</td>
+              <td colSpan={6}>{NO_DATA}</td>
             </tr>
           )}
           {h.pools.map((p) => (
@@ -111,6 +112,7 @@ function Body({ h }: { h: FleetHealth }) {
               </td>
               <td>{p.running}</td>
               <td>{p.last_heartbeat_at ? <DateChip at={p.last_heartbeat_at} /> : NO_DATA}</td>
+              <td>{p.oom_streak ?? 0}</td>
             </tr>
           ))}
         </tbody>
