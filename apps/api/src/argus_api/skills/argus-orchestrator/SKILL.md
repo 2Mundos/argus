@@ -93,12 +93,16 @@ question is cancelled). Use it only when the question no longer applies.
 Before `accept`:
 
 1. `get_tasks([id], view="detail")`: read the spec, acceptance and `result`.
-2. `get_task_continuation(id)`: every checklist item `done` with evidence;
+2. `get_task_delivery(id)`: forge PR/head/base, exact-head checks/statuses,
+   mergeability, review evidence; checklist and authorization are separate
+   fields. Treat `partial` and `stale` as incomplete evidence. Green checks do
+   not authorize merge; merged is not accepted.
+3. `get_task_continuation(id)`: every checklist item `done` with evidence;
    `gaps` lists what Argus does not know. Merged is not accepted.
-3. `list_artifacts(id)`, then `verify_artifact` on each artifact you rely on
+4. `list_artifacts(id)`, then `verify_artifact` on each artifact you rely on
    (`ok` only means the bytes are intact) and `read_artifact` to read it.
    Follow `next_offset` until it is null.
-4. `get_task_log(id)` if the result is thin or contradicts the artifacts.
+5. `get_task_log(id)` if the result is thin or contradicts the artifacts.
 
 Accept only if the acceptance criteria are met on the evidence. Otherwise
 reject with notes that say exactly what is missing. The notes become part of

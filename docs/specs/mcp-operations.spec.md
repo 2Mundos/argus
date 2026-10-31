@@ -252,6 +252,18 @@ Findings outside the gap list:
 `report_task_models` (agents), `get_task_models` and `get_agent_models` (any
 token) wrap the model trace endpoints ([spec](model-observability.spec.md)).
 
+## 3.2c Delivery evidence for inbox reviews
+
+`get_task_delivery` / `GET /api/tasks/{id}/delivery` is the bounded, read-only
+projection of forge PR/head/base/mergeability, exact-head checks/statuses,
+optional required gates, review evidence, and (separately) Argus checklist and
+authorization ([task delivery](task-delivery.spec.md) 3.3–3.5). It is listed to
+anyone who can read the task. Inbox rows do **not** embed it: after `get_inbox`
+selects a `review` (or `in_review`) row, the orchestrator calls
+`get_task_delivery` for that task. Green checks do not authorize merge; merge is
+not acceptance. Partial forge failures and stale head are disclosed on the
+projection.
+
 ## 3.3 P1 — fleet
 
 - **Inspect:** `GET /api/pools/{name}/inspect` → MCP `inspect_pool(name)`
