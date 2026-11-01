@@ -16,6 +16,8 @@ for dir in "$target/src/channels" "$target/dist/channels"; do
 done
 cp "$here/engines/model-policy.d.mts" "$target/src/channels/"
 cp "$here/argus.ts" "$target/src/channels/argus.ts"
+cp "$here/argus-quota-resume.ts" "$target/src/channels/argus-quota-resume.ts"
+cp "$here/argus-quota-resume.test.ts" "$target/src/channels/argus-quota-resume.test.ts"
 cp "$here/argus-chat.ts" "$target/src/channels/argus-chat.ts"
 cp "$here/argus-chat.test.ts" "$target/src/channels/argus-chat.test.ts"
 cp "$here/argus-local-forward.ts" "$target/src/channels/argus-local-forward.ts"

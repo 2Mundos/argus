@@ -2529,7 +2529,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     const nativeSession = async (): Promise<{ session_id: string; engine: string } | undefined> => {
       if (pausedProvider !== RESUME_ENGINE || !cfg.nativeSessions) return undefined;
       const id = await cfg.nativeSessions.observe(claimedAt).catch(() => null);
-      return id ? { session_id: id, engine: pausedProvider } : undefined;
+      return id ? { session_id: id, engine: RESUME_ENGINE } : undefined;
     };
     if (f.kind === "exhausted" && cfg.accounts && account) {
       const exhausted = account;
