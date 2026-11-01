@@ -461,6 +461,15 @@ class AccountLease(BaseModel):
     model: str | None = None
 
 
+class NativeSessionReport(BaseModel):
+    """The engine's own session the quota pause left behind (quota resume spec 3.2).
+    Optional on a quota report; the server adds the node and ignores it for any other
+    ending."""
+
+    session_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,64}$")
+    engine: str = Field(min_length=1, max_length=32)
+
+
 class ExhaustedReport(BaseModel):
     """Mark a held account exhausted for the caller's live task claim.
 
@@ -483,6 +492,7 @@ class ExhaustedReport(BaseModel):
     reason_code: Literal["quota_exhausted", "auth_expired"] | None = None
     reset_status: Literal["stated", "ambiguous", "absent"] | None = None
     reset_text: str | None = Field(default=None, max_length=120)  # provider's words
+    native_session: NativeSessionReport | None = None
 
     @model_validator(mode="after")
     def _reset_status_matches_until(self) -> "ExhaustedReport":

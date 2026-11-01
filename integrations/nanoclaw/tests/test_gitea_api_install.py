@@ -446,6 +446,18 @@ def test_install_sh_wires_the_preflight_session_files() -> None:
     assert (NANOCLAW / "argus-onecli-preflight-lease.test.ts").is_file()
 
 
+def test_install_sh_wires_quota_resume_files() -> None:
+    """A fresh install copies the quota-resume module and its tests."""
+    script = (NANOCLAW / "install.sh").read_text()
+    for name in ("argus-quota-resume.ts", "argus-quota-resume.test.ts"):
+        assert f'cp "$here/{name}" "$target/src/channels/{name}"' in script
+        assert (NANOCLAW / name).is_file()
+    assert (
+        "src/channels/argus-quota-resume.test.ts"
+        in (NANOCLAW / "provision.sh").read_text()
+    )
+
+
 def test_install_sh_wires_copilot_delegate_runtime() -> None:
     """Channel install copies the Copilot stub and patches OneCLI when present."""
     script = INSTALL_SH.read_text(encoding="utf-8")

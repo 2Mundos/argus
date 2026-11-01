@@ -415,7 +415,7 @@ async def test_0065_upgrade_keeps_data_and_is_idempotent(tmp_path: Path) -> None
     for _ in range(2):  # the upgrade, then a reopen that must change nothing
         db = await Database.open(path, migrations=migrations)
         async with db.read() as conn, conn.execute("PRAGMA user_version") as cur:
-            assert (await cur.fetchone())[0] == 65
+            assert (await cur.fetchone())[0] == len(migrations)
         assert await all_tasks(db) == [old.id]
         await db.close()
 

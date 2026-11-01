@@ -2905,6 +2905,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/quota-resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take Quota Resume
+         * @description Record what the channel did with the offered session (`resumed`, or a fresh
+         *     `fallback` with the reason). `first` is true once per offered session: send the
+         *     one operator message only then.
+         */
+        post: operations["take_quota_resume_api_tasks__task_id__quota_resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/release": {
         parameters: {
             query?: never;
@@ -4451,6 +4473,7 @@ export interface components {
             /** Project */
             project: string;
             prompt_trust: components["schemas"]["PromptTrust"];
+            quota_resume?: components["schemas"]["QuotaResume"] | null;
             /** Refill At */
             refill_at?: string | null;
             /** Required Capabilities */
@@ -5943,6 +5966,7 @@ export interface components {
         ExhaustedReport: {
             /** Attempt */
             attempt?: number | null;
+            native_session?: components["schemas"]["NativeSessionReport"] | null;
             /**
              * Reason
              * @default
@@ -6009,6 +6033,7 @@ export interface components {
             attempt: number;
             /** Error */
             error: string;
+            native_session?: components["schemas"]["NativeSessionReport"] | null;
             /**
              * Oom Kill
              * @default false
@@ -7285,6 +7310,18 @@ export interface components {
             /** User */
             user: string | null;
         };
+        /**
+         * NativeSessionReport
+         * @description The engine's own session the quota pause left behind (quota resume spec 3.2).
+         *     Optional on a quota report; the server adds the node and ignores it for any other
+         *     ending.
+         */
+        NativeSessionReport: {
+            /** Engine */
+            engine: string;
+            /** Session Id */
+            session_id: string;
+        };
         /** NextAction */
         NextAction: {
             /**
@@ -8402,6 +8439,33 @@ export interface components {
             used_percent?: number | null;
             /** Window Minutes */
             window_minutes?: number | null;
+        };
+        /**
+         * QuotaResume
+         * @description The native session the previous attempt's quota pause left, offered once to
+         *     the next claim (quota resume spec 3.3). `node` is the agent that held it.
+         */
+        QuotaResume: {
+            /** Engine */
+            engine: string;
+            /** From Attempt */
+            from_attempt: number;
+            /** Node */
+            node: string;
+            /** Session Id */
+            session_id: string;
+        };
+        /** QuotaResumeTaken */
+        QuotaResumeTaken: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "resumed" | "fallback";
+            /** Reason */
+            reason?: string | null;
         };
         /**
          * QuotaStatus
@@ -16377,6 +16441,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    take_quota_resume_api_tasks__task_id__quota_resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuotaResumeTaken"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
                 };
             };
             /** @description Validation Error */

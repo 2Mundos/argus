@@ -110,6 +110,9 @@ every new dependency is judged against it.
   attempt in flight; delivered on heartbeat, injected into the NanoClaw session as a
   framed operator instruction; expires with the attempt, or ends `unknown` when it
   was dispatched and never acknowledged
+- [Quota resume](specs/quota-resume.spec.md) — a quota pause keeps the Claude session
+  id; the next claim on the same node and engine sends one framed message or falls
+  back to a fresh session; resume itself is not wired yet
 - [Account usage](specs/account-usage.spec.md) — tokens spent and quota left per
   provider account: reported usage, Codex quota probe, Cursor pools, charts
 - [Cost view](specs/cost-view.spec.md) — the Cost tab: tokens and estimated cost
@@ -200,9 +203,7 @@ every new dependency is judged against it.
 - [Agent resource hygiene](drafts/2026-10-29.agent-resource-hygiene.draft.md) —
   agent commands die before the harness on OOM, CPU counts match the quota,
   OOM kills classified as `env_oom`
-- [Quota resume](drafts/2026-10-29.quota-resume.draft.md) — after a quota pause,
-  resume the same native conversation under the new account; a slice of
-  worker-efficiency P4
+- [Quota resume draft](drafts/2026-10-29.quota-resume.draft.md) — superseded by the spec
 - [Quota resume research](research/2026-10-29.quota-resume.research.md) — credential
   swap is a container recreate today; session validity and Codex resume left open;
   spec-update plan folding into P4
