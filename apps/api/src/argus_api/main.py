@@ -28,7 +28,7 @@ from argus_api.agents.routes import router as agents_router
 from argus_api.artifacts.routes import router as artifacts_router
 from argus_api.artifacts.store import LocalArtifactStore
 from argus_api.auth import ensure_admin_token
-from argus_api.config import Settings
+from argus_api.config import Settings, refuse_preview_data
 from argus_api.conversations.routes import router as conversations_router
 from argus_api.db import Database, DataDirLock
 from argus_api.decisions.routes import router as decisions_router
@@ -96,6 +96,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     settings = Settings.from_env()
+    refuse_preview_data(settings.data_dir)
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     with DataDirLock(settings.data_dir):
         db = await Database.open(settings.db_path)

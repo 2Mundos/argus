@@ -33,3 +33,6 @@ node_modules
 
 # Delegate runtime scratch (local auth stubs / chat state)
 .argus-delegate-runtime/
+
+# Per-checkout dev state (make dev-api)
+/.argus/

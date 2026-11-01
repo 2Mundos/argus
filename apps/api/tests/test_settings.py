@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from argus_api import model_policy
+from argus_api.config import refuse_preview_data
 from argus_api.errors import ValidationFailedError
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
@@ -591,3 +592,19 @@ def test_independent_review_blocks_when_delivery_has_no_head_sha(
     rows = events["items"] if isinstance(events, dict) else events
     blocked = [e for e in rows if e["subject_id"] == claimed["id"]]
     assert blocked and blocked[0]["data"]["reason"] == "no_review_head", events
+
+
+def test_preview_data_dir_is_refused_outside_the_preview_checkout(
+    tmp_path: Path,
+) -> None:
+    preview = tmp_path / "work" / "argus"
+    (preview / "data").mkdir(parents=True)
+    worktree = tmp_path / "worktree"
+    with pytest.raises(ValueError, match="preview install"):
+        refuse_preview_data(preview / "data", worktree, preview)
+    with pytest.raises(ValueError, match="preview install"):  # via a symlink
+        link = tmp_path / "link"
+        link.symlink_to(preview / "data")
+        refuse_preview_data(link, worktree, preview)
+    refuse_preview_data(preview / "data", preview, preview)  # the service itself
+    refuse_preview_data(worktree / ".argus", worktree, preview)
