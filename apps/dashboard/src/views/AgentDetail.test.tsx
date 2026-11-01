@@ -149,6 +149,25 @@ describe("AgentDetail", () => {
     expect(mock.fetchText).not.toHaveBeenCalled();
   });
 
+  it("links the held task as a compact chip in the panel State row", async () => {
+    render(<AgentDetail agentId="agent-1" onClose={() => {}} variant="panel" />);
+    await flush();
+    const chip = screen.getByRole("link", { name: /Open task Global - Finance canary/ });
+    expect(chip.getAttribute("href")).toBe("#tasks/task-1");
+    expect(chip.className).toMatch(/task-chip/);
+    expect(chip.textContent).toBe("Finance canary");
+    // Holding a task already implies active; the state badge is omitted.
+    expect(screen.queryByText("active")).toBeNull();
+  });
+
+  it("keeps the active badge in the panel when the worker holds no task", async () => {
+    mock.tasks = [];
+    render(<AgentDetail agentId="agent-1" onClose={() => {}} variant="panel" />);
+    await flush();
+    expect(screen.getByText("active")).toBeTruthy();
+    expect(screen.getByText("Holds no task")).toBeTruthy();
+  });
+
   it("shows current and recent models from the agent models endpoint", async () => {
     mock.models = {
       current: {
@@ -171,7 +190,9 @@ describe("AgentDetail", () => {
     };
     render(<AgentDetail agentId="agent-1" onClose={() => {}} />);
     await flush();
-    expect(screen.getByText(/codex · gpt-6/)).toBeTruthy();
+    const chip = screen.getByTitle(/codex · gpt-6 · configured/);
+    expect(chip.className).toMatch(/model-chip/);
+    expect(chip.textContent).toMatch(/gpt-6/);
     expect(screen.getByLabelText("Recent model runs").textContent).toMatch(
       /delegate · claude · sonnet · succeeded/,
     );

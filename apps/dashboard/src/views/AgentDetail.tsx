@@ -9,9 +9,10 @@ import { api, call, fetchText } from "../api";
 import { DateChip } from "../DateChip";
 import { shortId } from "../format";
 import { useLiveData } from "../live";
-import { TaskLabel } from "../TaskLabel";
+import { TaskLabel, taskLabelText } from "../TaskLabel";
 import { renderTerminalText } from "../terminalLog";
 import { useNow } from "./Activity";
+import { ModelChip } from "./ModelChip";
 import { TaskTerminal } from "./TaskTerminal";
 
 const LOG_TAIL = 200;
@@ -132,27 +133,36 @@ export function AgentDetail({
         <dd>{agent.role}</dd>
         <dt>State</dt>
         <dd className={compact ? "agent-state-work" : undefined}>
-          <span className={`badge agent-${agent.state}`}>{agent.state}</span>
+          {!(compact && agent.state === "active" && data.work.length > 0) && (
+            <span className={`badge agent-${agent.state}`}>{agent.state}</span>
+          )}
           {agent.end_reason && <span className="muted small"> {agent.end_reason}</span>}
           {compact &&
             (data.work.length === 0 ? (
-              <span className="muted"> · Holds no task</span>
+              <span className="muted">Holds no task</span>
             ) : (
-              data.work.map((task) => (
-                <span
-                  key={task.id}
-                  className="agent-held-task"
-                  title={task.progress_message ?? undefined}
-                >
-                  {" · "}
-                  <TaskLabel title={task.title} project={task.project} />
-                  <span className="muted">
-                    {" "}
-                    {shortId(task.id)}
-                    {task.progress_percent != null ? ` · ${task.progress_percent}%` : ""}
-                  </span>
-                </span>
-              ))
+              data.work.map((task) => {
+                const full = taskLabelText(task.title, task.project);
+                const tip = [
+                  full,
+                  shortId(task.id),
+                  task.progress_percent != null ? `${task.progress_percent}%` : null,
+                  task.progress_message,
+                ]
+                  .filter(Boolean)
+                  .join(" · ");
+                return (
+                  <a
+                    key={task.id}
+                    href={`#tasks/${task.id}`}
+                    className="task-chip"
+                    title={tip}
+                    aria-label={`Open task ${full}`}
+                  >
+                    <span className="task-chip-label">{task.title}</span>
+                  </a>
+                );
+              })
             ))}
         </dd>
         <dt>Heartbeat</dt>
@@ -175,21 +185,28 @@ export function AgentDetail({
         <dd className="worker-caps">{agent.capabilities.join(", ") || "—"}</dd>
         {data?.models &&
           Object.keys(data.models.current).length > 0 &&
-          Object.entries(data.models.current).map(([layer, run]) => (
-            <Fragment key={layer}>
-              <dt>{layer}</dt>
-              <dd>
-                {run.executor ?? run.engine ?? "unknown"} ·{" "}
-                {run.observed_model ?? run.configured_model ?? run.requested_model ?? "?"}
-                {!compact &&
-                  (run.observed_model
-                    ? ` (${run.evidence})`
-                    : run.configured_model
-                      ? " (configured)"
-                      : "")}
-              </dd>
-            </Fragment>
-          ))}
+          Object.entries(data.models.current).map(([layer, run]) => {
+            const tool = run.executor ?? run.engine;
+            const model = run.observed_model ?? run.configured_model ?? run.requested_model ?? null;
+            const detail = run.observed_model
+              ? run.evidence
+              : run.configured_model
+                ? "configured"
+                : null;
+            return (
+              <Fragment key={layer}>
+                <dt>{layer}</dt>
+                <dd>
+                  <ModelChip
+                    tool={tool}
+                    model={model}
+                    observed={run.observed_model != null}
+                    detail={detail}
+                  />
+                </dd>
+              </Fragment>
+            );
+          })}
       </dl>
       {!compact && data?.models && Object.keys(data.models.current).length === 0 && (
         <p className="muted">No model reports.</p>
