@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pytest
 from api_support import insert_agent
@@ -17,6 +18,8 @@ from argus_api.disk_guard import (
     DiskGuard,
     DockerRootQuery,
     RootSample,
+    StatFn,
+    StatvfsFn,
     Thresholds,
     advance,
     default_docker_root,
@@ -49,6 +52,18 @@ class FakeStat:
 class FakeVfs:
     f_bavail: int
     f_frsize: int = 1
+
+
+def as_stat(fn: Callable[[Path], FakeStat]) -> StatFn:
+    return cast(StatFn, fn)
+
+
+def as_statvfs(fn: Callable[[Path], FakeVfs]) -> StatvfsFn:
+    return cast(StatvfsFn, fn)
+
+
+def _statvfs_boom(_p: Path) -> FakeVfs:
+    raise OSError("boom")
 
 
 def settings_for(tmp_path: Path, **kw) -> Settings:
@@ -114,8 +129,8 @@ def guard_for(
     else:
         g._docker_root = lambda: DockerRootQuery("not_applicable")
 
-    g._stat = stat  # type: ignore[method-assign]
-    g._statvfs = statvfs  # type: ignore[method-assign]
+    g._stat = as_stat(stat)
+    g._statvfs = as_statvfs(statvfs)
     g._clock = lambda: mono[0]
     return g
 
@@ -154,8 +169,8 @@ def test_st_dev_dedup_and_worst_band(tmp_path: Path) -> None:
         data_dir=data,
         instances_root=instances,
         docker_root=DockerRootQuery("path", docker),
-        stat=stat,  # type: ignore[arg-type]
-        statvfs=statvfs,  # type: ignore[arg-type]
+        stat=as_stat(stat),
+        statvfs=as_statvfs(statvfs),
     )
     groups = group_by_device(samples)
     measured = [g for g in groups if not g.unknown]
@@ -200,8 +215,10 @@ def test_unstatable_docker_root_is_not_applicable(tmp_path: Path) -> None:
         data_dir=tmp_path,
         instances_root=None,
         docker_root=DockerRootQuery("path", docker_root),
-        stat=lambda p: FakeStat(1) if Path(p) == tmp_path else (_raise_oserror()),  # type: ignore[arg-type]
-        statvfs=lambda p: FakeVfs(50 * GiB),  # type: ignore[arg-type]
+        stat=as_stat(
+            lambda p: FakeStat(1) if Path(p) == tmp_path else (_raise_oserror())
+        ),
+        statvfs=as_statvfs(lambda p: FakeVfs(50 * GiB)),
     )
     docker = next(s for s in samples if s.role == "docker")
     assert docker.applicability == "not_applicable"
@@ -225,8 +242,8 @@ def test_docker_statvfs_failure_stays_unknown(tmp_path: Path) -> None:
         data_dir=tmp_path,
         instances_root=None,
         docker_root=DockerRootQuery("path", docker_root),
-        stat=stat,  # type: ignore[arg-type]
-        statvfs=statvfs,  # type: ignore[arg-type]
+        stat=as_stat(stat),
+        statvfs=as_statvfs(statvfs),
     )
     docker = next(s for s in samples if s.role == "docker")
     assert docker.applicability == "unknown"
@@ -578,11 +595,22 @@ async def test_concurrent_claims_under_low_disk(db: Database, tmp_path: Path) ->
     assert row["attempt"] == 0 and row["state"] == "ready"
 
 
-async def test_loop_cancellation(db: Database, tmp_path: Path) -> None:
+async def test_loop_cancellation(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     g = guard_for(db, tmp_path, frees={"data": 10 * GiB})
     g.thresholds = Thresholds(WARN, CLEAR, REFUSE, RESUME, interval_s=0.05)
+    first_pass = asyncio.Event()
+    run_pass = g.run_pass
+
+    async def run_pass_and_signal() -> None:
+        await run_pass()
+        # The loop records stats right after this returns, before the waiter wakes.
+        first_pass.set()
+
+    monkeypatch.setattr(g, "run_pass", run_pass_and_signal)
     task = asyncio.create_task(g.run())
-    await asyncio.sleep(0.12)
+    await first_pass.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -739,8 +767,8 @@ def test_startup_survives_warn_event_write_failure(
         orig_post_init(self)
         if not self.enabled:
             return
-        self._stat = lambda _p: FakeStat(1)  # type: ignore[method-assign]
-        self._statvfs = lambda _p: FakeVfs(frees["data"])  # type: ignore[method-assign]
+        self._stat = as_stat(lambda _p: FakeStat(1))
+        self._statvfs = as_statvfs(lambda _p: FakeVfs(frees["data"]))
         self._docker_root = lambda: DockerRootQuery("not_applicable")
         self._clock = lambda: 1.0
 
@@ -769,13 +797,14 @@ def test_startup_survives_warn_event_write_failure(
 
         # Free has left the warn band; the pending entry snapshot must still record.
         frees["data"] = CLEAR + 1
-        client.portal.call(guard.measure_once)  # type: ignore[union-attr]
+        assert client.portal is not None
+        client.portal.call(guard.measure_once)
         assert not guard._machine.warn_just_entered
         assert not guard._machine.warn_episode
         assert write_calls["n"] == 2
 
         db: Database = client.app.state.db
-        rows = client.portal.call(_warn_event_rows, db)  # type: ignore[union-attr]
+        rows = client.portal.call(_warn_event_rows, db)
         assert len(rows) == 1
         data = json.loads(rows[0]["data"])
         assert data["free_bytes"] == entry_free
@@ -826,11 +855,11 @@ async def test_failure_then_recovery_async(db: Database, tmp_path: Path) -> None
     g = guard_for(db, tmp_path, frees={"data": 10 * GiB}, clock=clock)
     await g.measure_once()
     assert g.snapshot().claim_admission == "admitted"
-    g._statvfs = lambda _p: (_ for _ in ()).throw(OSError("boom"))  # type: ignore[method-assign]
+    g._statvfs = as_statvfs(_statvfs_boom)
     snap = await g.measure_once()
     assert snap.measurement == "unknown" and snap.claim_admission == "refused"
-    g._statvfs = lambda _p: FakeVfs(RESUME + 1)  # type: ignore[method-assign]
-    g._stat = lambda _p: FakeStat(1)  # type: ignore[method-assign]
+    g._statvfs = as_statvfs(lambda _p: FakeVfs(RESUME + 1))
+    g._stat = as_stat(lambda _p: FakeStat(1))
     clock[0] = 20.0
     snap = await g.measure_once()
     assert snap.claim_admission == "admitted"
@@ -847,7 +876,7 @@ async def test_non_oserror_measurement_fails_closed(
     def boom() -> DockerRootQuery:
         raise RuntimeError("unexpected")
 
-    g._docker_root = boom  # type: ignore[method-assign]
+    g._docker_root = boom
     snap = await g.measure_once()
     assert snap.measurement == "unknown"
     assert snap.claim_admission == "refused"
@@ -873,8 +902,8 @@ async def test_configured_docker_socket_passed_to_resolver(
     from argus_api.disk_guard import DiskGuard as DG
 
     g = DG(s, db, LoopStats("disk_guard", 5.0))
-    g._stat = lambda _p: FakeStat(1)  # type: ignore[method-assign]
-    g._statvfs = lambda _p: FakeVfs(10 * GiB)  # type: ignore[method-assign]
+    g._stat = as_stat(lambda _p: FakeStat(1))
+    g._statvfs = as_statvfs(lambda _p: FakeVfs(10 * GiB))
     g._clock = lambda: 1.0
     await g.measure_once()
     assert seen == [str(sock)]
