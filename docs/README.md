@@ -116,6 +116,9 @@ every new dependency is judged against it.
   per project and account over 24h/7d/30d, price table, unpriced models
 - [Model observability](specs/model-observability.spec.md) — which model ran in the
   harness and delegate layers, with evidence, and the routing/fallback timeline
+- [Model-facing evals](specs/model-facing-evals.spec.md) — `evals/`: real models
+  run against the real MCP tool text, persona and worker prompt, scored on a
+  fake world; cases from real failures, controls, baselines; not in CI
 - [MCP operations](specs/mcp-operations.spec.md) — inbox and fleet journeys over
   MCP with compact, paged responses; REST/MCP coverage audit
 - [Task inputs](specs/task-inputs.spec.md) — byte-exact upload of shared
@@ -136,6 +139,8 @@ every new dependency is judged against it.
   capabilities, pins and dependencies with one rule set for REST, MCP and the dashboard
 - [Task drafts](specs/task-drafts.spec.md) — persisted, never-claimable task drafts
   published in one validated, idempotent transaction (atomic or partial)
+- [Command guard](specs/command-guard.spec.md) — a `PreToolUse` hook that blocks a
+  short list of catastrophic shell commands; accident prevention, not a sandbox
 - [Pool editor](specs/pool-editor.spec.md) — separate host and NanoClaw agent image fields with verified
   choices, version-checked saves, field-level errors
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes
@@ -212,9 +217,8 @@ every new dependency is judged against it.
   (item 3 shipped for steers)
 - [Verification boundary](drafts/2026-10-29.verification-boundary.draft.md) — a
   spec subsection stating what was verified, at which level and versions
-- [Model-facing evals](drafts/2026-10-31.model-facing-evals.draft.md) — run real
-  models against the real MCP tool text, persona and worker prompt; cases from
-  real failures, controls, baselines; not in CI
+- [Model-facing evals](drafts/2026-10-31.model-facing-evals.draft.md) —
+  superseded by the spec above; kept as a record
 - [Test hygiene checks](drafts/2026-10-31.test-hygiene-lint.draft.md) — a lint
   step that rejects sleeps, polling, wall-clock asserts, retries and unreasoned
   skips or suppressions in tests, and clock reads beside `tx.now`

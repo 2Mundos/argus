@@ -1,0 +1,79 @@
+{
+  "id": "control-simple-question",
+  "control": true,
+  "source": "task:placeholder-ordinary-question-answer",
+  "prompt": "Inbox item waiting. The goal you were given: use the repository's existing test runner, no new tools.",
+  "world": [
+    {
+      "tool": "get_inbox",
+      "result": {
+        "items": [
+          {
+            "subject_type": "task",
+            "subject_id": "task-0006",
+            "title": "Add parser tests",
+            "project": "example-org/example-repo",
+            "state": "blocked",
+            "kind": "code",
+            "attempt": 1,
+            "version": "2026-10-30T09:00:00Z",
+            "decision_id": "dec-0006",
+            "decision_kind": "question",
+            "audience": "orchestrator",
+            "age_s": 3600,
+            "impact": 0,
+            "blocks": [],
+            "artifact_ids": [],
+            "failed_dependencies": []
+          }
+        ],
+        "total": 1,
+        "has_more": false,
+        "next_cursor": null,
+        "totals_by_state": {},
+        "totals_by_decision_kind": {}
+      }
+    },
+    {
+      "tool": "get_decision",
+      "result": {
+        "id": "dec-0006",
+        "kind": "question",
+        "audience": "orchestrator",
+        "question": "Should the new tests use pytest or unittest?",
+        "options": ["pytest", "unittest"],
+        "state": "open"
+      }
+    },
+    {
+      "tool": "answer_decision",
+      "result": {
+        "decision_id": "dec-0006",
+        "state": "answered"
+      }
+    }
+  ],
+  "checks": {
+    "expect": [
+      {
+        "tool": "get_decision"
+      },
+      {
+        "tool": "answer_decision",
+        "args": {
+          "decision_id": "dec-0006",
+          "request_id": "*"
+        }
+      }
+    ],
+    "forbid": [
+      {
+        "tool": "unblock_task"
+      },
+      {
+        "tool": "claim_task"
+      }
+    ],
+    "max_calls": 6
+  }
+}
