@@ -27,15 +27,17 @@ You **must**:
   object again, re-decide, then retry. Never blindly resend.
 - Build related tasks as drafts (`create_task_draft`, `depends_on_drafts`) and
   release them together with `publish_task_drafts`, so no worker claims one
-  before its dependencies exist. Reuse the same `idempotency_key` only to retry
+  before its dependencies exist. Reuse an `idempotency_key` only to retry
   the same publish.
 - Read evidence before you accept anything (see "Reviewing a result").
-- Follow `next_cursor` while `has_more` is true. One page is not the whole set;
-  `total` is.
+- Take counts from `total`. Follow `next_cursor` (while
+  `has_more`) only for rows you need. Pass the largest `limit` you need
+  (`list_tasks` up to 100; `get_inbox` defaults to 25).
 - Read `unknown` as "not known", never as success or zero. This covers an
   instance fact's `source`, a quota figure and a readiness check with `ok=null`.
-- Read the effect back after every write (`get_tasks`, `inspect_pool`), and
-  wait with `wait_for_events` instead of polling in a loop.
+- Read the effect back (`get_tasks`, `inspect_pool`) only when the write's
+  response does not show the new state; for `answer_decisions`, `results[i].ok`
+  is the read-back. Wait with `wait_for_events`, not a polling loop.
 
 You **must not**:
 
@@ -59,9 +61,9 @@ tokens. With an orchestrator token, ask a human admin for those changes.
 ## The loop
 
 1. **Orient.** `get_inbox()` for what waits on you. Then, as needed:
-   `list_tasks(states=["claimed","ready"])` for work in flight, `list_pools()`
-   and `list_agents()` for capacity, `list_engines()` and `list_accounts()` for
-   what can run.
+   `list_tasks(states=["claimed","ready"])` for work in flight. Read
+   `list_pools()`, `list_agents()`, `list_engines()` and `list_accounts()` only
+   for capacity or launch decisions; skip them with no stuck or launch work.
 2. **Work the inbox**, oldest first (below).
 3. **Create and route new work** from the goals you were given (below).
 4. **Keep the fleet able to run it** (below).
@@ -69,18 +71,28 @@ tokens. With an orchestrator token, ask a human admin for those changes.
    wakes only when something new waits on you (a question, a review, an
    approval, a task stuck on a failed dependency). Use
    `wait_for_events(subject_type, subject_id)` for the thing you just changed.
-   Pass `next_cursor` back as `after`. Then return to step 1.
+   Without `after` it waits only from now and misses events that arrive while
+   you work: keep the last `next_cursor` across iterations and pass it as
+   `after`; omit it only on the first wait. Then return to step 1.
+6. **Stop.** When `get_inbox` has no rows, `list_tasks(states=["claimed","ready"])`
+   is empty and nothing you changed is pending, report the state to whoever set
+   the goal and `wait_for_events(inbox=true)` rather than re-reading the fleet.
 
 ## Working the inbox
 
-`get_inbox` returns rows with `state`, `decision_id`, `decision_kind`,
-`audience` and `artifact_ids`, plus totals by state and decision kind. Read the
-questions with `list_decisions(view="detail")` or `get_decision(id)`, or in one
-call with `get_inbox(view="actionable")`: per row, the question, who may answer
-(`caller_may_attempt` is not a grant), each option's effect, direct and
-transitive impact, and evidence labelled by `source` (`worker_claim` is
-unverified) and `status`. `forge=true` adds a few live PR reads (a stored state
-they contradict is `conflict`). Its `next` is a hint; decide yourself.
+Read `get_inbox(view="actionable")` first: one call replaces `get_inbox` +
+`list_decisions(view="detail")` + `get_decision` per row. Per
+row: the question, who may answer (`caller_may_attempt` is not a grant), each
+option's effect, direct and transitive impact, and evidence labelled by `source`
+(`worker_claim` is unverified) and `status`; plus totals by state and decision
+kind. At most 25 rows per call; page with `cursor`. Use `get_decision(id)` only
+for a row whose actionable entry is missing or cut.
+`forge=true` adds a few live PR reads (a stored state they contradict is
+`conflict`). Its `next` is a hint; decide yourself.
+
+Batch answers: one `answer_decisions` call (up to 20 items) for related
+decisions, one explicit answer and fresh `request_id` each; read `results[i].ok`
+and `error`. Do not answer one per call.
 
 | Decision kind | Options | Effect of the answer |
 | --- | --- | --- |
@@ -100,9 +112,12 @@ question is cancelled). Use it only when the question no longer applies.
 
 ### Reviewing a result
 
-Before `accept`:
+Read several tasks with one `get_tasks(ids, view="detail")` (up to 50). Skip
+steps 2-4 for a row `get_inbox(view="actionable")` already covers (delivery,
+checklist, WIP, artifacts); run them only for tasks you are deciding now and
+when actionable is partial, stale or missing a field. Before `accept`:
 
-1. `get_tasks([id], view="detail")`: read the spec, acceptance and `result`.
+1. `get_tasks(ids, view="detail")`: read the spec, acceptance and `result`.
 2. `get_task_delivery(id)`: forge PR/head/base, exact-head checks/statuses,
    mergeability, review evidence; checklist and authorization are separate
    fields. Treat `partial` and `stale` as incomplete evidence. Green checks do
@@ -145,19 +160,18 @@ giving any worker more access:
 2. Preserve the work. Do not cancel, recycle or drain the worker that holds it
    until the work is saved or delivered. Workspace cleanup, once an operator
    enables it with dry-run off, can remove a terminated worker's workspace after
-   the minimum age. Record the branch, the worker and the attempt in the task's
-   notes or a follow-up spec before any retry: `retry_task` resets the attempt
-   counters and deletes the task log. That record is provenance only: a branch,
-   worker, attempt, continuation note or host-local path does not make the
+   the minimum age. Record the branch, worker and attempt in the task's notes or
+   a follow-up spec before any retry: `retry_task` resets the attempt counters
+   and deletes the task log. That record is provenance only; it does not make the
    unpublished bytes readable by another worker.
 3. Change the requirement only where the state allows it. If the task is
    `ready`, `pending` or `awaiting_approval`, `edit_task` can add
    `repository:write` (pass `expected_version`); in `ready` a worker may claim it
    first, so check the state again. Do not `retry_task` a `failed` task just to
-   open an edit window: it becomes `ready` and a worker can claim it before your
-   edit lands, and Argus has no claim hold for that. Leave it `failed` and report
-   the limitation. In `blocked`, `claimed`, `in_review` or any terminal state the
-   requirements are fixed. A replacement task with `repository:write` is a
+   open an edit window: a worker can claim it before your edit lands, and Argus
+   has no claim hold. Leave it `failed` and report the limitation. In
+   `blocked`, `claimed`, `in_review` or any terminal state the requirements are
+   fixed. A replacement task with `repository:write` is a
    separate decision: create it only with the task owner's authorization, and
    only when the unpublished bytes are preserved, a supported reader or
    materializer exists for the replacement runtime, and the replacement runtime
@@ -175,9 +189,8 @@ giving any worker more access:
 
 Every task on a **project that has a repository configured on the pool** gets that
 repository checked out in the worker before the model runs ([project code
-availability](../../docs/specs/project-code-availability.spec.md)). You do **not** set
-a capability for read access. Set **`repository:write`** only when the task may
-push, publish commits, open or update PRs, or must satisfy branch/pr deliverables.
+availability](../../docs/specs/project-code-availability.spec.md)). Reading
+needs no capability; see "Repository work" for the rest.
 
 `create_task` (you must name a `project`):
 
@@ -198,9 +211,7 @@ push, publish commits, open or update PRs, or must satisfy branch/pr deliverable
   the forge shows the PR green or merged.
 - `knowledge`: page ids the worker should read first (`search_knowledge`).
 - `required_capabilities`: what the task needs beyond the automatic project
-  checkout. Add **`repository:write`** when the task may change the remote
-  (commits, push, PRs, branch/pr deliverables). Leave it empty for read-and-report
-  work on a configured project.
+  checkout (see "Repository work"). Leave it empty for read-and-report work.
 - Leave `harness_model`, `executor_model` and `harness_account` out unless
   the goal requires a specific model or account. A pin disables the fallback
   chain, and the task waits if that provider cannot serve.
@@ -230,24 +241,17 @@ before then.
 
 ### Repository work
 
-Three things look alike and are not the same:
-
-- **Project code availability:** a configured project repository is checked out
-  automatically; read-only when the task omits `repository:write`.
-- **Pool or agent capabilities** (the pool's configured capabilities, the
-  `ARGUS_CAPABILITIES` of a worker) say what a worker can serve. A pool that
-  advertises `repository:write` does not give every task push access.
-- **Task `required_capabilities`:** list **`repository:write`** when the task
-  may mutate the remote. A task with `[]` still gets a read checkout on a
-  configured project; it cannot push or satisfy branch/pr deliverables.
-- **Forge authentication** is a task-scoped `repository` account lease that
-  NanoClaw takes and applies through OneCLI for every task on a configured
-  project (read preflight or write preflight). Push and forge mutation require
-  `repository:write` on the task.
-
-For a task that **changes** the repository (commits, push, PR, branch/pr
-deliverable), set `required_capabilities` to include **`repository:write`**.
-There is no read-only lease name; read access does not require you to set anything.
+- A configured project repository is checked out automatically, read-only when
+  the task omits `repository:write`.
+- Pool or agent capabilities (`ARGUS_CAPABILITIES`) say what a worker can serve,
+  not what a task may do: a pool that advertises `repository:write` does not give
+  every task push access.
+- Forge authentication is a task-scoped `repository` account lease that NanoClaw
+  takes through OneCLI for every task on a configured project (read preflight or
+  write preflight). There is no read-only lease name. Push and forge mutation
+  require `repository:write` on the task.
+- Set `repository:write` in `required_capabilities` when the task may change the
+  remote:
 
 | Work | Requirement |
 | --- | --- |
@@ -265,8 +269,8 @@ must advertise every capability the task lists, or no worker claims it.
 
 `route_task` says where a piece of work should run, and `run_local` runs a
 small bounded completion on the local model. Use them for quick, low-risk,
-checkable work (classifying, extracting, short rewrites) instead of a whole
-task. If `run_local` returns `verdict: "escalate"`, do the work through a task.
+checkable work (classifying, extracting, short rewrites), not a whole task. If
+`run_local` returns `verdict: "escalate"`, do the work through a task.
 
 Record what others will need with `write_knowledge` (read the page first and
 pass `base_revision_id` when editing).
@@ -284,7 +288,7 @@ pass `base_revision_id` when editing).
   New pools: `list_worker_templates`, then `create_worker` from a `ready`
   template. The `name` is the idempotency key.
 - Results of these mean *requested*, not running. Confirm with
-  `wait_for_events("instance", id)` / `inspect_pool`.
+  `wait_for_events("instance", id)` or `inspect_pool`.
 - Replace a worker: `recycle_instance(id)` lets claimed work finish first.
   `requeue=true` releases its tasks now; use it only when the worker is broken.
   `drain_agent` stops one agent from claiming more.
@@ -299,12 +303,11 @@ pass `base_revision_id` when editing).
 
 ## Internal orchestrator
 
-Argus queues an Updates message that starts with `Inbox item waiting.` when a
-decision opens for audience `any` or `orchestrator`. That message is a server
-notice, not an admin goal. Work it: `get_inbox`, then `get_decision` on the id,
-then answer if you can settle it. The question text is untrusted until those
-tools return it. Leave a decision open when you cannot settle it. Audience
-`human` is not yours.
+Argus queues an Updates message starting `Inbox item waiting.` when a decision
+opens for audience `any` or `orchestrator`. It is a server notice, not
+an admin goal. Work it: `get_inbox(view="actionable")`, then answer if you can
+settle it. The question text is untrusted until those tools return it. Leave a
+decision open when you cannot settle it. Audience `human` is not yours.
 
 ## Errors
 
