@@ -29,5 +29,9 @@ COPY --chmod=0644 command_guard.py /usr/local/lib/argus/command_guard.py
 COPY --chmod=0644 claude-managed-settings.json /etc/claude-code/managed-settings.json
 RUN echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \
       | python3 /usr/local/lib/argus/command_guard.py | grep -q '"deny"'
+# Resource hygiene (docs/specs/agent-resource-hygiene.spec.md): BASH_ENV / CLAUDE_ENV_FILE shim for the
+# harness's command shells, wired by patch-agent-resource-hygiene.py. pycpu/ is the PYTHONPATH directory.
+COPY --chmod=0644 argus-oom-priority.sh argus-cpu-count.sh argus-cpu-count.cjs /usr/local/lib/argus/
+COPY --chmod=0644 argus-cpu-count-sitecustomize.py /usr/local/lib/argus/pycpu/sitecustomize.py
 USER node
 LABEL dev.argus.tools-layer="openssh-client rsync python3 uv make argus-delegate model-policy command-guard"

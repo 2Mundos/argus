@@ -70,8 +70,8 @@ and changing pool requests. Where the quota comes from is set by
   - `OMP_NUM_THREADS` and `PYTHON_CPU_COUNT` to the count.
 - **Node.** A preload module trims `os.cpus()` to the count. It is loaded with
   `--require` appended to `NODE_OPTIONS`. A project that replaces `NODE_OPTIONS`
-  loses the preload; the shim then logs one line to stderr so the loss is visible,
-  and the command still runs.
+  loses the preload; a later shell started under the shim sees it missing, logs one
+  line to stderr so the loss is visible, restores it, and the command still runs.
 - **Python.** `PYTHON_CPU_COUNT` is honoured only on Python 3.13 and later
   (unverified here: no 3.13 interpreter was available). For older Python a
   `sitecustomize` on `PYTHONPATH` overrides `os.cpu_count()`. `python -S` skips it;
@@ -80,8 +80,11 @@ and changing pool requests. Where the quota comes from is set by
 ## 3.3 Delivery
 
 - The install-time patch `integrations/nanoclaw/patch-agent-resource-hygiene.py`
-  edits NanoClaw's `container-runner.ts` so session containers get `BASH_ENV`,
-  `CLAUDE_ENV_FILE`, and the preload and `sitecustomize` paths. It follows the
+  edits NanoClaw's `container-runner.ts` so session containers get `BASH_ENV` and
+  `CLAUDE_ENV_FILE`, both naming `argus-oom-priority.sh` in the tools layer
+  (`/usr/local/lib/argus`). That shim sources `argus-cpu-count.sh`, which reads the
+  quota inside the container and adds the preload and `sitecustomize` paths only
+  when there is one; the patch sets neither `NODE_OPTIONS` nor `PYTHONPATH`. It follows the
   idempotent "ensure this exact text" pattern of the other `patch-*.py` files and
   stops the install if the upstream shape changed.
 - The patch is wired into `install.sh` after `patch-no-session-ceiling.py`.
@@ -117,9 +120,11 @@ and changing pool requests. Where the quota comes from is set by
 # 6. Implementation Consequences
 
 - New files under `integrations/nanoclaw/`: `argus-oom-priority.sh`,
-  `argus-cpu-count.cjs` (Node preload), `argus-cpu-count-sitecustomize.py`,
+  `argus-cpu-count.sh`, `argus-cpu-count.cjs` (Node preload),
+  `argus-cpu-count-sitecustomize.py` (installed as `pycpu/sitecustomize.py`),
   `patch-agent-resource-hygiene.py`, and their tests. The shims are copied into the
-  agent image by the tools-layer step, like the other overlays.
+  agent image by the tools layer (`Dockerfile.tools-layer`), not into the NanoClaw
+  checkout.
 - `install.sh` runs the new patch after `patch-no-session-ceiling.py`.
 - Tests: the score rule (raise only, never lower, no-op on error), the CPU count
   from `cpu.max` and from the fallback variable, no-quota no-op, set-only-if-unset,
