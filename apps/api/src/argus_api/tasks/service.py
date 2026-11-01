@@ -2526,8 +2526,8 @@ async def expire_agent_leases(tx: Tx, agent_id: str) -> list[str]:
 
 
 # -- disk guard pause (operations.spec.md 3.5) ------------------------------------
-# Dormant: nothing calls these yet. The server-side disk guard alone sets and clears
-# `paused_disk_at`; no route, tool, heartbeat or observation reaches them.
+# Only the server-side disk guard sets and clears `paused_disk_at`; no route, tool,
+# heartbeat or observation reaches them.
 
 PAUSED_DISK = "paused_disk"
 
@@ -2598,6 +2598,30 @@ async def renew_paused_disk(tx: Tx) -> list[PausedLease]:
         )
         renewed.append(PausedLease(row["id"], row["attempt"], deadline))
     return renewed
+
+
+ENV_DISK_FULL = "env_disk_full"
+
+
+async def shed_disk_full(tx: Tx, task_id: str, attempt: int) -> bool:
+    """End the disk guard's shed attempt as `env_disk_full` without spending it:
+    the task is `ready` again with `failures` untouched, like a release, and the
+    holder's account leases end with it unless it holds another claim. A pair that
+    is not the current claimed attempt is skipped (false)."""
+    from argus_api.accounts import service as accounts  # it imports this module
+
+    row = await _row(tx.conn, task_id)
+    if row["state"] != S.CLAIMED or row["attempt"] != attempt:
+        return False
+    holder = row["assignee_agent_id"]
+    await release_claim(tx, row, "system", ENV_DISK_FULL)
+    async with tx.conn.execute(
+        "SELECT 1 FROM tasks WHERE state = 'claimed' AND assignee_agent_id = ?",
+        (holder,),
+    ) as cur:
+        if await cur.fetchone() is None:
+            await accounts.release(tx, holder, "task_released")
+    return True
 
 
 # Reaper interval is 10 s (reaper.REAP_INTERVAL_S); three missed passes.

@@ -49,6 +49,8 @@ class FakeTarget:
         self.fail_stop = False
         self.started: list[str] = []
         self.stopped: list[str] = []
+        self.paused: list[str] = []  # every pause call, in order
+        self.unpaused: list[str] = []
         # Containers the runtime itself created (not started by Argus):
         # name -> {"label": key, "value": value}
         self.children: dict[str, dict] = {}
@@ -123,6 +125,18 @@ class FakeTarget:
         self.children.pop(ref, None)
         self.stopped.append(ref)
 
+    async def pause(self, ref):
+        self._check()
+        self.paused.append(ref)
+        if ref in self.children:
+            self.children[ref]["paused"] = True
+
+    async def unpause(self, ref):
+        self._check()
+        self.unpaused.append(ref)
+        if ref in self.children:
+            self.children[ref]["paused"] = False
+
     async def list(self, labels):
         from argus_api.fleet.targets import ProviderInstance
 
@@ -144,7 +158,9 @@ class FakeTarget:
 
         self._check()
         return [
-            LabeledContainer(name, c["value"], True)
+            LabeledContainer(
+                name, c["value"], True, c.get("paused", False), c.get("container_id")
+            )
             for name, c in self.children.items()
             if c["label"] == key
         ]

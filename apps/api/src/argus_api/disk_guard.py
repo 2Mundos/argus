@@ -2,8 +2,9 @@
 
 Measures free space on the data directory, optional instances root, and local
 Docker data root; keeps an in-memory hysteresis snapshot that claim paths read.
-Pause/shed are intentionally absent from this slice. Writer-ranking
-measurements live in ``disk_guard_writer_ranking`` (still unwired here).
+Pause/resume/shed live in ``disk_guard_pause``; the guard hands it one
+``PassView`` per pass. Writer-ranking measurements live in
+``disk_guard_writer_ranking``.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from argus_api.config import Settings
 from argus_api.db import Database
@@ -38,6 +39,19 @@ StatFn = Callable[[Path], os.stat_result]
 StatvfsFn = Callable[[Path], os.statvfs_result]
 DockerRootFn = Callable[[], "DockerRootQuery"]
 ClockFn = Callable[[], float]
+
+
+@dataclass(frozen=True)
+class PassView:
+    """What one guard pass tells the pause controller."""
+
+    measured: bool
+    free_bytes: int | None
+    roles: tuple[RootRole, ...] = ()
+
+
+class PauseHook(Protocol):
+    async def step(self, view: PassView) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -364,6 +378,29 @@ def advance(
     )
 
 
+def breach_roles(
+    samples: tuple[RootSample, ...], refuse_bytes: int
+) -> tuple[RootRole, ...]:
+    """Roles of the filesystems below refuse (or unknown): the role union per
+    `st_dev` group. A group that contains the data directory counts as `data`
+    whichever other roles share it (data-directory strictness)."""
+    roles: set[RootRole] = set()
+    by_dev: dict[int, set[RootRole]] = {}
+    free: dict[int, int] = {}
+    for s in samples:
+        if s.applicability == "not_applicable":
+            continue
+        if s.st_dev is None or s.free_bytes is None:
+            roles.add(s.role)
+            continue
+        by_dev.setdefault(s.st_dev, set()).add(s.role)
+        free[s.st_dev] = min(free.get(s.st_dev, s.free_bytes), s.free_bytes)
+    for dev, group in by_dev.items():
+        if free[dev] < refuse_bytes:
+            roles |= {"data"} if "data" in group else group
+    return tuple(sorted(roles))
+
+
 def root_band(sample: RootSample, thresholds: Thresholds) -> Band | None:
     """Instantaneous per-root band from free bytes; not the latched claim gate.
 
@@ -390,6 +427,7 @@ class DiskGuard:
     _statvfs: StatvfsFn = field(default=os.statvfs, repr=False)
     _docker_root: DockerRootFn | None = field(default=None, repr=False)
     _clock: ClockFn = field(default=time.monotonic, repr=False)
+    pause: PauseHook | None = None
     # Injectable seam for the warn-event INSERT (tests); default writes via db.
     _write_warn: Callable[[dict[str, Any]], Awaitable[None]] | None = field(
         default=None, repr=False
@@ -551,6 +589,20 @@ class DiskGuard:
                     self._machine.warn_entry_claim_admission = None
         return snap
 
+    def pass_view(self) -> PassView:
+        m = self._machine
+        return PassView(
+            measured=m.measurement == "measured",
+            free_bytes=m.free_bytes if m.measurement == "measured" else None,
+            roles=breach_roles(m.roots, self.thresholds.refuse_bytes),
+        )
+
+    async def run_pass(self) -> None:
+        """One measurement, then the pause controller's reaction to it."""
+        await self.measure_once()
+        if self.pause is not None:
+            await self.pause.step(self.pass_view())
+
     async def run(self) -> None:
         """Background loop: measure, record LoopStats, continue on errors."""
         while True:
@@ -559,7 +611,7 @@ class DiskGuard:
             await asyncio.sleep(self.thresholds.interval_s)
             started = time.monotonic()
             try:
-                await self.measure_once()
+                await self.run_pass()
                 self.stats.record(time.monotonic() - started)
             except asyncio.CancelledError:
                 raise

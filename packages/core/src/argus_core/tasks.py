@@ -283,6 +283,8 @@ FAILURE_CLASS: dict[str, RetryClass] = {
     "account_unavailable": RetryClass.ADMISSION,
     **dict.fromkeys(ENV_BLOCK_REASONS, RetryClass.ENVIRONMENT),
     ENV_OOM: RetryClass.ENVIRONMENT,
+    # The disk guard stopped the session that wrote most (operations.spec.md 3.5).
+    "env_disk_full": RetryClass.ENVIRONMENT,
     "provider_failure": RetryClass.TRANSIENT,
     "channel_error": RetryClass.TRANSIENT,
     "runtime_switch_failed": RetryClass.TRANSIENT,
