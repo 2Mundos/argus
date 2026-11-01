@@ -20,9 +20,16 @@ from argus_api.accounts.codex_login import (
 )
 from argus_api.config import Settings
 from argus_api.db import Database
+from argus_api.engines import catalog as catalog_mod
+from argus_api.engines import router as routing
 from argus_api.errors import ConflictError, NotFoundError
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
+from argus_core.engines import (
+    AccountsSummary,
+    Fact,
+    RouteRequest,
+)
 from fastapi.testclient import TestClient
 
 ADMIN_TOKEN = "t" * 40
@@ -238,11 +245,7 @@ async def test_login_completes_into_an_account(
     assert oct(home.stat().st_mode & 0o777) == "0o700"
 
     go.write_text("")
-    for _ in range(200):
-        view = mgr.get(started["login_id"], "tok-1")
-        if view["state"] != "pending":
-            break
-        await asyncio.sleep(0.02)
+    view = await settle(mgr, started["login_id"], "tok-1")
     assert view["state"] == "completed", view
     # The code is shown only while pending.
     assert view["user_code"] is None and view["verification_url"] is None
@@ -340,11 +343,7 @@ async def test_rejected_login_creates_no_account_and_hides_the_reason(
     mgr, go = manager(db, secrets, tmp_path, mode="reject")
     started = await mgr.start("tok-1", "admin:one", None)
     go.write_text("")
-    for _ in range(200):
-        view = mgr.get(started["login_id"], "tok-1")
-        if view["state"] != "pending":
-            break
-        await asyncio.sleep(0.02)
+    view = await settle(mgr, started["login_id"], "tok-1")
     assert view["state"] == "failed" and view["error"] == "login_rejected"
     assert "SECRET" not in json.dumps(view)
     assert secrets.names() == set()
@@ -384,12 +383,11 @@ async def account_count(db: Database) -> int:
 
 
 async def settle(mgr: CodexLoginManager, login_id: str, owner: str) -> dict:
-    for _ in range(300):
-        view = mgr.get(login_id, owner)
-        if view["state"] != "pending":
-            return view
-        await asyncio.sleep(0.02)
-    return view
+    """The login's outcome, once its run task (and the teardown it awaits) ended."""
+    task = mgr._sessions[login_id].task
+    assert task is not None
+    await asyncio.wait({task})  # does not raise if the run was cancelled
+    return mgr.get(login_id, owner)
 
 
 async def test_late_completion_after_expiry_creates_nothing(
@@ -403,7 +401,8 @@ async def test_late_completion_after_expiry_creates_nothing(
     now[0] = 901
     assert mgr.get(started["login_id"], "tok-1")["state"] == "expired"
     go.write_text("")  # the client would now report success
-    await asyncio.sleep(0.3)
+    assert session.task is not None
+    await asyncio.wait({session.task})  # expiry cancelled it after the teardown
     view = mgr.get(started["login_id"], "tok-1")
     assert view["state"] == "expired" and view["account_id"] is None
     assert await account_count(db) == 0 and secrets.names() == set()
@@ -436,7 +435,7 @@ async def test_cancel_during_persistence_reports_the_completed_account(
     go.write_text("")
     await asyncio.wait_for(store.entered.wait(), 5)
     cancel = asyncio.create_task(mgr.cancel(started["login_id"], "tok-1"))
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0)  # let the cancel reach its wait on the commit
     assert not cancel.done()  # waits for the outcome instead of racing it
     store.release.set()
     view = await asyncio.wait_for(cancel, 5)
@@ -468,9 +467,10 @@ async def test_cancel_before_persistence_wins_and_creates_nothing(
     store = GatedStore()
     mgr, go = manager(db, store, tmp_path)
     started = await mgr.start("tok-1", "admin:one", None)
+    session = mgr._sessions[started["login_id"]]
     view = await mgr.cancel(started["login_id"], "tok-1")
     go.write_text("")
-    await asyncio.sleep(0.2)
+    assert session.task is not None and session.task.done()  # the client is gone
     assert view["state"] == "cancelled" and not store.entered.is_set()
     assert mgr.get(started["login_id"], "tok-1")["account_id"] is None
     assert await account_count(db) == 0
@@ -508,11 +508,22 @@ def _alive(pid: int) -> bool:
 
 
 async def _gone(pid: int, seconds: float = 8) -> bool:
-    for _ in range(int(seconds / 0.05)):
-        if not _alive(pid):
-            return True
-        await asyncio.sleep(0.05)
-    return False
+    """Await the process exit: a pidfd turns readable then, child of ours or not."""
+    try:
+        fd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return True
+    loop = asyncio.get_running_loop()
+    exited = asyncio.Event()
+    loop.add_reader(fd, exited.set)
+    try:
+        await asyncio.wait_for(exited.wait(), seconds)  # a failure guard only
+    except TimeoutError:
+        return False
+    finally:
+        loop.remove_reader(fd)
+        os.close(fd)
+    return True
 
 
 @pytest.mark.parametrize("mode", ["tree", "stubborn"])
@@ -589,23 +600,26 @@ async def test_docker_mode_removes_exactly_its_container(
 async def test_every_cleanup_caller_waits_for_the_one_container_removal(
     db: Database, secrets, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # `docker rm` is slow and logs only when it finishes. Cancel, the run task's own
+    # `docker rm` blocks on a gate and logs only when it finishes. Cancel, the run task's own
     # cleanup and a second caller all race on it: each must return only after the
     # removal completed, and exactly one `rm` may run.
     codex, _ = fake_codex(tmp_path, "tree")
     log = tmp_path / "docker.log"
+    started_fifo, gate_fifo = tmp_path / "rm.started", tmp_path / "rm.gate"
+    os.mkfifo(started_fifo)
+    os.mkfifo(gate_fifo)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     docker = bin_dir / "docker"
     docker.write_text(
         f"#!{sys.executable}\n"
-        "import json, os, sys, time\n"
+        "import json, os, sys\n"
         "if sys.argv[1] == 'run':\n"
         f"    open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
         "    home = sys.argv[sys.argv.index('-v') + 1].split(':')[0]\n"
         f"    os.execve({codex!r}, [{codex!r}], {{'CODEX_HOME': home}})\n"
-        f"open({str(tmp_path / 'rm.started')!r}, 'w').write('1')\n"
-        "time.sleep(0.2)\n"
+        f"open({str(started_fifo)!r}, 'w').write('1')\n"  # blocks for the test
+        f"open({str(gate_fifo)!r}).read()\n"  # blocks until the test opens the gate
         f"open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
     )
     docker.chmod(0o755)
@@ -622,14 +636,22 @@ async def test_every_cleanup_caller_waits_for_the_one_container_removal(
         calls = [json.loads(line) for line in log.read_text().splitlines()]
         return [c for c in calls if c[0] == "rm"]
 
+    rm_running = False
+
+    async def open_gate() -> None:
+        await asyncio.to_thread(gate_fifo.write_text, "")
+
     try:
         first = asyncio.create_task(mgr.cancel(started["login_id"], "tok-1"))
-        for _ in range(500):  # the first teardown is now waiting on `docker rm`
-            if (tmp_path / "rm.started").exists():
-                break
-            await asyncio.sleep(0.01)
-        assert (tmp_path / "rm.started").exists()
+        # The first teardown is now waiting on `docker rm`.
+        await asyncio.to_thread(started_fifo.read_text)
+        rm_running = True
         second = asyncio.create_task(mgr._kill(session))
+        await asyncio.sleep(0)  # the late caller joins the teardown in flight
+        assert not first.done() and not second.done()
+        assert removals() == []
+        await open_gate()
+        rm_running = False
         await asyncio.wait_for(second, 10)
         assert removals() == [["rm", "-f", name]]  # the late caller waited for it
         await asyncio.wait_for(first, 10)
@@ -639,6 +661,8 @@ async def test_every_cleanup_caller_waits_for_the_one_container_removal(
         await mgr.shutdown()
         assert len(removals()) == 1
     finally:
+        if rm_running:
+            await open_gate()
         with contextlib.suppress(ProcessLookupError):
             os.kill(child, signal.SIGKILL)
         await mgr.shutdown()
@@ -678,14 +702,6 @@ def test_login_routes_need_admin_and_report_unavailable(client: TestClient) -> N
 
 
 # -- catalogue and fallback ----------------------------------------------------------
-
-from argus_api.engines import catalog as catalog_mod  # noqa: E402
-from argus_api.engines import router as routing  # noqa: E402
-from argus_core.engines import (  # noqa: E402
-    AccountsSummary,
-    Fact,
-    RouteRequest,
-)
 
 HARD = RouteRequest(summary="plan the migration")
 CODE = RouteRequest(summary="fix the bug", is_code=True)
