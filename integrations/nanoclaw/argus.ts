@@ -2876,6 +2876,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     task: ArgusTask,
   ): Promise<{ reason: string; error: string } | null> {
     const needsWrite = task.required_capabilities?.includes("repository:write") ?? false;
+    // `global` holds knowledge and settings; never take a read lease even if the pool
+    // map names a repository there (tasks on global are refused at the API).
+    if (!needsWrite && task.project === "global") return null;
     const acc = cfg.accounts;
     const repositoryUrl = acc?.repositories?.[task.project];
     if (!acc || !repositoryUrl) {

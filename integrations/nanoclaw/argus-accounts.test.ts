@@ -1780,9 +1780,9 @@ describe("task-scoped repository auth", () => {
     },
   );
 
-  it("does not acquire repository credentials when the task project has no configured repository", async () => {
+  it("does not acquire repository credentials for non-write global tasks", async () => {
     const w = world({ leases: [lease("engine", "dummy-engine-key")], tasks: [task()] });
-    const h = harness(w, true, { repositories: { web: "https://git.example.test/org/repo" } });
+    const h = harness(w, true, { repositories: { global: "https://git.example.test/org/repo" } });
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);

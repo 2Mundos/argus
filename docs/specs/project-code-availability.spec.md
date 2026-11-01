@@ -31,8 +31,10 @@ workspace specs.
 - No read-only **forge API** lease separate from today's `repository` account
   lease: the same task-scoped lease and OneCLI path apply; preflight distinguishes
   read vs write.
-- Tasks on **`global`** or projects with no configured repository are unchanged
-  (no tree, no lease for repository).
+- Tasks on **`global`** never get automatic read access, even if the pool map
+  lists a repository for `global` (that project is for knowledge and settings;
+  the API refuses task creation on `global`). Projects with no configured
+  repository are unchanged (no tree, no lease).
 
 # 3. Decisions Made
 
@@ -80,6 +82,11 @@ checkpoint resume.
 - Public repositories without a token: allow anonymous read preflight or always
   require the lease (current decision: always lease when the project is
   configured, same as write tasks).
+- Model-free `git fetch` of the default branch into the workspace before the
+  first model message (so read tasks never depend on the model to populate the
+  tree).
+- OneCLI path restrictions for read tasks (block `git-receive-pack`, mutating
+  REST) when preflight used `--access read`.
 
 # 5. Constraints
 
@@ -105,3 +112,11 @@ checkpoint resume.
 
 - Verified by unit and channel tests with fake forge responses.
 - Not verified: every production pool configuration and live forge.
+- **Read enforcement** is preflight mode, prompt, completion/deliverable gates, and
+  worker discipline today; the same OneCLI git and REST paths remain available
+  when the account token can write. A gateway read-only scope is an open hardening
+  step, not part of this change.
+- **Tree contents** on a first attempt: the host prepares an empty workspace with
+  `origin` set; the worker session runs `git fetch` (trusted prompt) before work,
+  as for existing `repository:write` tasks. A model-free fetch before injection is
+  deferred (open question below).
