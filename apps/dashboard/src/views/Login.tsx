@@ -1,26 +1,26 @@
 import { type FormEvent, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { api, call, setToken } from "../api";
 import { Brand } from "../Brand";
 
 export function Login({ onLogin }: { onLogin: () => void }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    setBusy(true);
-    setError(undefined);
-    setToken(value.trim());
-    try {
-      await call(api.GET("/api/agents"));
-      onLogin();
-    } catch {
-      setToken(null);
-      setError("That token was not accepted.");
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setError(undefined);
+      setToken(value.trim());
+      try {
+        await call(api.GET("/api/agents"));
+        onLogin();
+      } catch {
+        setToken(null);
+        setError("That token was not accepted.");
+      }
+    });
   }
 
   return (
@@ -40,9 +40,15 @@ export function Login({ onLogin }: { onLogin: () => void }) {
           required
         />
         {error && <p className="error">{error}</p>}
-        <button type="submit" className="primary" disabled={busy || !value.trim()}>
-          {busy ? "Checking…" : "Sign in"}
-        </button>
+        <ActionButton
+          type="submit"
+          className="primary"
+          disabled={!value.trim()}
+          pending={action.busy}
+          pendingLabel="Checking…"
+        >
+          Sign in
+        </ActionButton>
       </form>
     </main>
   );

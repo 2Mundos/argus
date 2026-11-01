@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import {
   COPILOT_PROVIDER,
   copilotTokenNotice,
@@ -31,7 +32,7 @@ export function EditAccount({
     "7d": account.token_limits?.["7d"]?.toString() ?? "",
   });
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -68,19 +69,19 @@ export function EditAccount({
       onClose();
       return;
     }
-    setBusy(true);
-    try {
-      await call(
-        api.PATCH("/api/accounts/{account_id}", {
-          params: { path: { account_id: account.id } },
-          body,
-        }),
-      );
-      onDone(`Saved “${name.trim()}”.`);
-    } catch (err) {
-      setError((err as Error).message);
-      setBusy(false);
-    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.PATCH("/api/accounts/{account_id}", {
+            params: { path: { account_id: account.id } },
+            body,
+          }),
+        );
+        onDone(`Saved “${name.trim()}”.`);
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   return (
@@ -137,12 +138,12 @@ export function EditAccount({
           </p>
         )}
         <div className="actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" disabled={action.busy} onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="primary" disabled={busy}>
+          <ActionButton type="submit" className="primary" pending={action.busy}>
             Save
-          </button>
+          </ActionButton>
         </div>
       </form>
     </div>
@@ -162,24 +163,24 @@ export function DeleteAccount({
 }) {
   const [typed, setTyped] = useState("");
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (typed !== account.name) return;
     setError(undefined);
-    setBusy(true);
-    try {
-      await call(
-        api.DELETE("/api/accounts/{account_id}", {
-          params: { path: { account_id: account.id }, query: { confirm_name: typed } },
-        }),
-      );
-      onDone(`Deleted “${account.name}”.`);
-    } catch (err) {
-      setError((err as Error).message);
-      setBusy(false);
-    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.DELETE("/api/accounts/{account_id}", {
+            params: { path: { account_id: account.id }, query: { confirm_name: typed } },
+          }),
+        );
+        onDone(`Deleted “${account.name}”.`);
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   return (
@@ -206,12 +207,17 @@ export function DeleteAccount({
           </p>
         )}
         <div className="actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" disabled={action.busy} onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="danger" disabled={busy || typed !== account.name}>
+          <ActionButton
+            type="submit"
+            className="danger"
+            disabled={typed !== account.name}
+            pending={action.busy}
+          >
             Delete account
-          </button>
+          </ActionButton>
         </div>
       </form>
     </div>
@@ -237,7 +243,7 @@ export function ReplaceCredential({
   const [username, setUsername] = useState("");
   const [token, setToken] = useState("");
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
 
   async function pick(file: File | undefined) {
     if (!file) return;
@@ -278,21 +284,21 @@ export function ReplaceCredential({
         return;
       }
     }
-    setBusy(true);
-    try {
-      await call(
-        api.PUT("/api/accounts/{account_id}/credential", {
-          params: { path: { account_id: account.id } },
-          body: { credential },
-        }),
-      );
-      setToken("");
-      onDone(`Replaced the credential of “${account.name}”.`);
-    } catch (err) {
-      setError(withoutSecret((err as Error).message, token));
-      setToken("");
-      setBusy(false);
-    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.PUT("/api/accounts/{account_id}/credential", {
+            params: { path: { account_id: account.id } },
+            body: { credential },
+          }),
+        );
+        setToken("");
+        onDone(`Replaced the credential of “${account.name}”.`);
+      } catch (err) {
+        setError(withoutSecret((err as Error).message, token));
+        setToken("");
+      }
+    });
   }
 
   return (
@@ -377,12 +383,12 @@ export function ReplaceCredential({
           </p>
         )}
         <div className="actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" disabled={action.busy} onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="primary" disabled={busy}>
+          <ActionButton type="submit" className="primary" pending={action.busy}>
             Replace credential
-          </button>
+          </ActionButton>
         </div>
       </form>
     </div>

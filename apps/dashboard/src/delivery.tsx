@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ActionButton, useAction } from "./ActionButton";
 import { api, call, type Delivery } from "./api";
 import { DateChip } from "./DateChip";
 
@@ -27,27 +28,26 @@ export function TaskDelivery({
   onChanged?: () => void;
 }) {
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
   const merged = delivery.pr_state === "merged";
   const head = shortSha(delivery.head?.sha);
   const combined = delivery.checks_combined;
 
   async function accept(decisionId: string) {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await call(
-        api.POST("/api/decisions/{decision_id}/answer", {
-          params: { path: { decision_id: decisionId } },
-          body: { choice: "accept", text: "", save_to_knowledge: null },
-        }),
-      );
-      onChanged?.();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setError(undefined);
+      try {
+        await call(
+          api.POST("/api/decisions/{decision_id}/answer", {
+            params: { path: { decision_id: decisionId } },
+            body: { choice: "accept", text: "", save_to_knowledge: null },
+          }),
+        );
+        onChanged?.();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   return (
@@ -100,13 +100,13 @@ export function TaskDelivery({
         </p>
       )}
       {delivery.accept_decision_id && (
-        <button
+        <ActionButton
           type="button"
-          disabled={busy}
-          onClick={() => accept(delivery.accept_decision_id as string)}
+          pending={action.busy}
+          action={() => accept(delivery.accept_decision_id as string)}
         >
           Accept
-        </button>
+        </ActionButton>
       )}
       {merged && !delivery.accept_decision_id && delivery.accept_blocked && (
         <p className="muted small">{BLOCKED[delivery.accept_blocked]}</p>

@@ -1967,6 +1967,46 @@ main > section.chat-page.chat-off {
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
+button .spinner {
+  width: 0.85em;
+  height: 0.85em;
+  border-width: 1.5px;
+}
+button.is-pending {
+  cursor: wait;
+  opacity: 0.78;
+}
+button.primary.is-pending {
+  opacity: 1;
+  filter: saturate(0.85);
+}
+button.link.is-pending {
+  opacity: 0.72;
+}
+.btn-pending {
+  position: relative;
+  display: inline-grid;
+  justify-items: start;
+  align-items: center;
+}
+.btn-pending-sizer,
+.btn-pending-face {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45em;
+  white-space: nowrap;
+}
+.btn-pending-sizer {
+  grid-area: 1 / 1;
+  visibility: hidden;
+}
+.btn-pending-face {
+  grid-area: 1 / 1;
+}
+.btn-pending-label {
+  min-width: 0;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { api, call, type Instance, type Pool } from "../api";
 import { DateChip } from "../DateChip";
 import { shortId } from "../format";
@@ -50,36 +51,41 @@ export function Pools() {
 function PoolCard({ pool, onEdit }: { pool: Pool; onEdit: () => void }) {
   const [error, setError] = useState<string>();
   const [logsOf, setLogsOf] = useState<Instance | null>(null);
+  const action = useAction();
   const { data: instances } = useLiveData(
     (signal) => call(api.GET("/api/instances", { params: { query: { pool: pool.name } }, signal })),
     [pool.name],
   );
 
-  async function scale(desired: number) {
+  async function scale(desired: number, key: string) {
     setError(undefined);
-    try {
-      await call(
-        api.POST("/api/pools/{name}/scale", {
-          params: { path: { name: pool.name } },
-          body: { desired_replicas: Math.max(0, desired) },
-        }),
-      );
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.POST("/api/pools/{name}/scale", {
+            params: { path: { name: pool.name } },
+            body: { desired_replicas: Math.max(0, desired) },
+          }),
+        );
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, key);
   }
 
   async function terminate(instance: Instance) {
     setError(undefined);
-    try {
-      await call(
-        api.POST("/api/instances/{instance_id}/terminate", {
-          params: { path: { instance_id: instance.id } },
-        }),
-      );
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.POST("/api/instances/{instance_id}/terminate", {
+            params: { path: { instance_id: instance.id } },
+          }),
+        );
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, `terminate:${instance.id}`);
   }
 
   return (
@@ -92,19 +98,23 @@ function PoolCard({ pool, onEdit }: { pool: Pool; onEdit: () => void }) {
           {pool.image} · {pool.target}/{pool.runtime}
         </span>
         <span className="scale">
-          <button type="button" onClick={() => scale(pool.desired_replicas - 1)}>
+          <ActionButton
+            pending={action.is("scale-down")}
+            disabled={action.busy}
+            action={() => scale(pool.desired_replicas - 1, "scale-down")}
+          >
             −
-          </button>
+          </ActionButton>
           <strong>
             {pool.live_instances} / {pool.desired_replicas}
           </strong>
-          <button
-            type="button"
-            onClick={() => scale(pool.desired_replicas + 1)}
-            disabled={pool.desired_replicas >= pool.max_replicas}
+          <ActionButton
+            pending={action.is("scale-up")}
+            disabled={action.busy || pool.desired_replicas >= pool.max_replicas}
+            action={() => scale(pool.desired_replicas + 1, "scale-up")}
           >
             +
-          </button>
+          </ActionButton>
           <span className="muted small">max {pool.max_replicas}</span>
         </span>
         <button type="button" className="link" onClick={onEdit}>
@@ -150,9 +160,14 @@ function PoolCard({ pool, onEdit }: { pool: Pool; onEdit: () => void }) {
                   Logs
                 </button>
                 {(i.state === "running" || i.state === "reserved") && (
-                  <button type="button" className="link danger" onClick={() => terminate(i)}>
+                  <ActionButton
+                    className="link danger"
+                    pending={action.is(`terminate:${i.id}`)}
+                    disabled={action.busy}
+                    action={() => terminate(i)}
+                  >
                     Terminate
-                  </button>
+                  </ActionButton>
                 )}
               </td>
             </tr>

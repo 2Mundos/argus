@@ -1,4 +1,5 @@
-import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import {
   api,
   type CreateWorkerRequest,
@@ -28,13 +29,12 @@ export function GuidedWorkerForm(props: {
 }) {
   const { catalog } = props;
   const [state, setState] = useState<GuidedState>(() => initialState(catalog));
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const inFlight = useRef(false); // a double click submits once
+  const action = useAction();
   const template = catalog.templates.find((t) => t.id === state.template);
   const readiness = readinessFor(template, state.node);
   const images = offeredImages(catalog, state);
-  const gate = verdict(catalog, state, busy);
+  const gate = verdict(catalog, state, action.busy);
   const set = (change: Partial<GuidedState>) => setState((s) => ({ ...s, ...change }));
 
   // The catalog is re-read on "Re-check"; keep the choice if it still exists.
@@ -50,18 +50,15 @@ export function GuidedWorkerForm(props: {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (!gate.ready || inFlight.current) return;
-    inFlight.current = true;
-    setBusy(true);
-    setError(undefined);
-    try {
-      await props.onCreate(buildRequest(catalog, state));
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-    }
+    if (!gate.ready) return;
+    await action.run(async () => {
+      setError(undefined);
+      try {
+        await props.onCreate(buildRequest(catalog, state));
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   const noun = state.quantity === 1 ? "worker" : "workers";
@@ -238,9 +235,15 @@ export function GuidedWorkerForm(props: {
             Cancel
           </button>
         )}
-        <button type="submit" className="primary" disabled={!gate.ready}>
-          {busy ? "Creating…" : `Create ${state.quantity} ${noun}`}
-        </button>
+        <ActionButton
+          type="submit"
+          className="primary"
+          disabled={!gate.ready}
+          pending={action.busy}
+          pendingLabel="Creating…"
+        >
+          {`Create ${state.quantity} ${noun}`}
+        </ActionButton>
       </div>
     </form>
   );

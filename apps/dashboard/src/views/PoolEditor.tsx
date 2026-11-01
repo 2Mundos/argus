@@ -1,4 +1,5 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import {
   api,
   call,
@@ -191,7 +192,7 @@ export function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void
   const [form, setForm] = useState<PoolForm>(() => toForm(pool));
   const [errors, setErrors] = useState<FieldErrors>({});
   const [conflict, setConflict] = useState<string>();
-  const [saving, setSaving] = useState(false);
+  const action = useAction();
   /** Bumped on Discard/Keep so ImageField remounts and its "Other" local state matches the form. */
   const [rebaseKey, setRebaseKey] = useState(0);
   const [catalog, reloadCatalog, lastKnownCatalog] = useImageCatalog();
@@ -217,36 +218,34 @@ export function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (saving) return;
     setConflict(undefined);
     const built = buildPool(base, form, roleCatalog);
     setErrors(built.errors);
     if (!built.body) return;
     if (built.unchanged) return onClose();
-    setSaving(true);
-    try {
-      if (base) {
-        await call(
-          api.PATCH("/api/pools/{name}", {
-            params: { path: { name: base.name } },
-            body: { expected_version: base.version, ...built.body } as PoolPatch,
-          }),
-        );
-      } else {
-        await call(
-          api.PUT("/api/pools/{name}", {
-            params: { path: { name: form.name } },
-            body: built.body as PoolUpsert,
-          }),
-        );
+    await action.run(async () => {
+      try {
+        if (base) {
+          await call(
+            api.PATCH("/api/pools/{name}", {
+              params: { path: { name: base.name } },
+              body: { expected_version: base.version, ...built.body } as PoolPatch,
+            }),
+          );
+        } else {
+          await call(
+            api.PUT("/api/pools/{name}", {
+              params: { path: { name: form.name } },
+              body: built.body as PoolUpsert,
+            }),
+          );
+        }
+        onClose();
+      } catch (err) {
+        if (isStale(err)) setConflict(err.details[0] ?? "");
+        else setErrors(poolErrors(err));
       }
-      onClose();
-    } catch (err) {
-      if (isStale(err)) setConflict(err.details[0] ?? "");
-      else setErrors(poolErrors(err));
-    } finally {
-      setSaving(false);
-    }
+    });
   }
 
   async function latest(): Promise<Pool | undefined> {
@@ -596,12 +595,17 @@ export function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void
         </fieldset>
 
         <div className="actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" disabled={action.busy} onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="primary" disabled={saving}>
-            {saving ? "Saving…" : "Save"}
-          </button>
+          <ActionButton
+            type="submit"
+            className="primary"
+            pending={action.busy}
+            pendingLabel="Saving…"
+          >
+            Save
+          </ActionButton>
         </div>
       </form>
     </div>

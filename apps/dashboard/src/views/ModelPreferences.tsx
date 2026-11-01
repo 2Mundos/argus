@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { useLiveData } from "../live";
 import {
   addProblem,
@@ -34,7 +35,7 @@ export function ModelPreferences() {
   const [draft, setDraft] = useState<Draft>();
   const [failure, setFailure] = useState<string>();
   const [done, setDone] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
 
   const dirty = !!policy && !!draft && JSON.stringify(draft) !== JSON.stringify(toDraft(policy));
   const empties = draft ? emptyChains(draft) : [];
@@ -51,25 +52,24 @@ export function ModelPreferences() {
     setDraft(toDraft(p));
   }
 
-  async function run(action: () => Promise<ModelPolicy>, verb: string) {
-    setBusy(true);
-    setFailure(undefined);
-    setDone(undefined);
-    try {
-      const next = await action();
-      adopt(next);
-      setDone(
-        `${verb}: revision ${next.revision.slice(0, 8)}, source ${sourceLabel(next.source)}.${
-          next.env_overrides
-            ? " ARGUS_MODEL_POLICY still wins, so nothing changed in effect."
-            : " Applies to instances started from now on."
-        }`,
-      );
-    } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+  async function run(fn: () => Promise<ModelPolicy>, verb: string, key: string) {
+    await action.run(async () => {
+      setFailure(undefined);
+      setDone(undefined);
+      try {
+        const next = await fn();
+        adopt(next);
+        setDone(
+          `${verb}: revision ${next.revision.slice(0, 8)}, source ${sourceLabel(next.source)}.${
+            next.env_overrides
+              ? " ARGUS_MODEL_POLICY still wins, so nothing changed in effect."
+              : " Applies to instances started from now on."
+          }`,
+        );
+      } catch (e) {
+        setFailure(e instanceof Error ? e.message : String(e));
+      }
+    }, key);
   }
 
   return (
@@ -110,16 +110,17 @@ export function ModelPreferences() {
           )}
           <ModelPreferencesEditor draft={draft} onChange={setDraft} empties={empties} />
           <div className="toolbar model-actions">
-            <button
+            <ActionButton
               type="button"
-              disabled={busy || !dirty}
-              onClick={() => run(() => saveModelPolicy(compactDraft(draft)), "Saved")}
+              disabled={action.busy || !dirty}
+              pending={action.is("save")}
+              action={() => run(() => saveModelPolicy(compactDraft(draft)), "Saved", "save")}
             >
               Save
-            </button>
+            </ActionButton>
             <button
               type="button"
-              disabled={busy || !dirty}
+              disabled={action.busy || !dirty}
               onClick={() => {
                 setDraft(toDraft(policy));
                 setFailure(undefined);
@@ -127,13 +128,14 @@ export function ModelPreferences() {
             >
               Discard changes
             </button>
-            <button
+            <ActionButton
               type="button"
-              disabled={busy || policy.file_revision === null}
-              onClick={() => run(() => restoreModelDefaults(), "Restored defaults")}
+              disabled={action.busy || policy.file_revision === null}
+              pending={action.is("restore")}
+              action={() => run(() => restoreModelDefaults(), "Restored defaults", "restore")}
             >
               Restore defaults
-            </button>
+            </ActionButton>
           </div>
           {failure && (
             <p className="error" role="alert">

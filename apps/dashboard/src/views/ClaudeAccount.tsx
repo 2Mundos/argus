@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { type Account, api, type ClaudeLogin, call } from "../api";
 import {
   type ClaudeCheck,
@@ -127,7 +128,7 @@ function ImportCredential({ renew, onClose, onDone }: Shared) {
   const [text, setText] = useState("");
   const [fileName, setFileName] = useState<string>();
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
   const check: ClaudeCheck | null = text.trim() ? checkClaudeCredential(text) : null;
 
   async function pick(file: File | undefined) {
@@ -145,16 +146,15 @@ function ImportCredential({ renew, onClose, onDone }: Shared) {
       setError(result.error);
       return;
     }
-    setBusy(true);
-    try {
-      await save(renew, name, result, JSON.parse(text));
-      setText(""); // the document does not stay in the page
-      onDone();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      try {
+        await save(renew, name, result, JSON.parse(text));
+        setText(""); // the document does not stay in the page
+        onDone();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   return (
@@ -195,12 +195,12 @@ function ImportCredential({ renew, onClose, onDone }: Shared) {
       {check && !check.ok && <p className="error">{check.error}</p>}
       {error && <p className="error">{error}</p>}
       <div className="actions">
-        <button type="button" onClick={onClose}>
+        <button type="button" disabled={action.busy} onClick={onClose}>
           Cancel
         </button>
-        <button type="submit" className="primary" disabled={busy || !check?.ok}>
+        <ActionButton type="submit" className="primary" disabled={!check?.ok} pending={action.busy}>
           {renew ? "Renew" : "Import"}
-        </button>
+        </ActionButton>
       </div>
     </form>
   );
@@ -211,7 +211,7 @@ function TokenCredential({ renew, onClose, onDone }: Shared) {
   const [type, setType] = useState<TokenType>("oauth_token");
   const [token, setToken] = useState("");
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
   const check = token.trim() ? checkToken(type, token) : null;
 
   async function submit(e: FormEvent) {
@@ -222,16 +222,15 @@ function TokenCredential({ renew, onClose, onDone }: Shared) {
       setError(result.error);
       return;
     }
-    setBusy(true);
-    try {
-      await save(renew, name, result, tokenCredential(type, token));
-      setToken("");
-      onDone();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      try {
+        await save(renew, name, result, tokenCredential(type, token));
+        setToken("");
+        onDone();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   return (
@@ -268,12 +267,12 @@ function TokenCredential({ renew, onClose, onDone }: Shared) {
       {check && !check.ok && <p className="error">{check.error}</p>}
       {error && <p className="error">{error}</p>}
       <div className="actions">
-        <button type="button" onClick={onClose}>
+        <button type="button" disabled={action.busy} onClick={onClose}>
           Cancel
         </button>
-        <button type="submit" className="primary" disabled={busy || !check?.ok}>
+        <ActionButton type="submit" className="primary" disabled={!check?.ok} pending={action.busy}>
           {renew ? "Renew" : "Add"}
-        </button>
+        </ActionButton>
       </div>
     </form>
   );
@@ -284,7 +283,7 @@ function DedicatedLogin({ renew, onClose, onDone }: Shared) {
   const [login, setLogin] = useState<ClaudeLogin>();
   const [code, setCode] = useState("");
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
   const live = useRef<ClaudeLogin>(undefined);
   const done = useRef(onDone);
   done.current = onDone;
@@ -335,20 +334,19 @@ function DedicatedLogin({ renew, onClose, onDone }: Shared) {
   async function start(e: FormEvent) {
     e.preventDefault();
     setError(undefined);
-    setBusy(true);
-    try {
-      track(
-        await call(
-          api.POST("/api/accounts/claude-login", {
-            body: renew ? { renew_account_id: renew.id } : { name },
-          }),
-        ),
-      );
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      try {
+        track(
+          await call(
+            api.POST("/api/accounts/claude-login", {
+              body: renew ? { renew_account_id: renew.id } : { name },
+            }),
+          ),
+        );
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   async function sendCode(e: FormEvent) {
@@ -362,22 +360,21 @@ function DedicatedLogin({ renew, onClose, onDone }: Shared) {
       );
       return;
     }
-    setBusy(true);
-    try {
-      track(
-        await call(
-          api.POST("/api/accounts/claude-login/{login_id}/code", {
-            params: { path: { login_id: login.login_id } },
-            body: { code: clean },
-          }),
-        ),
-      );
-      setCode(""); // the code does not stay in the page
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      try {
+        track(
+          await call(
+            api.POST("/api/accounts/claude-login/{login_id}/code", {
+              params: { path: { login_id: login.login_id } },
+              body: { code: clean },
+            }),
+          ),
+        );
+        setCode(""); // the code does not stay in the page
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   async function cancel() {
@@ -410,12 +407,12 @@ function DedicatedLogin({ renew, onClose, onDone }: Shared) {
         <NameField renew={renew} name={name} setName={setName} />
         {error && <p className="error">{error}</p>}
         <div className="actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" disabled={action.busy} onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="primary" disabled={busy}>
+          <ActionButton type="submit" className="primary" pending={action.busy}>
             Start login
-          </button>
+          </ActionButton>
         </div>
       </form>
     );
@@ -469,9 +466,14 @@ function DedicatedLogin({ renew, onClose, onDone }: Shared) {
                 />
               </label>
               <div className="actions">
-                <button type="submit" className="primary" disabled={busy || !code.trim()}>
+                <ActionButton
+                  type="submit"
+                  className="primary"
+                  disabled={!code.trim()}
+                  pending={action.busy}
+                >
                   Send code
-                </button>
+                </ActionButton>
               </div>
             </form>
           )}

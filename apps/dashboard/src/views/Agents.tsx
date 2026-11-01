@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { type AgentHygiene, api, call, type FleetCapabilities } from "../api";
 import { DateChip } from "../DateChip";
 import { shortId } from "../format";
@@ -24,9 +25,9 @@ function CreateWorker({ onError }: { onError: (message?: string) => void }) {
   const [caps, setCaps] = useState<FleetCapabilities>();
   const [capsError, setCapsError] = useState<string>();
   const [chosen, setChosen] = useState<string>();
-  const [busy, setBusy] = useState(false);
   const [requested, setRequested] = useState<string>();
   const [showNew, setShowNew] = useState(false);
+  const action = useAction();
 
   const check = useCallback(async () => {
     setCapsError(undefined);
@@ -42,35 +43,31 @@ function CreateWorker({ onError }: { onError: (message?: string) => void }) {
 
   const pool = (pools ?? []).find((p) => p.name === chosen) ?? pools?.[0];
   const capability = caps?.pools.find((c) => c.name === pool?.name);
-  const gate = launchGate(pool, capability, busy);
+  const gate = launchGate(pool, capability, action.busy);
   const mine = useMemo(
     () => (pool ? (instances ?? []).filter((i) => i.pool === pool.name) : []),
     [pool, instances],
   );
 
-  const inFlight = useRef(false); // a double click submits once, even before a re-render
-
   async function launch() {
-    if (!pool || inFlight.current) return;
-    inFlight.current = true;
-    setBusy(true);
-    onError(undefined);
-    setRequested(undefined);
-    try {
-      const res = await call(
-        api.POST("/api/pools/{name}/launch", {
-          params: { path: { name: pool.name } },
-          body: { expected_desired_replicas: pool.desired_replicas },
-        }),
-      );
-      setRequested(`Requested a worker from ${res.pool.name} (wants ${res.desired_replicas}).`);
-    } catch (err) {
-      onError((err as Error).message);
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-      void check();
-    }
+    if (!pool) return;
+    await action.run(async () => {
+      onError(undefined);
+      setRequested(undefined);
+      try {
+        const res = await call(
+          api.POST("/api/pools/{name}/launch", {
+            params: { path: { name: pool.name } },
+            body: { expected_desired_replicas: pool.desired_replicas },
+          }),
+        );
+        setRequested(`Requested a worker from ${res.pool.name} (wants ${res.desired_replicas}).`);
+      } catch (err) {
+        onError((err as Error).message);
+      } finally {
+        void check();
+      }
+    });
   }
 
   // A fresh install has no pools: the first worker comes from a template.
@@ -92,9 +89,16 @@ function CreateWorker({ onError }: { onError: (message?: string) => void }) {
             </option>
           ))}
         </select>
-        <button type="button" className="primary" disabled={!gate.enabled} onClick={launch}>
-          {busy ? "Requesting…" : "Create worker"}
-        </button>
+        <ActionButton
+          type="button"
+          className="primary"
+          disabled={!gate.enabled}
+          pending={action.busy}
+          pendingLabel="Requesting…"
+          action={() => void launch()}
+        >
+          Create worker
+        </ActionButton>
         <button type="button" className="link" onClick={() => void check()}>
           Re-check node
         </button>
@@ -169,24 +173,29 @@ export function Agents() {
   const visible = (agents ?? []).filter(
     (a) => showEnded || a.state === "active" || a.state === "draining",
   );
+  const action = useAction();
 
   async function mint(role: "worker" | "orchestrator") {
     setError(undefined);
-    try {
-      setIssued(await call(api.POST("/api/agents/bootstrap-tokens", { body: { role } })));
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await action.run(async () => {
+      try {
+        setIssued(await call(api.POST("/api/agents/bootstrap-tokens", { body: { role } })));
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, `mint:${role}`);
   }
 
   async function drain(agentId: string) {
-    try {
-      await call(
-        api.POST("/api/agents/{agent_id}/drain", { params: { path: { agent_id: agentId } } }),
-      );
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.POST("/api/agents/{agent_id}/drain", { params: { path: { agent_id: agentId } } }),
+        );
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, `drain:${agentId}`);
   }
 
   return (
@@ -200,12 +209,20 @@ export function Agents() {
           />
           Show ended
         </label>
-        <button type="button" onClick={() => mint("worker")}>
+        <ActionButton
+          pending={action.is("mint:worker")}
+          disabled={action.busy}
+          action={() => mint("worker")}
+        >
           Worker bootstrap token
-        </button>
-        <button type="button" onClick={() => mint("orchestrator")}>
+        </ActionButton>
+        <ActionButton
+          pending={action.is("mint:orchestrator")}
+          disabled={action.busy}
+          action={() => mint("orchestrator")}
+        >
           Orchestrator bootstrap token
-        </button>
+        </ActionButton>
         <button type="button" onClick={() => setArchiveOpen(true)}>
           Archive old identities…
         </button>
@@ -270,9 +287,14 @@ export function Agents() {
               <td className="small">{a.capabilities.join(", ") || "—"}</td>
               <td>
                 {a.state === "active" && (
-                  <button type="button" className="link" onClick={() => drain(a.id)}>
+                  <ActionButton
+                    className="link"
+                    pending={action.is(`drain:${a.id}`)}
+                    disabled={action.busy}
+                    action={() => drain(a.id)}
+                  >
                     Drain
-                  </button>
+                  </ActionButton>
                 )}
               </td>
             </tr>
@@ -405,7 +427,7 @@ function ArchiveAgents({ onClose }: { onClose: () => void }) {
   const [olderThanDays, setOlderThanDays] = useState("30");
   const [count, setCount] = useState<number>();
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
 
   useEffect(() => {
     setCount(undefined);
@@ -443,23 +465,23 @@ function ArchiveAgents({ onClose }: { onClose: () => void }) {
   async function confirm() {
     if (states.length === 0) return;
     const days = olderThanDays.trim() === "" ? undefined : Number(olderThanDays);
-    setBusy(true);
-    setError(undefined);
-    try {
-      await call(
-        api.POST("/api/agents/archive", {
-          body: {
-            states,
-            ...(days !== undefined ? { older_than_days: days } : {}),
-            dry_run: false,
-          },
-        }),
-      );
-      onClose();
-    } catch (err) {
-      setError((err as Error).message);
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setError(undefined);
+      try {
+        await call(
+          api.POST("/api/agents/archive", {
+            body: {
+              states,
+              ...(days !== undefined ? { older_than_days: days } : {}),
+              dry_run: false,
+            },
+          }),
+        );
+        onClose();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   const toggle = (state: "lost" | "gone", on: boolean) =>
@@ -505,12 +527,18 @@ function ArchiveAgents({ onClose }: { onClose: () => void }) {
         </label>
         {error && <p className="error">{error}</p>}
         <div className="actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" disabled={action.busy} onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="primary" disabled={busy || !count} onClick={confirm}>
+          <ActionButton
+            type="button"
+            className="primary"
+            disabled={!count}
+            pending={action.busy}
+            action={() => void confirm()}
+          >
             {label}
-          </button>
+          </ActionButton>
         </div>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { api, call } from "../api";
 import { ARCHIVABLE, type ArchiveCriteria, bulkBody, confirmLabel } from "../archive";
 import { useLiveData } from "../live";
@@ -16,7 +17,7 @@ export function ArchiveTasks({ onClose }: { onClose: () => void }) {
   });
   const [count, setCount] = useState<number>();
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
 
   // The count shown is always the server's dry run for exactly these criteria.
   useEffect(() => {
@@ -43,15 +44,15 @@ export function ArchiveTasks({ onClose }: { onClose: () => void }) {
   async function confirm() {
     const body = bulkBody(criteria, false);
     if (!body) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      await call(api.POST("/api/tasks/archive", { body }));
-      onClose();
-    } catch (err) {
-      setError((err as Error).message);
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setError(undefined);
+      try {
+        await call(api.POST("/api/tasks/archive", { body }));
+        onClose();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   const toggle = (state: (typeof ARCHIVABLE)[number], on: boolean) =>
@@ -109,12 +110,18 @@ export function ArchiveTasks({ onClose }: { onClose: () => void }) {
         </div>
         {error && <p className="error">{error}</p>}
         <div className="actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" disabled={action.busy} onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="primary" disabled={busy || !count} onClick={confirm}>
+          <ActionButton
+            type="button"
+            className="primary"
+            disabled={!count}
+            pending={action.busy}
+            action={() => void confirm()}
+          >
             {confirmLabel(count)}
-          </button>
+          </ActionButton>
         </div>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { ActionButton } from "../ActionButton";
 import { api, call, type OnboardingStatus, type TemplateCatalog } from "../api";
 import { useLiveData } from "../live";
 import { ClaudeAccount } from "./ClaudeAccount";
@@ -349,9 +350,14 @@ function OrchestratorStep(props: {
               onChange={(e) => props.setBudget(e.target.value)}
             />
           </label>
-          <button type="button" className="primary" onClick={props.onEnable}>
+          <ActionButton
+            type="button"
+            className="primary"
+            pending={props.enabling}
+            action={() => props.onEnable()}
+          >
             Enable orchestrator
-          </button>
+          </ActionButton>
         </>
       )}
       <div className="toolbar">
