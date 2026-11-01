@@ -34,6 +34,16 @@
             "title": "Created At",
             "type": "string"
           },
+          "credential": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CredentialState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "credit": {
             "anyOf": [
               {
@@ -5387,6 +5397,37 @@
           "desired_replicas"
         ],
         "title": "CreateWorkerResult",
+        "type": "object"
+      },
+      "CredentialState": {
+        "description": "What Argus stores about a credential, never a verdict that it works: `present`\nis not \"healthy\" (account-usage.spec.md 3.5). `expires_at` is the stored Claude\n`expiresAt`; the holder may have refreshed the token since.",
+        "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "state": {
+            "enum": [
+              "present",
+              "missing",
+              "expired"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "CredentialState",
         "type": "object"
       },
       "CredentialUpdate": {

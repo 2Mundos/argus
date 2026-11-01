@@ -60,6 +60,17 @@ def _expiry(value: Any) -> datetime | None:
     raise ClaudeAuthError("claudeAiOauth.expiresAt is not a date")
 
 
+def stored_expiry(doc: dict[str, Any]) -> datetime | None:
+    """The stored `claudeAiOauth.expiresAt`, or None (other modes, absent, unreadable)."""
+    oauth = doc.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        return None
+    try:
+        return _expiry(oauth.get("expiresAt"))
+    except ClaudeAuthError:
+        return None
+
+
 def validate(doc: dict[str, Any], *, now: datetime | None = None) -> ClaudeAuthSummary:
     present = [k for k in _KEYS if k in doc]
     if not present:

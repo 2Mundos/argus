@@ -3821,3 +3821,13 @@ button.link.account-name {
     margin-bottom: 0.4rem;
   }
 }
+.credential-missing,
+.credential-expired {
+  color: var(--danger);
+  border-color: currentColor;
+}
+.auth-facts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}

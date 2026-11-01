@@ -126,9 +126,11 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
 
 
 @router.get("")
-async def list_accounts(db: DbDep, _: ManagerDep) -> list[Account]:
+async def list_accounts(request: Request, db: DbDep, _: ManagerDep) -> list[Account]:
+    now = utcnow()
     async with db.read() as conn:
-        return await service.list_accounts(conn, utcnow())
+        listed = await service.list_accounts(conn, now)
+    return service.with_credential(listed, request.app.state.secrets, now)
 
 
 @router.get("/usage")
@@ -336,9 +338,13 @@ async def cancel_claude_login(
 
 
 @router.get("/{account_id}")
-async def get_account(account_id: str, db: DbDep, _: ManagerDep) -> Account:
+async def get_account(
+    account_id: str, request: Request, db: DbDep, _: ManagerDep
+) -> Account:
+    now = utcnow()
     async with db.read() as conn:
-        return await service.get_account(conn, account_id, utcnow())
+        found = await service.get_account(conn, account_id, now)
+    return service.with_credential([found], request.app.state.secrets, now)[0]
 
 
 @router.post("/{account_id}/quota/refresh")

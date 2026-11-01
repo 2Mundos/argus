@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { ActionButton, useAction } from "../ActionButton";
+import { AuthFacts } from "../AuthFacts";
 import {
   COPILOT_PROVIDER,
   CUSTOM_PROVIDER_PATTERN,
@@ -130,6 +131,7 @@ export function Accounts() {
           <tr>
             <th>Account</th>
             <th>State</th>
+            <th>Auth</th>
             <th>Quota left</th>
             <th>Tokens, 7 days</th>
             <th>Leases</th>
@@ -165,6 +167,9 @@ export function Accounts() {
                     </span>
                   )}
                   {a.disabled_reason && <span className="muted small"> {a.disabled_reason}</span>}
+                </td>
+                <td data-label="Auth">
+                  <AuthFacts account={a} />
                 </td>
                 <td data-label="Quota left">
                   {!model ? (
@@ -267,7 +272,7 @@ export function Accounts() {
           })}
           {accounts?.length === 0 && (
             <tr>
-              <td colSpan={6} className="muted">
+              <td colSpan={7} className="muted">
                 No accounts yet.
               </td>
             </tr>

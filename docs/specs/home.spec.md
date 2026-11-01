@@ -91,7 +91,9 @@ that returns.
 - **Attention rules** (severity, then items needing a person first, then count):
   - critical: a failing readiness check; a pool whose status is not `ok`; a provider
     with accounts but none `available`.
-  - attention: degraded check; pool with `running < desired`; exhausted accounts;
+  - attention: degraded check; pool with `running < desired`; exhausted accounts; an account whose last rejection is newer than its last
+    acceptance (or rejected, never accepted; from `GET /api/accounts`, skipped when
+    the caller cannot read it, [account usage](account-usage.spec.md) 3.5);
     lost agents on unfinished instances; blocked tasks; tasks awaiting approval;
     open decisions; stream offline; a source that could not be loaded.
   - info: tasks in review; failed tasks; terminating instances; open knowledge proposals.

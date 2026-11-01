@@ -11,13 +11,16 @@ from typing import Any, NamedTuple
 from uuid import uuid4
 
 import aiosqlite
+from argus_core import claude_auth
 from argus_core.accounts import (
     LOCAL_PROVIDER,
+    REPOSITORY_PROVIDERS,
     Account,
     AccountCreate,
     AccountLease,
     AccountUpdate,
     AuthRejectedReport,
+    CredentialState,
     ExhaustedReport,
     FallbackResult,
     LeaseRole,
@@ -71,6 +74,35 @@ class NoAccountError(ConflictError):
 
 
 # -- registry ------------------------------------------------------------------------
+
+
+def credential_state(
+    account: Account, store: SecretStore, now: datetime
+) -> CredentialState | None:
+    """present / missing / expired from the in-memory secret store, with no provider
+    call. Only Claude documents carry an `expiresAt`; None for repository and local
+    accounts, which hold no model credential."""
+    if account.provider in REPOSITORY_PROVIDERS or account.provider == LOCAL_PROVIDER:
+        return None
+    name = ref_name(account.secret_ref)
+    doc = store.get(name) if name else None
+    if doc is None:
+        return CredentialState(state="missing")
+    expires = (
+        claude_auth.stored_expiry(doc) if account.provider == "anthropic" else None
+    )
+    if expires is not None and expires <= now:
+        return CredentialState(state="expired", expires_at=expires)
+    return CredentialState(state="present", expires_at=expires)
+
+
+def with_credential(
+    accounts: list[Account], store: SecretStore, now: datetime
+) -> list[Account]:
+    return [
+        a.model_copy(update={"credential": credential_state(a, store, now)})
+        for a in accounts
+    ]
 
 
 async def get_account(
