@@ -588,6 +588,10 @@ python3 "$here/patch-startup-adoption-gate.py" "$target"
 # No blanket running-session ceiling (reconcile-session.ts): only a stale message claim kills.
 python3 "$here/patch-no-session-ceiling.py" "$target"
 
+# Raise-only OOM priority and CPU-count shims for harness command shells (agent-resource-hygiene.spec.md).
+# The shim files ship in the agent image (engines/Dockerfile.tools-layer); this wires session containers to them.
+python3 "$here/patch-agent-resource-hygiene.py" "$target"
+
 # No self-modifying tools for Argus agents (internal orchestrator spec 3.1): create_agent,
 # install_packages and add_mcp_server need a NanoClaw owner's approval, which no Argus host has.
 mcp_tools="$target/container/agent-runner/src/mcp-tools/index.ts"
