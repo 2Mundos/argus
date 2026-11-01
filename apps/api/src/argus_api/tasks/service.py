@@ -87,7 +87,7 @@ from argus_api.modeltrace import service as modeltrace
 from argus_api.routines import failures as routine_failures
 from argus_api.runtime.gate import claim_gate
 from argus_api.tasks import continuation as cont
-from argus_api.tasks import steers
+from argus_api.tasks import finalization, steers
 
 log = logging.getLogger(__name__)
 S = TaskState
@@ -3196,6 +3196,9 @@ async def _apply(
         # Pending steers belong to this attempt only: they expire, or end `unknown`
         # when a heartbeat carried them (task steering spec 3.3).
         await steers.close_attempt(tx, row["id"], row["attempt"])
+        await finalization.record_claim_end(
+            tx, row["id"], row["attempt"], str(action.value)
+        )
         await _ensure_usage_outcome(tx, row, action, data or {})
     # Decisions that waited on the old state are moot once the task leaves it
     # (an answered decision is already closed before its transition runs).

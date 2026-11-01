@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { ArgusEvent, Task, TaskRead } from "../api";
 import { DateChip } from "../DateChip";
 import { MilestoneLine, NoSignal } from "../milestones";
-import { quietFacts } from "../stall";
+import { finalizationLine, quietFacts } from "../stall";
 
 /** The current time, re-read every `ms`, so "N s ago" keeps counting between events. */
 export function useNow(ms = 1000): number {
@@ -26,7 +26,9 @@ type Progress = Pick<
   | "progress_data"
   | "lease_expires_at"
 > &
-  Pick<TaskRead, "quiet_at" | "last_signal_at" | "last_signal_source" | "stall_cause">;
+  Pick<TaskRead, "quiet_at" | "last_signal_at" | "last_signal_source" | "stall_cause"> & {
+    finalization?: TaskRead["finalization"];
+  };
 
 /** Progress notes of the task's current attempt, newest first. */
 export function attemptNotes(task: Progress, events: ArgusEvent[]): ArgusEvent[] {
@@ -81,9 +83,15 @@ export function Activity({
           now,
         )
       : null;
-  if (task.state !== "claimed" && notes.length === 0 && !quietLine) return null;
+  const finalLine = task.finalization ? finalizationLine(task.finalization, now) : null;
+  if (task.state !== "claimed" && notes.length === 0 && !quietLine && !finalLine) return null;
   return (
     <div className="activity">
+      {finalLine && (
+        <p className="finalization muted small" data-step={task.finalization?.step}>
+          {finalLine}
+        </p>
+      )}
       {quietLine && (
         <p className="quiet-claim" role="status">
           {quietLine.charAt(0).toUpperCase() + quietLine.slice(1)}

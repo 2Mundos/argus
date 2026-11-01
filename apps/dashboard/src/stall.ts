@@ -41,3 +41,36 @@ export function quietFacts(
       : "";
   return `quiet for ${dur(q.age_s)}${signalLine}${cause}.`;
 }
+
+type FinalizationRead = {
+  step: "executing" | "finalizing_checkpoint" | "finished" | "unknown";
+  execution_s: number | null;
+  checkpoint: {
+    state: "running" | "saved" | "nothing_to_save" | "failed" | "unknown";
+    started_at: string | null;
+    duration_s: number | null;
+    detail: string | null;
+  } | null;
+};
+
+/** Execution versus follow-up of the newest attempt (task finalization 3.5). A
+ *  finished agent says nothing about preservation: no checkpoint report, no sentence. */
+export function finalizationLine(f: FinalizationRead, now?: number): string {
+  const took = (s: number | null) => (s == null ? "" : ` (took ${dur(s)})`);
+  if (f.step === "executing") return "Agent running.";
+  const agent = `Agent finished${took(f.execution_s)}.`;
+  const c = f.checkpoint;
+  if (!c) return agent;
+  switch (c.state) {
+    case "running":
+      return `${agent} Saving checkpoint…`;
+    case "saved":
+      return `${agent} Checkpoint saved${took(c.duration_s)}.`;
+    case "nothing_to_save":
+      return `${agent} Nothing to checkpoint.`;
+    case "failed":
+      return `${agent} Checkpoint failed${c.detail ? `: ${c.detail}` : ""}${took(c.duration_s)}.`;
+    case "unknown":
+      return `${agent} Checkpoint state unknown: worker silent since ${c.started_at ? relative(c.started_at, now) : "start"}.`;
+  }
+}
