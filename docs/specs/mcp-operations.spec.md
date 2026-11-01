@@ -280,7 +280,9 @@ Findings outside the gap list:
   fails as a whole. `ids` takes no other filter or cursor (`422 ids_exclusive`).
 - **Task log:** MCP `get_task_log(task_id, attempt?, after?, limit?)` reads the live
   log tail like `GET /api/tasks/{id}/log` ([task live log](task-live-log.spec.md) 3.5),
-  with REST's permissions; it is listed to every scope.
+  with REST's permissions; it is listed to every scope. `append_task_log(task_id,
+  attempt, lines, source?)` wraps `POST /api/tasks/{id}/log` for workers and
+  orchestrators, with REST's limits.
 - **Task changes:** MCP `get_task_changes(task_id, attempt?)` reads the attempt's
   workspace diff snapshot like `GET /api/tasks/{id}/changes` ([task
   changes](task-changes.spec.md) 3.6), with REST's permissions; listed to every scope.

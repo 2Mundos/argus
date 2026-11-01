@@ -520,6 +520,25 @@ async def report_progress(
 
 
 @tool(AGENTS)
+async def append_task_log(
+    ctx: Context,
+    task_id: str,
+    attempt: int,
+    lines: list[str],
+    source: Literal["worker", "delegate"] = "worker",
+) -> dict:
+    """Append output lines to the live log of the attempt you hold: up to 200 lines
+    per batch and one batch per second per source. Secrets are redacted before they
+    are stored. Returns {accepted, last_seq, output_at}."""
+    return await _call(
+        ctx,
+        "POST",
+        f"/tasks/{task_id}/log",
+        json={"attempt": attempt, "source": source, "lines": lines},
+    )
+
+
+@tool(AGENTS)
 async def report_task_models(
     ctx: Context,
     task_id: str,

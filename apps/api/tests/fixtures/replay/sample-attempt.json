@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "steps": [
+    { "t": 0.0, "type": "event", "kind": "task.claimed", "data": { "attempt": 1 } },
+    {
+      "t": 0.2,
+      "type": "models",
+      "executions": [
+        {
+          "key": "harness-1",
+          "layer": "harness",
+          "state": "running",
+          "engine": "claude",
+          "requested_model": "model-a",
+          "observed_model": "model-a",
+          "evidence": "reported_by_runtime"
+        }
+      ],
+      "selections": [
+        {
+          "key": "select-1",
+          "layer": "harness",
+          "kind": "initial",
+          "reason_code": "priority",
+          "explanation": "first choice of the policy",
+          "to_model": "model-a",
+          "execution_key": "harness-1",
+          "alternatives": []
+        }
+      ]
+    },
+    { "t": 0.5, "type": "log", "source": "worker", "line": "reading the task spec" },
+    { "t": 0.6, "type": "log", "source": "worker", "line": "listing <path>/src" },
+    { "t": 1.0, "type": "progress", "message": "Reading the code", "percent": 10 },
+    { "t": 3.0, "type": "log", "source": "worker", "line": "editing <path>/src/app.py" },
+    { "t": 3.4, "type": "log", "source": "delegate", "line": "applied 1 hunk" },
+    { "t": 5.0, "type": "log", "source": "worker", "line": "running the tests" },
+    { "t": 5.2, "type": "log", "source": "worker", "line": "12 passed in 0.8s" },
+    {
+      "t": 6.0,
+      "type": "progress",
+      "message": "Committed the change",
+      "percent": 60,
+      "kind": "commit_created",
+      "data": { "branch": "feat/sample", "sha": "0123456789abcdef0123456789abcdef01234567" }
+    },
+    { "t": 8.0, "type": "log", "source": "worker", "line": "Authorization: [redacted]" },
+    { "t": 12.0, "type": "log", "source": "worker", "line": "writing the summary" },
+    { "t": 12.5, "type": "event", "kind": "task.completed", "data": {} }
+  ],
+  "final": {
+    "outcome": "complete",
+    "result": {
+      "summary": "Sample change: edited one file and ran the tests.",
+      "data": null,
+      "input_tokens": 1200,
+      "output_tokens": 340,
+      "cost_usd": 0.01
+    }
+  }
+}
