@@ -71,6 +71,9 @@ every new dependency is judged against it.
 - [Agent hygiene](specs/agent-hygiene.spec.md) — lost/gone identities by pool and
   heartbeat age, bounded opt-in archiving, and the lost-holding-claims and
   lost-spike alerts
+- [Agent resource hygiene](specs/agent-resource-hygiene.spec.md) — session
+  containers: harness children get a higher OOM score, and CPU-count defaults
+  follow the container's CPU quota
 - [Failure classes](specs/failure-classes.spec.md) — one class per failure reason
   picks the retry (block, backoff, requeue, hand to a human), and a channel
   preflight blocks environment problems before any model work
