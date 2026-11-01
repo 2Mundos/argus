@@ -41,6 +41,7 @@ lint: ## Ruff + Biome + docs validation.
 	$(UV) run ruff format --check .
 	$(PNPM) lint
 	python3 scripts/validate_docs.py
+	$(UV) run python scripts/check_tests.py
 format: ## Auto-format Python and TypeScript.
 	$(UV) run ruff check --fix .
 	$(UV) run ruff format .
