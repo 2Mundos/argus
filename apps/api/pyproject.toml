@@ -14,6 +14,9 @@ dependencies = [
     "uvicorn[standard]>=0.30",
 ]
 
+[project.scripts]
+argus-replay = "argus_api.replay.cli:main"  # refuses to run without ARGUS_DEV_REPLAY=1
+
 [build-system]
 requires = ["uv_build>=0.8,<0.12"]
 build-backend = "uv_build"

@@ -75,6 +75,28 @@ make dev-dashboard # http://localhost:3000, proxies /api to :8000
 make check        # lint + typecheck + test (what CI runs)
 ```
 
+### Replay worker (dev only)
+
+Watch a task flow through a local Argus with no model: `argus-replay` claims the
+next task that requires the `replay` capability and plays a recorded attempt back
+through the MCP tools a worker uses. Off unless `ARGUS_DEV_REPLAY=1`.
+
+```bash
+curl -s -X POST localhost:8000/api/tasks -H "Authorization: Bearer $ARGUS_ADMIN_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"project":"global","title":"replay me","required_capabilities":["replay"]}'
+ARGUS_DEV_REPLAY=1 ARGUS_ADMIN_TOKEN=... uv run argus-replay \
+  --fixture apps/api/tests/fixtures/replay/sample-attempt.json --speed 4
+```
+
+Steers and cancels sent during playback are honoured. A fixture holds the event
+stream only (log lines, progress, model reports, final output); the workspace diff
+is not recorded, so task changes and delivery are not replayed. Point it at a dev
+instance: an untagged task matches every worker, and the command refuses it.
+Record a fixture from a **copy** of a database, then review it before committing:
+`ARGUS_DB=copy.db scripts/record_attempt.py <task_id> <attempt> -o fixture.json`
+(secrets and absolute paths are redacted; times are offsets from the first step).
+
 ## Run with Docker
 
 One process, one volume ([single-node](docs/specs/single-node.spec.md)): the
