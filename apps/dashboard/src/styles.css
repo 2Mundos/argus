@@ -1090,6 +1090,17 @@ main > section.home > .page-header {
   font-size: 10px;
   padding: 0.05rem 0.35rem;
 }
+.agent-stats-compact .facts .badge.model-chip {
+  padding: 0.05rem 0.35rem 0.05rem 0.22rem;
+  gap: 0.25rem;
+  max-width: 11rem;
+  text-transform: none;
+}
+.agent-stats-compact .model-chip .provider-mark,
+.agent-stats-compact .model-chip .configured-icon {
+  width: 11px;
+  height: 11px;
+}
 .agent-stats-compact .worker-caps {
   font-size: 10.5px;
   color: var(--muted);
@@ -1097,15 +1108,38 @@ main > section.home > .page-header {
 .agent-state-work {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.15rem 0;
+  align-items: center;
+  gap: 0.25rem 0.4rem;
   min-width: 0;
 }
-.agent-held-task {
+.task-chip {
+  display: inline-flex;
+  max-width: 12rem;
   min-width: 0;
+  align-items: center;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--muted) 50%, var(--border));
+  background: var(--surface-2);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 10.5px;
+  line-height: 1.3;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.task-chip-label {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+.task-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+}
+.agent-stats-compact .task-chip {
+  font-size: 10px;
+  padding: 0.05rem 0.35rem;
 }
 .worker-panel > .panel-titlebar {
   padding: 0.35rem 0.75rem;
