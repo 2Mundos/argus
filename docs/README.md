@@ -88,6 +88,9 @@ every new dependency is judged against it.
 - [Task checkpoint](specs/task-checkpoint.spec.md) — hash-verified, node-local
   preservation of a task's unpublished work and its restore by the next attempt,
   or a typed `env_checkpoint_*` block
+- [Task finalization](specs/task-finalization.spec.md) — which step an attempt is in
+  (executing, checkpoint follow-up, unknown), fenced worker report, no implied
+  preservation
 - [Live work](specs/live-work.spec.md) — what an agent is doing now: task activity
   feed, agent drawer with its current work and container output, and a fixed
   live status bar (expandable recent-event feed)
