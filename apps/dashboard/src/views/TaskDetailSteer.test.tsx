@@ -60,7 +60,7 @@ vi.mock("../WorkerChip", () => ({
 }));
 vi.mock("./EventList", () => ({ EventList: () => null }));
 vi.mock("./TaskEditForm", () => ({ TaskEditForm: () => null }));
-vi.mock("./TaskLog", () => ({ TaskLog: () => null }));
+vi.mock("./TaskTerminal", () => ({ TaskTerminal: () => null }));
 vi.mock("../delivery", () => ({ TaskDelivery: () => null }));
 vi.mock("../failover", () => ({ TaskFailover: () => null }));
 

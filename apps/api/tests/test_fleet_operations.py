@@ -318,3 +318,20 @@ def test_nanoclaw_pool_rejects_equal_or_swapped_host_and_agent_images(
     assert swapped.json()["detail"]["code"] == "invalid_pool"
     assert "image" in swapped.json()["detail"]["message"]
     assert "nanoclaw.agent_image" in swapped.json()["detail"]["message"]
+
+
+def test_delete_pool_needs_admin_and_the_current_name(client: TestClient) -> None:
+    url = "/api/pools/web"
+    assert client.delete(url, params={"confirm_name": "web"}).status_code == 401
+    assert client.delete(url, headers=ADMIN).status_code == 422
+    res = client.delete(url, params={"confirm_name": "other"}, headers=ADMIN)
+    assert (res.status_code, res.json()["detail"]["code"]) == (409, "name_mismatch")
+    assert (
+        client.delete(url, params={"confirm_name": "web"}, headers=ADMIN).status_code
+        == 204
+    )
+    assert client.get(url, headers=ADMIN).status_code == 404
+    assert (
+        client.delete(url, params={"confirm_name": "web"}, headers=ADMIN).status_code
+        == 404
+    )

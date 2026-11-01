@@ -210,6 +210,33 @@ async def create_pool(tx: Tx, name: str, body: PoolUpsert, actor: str) -> Pool:
     return pool
 
 
+async def delete_pool(tx: Tx, name: str, confirm_name: str, actor: str) -> None:
+    """Remove a pool and its terminated instance rows (pool-delete 3).
+    `confirm_name` must equal the current name. System pools and any still-live
+    instance refuse; delete never starts terminations itself."""
+    pool = await get_pool(tx.conn, name)
+    if confirm_name != pool.name:
+        raise ConflictError(
+            "confirmation does not match the pool's current name",
+            code="name_mismatch",
+        )
+    require_not_system(pool, action="delete")
+    async with tx.conn.execute(
+        "SELECT count(*) FROM instances WHERE pool = ? AND state != 'terminated'",
+        (name,),
+    ) as cur:
+        live = (await cur.fetchone() or (0,))[0]
+    if live:
+        raise ConflictError(
+            f"pool {name!r} has {live} live instance(s);"
+            " scale to zero and wait until they are terminated, then delete",
+            code="pool_in_use",
+        )
+    await tx.conn.execute("DELETE FROM instances WHERE pool = ?", (name,))
+    await tx.conn.execute("DELETE FROM pools WHERE name = ?", (name,))
+    await record(tx, actor, "pool", name, "pool.deleted", {"name": name})
+
+
 async def scale(
     tx: Tx, name: str, desired: int, actor: str, scope: Scope
 ) -> tuple[Pool, str | None]:

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import { ActionButton, useAction } from "../ActionButton";
 import { api, call, type Instance, type Pool } from "../api";
 import { DateChip } from "../DateChip";
@@ -13,11 +13,14 @@ export { PoolEditor };
 
 export function Pools() {
   const [editing, setEditing] = useState<Pool | "new" | null>(null);
+  const [deleting, setDeleting] = useState<Pool | null>(null);
+  const [notice, setNotice] = useState<string>();
   const [guided, setGuided] = useState(false);
-  const { data: pools, error } = useLiveData(
-    (signal) => call(api.GET("/api/pools", { signal })),
-    [],
-  );
+  const {
+    data: pools,
+    error,
+    reload,
+  } = useLiveData((signal) => call(api.GET("/api/pools", { signal })), []);
   return (
     <section>
       <PageHeader
@@ -31,12 +34,18 @@ export function Pools() {
           New pool (advanced)
         </button>
       </PageHeader>
+      {notice && <p className="notice">{notice}</p>}
       {error && <p className="error">{error.message}</p>}
       {(guided || pools?.length === 0) && (
         <NewWorker onCancel={guided ? () => setGuided(false) : undefined} />
       )}
       {(pools ?? []).map((pool) => (
-        <PoolCard key={pool.name} pool={pool} onEdit={() => setEditing(pool)} />
+        <PoolCard
+          key={pool.name}
+          pool={pool}
+          onEdit={() => setEditing(pool)}
+          onDelete={pool.system ? undefined : () => setDeleting(pool)}
+        />
       ))}
       {editing && (
         <PoolEditor
@@ -44,11 +53,30 @@ export function Pools() {
           onClose={() => setEditing(null)}
         />
       )}
+      {deleting && (
+        <DeletePool
+          pool={deleting}
+          onClose={() => setDeleting(null)}
+          onDone={(message) => {
+            setDeleting(null);
+            setNotice(message);
+            reload();
+          }}
+        />
+      )}
     </section>
   );
 }
 
-function PoolCard({ pool, onEdit }: { pool: Pool; onEdit: () => void }) {
+function PoolCard({
+  pool,
+  onEdit,
+  onDelete,
+}: {
+  pool: Pool;
+  onEdit: () => void;
+  onDelete?: () => void;
+}) {
   const [error, setError] = useState<string>();
   const [logsOf, setLogsOf] = useState<Instance | null>(null);
   const action = useAction();
@@ -120,6 +148,11 @@ function PoolCard({ pool, onEdit }: { pool: Pool; onEdit: () => void }) {
         <button type="button" className="link" onClick={onEdit}>
           Edit
         </button>
+        {onDelete && (
+          <button type="button" className="link danger" onClick={onDelete}>
+            Delete
+          </button>
+        )}
       </header>
       {pool.last_error && <p className="error small">{pool.last_error}</p>}
       {error && <p className="error">{error}</p>}
@@ -183,6 +216,81 @@ function PoolCard({ pool, onEdit }: { pool: Pool; onEdit: () => void }) {
       </table>
       {logsOf && <Logs instance={logsOf} onClose={() => setLogsOf(null)} />}
     </article>
+  );
+}
+
+/** Deleting needs the pool's name typed back. The server checks it again against
+ * the current name, so a stale dialog cannot delete a renamed target. */
+export function DeletePool({
+  pool,
+  onClose,
+  onDone,
+}: {
+  pool: Pool;
+  onClose: () => void;
+  onDone: (message: string) => void;
+}) {
+  const [typed, setTyped] = useState("");
+  const [error, setError] = useState<string>();
+  const action = useAction();
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (typed !== pool.name) return;
+    setError(undefined);
+    await action.run(async () => {
+      try {
+        await call(
+          api.DELETE("/api/pools/{name}", {
+            params: { path: { name: pool.name }, query: { confirm_name: typed } },
+          }),
+        );
+        onDone(`Deleted “${pool.name}”.`);
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
+  }
+
+  return (
+    <div className="overlay">
+      <form className="dialog" onSubmit={submit} aria-label={`Delete ${pool.name}`}>
+        <h2>Delete {pool.name}?</h2>
+        <p className="small">
+          This removes the pool definition and its terminated instance history. It cannot be undone.
+          Scale to zero and wait until every instance is terminated first; delete never stops
+          containers itself.
+        </p>
+        <label>
+          Type <strong>{pool.name}</strong> to confirm
+          <input
+            aria-label="Confirm pool name"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="actions">
+          <button type="button" disabled={action.busy} onClick={onClose}>
+            Cancel
+          </button>
+          <ActionButton
+            type="submit"
+            className="danger"
+            disabled={typed !== pool.name}
+            pending={action.busy}
+          >
+            Delete pool
+          </ActionButton>
+        </div>
+      </form>
+    </div>
   );
 }
 

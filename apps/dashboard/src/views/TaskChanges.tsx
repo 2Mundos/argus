@@ -11,20 +11,14 @@ import {
   splitPatch,
 } from "../taskChanges";
 
-/** What the attempt changed in its workspace: the latest snapshot, refreshed on `task.changes`. */
-export function TaskChanges({
+export function useTaskChangesSnapshot({
   taskId,
   attempt,
-  hideWhenEmpty = false,
   selected,
 }: {
   taskId: string;
   attempt: number;
-  /** The attempt chosen in the shared attempt strip; when set it replaces the own selector. */
   selected?: number;
-  /** Render nothing until the attempt has a snapshot (the agent drawer does not know
-   * whether the task has a workspace). */
-  hideWhenEmpty?: boolean;
 }) {
   const { subscribe, connection } = useLive();
   const [own, setShown] = useState(attempt);
@@ -74,52 +68,61 @@ export function TaskChanges({
   const files = changes?.files ?? [];
   const added = files.reduce((n, f) => n + (f.added ?? 0), 0);
   const deleted = files.reduce((n, f) => n + (f.deleted ?? 0), 0);
-  const patches = splitPatch(changes?.patch ?? "");
-  const attempts = snapshotAttempts(attempt);
-  const commits = changes?.commits ?? [];
-  const untracked = changes?.untracked ?? [];
-  const cut = changes?.truncated ?? { files: false, patch: false };
-  if (hideWhenEmpty && missing && shown === attempt) return null;
+
+  return {
+    shown,
+    setShown,
+    changes,
+    missing,
+    error,
+    files,
+    added,
+    deleted,
+    patches: splitPatch(changes?.patch ?? ""),
+    attempts: snapshotAttempts(attempt),
+    commits: changes?.commits ?? [],
+    untracked: changes?.untracked ?? [],
+    cut: changes?.truncated ?? { files: false, patch: false },
+  };
+}
+
+export function TaskChangesStatus({ snap }: { snap: ReturnType<typeof useTaskChangesSnapshot> }) {
+  const { changes, files, added, deleted } = snap;
+  if (!changes) return null;
+  return (
+    <span className="term-dim term-changes-status">
+      {changes.branch} @ {shortSha(changes.head)} ·{" "}
+      {`${files.length} file${files.length === 1 ? "" : "s"} `}
+      <span className="diff-add">{`+${added}`}</span>{" "}
+      <span className="diff-del">{`−${deleted}`}</span>
+    </span>
+  );
+}
+
+export function TaskChangesTabCounts({
+  snap,
+}: {
+  snap: ReturnType<typeof useTaskChangesSnapshot>;
+}) {
+  const { changes, files, added, deleted } = snap;
+  if (!changes) return "Changes";
+  const fileWord = files.length === 1 ? "file" : "files";
+  return (
+    <>
+      Changes{" "}
+      <span className="term-tab-count">
+        · {files.length} {fileWord} <span className="diff-add">{`+${added}`}</span>{" "}
+        <span className="diff-del">{`−${deleted}`}</span>
+      </span>
+    </>
+  );
+}
+
+function TaskChangesBody({ snap }: { snap: ReturnType<typeof useTaskChangesSnapshot> }) {
+  const { changes, missing, error, files, patches, commits, untracked, cut } = snap;
 
   return (
-    <section className="term task-changes" aria-label="Changes">
-      <div className="term-bar">
-        <span className="term-traffic" aria-hidden="true">
-          <i />
-          <i />
-          <i />
-        </span>
-        <span className="term-title">
-          {changes ? (
-            <>
-              changes · {changes.branch} @ {shortSha(changes.head)} · <DateChip at={changes.at} />
-            </>
-          ) : (
-            "changes"
-          )}
-        </span>
-        {selected === undefined && attempts.length > 1 && (
-          <select
-            className="term-filter"
-            aria-label="Attempt"
-            value={shown}
-            onChange={(e) => setShown(Number(e.target.value))}
-          >
-            {attempts.map((a) => (
-              <option key={a} value={a}>
-                {`attempt ${a}`}
-              </option>
-            ))}
-          </select>
-        )}
-        {changes && (
-          <span className="term-dim">
-            {`${files.length} file${files.length === 1 ? "" : "s"} `}
-            <span className="diff-add">{`+${added}`}</span>{" "}
-            <span className="diff-del">{`−${deleted}`}</span>
-          </span>
-        )}
-      </div>
+    <>
       {error && <p className="term-error">{error}</p>}
       <div className="term-body changes-body">
         {!changes ? (
@@ -139,6 +142,8 @@ export function TaskChanges({
               {changes.base
                 ? `against ${changes.base.ref} (${shortSha(changes.base.sha)})`
                 : "against the empty tree (nothing fetched yet)"}
+              {" · "}
+              <DateChip at={changes.at} />
             </p>
             {commits.length > 0 && (
               <ul className="changes-commits">
@@ -185,6 +190,75 @@ export function TaskChanges({
           </>
         )}
       </div>
+    </>
+  );
+}
+
+/** What the attempt changed in its workspace: the latest snapshot, refreshed on `task.changes`. */
+export function TaskChanges({
+  taskId,
+  attempt,
+  hideWhenEmpty = false,
+  selected,
+  embedded = false,
+  snap: externalSnap,
+}: {
+  taskId: string;
+  attempt: number;
+  selected?: number;
+  hideWhenEmpty?: boolean;
+  embedded?: boolean;
+  /** Reuse a snapshot loaded by a parent (tabbed terminal). */
+  snap?: ReturnType<typeof useTaskChangesSnapshot>;
+}) {
+  const internalSnap = useTaskChangesSnapshot({ taskId, attempt, selected });
+  const snap = externalSnap ?? internalSnap;
+  const { shown, setShown, changes, missing, files, added, deleted, attempts } = snap;
+
+  if (hideWhenEmpty && missing && shown === attempt) return null;
+
+  if (embedded) return <TaskChangesBody snap={snap} />;
+
+  return (
+    <section className="term task-changes" aria-label="Changes">
+      <div className="term-bar">
+        <span className="term-traffic" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="term-title">
+          {changes ? (
+            <>
+              changes · {changes.branch} @ {shortSha(changes.head)} · <DateChip at={changes.at} />
+            </>
+          ) : (
+            "changes"
+          )}
+        </span>
+        {selected === undefined && attempts.length > 1 && (
+          <select
+            className="term-filter"
+            aria-label="Attempt"
+            value={shown}
+            onChange={(e) => setShown(Number(e.target.value))}
+          >
+            {attempts.map((a) => (
+              <option key={a} value={a}>
+                {`attempt ${a}`}
+              </option>
+            ))}
+          </select>
+        )}
+        {changes && (
+          <span className="term-dim">
+            {`${files.length} file${files.length === 1 ? "" : "s"} `}
+            <span className="diff-add">{`+${added}`}</span>{" "}
+            <span className="diff-del">{`−${deleted}`}</span>
+          </span>
+        )}
+      </div>
+      <TaskChangesBody snap={snap} />
     </section>
   );
 }

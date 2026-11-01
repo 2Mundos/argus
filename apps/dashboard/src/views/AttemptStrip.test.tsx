@@ -121,9 +121,11 @@ describe("attempt strip", () => {
   it("defaults to the current attempt and switches Live and Changes together", async () => {
     render(<TaskDetail taskId="t1" onClose={() => {}} />);
     await screen.findByText("second run output");
+    fireEvent.click(await screen.findByRole("tab", { name: /Changes/ }));
     await screen.findByText("attempt two commit");
     fireEvent.click(screen.getByRole("button", { name: "Attempt 1" }));
     await screen.findByText("first run output");
+    fireEvent.click(await screen.findByRole("tab", { name: /Changes/ }));
     await screen.findByText("attempt one commit");
     // never mixed: nothing of attempt 2 is left on screen
     expect(screen.queryByText("second run output")).toBeNull();
@@ -134,14 +136,14 @@ describe("attempt strip", () => {
     expect(screen.queryByText("first run output")).toBeNull();
   });
 
-  it("shows explicit empty states for an attempt with no rows or snapshot", async () => {
+  it("shows an empty log and omits Changes when the attempt has no snapshot", async () => {
     mock.logs.delete(1);
     mock.changes.delete(1);
     render(<TaskDetail taskId="t1" onClose={() => {}} />);
     await screen.findByText("second run output");
     fireEvent.click(screen.getByRole("button", { name: "Attempt 1" }));
     await screen.findByText("No output yet.");
-    await screen.findByText(/No changes reported for this attempt yet/);
+    expect(screen.queryByRole("tab", { name: /Changes/ })).toBeNull();
     expect(screen.queryByText("second run output")).toBeNull();
     expect(screen.queryByText("attempt two commit")).toBeNull();
     expect(screen.getByText("No progress notes for this attempt.")).toBeTruthy();

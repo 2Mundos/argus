@@ -371,6 +371,10 @@ instances and converges:
   same confirmation rule before its slot is freed.
 - `max_replicas` caps what an orchestrator can request. Raising the cap is a
   human-only action (guards against a runaway orchestrator).
+- Removing a pool definition is a separate admin action
+  ([pool delete](pool-delete.spec.md)): scale to zero, wait until every
+  instance is terminated, then `DELETE` with name confirmation. Delete never
+  terminates containers itself.
 
 The reconciler is an asyncio task in the Argus process (single-node 3.1); the
 startup lock file guarantees there is only one. As built:

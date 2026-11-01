@@ -1,4 +1,10 @@
-import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { api, call, fetchText } from "../api";
 import { DateChip } from "../DateChip";
 import { shortId } from "../format";
@@ -6,13 +12,12 @@ import { useLiveData } from "../live";
 import { TaskLabel } from "../TaskLabel";
 import { renderTerminalText } from "../terminalLog";
 import { useNow } from "./Activity";
-import { TaskChanges } from "./TaskChanges";
-import { TaskLog } from "./TaskLog";
+import { TaskTerminal } from "./TaskTerminal";
 
 const LOG_TAIL = 200;
 const LOG_EVERY_MS = 2000;
-const META_PCT_MIN = 12;
-const META_PCT_MAX = 70;
+const META_PCT_MIN = 10;
+const META_PCT_MAX = 55;
 const META_PCT_DEFAULT = 28;
 
 /**
@@ -59,6 +64,10 @@ export function AgentDetail({
     [agentId],
   );
   const agent = data?.agent;
+
+  useEffect(() => {
+    setMetaPct(META_PCT_DEFAULT);
+  }, [agentId]);
 
   useEffect(() => {
     if (variant !== "panel") return;
@@ -114,17 +123,37 @@ export function AgentDetail({
     </header>
   );
 
+  const compact = variant === "panel";
+
   const meta = agent && (
-    <>
-      <dl className="facts">
-        <dt>Name</dt>
-        <dd>{agent.name}</dd>
+    <div className={compact ? "agent-stats agent-stats-compact" : "agent-stats"}>
+      <dl className="facts" aria-label={compact ? "Worker summary" : undefined}>
         <dt>Role</dt>
         <dd>{agent.role}</dd>
         <dt>State</dt>
-        <dd>
+        <dd className={compact ? "agent-state-work" : undefined}>
           <span className={`badge agent-${agent.state}`}>{agent.state}</span>
           {agent.end_reason && <span className="muted small"> {agent.end_reason}</span>}
+          {compact &&
+            (data.work.length === 0 ? (
+              <span className="muted"> · Holds no task</span>
+            ) : (
+              data.work.map((task) => (
+                <span
+                  key={task.id}
+                  className="agent-held-task"
+                  title={task.progress_message ?? undefined}
+                >
+                  {" · "}
+                  <TaskLabel title={task.title} project={task.project} />
+                  <span className="muted">
+                    {" "}
+                    {shortId(task.id)}
+                    {task.progress_percent != null ? ` · ${task.progress_percent}%` : ""}
+                  </span>
+                </span>
+              ))
+            ))}
         </dd>
         <dt>Heartbeat</dt>
         <dd>
@@ -140,33 +169,32 @@ export function AgentDetail({
             </dd>
           </>
         )}
-        <dt>Capabilities</dt>
-        <dd>{agent.capabilities.join(", ") || "—"}</dd>
         <dt>Instance</dt>
         <dd>{agent.instance_id ? shortId(agent.instance_id) : "none"}</dd>
-      </dl>
-      <h3>Models</h3>
-      {data?.models && Object.keys(data.models.current).length ? (
-        <dl className="facts" aria-label="Current models">
-          {Object.entries(data.models.current).map(([layer, run]) => (
-            <div key={layer}>
+        <dt>Capabilities</dt>
+        <dd className="worker-caps">{agent.capabilities.join(", ") || "—"}</dd>
+        {data?.models &&
+          Object.keys(data.models.current).length > 0 &&
+          Object.entries(data.models.current).map(([layer, run]) => (
+            <Fragment key={layer}>
               <dt>{layer}</dt>
               <dd>
                 {run.executor ?? run.engine ?? "unknown"} ·{" "}
                 {run.observed_model ?? run.configured_model ?? run.requested_model ?? "?"}
-                {run.observed_model
-                  ? ` (${run.evidence})`
-                  : run.configured_model
-                    ? " (configured)"
-                    : ""}
+                {!compact &&
+                  (run.observed_model
+                    ? ` (${run.evidence})`
+                    : run.configured_model
+                      ? " (configured)"
+                      : "")}
               </dd>
-            </div>
+            </Fragment>
           ))}
-        </dl>
-      ) : (
+      </dl>
+      {!compact && data?.models && Object.keys(data.models.current).length === 0 && (
         <p className="muted">No model reports.</p>
       )}
-      {data?.models?.history?.length ? (
+      {!compact && data?.models?.history?.length ? (
         <div className="plain" aria-label="Recent model runs">
           {data.models.history.slice(0, 8).map((run) => (
             <p key={run.id} className="muted small">
@@ -177,55 +205,59 @@ export function AgentDetail({
           ))}
         </div>
       ) : null}
-      <h3>Current work</h3>
-      <table className="work-table">
-        <thead>
-          <tr>
-            <th>Task</th>
-            <th>Attempt</th>
-            <th>Progress</th>
-            <th>Note</th>
-            <th>Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.work.length === 0 ? (
-            <tr>
-              <td colSpan={5} className="muted">
-                Holds no task.
-              </td>
-            </tr>
-          ) : (
-            data.work.map((task) => (
-              <tr key={task.id}>
-                <td>
-                  <TaskLabel title={task.title} project={task.project} />{" "}
-                  <span className="muted small">{shortId(task.id)}</span>
-                </td>
-                <td>{task.attempt}</td>
-                <td>{task.progress_percent != null ? `${task.progress_percent}%` : "—"}</td>
-                <td>{task.progress_message ?? "—"}</td>
-                <td className="muted small">
-                  {task.progress_at ? (
-                    <>
-                      updated <DateChip at={task.progress_at} now={now} />
-                    </>
-                  ) : (
-                    "silent"
-                  )}
-                  {task.state === "claimed" && (
-                    <>
-                      {" · lease "}
-                      <DateChip at={task.lease_expires_at} now={now} />
-                    </>
-                  )}
-                </td>
+      {!compact && (
+        <>
+          <h3>Current work</h3>
+          <table className="work-table">
+            <thead>
+              <tr>
+                <th>Task</th>
+                <th>Attempt</th>
+                <th>Progress</th>
+                <th>Note</th>
+                <th>Updated</th>
               </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </>
+            </thead>
+            <tbody>
+              {data.work.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="muted">
+                    Holds no task.
+                  </td>
+                </tr>
+              ) : (
+                data.work.map((task) => (
+                  <tr key={task.id}>
+                    <td>
+                      <TaskLabel title={task.title} project={task.project} />{" "}
+                      <span className="muted small">{shortId(task.id)}</span>
+                    </td>
+                    <td>{task.attempt}</td>
+                    <td>{task.progress_percent != null ? `${task.progress_percent}%` : "—"}</td>
+                    <td>{task.progress_message ?? "—"}</td>
+                    <td className="muted small">
+                      {task.progress_at ? (
+                        <>
+                          updated <DateChip at={task.progress_at} now={now} />
+                        </>
+                      ) : (
+                        "silent"
+                      )}
+                      {task.state === "claimed" && (
+                        <>
+                          {" · lease "}
+                          <DateChip at={task.lease_expires_at} now={now} />
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
   );
 
   // Prefer the task live log (NanoClaw/delegate stream). Container stdout is only
@@ -234,18 +266,15 @@ export function AgentDetail({
   const output =
     agent &&
     (held && held.attempt > 0 ? (
-      <>
-        <TaskLog
-          taskId={held.id}
-          attempt={held.attempt}
-          steer={{
-            claimed: held.state === "claimed",
-            assigneeId: held.assignee_agent_id ?? agent.id,
-            supportsSteer: agent.runtime?.features?.includes("steer") ?? false,
-          }}
-        />
-        <TaskChanges taskId={held.id} attempt={held.attempt} hideWhenEmpty />
-      </>
+      <TaskTerminal
+        taskId={held.id}
+        attempt={held.attempt}
+        steer={{
+          claimed: held.state === "claimed",
+          assigneeId: held.assignee_agent_id ?? agent.id,
+          supportsSteer: agent.runtime?.features?.includes("steer") ?? false,
+        }}
+      />
     ) : agent.instance_id ? (
       <LogTail instanceId={agent.instance_id} tail={LOG_TAIL} />
     ) : (
@@ -260,7 +289,7 @@ export function AgentDetail({
         {titlebar}
         {meta && (
           <>
-            <div className="worker-panel-meta" style={{ flex: `0 0 ${metaPct}%` }}>
+            <div className="worker-panel-meta" style={{ maxHeight: `${metaPct}%` }}>
               {meta}
             </div>
             <hr
