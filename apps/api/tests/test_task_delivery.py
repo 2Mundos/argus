@@ -420,7 +420,7 @@ def setup_repository(client: TestClient) -> None:
                 "install_dir": "/opt/nanoclaw",
                 "instances_root": "/srv/i",
                 "agent_image": "a:1",
-                "repositories": {"global": f"https://{HOST}/{OWNER}/{REPO}"},
+                "repositories": {"demo": f"https://{HOST}/{OWNER}/{REPO}"},
             },
         },
     )
@@ -437,7 +437,7 @@ def setup_repository(client: TestClient) -> None:
 
 
 def review_task(client: TestClient, summary: str, **extra) -> str:
-    body = {"project": "global", "title": "CA5", "review": "orchestrator", **extra}
+    body = {"project": "demo", "title": "CA5", "review": "orchestrator", **extra}
     tid = client.post("/api/tasks", json=body).json()["id"]
     boot = client.post("/api/agents/bootstrap-tokens", json={"role": "worker"}).json()
     token = client.post(
@@ -586,7 +586,7 @@ def test_rest_allow_merge_authorization_is_separate_from_green(client) -> None:
     tid = client.post(
         "/api/tasks",
         json={
-            "project": "global",
+            "project": "demo",
             "title": "merge-auth",
             "review": "orchestrator",
             "input": {"delivery": {"allow_merge": True}},

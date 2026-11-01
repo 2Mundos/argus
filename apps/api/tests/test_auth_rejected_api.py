@@ -47,7 +47,7 @@ def add_account(client: TestClient, name: str, priority: int) -> str:
 
 
 def claim_and_lease(client: TestClient, worker: dict[str, str]) -> tuple[dict, str]:
-    res = client.post("/api/tasks", json={"project": "global", "title": "t"})
+    res = client.post("/api/tasks", json={"project": "demo", "title": "t"})
     assert res.status_code == 201
     task = client.post("/api/tasks/claim", json={}, headers=worker).json()
     lease = client.post(
@@ -194,7 +194,7 @@ def test_stale_attempt_or_other_task_is_refused(
     worker, task, held, _other = setup
     stale = reject(client, held, task, worker, attempt=task["attempt"] + 1)
     assert stale.status_code == 409, stale.text
-    unclaimed = client.post("/api/tasks", json={"project": "global", "title": "u"})
+    unclaimed = client.post("/api/tasks", json={"project": "demo", "title": "u"})
     res = reject(client, held, task, worker, task_id=unclaimed.json()["id"])
     assert res.status_code == 409, res.text
     missing = reject(client, held, task, worker, task_id="tsk_missing")

@@ -71,7 +71,7 @@ async def lease(db: Database, store, task):
 async def started(db: Database, store, **kw):
     """Create a task, claim it and lease the engine account for the claim."""
     async with db.write() as tx:
-        await tasks.create_task(tx, TaskCreate(project="global", title="t", **kw), "u")
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t", **kw), "u")
     task = await claim(db)
     assert (await lease(db, store, task)) is not None
     return task
@@ -192,7 +192,7 @@ async def test_claim_on_an_unusable_account_is_refused(
                 held,
             ),
         )
-        await tasks.create_task(tx, TaskCreate(project="global", title="u"), "u")
+        await tasks.create_task(tx, TaskCreate(project="demo", title="u"), "u")
     with pytest.raises(ConflictError) as err:
         await claim(db)
     assert err.value.code == "lease_account_unusable"

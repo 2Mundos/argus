@@ -79,7 +79,7 @@ def test_fleet_journey_over_mcp(client: TestClient) -> None:
 
     # Recycle while the worker holds a task: nothing is interrupted.
     cursor = tool(client, orch, "wait_for_events", wait_s=0)["next_cursor"]
-    tool(client, orch, "create_task", title="t", project="global")
+    tool(client, orch, "create_task", title="t", project="demo")
     claimed = tool(client, worker, "claim_task", wait_s=0)["task"]
     assert tool(client, orch, "recycle_instance", instance_id=inst["id"])["draining"]
     reconcile()

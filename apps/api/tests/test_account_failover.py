@@ -79,7 +79,7 @@ async def new_task(db: Database, agent=A, **kw):
     """Create a task and claim it as `agent`."""
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="global", title="t", **kw), "admin:test"
+            tx, TaskCreate(project="demo", title="t", **kw), "admin:test"
         )
         task = await tasks.claim(tx, agent, [])
     assert task is not None
@@ -631,12 +631,10 @@ async def test_unclaimed_ready_task_is_parked_when_no_account_is_leasable(
             store,
         )
     async with db.write() as tx:
-        await tasks.create_task(
-            tx, TaskCreate(project="global", title="t"), "admin:test"
-        )
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "admin:test")
         other = await tasks.create_task(
             tx,
-            TaskCreate(project="global", title="u", required_capabilities=["gpu"]),
+            TaskCreate(project="demo", title="u", required_capabilities=["gpu"]),
             "admin:test",
         )
     async with db.write() as tx:
@@ -663,9 +661,7 @@ async def test_parking_is_refused_while_an_account_is_usable(
 ) -> None:
     await add(db, store, "acct-a")
     async with db.write() as tx:
-        await tasks.create_task(
-            tx, TaskCreate(project="global", title="t"), "admin:test"
-        )
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "admin:test")
     async with db.write() as tx:
         with pytest.raises(ConflictError) as err:
             await accounts.mark_awaiting_quota(
@@ -717,9 +713,7 @@ async def test_two_agents_never_hold_the_same_task(
     db: Database, store: MemorySecretStore
 ) -> None:
     async with db.write() as tx:
-        await tasks.create_task(
-            tx, TaskCreate(project="global", title="t"), "admin:test"
-        )
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "admin:test")
 
     async def claim(agent: str):
         async with db.write() as tx:
@@ -762,7 +756,7 @@ def test_failover_over_http(client: TestClient) -> None:
             },
         )
         assert res.status_code == 201
-    client.post("/api/tasks", json={"project": "global", "title": "x"})
+    client.post("/api/tasks", json={"project": "demo", "title": "x"})
     task = client.post("/api/tasks/claim", json={}, headers=worker).json()
     assert client.post(
         "/api/accounts/lease",
@@ -804,7 +798,7 @@ def test_awaiting_quota_endpoint_over_http(client: TestClient) -> None:
             "credential": {"api_key": "sk-ant-api03-solo"},
         },
     ).json()
-    task = client.post("/api/tasks", json={"project": "global", "title": "x"}).json()
+    task = client.post("/api/tasks", json={"project": "demo", "title": "x"}).json()
     parked = client.post(
         "/api/accounts/awaiting-quota",
         json={"runtime_providers": ["anthropic"]},
@@ -824,7 +818,7 @@ def test_awaiting_quota_endpoint_over_http(client: TestClient) -> None:
         headers=worker,
     )
     waiting = client.post(
-        "/api/tasks", json={"project": "global", "title": "waiting"}
+        "/api/tasks", json={"project": "demo", "title": "waiting"}
     ).json()
     reset = "2099-01-01T00:00:00Z"
     client.post(
@@ -879,7 +873,7 @@ def test_exhausted_returns_metadata_only_and_honors_runtime_provider_filter(
             "credential": {"api_key": "sk-ant-api03-next"},
         },
     )
-    client.post("/api/tasks", json={"project": "global", "title": "quota"})
+    client.post("/api/tasks", json={"project": "demo", "title": "quota"})
     task = client.post("/api/tasks/claim", json={}, headers=worker).json()
     leased = client.post(
         "/api/accounts/lease",

@@ -64,7 +64,7 @@ async def new_task(db: Database, title: str = "big", **kw) -> str:
     kw.setdefault("lease_ttl_s", 3600)
     async with db.write() as tx:
         task = await tasks.create_task(
-            tx, TaskCreate(project="global", title=title, **kw), "human:test"
+            tx, TaskCreate(project="demo", title=title, **kw), "human:test"
         )
     return task.id
 
@@ -455,7 +455,7 @@ def test_the_fail_route_carries_the_fact(client: TestClient) -> None:
     reg = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
     h = {"Authorization": f"Bearer {reg.json()['token']}"}
     created = client.post(
-        "/api/tasks", json={"title": "t", "project": "global", "spec": "s"}
+        "/api/tasks", json={"title": "t", "project": "demo", "spec": "s"}
     )
     task_id = created.json()["id"]
     attempt = client.post("/api/tasks/claim", json={}, headers=h).json()["attempt"]

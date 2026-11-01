@@ -31,10 +31,14 @@ task's spec and clarifications are what one task needs.
 
 `projects` (`slug`, `name`, `description`) are a first-class scope, managed by
 orchestrators and admins (`PUT /api/projects/{slug}`). `global` exists by
-default for fleet-wide knowledge. **Every task belongs to a project**: it is
-required on creation, except that a subtask without one inherits its parent's
-(`422 project_required` otherwise). No per-project permissions: any valid token
-reads every project.
+default as the scope of fleet-wide knowledge and settings; it is **not a home
+for tasks**. **Every task belongs to a real project**: it is required on
+creation, except that a subtask without one inherits its parent's. Naming
+`global`, or omitting the project with no parent, is `422 project_required`.
+Work that spans projects goes in a project made for it (for example `argus` or
+`ops`). Tasks created before this rule stay in `global`, and their subtasks
+inherit it. Routine templates and draft publishes follow the same rule. No
+per-project permissions: any valid token reads every project.
 
 ## 3.2 Pages and revisions
 

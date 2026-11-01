@@ -140,7 +140,7 @@ def test_a_leasing_agent_cannot_replace_a_copilot_credential(
     worker = register(client)
     task = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "copilot test"},
+        json={"project": "demo", "title": "copilot test"},
         headers=ADMIN,
     )
     assert task.status_code == 201
@@ -201,7 +201,7 @@ async def add(db: Database, store, name: str, provider: str, credential: dict, *
 async def lease(db: Database, store, role: str, providers: list[str]):
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="global", title="copilot lease test"), "admin:test"
+            tx, TaskCreate(project="demo", title="copilot lease test"), "admin:test"
         )
         task = await tasks.claim(tx, A, [])
     assert task is not None

@@ -58,8 +58,9 @@ field() { python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])
 bootstrap() { call POST /agents/bootstrap-tokens "$admin" "{\"role\":\"$1\"}" | field token; }
 
 orch="$(call POST /agents/register "" "{\"bootstrap_token\":\"$(bootstrap orchestrator)\",\"name\":\"e2e-orchestrator\"}" | field token)"
-task="$(call POST /tasks "$orch" '{"project":"global","title":"task-inputs e2e","required_capabilities":["task-inputs"]}' | field id)"
-other="$(call POST /tasks "$orch" '{"project":"global","title":"task-inputs e2e: another task","required_capabilities":["e2e-other"]}' | field id)"
+call PUT /projects/e2e "$admin" '{"name":"E2E"}' >/dev/null  # tasks cannot live in `global`
+task="$(call POST /tasks "$orch" '{"project":"e2e","title":"task-inputs e2e","required_capabilities":["task-inputs"]}' | field id)"
+other="$(call POST /tasks "$orch" '{"project":"e2e","title":"task-inputs e2e: another task","required_capabilities":["e2e-other"]}' | field id)"
 
 # -- A synthetic patch of multi-byte UTF-8 on an exact base ------------------------
 base="$tmp/base"

@@ -50,7 +50,7 @@ def account(client: TestClient) -> str:
 
 def claim(client: TestClient, worker: dict[str, str], title: str | None = "t") -> dict:
     if title is not None:
-        res = client.post("/api/tasks", json={"project": "global", "title": title})
+        res = client.post("/api/tasks", json={"project": "demo", "title": title})
         assert res.status_code == 201
     res = client.post("/api/tasks/claim", json={}, headers=worker)
     assert res.status_code == 200, res.text

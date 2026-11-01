@@ -73,7 +73,7 @@ async def lease(db: Database, store, agent=A, runtime=None):
 async def claim_task(db: Database, agent=A) -> tuple[str, int]:
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="global", title="account lease test"), "admin:test"
+            tx, TaskCreate(project="demo", title="account lease test"), "admin:test"
         )
         task = await tasks.claim(tx, agent, [])
     assert task is not None
@@ -317,9 +317,7 @@ async def test_nothing_left_blocks_task_until_an_account_recovers(
 ) -> None:
     c1 = await add(db, store, "claude-1", "anthropic")
     async with db.write() as tx:
-        await tasks.create_task(
-            tx, TaskCreate(project="global", title="t"), "admin:test"
-        )
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "admin:test")
         task = await tasks.claim(tx, A, [])
     assert task is not None
     await lease(db, store)
@@ -415,9 +413,7 @@ async def test_usage_from_results_and_reports(
             await accounts.record_usage(tx, c1, A, UsageReport(input_tokens=1))
     await lease(db, store, A)
     async with db.write() as tx:
-        await tasks.create_task(
-            tx, TaskCreate(project="global", title="t"), "admin:test"
-        )
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "admin:test")
         task = await tasks.claim(tx, A, [])
         assert task is not None
         await accounts.record_usage(
@@ -664,7 +660,7 @@ def register(client: TestClient) -> dict[str, str]:
 def claimed_task(client: TestClient, worker: dict[str, str]) -> dict:
     created = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "account test"},
+        json={"project": "demo", "title": "account test"},
         headers=ADMIN,
     )
     assert created.status_code == 201
@@ -725,7 +721,7 @@ def test_accounts_over_http(client: TestClient) -> None:
     other_worker = register(client)
     other_task = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "owned elsewhere"},
+        json={"project": "demo", "title": "owned elsewhere"},
         headers=ADMIN,
     ).json()
     other_claim = client.post("/api/tasks/claim", json={}, headers=other_worker).json()
@@ -742,7 +738,7 @@ def test_accounts_over_http(client: TestClient) -> None:
     assert "sk-ant-api03-fake" not in foreign_claim_attempt.text
     task = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "account test"},
+        json={"project": "demo", "title": "account test"},
         headers=ADMIN,
     ).json()
     claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
@@ -1221,7 +1217,7 @@ def test_replace_credential_keeps_state_and_validates_shape(
 async def _make_ready(db: Database) -> str:
     async with db.write() as tx:
         task = await tasks.create_task(
-            tx, TaskCreate(project="global", title="t", max_attempts=3), "admin:test"
+            tx, TaskCreate(project="demo", title="t", max_attempts=3), "admin:test"
         )
     return task.id
 

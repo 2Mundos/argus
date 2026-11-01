@@ -32,7 +32,7 @@ def bearer(token: str) -> dict[str, str]:
 def make(client: TestClient, **kw) -> dict:
     res = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "t", **kw},
+        json={"project": "demo", "title": "t", **kw},
         headers=bearer(ADMIN_TOKEN),
     )
     assert res.status_code == 201, res.text
@@ -212,6 +212,7 @@ def test_editable_fields_come_from_one_source_in_task_and_tool_text(
         "knowledge",
         "depends_on",
         "difficulty",
+        "deliverable",
         "account_providers",
         "harness_model",
         "executor_model",
@@ -231,7 +232,7 @@ def test_model_pins_over_rest_and_mcp(client: TestClient) -> None:
         ADMIN_TOKEN,
         "create_task",
         title="pinned",
-        project="global",
+        project="demo",
         harness_model=opus,
     )
     assert created["harness_model"] == opus and created["executor_model"] is None

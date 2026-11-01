@@ -46,6 +46,7 @@ thin callers of the same function with only `depends_on` set.
 | `depends_on` | list of task ids | replaces the set; the rules of [task dependencies](task-dependencies.spec.md) 3.1: ids exist, no self-dependency, no cycle, at most 100 |
 | `account_providers` | list of providers | engine providers only, de-duplicated and sorted, as at creation ([local harness](local-harness.spec.md) 3); `null` or `[]` clears (no restriction) |
 | `harness_model`, `executor_model` | object | [task models](task-models.spec.md) 3.1; `null` clears |
+| `deliverable` | enum | [task deliverable](task-deliverable.spec.md) 3.1; cannot be cleared; the creation rules of 3.3 run on the resulting capabilities and deliverable |
 
 **Immutable**: `state`/`status`, `assignee_agent_id`, `lease_expires_at`,
 `lease_ttl_s`, `timeout_s`, `timeout_at`, `attempt`, `failures`,
@@ -92,8 +93,9 @@ and the MCP tool description are driven by it.
 
 | State | Editable fields | Why |
 | --- | --- | --- |
-| `awaiting_approval`, `pending`, `ready` | all seven | nothing has run; the next claim sees the saved definition |
-| `blocked`, `claimed`, `in_review` | `priority` | queue order only; the title, spec, criteria, capabilities, pins or dependencies may already be in use by an attempt or a reviewer |
+| `awaiting_approval`, `pending`, `ready` | all | nothing has run; the next claim sees the saved definition |
+| `blocked`, `claimed` | `priority` | queue order only; the title, spec, criteria, capabilities, pins or dependencies may already be in use by an attempt |
+| `in_review` | `priority`, `deliverable` | queue order; and a deliverable that proved unreachable can be lowered ([task deliverable](task-deliverable.spec.md) 3.6); nothing else the reviewer may be reading changes |
 | `succeeded`, `failed`, `cancelled` | none | the record of what ran stays as it was |
 | archived (any) | none | archived tasks are read-only |
 

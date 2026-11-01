@@ -38,7 +38,7 @@ async def lease(
 ):
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="global", title="usage lease test"), "admin:test"
+            tx, TaskCreate(project="demo", title="usage lease test"), "admin:test"
         )
         task = await tasks.claim(tx, A, [])
     assert task is not None

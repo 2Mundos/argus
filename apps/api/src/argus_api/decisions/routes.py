@@ -135,14 +135,21 @@ async def preview_decision(
 
 @router.post("/decisions/{decision_id}/answer")
 async def answer_decision(
-    decision_id: str, body: DecisionAnswer, db: DbDep, caller: ManagerDep
+    decision_id: str,
+    body: DecisionAnswer,
+    request: Request,
+    db: DbDep,
+    caller: ManagerDep,
 ) -> AnsweredDecision:
     """Answer an open decision. Approvals take `approve`/`reject`, reviews
     `accept`/`reject` (with `text` as notes), questions their options or text.
     With a `request_id`, a retry of the same answer by the same caller returns
     the stored decision with `replayed: true` instead of 409 decision_not_open."""
+    forge = await service.forge_evidence(
+        db, request.app.state.pr_checker, decision_id, body.choice
+    )
     async with db.write() as tx:
-        return await service.answer(tx, decision_id, body, caller)
+        return await service.answer(tx, decision_id, body, caller, forge)
 
 
 class AnswerBatchResult(BaseModel):
@@ -151,12 +158,14 @@ class AnswerBatchResult(BaseModel):
 
 @router.post("/decisions/answers")
 async def answer_decisions(
-    body: AnswerBatch, db: DbDep, caller: ManagerDep
+    body: AnswerBatch, request: Request, db: DbDep, caller: ManagerDep
 ) -> AnswerBatchResult:
     """Answer up to 20 decisions, each with its own explicit answer and in its own
     transaction. Each item succeeds or fails on its own (`ok`, `error`)."""
     return AnswerBatchResult(
-        results=await service.answer_many(db, body.answers, caller)
+        results=await service.answer_many(
+            db, body.answers, caller, request.app.state.pr_checker
+        )
     )
 
 

@@ -1,4 +1,5 @@
 import { ApiError, type Task } from "./api";
+import type { Deliverable } from "./deliverables";
 import { MODEL_ID } from "./models";
 
 export const EDIT_FIELDS = [
@@ -10,6 +11,7 @@ export const EDIT_FIELDS = [
   "knowledge",
   "depends_on",
   "difficulty",
+  "deliverable",
   "account_providers",
   "harness_model",
   "executor_model",
@@ -32,6 +34,7 @@ export type Changes = {
   knowledge?: string[];
   depends_on?: string[];
   difficulty?: "trivial" | "simple" | "standard" | "hard";
+  deliverable?: Deliverable;
   account_providers?: string[];
   harness_model?: HarnessPin | null;
   executor_model?: ExecutorPin | null;
@@ -88,6 +91,7 @@ export function toDraft(task: Task): Draft {
     knowledge: task.knowledge.join("\n"),
     depends_on: task.depends_on.join("\n"),
     difficulty: task.difficulty ?? "standard",
+    deliverable: task.deliverable ?? "response",
     account_providers: (task.account_providers ?? []).join("\n"),
     harness_model: pinText(task.harness_model),
     executor_model: pinText(task.executor_model),
@@ -127,6 +131,8 @@ export function buildChanges(base: Task, draft: Draft): { changes: Changes; erro
       else changes.priority = n;
     } else if (field === "difficulty") {
       changes.difficulty = value as "trivial" | "simple" | "standard" | "hard";
+    } else if (field === "deliverable") {
+      changes.deliverable = value as Deliverable;
     } else if (field === "harness_model" || field === "executor_model") {
       const pin = parsePin(value);
       if (pin && !MODEL_ID.test(pin.model)) errors[field] = "Enter a model ID.";

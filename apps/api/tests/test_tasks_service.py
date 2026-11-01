@@ -37,7 +37,7 @@ async def agents(db: Database) -> None:
 async def create(db: Database, **kw) -> Task:
     async with db.write() as tx:
         return await service.create_task(
-            tx, TaskCreate(project="global", title="t", **kw), "human:test"
+            tx, TaskCreate(project="demo", title="t", **kw), "human:test"
         )
 
 
@@ -485,7 +485,7 @@ async def test_events_are_published_only_after_commit(db: Database) -> None:
         with pytest.raises(RuntimeError):
             async with db.write() as tx:
                 await service.create_task(
-                    tx, TaskCreate(project="global", title="x"), "human:test"
+                    tx, TaskCreate(project="demo", title="x"), "human:test"
                 )
                 raise RuntimeError("rollback")
         await create(db)
@@ -537,7 +537,7 @@ async def test_worker_creates_subtasks_only_under_a_held_task(db: Database) -> N
         async with db.write() as tx:
             await service.create_task(
                 tx,
-                TaskCreate(project="global", title="sub", parent_id=parent.id),
+                TaskCreate(project="demo", title="sub", parent_id=parent.id),
                 "agent:a",
                 as_worker=A,
             )
@@ -545,7 +545,7 @@ async def test_worker_creates_subtasks_only_under_a_held_task(db: Database) -> N
     async with db.write() as tx:
         sub = await service.create_task(
             tx,
-            TaskCreate(project="global", title="sub", parent_id=parent.id),
+            TaskCreate(project="demo", title="sub", parent_id=parent.id),
             "agent:a",
             as_worker=A,
         )
@@ -560,7 +560,7 @@ async def test_worker_creates_subtasks_only_under_a_held_task(db: Database) -> N
             async with db.write() as tx:
                 await service.create_task(
                     tx,
-                    TaskCreate(project="global", title="x", **kwargs),
+                    TaskCreate(project="demo", title="x", **kwargs),
                     f"agent:{agent}",
                     as_worker=agent,
                 )
@@ -580,7 +580,7 @@ async def test_worker_child_prompt_trust_never_elevates_and_forces_approval(
         sub = await service.create_task(
             tx,
             TaskCreate(
-                project="global",
+                project="demo",
                 title="relay",
                 spec=inject,
                 parent_id=parent.id,
@@ -592,7 +592,7 @@ async def test_worker_child_prompt_trust_never_elevates_and_forces_approval(
         orch = await service.create_task(
             tx,
             TaskCreate(
-                project="global",
+                project="demo",
                 title="orch-sub",
                 parent_id=parent.id,
                 requires_approval=False,
@@ -611,13 +611,27 @@ async def test_worker_child_prompt_trust_never_elevates_and_forces_approval(
 
 
 async def test_project_is_required_and_subtasks_inherit_it(db: Database) -> None:
-    with pytest.raises(ValidationFailedError) as err:
-        async with db.write() as tx:
-            await service.create_task(tx, TaskCreate(title="x"), "admin:test")
-    assert err.value.code == "project_required"
+    # No project and no parent, or the `global` knowledge scope: refused.
+    for body in (TaskCreate(title="x"), TaskCreate(title="x", project="global")):
+        with pytest.raises(ValidationFailedError) as err:
+            async with db.write() as tx:
+                await service.create_task(tx, body, "admin:test")
+        assert err.value.code == "project_required"
+    with pytest.raises(ValidationFailedError):  # routine templates and drafts too
+        async with db.read() as conn:
+            await service.check_create(conn, TaskCreate(title="x", project="global"))
     parent = await create(db)
     async with db.write() as tx:
         sub = await service.create_task(
             tx, TaskCreate(title="sub", parent_id=parent.id), "admin:test"
         )
-    assert sub.project == parent.project == "global"
+    assert sub.project == parent.project == "demo"
+    # A task that predates the rule still sits in `global`; its subtasks inherit it.
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE tasks SET project = 'global' WHERE id = ?", (parent.id,)
+        )
+        legacy_sub = await service.create_task(
+            tx, TaskCreate(title="sub", parent_id=parent.id), "admin:test"
+        )
+    assert legacy_sub.project == "global"

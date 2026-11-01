@@ -8,13 +8,13 @@ from pydantic import ValidationError
 
 def test_oversized_spec_is_rejected() -> None:
     with pytest.raises(ValidationError, match=r"spec"):
-        TaskCreate(project="global", title="t", spec="x" * (SPEC_MAX_LENGTH + 1))
+        TaskCreate(project="demo", title="t", spec="x" * (SPEC_MAX_LENGTH + 1))
 
 
 def test_oversized_input_is_rejected() -> None:
     with pytest.raises(ValidationError, match=r"input"):
         TaskCreate(
-            project="global",
+            project="demo",
             title="t",
             input={"blob": "y" * (INPUT_MAX_CHARS + 1)},
         )
@@ -26,5 +26,5 @@ def test_oversized_spec_edit_is_rejected() -> None:
 
 
 def test_within_caps_is_accepted() -> None:
-    TaskCreate(project="global", title="t", spec="ok", input={"a": 1})
+    TaskCreate(project="demo", title="t", spec="ok", input={"a": 1})
     TaskChanges(spec="ok")

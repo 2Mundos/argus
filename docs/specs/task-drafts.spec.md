@@ -101,7 +101,8 @@ create ──▶ open ──edit (expected_version)──▶ open ──publish�
     none blank (`validation_failed`). Only drafts require this; direct create
     does not;
   - the kind exists and its input schema holds; the project exists (a draft
-    without `parent_id` must name one, `project_required`); pinned pages exist;
+    without `parent_id` must name a real project, not `global`,
+    `project_required`); pinned pages exist;
     the harness account pin resolves (the create rules, `check_create`);
   - **capabilities**: every required capability (after the kind's defaults) is
     declared by at least one pool or one non-archived agent

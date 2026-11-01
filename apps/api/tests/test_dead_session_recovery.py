@@ -450,7 +450,7 @@ async def worker(db: Database) -> str:
 async def new_task(db: Database, title: str = "recover-me", **kw) -> str:
     async with db.write() as tx:
         task = await tasks.create_task(
-            tx, TaskCreate(project="global", title=title, **kw), "human:test"
+            tx, TaskCreate(project="demo", title=title, **kw), "human:test"
         )
     return task.id
 

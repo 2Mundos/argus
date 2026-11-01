@@ -21,7 +21,7 @@ ADMIN_TOKEN = "test-admin-token-" + "s" * 32
 async def create(db: Database, **kw):
     async with db.write() as tx:
         return await tasks.create_task(
-            tx, TaskCreate(project="global", title="t", **kw), "admin:test"
+            tx, TaskCreate(project="demo", title="t", **kw), "admin:test"
         )
 
 
@@ -514,7 +514,7 @@ def register(client: TestClient) -> dict[str, str]:
 
 def test_rest_contract(client: TestClient) -> None:
     worker = register(client)
-    task = client.post("/api/tasks", json={"title": "t", "project": "global"}).json()
+    task = client.post("/api/tasks", json={"title": "t", "project": "demo"}).json()
     url = f"/api/tasks/{task['id']}/steers"
     assert client.post(url, json={"message": "hi"}, headers=worker).status_code == 403
     claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
@@ -572,7 +572,7 @@ def json_kinds(client: TestClient, task_id: str) -> list[str]:
 
 def test_rest_unknown_outcome_reaches_the_next_claim(client: TestClient) -> None:
     first, second = register(client), register(client)
-    task = client.post("/api/tasks", json={"title": "t", "project": "global"}).json()
+    task = client.post("/api/tasks", json={"title": "t", "project": "demo"}).json()
     url = f"/api/tasks/{task['id']}/steers"
     claimed = client.post("/api/tasks/claim", json={}, headers=first).json()
     assert claimed["steer_unknown"] == 0

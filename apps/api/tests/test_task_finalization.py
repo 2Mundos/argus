@@ -31,7 +31,7 @@ def register(client: TestClient) -> dict[str, str]:
 
 
 def claim(client: TestClient, worker: dict[str, str]) -> dict:
-    client.post("/api/tasks", json={"project": "global", "title": "t"})
+    client.post("/api/tasks", json={"project": "demo", "title": "t"})
     res = client.post("/api/tasks/claim", json={}, headers=worker)
     assert res.status_code == 200, res.text
     return res.json()

@@ -51,7 +51,7 @@ def task(api: httpx.Client) -> str:
     res = api.post(
         "/api/tasks",
         json={
-            "project": "global",
+            "project": "demo",
             "title": "t",
             "required_capabilities": ["task-inputs"],
         },

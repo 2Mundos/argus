@@ -6,7 +6,7 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from api_support import FakeClock, insert_agent
+from api_support import FakeClock, insert_agent, insert_project
 from argus_api.db import Database
 from argus_api.db.migrate import load_migrations
 from argus_api.errors import (
@@ -40,7 +40,7 @@ DRAFT_TOOLS = {
 
 def complete(**kw) -> dict:
     return {
-        "project": "global",
+        "project": "demo",
         "title": "t",
         "spec": "do it",
         "acceptance": ["done"],
@@ -214,8 +214,8 @@ async def test_a_self_reference_is_a_cycle(db: Database) -> None:
 @pytest.mark.parametrize(
     ("body", "code"),
     [
-        ({"project": "global", "title": "t", "acceptance": ["a"]}, "validation_failed"),
-        ({"project": "global", "title": "t", "spec": "s"}, "validation_failed"),
+        ({"project": "demo", "title": "t", "acceptance": ["a"]}, "validation_failed"),
+        ({"project": "demo", "title": "t", "spec": "s"}, "validation_failed"),
         (complete(acceptance=[" "]), "validation_failed"),
         (complete(title=""), "validation_failed"),
         (complete(depends_on_drafts=["no-such-draft"]), "validation_failed"),
@@ -406,10 +406,16 @@ async def test_0065_upgrade_keeps_data_and_is_idempotent(tmp_path: Path) -> None
     assert migrations[64].name == "0065_task_drafts.sql"
     db = await Database.open(path, migrations=migrations[:64])
     await insert_agent(db, A)
+    await insert_project(db)
     async with db.write() as tx:
-        old = await tasks.create_task(
-            tx, TaskCreate(project="global", title="old"), ACTOR
+        # create_task writes a column that a later migration adds; borrow it for the setup
+        await tx.conn.execute(
+            "ALTER TABLE tasks ADD COLUMN deliverable TEXT NOT NULL DEFAULT 'response'"
         )
+        old = await tasks.create_task(
+            tx, TaskCreate(project="demo", title="old"), ACTOR
+        )
+        await tx.conn.execute("ALTER TABLE tasks DROP COLUMN deliverable")
     await db.close()
 
     for _ in range(2):  # the upgrade, then a reopen that must change nothing
@@ -568,7 +574,7 @@ def test_mcp_round_trip_as_orchestrator(client: TestClient) -> None:
         "edit_task_draft",
         draft_id=child["id"],
         expected_version=child["version"],
-        changes={"project": "global", "spec": "s", "acceptance": ["a"]},
+        changes={"project": "demo", "spec": "s", "acceptance": ["a"]},
     )
     assert tool(client, orch, "list_task_drafts")["total"] == 2
     items = [

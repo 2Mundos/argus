@@ -48,7 +48,7 @@ async def agents(db: Database) -> None:
 async def create(db: Database, **kw):
     async with db.write() as tx:
         return await tasks.create_task(
-            tx, TaskCreate(project="global", title="t", **kw), "admin:test"
+            tx, TaskCreate(project="demo", title="t", **kw), "admin:test"
         )
 
 
@@ -193,11 +193,11 @@ async def test_policy_gate_preview(db: Database) -> None:
     for _ in range(2):
         async with db.write() as tx:
             await tasks.create_task(
-                tx, TaskCreate(project="global", title="t"), actor, hourly_limit=2
+                tx, TaskCreate(project="demo", title="t"), actor, hourly_limit=2
             )
     async with db.write() as tx:
         held = await tasks.create_task(
-            tx, TaskCreate(project="global", title="held"), actor, hourly_limit=2
+            tx, TaskCreate(project="demo", title="held"), actor, hourly_limit=2
         )
     async with db.read() as conn:
         [policy] = await decision_store.open_ids(conn, "task", held.id)
@@ -412,7 +412,7 @@ def _mcp(client: TestClient, token: str, name: str, **arguments) -> dict:
 def test_preview_over_http_and_mcp_and_rights(client: TestClient) -> None:
     worker, orch = _token(client, "worker"), _token(client, "orchestrator")
     H = {"Authorization": f"Bearer {worker}"}
-    client.post("/api/tasks", json={"title": "t", "project": "global"}, headers=ADMIN_H)
+    client.post("/api/tasks", json={"title": "t", "project": "demo"}, headers=ADMIN_H)
     claimed = client.post("/api/tasks/claim", json={}, headers=H).json()
     asked = client.post(
         f"/api/tasks/{claimed['id']}/ask",

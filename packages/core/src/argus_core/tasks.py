@@ -214,6 +214,37 @@ class Review(StrEnum):
     ORCHESTRATOR = "orchestrator"
 
 
+class Deliverable(StrEnum):
+    """What a task must leave behind to count as done (task deliverable spec 3.1).
+
+    `branch` < `pr_open` < `pr_green` < `pr_merged` is a ladder; the others stand alone.
+    """
+
+    RESPONSE = "response"
+    KNOWLEDGE = "knowledge"
+    ARTIFACT = "artifact"
+    SUBTASKS = "subtasks"
+    BRANCH = "branch"
+    PR_OPEN = "pr_open"
+    PR_GREEN = "pr_green"
+    PR_MERGED = "pr_merged"
+
+
+# Deliverables that live in the project's repository: they need `repository:write`
+# and a repository the project proves.
+CODE_DELIVERABLES = frozenset(
+    {
+        Deliverable.BRANCH,
+        Deliverable.PR_OPEN,
+        Deliverable.PR_GREEN,
+        Deliverable.PR_MERGED,
+    }
+)
+# Deliverables whose evidence changes after the worker is done: closing the task
+# reads the forge.
+FORGE_DELIVERABLES = frozenset({Deliverable.PR_GREEN, Deliverable.PR_MERGED})
+
+
 class PromptTrust(StrEnum):
     """Immutable origin of task content for prompt isolation.
 
@@ -400,6 +431,9 @@ class TaskCreate(BaseModel):
     priority: int = 0
     requires_approval: bool = False
     review: Review = Review.NONE
+    # What the task must leave behind (task deliverable spec); checked at creation,
+    # completion and, for a PR that must be green or merged, at accept.
+    deliverable: Deliverable = Deliverable.RESPONSE
     parent_id: str | None = None
     depends_on: list[str] = []
     # Required; a subtask may omit it to inherit its parent's project.
@@ -515,6 +549,7 @@ class Task(BaseModel):
     knowledge: list[str]
     difficulty: Difficulty = Difficulty.STANDARD
     difficulty_source: DifficultySource = DifficultySource.INFERRED
+    deliverable: Deliverable = Deliverable.RESPONSE
     account_providers: list[str] | None = None
     harness_model: HarnessModel | None = None
     executor_model: ExecutorModel | None = None

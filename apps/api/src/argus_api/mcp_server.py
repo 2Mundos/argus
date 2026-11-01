@@ -26,7 +26,7 @@ from argus_core.continuation import (
 )
 from argus_core.task_drafts import PublishItem, TaskDraftBody
 from argus_core.task_edit import TaskChanges
-from argus_core.tasks import ExecutorModel, HarnessModel
+from argus_core.tasks import Deliverable, ExecutorModel, HarnessModel
 from fastapi import FastAPI
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import Context, MCPServer
@@ -783,10 +783,20 @@ async def create_task(
     harness_model: HarnessModel | None = None,
     executor_model: ExecutorModel | None = None,
     harness_account: str | None = None,
+    deliverable: Deliverable | None = None,
 ) -> dict:
     """Create a task. Workers may only create subtasks of a task they hold (set
     parent_id; the project is inherited). Orchestrators create any task and must name
-    a project. `knowledge` pins pages the claiming agent should read. `difficulty`:
+    a real project (not `global`, which holds only knowledge and settings).
+    `deliverable` is what the task must leave behind: response (the default: a
+    summary), knowledge (a page written), artifact (a file listed in the result),
+    subtasks (at least one child), branch (pushed), pr_open, pr_green (open with
+    passing checks) or pr_merged. The branch and pr_* values need
+    `required_capabilities` with repository:write and a project that has a repository
+    (422 deliverable_capability or deliverable_repository); completing without the
+    evidence is refused (422 deliverable_missing), and a pr_green or pr_merged task
+    is accepted only once the forge shows it (409 deliverable_unmet or
+    deliverable_unverified). `knowledge` pins pages the claiming agent should read. `difficulty`:
     "trivial" (a copy change, a typo) or "simple" take the cheap Cursor executor
     (composer-2.5), trivial first on the node's local model with the cloud as the
     fallback; "standard" (the default) the Claude or Codex executor; "hard"
@@ -831,6 +841,8 @@ async def create_task(
         body["executor_model"] = executor_model.model_dump()
     if harness_account is not None:
         body["harness_account"] = harness_account
+    if deliverable is not None:
+        body["deliverable"] = deliverable.value
     return await _call(ctx, "POST", "/tasks", json=body)
 
 
@@ -1198,15 +1210,16 @@ async def edit_task(
     """Edit a task's definition: title, spec, acceptance, priority,
     required_capabilities, knowledge (pinned page ids), depends_on,
     account_providers, difficulty (trivial | simple | standard | hard; not clearable),
-    harness_model ({engine, model}), executor_model ({executor, model}) and
+    deliverable (not clearable; the creation rules re-run), harness_model ({engine,
+    model}), executor_model ({executor, model}) and
     harness_account (an account id or name). `changes` is a partial patch: a field
     you leave out is kept, null clears spec, acceptance, required_capabilities,
     knowledge, depends_on, account_providers (no restriction), a model pin (back to
     the policy) or the harness account pin (any account). Pass the task's `version` as
     expected_version (409 stale_version carries the current one). The task's
     `editable_fields` says what its state allows: ready, pending and
-    awaiting_approval tasks take everything; blocked, claimed and in_review only
-    priority; finished ones nothing (409 task_not_editable). Returns the task with
+    awaiting_approval tasks take everything; in_review takes priority and deliverable;
+    blocked and claimed only priority; finished ones nothing (409 task_not_editable). Returns the task with
     its new `version`. Nothing is written when any field is refused."""
     return await _call(
         ctx,

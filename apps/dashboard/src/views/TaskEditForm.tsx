@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ActionButton, useAction } from "../ActionButton";
 import { ApiError, api, call, type Task } from "../api";
+import { DELIVERABLES } from "../deliverables";
 import {
   buildChanges,
   type Draft,
@@ -22,6 +23,7 @@ const LABELS: Record<EditField, string> = {
   knowledge: "Pinned page ids (one per line)",
   depends_on: "Depends on (task ids, one per line)",
   difficulty: "Difficulty",
+  deliverable: "Deliverable (what the task must leave behind)",
   account_providers: "Restrict to account providers (one per line, e.g. local; empty: any)",
   harness_model: "Harness engine and model (pinned for every attempt)",
   executor_model: "Coding executor and model (pinned for every attempt)",
@@ -144,6 +146,14 @@ export function TaskEditForm({ task, onDone }: { task: Task; onDone: (saved?: Ta
                 <option value="trivial">trivial (cheapest executor)</option>
                 <option value="simple">simple (cheap executor)</option>
                 <option value="hard">hard (Claude runs on Opus)</option>
+              </select>
+            ) : field === "deliverable" ? (
+              <select {...common}>
+                {DELIVERABLES.map((d) => (
+                  <option key={d.value} value={d.value}>
+                    {d.label}
+                  </option>
+                ))}
               </select>
             ) : field === "harness_model" || field === "executor_model" ? (
               <ModelPin

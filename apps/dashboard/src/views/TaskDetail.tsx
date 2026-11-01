@@ -4,6 +4,7 @@ import { api, call, download } from "../api";
 import { ARCHIVABLE } from "../archive";
 import { blockReasonText } from "../blockCopy";
 import { DateChip } from "../DateChip";
+import { deliverableLabel } from "../deliverables";
 import { TaskDelivery } from "../delivery";
 import { TaskFailover } from "../failover";
 import { bytes, shortId } from "../format";
@@ -390,6 +391,8 @@ export function TaskDetail({
               </span>{" "}
               <span className="muted small">({task.difficulty_source ?? "inferred"})</span>
             </dd>
+            <dt>Deliverable</dt>
+            <dd>{deliverableLabel(task.deliverable)}</dd>
             {task.project && (
               <>
                 <dt>Project</dt>

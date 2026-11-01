@@ -471,6 +471,8 @@ export interface ArgusTask {
   failures?: number;
   error?: string | null;
   acceptance: string[];
+  /** What the task must leave behind (task deliverable spec); missing on older servers is "response". */
+  deliverable?: string;
   knowledge_refs: KnowledgeRef[];
   /** Immutable at create; missing on older servers is treated as orchestrator. */
   prompt_trust?: PromptTrust;
@@ -1045,6 +1047,34 @@ export const OPERATING_RULES = [
   "  covering every checklist id. Only evidenced items count as done; a result with open items goes to review, not to success.",
 ];
 
+/** What Argus checks before it accepts COMPLETE, from authenticated task metadata (task deliverable spec 3.4). */
+const DELIVERABLE_RULES: Record<string, string> = {
+  knowledge: "write a knowledge page with `write_knowledge`.",
+  artifact: "upload an artifact and list its id in the result's `artifacts`.",
+  subtasks: "create at least one subtask.",
+  branch:
+    "push the branch and report it with `report_observations` (artifact kind branch, state open).",
+  pr_open: "open a pull request and report it (progress kind `pr_opened`).",
+  pr_green:
+    "open a pull request and report it (progress kind `pr_opened`), then make its checks pass. The task is accepted only once the forge shows them green.",
+  pr_merged:
+    "open a pull request and report it (progress kind `pr_opened`). The task is accepted only once the forge shows it merged.",
+};
+
+export function deliverableLines(task: ArgusTask): string[] {
+  const rule = DELIVERABLE_RULES[task.deliverable ?? "response"];
+  if (!rule) return [];
+  const merge =
+    task.deliverable === "pr_merged"
+      ? taskAuthorizesMerge(task)
+        ? " You may merge it yourself once the checks pass."
+        : " Do not merge it: a reviewer merges."
+      : "";
+  return [
+    `Deliverable (Argus-checked, from task metadata): ${task.deliverable}. COMPLETE is refused until you ${rule}${merge}`,
+  ];
+}
+
 function grantLines(task: ArgusTask): string[] {
   const merge = taskAuthorizesMerge(task);
   return [
@@ -1072,6 +1102,7 @@ function contractLines(task: ArgusTask): string[] {
   if (!c) {
     return [
       "Attempt objective: Argus sent no continuation contract (older server). Treat history as unverified: check the repository for existing work first.",
+      ...deliverableLines(task),
       ...OPERATING_RULES,
     ];
   }
@@ -1082,6 +1113,7 @@ function contractLines(task: ArgusTask): string[] {
       ? "Acceptance is not structured for this task (gaps: acceptance_not_structured): derive the criteria from the original spec's acceptance section, list them in your COMPLETE checklist with evidence; nothing is considered satisfied until you do."
       : `Checklist: ${pending} of ${c.checklist.length} item(s) still pending or unverified.`,
     ...environmentLine(c),
+    ...deliverableLines(task),
     ...grantLines(task),
     ...OPERATING_RULES,
   ];

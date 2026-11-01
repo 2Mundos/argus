@@ -346,9 +346,7 @@ async def add(db: Database, store: MemorySecretStore, name: str, **kw) -> str:
 
 async def claimed(db: Database):
     async with db.write() as tx:
-        await tasks.create_task(
-            tx, TaskCreate(project="global", title="t"), "admin:test"
-        )
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "admin:test")
         task = await tasks.claim(tx, A, [])
     assert task is not None
     return task

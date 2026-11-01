@@ -450,7 +450,7 @@ def test_independent_review_skips_without_delivery(client: TestClient) -> None:
     )
     client.post(
         "/api/tasks",
-        json={"title": "Answer a question", "project": "global", "spec": "why?"},
+        json={"title": "Answer a question", "project": "demo", "spec": "why?"},
         headers=ADMIN,
     )
     boot = client.post(

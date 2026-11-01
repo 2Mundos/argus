@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 
 import pytest
-from api_support import FakeClock
+from api_support import FakeClock, insert_project
 from argus_api.db import Database
 
 
@@ -17,7 +17,9 @@ def _migrated_template(tmp_path_factory: pytest.TempPathFactory) -> Generator[No
     template = tmp_path_factory.mktemp("db-template") / "argus.db"
 
     async def build() -> None:
-        await (await Database.open(template, readers=0)).close()
+        database = await Database.open(template, readers=0)
+        await insert_project(database)  # tasks cannot live in `global`
+        await database.close()
 
     asyncio.run(build())
     real_open = Database.open.__func__

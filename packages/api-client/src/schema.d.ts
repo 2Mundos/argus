@@ -4429,6 +4429,8 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by: string;
+            /** @default response */
+            deliverable?: components["schemas"]["Deliverable"];
             /** Depends On */
             depends_on: string[];
             /** @default standard */
@@ -5341,6 +5343,14 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /**
+         * Deliverable
+         * @description What a task must leave behind to count as done (task deliverable spec 3.1).
+         *
+         *     `branch` < `pr_open` < `pr_green` < `pr_merged` is a ladder; the others stand alone.
+         * @enum {string}
+         */
+        Deliverable: "response" | "knowledge" | "artifact" | "subtasks" | "branch" | "pr_open" | "pr_green" | "pr_merged";
         /**
          * Delivery
          * @description What Argus read of the task's pull request. Observed only: a merge neither
@@ -9487,6 +9497,8 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by: string;
+            /** @default response */
+            deliverable?: components["schemas"]["Deliverable"];
             /** Depends On */
             depends_on: string[];
             /** @default standard */
@@ -9662,6 +9674,7 @@ export interface components {
             acceptance?: string[] | null;
             /** Account Providers */
             account_providers?: string[] | null;
+            deliverable?: components["schemas"]["Deliverable"] | null;
             /** Depends On */
             depends_on?: string[] | null;
             difficulty?: components["schemas"]["Difficulty"] | null;
@@ -9691,6 +9704,8 @@ export interface components {
             acceptance?: string[];
             /** Account Providers */
             account_providers?: string[] | null;
+            /** @default response */
+            deliverable?: components["schemas"]["Deliverable"];
             /**
              * Depends On
              * @default []
@@ -9795,6 +9810,8 @@ export interface components {
             created_by: string;
             /** Decision Ids */
             decision_ids: string[];
+            /** @default response */
+            deliverable?: components["schemas"]["Deliverable"];
             /** Depends On */
             depends_on: string[];
             /** @default standard */
@@ -9942,6 +9959,8 @@ export interface components {
             acceptance?: string[];
             /** Account Providers */
             account_providers?: string[] | null;
+            /** @default response */
+            deliverable?: components["schemas"]["Deliverable"];
             /**
              * Depends On
              * @default []
@@ -10193,6 +10212,8 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by: string;
+            /** @default response */
+            deliverable?: components["schemas"]["Deliverable"];
             /** Depends On */
             depends_on: string[];
             /** @default standard */

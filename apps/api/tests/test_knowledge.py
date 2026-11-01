@@ -194,7 +194,7 @@ async def test_claim_refs_pinned_first_then_matches(
 async def test_task_project_and_pins_must_exist(db: Database) -> None:
     for body in (
         TaskCreate(title="x", project="nope"),
-        TaskCreate(project="global", title="x", knowledge=["nope"]),
+        TaskCreate(project="demo", title="x", knowledge=["nope"]),
     ):
         with pytest.raises(NotFoundError):
             async with db.write() as tx:
@@ -208,7 +208,7 @@ async def ask_and_answer(db: Database, save: SaveToKnowledge, **task_kw) -> None
     await insert_agent(db, A)
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="global", title="t", **task_kw), "admin:test"
+            tx, TaskCreate(project="demo", title="t", **task_kw), "admin:test"
         )
         task = await tasks.claim(tx, A, [])
         assert task is not None
@@ -380,7 +380,7 @@ async def test_kind_pins_merge_with_task_pins(db: Database, clock: FakeClock) ->
         task = await tasks.create_task(
             tx,
             TaskCreate(
-                project="global", title="Ship it", kind="deploy", knowledge=[extra]
+                project="demo", title="Ship it", kind="deploy", knowledge=[extra]
             ),
             "admin:test",
         )

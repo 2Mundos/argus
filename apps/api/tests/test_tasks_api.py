@@ -39,7 +39,7 @@ def agent(client: TestClient) -> dict[str, str]:
 
 def test_create_get_list(client: TestClient) -> None:
     res = client.post(
-        "/api/tasks", json={"project": "global", "title": "write docs", "priority": 2}
+        "/api/tasks", json={"project": "demo", "title": "write docs", "priority": 2}
     )
     assert res.status_code == 201
     task = res.json()
@@ -59,7 +59,7 @@ def test_create_get_list(client: TestClient) -> None:
 
 
 def test_claim_and_complete(client: TestClient, agent: dict[str, str]) -> None:
-    task = client.post("/api/tasks", json={"project": "global", "title": "x"}).json()
+    task = client.post("/api/tasks", json={"project": "demo", "title": "x"}).json()
     claimed = client.post("/api/tasks/claim", json={}, headers=agent).json()
     assert claimed["id"] == task["id"]
     res = client.post(
@@ -88,7 +88,7 @@ def test_claim_long_poll_wakes_when_a_task_becomes_ready(
         )
         time.sleep(0.3)
         task = client.post(
-            "/api/tasks", json={"project": "global", "title": "late"}
+            "/api/tasks", json={"project": "demo", "title": "late"}
         ).json()
         res = waiting.result(timeout=5)
     assert res.status_code == 200
@@ -105,7 +105,7 @@ def test_worker_operations_require_an_agent(client: TestClient) -> None:
 def test_invalid_token_is_401_not_anonymous(client: TestClient) -> None:
     res = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "x"},
+        json={"project": "demo", "title": "x"},
         headers={"Authorization": "Bearer nope"},
     )
     assert res.status_code == 401
@@ -113,7 +113,7 @@ def test_invalid_token_is_401_not_anonymous(client: TestClient) -> None:
 
 
 def test_agent_lifecycle_over_http(client: TestClient, agent: dict[str, str]) -> None:
-    task = client.post("/api/tasks", json={"project": "global", "title": "x"}).json()
+    task = client.post("/api/tasks", json={"project": "demo", "title": "x"}).json()
     claimed = client.post("/api/tasks/claim", json={}, headers=agent).json()
     hb = client.post(
         "/api/agents/me/heartbeat",
@@ -137,7 +137,7 @@ def test_agent_lifecycle_over_http(client: TestClient, agent: dict[str, str]) ->
 def test_errors_have_actionable_codes(
     client: TestClient, agent: dict[str, str]
 ) -> None:
-    task = client.post("/api/tasks", json={"project": "global", "title": "x"}).json()
+    task = client.post("/api/tasks", json={"project": "demo", "title": "x"}).json()
     client.post("/api/tasks/claim", json={}, headers=agent)
     res = client.post(
         f"/api/tasks/{task['id']}/complete",
@@ -159,7 +159,7 @@ def test_errors_have_actionable_codes(
 def test_a_worker_blocks_only_for_the_environment(
     client: TestClient, agent: dict[str, str]
 ) -> None:
-    task = client.post("/api/tasks", json={"project": "global", "title": "x"}).json()
+    task = client.post("/api/tasks", json={"project": "demo", "title": "x"}).json()
     claimed = client.post("/api/tasks/claim", json={}, headers=agent).json()
     url = f"/api/tasks/{task['id']}/block"
     attempt = claimed["attempt"]
@@ -192,7 +192,7 @@ WORKSPACE_REASONS = [
 def test_a_worker_blocks_for_a_broken_task_workspace(
     client: TestClient, agent: dict[str, str], reason: str
 ) -> None:
-    task = client.post("/api/tasks", json={"project": "global", "title": "x"}).json()
+    task = client.post("/api/tasks", json={"project": "demo", "title": "x"}).json()
     claimed = client.post("/api/tasks/claim", json={}, headers=agent).json()
     res = client.post(
         f"/api/tasks/{task['id']}/block",
@@ -215,7 +215,7 @@ def _fail_once(client: TestClient, agent: dict[str, str], **body: object) -> dic
     """Create a task, claim it, and fail it; with max_attempts=1 it ends `failed`."""
     task = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "x", "max_attempts": 1, **body},
+        json={"project": "demo", "title": "x", "max_attempts": 1, **body},
     ).json()
     claimed = client.post("/api/tasks/claim", json={}, headers=agent).json()
     res = client.post(
@@ -250,7 +250,7 @@ def test_retry_returns_a_failed_task_to_ready(
 def test_retry_refuses_any_state_but_failed(
     client: TestClient, agent: dict[str, str]
 ) -> None:
-    task = client.post("/api/tasks", json={"project": "global", "title": "x"}).json()
+    task = client.post("/api/tasks", json={"project": "demo", "title": "x"}).json()
     res = client.post(f"/api/tasks/{task['id']}/retry")
     assert res.status_code == 409
     assert res.json()["detail"]["code"] == "task_not_failed"
@@ -311,7 +311,7 @@ def test_retry_is_a_manager_operation(
 def test_progress_milestone_over_rest(
     client: TestClient, agent: dict[str, str]
 ) -> None:
-    created = client.post("/api/tasks", json={"project": "global", "title": "t"}).json()
+    created = client.post("/api/tasks", json={"project": "demo", "title": "t"}).json()
     legacy = client.get(f"/api/tasks/{created['id']}").json()
     assert (legacy["progress_kind"], legacy["progress_data"]) == (None, None)
     claimed = client.post("/api/tasks/claim", json={}, headers=agent).json()

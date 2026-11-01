@@ -32,7 +32,7 @@ async def register(db: Database, **kw):
 async def claim_one(db: Database, agent_id: str):
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="global", title="quiet-me"), "human:test"
+            tx, TaskCreate(project="demo", title="quiet-me"), "human:test"
         )
         task = await tasks.claim(tx, agent_id, [])
     assert task is not None

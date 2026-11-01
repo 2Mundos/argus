@@ -49,7 +49,7 @@ def worker(client: TestClient) -> dict[str, str]:
 @pytest.fixture
 def task(client: TestClient) -> dict:
     return client.post(
-        "/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN
+        "/api/tasks", json={"project": "demo", "title": "t"}, headers=ADMIN
     ).json()
 
 
@@ -261,7 +261,7 @@ def test_count_cap(client: TestClient, task, tmp_path: Path) -> None:
     assert res.json()["detail"]["code"] == "attachment_limit"
     assert len(files(tmp_path)) == 3
     other = client.post(
-        "/api/tasks", json={"project": "global", "title": "u"}, headers=ADMIN
+        "/api/tasks", json={"project": "demo", "title": "u"}, headers=ADMIN
     ).json()
     assert attach(client, ADMIN, other, name="f0").status_code == 201
 
@@ -286,7 +286,7 @@ def test_attachments_do_not_use_the_agent_quota(
         orch = register(client, "orchestrator")
         worker = register(client, "worker")
         task = client.post(
-            "/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN
+            "/api/tasks", json={"project": "demo", "title": "t"}, headers=ADMIN
         ).json()
         for i in range(3):
             assert (
@@ -351,13 +351,13 @@ def test_inbox_lists_worker_artifacts_not_attachments(
 ) -> None:
     approval = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "a", "requires_approval": True},
+        json={"project": "demo", "title": "a", "requires_approval": True},
         headers=ADMIN,
     ).json()
     att = attach(client, orchestrator, approval).json()  # attempt 0 == task attempt
     review = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "r", "review": "orchestrator"},
+        json={"project": "demo", "title": "r", "review": "orchestrator"},
         headers=ADMIN,
     ).json()
     claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
@@ -574,14 +574,14 @@ def test_shared_attachment_is_denied_to_workers_on_other_tasks(
     client: TestClient, orchestrator, worker
 ) -> None:
     other = client.post(
-        "/api/tasks", json={"project": "global", "title": "other"}, headers=ADMIN
+        "/api/tasks", json={"project": "demo", "title": "other"}, headers=ADMIN
     ).json()
     assert (
         client.post("/api/tasks/claim", json={}, headers=worker).json()["id"]
         == (other["id"])
     )
     task = client.post(
-        "/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN
+        "/api/tasks", json={"project": "demo", "title": "t"}, headers=ADMIN
     ).json()
     shared = attach(client, orchestrator, task, worker_readable="true").json()
     assert read_all(client, worker, shared) == [403] * 4

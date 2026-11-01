@@ -34,7 +34,7 @@ async def agent_row(db: Database) -> None:
 async def claim(db: Database, **kw):
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="global", title="t", **kw), "admin:test"
+            tx, TaskCreate(project="demo", title="t", **kw), "admin:test"
         )
         task = await tasks.claim(tx, A, [])
     assert task is not None
@@ -252,7 +252,7 @@ async def test_mark_skips_unclaimed_and_wrong_attempts(db: Database) -> None:
     task = await claim(db)
     async with db.write() as tx:
         ready = await tasks.create_task(
-            tx, TaskCreate(project="global", title="r"), "admin:test"
+            tx, TaskCreate(project="demo", title="r"), "admin:test"
         )
     async with db.write() as tx:
         assert await tasks.mark_paused_disk(tx, [(ready.id, 0)]) == []
@@ -375,7 +375,7 @@ def test_http_heartbeat_cannot_claim_a_pause_and_reads_show_it(
     boot = client.post("/api/agents/bootstrap-tokens", json={"role": "worker"}).json()
     res = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
     worker = {"Authorization": f"Bearer {res.json()['token']}"}
-    client.post("/api/tasks", json={"project": "global", "title": "p"})
+    client.post("/api/tasks", json={"project": "demo", "title": "p"})
     task = client.post("/api/tasks/claim", json={}, headers=worker).json()
     lease = {"task_id": task["id"], "attempt": task["attempt"]}
 

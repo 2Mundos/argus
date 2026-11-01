@@ -113,9 +113,7 @@ def test_scale_up_work_and_scale_down(argus: httpx.Client) -> None:
     assert len(docker_ps()) == 2
 
     ids = [
-        argus.post("/tasks", json={"project": "global", "title": f"job {n}"}).json()[
-            "id"
-        ]
+        argus.post("/tasks", json={"project": "demo", "title": f"job {n}"}).json()["id"]
         for n in range(4)
     ]
 
@@ -223,7 +221,7 @@ def test_nanoclaw_runtime_registers_and_leaves_nothing_behind(
         )
         # A task makes NanoClaw spawn an agent container (its model call will fail
         # without a credential; the container is what we are checking).
-        argus.post("/tasks", json={"project": "global", "title": "nanoclaw it"})
+        argus.post("/tasks", json={"project": "demo", "title": "nanoclaw it"})
         wait_for(lambda: bool(agent_containers()), 60, "an agent container")
 
         [inst] = argus.get("/instances", params={"pool": pool}).json()
@@ -320,7 +318,7 @@ def test_kubernetes_target_scales_runs_work_and_cleans_up(argus: httpx.Client) -
 
         ids = [
             argus.post(
-                "/tasks", json={"project": "global", "title": f"k8s job {n}"}
+                "/tasks", json={"project": "demo", "title": f"k8s job {n}"}
             ).json()["id"]
             for n in range(3)
         ]

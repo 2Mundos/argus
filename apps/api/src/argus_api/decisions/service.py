@@ -12,6 +12,7 @@ from argus_core.decisions import (
     DecisionKind,
     DecisionState,
 )
+from argus_core.tasks import FORGE_DELIVERABLES, TaskState
 from pydantic import BaseModel, Field
 
 from argus_api.auth import Identity
@@ -27,6 +28,7 @@ from argus_api.events import record
 from argus_api.fleet import service as fleet
 from argus_api.knowledge import service as knowledge
 from argus_api.routines import service as routines
+from argus_api.tasks import deliverable, delivery
 from argus_api.tasks import service as tasks
 
 
@@ -66,8 +68,40 @@ class AnsweredDecision(Decision):
     replayed: bool = False  # a retry of the stored answer; nothing changed
 
 
+async def forge_evidence(
+    db: Database, checker: delivery.PrChecker, decision_id: str, choice: str | None
+) -> deliverable.ForgeRead | None:
+    """For accepting a review of a task that must be green or merged: what the forge
+    shows, read here, before and outside the write transaction (task deliverable
+    spec 3.5). None when no forge read is needed or the decision cannot be read; the
+    answer reports the latter itself."""
+    if choice != "accept":
+        return None
+    async with db.read() as conn:
+        try:
+            decision = await store.get(conn, decision_id)
+            if (
+                decision.kind is not DecisionKind.REVIEW
+                or decision.state is not DecisionState.OPEN
+            ):
+                return None
+            task = await tasks.get_task(conn, decision.subject_id)
+        except DomainError:
+            return None
+        if (
+            task.deliverable not in FORGE_DELIVERABLES
+            or task.state is not TaskState.IN_REVIEW
+        ):
+            return None
+        return deliverable.ForgeRead(await delivery.delivery_of(conn, checker, task))
+
+
 async def answer(
-    tx: Tx, decision_id: str, body: DecisionAnswer, caller: Identity
+    tx: Tx,
+    decision_id: str,
+    body: DecisionAnswer,
+    caller: Identity,
+    forge: deliverable.ForgeRead | None = None,
 ) -> AnsweredDecision:
     decision = await store.get(tx.conn, decision_id)
     if decision.state is not DecisionState.OPEN:
@@ -101,7 +135,7 @@ async def answer(
         "decision.answered",
         {"choice": body.choice},
     )
-    await _apply_answer(tx, decision, body, caller)
+    await _apply_answer(tx, decision, body, caller, forge)
     return AnsweredDecision(**(await store.get(tx.conn, decision_id)).model_dump())
 
 
@@ -138,7 +172,10 @@ class AnswerOutcome(BaseModel):
 
 
 async def answer_many(
-    db: Database, items: list[AnswerItem], caller: Identity
+    db: Database,
+    items: list[AnswerItem],
+    caller: Identity,
+    checker: delivery.PrChecker,
 ) -> list[AnswerOutcome]:
     """Answer each item in its own transaction, in order; one failure never
     rolls back or skips the others."""
@@ -146,8 +183,9 @@ async def answer_many(
     for item in items:
         body = DecisionAnswer(**item.model_dump(exclude={"decision_id"}))
         try:
+            forge = await forge_evidence(db, checker, item.decision_id, body.choice)
             async with db.write() as tx:
-                decision = await answer(tx, item.decision_id, body, caller)
+                decision = await answer(tx, item.decision_id, body, caller, forge)
         except DomainError as exc:
             error = ItemError(
                 status=exc.status,
@@ -220,7 +258,11 @@ def effect_of(decision: Decision, choice: str | None) -> Effect:
 
 
 async def _apply_answer(
-    tx: Tx, decision: Decision, body: DecisionAnswer, caller: Identity
+    tx: Tx,
+    decision: Decision,
+    body: DecisionAnswer,
+    caller: Identity,
+    forge: deliverable.ForgeRead | None = None,
 ) -> None:
     task_id = decision.subject_id
     match effect_of(decision, body.choice):
@@ -282,6 +324,7 @@ async def _apply_answer(
                 caller.scope,
                 accept=effect is Effect.REVIEW_ACCEPT,
                 notes=body.text,
+                forge=forge,
             )
 
 

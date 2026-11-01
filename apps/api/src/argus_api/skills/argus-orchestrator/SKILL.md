@@ -86,7 +86,7 @@ they contradict is `conflict`). Its `next` is a hint; decide yourself.
 | --- | --- | --- |
 | `question` | its own `options`, and/or free `text` | The answer is appended to the task spec's "Clarifications"; the task returns to ready. |
 | `question` with `payload.category = "assistance"` | — | A worker is missing a tool, credential or service named in `resource`. Fix the cause (project runtime, account, pool), then answer with what changed. |
-| `review` | `accept` / `reject` | `accept` → succeeded. `reject` → your `text` is appended to the spec as review notes and the task runs again at a higher difficulty. A rejection is not a failure. |
+| `review` | `accept` / `reject` | `accept` → succeeded (a `pr_green` or `pr_merged` task is accepted only once the forge shows it green or merged; otherwise `deliverable_unmet` or `deliverable_unverified`). `reject` → your `text` is appended to the spec as review notes and the task runs again at a higher difficulty. A rejection is not a failure. |
 | `approval`, `policy` (task) | `approve` / `reject` | `approve` → the task can start. **`reject` cancels the task.** |
 | `policy` (pool) | `approve` / `reject` | Approves or refuses a scale above the pool's cap. Usually `human`. |
 | `knowledge` | `accept` / `reject` | Publishes or drops a proposed knowledge page revision. |
@@ -183,6 +183,13 @@ giving any worker more access:
   or `hard` (architecture, migrations, security, several services). It picks
   the executor and model. Omit it and Argus infers it conservatively.
 - `depends_on` to order tasks; `parent_id` to group subtasks.
+- `deliverable`: what finishing means, checked when the worker completes.
+  `response` (default), `knowledge`, `artifact`, `subtasks`, `branch`,
+  `pr_open`, `pr_green` or `pr_merged`. The code levels need
+  `repository:write` and a repository for the project. A worker that
+  completes without the evidence is refused. `pr_green` and `pr_merged`
+  wait in review, and the accept is refused until the forge shows the PR
+  green or merged.
 - `knowledge`: page ids the worker should read first (`search_knowledge`).
 - `required_capabilities`: what the task needs from a worker. A worker claims the
   task only if its capabilities include every entry. Set `repository:write` on
