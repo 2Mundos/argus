@@ -6,7 +6,7 @@ import {
   useTaskChangesSnapshot,
 } from "./TaskChanges";
 import { TaskLogBarActions, TaskLogContent, type TaskLogSteer, useTaskLog } from "./TaskLog";
-import { taskTerminalVisibleTabs, type TaskTerminalTab } from "./taskTerminalTabs";
+import { type TaskTerminalTab, taskTerminalVisibleTabs } from "./taskTerminalTabs";
 
 export type { TaskTerminalTab };
 
