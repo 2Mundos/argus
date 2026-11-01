@@ -16,8 +16,9 @@ import { WorkerChip } from "../WorkerChip";
 import { Activity } from "./Activity";
 import { AttemptStrip } from "./AttemptStrip";
 import { EventList } from "./EventList";
-import { TaskTerminal } from "./TaskTerminal";
+import { TaskEditForm } from "./TaskEditForm";
 import { TaskSteers } from "./TaskSteers";
+import { TaskTerminal } from "./TaskTerminal";
 
 /** Size of the History page; a full page may hide older events. */
 const HISTORY_LIMIT = 50;

@@ -89,10 +89,9 @@ export function Activity({
     task.progress_percent != null ||
     task.progress_at != null ||
     task.progress_kind != null;
-  // Claimed tasks keep a progress row (lease / quiet); finished ones only when there is a note.
+  // Claimed tasks keep a progress row (lease / quiet); finished ones only with notes.
   const showProgress = task.state === "claimed" || hasProgress;
-  if (task.state !== "claimed" && notes.length === 0 && !quietLine && !finalLine && !hasProgress)
-    return null;
+  if (task.state !== "claimed" && notes.length === 0 && !quietLine && !finalLine) return null;
   return (
     <div className="activity">
       {finalLine && (
