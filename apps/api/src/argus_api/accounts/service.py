@@ -21,6 +21,7 @@ from argus_core.accounts import (
     ExhaustedReport,
     FallbackResult,
     LeaseRole,
+    NativeSessionReport,
     QuotaWindow,
     Usage,
     UsageReport,
@@ -54,6 +55,7 @@ from argus_api.errors import (
 from argus_api.events import record
 from argus_api.modeltrace import service as modeltrace
 from argus_api.secrets import SecretStore, ref_name
+from argus_api.tasks import quota_resume
 from argus_api.tasks import service as tasks
 
 log = logging.getLogger(__name__)
@@ -572,6 +574,10 @@ async def exhausted(
             lease=None, earliest_reset=await earliest_reset(tx, role, allowed)
         )
     await tasks.block(tx, agent_id, task_id, attempt, tasks.AWAITING_QUOTA)
+    if report.native_session is not None:
+        await quota_resume.record_session(
+            tx, agent_id, task_id, attempt, report.native_session
+        )
     return FallbackResult(
         lease=None,
         earliest_reset=await earliest_reset(tx, role, allowed),
@@ -656,6 +662,7 @@ async def fail_task(
     cooldown: timedelta = DEFAULT_COOLDOWN,
     *,
     oom_kill: bool = False,
+    native_session: NativeSessionReport | None = None,
 ) -> Task:
     """`POST /tasks/{id}/fail`. A `provider_failure` whose error is a known quota
     notice of the provider the agent's engine account belongs to is not a task
@@ -703,6 +710,10 @@ async def fail_task(
     task = await tasks.pause_for_quota(
         tx, agent_id, task_id, attempt, hit.reason, wait=not next_candidate
     )
+    if native_session is not None:
+        await quota_resume.record_session(
+            tx, agent_id, task_id, attempt, native_session
+        )
     await _failover(
         tx,
         agent_id,

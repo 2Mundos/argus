@@ -17,8 +17,10 @@ from argus_api.errors import ConflictError, LeaseConflictError
 from argus_api.main import app
 from argus_api.reaper import reap
 from argus_api.secrets import MemorySecretStore
+from argus_api.tasks import quota_resume
 from argus_api.tasks import service as tasks
-from argus_core.accounts import AccountCreate, ExhaustedReport
+from argus_api.tasks.quota_resume import QuotaResumeTaken
+from argus_core.accounts import AccountCreate, ExhaustedReport, NativeSessionReport
 from argus_core.tasks import TaskCreate
 from argus_core.tasks import TaskState as S
 from fastapi.testclient import TestClient
@@ -110,6 +112,148 @@ async def events(db: Database, kind: str) -> list[dict]:
             {"subject": r[0], "actor": r[1], **json.loads(r[2])}
             for r in await cur.fetchall()
         ]
+
+
+# -- quota resume (quota-resume spec) ---------------------------------------------------
+
+SESSION = NativeSessionReport(
+    session_id="5b1c0f3e-aaaa-bbbb-cccc-0123456789ab", engine="anthropic"
+)
+
+
+async def offered(db: Database, task_id: str, attempt: int):
+    async with db.read() as conn:
+        return await quota_resume.offered(conn, task_id, attempt)
+
+
+async def take(db: Database, agent: str, task, outcome="resumed", reason=None) -> bool:
+    async with db.write() as tx:
+        return await quota_resume.take(
+            tx,
+            agent,
+            task.id,
+            QuotaResumeTaken(attempt=task.attempt, outcome=outcome, reason=reason),
+        )
+
+
+async def test_quota_pause_keeps_the_native_session_and_the_counters_match(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "acct-a", priority=100)
+    await add(db, store, "acct-b", priority=90)
+    await lease(db, store)
+    task = await new_task(db)
+    async with db.write() as tx:
+        after = await accounts.fail_task(
+            tx, A, task.id, task.attempt, QUOTA, "provider_failure", store,
+            timedelta(hours=1), native_session=SESSION,
+        )  # fmt: skip
+    # Same state, attempt and failures as without a session reference.
+    assert (after.state, after.attempt, after.failures) == (S.READY, 1, 0)
+
+    async with db.write() as tx:
+        again = await tasks.claim(tx, B, [])  # another agent: offered with its node
+    assert again is not None and (again.attempt, again.failures) == (2, 0)
+    offer = await offered(db, task.id, again.attempt)
+    assert offer is not None
+    assert (offer.session_id, offer.engine, offer.node, offer.from_attempt) == (
+        SESSION.session_id, "anthropic", A, 1,
+    )  # fmt: skip
+    assert (
+        await offered(db, task.id, task.attempt) is None
+    )  # attempt 1 has no earlier one
+
+
+async def test_only_a_quota_pause_keeps_a_session(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "acct-a")
+    await lease(db, store)
+    task = await new_task(db)
+    async with db.write() as tx:
+        await accounts.fail_task(
+            tx, A, task.id, task.attempt, GENERIC, "provider_failure", store,
+            timedelta(hours=1), native_session=SESSION,
+        )  # fmt: skip
+        await tx.conn.execute("UPDATE tasks SET retry_at = NULL")  # skip the backoff
+        again = await tasks.claim(tx, A, [])
+    assert again is not None
+    assert await offered(db, task.id, again.attempt) is None  # a failure, not a quota
+    async with db.write() as tx:
+        await accounts.fail_task(
+            tx, A, task.id, again.attempt, "gone", "session_lost", store,
+            timedelta(hours=1), native_session=SESSION,
+        )  # fmt: skip
+        await tx.conn.execute("UPDATE tasks SET retry_at = NULL")
+        third = await tasks.claim(tx, A, [])
+    assert third is not None
+    assert await offered(db, task.id, third.attempt) is None
+
+
+async def test_awaiting_quota_pause_keeps_the_session_too(
+    db: Database, store: MemorySecretStore
+) -> None:
+    a = await add(db, store, "acct-a")
+    task = await new_task(db)
+    await lease(db, store, task=task)
+    async with db.write() as tx:
+        result = await accounts.exhausted(
+            tx, A, a,
+            ExhaustedReport(
+                until=None, runtime_providers=["anthropic"], task_id=task.id,
+                attempt=task.attempt, native_session=SESSION,
+            ),
+            store,
+        )  # fmt: skip
+    assert result.task_blocked
+    await add(db, store, "acct-b")  # a usable account wakes the task
+    async with db.write() as tx:
+        again = await tasks.claim(tx, A, [])
+    assert again is not None and (again.attempt, again.failures) == (2, 0)
+    assert (await offered(db, task.id, again.attempt)).session_id == SESSION.session_id  # type: ignore[union-attr]
+
+
+async def test_the_session_is_taken_once_and_a_retry_does_not_send_again(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "acct-a", priority=100)
+    await add(db, store, "acct-b", priority=90)
+    await lease(db, store)
+    task = await new_task(db)
+    async with db.write() as tx:
+        await accounts.fail_task(
+            tx, A, task.id, task.attempt, QUOTA, "provider_failure", store,
+            timedelta(hours=1), native_session=SESSION,
+        )  # fmt: skip
+        again = await tasks.claim(tx, A, [])
+    assert again is not None
+    assert await take(db, A, again) is True
+    assert await take(db, A, again) is False  # a retry: send nothing
+    assert await offered(db, task.id, again.attempt) is None
+    [event] = await events(db, "task.quota_resume")
+    assert (event["attempt"], event["outcome"]) == (2, "resumed")
+    with pytest.raises(LeaseConflictError):
+        await take(db, B, again)  # fenced like every worker write
+
+
+async def test_a_fallback_also_consumes_the_session(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "acct-a", priority=100)
+    await add(db, store, "acct-b", priority=90)
+    await lease(db, store)
+    task = await new_task(db)
+    async with db.write() as tx:
+        await accounts.fail_task(
+            tx, A, task.id, task.attempt, QUOTA, "provider_failure", store,
+            timedelta(hours=1), native_session=SESSION,
+        )  # fmt: skip
+        again = await tasks.claim(tx, A, [])
+    assert again is not None
+    assert await take(db, A, again, "fallback", "unreadable") is True
+    [event] = await events(db, "task.quota_resume")
+    assert (event["outcome"], event["reason"]) == ("fallback", "unreadable")
+    assert await offered(db, task.id, again.attempt) is None
 
 
 # -- ranking ----------------------------------------------------------------------------

@@ -123,6 +123,7 @@
   "progress_percent": null,
   "project": "global",
   "prompt_trust": "orchestrator",
+  "quota_resume": null,
   "refill_at": null,
   "required_capabilities": [],
   "requires_approval": false,

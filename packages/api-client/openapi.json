@@ -4191,6 +4191,16 @@
           "prompt_trust": {
             "$ref": "#/components/schemas/PromptTrust"
           },
+          "quota_resume": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuotaResume"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "refill_at": {
             "anyOf": [
               {
@@ -8629,6 +8639,16 @@
             ],
             "title": "Attempt"
           },
+          "native_session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NativeSessionReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "reason": {
             "default": "",
             "maxLength": 2000,
@@ -8838,6 +8858,16 @@
             "minLength": 1,
             "title": "Error",
             "type": "string"
+          },
+          "native_session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NativeSessionReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "oom_kill": {
             "default": false,
@@ -12540,6 +12570,28 @@
         "title": "NanoclawOptions",
         "type": "object"
       },
+      "NativeSessionReport": {
+        "description": "The engine's own session the quota pause left behind (quota resume spec 3.2).\nOptional on a quota report; the server adds the node and ignores it for any other\nending.",
+        "properties": {
+          "engine": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Engine",
+            "type": "string"
+          },
+          "session_id": {
+            "pattern": "^[A-Za-z0-9_-]{8,64}$",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "engine"
+        ],
+        "title": "NativeSessionReport",
+        "type": "object"
+      },
       "NextAction": {
         "properties": {
           "action": {
@@ -15625,6 +15677,72 @@
           }
         },
         "title": "QuotaReport",
+        "type": "object"
+      },
+      "QuotaResume": {
+        "description": "The native session the previous attempt's quota pause left, offered once to\nthe next claim (quota resume spec 3.3). `node` is the agent that held it.",
+        "properties": {
+          "engine": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Engine",
+            "type": "string"
+          },
+          "from_attempt": {
+            "title": "From Attempt",
+            "type": "integer"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "session_id": {
+            "pattern": "^[A-Za-z0-9_-]{8,64}$",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "engine",
+          "node",
+          "from_attempt"
+        ],
+        "title": "QuotaResume",
+        "type": "object"
+      },
+      "QuotaResumeTaken": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "outcome": {
+            "enum": [
+              "resumed",
+              "fallback"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "attempt",
+          "outcome"
+        ],
+        "title": "QuotaResumeTaken",
         "type": "object"
       },
       "QuotaStatus": {
@@ -32783,6 +32901,68 @@
           }
         ],
         "summary": "Report Progress",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/quota-resume": {
+      "post": {
+        "description": "Record what the channel did with the offered session (`resumed`, or a fresh\n`fallback` with the reason). `first` is true once per offered session: send the\none operator message only then.",
+        "operationId": "take_quota_resume_api_tasks__task_id__quota_resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuotaResumeTaken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Take Quota Resume Api Tasks  Task Id  Quota Resume Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Take Quota Resume",
         "tags": [
           "tasks"
         ]

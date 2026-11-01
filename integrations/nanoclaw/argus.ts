@@ -106,6 +106,14 @@ import {
   writeLocalHarnessFile,
 } from "./argus-local-harness.js";
 import {
+  claudeSessionReadable,
+  decideQuotaResume,
+  type FallbackReason,
+  observeClaudeSession,
+  type QuotaResumeOffer,
+  RESUME_ENGINE,
+} from "./argus-quota-resume.js";
+import {
   nanoclawPreflightRunner,
   nanoclawStartupReady,
   PREFLIGHT_TOTAL_MS,
@@ -409,6 +417,17 @@ export interface ArgusConfig {
   /** The newest Claude API error the group's sessions recorded since a time (failure cause). */
   lastApiError?: (sinceMs: number) => Promise<ApiErrorFact | null>;
   /**
+   * The engine's own sessions on this host (quota resume spec 3.2): `observe` the one
+   * session id written since a time, `readable` tells whether a recorded one still
+   * exists, and `resume` starts the attempt's thread from it. Absent `resume`: every
+   * offered session falls back to a fresh one.
+   */
+  nativeSessions?: {
+    observe(sinceMs: number): Promise<string | null>;
+    readable(sessionId: string): Promise<boolean>;
+    resume?(sessionId: string, thread: string): Promise<boolean>;
+  };
+  /**
    * One session per attempt: close the session of `thread` (null: the top-level session
    * of the old shared wiring) so NanoClaw never resolves it again, then stop its
    * container. Rejects when the container could not be stopped. Absent only in test
@@ -473,6 +492,8 @@ export interface ArgusTask {
   model_policy_revision?: string | null;
   /** Steers the previous attempt was sent but never acknowledged (task steering spec 3.3). */
   steer_unknown?: number;
+  /** The previous attempt's quota-paused native session, offered once (quota resume spec 3.3). */
+  quota_resume?: QuotaResumeOffer | null;
   /** Effective executor chain for this task's difficulty (settings 3.7). Empty: harness does the work. */
   difficulty_executors?: string[] | null;
 }
@@ -661,6 +682,18 @@ export function parseFramedSteer(text: string): { message: string } {
   const parsed = JSON.parse(new TextDecoder().decode(bytes.slice(0, n))) as { message?: unknown };
   if (typeof parsed.message !== "string") throw new Error("steer frame has no message");
   return { message: parsed.message };
+}
+
+/** The one operator message that resumes a quota-paused session (quota resume spec 3.5). */
+export function renderQuotaResume(task: { id: string; attempt: number }): string {
+  return renderSteer({
+    actor: "argus:quota-resume",
+    task_id: task.id,
+    attempt: task.attempt,
+    message:
+      "Your previous account hit a usage limit and the account was switched. " +
+      "Continue from where you stopped.",
+  });
 }
 
 /** Extract and parse a length-framed untrusted payload (for tests and strict consumers). */
@@ -1783,6 +1816,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   const steerAcks = new Set<string>();
   let loop: Promise<void> | null = null;
   let agentRole: "orchestrator" | "worker" = cfg.role ?? "worker";
+  let agentId: string | null = null;
   let chat: ReturnType<typeof createChatLoop> | null = null;
   let orchestratorEngineReady = false;
   let orchestratorLeasing: Promise<void> | null = null;
@@ -1832,6 +1866,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     const role = data.agent?.role;
     if (role === "orchestrator" || role === "worker") agentRole = role;
     else if (cfg.role) agentRole = cfg.role;
+    agentId = typeof data.agent?.id === "string" ? data.agent.id : null;
     log.info("Argus channel registered", { agentId: data.agent?.id, role: agentRole });
     return data.heartbeat_interval_s ?? 30;
   }
@@ -2489,9 +2524,17 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         log.warn("Could not report the account's authentication rejection", { err });
       }
     }
+    const pausedProvider = account?.provider;
+    /** The paused attempt's Claude session, for a quota pause only (quota resume spec 3.2). */
+    const nativeSession = async (): Promise<{ session_id: string; engine: string } | undefined> => {
+      if (pausedProvider !== RESUME_ENGINE || !cfg.nativeSessions) return undefined;
+      const id = await cfg.nativeSessions.observe(claimedAt).catch(() => null);
+      return id ? { session_id: id, engine: pausedProvider } : undefined;
+    };
     if (f.kind === "exhausted" && cfg.accounts && account) {
       const exhausted = account;
       account = null;
+      const native_session = await nativeSession();
       const { data } = await client.call("POST", `/accounts/${exhausted.id}/exhausted`, {
         until: f.until,
         reason: f.reason,
@@ -2503,6 +2546,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         runtime_providers: runtimeProviders("engine"),
         task_id: task.id,
         attempt: task.attempt,
+        native_session,
       });
       log.warn("Argus account exhausted", { account: exhausted.name, until: f.until });
       const nextInfo = data.next_account_id
@@ -2573,6 +2617,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           attempt: task.attempt,
           error: await failError(f.reason),
           reason: nextInfo ? "provider_failure" : "quota",
+          native_session,
         });
       }
       finishTask();
@@ -2582,6 +2627,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       attempt: task.attempt,
       error: await failError(f.reason),
       reason: "provider_failure",
+      // Argus keeps it only when it recognises the notice as a quota (spec 3.2).
+      native_session: await nativeSession(),
     });
     // Argus may have recognised a quota notice itself and moved this worker to
     // another account (account selection 3.6): drop the stale one; the next lease
@@ -2945,6 +2992,45 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
+  /**
+   * The offered quota-paused session (quota resume spec 3.3-3.5): resume it when the
+   * decision allows, say so to Argus, and return the one operator message to send with
+   * the task, only the first time Argus is told. null: a fresh session, as before.
+   */
+  async function quotaResumeNote(task: ArgusTask): Promise<string | null> {
+    const offer = task.quota_resume;
+    if (!offer) return null;
+    const sessions = cfg.nativeSessions;
+    const resume = sessions?.resume?.bind(sessions);
+    const readable = sessions
+      ? await sessions.readable(offer.session_id).catch(() => false)
+      : false;
+    let decision = decideQuotaResume(offer, {
+      node: agentId,
+      engine: account?.provider ?? null,
+      canResume: resume !== undefined,
+      readable,
+    });
+    if (decision.action === "resume" && resume) {
+      const started = await resume(offer.session_id, attemptThread(task)).catch(() => false);
+      if (!started) decision = { action: "fallback", reason: "resume_failed" };
+    }
+    const resumed = decision.action === "resume";
+    const reason: FallbackReason | undefined =
+      decision.action === "fallback" ? decision.reason : undefined;
+    try {
+      const { data } = await client.call("POST", `/tasks/${task.id}/quota-resume`, {
+        attempt: task.attempt,
+        outcome: resumed ? "resumed" : "fallback",
+        reason,
+      });
+      return resumed && data?.first === true ? renderQuotaResume(task) : null;
+    } catch (err) {
+      log.warn("Could not record the quota resume decision", { task: task.id, err });
+      return null;
+    }
+  }
+
   async function runTask(task: ArgusTask): Promise<void> {
     current = Object.freeze({
       id: task.id,
@@ -3070,7 +3156,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         });
       currentText = renderCurrent();
       sessionCarriesTask = true;
-      await injectTask(task.id, task.attempt, currentText);
+      const resumeNote = await quotaResumeNote(task);
+      await injectTask(
+        task.id,
+        task.attempt,
+        resumeNote ? `${resumeNote}\n\n${currentText}` : currentText,
+      );
       void verifyRuntimeUsed(task);
       await finished;
     } catch (err) {
@@ -4728,9 +4819,19 @@ export function fromEnv(): ChannelAdapter | null {
       runtime?.sessionEvidence && runtime.sessions ? sessionLogTail(runtime) : undefined,
     lastApiError: async (sinceMs) => {
       const group = await argusGroup();
-      if (!group) return null;
-      const projects = path.resolve("data", "v2-sessions", group.id, ".claude-shared", "projects");
-      return lastClaudeApiError(projects, sinceMs);
+      return group ? lastClaudeApiError(claudeProjectsDir(group.id), sinceMs) : null;
+    },
+    // Observation only: nothing here can start a NanoClaw session from a native id yet
+    // (quota resume spec 4), so every offered session falls back to a fresh one.
+    nativeSessions: {
+      observe: async (sinceMs) => {
+        const group = await argusGroup();
+        return group ? observeClaudeSession(claudeProjectsDir(group.id), sinceMs) : null;
+      },
+      readable: async (sessionId) => {
+        const group = await argusGroup();
+        return group ? claudeSessionReadable(claudeProjectsDir(group.id), sessionId) : false;
+      },
     },
     selectModels: modelsFromEnv(),
     delegateLogFile: async () => {
@@ -4745,5 +4846,8 @@ export function fromEnv(): ChannelAdapter | null {
         : undefined,
   });
 }
+
+const claudeProjectsDir = (groupId: string): string =>
+  path.resolve("data", "v2-sessions", groupId, ".claude-shared", "projects");
 
 registerChannelAdapter(CHANNEL_TYPE, { factory: fromEnv, defaults: ARGUS_DEFAULTS });

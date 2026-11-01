@@ -21,7 +21,7 @@ from pydantic import (
     model_validator,
 )
 
-from argus_core.accounts import ENGINE_PROVIDERS, AccountLease
+from argus_core.accounts import ENGINE_PROVIDERS, AccountLease, NativeSessionReport
 from argus_core.continuation import ChecklistReport, EffectiveContinuation
 from argus_core.difficulty import Difficulty, DifficultySource
 from argus_core.knowledge import KnowledgeRef
@@ -548,6 +548,14 @@ class Task(BaseModel):
         return self.difficulty.value  # type: ignore[return-value]
 
 
+class QuotaResume(NativeSessionReport):
+    """The native session the previous attempt's quota pause left, offered once to
+    the next claim (quota resume spec 3.3). `node` is the agent that held it."""
+
+    node: str
+    from_attempt: int
+
+
 class ClaimedTask(Task):
     """A claimed task plus knowledge worth reading first: pinned pages, then the
     best matches for the task in its project (references only)."""
@@ -567,6 +575,9 @@ class ClaimedTask(Task):
     # Steers the previous attempt was sent but never confirmed (task steering spec
     # 3.3): they may or may not have been applied. A count only, never the text.
     steer_unknown: int = 0
+    # The previous attempt's quota-paused native session, not yet taken (quota
+    # resume spec 3.3). The channel resumes it or reports why it did not.
+    quota_resume: QuotaResume | None = None
     # Effective difficulty → executor chain for this task's level (task difficulty /
     # settings 3.7). Empty list: no delegated executor; the harness does the work.
     difficulty_executors: list[str] | None = None

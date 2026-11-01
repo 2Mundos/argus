@@ -307,7 +307,7 @@ All are global only, admin-written, and follow the [settings](settings.spec.md) 
 - **Native resume validity.** Whether a NanoClaw/Claude/Codex session survives a
   credential swap is the open question of the
   [quota resume research](../research/2026-10-29.quota-resume.research.md); 3.4
-  falls back to seeding either way.
+  falls back to seeding either way. See [quota resume](quota-resume.spec.md).
 - **Mid-turn messages.** Whether a message sent during a turn should be injected
   into it (like a steer) instead of queuing behind it.
 - **Token streaming.** Would need a streaming path through `deliver()`.

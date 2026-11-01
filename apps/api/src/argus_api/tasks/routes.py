@@ -2,6 +2,7 @@ import asyncio
 from datetime import timedelta
 from typing import Annotated, Any, Literal
 
+from argus_core.accounts import NativeSessionReport
 from argus_core.auth import Scope
 from argus_core.continuation import (
     ContinuationUpdate,
@@ -60,12 +61,14 @@ from argus_api.tasks import (
     delivery,
     log,
     prerequisites,
+    quota_resume,
     resumability,
     service,
     steers,
     views,
 )
 from argus_api.tasks.prerequisites import PrerequisitesView
+from argus_api.tasks.quota_resume import QuotaResumeTaken
 from argus_api.tasks.views import TaskPage
 
 
@@ -129,6 +132,8 @@ class FailRequest(BaseModel):
     `account_unavailable` is a lease or apply error: admission, like `quota`, so it
     spends no attempt. The
     difficulty raisers are `context_overflow` and `verification_failed`."""
+    native_session: NativeSessionReport | None = None
+    """The engine session to offer the next claim; read only for a quota pause."""
     oom_kill: bool = False
     """The channel's evidence that the `session_lost` session was OOM-killed:
     Docker's `OOMKilled` with exit 137 on the container it saw (failure classes
@@ -298,6 +303,7 @@ async def claim_task(
                         conn, task.id, task.attempt
                     )
                     unknown = await steers.previous_unknown(conn, task.id, task.attempt)
+                    resume = await quota_resume.offered(conn, task.id, task.attempt)
                 if engine_lease is not None:
                     engine_lease = await with_local_context(request, engine_lease)
                 return ClaimedTask(
@@ -308,6 +314,7 @@ async def claim_task(
                     model_policy_revision=revision,
                     model_switch=switch,
                     steer_unknown=unknown,
+                    quota_resume=resume,
                     difficulty_executors=difficulty_executors,
                 )
             remaining = deadline - loop.time()
@@ -538,7 +545,20 @@ async def fail_task(
             secrets,
             timedelta(minutes=settings.account_cooldown_minutes),
             oom_kill=body.oom_kill,
+            native_session=body.native_session,
         )
+
+
+@router.post("/{task_id}/quota-resume")
+async def take_quota_resume(
+    task_id: str, body: QuotaResumeTaken, db: DbDep, agent_id: AgentDep
+) -> dict[str, bool]:
+    """Record what the channel did with the offered session (`resumed`, or a fresh
+    `fallback` with the reason). `first` is true once per offered session: send the
+    one operator message only then."""
+    async with db.write() as tx:
+        first = await quota_resume.take(tx, agent_id, task_id, body)
+    return {"first": first}
 
 
 @router.post("/{task_id}/block")
