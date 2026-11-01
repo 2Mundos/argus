@@ -2,6 +2,7 @@ import { type FormEvent, useState } from "react";
 import { ActionButton, useAction } from "../ActionButton";
 import { api, call, newestTasks, type TaskKind, type TaskState, type TaskSummary } from "../api";
 import { DateChip } from "../DateChip";
+import { DELIVERABLES, type Deliverable } from "../deliverables";
 import { reportPage, useLiveData } from "../live";
 import { TaskSignal } from "../milestones";
 import { PageHeader } from "../PageHeader";
@@ -235,7 +236,8 @@ function NewTask({ onClose }: { onClose: () => void }) {
     title: "",
     spec: "",
     kind: "generic",
-    project: "global",
+    project: "",
+    deliverable: "response" as Deliverable,
     priority: 0,
     capabilities: "",
     accountProviders: "",
@@ -251,6 +253,9 @@ function NewTask({ onClose }: { onClose: () => void }) {
   const action = useAction();
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
+  // `global` scopes knowledge and settings only; a task needs a real project.
+  const taskProjects = (projects ?? []).filter((p) => p.slug !== "global");
+  const project = form.project || taskProjects[0]?.slug || "";
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -272,7 +277,8 @@ function NewTask({ onClose }: { onClose: () => void }) {
               title: form.title,
               spec: form.spec,
               kind: form.kind,
-              project: form.project,
+              project,
+              deliverable: form.deliverable,
               priority: form.priority,
               requires_approval: form.requires_approval,
               review: form.review,
@@ -316,10 +322,23 @@ function NewTask({ onClose }: { onClose: () => void }) {
           </label>
           <label>
             Project
-            <select value={form.project} onChange={(e) => set("project", e.target.value)}>
-              {(projects ?? []).map((p) => (
+            <select value={project} onChange={(e) => set("project", e.target.value)} required>
+              {taskProjects.map((p) => (
                 <option key={p.slug} value={p.slug}>
                   {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Deliverable
+            <select
+              value={form.deliverable}
+              onChange={(e) => set("deliverable", e.target.value as Deliverable)}
+            >
+              {DELIVERABLES.map((d) => (
+                <option key={d.value} value={d.value}>
+                  {d.label}
                 </option>
               ))}
             </select>

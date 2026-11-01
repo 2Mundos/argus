@@ -114,7 +114,7 @@ def agent(client: TestClient, role: str) -> dict[str, str]:
 def test_scope_table(client: TestClient) -> None:
     worker, orch = agent(client, "worker"), agent(client, "orchestrator")
     task_id = client.post(
-        "/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN
+        "/api/tasks", json={"project": "demo", "title": "t"}, headers=ADMIN
     ).json()["id"]
     worker_id = client.get("/api/agents?state=active", headers=ADMIN).json()[-1]["id"]
 
@@ -135,11 +135,11 @@ def test_scope_table(client: TestClient) -> None:
 
     # Task management: orchestrator and admin, not workers.
     assert (
-        status("POST", "/api/tasks", worker, json={"project": "global", "title": "x"})
+        status("POST", "/api/tasks", worker, json={"project": "demo", "title": "x"})
         == 403
     )
     assert (
-        status("POST", "/api/tasks", orch, json={"project": "global", "title": "x"})
+        status("POST", "/api/tasks", orch, json={"project": "demo", "title": "x"})
         == 201
     )
     assert status("POST", f"/api/tasks/{task_id}/cancel", worker) == 403

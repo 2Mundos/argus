@@ -10,7 +10,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from argus_core.difficulty import Difficulty
-from argus_core.tasks import AccountRef, ExecutorModel, HarnessModel, TaskState
+from argus_core.tasks import (
+    AccountRef,
+    Deliverable,
+    ExecutorModel,
+    HarnessModel,
+    TaskState,
+)
 
 EDITABLE = (
     "title",
@@ -21,23 +27,27 @@ EDITABLE = (
     "knowledge",
     "depends_on",
     "difficulty",
+    "deliverable",
     "account_providers",
     "harness_model",
     "executor_model",
     "harness_account",
 )
-# `null` clears these to their empty value; title, priority and difficulty cannot be.
-CLEARABLE = frozenset(EDITABLE) - {"title", "priority", "difficulty"}
+# `null` clears these to their empty value; title, priority, difficulty and
+# deliverable cannot be.
+CLEARABLE = frozenset(EDITABLE) - {"title", "priority", "difficulty", "deliverable"}
 
 _ALL = frozenset(EDITABLE)
 _PRIORITY_ONLY = frozenset({"priority"})
+# A deliverable that proved unreachable can be lowered while the result is reviewed.
+_IN_REVIEW = frozenset({"priority", "deliverable"})
 EDITABLE_BY_STATE: dict[TaskState, frozenset[str]] = {
     TaskState.AWAITING_APPROVAL: _ALL,
     TaskState.PENDING: _ALL,
     TaskState.READY: _ALL,
     TaskState.BLOCKED: _PRIORITY_ONLY,
     TaskState.CLAIMED: _PRIORITY_ONLY,
-    TaskState.IN_REVIEW: _PRIORITY_ONLY,
+    TaskState.IN_REVIEW: _IN_REVIEW,
     TaskState.SUCCEEDED: frozenset(),
     TaskState.FAILED: frozenset(),
     TaskState.CANCELLED: frozenset(),
@@ -69,6 +79,7 @@ class TaskChanges(BaseModel):
     knowledge: list[str] | None = None
     depends_on: list[str] | None = None
     difficulty: Difficulty | None = None
+    deliverable: Deliverable | None = None
     account_providers: list[str] | None = None
     harness_model: HarnessModel | None = None
     executor_model: ExecutorModel | None = None

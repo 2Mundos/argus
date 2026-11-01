@@ -539,7 +539,7 @@ async def test_all_unknown_samples_instances_applicability(
 async def test_claim_refused_disk_low_no_attempt(db: Database, tmp_path: Path) -> None:
     await insert_agent(db, A)
     async with db.write() as tx:
-        task = await tasks.create_task(tx, TaskCreate(project="global", title="t"), "t")
+        task = await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "t")
     g = guard_for(db, tmp_path, frees={"data": REFUSE - 1})
     await g.measure_once()
     with pytest.raises(ConflictError) as err:
@@ -556,7 +556,7 @@ async def test_concurrent_claims_under_low_disk(db: Database, tmp_path: Path) ->
     await insert_agent(db, A)
     await insert_agent(db, "disk-agent-b")
     async with db.write() as tx:
-        await tasks.create_task(tx, TaskCreate(project="global", title="t"), "t")
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "t")
     g = guard_for(db, tmp_path, frees={"data": REFUSE - 1})
     await g.measure_once()
 
@@ -619,7 +619,7 @@ def _worker(client: TestClient) -> dict[str, str]:
 
 
 def test_claim_http_returns_disk_low(client: TestClient) -> None:
-    client.post("/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN)
+    client.post("/api/tasks", json={"project": "demo", "title": "t"}, headers=ADMIN)
     worker = _worker(client)
     guard: DiskGuard = client.app.state.disk_guard
     guard._machine.refused = True
@@ -792,7 +792,7 @@ async def _warn_event_rows(db: Database) -> list:
 
 def test_mcp_claim_task_surfaces_disk_low_via_http(client: TestClient) -> None:
     """MCP claim_task POSTs /tasks/claim; refusal is the same typed error."""
-    client.post("/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN)
+    client.post("/api/tasks", json={"project": "demo", "title": "t"}, headers=ADMIN)
     worker = _worker(client)
     guard: DiskGuard = client.app.state.disk_guard
     guard._machine.refused = True
@@ -812,7 +812,7 @@ async def test_accounts_claim_uses_shared_guard(db: Database, tmp_path: Path) ->
 
     await insert_agent(db, A)
     async with db.write() as tx:
-        await tasks.create_task(tx, TaskCreate(project="global", title="t"), "t")
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "t")
     g = guard_for(db, tmp_path, frees={"data": REFUSE - 1})
     await g.measure_once()
     with pytest.raises(ConflictError) as err:

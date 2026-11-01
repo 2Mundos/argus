@@ -250,9 +250,7 @@ async def test_scale_down_drains_idle_and_spares_busy(
     agent_a = await register_from(db, target, a.provider_ref)
     agent_b = await register_from(db, target, b.provider_ref)
     async with db.write() as tx:  # agent_b is busy
-        await tasks.create_task(
-            tx, TaskCreate(project="global", title="t"), "admin:test"
-        )
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "admin:test")
         task = await tasks.claim(tx, agent_b, [])
     assert task is not None
     await scale(db, 1)

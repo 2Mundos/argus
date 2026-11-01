@@ -50,7 +50,7 @@ async def add_account(db: Database, store, name: str, provider: str, priority: i
 async def make_task(db: Database, **kw) -> str:
     async with db.write() as tx:
         task = await tasks.create_task(
-            tx, TaskCreate(project="global", title="pinned", **kw), "admin:test"
+            tx, TaskCreate(project="demo", title="pinned", **kw), "admin:test"
         )
     return task.id
 
@@ -71,9 +71,9 @@ def test_pins_are_validated() -> None:
         {"harness_model": OPUS, "account_providers": ["openai"]},
     ):
         with pytest.raises(ValueError):
-            TaskCreate(project="global", title="x", **bad)
+            TaskCreate(project="demo", title="x", **bad)
     ok = TaskCreate(
-        project="global", title="x", harness_model=OPUS, account_providers=["anthropic"]
+        project="demo", title="x", harness_model=OPUS, account_providers=["anthropic"]
     )
     assert ok.harness_model == OPUS
 

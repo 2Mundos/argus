@@ -35,7 +35,7 @@ async def claim(db: Database, agent: str = A):
 async def create(db: Database, **kw):
     async with db.write() as tx:
         return await tasks.create_task(
-            tx, TaskCreate(project="global", title="t", **kw), "admin:test"
+            tx, TaskCreate(project="demo", title="t", **kw), "admin:test"
         )
 
 
@@ -382,8 +382,8 @@ async def test_task_log_is_live_only_and_not_persisted(db: Database, claimed) ->
 async def test_stream_delivers_task_log_only_to_the_lessee(
     db: Database, claimed
 ) -> None:
-    other = event_stream(db, after=None, keepalive=0.2, projects={"global"}, agent_id=B)
-    owner = event_stream(db, after=None, keepalive=5, projects={"global"}, agent_id=A)
+    other = event_stream(db, after=None, keepalive=0.2, projects={"demo"}, agent_id=B)
+    owner = event_stream(db, after=None, keepalive=5, projects={"demo"}, agent_id=A)
     t_other, t_owner = (asyncio.ensure_future(anext(s)) for s in (other, owner))
     await asyncio.sleep(0.05)
     await post(db, claimed, ["private"])
@@ -408,7 +408,7 @@ async def test_stream_checks_the_lease_once_per_task(
         return await real(conn, agent_id, task_id)
 
     monkeypatch.setattr(routes, "has_leased_task", counting)
-    owner = event_stream(db, after=None, keepalive=5, projects={"global"}, agent_id=A)
+    owner = event_stream(db, after=None, keepalive=5, projects={"demo"}, agent_id=A)
     pending = asyncio.ensure_future(anext(owner))
     await asyncio.sleep(0.05)
     for source in ("worker", "delegate"):  # one batch per source per interval
@@ -464,7 +464,7 @@ def register(client: TestClient, role: str = "worker") -> tuple[dict[str, str], 
 
 def start(client: TestClient):
     (worker, token), (other, _) = register(client), register(client)
-    task = client.post("/api/tasks", json={"title": "t", "project": "global"}).json()
+    task = client.post("/api/tasks", json={"title": "t", "project": "demo"}).json()
     claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
     assert claimed["id"] == task["id"]
     return claimed, worker, other, token

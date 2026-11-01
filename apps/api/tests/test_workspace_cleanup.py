@@ -507,9 +507,7 @@ async def test_claimed_task_and_active_agent_block(env: Env) -> None:
     assert (await env.entry(A))["reason"] == "agent_active"
 
     async with env.db.write() as tx:
-        await tasks.create_task(
-            tx, TaskCreate(project="global", title="t"), "admin:test"
-        )
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "admin:test")
         claimed = await tasks.claim(tx, "ag-1", [])
         assert claimed is not None
         await tx.conn.execute(

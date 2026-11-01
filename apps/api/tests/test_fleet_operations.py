@@ -125,9 +125,7 @@ async def test_recycle_waits_for_claimed_work_then_replaces(
 ) -> None:
     inst, agent_id = await running_instance_with_agent(db, registry, target)
     async with db.write() as tx:
-        await tasks.create_task(
-            tx, TaskCreate(project="global", title="t"), "admin:test"
-        )
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "admin:test")
         task = await tasks.claim(tx, agent_id, [])
     assert task is not None
     async with db.write() as tx:

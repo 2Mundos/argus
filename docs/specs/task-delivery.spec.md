@@ -19,7 +19,10 @@ evidence call an orchestrator uses when working an inbox `review` row
 
 - No auto-close, no attempt spent, no state change: **merged is not accepted**
   ([task continuation](task-continuation.spec.md) 3.1, 3.5). Delivery and CI stay the
-  NanoClaw worker's job; Argus observes.
+  NanoClaw worker's job; Argus observes. The one place the projection gates
+  anything is accepting a task whose [deliverable](task-deliverable.spec.md) is
+  `pr_green` or `pr_merged`: the accept reads it first and is refused short of
+  that level. The projection itself still decides nothing.
 - No implication that green checks authorize merge, or that merge authorizes accept.
   Authorization (task/policy `allow_merge`, accept offer) is a separate projection
   from forge CI and from checklist evidence.

@@ -60,9 +60,7 @@ async def custom(db, store, name, engine, executor, **kw) -> str:
 
 async def claim(db: Database, agent: str = A) -> tuple[str, int]:
     async with db.write() as tx:
-        await tasks.create_task(
-            tx, TaskCreate(project="global", title="t"), "admin:test"
-        )
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "admin:test")
         task = await tasks.claim(tx, agent, [])
     assert task is not None
     return task.id, task.attempt

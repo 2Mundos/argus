@@ -46,7 +46,7 @@ def setup_repository(client: TestClient) -> None:
                 "install_dir": "/opt/nanoclaw",
                 "instances_root": "/srv/i",
                 "agent_image": "a:1",
-                "repositories": {"global": f"https://{HOST}/{OWNER}/{REPO}"},
+                "repositories": {"demo": f"https://{HOST}/{OWNER}/{REPO}"},
             },
         },
     )
@@ -78,7 +78,7 @@ def succeed(
     summary: str = "done",
     artifacts: list[str] | None = None,
 ) -> dict:
-    tid = client.post("/api/tasks", json={"project": "global", "title": title}).json()[
+    tid = client.post("/api/tasks", json={"project": "demo", "title": title}).json()[
         "id"
     ]
     claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
@@ -95,7 +95,7 @@ def succeed(
 def dependent(client: TestClient, dep_ids: list[str]) -> dict:
     res = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "child", "depends_on": dep_ids},
+        json={"project": "demo", "title": "child", "depends_on": dep_ids},
     )
     assert res.status_code == 201, res.text
     return res.json()
@@ -223,7 +223,7 @@ def test_artifact_verified_and_missing_corrupt(client: TestClient) -> None:
     from argus_api.artifacts.service import key as artifact_key
 
     worker = worker_headers(client)
-    tid = client.post("/api/tasks", json={"project": "global", "title": "art"}).json()[
+    tid = client.post("/api/tasks", json={"project": "demo", "title": "art"}).json()[
         "id"
     ]
     claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
@@ -276,7 +276,7 @@ def test_artifact_over_byte_cap_is_unknown(
 
     monkeypatch.setattr(prereq, "ARTIFACT_BYTE_CAP", 4)
     worker = worker_headers(client)
-    tid = client.post("/api/tasks", json={"project": "global", "title": "cap"}).json()[
+    tid = client.post("/api/tasks", json={"project": "demo", "title": "cap"}).json()[
         "id"
     ]
     claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()

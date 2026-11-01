@@ -36,7 +36,7 @@ async def claim_task(db: Database, agent: str = A) -> tuple[str, int]:
     async with db.write() as tx:
         await tasks.create_task(
             tx,
-            TaskCreate(project="global", title="local harness routing"),
+            TaskCreate(project="demo", title="local harness routing"),
             "admin:test",
         )
         task = await tasks.claim(tx, agent, [])
@@ -156,7 +156,7 @@ async def make_task(
     async with db.write() as tx:
         task = await tasks.create_task(
             tx,
-            TaskCreate(project="global", title=title, account_providers=providers),
+            TaskCreate(project="demo", title=title, account_providers=providers),
             "admin:test",
         )
     return task.id
@@ -310,8 +310,8 @@ async def test_restricted_lease_still_requires_the_live_claim(
 def test_account_providers_are_validated() -> None:
     for bad in (["gitea"], ["cursor"], ["bogus"], []):
         with pytest.raises(ValueError):
-            TaskCreate(project="global", title="x", account_providers=bad)
-    ok = TaskCreate(project="global", title="x", account_providers=["local", "local"])
+            TaskCreate(project="demo", title="x", account_providers=bad)
+    ok = TaskCreate(project="demo", title="x", account_providers=["local", "local"])
     assert ok.account_providers == ["local"]
 
 

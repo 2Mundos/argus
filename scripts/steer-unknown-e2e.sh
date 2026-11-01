@@ -59,7 +59,8 @@ field() { python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])
 bootstrap() { call POST /agents/bootstrap-tokens "$admin" "{\"role\":\"$1\"}" | field token; }
 
 orch="$(call POST /agents/register "" "{\"bootstrap_token\":\"$(bootstrap orchestrator)\",\"name\":\"e2e-orchestrator\"}" | field token)"
-task="$(call POST /tasks "$orch" '{"project":"global","title":"steer-unknown e2e","required_capabilities":["steer-e2e"]}' | field id)"
+call PUT /projects/e2e "$admin" '{"name":"E2E"}' >/dev/null  # tasks cannot live in `global`
+task="$(call POST /tasks "$orch" '{"project":"e2e","title":"steer-unknown e2e","required_capabilities":["steer-e2e"]}' | field id)"
 echo "API: $url, task $task"
 
 # -- The channel in a disposable NanoClaw checkout --------------------------------

@@ -40,7 +40,7 @@ async def agents(db: Database) -> None:
 async def create(db: Database, actor: str = "admin:test", limit=None, **kw):
     async with db.write() as tx:
         return await tasks.create_task(
-            tx, TaskCreate(project="global", title="t", **kw), actor, hourly_limit=limit
+            tx, TaskCreate(project="demo", title="t", **kw), actor, hourly_limit=limit
         )
 
 
@@ -453,7 +453,7 @@ def test_inbox_over_http(client: TestClient) -> None:
     reg = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
     worker = {"Authorization": f"Bearer {reg.json()['token']}"}
     task = client.post(
-        "/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN_H
+        "/api/tasks", json={"project": "demo", "title": "t"}, headers=ADMIN_H
     ).json()
     claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
 
@@ -494,7 +494,7 @@ def test_answer_many_applies_each_item_on_its_own(client: TestClient) -> None:
     def approval() -> str:
         task = client.post(
             "/api/tasks",
-            json={"project": "global", "title": "t", "requires_approval": True},
+            json={"project": "demo", "title": "t", "requires_approval": True},
             headers=ADMIN_H,
         ).json()
         res = client.get(
@@ -541,7 +541,7 @@ def test_inbox_hides_what_the_caller_may_not_see(client: TestClient) -> None:
     worker = {"Authorization": f"Bearer {reg.json()['token']}"}
     client.post(
         "/api/tasks",
-        json={"project": "global", "title": "t", "requires_approval": True},
+        json={"project": "demo", "title": "t", "requires_approval": True},
         headers=ADMIN_H,
     )
     assert client.get("/api/inbox", headers=worker).status_code == 403
@@ -557,7 +557,7 @@ def test_batch_partial_failure_retries_with_the_original_request_ids(
     def approval() -> str:
         task = client.post(
             "/api/tasks",
-            json={"project": "global", "title": "t", "requires_approval": True},
+            json={"project": "demo", "title": "t", "requires_approval": True},
             headers=ADMIN_H,
         ).json()
         res = client.get(

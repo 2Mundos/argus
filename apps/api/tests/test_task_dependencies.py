@@ -26,7 +26,7 @@ async def create(db: Database, deps: list[str] | None = None, **kw):
     async with db.write() as tx:
         return await tasks.create_task(
             tx,
-            TaskCreate(project="global", title="t", depends_on=deps or [], **kw),
+            TaskCreate(project="demo", title="t", depends_on=deps or [], **kw),
             "admin:test",
         )
 
@@ -145,7 +145,7 @@ def test_stuck_dependents_show_in_the_inbox_and_are_released_over_mcp(
 ) -> None:
     def new(**kw) -> dict:
         res = client.post(
-            "/api/tasks", json={"project": "global", "title": "t", **kw}, headers=ADMIN
+            "/api/tasks", json={"project": "demo", "title": "t", **kw}, headers=ADMIN
         )
         assert res.status_code == 201, res.text
         return res.json()

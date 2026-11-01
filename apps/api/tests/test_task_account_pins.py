@@ -69,7 +69,7 @@ async def fleet(db: Database, store) -> None:
 async def make_task(db: Database, **kw) -> str:
     async with db.write() as tx:
         task = await tasks.create_task(
-            tx, TaskCreate(project="global", title="pinned", **kw), "admin:test"
+            tx, TaskCreate(project="demo", title="pinned", **kw), "admin:test"
         )
     return task.id
 

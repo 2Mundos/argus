@@ -87,7 +87,7 @@ from argus_api.modeltrace import service as modeltrace
 from argus_api.routines import failures as routine_failures
 from argus_api.runtime.gate import claim_gate
 from argus_api.tasks import continuation as cont
-from argus_api.tasks import finalization, steers
+from argus_api.tasks import deliverable, finalization, steers
 
 log = logging.getLogger(__name__)
 S = TaskState
@@ -165,11 +165,10 @@ async def create_task(
     body = _apply_kind_defaults(body, await kinds.get_kind(tx.conn, body.kind))
     if body.project is None:
         if body.parent_id is None:
-            raise ValidationFailedError(
-                "project is required (use 'global' for fleet-wide work)",
-                code="project_required",
-            )
+            raise ValidationFailedError("project is required", code="project_required")
         body = body.model_copy(update={"project": parent["project"]})
+    else:  # only an explicit name is refused: legacy `global` parents still inherit
+        _refuse_global(body.project)
     # Worker-authored child tasks: immutable worker trust; always await approval so
     # injected prompts cannot silently become ready work for another agent.
     if as_worker is not None:
@@ -219,9 +218,10 @@ async def create_task(
         " required_capabilities, priority, state, requires_approval, review,"
         " prompt_trust, lease_ttl_s, max_attempts, project, timeout_s, created_by,"
         " created_at, updated_at, difficulty, difficulty_source, account_providers,"
-        " harness_model, executor_model, harness_account, origin_conversation_id)"
+        " harness_model, executor_model, harness_account, origin_conversation_id,"
+        " deliverable)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-        " ?, ?, ?, ?)",
+        " ?, ?, ?, ?, ?)",
         (
             task_id,
             body.parent_id,
@@ -250,6 +250,7 @@ async def create_task(
             _pin_json(body.executor_model),
             harness_account,
             origin_conversation_id,
+            body.deliverable,
         ),
     )
     await tx.conn.executemany(
@@ -1031,6 +1032,11 @@ async def complete(
     await _oom_outcome(tx, agent_id, oom_kill=False)
     await _check_artifacts(tx.conn, task_id, result.artifacts)
     have = cont.load(row)
+    # The deliverable's evidence comes first: the worker still holds its claim and can
+    # fix the gap in this attempt (task deliverable spec 3.4).
+    awaits_forge = await deliverable.check_complete(
+        tx.conn, row, agent_id, result, have
+    )
     held = merge_acceptance(have.checklist, json.loads(row["acceptance"]))
     # A report naming an item this task does not hold came from another task's work
     # (a late reply after a switch); fail closed instead of recording it as evidence.
@@ -1106,9 +1112,14 @@ async def complete(
         Action.COMPLETE,
         actor,
         set_={"result": result.model_dump_json(exclude_none=True)},
-        data={"acceptance_open": open_items} if open_items else None,
+        data=(
+            ({"acceptance_open": open_items} if open_items else {})
+            | ({"deliverable_pending": row["deliverable"]} if awaits_forge else {})
+        )
+        or None,
+        # Open criteria, or a PR that must still turn green or merge, need a decision.
         review=Review.ORCHESTRATOR
-        if open_items and Review(row["review"]) is Review.NONE
+        if (open_items or awaits_forge) and Review(row["review"]) is Review.NONE
         else None,
     )
     return await get_task(tx.conn, task_id)
@@ -1751,6 +1762,13 @@ async def edit_task(
             f"invalid values: harness_model: {why}",
             details=[f"harness_model: {why}"],
         )
+    if changed.keys() & {"deliverable", "required_capabilities"}:
+        await deliverable.check_creatable(
+            tx.conn,
+            row["project"],
+            new.get("required_capabilities", current.required_capabilities),
+            new.get("deliverable", current.deliverable),
+        )
     if changed.keys() & set(_ACCOUNT_PIN_RULES):
         await _resolve_harness_account(
             tx.conn,
@@ -1990,6 +2008,7 @@ def _diff(field: str, old: Any, new: Any) -> dict[str, Any]:
         "title",
         "priority",
         "difficulty",
+        "deliverable",
         "account_providers",
         "harness_account",
     ):
@@ -2074,6 +2093,7 @@ async def _snapshot_attempt(tx: Tx, task: Task, agent_id: str) -> None:
             "depends_on",
             "difficulty",
             "difficulty_source",
+            "deliverable",
             "harness_account",
         )
     }
@@ -2454,10 +2474,12 @@ async def review(
     *,
     accept: bool,
     notes: str = "",
+    forge: deliverable.ForgeRead | None = None,
 ) -> Task:
     row = await _row(tx.conn, task_id)
     check_reviewer(row, reviewer)
     if accept:
+        deliverable.check_accept(row, forge)
         await _apply(tx, row, Action.ACCEPT, actor, data={"notes": notes})
     else:
         # Rejection is not a failure: `failures` is untouched (3.2).
@@ -3405,7 +3427,17 @@ async def check_create(conn: aiosqlite.Connection, body: TaskCreate) -> None:
     the project and pinned pages. Routine templates are checked with it on save
     (routines spec 3.1)."""
     body = _apply_kind_defaults(body, await kinds.get_kind(conn, body.kind))
+    _refuse_global(body.project)
     await _check_project_and_pins(conn, body)
+
+
+def _refuse_global(project: str | None) -> None:
+    """`global` scopes knowledge and settings; a task needs a real project."""
+    if project == "global":
+        raise ValidationFailedError(
+            "tasks need a real project; 'global' holds only knowledge and settings",
+            code="project_required",
+        )
 
 
 async def _check_project_and_pins(conn: aiosqlite.Connection, body: TaskCreate) -> None:
@@ -3417,6 +3449,9 @@ async def _check_project_and_pins(conn: aiosqlite.Connection, body: TaskCreate) 
                 raise NotFoundError(
                     f"unknown project: {body.project}", code="unknown_project"
                 )
+    await deliverable.check_creatable(
+        conn, body.project, body.required_capabilities, body.deliverable
+    )
     if body.knowledge:
         await _check_pages_exist(conn, body.knowledge)
 

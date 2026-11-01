@@ -45,7 +45,7 @@ async def create(db: Database, **kw):
     async with db.write() as tx:
         return await tasks.create_task(
             tx,
-            TaskCreate(**({"project": "global", "title": "t"} | kw)),
+            TaskCreate(**({"project": "demo", "title": "t"} | kw)),
             "admin:test",
         )
 
@@ -140,7 +140,7 @@ def test_rest_and_mcp_create_and_edit(client: TestClient) -> None:
     auth = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
     res = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "t", "difficulty": "trivial"},
+        json={"project": "demo", "title": "t", "difficulty": "trivial"},
         headers=auth,
     )
     assert res.status_code == 201
@@ -148,7 +148,7 @@ def test_rest_and_mcp_create_and_edit(client: TestClient) -> None:
     assert res.json()["difficulty_source"] == "declared"
     bad = client.post(
         "/api/tasks",
-        json={"project": "global", "title": "t", "difficulty": "easy"},
+        json={"project": "demo", "title": "t", "difficulty": "easy"},
         headers=auth,
     )
     assert bad.status_code == 422
@@ -157,11 +157,11 @@ def test_rest_and_mcp_create_and_edit(client: TestClient) -> None:
         ADMIN_TOKEN,
         "create_task",
         title="t",
-        project="global",
+        project="demo",
         difficulty="trivial",
     )
     assert made["difficulty"] == "trivial"
-    plain = tool(client, ADMIN_TOKEN, "create_task", title="Add auth", project="global")
+    plain = tool(client, ADMIN_TOKEN, "create_task", title="Add auth", project="demo")
     assert (plain["difficulty"], plain["difficulty_source"]) == (
         "standard",
         "inferred",

@@ -45,7 +45,7 @@ def agent(client: TestClient) -> dict[str, str]:
 
 
 def claimed(client: TestClient, agent: dict[str, str], **kw) -> tuple[str, int]:
-    client.post("/api/tasks", json={"project": "global", "title": "t", **kw})
+    client.post("/api/tasks", json={"project": "demo", "title": "t", **kw})
     task = client.post("/api/tasks/claim", json={}, headers=agent).json()
     return task["id"], task["attempt"]
 
@@ -471,9 +471,7 @@ async def test_usage_correlation_is_unknown_until_reported(db: Database) -> None
     await insert_agent(db, "agent-a")
     acct = await add(db, store, "acct")
     async with db.write() as tx:
-        await tasks.create_task(
-            tx, TaskCreate(project="global", title="t"), "admin:test"
-        )
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "admin:test")
         task = await tasks.claim(tx, "agent-a", [])
         assert task is not None
         for key, run_key in (
@@ -520,9 +518,7 @@ async def test_quota_failover_records_account_switch(db: Database) -> None:
     async with db.write() as tx:
         from argus_api.accounts import service as accounts
 
-        await tasks.create_task(
-            tx, TaskCreate(project="global", title="t"), "admin:test"
-        )
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "admin:test")
         task = await tasks.claim(tx, "agent-a", [])
         assert task is not None
         # Leases are bound to a live claim since #46.

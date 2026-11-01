@@ -33,7 +33,7 @@ def worker(client: TestClient) -> dict[str, str]:
 
 @pytest.fixture
 def claimed(client: TestClient, worker: dict[str, str]) -> dict:
-    client.post("/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN)
+    client.post("/api/tasks", json={"project": "demo", "title": "t"}, headers=ADMIN)
     return client.post("/api/tasks/claim", json={}, headers=worker).json()
 
 
@@ -104,9 +104,7 @@ def test_agent_quota_refuses_over_cap(
                 ).json()["token"]
             )
         }
-        client.post(
-            "/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN
-        )
+        client.post("/api/tasks", json={"project": "demo", "title": "t"}, headers=ADMIN)
         claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
         first = upload(client, worker, claimed, name="a.md", body=b"1234567890")
         assert first.status_code == 201, first.text

@@ -171,7 +171,7 @@ async def make_world(
                 "UPDATE agents SET instance_id = ? WHERE id = ?", (inst.id, agent)
             )
             await tasks.create_task(
-                tx, TaskCreate(project="global", title=f"t{i}"), "admin:test"
+                tx, TaskCreate(project="demo", title=f"t{i}"), "admin:test"
             )
             claimed = await tasks.claim(tx, agent, [])
         assert claimed is not None

@@ -60,7 +60,7 @@ async def events(db: Database, kind: str) -> list[dict]:
 
 async def claim_and_lease(db: Database, store):
     async with db.write() as tx:
-        await tasks.create_task(tx, TaskCreate(project="global", title="t"), "u")
+        await tasks.create_task(tx, TaskCreate(project="demo", title="t"), "u")
     async with db.write() as tx:
         task = await tasks.claim(tx, A, [])
     assert task is not None
@@ -268,7 +268,7 @@ async def test_auth_health_is_per_account(
     await complete(db, third)  # no report: the attempt's placeholder
     async with db.write() as tx:
         await accounts.release(tx, A, "done", "engine")
-        await tasks.create_task(tx, TaskCreate(project="global", title="bare"), "u")
+        await tasks.create_task(tx, TaskCreate(project="demo", title="bare"), "u")
     clock.now += timedelta(seconds=1)
     async with db.write() as tx:
         bare = await tasks.claim(tx, A, [])

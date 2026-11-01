@@ -175,7 +175,7 @@ async def test_snapshot_reports_queue_age(
     db: Database, clock: FakeClock, tmp_path: Path
 ) -> None:
     async with db.write() as tx:
-        await tasks.create_task(tx, TaskCreate(project="global", title="old"), "t")
+        await tasks.create_task(tx, TaskCreate(project="demo", title="old"), "t")
     clock.advance(90)
     snap = await ops.snapshot(db, tmp_path / "argus.db", tmp_path, now=clock.now)
     assert snap.tasks["ready"] == 1
@@ -197,7 +197,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestCli
 
 
 def test_metrics_are_valid_prometheus_and_admin_only(client: TestClient) -> None:
-    client.post("/api/tasks", json={"project": "global", "title": "t"}, headers=ADMIN)
+    client.post("/api/tasks", json={"project": "demo", "title": "t"}, headers=ADMIN)
     client.put(
         "/api/pools/web",
         json={"image": "w:1", "max_replicas": 2, "desired_replicas": 0},

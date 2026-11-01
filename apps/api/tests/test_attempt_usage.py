@@ -55,7 +55,7 @@ async def claim_with_lease(
 ):
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="global", title="attempt usage"), "admin:test"
+            tx, TaskCreate(project="demo", title="attempt usage"), "admin:test"
         )
         task = await tasks.claim(tx, A, [])
     assert task is not None
@@ -168,7 +168,7 @@ async def test_expire_timeouts_writes_timeout_reason(
     async with db.write() as tx:
         await tasks.create_task(
             tx,
-            TaskCreate(project="global", title="timeout usage", timeout_s=60),
+            TaskCreate(project="demo", title="timeout usage", timeout_s=60),
             "admin:test",
         )
         task = await tasks.claim(tx, A, [])
@@ -254,7 +254,7 @@ async def test_late_measured_upgrades_placeholder_in_place(
     # Re-lease so a late report is still allowed (§3.2).
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="global", title="hold lease"), "admin:test"
+            tx, TaskCreate(project="demo", title="hold lease"), "admin:test"
         )
         hold = await tasks.claim(tx, A, [])
         await accounts.lease(
@@ -294,7 +294,7 @@ async def test_not_reported_after_placeholder_adds_nothing(
         await tasks.complete(tx, A, task.id, task.attempt, DONE)
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="global", title="hold"), "admin:test"
+            tx, TaskCreate(project="demo", title="hold"), "admin:test"
         )
         hold = await tasks.claim(tx, A, [])
         await accounts.lease(
@@ -474,7 +474,7 @@ async def test_ensure_outcome_without_claim_row_uses_claim_id_zero(
     """Leave-claimed with no task_attempts row still writes a1:…:0."""
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="global", title="no claim row"), "admin:test"
+            tx, TaskCreate(project="demo", title="no claim row"), "admin:test"
         )
         task = await tasks.claim(tx, A, [])
         assert task is not None

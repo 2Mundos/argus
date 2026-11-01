@@ -42,7 +42,7 @@ async def new_task(db: Database, title: str = "crashy", **kw) -> str:
     kw.setdefault("lease_ttl_s", 3600)
     async with db.write() as tx:
         task = await tasks.create_task(
-            tx, TaskCreate(project="global", title=title, **kw), "human:test"
+            tx, TaskCreate(project="demo", title=title, **kw), "human:test"
         )
     return task.id
 

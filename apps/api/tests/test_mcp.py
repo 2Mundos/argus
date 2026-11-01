@@ -184,7 +184,7 @@ def test_worker_flow_over_mcp(client: TestClient) -> None:
         ADMIN_TOKEN,
         "create_task",
         title="Write release notes",
-        project="global",
+        project="demo",
     )
     assert created["state"] == "ready"
     assert (
@@ -243,7 +243,7 @@ def test_worker_flow_over_mcp(client: TestClient) -> None:
 
 def test_errors_come_back_as_tool_errors_with_codes(client: TestClient) -> None:
     worker = register(client)
-    tool(client, ADMIN_TOKEN, "create_task", title="t", project="global")
+    tool(client, ADMIN_TOKEN, "create_task", title="t", project="demo")
     claimed = tool(client, worker, "claim_task", wait_s=0)["task"]
     stale = tool(
         client, worker, "complete_task", task_id=claimed["id"], attempt=99, summary="x"
@@ -262,7 +262,7 @@ def test_tools_need_a_token(client: TestClient) -> None:
 
 def test_ask_and_answer_over_mcp(client: TestClient) -> None:
     worker, orchestrator = register(client), register(client, "orchestrator")
-    tool(client, orchestrator, "create_task", title="Pick a DB", project="global")
+    tool(client, orchestrator, "create_task", title="Pick a DB", project="demo")
     claimed = tool(client, worker, "claim_task", wait_s=0)["task"]
     asked = tool(
         client,
@@ -291,7 +291,7 @@ def test_dict_results_also_come_as_text_content(client: TestClient) -> None:
         client,
         ADMIN_TOKEN,
         "tools/call",
-        {"name": "create_task", "arguments": {"title": "t", "project": "global"}},
+        {"name": "create_task", "arguments": {"title": "t", "project": "demo"}},
     )
     text = result["content"][0]["text"]
     assert json.loads(text)["title"] == "t"  # for clients that only read content
@@ -300,7 +300,7 @@ def test_dict_results_also_come_as_text_content(client: TestClient) -> None:
 def test_inbox_wait_wakes_only_for_new_inbox_rows(client: TestClient) -> None:
     worker, orchestrator = register(client), register(client, "orchestrator")
     start = tool(client, orchestrator, "wait_for_events", wait_s=0)["next_cursor"]
-    tool(client, orchestrator, "create_task", title="t", project="global")
+    tool(client, orchestrator, "create_task", title="t", project="demo")
     claimed = tool(client, worker, "claim_task", wait_s=0)["task"]
     task_id, attempt = claimed["id"], claimed["attempt"]
     tool(
@@ -340,7 +340,7 @@ def test_inbox_wait_wakes_only_for_new_inbox_rows(client: TestClient) -> None:
 def test_inbox_journey_tools_match_rest(client: TestClient) -> None:
     worker, orchestrator = register(client), register(client, "orchestrator")
     rest = {"Authorization": f"Bearer {orchestrator}"}
-    tool(client, orchestrator, "create_task", title="Review me", project="global")
+    tool(client, orchestrator, "create_task", title="Review me", project="demo")
     claimed = tool(client, worker, "claim_task", wait_s=0)["task"]
     task_id, attempt = claimed["id"], claimed["attempt"]
     artifact = tool(
@@ -370,8 +370,8 @@ def test_inbox_journey_tools_match_rest(client: TestClient) -> None:
             "groups": [{**g, "oldest_age_s": 0} for g in page["groups"]],
         }
 
-    inbox = tool(client, orchestrator, "get_inbox", project="global")
-    direct = client.get("/api/inbox?project=global", headers=rest).json()
+    inbox = tool(client, orchestrator, "get_inbox", project="demo")
+    direct = client.get("/api/inbox?project=demo", headers=rest).json()
     assert without_ages(inbox) == without_ages(direct)
     [row] = inbox["items"]
     assert (row["decision_id"], row["artifact_ids"]) == (asked["id"], [artifact["id"]])
@@ -379,10 +379,10 @@ def test_inbox_journey_tools_match_rest(client: TestClient) -> None:
         (f"task:{task_id}", 1)
     ]
     mcp = tool(
-        client, orchestrator, "get_inbox", project="global", blocking_only=True,
+        client, orchestrator, "get_inbox", project="demo", blocking_only=True,
         order="impact",
     )  # fmt: skip
-    query = "project=global&blocking_only=true&order=impact"
+    query = "project=demo&blocking_only=true&order=impact"
     rest_page = client.get(f"/api/inbox?{query}", headers=rest).json()
     assert without_ages(mcp) == without_ages(rest_page)
     assert [r["impact"] for r in mcp["items"]] == [1]
@@ -417,7 +417,7 @@ def test_inbox_journey_tools_match_rest(client: TestClient) -> None:
 
 def test_release_task_over_mcp(client: TestClient) -> None:
     orchestrator, worker = register(client, "orchestrator"), register(client)
-    task = tool(client, ADMIN_TOKEN, "create_task", title="t", project="global")
+    task = tool(client, ADMIN_TOKEN, "create_task", title="t", project="demo")
     claimed = tool(client, worker, "claim_task", wait_s=0)["task"]
     assert (
         "403"
@@ -444,7 +444,7 @@ def test_answers_over_mcp_are_safe_to_retry(client: TestClient) -> None:
     orchestrator = register(client, "orchestrator")
     ids = []
     for _ in range(2):
-        task = tool(client, ADMIN_TOKEN, "create_task", title="t", project="global")
+        task = tool(client, ADMIN_TOKEN, "create_task", title="t", project="demo")
         ids.append(task["id"])
     worker = register(client)
     asked = []
@@ -650,7 +650,7 @@ def test_attach_artifact_is_manager_only_and_round_trips(client: TestClient) -> 
     assert "attach_artifact" in listed(client, orchestrator)
     assert "attach_artifact" in listed(client, ADMIN_TOKEN)
     created = tool(
-        client, orchestrator, "create_task", title="Evidence", project="global"
+        client, orchestrator, "create_task", title="Evidence", project="demo"
     )
     task_id = created["id"]
     raw = b"\x00\xff evidence"
@@ -700,7 +700,7 @@ def stored(tmp_path: Path) -> tuple[int, list[Path]]:
 def test_attach_artifact_by_admin_returns_metadata_not_content(
     small: TestClient,
 ) -> None:
-    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="global")["id"]
+    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="demo")["id"]
     text = "notes é\n"
     art = tool(
         small,
@@ -737,7 +737,7 @@ def test_attach_artifact_oversize_is_rejected_before_staging(
     arguments: dict,
     decodes: bool,
 ) -> None:
-    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="global")["id"]
+    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="demo")["id"]
     staged: list[bool] = []
 
     async def stage(self, chunks):
@@ -771,7 +771,7 @@ def test_attach_artifact_oversize_is_rejected_before_staging(
 def test_attach_artifact_rejects_invalid_encodings_without_echoing(
     small: TestClient, tmp_path: Path, arguments: dict, message: str
 ) -> None:
-    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="global")["id"]
+    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="demo")["id"]
     res = tool(
         small, ADMIN_TOKEN, "attach_artifact", task_id=task_id, name="bad", **arguments
     )
@@ -785,7 +785,7 @@ def test_attach_artifact_storage_failure_leaves_nothing_and_hides_content(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="global")["id"]
+    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="demo")["id"]
     secret = "canary text alpha"
 
     async def stage(self, chunks):
@@ -817,7 +817,7 @@ def test_attach_artifact_storage_failure_leaves_nothing_and_hides_content(
 def test_attach_artifact_content_stays_out_of_events_and_logs(
     small: TestClient, caplog: pytest.LogCaptureFixture
 ) -> None:
-    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="global")["id"]
+    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="demo")["id"]
     secret = "canary text beta"
     caplog.set_level(logging.DEBUG)
     art = tool(
@@ -848,7 +848,7 @@ def test_shared_attachment_hands_input_to_another_worker(small: TestClient) -> N
     assert props["share_with_workers"]["default"] is False
     assert not {"path", "file", "file_path"} & set(props)
     task_id = tool(
-        small, orchestrator, "create_task", title="Disposable", project="global"
+        small, orchestrator, "create_task", title="Disposable", project="demo"
     )["id"]
     text = "synthetic input é\nline 2\n"
     raw = text.encode()
@@ -914,9 +914,7 @@ def test_attach_artifact_checks_expected_sha256_and_lists_inputs(
     orchestrator, worker = register(small, "orchestrator"), register(small)
     assert "list_task_inputs" in listed(small, orchestrator)
     assert "list_task_inputs" not in listed(small, worker)
-    task_id = tool(small, orchestrator, "create_task", title="t", project="global")[
-        "id"
-    ]
+    task_id = tool(small, orchestrator, "create_task", title="t", project="demo")["id"]
     raw = "input é\n".encode()
     digest = hashlib.sha256(raw).hexdigest()
     bad = tool(
@@ -951,7 +949,7 @@ def test_attach_artifact_checks_expected_sha256_and_lists_inputs(
 def test_attach_artifact_rejects_text_that_is_not_utf8(
     small: TestClient, tmp_path: Path
 ) -> None:
-    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="global")["id"]
+    task_id = tool(small, ADMIN_TOKEN, "create_task", title="t", project="demo")["id"]
     secret = "canary text \ud800"
     # JSON-RPC parsing refuses a lone surrogate before the tool runs...
     res = small.post(
@@ -984,9 +982,7 @@ def test_attach_artifact_rejects_text_that_is_not_utf8(
 def test_unknown_steer_outcome_over_mcp_matches_rest(client: TestClient) -> None:
     first, second = register(client), register(client)
     admin = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
-    task_id = tool(client, ADMIN_TOKEN, "create_task", title="t", project="global")[
-        "id"
-    ]
+    task_id = tool(client, ADMIN_TOKEN, "create_task", title="t", project="demo")["id"]
     claimed = tool(client, first, "claim_task", wait_s=0)["task"]
     assert claimed["steer_unknown"] == 0
     lease = [{"task_id": task_id, "attempt": claimed["attempt"]}]
@@ -1027,7 +1023,7 @@ def test_list_accounts_reports_auth_health_through_mcp(client: TestClient) -> No
     ).json()
     reg = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
     worker = {"Authorization": f"Bearer {reg.json()['token']}"}
-    client.post("/api/tasks", json={"project": "global", "title": "t"}, headers=admin)
+    client.post("/api/tasks", json={"project": "demo", "title": "t"}, headers=admin)
     task = client.post("/api/tasks/claim", json={}, headers=worker).json()
     lease = client.post(
         "/api/accounts/lease",

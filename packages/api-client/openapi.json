@@ -3976,6 +3976,10 @@
             "title": "Created By",
             "type": "string"
           },
+          "deliverable": {
+            "$ref": "#/components/schemas/Deliverable",
+            "default": "response"
+          },
           "depends_on": {
             "items": {
               "type": "string"
@@ -6713,6 +6717,21 @@
         ],
         "title": "DecisionsOverview",
         "type": "object"
+      },
+      "Deliverable": {
+        "description": "What a task must leave behind to count as done (task deliverable spec 3.1).\n\n`branch` < `pr_open` < `pr_green` < `pr_merged` is a ladder; the others stand alone.",
+        "enum": [
+          "response",
+          "knowledge",
+          "artifact",
+          "subtasks",
+          "branch",
+          "pr_open",
+          "pr_green",
+          "pr_merged"
+        ],
+        "title": "Deliverable",
+        "type": "string"
       },
       "Delivery": {
         "description": "What Argus read of the task's pull request. Observed only: a merge neither\ncloses the task nor counts as acceptance. Green checks do not authorize merge.",
@@ -18631,6 +18650,10 @@
             "title": "Created By",
             "type": "string"
           },
+          "deliverable": {
+            "$ref": "#/components/schemas/Deliverable",
+            "default": "response"
+          },
           "depends_on": {
             "items": {
               "type": "string"
@@ -19193,6 +19216,16 @@
             ],
             "title": "Account Providers"
           },
+          "deliverable": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Deliverable"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "depends_on": {
             "anyOf": [
               {
@@ -19339,6 +19372,10 @@
               }
             ],
             "title": "Account Providers"
+          },
+          "deliverable": {
+            "$ref": "#/components/schemas/Deliverable",
+            "default": "response"
           },
           "depends_on": {
             "default": [],
@@ -19618,6 +19655,10 @@
             },
             "title": "Decision Ids",
             "type": "array"
+          },
+          "deliverable": {
+            "$ref": "#/components/schemas/Deliverable",
+            "default": "response"
           },
           "depends_on": {
             "items": {
@@ -20118,6 +20159,10 @@
               }
             ],
             "title": "Account Providers"
+          },
+          "deliverable": {
+            "$ref": "#/components/schemas/Deliverable",
+            "default": "response"
           },
           "depends_on": {
             "default": [],
@@ -20846,6 +20891,10 @@
           "created_by": {
             "title": "Created By",
             "type": "string"
+          },
+          "deliverable": {
+            "$ref": "#/components/schemas/Deliverable",
+            "default": "response"
           },
           "depends_on": {
             "items": {

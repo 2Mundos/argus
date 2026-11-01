@@ -16,8 +16,10 @@ from argus_core.continuation import ArtifactKind
 from argus_core.decisions import Audience, DecisionKind
 from argus_core.settings import IndependentReviewSetting, ReviewMode
 from argus_core.tasks import (
+    FORGE_DELIVERABLES,
     HARNESS_PROVIDERS,
     Action,
+    Deliverable,
     ExecutorModel,
     HarnessModel,
     Review,
@@ -505,7 +507,10 @@ async def on_review_child_complete(
             "review.independent_passed",
             {"child_id": child["id"], "verdict": "approve"},
         )
-        if review is not Review.NONE or open_items:
+        # A PR that must still turn green or merge is closed by a decision, which
+        # reads the forge (task deliverable spec 3.5), never by this approval.
+        forge_gated = Deliverable(parent["deliverable"]) in FORGE_DELIVERABLES
+        if review is not Review.NONE or open_items or forge_gated:
             await decisions.open_decision(
                 tx,
                 subject_type="task",

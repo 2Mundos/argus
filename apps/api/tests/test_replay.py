@@ -59,7 +59,7 @@ def new_task(client: TestClient, *capabilities: str) -> str:
     res = client.post(
         "/api/tasks",
         json={
-            "project": "global",
+            "project": "demo",
             "title": "replayed",
             "required_capabilities": list(capabilities),
         },

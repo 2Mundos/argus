@@ -68,7 +68,7 @@ async def claimed(db: Database):
     await insert_agent(db, B)
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="global", title="t", max_attempts=6), "admin:test"
+            tx, TaskCreate(project="demo", title="t", max_attempts=6), "admin:test"
         )
     return await claim(db)
 
@@ -267,7 +267,7 @@ def register(client: TestClient) -> tuple[dict[str, str], str]:
 
 def start(client: TestClient):
     (worker, token), (other, _) = register(client), register(client)
-    task = client.post("/api/tasks", json={"title": "t", "project": "global"}).json()
+    task = client.post("/api/tasks", json={"title": "t", "project": "demo"}).json()
     claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
     assert claimed["id"] == task["id"]
     return claimed, worker, other, token

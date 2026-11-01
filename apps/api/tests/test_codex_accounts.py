@@ -907,7 +907,7 @@ def _worker(client: TestClient) -> dict:
 def _lease(client: TestClient, worker: dict) -> dict:
     client.post(
         "/api/tasks",
-        json={"project": "global", "title": "account routing"},
+        json={"project": "demo", "title": "account routing"},
         headers=ADMIN,
     )
     task = client.post("/api/tasks/claim", json={}, headers=worker).json()

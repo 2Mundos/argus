@@ -32,7 +32,7 @@ A, B = "agent-a", "agent-b"
 async def new_task(db: Database, **kw) -> str:
     async with db.write() as tx:
         task = await tasks.create_task(
-            tx, TaskCreate(project="global", title="release me", **kw), "admin:test"
+            tx, TaskCreate(project="demo", title="release me", **kw), "admin:test"
         )
     return task.id
 
@@ -463,7 +463,7 @@ def register(client: TestClient, role: str = "worker") -> dict[str, str]:
 
 
 def claimed(client: TestClient, worker: dict[str, str]) -> tuple[str, int]:
-    task = client.post("/api/tasks", json={"project": "global", "title": "x"}).json()
+    task = client.post("/api/tasks", json={"project": "demo", "title": "x"}).json()
     got = client.post("/api/tasks/claim", json={}, headers=worker).json()
     assert got["id"] == task["id"]
     return task["id"], got["attempt"]

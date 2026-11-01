@@ -32,7 +32,7 @@ async def create(db: Database, deps: list[str] | None = None, **kw):
     async with db.write() as tx:
         return await tasks.create_task(
             tx,
-            TaskCreate(project="global", depends_on=deps or [], **kw),
+            TaskCreate(project="demo", depends_on=deps or [], **kw),
             WHO,
         )
 
@@ -428,6 +428,7 @@ async def test_each_state_permits_exactly_its_documented_fields(
         "knowledge": [],
         "depends_on": [],
         "difficulty": "trivial",
+        "deliverable": "knowledge",
         "account_providers": ["anthropic", "local"],
         "harness_model": HarnessModel(engine="claude", model="claude-opus-5-5"),
         "executor_model": ExecutorModel(executor="codex", model="gpt-6.1-sol"),

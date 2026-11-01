@@ -31,6 +31,16 @@ async def insert_agent(db: Database, agent_id: str, state: str = "active") -> No
         )
 
 
+async def insert_project(db: Database, slug: str = "demo") -> None:
+    """A project row for tests: tasks cannot live in the seeded `global` project."""
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "INSERT INTO projects (slug, name, description, created_at, updated_at)"
+            " VALUES (?, ?, 'Test project.', ?, ?)",
+            (slug, slug.title(), ts(tx.now), ts(tx.now)),
+        )
+
+
 class FakeTarget:
     """In-memory Target with switches for the failures the reconciler must survive."""
 

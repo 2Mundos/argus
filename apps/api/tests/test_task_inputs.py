@@ -68,7 +68,7 @@ def register(client: TestClient, role: str = "worker") -> dict[str, str]:
 def new_task(client: TestClient, caps: list[str] | None = None) -> dict:
     return client.post(
         "/api/tasks",
-        json={"project": "global", "title": "t", "required_capabilities": caps or []},
+        json={"project": "demo", "title": "t", "required_capabilities": caps or []},
         headers=ADMIN,
     ).json()
 

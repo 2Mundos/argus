@@ -86,7 +86,7 @@ through the MCP tools a worker uses. Off unless `ARGUS_DEV_REPLAY=1`.
 ```bash
 curl -s -X POST localhost:8000/api/tasks -H "Authorization: Bearer $ARGUS_ADMIN_TOKEN" \
   -H 'content-type: application/json' \
-  -d '{"project":"global","title":"replay me","required_capabilities":["replay"]}'
+  -d '{"project":"<project>","title":"replay me","required_capabilities":["replay"]}'
 ARGUS_DEV_REPLAY=1 ARGUS_ADMIN_TOKEN=... uv run argus-replay \
   --fixture apps/api/tests/fixtures/replay/sample-attempt.json --speed 4
 ```

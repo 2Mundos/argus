@@ -31,7 +31,7 @@ def make(client: TestClient, agent: dict[str, str], state: str, **body: object) 
     extra = {"requires_approval": True} if state == "awaiting_approval" else {}
     task = client.post(
         "/api/tasks",
-        json={"project": "global", "title": state, "max_attempts": 1, **extra, **body},
+        json={"project": "demo", "title": state, "max_attempts": 1, **extra, **body},
     ).json()
     tid = task["id"]
     if state in ("awaiting_approval", "ready"):
@@ -39,7 +39,7 @@ def make(client: TestClient, agent: dict[str, str], state: str, **body: object) 
     if state == "cancelled":
         return client.post(f"/api/tasks/{tid}/cancel").json()
     if state == "pending":
-        dep = client.post("/api/tasks", json={"project": "global", "title": "d"})
+        dep = client.post("/api/tasks", json={"project": "demo", "title": "d"})
         return client.put(
             f"/api/tasks/{tid}/dependencies",
             json={
@@ -107,7 +107,7 @@ def test_active_tasks_are_rejected_without_side_effects(
 
 def test_in_review_is_rejected(client: TestClient, agent: dict[str, str]) -> None:
     task = client.post(
-        "/api/tasks", json={"project": "global", "title": "r", "review": "human"}
+        "/api/tasks", json={"project": "demo", "title": "r", "review": "human"}
     ).json()
     claimed = client.post("/api/tasks/claim", json={}, headers=agent).json()
     res = client.post(
@@ -237,7 +237,7 @@ def test_bulk_filters_by_project_and_age(
             "UPDATE tasks SET updated_at = '2020-01-01T00:00:00.000000Z' WHERE id IN (?, ?)",
             (old["id"], elsewhere["id"]),
         )
-    body = {"states": ["failed"], "project": "global", "older_than_days": 30}
+    body = {"states": ["failed"], "project": "demo", "older_than_days": 30}
     assert (
         client.post("/api/tasks/archive", json={**body, "dry_run": True}).json()[
             "count"

@@ -181,7 +181,7 @@ async def add(db: Database, store, name: str, provider: str, credential: dict, *
 async def lease(db: Database, store, role: str, providers: list[str]):
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="global", title="cursor lease test"), "admin:test"
+            tx, TaskCreate(project="demo", title="cursor lease test"), "admin:test"
         )
         task = await tasks.claim(tx, A, [])
     assert task is not None

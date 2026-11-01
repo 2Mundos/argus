@@ -3,7 +3,7 @@ from pathlib import Path
 
 import aiosqlite
 import pytest
-from api_support import insert_agent
+from api_support import insert_agent, insert_project
 from argus_api.accounts import service as accounts_service
 from argus_api.agents import service as _agents  # noqa: F401 - avoids an import cycle
 from argus_api.db import Database, MigrationError, ts
@@ -86,16 +86,21 @@ async def test_0057_marks_pending_steers_dispatched(tmp_path: Path) -> None:
     migrations = load_migrations()
     db = await Database.open(path, migrations=migrations[:56])
     await insert_agent(db, "a")
+    await insert_project(db)
     async with db.write() as tx:
         # claim writes a column that a later migration adds; borrow it for the setup
         await tx.conn.execute("ALTER TABLE tasks ADD COLUMN session_gone_at TEXT")
         await tx.conn.execute("ALTER TABLE tasks ADD COLUMN paused_disk_at TEXT")
+        await tx.conn.execute(
+            "ALTER TABLE tasks ADD COLUMN deliverable TEXT NOT NULL DEFAULT 'response'"
+        )
         task = await tasks.create_task(
-            tx, TaskCreate(project="global", title="t"), "admin:test"
+            tx, TaskCreate(project="demo", title="t"), "admin:test"
         )
         await tasks.claim(tx, "a", [])
         await tx.conn.execute("ALTER TABLE tasks DROP COLUMN session_gone_at")
         await tx.conn.execute("ALTER TABLE tasks DROP COLUMN paused_disk_at")
+        await tx.conn.execute("ALTER TABLE tasks DROP COLUMN deliverable")
         await tx.conn.execute(
             "UPDATE agents SET runtime = '{\"features\": [\"steer\"]}' WHERE id = 'a'"
         )

@@ -11,6 +11,7 @@ import {
   capabilitiesFromEnv,
   createArgusAdapter,
   createDelegateLogRelay,
+  deliverableLines,
   frameUntrustedTaskData,
   fromEnv,
   heldAccountFits,
@@ -249,6 +250,23 @@ describe("heldAccountFits with a fallen-back pin", () => {
     expect(heldAccountFits(codex, { harness_model: pin })).toBe(false);
     expect(heldAccountFits(codex, { harness_model: pin, model_switch: switched("a-other") })).toBe(
       false,
+    );
+  });
+});
+
+describe("deliverableLines", () => {
+  it("states what COMPLETE needs, and only a trusted merge grant lets the worker merge", () => {
+    expect(deliverableLines(task() as any)).toEqual([]); // response: nothing to add
+    expect(deliverableLines({ ...task(), deliverable: "pr_open" } as any).join("\n")).toContain(
+      "pr_opened",
+    );
+    const merged = { ...task(), deliverable: "pr_merged" } as any;
+    expect(deliverableLines(merged).join("\n")).toContain("Do not merge it");
+    const granted = { ...merged, input: { delivery: { allow_merge: true } } };
+    expect(deliverableLines(granted).join("\n")).toContain("You may merge it yourself");
+    // A worker-authored task can never grant itself the merge.
+    expect(deliverableLines({ ...granted, prompt_trust: "worker" }).join("\n")).toContain(
+      "Do not merge it",
     );
   });
 });

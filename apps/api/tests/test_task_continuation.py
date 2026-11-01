@@ -55,7 +55,7 @@ async def new_task(db: Database, **kw) -> str:
     kw.setdefault("title", "task")
     async with db.write() as tx:
         task = await tasks.create_task(
-            tx, TaskCreate(project="global", **kw), "admin:test"
+            tx, TaskCreate(project="demo", **kw), "admin:test"
         )
     return task.id
 
@@ -812,7 +812,7 @@ def test_the_contract_over_http_is_scoped_fenced_and_survives_a_release(
     created = client.post(
         "/api/tasks",
         json={
-            "project": "global",
+            "project": "demo",
             "title": "CA2",
             "acceptance": ["collector stores splits"],
         },
