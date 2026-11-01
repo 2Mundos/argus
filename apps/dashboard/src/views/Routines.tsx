@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { ApiError, api, call, type TaskState } from "../api";
 import { DateChip } from "../DateChip";
 import { useLiveData } from "../live";
@@ -125,42 +126,42 @@ export function Routines() {
 }
 
 function RoutineCard({ routine, onChanged }: { routine: Routine; onChanged: () => void }) {
-  const [pending, setPending] = useState<"toggle" | "run" | null>(null);
+  const action = useAction();
   const [notice, setNotice] = useState<Notice | null>(null);
   const tz = routine.timezone;
 
   async function act(kind: "toggle" | "run") {
-    setPending(kind);
-    setNotice(null);
-    try {
-      if (kind === "toggle") {
-        await call(
-          api.PATCH("/api/projects/{slug}/routines/{routine}", {
-            params: { path: { slug: routine.project, routine: routine.slug } },
-            body: { enabled: !routine.enabled },
-          }),
-        );
-      } else {
-        const result = await call(
-          api.POST("/api/routines/{routine_id}/run", {
-            params: { path: { routine_id: routine.id } },
-          }),
-        );
-        setNotice(
-          result.skipped === "previous_running"
-            ? {
-                kind: "skipped",
-                text: "Already running, not started: the previous run is still open.",
-              }
-            : { kind: "started", text: `Run started as task ${result.task_id ?? "unknown"}.` },
-        );
+    await action.run(async () => {
+      setNotice(null);
+      try {
+        if (kind === "toggle") {
+          await call(
+            api.PATCH("/api/projects/{slug}/routines/{routine}", {
+              params: { path: { slug: routine.project, routine: routine.slug } },
+              body: { enabled: !routine.enabled },
+            }),
+          );
+        } else {
+          const result = await call(
+            api.POST("/api/routines/{routine_id}/run", {
+              params: { path: { routine_id: routine.id } },
+            }),
+          );
+          setNotice(
+            result.skipped === "previous_running"
+              ? {
+                  kind: "skipped",
+                  text: "Already running, not started: the previous run is still open.",
+                }
+              : { kind: "started", text: `Run started as task ${result.task_id ?? "unknown"}.` },
+          );
+        }
+      } catch (err) {
+        setNotice({ kind: "error", text: failure(err) });
+      } finally {
+        onChanged();
       }
-    } catch (err) {
-      setNotice({ kind: "error", text: failure(err) });
-    } finally {
-      setPending(null);
-      onChanged();
-    }
+    }, kind);
   }
 
   return (
@@ -201,18 +202,24 @@ function RoutineCard({ routine, onChanged }: { routine: Routine; onChanged: () =
         </dd>
       </dl>
       <div className="routine-actions">
-        <button type="button" disabled={pending !== null} onClick={() => act("toggle")}>
-          {pending === "toggle"
-            ? routine.enabled
-              ? "Disabling…"
-              : "Enabling…"
-            : routine.enabled
-              ? "Disable"
-              : "Enable"}
-        </button>
-        <button type="button" disabled={pending !== null} onClick={() => act("run")}>
-          {pending === "run" ? "Starting…" : "Run now"}
-        </button>
+        <ActionButton
+          type="button"
+          disabled={action.busy}
+          pending={action.is("toggle")}
+          pendingLabel={routine.enabled ? "Disabling…" : "Enabling…"}
+          action={() => void act("toggle")}
+        >
+          {routine.enabled ? "Disable" : "Enable"}
+        </ActionButton>
+        <ActionButton
+          type="button"
+          disabled={action.busy}
+          pending={action.is("run")}
+          pendingLabel="Starting…"
+          action={() => void act("run")}
+        >
+          Run now
+        </ActionButton>
       </div>
       {notice && (
         <p

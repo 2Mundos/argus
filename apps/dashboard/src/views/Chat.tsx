@@ -1,4 +1,5 @@
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import {
   type Agent,
   api,
@@ -157,7 +158,7 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string>();
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
   const box = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
 
@@ -225,32 +226,31 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
   async function send(e?: FormEvent) {
     e?.preventDefault();
     const text = draft.trim();
-    if (!text || busy) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      let conversationId = selected?.id;
-      if (!conversationId) {
-        const created = await call(api.POST("/api/conversations", { body: {} }));
-        conversationId = created.id;
-        setSelectedId(created.id);
+    if (!text) return;
+    await action.run(async () => {
+      setError(undefined);
+      try {
+        let conversationId = selected?.id;
+        if (!conversationId) {
+          const created = await call(api.POST("/api/conversations", { body: {} }));
+          conversationId = created.id;
+          setSelectedId(created.id);
+          reloadList();
+        }
+        await call(
+          api.POST("/api/conversations/{conversation_id}/messages", {
+            params: { path: { conversation_id: conversationId } },
+            body: { body: text },
+          }),
+        );
+        setDraft("");
+        if (box.current) box.current.style.height = "auto";
+        reloadMessages();
         reloadList();
+      } catch (err) {
+        setError((err as Error).message);
       }
-      await call(
-        api.POST("/api/conversations/{conversation_id}/messages", {
-          params: { path: { conversation_id: conversationId } },
-          body: { body: text },
-        }),
-      );
-      setDraft("");
-      if (box.current) box.current.style.height = "auto";
-      reloadMessages();
-      reloadList();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -276,7 +276,7 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
           value={draft}
           rows={1}
           maxLength={8000}
-          disabled={busy}
+          disabled={action.busy}
           placeholder="Message the orchestrator"
           aria-label="Message"
           onChange={(e) => {
@@ -285,10 +285,11 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
           }}
           onKeyDown={onKeyDown}
         />
-        <button
+        <ActionButton
           type="submit"
           className="chat-send"
-          disabled={busy || !draft.trim()}
+          disabled={!draft.trim()}
+          pending={action.busy}
           aria-label="Send"
         >
           <svg viewBox="0 0 24 24" width={16} height={16} aria-hidden="true">
@@ -301,7 +302,7 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
               strokeLinejoin="round"
             />
           </svg>
-        </button>
+        </ActionButton>
       </div>
       {error && <p className="error small">{error}</p>}
     </form>

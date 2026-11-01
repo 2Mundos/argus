@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { api, call } from "../api";
 import {
   buildConfig,
@@ -21,7 +22,7 @@ export function CustomAccount({ onClose, onDone }: { onClose: () => void; onDone
   const [error, setError] = useState<string>();
   const [probe, setProbe] = useState<Probe>();
   const [accountId, setAccountId] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
   const openrouter = form.label.trim() === "openrouter";
 
   async function submit(e: FormEvent) {
@@ -32,52 +33,50 @@ export function CustomAccount({ onClose, onDone }: { onClose: () => void; onDone
       setError(urlError);
       return;
     }
-    setBusy(true);
-    try {
-      const account = await call(
-        api.POST("/api/accounts", {
-          body: {
-            name,
-            provider: "custom",
-            kind: "api_key",
-            credential: { api_key: key.trim() },
-            config: buildConfig(form),
-          },
-        }),
-      );
-      setKey(""); // the key does not stay in the page
-      setAccountId(account.id);
-      setProbe(
-        await call(
-          api.POST("/api/accounts/{account_id}/probe", {
-            params: { path: { account_id: account.id } },
+    await action.run(async () => {
+      try {
+        const account = await call(
+          api.POST("/api/accounts", {
+            body: {
+              name,
+              provider: "custom",
+              kind: "api_key",
+              credential: { api_key: key.trim() },
+              config: buildConfig(form),
+            },
           }),
-        ),
-      );
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+        );
+        setKey(""); // the key does not stay in the page
+        setAccountId(account.id);
+        setProbe(
+          await call(
+            api.POST("/api/accounts/{account_id}/probe", {
+              params: { path: { account_id: account.id } },
+            }),
+          ),
+        );
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   async function savePreferences() {
     if (!accountId) return;
     setError(undefined);
-    setBusy(true);
-    try {
-      await call(
-        api.PATCH("/api/accounts/{account_id}", {
-          params: { path: { account_id: accountId } },
-          body: { config: buildConfig(form) },
-        }),
-      );
-      onDone();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.PATCH("/api/accounts/{account_id}", {
+            params: { path: { account_id: accountId } },
+            body: { config: buildConfig(form) },
+          }),
+        );
+        onDone();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   const role = (which: "engine" | "executor", title: string) => (
@@ -116,15 +115,16 @@ export function CustomAccount({ onClose, onDone }: { onClose: () => void; onDone
               </p>
             )}
             <div className="row">
-              <button
+              <ActionButton
                 type="button"
                 className="primary"
-                disabled={busy}
-                onClick={() => void savePreferences()}
+                pending={action.busy}
+                pendingLabel="Saving…"
+                action={() => void savePreferences()}
               >
-                {busy ? "Saving…" : "Save preferences"}
-              </button>
-              <button type="button" disabled={busy} onClick={onDone}>
+                Save preferences
+              </ActionButton>
+              <button type="button" disabled={action.busy} onClick={onDone}>
                 Skip
               </button>
             </div>
@@ -177,9 +177,14 @@ export function CustomAccount({ onClose, onDone }: { onClose: () => void; onDone
               </p>
             )}
             <div className="row">
-              <button type="submit" className="primary" disabled={busy}>
-                {busy ? "Saving…" : "Save and check"}
-              </button>
+              <ActionButton
+                type="submit"
+                className="primary"
+                pending={action.busy}
+                pendingLabel="Saving…"
+              >
+                Save and check
+              </ActionButton>
               <button type="button" onClick={onClose}>
                 Cancel
               </button>

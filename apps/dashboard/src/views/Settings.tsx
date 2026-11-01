@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { useLiveData } from "../live";
 import { compactDraft, type Draft, emptyChains, toDraft } from "../models";
 import { PageHeader } from "../PageHeader";
@@ -118,7 +119,7 @@ function ProjectModelsEditor(props: {
   const [draft, setDraft] = useState<Draft>({ harness: {}, implementation: {} });
   const [failure, setFailure] = useState<string>();
   const [done, setDone] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
   const inherited = setting?.source !== "project";
 
   useEffect(() => {
@@ -142,34 +143,32 @@ function ProjectModelsEditor(props: {
   }, [project, setting?.updated_at]);
 
   async function save() {
-    setBusy(true);
-    setFailure(undefined);
-    setDone(undefined);
-    try {
-      await putSetting("models", compactDraft(draft), project);
-      setDone("Saved project model override.");
-      onChanged();
-    } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setFailure(undefined);
+      setDone(undefined);
+      try {
+        await putSetting("models", compactDraft(draft), project);
+        setDone("Saved project model override.");
+        onChanged();
+      } catch (e) {
+        setFailure(e instanceof Error ? e.message : String(e));
+      }
+    }, "save");
   }
 
   async function reset() {
-    setBusy(true);
-    setFailure(undefined);
-    setDone(undefined);
-    try {
-      await resetSetting("models", project);
-      setDraft({ harness: {}, implementation: {} });
-      setDone("Reset to inherited.");
-      onChanged();
-    } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setFailure(undefined);
+      setDone(undefined);
+      try {
+        await resetSetting("models", project);
+        setDraft({ harness: {}, implementation: {} });
+        setDone("Reset to inherited.");
+        onChanged();
+      } catch (e) {
+        setFailure(e instanceof Error ? e.message : String(e));
+      }
+    }, "reset");
   }
 
   return (
@@ -190,12 +189,22 @@ function ProjectModelsEditor(props: {
       </p>
       <ModelPreferencesEditor draft={draft} onChange={setDraft} empties={emptyChains(draft)} />
       <div className="toolbar model-actions">
-        <button type="button" disabled={busy} onClick={() => void save()}>
+        <ActionButton
+          type="button"
+          disabled={action.busy}
+          pending={action.is("save")}
+          action={() => void save()}
+        >
           Save override
-        </button>
-        <button type="button" disabled={busy || inherited} onClick={() => void reset()}>
+        </ActionButton>
+        <ActionButton
+          type="button"
+          disabled={action.busy || inherited}
+          pending={action.is("reset")}
+          action={() => void reset()}
+        >
           Reset to inherited
-        </button>
+        </ActionButton>
       </div>
       {failure && (
         <p className="error" role="alert">
@@ -215,7 +224,7 @@ function DifficultyExecutorsSection(props: {
   const { project, setting, onChanged } = props;
   const stored = (setting?.value ?? {}) as DifficultyExecutors;
   const [draft, setDraft] = useState<DifficultyExecutors>(stored);
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
   const [failure, setFailure] = useState<string>();
   const [done, setDone] = useState<string>();
   const inherited =
@@ -236,34 +245,32 @@ function DifficultyExecutorsSection(props: {
   }
 
   async function save() {
-    setBusy(true);
-    setFailure(undefined);
-    setDone(undefined);
-    try {
-      await putSetting("difficulty.executors", draft, project);
-      setDone("Saved.");
-      onChanged();
-    } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setFailure(undefined);
+      setDone(undefined);
+      try {
+        await putSetting("difficulty.executors", draft, project);
+        setDone("Saved.");
+        onChanged();
+      } catch (e) {
+        setFailure(e instanceof Error ? e.message : String(e));
+      }
+    }, "save");
   }
 
   async function reset() {
-    setBusy(true);
-    setFailure(undefined);
-    setDone(undefined);
-    try {
-      await resetSetting("difficulty.executors", project);
-      setDraft({});
-      setDone("Reset to inherited.");
-      onChanged();
-    } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setFailure(undefined);
+      setDone(undefined);
+      try {
+        await resetSetting("difficulty.executors", project);
+        setDraft({});
+        setDone("Reset to inherited.");
+        onChanged();
+      } catch (e) {
+        setFailure(e instanceof Error ? e.message : String(e));
+      }
+    }, "reset");
   }
 
   return (
@@ -305,16 +312,22 @@ function DifficultyExecutorsSection(props: {
         })}
       </div>
       <div className="toolbar model-actions">
-        <button
+        <ActionButton
           type="button"
-          disabled={busy || setting?.source === "env"}
-          onClick={() => void save()}
+          disabled={action.busy || setting?.source === "env"}
+          pending={action.is("save")}
+          action={() => void save()}
         >
           Save
-        </button>
-        <button type="button" disabled={busy || inherited} onClick={() => void reset()}>
+        </ActionButton>
+        <ActionButton
+          type="button"
+          disabled={action.busy || inherited}
+          pending={action.is("reset")}
+          action={() => void reset()}
+        >
           Reset to inherited
-        </button>
+        </ActionButton>
       </div>
       {failure && (
         <p className="error" role="alert">
@@ -335,7 +348,7 @@ function IndependentReviewSection(props: {
   const value = (setting?.value ?? { mode: "off", max_rounds: 3 }) as IndependentReview;
   const [mode, setMode] = useState<ReviewMode>(value.mode);
   const [rounds, setRounds] = useState(value.max_rounds);
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
   const [failure, setFailure] = useState<string>();
   const [done, setDone] = useState<string>();
   const inherited =
@@ -349,33 +362,31 @@ function IndependentReviewSection(props: {
   }, [value.mode, value.max_rounds, setting?.updated_at]);
 
   async function save() {
-    setBusy(true);
-    setFailure(undefined);
-    setDone(undefined);
-    try {
-      await putSetting("review.independent", { mode, max_rounds: rounds }, project);
-      setDone("Saved.");
-      onChanged();
-    } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setFailure(undefined);
+      setDone(undefined);
+      try {
+        await putSetting("review.independent", { mode, max_rounds: rounds }, project);
+        setDone("Saved.");
+        onChanged();
+      } catch (e) {
+        setFailure(e instanceof Error ? e.message : String(e));
+      }
+    }, "save");
   }
 
   async function reset() {
-    setBusy(true);
-    setFailure(undefined);
-    setDone(undefined);
-    try {
-      await resetSetting("review.independent", project);
-      setDone("Reset to inherited.");
-      onChanged();
-    } catch (e) {
-      setFailure(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setFailure(undefined);
+      setDone(undefined);
+      try {
+        await resetSetting("review.independent", project);
+        setDone("Reset to inherited.");
+        onChanged();
+      } catch (e) {
+        setFailure(e instanceof Error ? e.message : String(e));
+      }
+    }, "reset");
   }
 
   return (
@@ -415,12 +426,22 @@ function IndependentReviewSection(props: {
         </label>
       </div>
       <div className="toolbar model-actions">
-        <button type="button" disabled={busy} onClick={() => void save()}>
+        <ActionButton
+          type="button"
+          disabled={action.busy}
+          pending={action.is("save")}
+          action={() => void save()}
+        >
           Save
-        </button>
-        <button type="button" disabled={busy || inherited} onClick={() => void reset()}>
+        </ActionButton>
+        <ActionButton
+          type="button"
+          disabled={action.busy || inherited}
+          pending={action.is("reset")}
+          action={() => void reset()}
+        >
           Reset to inherited
-        </button>
+        </ActionButton>
       </div>
       {failure && (
         <p className="error" role="alert">

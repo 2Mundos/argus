@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { type Account, api, call } from "../api";
 import { DateChip } from "../DateChip";
 import { relative } from "../format";
@@ -31,7 +32,8 @@ export function AccountDetail(props: {
 }) {
   const { account: a, onClose, onRefreshed } = props;
   const [win, setWin] = useState<WindowId>("7d");
-  const [refresh, setRefresh] = useState<{ busy: boolean; text?: string }>({ busy: false });
+  const [refreshNote, setRefreshNote] = useState<string>();
+  const action = useAction();
   const tz = viewerTimeZone();
   const model = hasModelUsage(a.provider);
   const { data, error } = useLiveData(
@@ -49,18 +51,19 @@ export function AccountDetail(props: {
   const usage = data?.accounts?.[0];
 
   async function refreshQuota() {
-    setRefresh({ busy: true });
-    try {
-      const r = await call(
-        api.POST("/api/accounts/{account_id}/quota/refresh", {
-          params: { path: { account_id: a.id } },
-        }),
-      );
-      setRefresh({ busy: false, text: refreshText(r) });
-      onRefreshed?.(); // the probe outcome may change without a figure changing
-    } catch (err) {
-      setRefresh({ busy: false, text: (err as Error).message });
-    }
+    await action.run(async () => {
+      try {
+        const r = await call(
+          api.POST("/api/accounts/{account_id}/quota/refresh", {
+            params: { path: { account_id: a.id } },
+          }),
+        );
+        setRefreshNote(refreshText(r));
+        onRefreshed?.(); // the probe outcome may change without a figure changing
+      } catch (err) {
+        setRefreshNote((err as Error).message);
+      }
+    });
   }
 
   return (
@@ -127,10 +130,15 @@ export function AccountDetail(props: {
               </p>
             )}
             <p className="small">
-              <button type="button" onClick={refreshQuota} disabled={refresh.busy}>
-                {refresh.busy ? "Reading…" : "Refresh quota"}
-              </button>{" "}
-              {refresh.text && <span className="muted">{refresh.text}</span>}
+              <ActionButton
+                type="button"
+                pending={action.busy}
+                pendingLabel="Reading…"
+                action={() => void refreshQuota()}
+              >
+                Refresh quota
+              </ActionButton>{" "}
+              {refreshNote && <span className="muted">{refreshNote}</span>}
             </p>
 
             <div className="toolbar">

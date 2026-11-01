@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { api, call } from "../api";
 import { type AuthFileCheck, checkAuthFile, safeLoginUrl } from "../codexAuth";
 
@@ -61,7 +62,7 @@ function ImportAuth({ onClose, onDone }: { onClose: () => void; onDone: () => vo
   const [text, setText] = useState("");
   const [fileName, setFileName] = useState<string>();
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
   const check: AuthFileCheck | null = text.trim() ? checkAuthFile(text) : null;
 
   async function pick(file: File | undefined) {
@@ -79,25 +80,24 @@ function ImportAuth({ onClose, onDone }: { onClose: () => void; onDone: () => vo
       setError(result.error);
       return;
     }
-    setBusy(true);
-    try {
-      await call(
-        api.POST("/api/accounts", {
-          body: {
-            name,
-            provider: "openai",
-            kind: result.kind,
-            credential: JSON.parse(text),
-          },
-        }),
-      );
-      setText(""); // the document does not stay in the page
-      onDone();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.POST("/api/accounts", {
+            body: {
+              name,
+              provider: "openai",
+              kind: result.kind,
+              credential: JSON.parse(text),
+            },
+          }),
+        );
+        setText(""); // the document does not stay in the page
+        onDone();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   return (
@@ -141,12 +141,12 @@ function ImportAuth({ onClose, onDone }: { onClose: () => void; onDone: () => vo
       {check && !check.ok && <p className="error">{check.error}</p>}
       {error && <p className="error">{error}</p>}
       <div className="actions">
-        <button type="button" onClick={onClose}>
+        <button type="button" disabled={action.busy} onClick={onClose}>
           Cancel
         </button>
-        <button type="submit" className="primary" disabled={busy || !check?.ok}>
+        <ActionButton type="submit" className="primary" disabled={!check?.ok} pending={action.busy}>
           Import
-        </button>
+        </ActionButton>
       </div>
     </form>
   );
@@ -156,7 +156,7 @@ function DedicatedLogin({ onClose, onDone }: { onClose: () => void; onDone: () =
   const [name, setName] = useState("Codex (login)");
   const [login, setLogin] = useState<Login>();
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
   const id = login?.state === "pending" ? login.login_id : undefined;
   const done = useRef(onDone);
   done.current = onDone;
@@ -184,14 +184,13 @@ function DedicatedLogin({ onClose, onDone }: { onClose: () => void; onDone: () =
   async function start(e: FormEvent) {
     e.preventDefault();
     setError(undefined);
-    setBusy(true);
-    try {
-      setLogin((await call(api.POST("/api/accounts/codex-login", { body: { name } }))) as Login);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      try {
+        setLogin((await call(api.POST("/api/accounts/codex-login", { body: { name } }))) as Login);
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   async function cancel() {
@@ -226,12 +225,12 @@ function DedicatedLogin({ onClose, onDone }: { onClose: () => void; onDone: () =
         </label>
         {error && <p className="error">{error}</p>}
         <div className="actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" disabled={action.busy} onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="primary" disabled={busy}>
+          <ActionButton type="submit" className="primary" pending={action.busy}>
             Start login
-          </button>
+          </ActionButton>
         </div>
       </form>
     );

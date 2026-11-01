@@ -1,4 +1,5 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { api, call } from "../api";
 import { DateChip } from "../DateChip";
 import { useLiveData } from "../live";
@@ -46,8 +47,8 @@ function Steers({
 }: Props) {
   const now = useNow();
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const action = useAction();
   const box = useRef<HTMLTextAreaElement>(null);
   // A send that lands after the composer moved to another task or attempt must not touch it.
   const mounted = useRef(true);
@@ -82,6 +83,7 @@ function Steers({
   const known =
     supportsSteer !== undefined || !needsLookup || assignee !== undefined || !!lookupError;
   const items = showList ? (page?.items ?? []) : [];
+  const busy = action.busy;
 
   useEffect(() => {
     if (composerOpen) box.current?.focus();
@@ -92,38 +94,39 @@ function Steers({
   async function send() {
     const message = draft.trim();
     if (!message || busy || !can || !claimed) return;
-    setBusy(true);
     setError(undefined);
-    try {
-      await call(
-        api.POST("/api/tasks/{task_id}/steers", {
-          params: { path: { task_id: taskId } },
-          body: { message },
-        }),
-      );
-      if (!mounted.current) return;
-      setDraft("");
-      onComposerOpenChange(false);
-      reload();
-    } catch (err) {
-      if (mounted.current) setError((err as Error).message);
-    } finally {
-      if (mounted.current) setBusy(false);
-    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.POST("/api/tasks/{task_id}/steers", {
+            params: { path: { task_id: taskId } },
+            body: { message },
+          }),
+        );
+        if (!mounted.current) return;
+        setDraft("");
+        onComposerOpenChange(false);
+        reload();
+      } catch (err) {
+        if (mounted.current) setError((err as Error).message);
+      }
+    }, "send");
   }
 
   async function cancel(steerId: string) {
     setError(undefined);
-    try {
-      await call(
-        api.DELETE("/api/tasks/{task_id}/steers/{steer_id}", {
-          params: { path: { task_id: taskId, steer_id: steerId } },
-        }),
-      );
-      reload();
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.DELETE("/api/tasks/{task_id}/steers/{steer_id}", {
+            params: { path: { task_id: taskId, steer_id: steerId } },
+          }),
+        );
+        reload();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, `cancel:${steerId}`);
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -158,14 +161,14 @@ function Steers({
           {!can && <p className="muted small">This worker does not accept steering.</p>}
           {can && (
             <div className="actions left">
-              <button
-                type="button"
+              <ActionButton
                 className="primary"
+                pending={action.is("send")}
                 disabled={busy || !draft.trim()}
-                onClick={() => void send()}
+                action={() => send()}
               >
                 Send steer
-              </button>
+              </ActionButton>
               <button type="button" className="link" onClick={() => onComposerOpenChange(false)}>
                 Close
               </button>
@@ -197,9 +200,14 @@ function Steers({
                 {item.state === "pending" && (
                   <>
                     {" "}
-                    <button type="button" className="link" onClick={() => void cancel(item.id)}>
+                    <ActionButton
+                      className="link"
+                      pending={action.is(`cancel:${item.id}`)}
+                      disabled={action.busy}
+                      action={() => cancel(item.id)}
+                    >
                       Cancel
-                    </button>
+                    </ActionButton>
                   </>
                 )}
               </span>

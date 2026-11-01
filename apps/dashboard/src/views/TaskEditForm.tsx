@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { ApiError, api, call, type Task } from "../api";
 import {
   buildChanges,
@@ -46,7 +47,7 @@ export function TaskEditForm({ task, onDone }: { task: Task; onDone: (saved?: Ta
   const [draft, setDraft] = useState<Draft>(toDraft(task));
   const [errors, setErrors] = useState<FieldErrors>({});
   const [conflict, setConflict] = useState<string>();
-  const [saving, setSaving] = useState(false);
+  const action = useAction();
   const allowed = new Set<string>(base.editable_fields ?? []);
 
   async function latest(): Promise<Task> {
@@ -58,23 +59,22 @@ export function TaskEditForm({ task, onDone }: { task: Task; onDone: (saved?: Ta
     setConflict(undefined);
     if (Object.keys(local).length > 0) return setErrors(local);
     if (Object.keys(changes).length === 0) return onDone();
-    setSaving(true);
-    try {
-      const saved = await call(
-        api.PATCH("/api/tasks/{task_id}", {
-          params: { path: { task_id: base.id } },
-          body: { expected_version: base.version, changes },
-        }),
-      );
-      onDone(saved);
-    } catch (err) {
-      if (err instanceof ApiError && err.code === "stale_version") {
-        setErrors({});
-        setConflict(err.details[0] ?? "");
-      } else setErrors(errorsFrom(err));
-    } finally {
-      setSaving(false);
-    }
+    await action.run(async () => {
+      try {
+        const saved = await call(
+          api.PATCH("/api/tasks/{task_id}", {
+            params: { path: { task_id: base.id } },
+            body: { expected_version: base.version, changes },
+          }),
+        );
+        onDone(saved);
+      } catch (err) {
+        if (err instanceof ApiError && err.code === "stale_version") {
+          setErrors({});
+          setConflict(err.details[0] ?? "");
+        } else setErrors(errorsFrom(err));
+      }
+    });
   }
 
   async function reload() {
@@ -176,10 +176,10 @@ export function TaskEditForm({ task, onDone }: { task: Task; onDone: (saved?: Ta
       })}
       {errors.form && <p className="error">{errors.form}</p>}
       <div className="actions left">
-        <button type="submit" className="primary" disabled={saving}>
+        <ActionButton type="submit" className="primary" pending={action.busy}>
           Save
-        </button>
-        <button type="button" onClick={() => onDone()}>
+        </ActionButton>
+        <button type="button" disabled={action.busy} onClick={() => onDone()}>
           Cancel
         </button>
       </div>

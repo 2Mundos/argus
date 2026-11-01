@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { api, call, download } from "../api";
 import { ARCHIVABLE } from "../archive";
 import { blockReasonText } from "../blockCopy";
@@ -144,24 +145,27 @@ export function TaskDetail({
   const modelAttempts = [...new Set(modelTrace?.executions.map((run) => run.attempt) ?? [])].sort(
     (a, b) => b - a,
   );
+  const action = useAction();
 
-  async function act(action: "cancel" | "unblock" | "retry" | "archive" | "unarchive") {
+  async function act(kind: "cancel" | "unblock" | "retry" | "archive" | "unarchive") {
     setError(undefined);
     setConfirmingRetry(false);
-    try {
-      const path = { task_id: taskId };
-      if (action === "cancel")
-        await call(api.POST("/api/tasks/{task_id}/cancel", { params: { path } }));
-      else if (action === "archive")
-        await call(api.POST("/api/tasks/{task_id}/archive", { params: { path } }));
-      else if (action === "unarchive")
-        await call(api.POST("/api/tasks/{task_id}/unarchive", { params: { path } }));
-      else if (action === "retry")
-        await call(api.POST("/api/tasks/{task_id}/retry", { params: { path } }));
-      else await call(api.POST("/api/tasks/{task_id}/unblock", { params: { path } }));
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await action.run(async () => {
+      try {
+        const path = { task_id: taskId };
+        if (kind === "cancel")
+          await call(api.POST("/api/tasks/{task_id}/cancel", { params: { path } }));
+        else if (kind === "archive")
+          await call(api.POST("/api/tasks/{task_id}/archive", { params: { path } }));
+        else if (kind === "unarchive")
+          await call(api.POST("/api/tasks/{task_id}/unarchive", { params: { path } }));
+        else if (kind === "retry")
+          await call(api.POST("/api/tasks/{task_id}/retry", { params: { path } }));
+        else await call(api.POST("/api/tasks/{task_id}/unblock", { params: { path } }));
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, kind);
   }
 
   const titlebar = (
@@ -175,17 +179,30 @@ export function TaskDetail({
             </button>
           )}
           {task.state === "blocked" && (
-            <button type="button" onClick={() => act("unblock")}>
+            <ActionButton
+              pending={action.is("unblock")}
+              disabled={action.busy}
+              action={() => act("unblock")}
+            >
               Unblock
-            </button>
+            </ActionButton>
           )}
           {task.state === "failed" &&
             (confirmingRetry ? (
               <>
-                <button type="button" className="primary" onClick={() => act("retry")}>
+                <ActionButton
+                  className="primary"
+                  pending={action.is("retry")}
+                  disabled={action.busy}
+                  action={() => act("retry")}
+                >
                   Confirm retry
-                </button>
-                <button type="button" onClick={() => setConfirmingRetry(false)}>
+                </ActionButton>
+                <button
+                  type="button"
+                  disabled={action.busy}
+                  onClick={() => setConfirmingRetry(false)}
+                >
                   Keep failed
                 </button>
               </>
@@ -193,6 +210,7 @@ export function TaskDetail({
               <button
                 type="button"
                 title={`Reset attempts (${task.attempt}/${task.max_attempts} used) and run it again`}
+                disabled={action.busy}
                 onClick={() => setConfirmingRetry(true)}
               >
                 Retry
@@ -200,13 +218,21 @@ export function TaskDetail({
             ))}
           {ARCHIVABLE.includes(task.state) &&
             (task.archived_at ? (
-              <button type="button" onClick={() => act("unarchive")}>
+              <ActionButton
+                pending={action.is("unarchive")}
+                disabled={action.busy}
+                action={() => act("unarchive")}
+              >
                 Unarchive
-              </button>
+              </ActionButton>
             ) : (
-              <button type="button" onClick={() => act("archive")}>
+              <ActionButton
+                pending={action.is("archive")}
+                disabled={action.busy}
+                action={() => act("archive")}
+              >
                 Archive
-              </button>
+              </ActionButton>
             ))}
           {steerable && selected === task.attempt && supportsSteer !== false && (
             <button
@@ -218,9 +244,14 @@ export function TaskDetail({
             </button>
           )}
           {!ARCHIVABLE.includes(task.state) && (
-            <button type="button" className="danger" onClick={() => act("cancel")}>
+            <ActionButton
+              className="danger"
+              pending={action.is("cancel")}
+              disabled={action.busy}
+              action={() => act("cancel")}
+            >
               Cancel task
-            </button>
+            </ActionButton>
           )}
         </div>
       )}

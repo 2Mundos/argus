@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { ApiError, api, call, type Page } from "../api";
 import { DateChip } from "../DateChip";
 import { actor } from "../format";
@@ -123,6 +124,7 @@ function PageView({ pageId }: { pageId: string }) {
   const [editing, setEditing] = useState(false);
   const [history, setHistory] = useState(false);
   const [error, setError] = useState<string>();
+  const action = useAction();
   const { data: page } = useLiveData(
     (signal) =>
       call(
@@ -136,19 +138,23 @@ function PageView({ pageId }: { pageId: string }) {
   if (!page) return null;
   if (editing) return <PageEditor page={page} onDone={() => setEditing(false)} />;
 
-  async function act(action: "reviewed" | "archive" | "unarchive") {
+  async function act(kind: "reviewed" | "archive" | "unarchive") {
     setError(undefined);
-    try {
-      const params = { params: { path: { page_id: pageId } } };
-      if (action === "reviewed")
-        await call(api.POST("/api/knowledge/pages/{page_id}/reviewed", params));
-      else if (action === "archive")
-        await call(api.POST("/api/knowledge/pages/{page_id}/archive", params));
-      else await call(api.POST("/api/knowledge/pages/{page_id}/unarchive", params));
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await action.run(async () => {
+      try {
+        const params = { params: { path: { page_id: pageId } } };
+        if (kind === "reviewed")
+          await call(api.POST("/api/knowledge/pages/{page_id}/reviewed", params));
+        else if (kind === "archive")
+          await call(api.POST("/api/knowledge/pages/{page_id}/archive", params));
+        else await call(api.POST("/api/knowledge/pages/{page_id}/unarchive", params));
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, kind);
   }
+
+  const archiveKind = page.state === "active" ? "archive" : "unarchive";
 
   return (
     <article className="card page">
@@ -159,15 +165,20 @@ function PageView({ pageId }: { pageId: string }) {
             Edit
           </button>
         )}
-        <button type="button" onClick={() => act("reviewed")}>
+        <ActionButton
+          pending={action.is("reviewed")}
+          disabled={action.busy}
+          action={() => act("reviewed")}
+        >
           Still accurate
-        </button>
-        <button
-          type="button"
-          onClick={() => act(page.state === "active" ? "archive" : "unarchive")}
+        </ActionButton>
+        <ActionButton
+          pending={action.is(archiveKind)}
+          disabled={action.busy}
+          action={() => act(archiveKind)}
         >
           {page.state === "active" ? "Archive" : "Unarchive"}
-        </button>
+        </ActionButton>
       </div>
       <p className="muted small">
         {page.project} · revision {page.revision_number} by {actor(page.author)}{" "}
@@ -193,6 +204,7 @@ function PageView({ pageId }: { pageId: string }) {
 
 function History({ page }: { page: Page }) {
   const [error, setError] = useState<string>();
+  const action = useAction();
   const { data: revisions } = useLiveData(
     (signal) =>
       call(
@@ -206,20 +218,22 @@ function History({ page }: { page: Page }) {
 
   async function restore(revisionId: string, number: number) {
     setError(undefined);
-    try {
-      await call(
-        api.POST("/api/knowledge/pages/{page_id}/restore", {
-          params: { path: { page_id: page.id } },
-          body: {
-            revision_id: revisionId,
-            base_revision_id: page.revision_id,
-            reason: `restored from the dashboard (revision ${number})`,
-          },
-        }),
-      );
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.POST("/api/knowledge/pages/{page_id}/restore", {
+            params: { path: { page_id: page.id } },
+            body: {
+              revision_id: revisionId,
+              base_revision_id: page.revision_id,
+              reason: `restored from the dashboard (revision ${number})`,
+            },
+          }),
+        );
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, revisionId);
   }
 
   return (
@@ -233,9 +247,14 @@ function History({ page }: { page: Page }) {
             <span className="small">{actor(r.author)}</span>
             <span className="muted small">{r.reason}</span>
             {r.id !== page.revision_id && page.state === "active" ? (
-              <button type="button" className="link" onClick={() => restore(r.id, r.number)}>
+              <ActionButton
+                className="link"
+                pending={action.is(r.id)}
+                disabled={action.busy}
+                action={() => restore(r.id, r.number)}
+              >
                 Restore
-              </button>
+              </ActionButton>
             ) : (
               <span className="muted small">current</span>
             )}
@@ -262,6 +281,7 @@ function PageEditor(props: {
     reason: "",
   });
   const [error, setError] = useState<string>();
+  const action = useAction();
   const set = (key: keyof typeof form, value: string) => setForm((f) => ({ ...f, [key]: value }));
 
   async function submit(e: FormEvent) {
@@ -277,25 +297,27 @@ function PageEditor(props: {
         .filter(Boolean),
       reason: form.reason,
     };
-    try {
-      const result = page
-        ? await call(
-            api.POST("/api/knowledge/pages/{page_id}/revisions", {
-              params: { path: { page_id: page.id } },
-              body: { ...content, base_revision_id: page.revision_id },
-            }),
-          )
-        : await call(
-            api.POST("/api/knowledge/pages", { body: { ...content, project: form.project } }),
+    await action.run(async () => {
+      try {
+        const result = page
+          ? await call(
+              api.POST("/api/knowledge/pages/{page_id}/revisions", {
+                params: { path: { page_id: page.id } },
+                body: { ...content, base_revision_id: page.revision_id },
+              }),
+            )
+          : await call(
+              api.POST("/api/knowledge/pages", { body: { ...content, project: form.project } }),
+            );
+        props.onDone(result.page?.id);
+      } catch (err) {
+        if (err instanceof ApiError && err.code === "knowledge_conflict") {
+          setError(
+            "Someone else changed this page while you were editing. Copy your text, cancel, and re-apply it on the latest version.",
           );
-      props.onDone(result.page?.id);
-    } catch (err) {
-      if (err instanceof ApiError && err.code === "knowledge_conflict") {
-        setError(
-          "Someone else changed this page while you were editing. Copy your text, cancel, and re-apply it on the latest version.",
-        );
-      } else setError((err as Error).message);
-    }
+        } else setError((err as Error).message);
+      }
+    });
   }
 
   return (
@@ -335,12 +357,12 @@ function PageEditor(props: {
       </div>
       {error && <p className="error">{error}</p>}
       <div className="actions">
-        <button type="button" onClick={() => props.onDone()}>
+        <button type="button" disabled={action.busy} onClick={() => props.onDone()}>
           Cancel
         </button>
-        <button type="submit" className="primary">
+        <ActionButton type="submit" className="primary" pending={action.busy}>
           {page ? "Publish revision" : "Create page"}
-        </button>
+        </ActionButton>
       </div>
     </form>
   );

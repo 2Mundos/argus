@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import {
   COPILOT_PROVIDER,
   CUSTOM_PROVIDER_PATTERN,
@@ -65,30 +66,35 @@ export function Accounts() {
   );
   const [selected, setSelected] = useState<string>();
   const selectedAccount = accounts?.find((a) => a.id === selected);
+  const action = useAction();
 
   async function toggle(account: Account) {
     setError(undefined);
-    try {
-      await call(
-        api.PATCH("/api/accounts/{account_id}", {
-          params: { path: { account_id: account.id } },
-          body: { enabled: account.state === "disabled" },
-        }),
-      );
-      reloadList();
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.PATCH("/api/accounts/{account_id}", {
+            params: { path: { account_id: account.id } },
+            body: { enabled: account.state === "disabled" },
+          }),
+        );
+        reloadList();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, `toggle:${account.id}`);
   }
 
   async function reload() {
     setError(undefined);
-    try {
-      const result = await call(api.POST("/api/admin/secrets/reload"));
-      setNotice(`Reloaded the secrets file: ${result.secrets} entries.`);
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await action.run(async () => {
+      try {
+        const result = await call(api.POST("/api/admin/secrets/reload"));
+        setNotice(`Reloaded the secrets file: ${result.secrets} entries.`);
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, "reload-secrets");
   }
 
   return (
@@ -97,9 +103,13 @@ export function Accounts() {
         title="Accounts"
         lead="Provider accounts agents lease. Credentials live encrypted in the SOPS file and are never shown here. When an account hits its quota, agents fall back to the next one."
       >
-        <button type="button" onClick={reload}>
+        <ActionButton
+          pending={action.is("reload-secrets")}
+          disabled={action.busy}
+          action={() => reload()}
+        >
           Reload secrets file
-        </button>
+        </ActionButton>
         <button type="button" onClick={() => setAddingCodex(true)}>
           Add Codex account
         </button>
@@ -214,14 +224,15 @@ export function Accounts() {
                     >
                       Edit
                     </button>
-                    <button
-                      type="button"
+                    <ActionButton
                       className="link"
                       aria-label={`${a.state === "disabled" ? "Enable" : "Disable"} ${a.name}`}
-                      onClick={() => toggle(a)}
+                      pending={action.is(`toggle:${a.id}`)}
+                      disabled={action.busy}
+                      action={() => toggle(a)}
                     >
                       {a.state === "disabled" ? "Enable" : "Disable"}
-                    </button>
+                    </ActionButton>
                     {a.provider === "anthropic" ? (
                       <button
                         type="button"
@@ -363,6 +374,7 @@ function AddAccount({ onClose }: { onClose: () => void }) {
     repoToken: "",
   });
   const [error, setError] = useState<string>();
+  const action = useAction();
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
@@ -412,25 +424,27 @@ function AddAccount({ onClose }: { onClose: () => void }) {
         return;
       }
     }
-    try {
-      await call(
-        api.POST("/api/accounts", {
-          body: {
-            name: form.name,
-            provider: resolvedProvider,
-            kind,
-            priority: form.priority,
-            max_leases: form.maxLeases ? Number(form.maxLeases) : null,
-            credential,
-          },
-        }),
-      );
-      set("repoToken", "");
-      onClose();
-    } catch (err) {
-      setError(withoutSecret((err as Error).message, form.repoToken));
-      set("repoToken", "");
-    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.POST("/api/accounts", {
+            body: {
+              name: form.name,
+              provider: resolvedProvider,
+              kind,
+              priority: form.priority,
+              max_leases: form.maxLeases ? Number(form.maxLeases) : null,
+              credential,
+            },
+          }),
+        );
+        set("repoToken", "");
+        onClose();
+      } catch (err) {
+        setError(withoutSecret((err as Error).message, form.repoToken));
+        set("repoToken", "");
+      }
+    });
   }
 
   return (
@@ -575,12 +589,12 @@ function AddAccount({ onClose }: { onClose: () => void }) {
         )}
         {error && <p className="error">{error}</p>}
         <div className="actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" disabled={action.busy} onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="primary">
+          <ActionButton type="submit" className="primary" pending={action.busy}>
             Add
-          </button>
+          </ActionButton>
         </div>
       </form>
     </div>

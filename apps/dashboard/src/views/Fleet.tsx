@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { api, call, type FleetHealth, type WorkspaceCleanupSummary } from "../api";
 import { DateChip } from "../DateChip";
 import { bytes } from "../format";
@@ -274,22 +275,21 @@ function WorkspaceCleanup() {
       ),
     [],
   );
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const action = useAction();
   if (!data) return null;
   const { settings: s, last_run: run } = data;
 
   async function dryRun() {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await call(api.POST("/api/fleet/workspace-cleanup/run", { body: { dry_run: true } }));
-      reload();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setError(undefined);
+      try {
+        await call(api.POST("/api/fleet/workspace-cleanup/run", { body: { dry_run: true } }));
+        reload();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    });
   }
 
   return (
@@ -321,9 +321,9 @@ function WorkspaceCleanup() {
           <p className="muted small">
             approx. {bytes(data.bytes_estimated)} estimated · {bytes(data.bytes_freed)} freed
           </p>
-          <button type="button" disabled={busy} onClick={() => void dryRun()}>
+          <ActionButton type="button" pending={action.busy} action={() => void dryRun()}>
             Dry run now
-          </button>
+          </ActionButton>
           {error && <p className="error">Dry run failed: {error}</p>}
         </Card>
       </div>

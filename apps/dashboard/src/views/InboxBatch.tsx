@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { api, call, type DecisionDetail } from "../api";
 
 export const MAX_BATCH = 20; // the answers endpoint's limit
@@ -34,8 +35,8 @@ export function BatchPanel(props: {
   onClose: () => void;
 }) {
   const [results, setResults] = useState<Record<string, Outcome>>({});
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const action = useAction();
   const sent = Object.keys(results).length > 0;
   const failed = props.entries.filter((e) => results[e.decision.id]?.ok === false);
 
@@ -49,31 +50,30 @@ export function BatchPanel(props: {
   }
 
   async function send(entries: Entry[]) {
-    setBusy(true);
-    setError(undefined);
-    try {
-      const { results: outcomes } = await call(
-        api.POST("/api/decisions/answers", {
-          body: {
-            answers: entries.map(({ decision, draft }) => ({
-              decision_id: decision.id,
-              choice: draft.choice,
-              text: draft.text,
-              request_id: requestId(decision.id),
-            })),
-          },
-        }),
-      );
-      setResults((prev) => ({
-        ...prev,
-        ...Object.fromEntries(outcomes.map((o) => [o.decision_id, o])),
-      }));
-      props.onResolved(outcomes.filter((o) => o.ok).map((o) => o.decision_id));
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setError(undefined);
+      try {
+        const { results: outcomes } = await call(
+          api.POST("/api/decisions/answers", {
+            body: {
+              answers: entries.map(({ decision, draft }) => ({
+                decision_id: decision.id,
+                choice: draft.choice,
+                text: draft.text,
+                request_id: requestId(decision.id),
+              })),
+            },
+          }),
+        );
+        setResults((prev) => ({
+          ...prev,
+          ...Object.fromEntries(outcomes.map((o) => [o.decision_id, o])),
+        }));
+        props.onResolved(outcomes.filter((o) => o.ok).map((o) => o.decision_id));
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   return (
@@ -106,24 +106,29 @@ export function BatchPanel(props: {
       {error && <p className="error">{error}</p>}
       <div className="actions left">
         {!sent && (
-          <button
+          <ActionButton
             type="button"
             className="primary"
-            disabled={busy}
-            onClick={() => send(props.entries)}
+            pending={action.busy}
+            action={() => send(props.entries)}
           >
             Send {props.entries.length} answer{props.entries.length === 1 ? "" : "s"}
-          </button>
+          </ActionButton>
         )}
         {sent && failed.length > 0 && (
-          <button type="button" className="primary" disabled={busy} onClick={() => send(failed)}>
+          <ActionButton
+            type="button"
+            className="primary"
+            pending={action.busy}
+            action={() => send(failed)}
+          >
             Retry {failed.length} failed
-          </button>
+          </ActionButton>
         )}
         {!sent && error && (
           <span className="muted small">A retry reuses the same request ids.</span>
         )}
-        <button type="button" disabled={busy} onClick={props.onClose}>
+        <button type="button" disabled={action.busy} onClick={props.onClose}>
           {sent ? "Close" : "Back"}
         </button>
       </div>

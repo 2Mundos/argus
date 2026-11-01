@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { api, call, newestTasks, type TaskKind, type TaskState, type TaskSummary } from "../api";
 import { DateChip } from "../DateChip";
 import { reportPage, useLiveData } from "../live";
@@ -247,46 +248,49 @@ function NewTask({ onClose }: { onClose: () => void }) {
     harnessAccount: "",
   });
   const [error, setError] = useState<string>();
+  const action = useAction();
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    try {
-      const capabilities = form.capabilities
-        .split(",")
-        .map((c) => c.trim())
-        .filter(Boolean);
-      const accountProviders = form.accountProviders
-        .split(",")
-        .map((c) => c.trim())
-        .filter(Boolean);
-      const harness = harnessPin(form.harnessModel);
-      const executor = executorPin(form.executorModel);
-      await call(
-        api.POST("/api/tasks", {
-          body: {
-            title: form.title,
-            spec: form.spec,
-            kind: form.kind,
-            project: form.project,
-            priority: form.priority,
-            requires_approval: form.requires_approval,
-            review: form.review,
-            ...(form.difficulty ? { difficulty: form.difficulty } : {}),
-            ...(form.timeoutMinutes ? { timeout_s: Number(form.timeoutMinutes) * 60 } : {}),
-            ...(capabilities.length ? { required_capabilities: capabilities } : {}),
-            ...(accountProviders.length ? { account_providers: accountProviders } : {}),
-            ...(harness ? { harness_model: harness } : {}),
-            ...(executor ? { executor_model: executor } : {}),
-            ...(form.harnessAccount ? { harness_account: form.harnessAccount } : {}),
-          },
-        }),
-      );
-      onClose();
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await action.run(async () => {
+      try {
+        const capabilities = form.capabilities
+          .split(",")
+          .map((c) => c.trim())
+          .filter(Boolean);
+        const accountProviders = form.accountProviders
+          .split(",")
+          .map((c) => c.trim())
+          .filter(Boolean);
+        const harness = harnessPin(form.harnessModel);
+        const executor = executorPin(form.executorModel);
+        await call(
+          api.POST("/api/tasks", {
+            body: {
+              title: form.title,
+              spec: form.spec,
+              kind: form.kind,
+              project: form.project,
+              priority: form.priority,
+              requires_approval: form.requires_approval,
+              review: form.review,
+              ...(form.difficulty ? { difficulty: form.difficulty } : {}),
+              ...(form.timeoutMinutes ? { timeout_s: Number(form.timeoutMinutes) * 60 } : {}),
+              ...(capabilities.length ? { required_capabilities: capabilities } : {}),
+              ...(accountProviders.length ? { account_providers: accountProviders } : {}),
+              ...(harness ? { harness_model: harness } : {}),
+              ...(executor ? { executor_model: executor } : {}),
+              ...(form.harnessAccount ? { harness_account: form.harnessAccount } : {}),
+            },
+          }),
+        );
+        onClose();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   return (
@@ -409,12 +413,12 @@ function NewTask({ onClose }: { onClose: () => void }) {
         </label>
         {error && <p className="error">{error}</p>}
         <div className="actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" disabled={action.busy} onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="primary">
+          <ActionButton type="submit" className="primary" pending={action.busy}>
             Create
-          </button>
+          </ActionButton>
         </div>
       </form>
     </div>

@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { ActionButton, useAction } from "../ActionButton";
 import { api, call, type DecisionDetail, type InboxGroup, type InboxItem } from "../api";
 import { blockReasonText } from "../blockCopy";
 import { DateChip } from "../DateChip";
@@ -233,8 +234,8 @@ function BlockedCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () => 
 /** What the worker host last saw for a quiet claim (stall visibility 3.7). */
 function QuietClaimCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () => void }) {
   const [steerOpen, setSteerOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const action = useAction();
   const task = item.task;
   const attempt = item.attempt ?? task?.attempt ?? 1;
   const assigneeId = task?.assignee_agent_id ?? null;
@@ -248,20 +249,19 @@ function QuietClaimCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () 
   const quietSentence = quietLine.charAt(0).toUpperCase() + quietLine.slice(1);
 
   async function release() {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await call(
-        api.POST("/api/tasks/{task_id}/release", {
-          params: { path: { task_id: item.subject_id } },
-          body: { reason: "quiet in inbox", attempt: item.attempt ?? undefined },
-        }),
-      );
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setError(undefined);
+      try {
+        await call(
+          api.POST("/api/tasks/{task_id}/release", {
+            params: { path: { task_id: item.subject_id } },
+            body: { reason: "quiet in inbox", attempt: item.attempt ?? undefined },
+          }),
+        );
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    });
   }
 
   return (
@@ -275,10 +275,10 @@ function QuietClaimCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () 
         <button type="button" className="link" onClick={onOpenTask}>
           Open task
         </button>
-        <button type="button" disabled={busy} onClick={() => void release()}>
+        <ActionButton type="button" pending={action.busy} action={() => void release()}>
           Release
-        </button>
-        <button type="button" disabled={busy} onClick={() => setSteerOpen((o) => !o)}>
+        </ActionButton>
+        <button type="button" disabled={action.busy} onClick={() => setSteerOpen((o) => !o)}>
           {steerOpen ? "Close steer" : "Steer"}
         </button>
       </div>
@@ -327,26 +327,26 @@ function DecisionCard(props: {
   const setText = (value: string) => props.onDraft({ ...draft, text: value });
   const [saveTo, setSaveTo] = useState<string | null>(null); // null: don't save; "": new page
   const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const action = useAction();
 
   async function answer(choice?: string) {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await call(
-        api.POST("/api/decisions/{decision_id}/answer", {
-          params: { path: { decision_id: decision.id } },
-          body: {
-            choice: choice ?? null,
-            text,
-            save_to_knowledge: saveTo === null ? null : saveTo === "" ? {} : { page_id: saveTo },
-          },
-        }),
-      );
-    } catch (err) {
-      setError((err as Error).message);
-      setBusy(false);
-    }
+    await action.run(async () => {
+      setError(undefined);
+      try {
+        await call(
+          api.POST("/api/decisions/{decision_id}/answer", {
+            params: { path: { decision_id: decision.id } },
+            body: {
+              choice: choice ?? null,
+              text,
+              save_to_knowledge: saveTo === null ? null : saveTo === "" ? {} : { page_id: saveTo },
+            },
+          }),
+        );
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, choice ?? "answer");
   }
 
   const textLabel =
@@ -406,25 +406,27 @@ function DecisionCard(props: {
       <div className="actions left">
         {decision.options ? (
           decision.options.map((option) => (
-            <button
+            <ActionButton
               type="button"
               key={option}
-              disabled={busy}
+              pending={action.is(option)}
+              disabled={action.busy}
               className={option === "reject" ? "danger" : "primary"}
-              onClick={() => answer(option)}
+              action={() => answer(option)}
             >
               {option}
-            </button>
+            </ActionButton>
           ))
         ) : (
-          <button
+          <ActionButton
             type="button"
             className="primary"
-            disabled={busy || !text.trim()}
-            onClick={() => answer()}
+            pending={action.is("answer")}
+            disabled={action.busy || !text.trim()}
+            action={() => answer()}
           >
             Send answer
-          </button>
+          </ActionButton>
         )}
       </div>
     </article>
