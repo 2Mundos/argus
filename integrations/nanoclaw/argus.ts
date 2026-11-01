@@ -1913,11 +1913,36 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       );
       return true;
     } catch (err) {
-      log.warn("Could not store the stderr tail; failing without it", {
+      log.warn("Could not store the stderr tail; going on without it", {
         task: task.id,
         err: String(err).slice(0, 200),
       });
       return false;
+    }
+  }
+
+  /** The attempt whose completion already tried to store a tail: a retry does not repeat it. */
+  let completionTailTried: string | null = null;
+
+  /**
+   * Best-effort, on completion: keep the redacted log tail as `stderr-tail` only when
+   * there is one (3.12.1). A missing hook, a failed read or upload never changes the completion.
+   */
+  async function storeCompletionTail(task: { id: string; attempt: number }): Promise<void> {
+    const key = `${task.id}:${task.attempt}`;
+    if (!cfg.agentLogTail || completionTailTried === key) return;
+    completionTailTried = key;
+    try {
+      const read = await cfg.agentLogTail();
+      await uploadStderrTail(
+        task,
+        sessionTail(typeof read === "string" ? { logTail: read } : read),
+      );
+    } catch (err) {
+      log.warn("Could not read the agent log tail for a completion", {
+        task: task.id,
+        err: String(err).slice(0, 200),
+      });
     }
   }
 
@@ -3785,6 +3810,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     checklist?: ChecklistReport[],
   ): Promise<void> {
     await reportHarness(t, "succeeded");
+    await storeCompletionTail(t);
     const extra = [...attached.keys()];
     const missing = attachFailures.length ? `\n\n[Not stored: ${attachFailures.join("; ")}]` : "";
     if (chars(text + missing).length <= SUMMARY_MAX_CHARS) {
