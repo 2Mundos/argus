@@ -311,15 +311,17 @@ export interface ArgusConfig {
   observe?: (task: ArgusTask) => Promise<Observation | null>;
   /**
    * The repository preflight (failure classes 3.3), run after the repository lease is
-   * applied and before any model session: it must prove an authenticated write
-   * credential for exactly this repository, from inside a session container (the host
-   * has no OneCLI proxy). `provider` is the applied lease's provider. Absent: the
-   * preflight fails closed; `fromEnv` wires the ephemeral-session probe.
+   * applied and before any model session: it must prove read or write access for
+   * exactly this repository, from inside a session container (the host has no OneCLI
+   * proxy). `provider` is the applied lease's provider; `access` is `write` when the
+   * task lists `repository:write`, otherwise `read`. Absent: the preflight fails
+   * closed; `fromEnv` wires the ephemeral-session probe.
    */
   probeRepository?: (
     repositoryUrl: string,
     allowlist: readonly string[],
     provider: string,
+    access?: "read" | "write",
   ) => Promise<void>;
   /**
    * Settles when the host may start work: NanoClaw's startup adoption has finished
@@ -600,18 +602,31 @@ export interface TaskWorkspace {
   branch: string;
 }
 
-function repositoryTaskLines(task: ArgusTask, workspace?: TaskWorkspace | null): string[] {
+function repositoryTaskLines(
+  task: ArgusTask,
+  workspace?: TaskWorkspace | null,
+  readOnly?: boolean,
+): string[] {
   const github = normalizeRepositoryUrl(task.repository_url ?? "").provider === "github";
   const helper = github ? "argus-github-api" : "argus-gitea-api";
   const lines = [
     `Repository (allowlisted): ${task.repository_url}`,
+    ...(readOnly
+      ? [
+          "Project code (read-only): this task does not list repository:write. Use the workspace to read and run local gates; do not push, publish commits, or open pull requests.",
+        ]
+      : []),
     ...(workspace
       ? [
           `Workspace: ${workspace.containerPath}, branch ${workspace.branch}, remote origin ${task.repository_url}; run git fetch and work in this directory; do not create another checkout. It may already hold work from an earlier attempt of this task: keep it.`,
         ]
       : []),
     `Use /usr/local/bin/${helper} for repository API access; do not handle credentials or add auth headers yourself. Commands: get = pull request by number; issue-get = issue tracker item; list-prs = paginated PR list with --state; status = ${github ? "commit statuses and check runs (GitHub Actions) for the PR head SHA, with combined_state" : "commit statuses for the PR head SHA"}; create = open a pull request; update = edit a pull request. Newer images add repo-get, default-branch, branch-get, issue-list/create/update/close/reopen, label-list/add/remove, comment-list/get/create/edit/delete (issues and PRs; comment-create --idempotency-key K), pr-commits, pr-files, pr-diff, pr-review-list/get/comments/create, statuses --sha, run-list/get, job-list, job-logs, artifact-list/download, and review-findings --pr N (agentic review for the exact head SHA; finding_count null means unknown, never zero). Run ${helper} --help first: it lists the commands and exit codes your image supports.`,
-    `To open a PR (you can; push your branch first, then): ${helper} create --repository ${task.repository_url} --title "<title>" --head <branch> --base <base-branch> --body "<text>"   (a long body may use --body-file <path> or --body-stdin when --help lists them; older images silently ignore unsupported options, so check the returned PR body). create is idempotent: if an open PR for the same head and base exists it is returned instead of a duplicate. To edit one: ${helper} update --repository ${task.repository_url} --number <N> [--title T] [--body-file PATH | --body TEXT] [--base B] [--state open|closed]. Both print the PR JSON (number, html_url, head.sha).`,
+    ...(readOnly
+      ? []
+      : [
+          `To open a PR (you can; push your branch first, then): ${helper} create --repository ${task.repository_url} --title "<title>" --head <branch> --base <base-branch> --body "<text>"   (a long body may use --body-file <path> or --body-stdin when --help lists them; older images silently ignore unsupported options, so check the returned PR body). create is idempotent: if an open PR for the same head and base exists it is returned instead of a duplicate. To edit one: ${helper} update --repository ${task.repository_url} --number <N> [--title T] [--body-file PATH | --body TEXT] [--base B] [--state open|closed]. Both print the PR JSON (number, html_url, head.sha).`,
+        ]),
   ];
   if (taskAuthorizesMerge(task)) {
     lines.push(
@@ -1208,7 +1223,13 @@ export function renderTask(
   ];
   const lines = [
     `[Argus task] Task: ${task.id} · Project: ${task.project} · Attempt: ${task.attempt}`,
-    ...(task.repository_url ? repositoryTaskLines(task, opts.workspace) : []),
+    ...(task.repository_url
+      ? repositoryTaskLines(
+          task,
+          opts.workspace,
+          !task.required_capabilities?.includes("repository:write"),
+        )
+      : []),
     ...(opts.runtime ? runtimeTaskLines(opts.runtime) : []),
     ...(opts.inputs?.length ? ["", ...taskInputLines(task.id, opts.inputs)] : []),
     "",
@@ -2848,21 +2869,27 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   }
 
   /**
-   * Repository access for a `repository:write` task, checked in code before any model
-   * work (failure classes 3.3). Null when the task may start; otherwise the typed
-   * reason it is blocked for and what went wrong.
+   * Repository access when the task's project has a configured repository (project code
+   * availability spec). Write tasks use a write preflight; others get read-only checkout. Null when the task may start.
    */
   async function repositoryPreflight(
     task: ArgusTask,
   ): Promise<{ reason: string; error: string } | null> {
-    if (!task.required_capabilities?.includes("repository:write")) return null;
+    const needsWrite = task.required_capabilities?.includes("repository:write") ?? false;
+    // `global` holds knowledge and settings; never take a read lease even if the pool
+    // map names a repository there (tasks on global are refused at the API).
+    if (!needsWrite && task.project === "global") return null;
     const acc = cfg.accounts;
     const repositoryUrl = acc?.repositories?.[task.project];
-    if (!acc || !repositoryUrl)
-      return {
-        reason: "env_repository_unconfigured",
-        error: `no repository is configured for project ${task.project}`,
-      };
+    if (!acc || !repositoryUrl) {
+      if (needsWrite)
+        return {
+          reason: "env_repository_unconfigured",
+          error: `no repository is configured for project ${task.project}`,
+        };
+      return null;
+    }
+    const access: "read" | "write" = needsWrite ? "write" : "read";
     try {
       if (activeAccountLeases.length === 0)
         throw new Error("cannot safely reconcile repository access without active base leases");
@@ -2897,6 +2924,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         task.repository_url,
         activeRepositoryAllowlist,
         activeRepositoryLease?.provider ?? "",
+        access,
       );
       const mark = setTimeout(
         () =>
@@ -2917,13 +2945,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   }
 
   /**
-   * The task's stable workspace (task workspace spec), prepared or checked after the
-   * repository preflight succeeded. Null for a task without `repository:write`.
+   * The task's stable workspace, prepared after repository preflight when the project
+   * has a configured repository. Null when skipped or on checkpoint failure payload.
    */
   async function workspacePreflight(
     task: ArgusTask,
   ): Promise<WorkspaceResult | CheckpointFailure | null> {
-    if (!task.required_capabilities?.includes("repository:write")) return null;
+    if (!task.repository_url) return null;
+    const needsWrite = task.required_capabilities?.includes("repository:write") ?? false;
     let groupDir: string | null;
     try {
       groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
@@ -2935,7 +2964,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       };
     }
     const storeRoot = cfg.checkpointRoot ?? process.env.ARGUS_CHECKPOINT_DIR?.trim();
-    if (storeRoot && task.attempt > 1) {
+    if (needsWrite && storeRoot && task.attempt > 1) {
       // A retry resumes the previous attempt's unpublished work before anything else
       // touches the workspace; an untrusted checkpoint blocks instead of being ignored.
       const restored = await restoreTaskWorkspace({

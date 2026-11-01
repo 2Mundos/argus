@@ -1375,16 +1375,23 @@ function writePreflightResult(file, verdict) {
  * be distinguished here). Anonymous callers cannot get push:true. Then the allowlist must
  * refuse another host and a sibling repository (no network).
  */
-async function repoPreflight(api, resultFile) {
+async function repoPreflight(api, resultFile, access = "write") {
   const { origin, owner, repo } = api.repository;
   const fullName = `${owner}/${repo}`;
+  const needWrite = access === "write";
   let verdict;
   try {
     const data = await api.getRepository();
     if (String(data?.full_name).toLowerCase() !== fullName.toLowerCase())
       throw new GiteaError("bad_response", "the response names a different repository");
-    if (data.permissions?.push !== true)
-      throw policy("the credential is not authenticated with write access to the repository");
+    const perms = data.permissions ?? {};
+    const canWrite = perms.push === true;
+    const canRead = canWrite || perms.pull === true || perms.admin === true;
+    if (needWrite) {
+      if (!canWrite)
+        throw policy("the credential is not authenticated with write access to the repository");
+    } else if (!canRead)
+      throw policy("the credential is not authenticated with read access to the repository");
     const allowed = [`${origin}/${fullName}`];
     for (const other of [
       `https://preflight-denied.invalid/${fullName}`,
@@ -1403,7 +1410,8 @@ async function repoPreflight(api, resultFile) {
       provider: api.product.toLowerCase(),
       repository: `${origin}/${fullName}`,
       authenticated: true,
-      write: true,
+      write: canWrite,
+      read: canRead,
       allowlist_refuses_other_host: true,
       allowlist_refuses_sibling: true,
     };
@@ -1527,9 +1535,9 @@ const COMMANDS = {
     run: (api) => api.getRepository(),
   },
   "repo-preflight": {
-    summary: "prove this session is authenticated with write access to the repository",
-    options: { "result-file": "string" },
-    run: (api, o) => repoPreflight(api, o["result-file"]),
+    summary: "prove this session is authenticated with read or write access to the repository",
+    options: { "result-file": "string", access: "string" },
+    run: (api, o) => repoPreflight(api, o["result-file"], o.access === "read" ? "read" : "write"),
   },
   "default-branch": {
     summary: "{default_branch, sha}",

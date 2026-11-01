@@ -74,8 +74,11 @@ a routine template save and an edit, which share the rules) is refused with
   map, [delivery](task-delivery.spec.md) 3.1): `deliverable_repository`.
 
 Each error names the deliverable and what is missing. The capability is not added
-for the caller. `pr_merged` does not require `delivery.allow_merge`: a human or
-orchestrator may merge; the worker's prompt states whether it may.
+for the caller. Orchestrators still get an automatic read checkout for configured
+projects without setting any capability ([project code
+availability](project-code-availability.spec.md)); branch/pr deliverables still
+require `repository:write` here. `pr_merged` does not require `delivery.allow_merge`:
+a human or orchestrator may merge; the worker's prompt states whether it may.
 
 ## 3.4 Completion gate
 

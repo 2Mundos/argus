@@ -788,14 +788,18 @@ async def create_task(
     """Create a task. Workers may only create subtasks of a task they hold (set
     parent_id; the project is inherited). Orchestrators create any task and must name
     a real project (not `global`, which holds only knowledge and settings).
+    When the project has a repository configured on the pool, the worker gets a
+    checkout before the model runs without you setting any capability (project code
+    availability spec). Set `repository:write` only when the task may push, publish
+    commits, or open or update PRs.
     `deliverable` is what the task must leave behind: response (the default: a
     summary), knowledge (a page written), artifact (a file listed in the result),
     subtasks (at least one child), branch (pushed), pr_open, pr_green (open with
     passing checks) or pr_merged. The branch and pr_* values need
     `required_capabilities` with repository:write and a project that has a repository
-    (422 deliverable_capability or deliverable_repository); completing without the
-    evidence is refused (422 deliverable_missing), and a pr_green or pr_merged task
-    is accepted only once the forge shows it (409 deliverable_unmet or
+    at create time (422 deliverable_capability or deliverable_repository); completing
+    without the evidence is refused (422 deliverable_missing), and a pr_green or
+    pr_merged task is accepted only once the forge shows it (409 deliverable_unmet or
     deliverable_unverified). `knowledge` pins pages the claiming agent should read. `difficulty`:
     "trivial" (a copy change, a typo) or "simple" take the cheap Cursor executor
     (composer-2.5), trivial first on the node's local model with the cloud as the

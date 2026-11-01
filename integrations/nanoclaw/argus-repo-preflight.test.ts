@@ -51,6 +51,7 @@ const verdict = (provider: string, repository: string, extra: object = {}) => ({
   repository,
   authenticated: true,
   write: true,
+  read: true,
   allowlist_refuses_other_host: true,
   allowlist_refuses_sibling: true,
   ...extra,
@@ -246,6 +247,8 @@ describe("repository preflight session", () => {
       "repo-preflight",
       "--repository",
       `${GITHUB}.git`,
+      "--access",
+      "write",
       "--result-file",
       "/preflight/result.json",
       "--timeout-ms",
@@ -309,7 +312,7 @@ describe("repository preflight session", () => {
     child = () => ({ code: 0, verdict: verdict("github", "https://github.com/acme/other") });
     await expect(run()).rejects.toThrow(/different repository/);
     child = () => ({ code: 0, verdict: verdict("github", GITHUB, { authenticated: false }) });
-    await expect(run()).rejects.toThrow(/authenticated write access in its verdict/);
+    await expect(run()).rejects.toThrow(/authenticated access in its verdict/);
     child = () => ({
       code: 0,
       verdict: verdict("github", GITHUB, { allowlist_refuses_sibling: false }),

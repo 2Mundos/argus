@@ -685,15 +685,17 @@ verified by the control plane. Non-code tasks need not carry PR metadata.
 
 ### Repository credentials and Gitea delivery
 
-Repository access is separate from engine and executor accounts. A distinct
-Argus `repository` account lease is requested only for tasks requiring the
-`repository:write` capability. Pools configure a project-to-HTTPS
-`owner/repository` allowlist; NanoClaw rejects an unconfigured project, host,
-or repository before applying the lease. The account provider is `gitea`, or
-`github` for a github.com repository ([GitHub repositories](github-repositories.spec.md)).
-After the task, NanoClaw unassigns both OneCLI repository secrets and releases
-the task-scoped `repository` lease. Tasks without this capability do not
-acquire the credential and retain existing behavior.
+Repository access is separate from engine and executor accounts. Pools configure
+a project-to-HTTPS `owner/repository` allowlist. For any task whose project has
+an entry in that map, NanoClaw requests a task-scoped Argus `repository` account
+lease, applies OneCLI secrets, and runs preflight before injection ([project code
+availability](project-code-availability.spec.md)). Preflight requires **write**
+when the task lists `repository:write`, otherwise **read**. Push, forge mutation,
+and checkpoints stay on `repository:write` only. The account provider is `gitea`,
+or `github` for a github.com repository ([GitHub repositories](github-repositories.spec.md)).
+After the task, NanoClaw unassigns both OneCLI repository secrets and releases the
+lease. Tasks on `global` or projects without a configured repository take no
+repository lease.
 
 Before the task is injected, the host proves the credential works in an ephemeral,
 model-free preflight session of the same agent group, driver, image and gateway lease as a

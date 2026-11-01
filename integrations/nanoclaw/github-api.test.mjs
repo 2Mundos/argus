@@ -55,6 +55,7 @@ describe("repo-preflight (offline logic; production proof is the session child)"
       repository: REPO,
       authenticated: true,
       write: true,
+      read: true,
       allowlist_refuses_other_host: true,
       allowlist_refuses_sibling: true,
     });
@@ -70,6 +71,22 @@ describe("repo-preflight (offline logic; production proof is the session child)"
       assert.equal(r.code, 13, r.out);
       assert.match(JSON.parse(r.err).error.message, /not authenticated with write access/);
     }
+  });
+
+  it("read mode accepts pull without push", async () => {
+    const r = await run(
+      ["repo-preflight", "--access", "read"],
+      repo({ permissions: { pull: true, push: false } }),
+    );
+    assert.equal(r.code, 0, r.err);
+    assert.equal(r.json().write, false);
+    assert.equal(r.json().read, true);
+  });
+
+  it("read mode refuses when the credential cannot read", async () => {
+    const r = await run(["repo-preflight", "--access", "read"], repo({ permissions: {} }));
+    assert.equal(r.code, 13);
+    assert.match(JSON.parse(r.err).error.message, /read access/);
   });
 
   it("uses only permissions.push on the repository GET as the write signal (not scope headers)", async () => {

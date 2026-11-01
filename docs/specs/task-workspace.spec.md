@@ -2,14 +2,16 @@
 
 # 1. Purpose and Scope
 
-A `repository:write` task used to start its model session with no checkout. The
-worker made one wherever it liked, and a later attempt of the same task could not
-find it. This spec covers the workspace half of P2 in
+A task on a project with a configured repository used to get a checkout only when
+it listed `repository:write`. Workers on other tasks saw an empty workspace. This
+spec covers the workspace half of P2 in
 [worker efficiency](../drafts/2026-10-24.worker-efficiency.draft.md). The NanoClaw
 channel gives each such task one git workspace at a fixed path, keyed by task id,
-and checks it in code before any model starts. A broken workspace blocks the task
-with a typed environment reason, as the channel preflight in
-[failure classes](failure-classes.spec.md) 3.3 already does for the repository.
+and checks it in code before any model starts ([project code
+availability](project-code-availability.spec.md) decides when the channel
+prepares it). A broken workspace blocks the task with a typed environment reason,
+as the channel preflight in [failure classes](failure-classes.spec.md) 3.3 already
+does for the repository.
 
 The scope is the NanoClaw channel (`integrations/nanoclaw/argus-workspace.ts` and
 its call in `runTask`) and the new block reasons in Argus.
@@ -59,8 +61,9 @@ its call in `runTask`) and the new block reasons in Argus.
 
 1. The channel claims the task, takes the leases and runs the repository
    preflight (failure classes 3.3).
-2. If the task needs `repository:write`, the channel prepares the workspace.
-   Tasks without it are untouched: the workspaces root is not even resolved.
+2. When the task's project has a configured repository, the channel prepares the
+   workspace after preflight. Tasks on `global` or projects without a repository
+   skip this step.
 3. First attempt: the channel builds the workspace in a hidden temporary
    directory (`.tmp-<task id>-*`) under the root. It runs `git init` with HEAD
    on the task branch (unborn, no commits) and adds `origin`, then renames the

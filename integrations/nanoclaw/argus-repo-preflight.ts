@@ -37,6 +37,7 @@ export interface PreflightChildRequest {
   /** The one repository the child may touch (its whole allowlist). */
   repositoryUrl: string;
   timeoutMs: number;
+  access?: "read" | "write";
 }
 
 /**
@@ -109,6 +110,7 @@ export function safeText(text: string, max = 160): string {
 export function assertPreflightPositive(
   result: PreflightChildResult,
   expected: { provider: string; repository: string },
+  access: "read" | "write" = "write",
 ): void {
   if (result.exitCode !== 0)
     throw new Error(
@@ -121,9 +123,16 @@ export function assertPreflightPositive(
     throw new Error(`the repository preflight ran for another provider than ${expected.provider}`);
   if (v.repository !== expected.repository)
     throw new Error("the repository preflight ran against a different repository");
-  if (v.authenticated !== true || v.write !== true)
+  if (v.authenticated !== true)
+    throw new Error("the repository preflight did not report authenticated access in its verdict");
+  if (access === "write") {
+    if (v.write !== true)
+      throw new Error(
+        "the repository preflight did not report authenticated write access in its verdict",
+      );
+  } else if (v.read !== true && v.write !== true)
     throw new Error(
-      "the repository preflight did not report authenticated write access in its verdict",
+      "the repository preflight did not report authenticated read access in its verdict",
     );
   if (v.allowlist_refuses_other_host !== true || v.allowlist_refuses_sibling !== true)
     throw new Error("the repository preflight did not confirm the helper allowlist refusals");
@@ -138,8 +147,13 @@ export function assertPreflightPositive(
 export function sessionRepositoryProbe(
   run: PreflightRunner,
   timeoutMs = PREFLIGHT_TIMEOUT_MS,
-): (repositoryUrl: string, allowlist: readonly string[], provider: string) => Promise<void> {
-  return async (repositoryUrl, allowlist, provider) => {
+): (
+  repositoryUrl: string,
+  allowlist: readonly string[],
+  provider: string,
+  access?: "read" | "write",
+) => Promise<void> {
+  return async (repositoryUrl, allowlist, provider, access = "write") => {
     const repository = normalizeRepositoryUrl(repositoryUrl);
     if (repository.provider !== provider)
       throw new Error(
@@ -156,8 +170,9 @@ export function sessionRepositoryProbe(
       helper: repository.provider === "github" ? "argus-github-api" : "argus-gitea-api",
       repositoryUrl: repository.cloneUrl,
       timeoutMs,
+      access,
     });
-    assertPreflightPositive(result, { provider: repository.provider, repository: exact });
+    assertPreflightPositive(result, { provider: repository.provider, repository: exact }, access);
   };
 }
 
@@ -452,6 +467,8 @@ export function ephemeralSessionRunner(deps: EphemeralSessionDeps): PreflightRun
         "repo-preflight",
         "--repository",
         request.repositoryUrl,
+        "--access",
+        request.access === "read" ? "read" : "write",
         "--result-file",
         `${PREFLIGHT_CONTAINER_DIR}/${PREFLIGHT_RESULT_FILE}`,
         "--timeout-ms",
