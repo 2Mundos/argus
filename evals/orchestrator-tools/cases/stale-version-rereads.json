@@ -1,0 +1,78 @@
+{
+  "id": "stale-version-rereads",
+  "source": "incident:placeholder-blind-resend-after-409",
+  "prompt": "Raise the priority of task-0005 to 1.",
+  "world": [
+    {
+      "tool": "get_tasks",
+      "times": 1,
+      "result": {
+        "tasks": [
+          {
+            "id": "task-0005",
+            "state": "ready",
+            "version": "2026-10-30T10:00:00Z",
+            "priority": 3,
+            "editable_fields": ["title", "spec", "priority"]
+          }
+        ],
+        "missing": []
+      }
+    },
+    {
+      "tool": "edit_task",
+      "when": {
+        "expected_version": "2026-10-30T10:00:00Z"
+      },
+      "times": 1,
+      "error": "409 stale_version: task changed since 2026-10-30T10:00:00Z"
+    },
+    {
+      "tool": "get_tasks",
+      "result": {
+        "tasks": [
+          {
+            "id": "task-0005",
+            "state": "ready",
+            "version": "2026-10-30T10:05:00Z",
+            "priority": 3,
+            "editable_fields": ["title", "spec", "priority"]
+          }
+        ],
+        "missing": []
+      }
+    },
+    {
+      "tool": "edit_task",
+      "when": {
+        "expected_version": "2026-10-30T10:05:00Z"
+      },
+      "result": {
+        "id": "task-0005",
+        "priority": 1,
+        "version": "2026-10-30T10:06:00Z"
+      }
+    }
+  ],
+  "checks": {
+    "in_order": true,
+    "expect": [
+      {
+        "tool": "get_tasks"
+      },
+      {
+        "tool": "edit_task"
+      },
+      {
+        "tool": "get_tasks"
+      },
+      {
+        "tool": "edit_task",
+        "args": {
+          "expected_version": "2026-10-30T10:05:00Z"
+        }
+      }
+    ],
+    "max_calls": 8
+  }
+}

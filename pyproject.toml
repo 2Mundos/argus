@@ -42,12 +42,12 @@ ignore = ["B008", "S101"]
 ".github/scripts/**" = ["S"]
 
 [tool.ty.src]
-include = ["apps/api/src", "packages/core/src"]
+include = ["apps/api/src", "packages/core/src", "evals"]
 
 [tool.ty.environment]
 python-version = "3.12"
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
-pythonpath = ["apps/api/tests", "scripts"]
+pythonpath = [".", "apps/api/tests", "scripts"]
 asyncio_mode = "auto"

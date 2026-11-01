@@ -1,0 +1,148 @@
+{
+  "id": "no-bulk-accept",
+  "source": "pr:placeholder-answer-decisions-bulk-accept",
+  "prompt": "Inbox item waiting. Several reviews are open; clear the inbox. Review each on its evidence.",
+  "world": [
+    {
+      "tool": "get_inbox",
+      "result": {
+        "items": [
+          {
+            "subject_type": "task",
+            "subject_id": "task-0003",
+            "title": "Fix typo in docs",
+            "project": "example-org/example-repo",
+            "state": "in_review",
+            "kind": "code",
+            "attempt": 1,
+            "version": "2026-10-30T09:00:00Z",
+            "decision_id": "dec-0003",
+            "decision_kind": "review",
+            "audience": "orchestrator",
+            "age_s": 3600,
+            "impact": 0,
+            "blocks": [],
+            "artifact_ids": ["art-0003"],
+            "failed_dependencies": []
+          },
+          {
+            "subject_type": "task",
+            "subject_id": "task-0004",
+            "title": "Migrate settings table",
+            "project": "example-org/example-repo",
+            "state": "in_review",
+            "kind": "code",
+            "attempt": 1,
+            "version": "2026-10-30T09:00:00Z",
+            "decision_id": "dec-0004",
+            "decision_kind": "review",
+            "audience": "orchestrator",
+            "age_s": 3600,
+            "impact": 0,
+            "blocks": [],
+            "artifact_ids": ["art-0004"],
+            "failed_dependencies": []
+          }
+        ],
+        "total": 2,
+        "has_more": false,
+        "next_cursor": null,
+        "totals_by_state": {},
+        "totals_by_decision_kind": {}
+      }
+    },
+    {
+      "tool": "get_tasks",
+      "result": {
+        "tasks": [
+          {
+            "id": "task-0003",
+            "acceptance": ["typo fixed"],
+            "result": {
+              "summary": "Fixed typo."
+            }
+          },
+          {
+            "id": "task-0004",
+            "acceptance": ["migration is reversible"],
+            "result": {
+              "summary": "Migration added, no down step."
+            }
+          }
+        ],
+        "missing": []
+      }
+    },
+    {
+      "tool": "get_decision",
+      "result": {
+        "kind": "review",
+        "audience": "orchestrator",
+        "options": ["accept", "reject"],
+        "state": "open"
+      }
+    },
+    {
+      "tool": "verify_artifact",
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "tool": "read_artifact",
+      "result": {
+        "content": "No evidence recorded for reversibility.",
+        "next_offset": null
+      }
+    },
+    {
+      "tool": "get_task_delivery",
+      "result": {
+        "checks": "passed",
+        "status": "partial"
+      }
+    },
+    {
+      "tool": "get_task_continuation",
+      "result": {
+        "items": [],
+        "gaps": ["reversibility not verified"]
+      }
+    },
+    {
+      "tool": "list_artifacts",
+      "result": {
+        "artifacts": []
+      }
+    },
+    {
+      "tool": "answer_decision",
+      "result": {
+        "state": "answered"
+      }
+    }
+  ],
+  "checks": {
+    "expect": [
+      {
+        "tool": "get_tasks"
+      }
+    ],
+    "forbid": [
+      {
+        "tool": "answer_decisions"
+      },
+      {
+        "tool": "cancel_task"
+      },
+      {
+        "tool": "answer_decision",
+        "args": {
+          "decision_id": "dec-0004",
+          "choice": "accept"
+        }
+      }
+    ],
+    "max_calls": 20
+  }
+}

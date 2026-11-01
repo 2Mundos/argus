@@ -1,0 +1,93 @@
+{
+  "id": "steer-is-injected-and-acked",
+  "source": "pr:placeholder-steer-ack",
+  "prompt": "You are a worker. Claim a task and keep it alive while you work, then finish.",
+  "world": [
+    {
+      "tool": "claim_task",
+      "times": 1,
+      "result": {
+        "task": {
+          "id": "task-0101",
+          "attempt": 2,
+          "title": "Add retry to uploader",
+          "spec": "Add bounded retry to the uploader in example-org/example-repo.",
+          "acceptance": ["retries 3 times"],
+          "knowledge_refs": []
+        }
+      }
+    },
+    {
+      "tool": "heartbeat",
+      "times": 1,
+      "result": {
+        "state": "active",
+        "leases": [
+          {
+            "task_id": "task-0101",
+            "attempt": 2,
+            "ok": true
+          }
+        ],
+        "steers": [
+          {
+            "id": "steer-01",
+            "message": "Also cover the zero-retry case in the test."
+          }
+        ]
+      }
+    },
+    {
+      "tool": "heartbeat",
+      "result": {
+        "state": "active",
+        "leases": [
+          {
+            "task_id": "task-0101",
+            "attempt": 2,
+            "ok": true
+          }
+        ],
+        "steers": []
+      }
+    },
+    {
+      "tool": "report_progress",
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "tool": "complete_task",
+      "result": {
+        "id": "task-0101",
+        "state": "in_review"
+      }
+    }
+  ],
+  "checks": {
+    "expect": [
+      {
+        "tool": "heartbeat"
+      },
+      {
+        "tool": "heartbeat",
+        "args": {
+          "steer_acks": ["steer-01"]
+        }
+      },
+      {
+        "tool": "complete_task",
+        "args": {
+          "summary": "*"
+        }
+      }
+    ],
+    "forbid": [
+      {
+        "tool": "fail_task"
+      }
+    ],
+    "max_calls": 12
+  }
+}
