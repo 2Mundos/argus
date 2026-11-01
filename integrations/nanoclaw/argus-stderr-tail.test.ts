@@ -402,6 +402,62 @@ describe("stderr-tail artifact on a generic failure (synthetic log)", () => {
   }, 15_000);
 });
 
+describe("stderr-tail artifact on completion (synthetic log)", () => {
+  const completes = (f: ReturnType<typeof fakeArgus>) =>
+    f.calls.filter((c) => c.path === "/tasks/t1/complete");
+  async function complete(over: Parameters<typeof start>[2]) {
+    const h = await start({ exitCode: null, logTail: "" }, async () => ["ctr-1"], over);
+    await h.adapter.deliver("local", h.thread(), {
+      kind: "chat",
+      content: { text: "COMPLETE: shipped" },
+    });
+    await until(() => completes(h.fake).length === 1);
+    return h;
+  }
+
+  it("stores a redacted, non-empty tail before the completion", async () => {
+    const secret = ["gh", "p_SYNTHETICSECRET0123456789"].join("");
+    const h = await complete({
+      agentLogTail: async () => ({
+        exitCode: null,
+        logTail: `synthetic warning\nauth ${secret}\n`,
+        truncated: false,
+        complete: true,
+      }),
+    });
+    const [up] = uploads(h.fake);
+    expect(up!.query.get("name")).toBe("stderr-tail");
+    expect(up!.query.get("role")).toBe("other");
+    expect(up!.contentType).toBe(
+      `text/plain; charset=utf-8; truncated=false; complete=true; bytes=${bytes(up!.body)}; redaction_version=1`,
+    );
+    expect(up!.body).toContain("synthetic warning");
+    expect(up!.body).not.toContain("SYNTHETICSECRET");
+    const order = paths(h.fake);
+    expect(order.indexOf("/tasks/t1/artifacts")).toBeLessThan(order.indexOf("/tasks/t1/complete"));
+    expect(JSON.stringify(completes(h.fake)[0]!.body)).not.toContain("synthetic warning");
+  }, 15_000);
+
+  it("uploads nothing for an empty tail", async () => {
+    const h = await complete({ agentLogTail: async () => "" });
+    expect(uploads(h.fake)).toEqual([]);
+  }, 15_000);
+
+  it("completes when the upload fails or the read throws", async () => {
+    const failed = await complete({
+      uploadStatus: 500,
+      agentLogTail: async () => "synthetic: noisy stderr\n",
+    });
+    expect(uploads(failed.fake)).toHaveLength(1);
+    const threw = await complete({
+      agentLogTail: async () => {
+        throw new Error("docker unavailable");
+      },
+    });
+    expect(uploads(threw.fake)).toEqual([]);
+  }, 15_000);
+});
+
 describe("lastClaudeApiError", () => {
   const record = (timestamp: string, status: number, type: string) =>
     JSON.stringify({
