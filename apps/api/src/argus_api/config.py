@@ -120,6 +120,9 @@ class Settings:
     disk_guard_refuse_bytes: int = 2 * 1024 * 1024 * 1024
     disk_guard_resume_bytes: int = int(2.5 * 1024 * 1024 * 1024)
     disk_guard_interval_s: float = 5.0
+    disk_guard_pause: bool = False
+    disk_guard_shed_after_s: float = 30.0
+    disk_guard_fail_pause_count: int = 2
 
     @property
     def db_path(self) -> Path:
@@ -319,6 +322,13 @@ class Settings:
             disk_guard_interval_s=float(
                 os.environ.get("ARGUS_DISK_GUARD_INTERVAL_S", 5)
             ),
+            disk_guard_pause=_env_bool("ARGUS_DISK_GUARD_PAUSE", "false"),
+            disk_guard_shed_after_s=_env_number(
+                "ARGUS_DISK_GUARD_SHED_AFTER_S", float, 30
+            ),
+            disk_guard_fail_pause_count=_env_number(
+                "ARGUS_DISK_GUARD_FAIL_PAUSE_COUNT", int, 2
+            ),
         )
         settings._validate_disk_guard()
         return settings
@@ -353,6 +363,16 @@ class Settings:
             raise ValueError(
                 f"ARGUS_DISK_GUARD_INTERVAL_S must be > 0 (got {interval})"
             )
+        if not self.disk_guard_shed_after_s > 0:
+            raise ValueError(
+                "ARGUS_DISK_GUARD_SHED_AFTER_S must be > 0"
+                f" (got {self.disk_guard_shed_after_s})"
+            )
+        if self.disk_guard_fail_pause_count < 1:
+            raise ValueError(
+                "ARGUS_DISK_GUARD_FAIL_PAUSE_COUNT must be >= 1"
+                f" (got {self.disk_guard_fail_pause_count})"
+            )
 
 
 def _difficulty_executors() -> dict[str, tuple[str, ...]]:
@@ -369,6 +389,18 @@ def _difficulty_executors() -> dict[str, tuple[str, ...]]:
 
 def _csv(name: str) -> tuple[str, ...]:
     return tuple(x.strip() for x in os.environ.get(name, "").split(",") if x.strip())
+
+
+def _env_number[T: (int, float)](name: str, kind: type[T], default: T) -> T:
+    """Parse a numeric env var; empty or whitespace-only means the default and a
+    typo fails startup naming the setting."""
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return kind(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a number; got {raw!r}") from None
 
 
 def _env_bool(name: str, default: str) -> bool:

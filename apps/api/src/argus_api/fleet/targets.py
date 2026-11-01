@@ -127,6 +127,8 @@ class LabeledContainer:
     ref: str
     value: str  # the value of the label that was asked for
     running: bool
+    paused: bool = False
+    container_id: str | None = None  # the engine's full id (its cgroup name)
 
 
 @dataclass(frozen=True)
@@ -174,6 +176,12 @@ class Target(Protocol):
     async def list_by_label(self, key: str) -> builtins.list[LabeledContainer]:
         """Every container (any state) carrying the label `key`, with its value."""
         ...
+
+    async def pause(self, ref: str) -> None:
+        """Freeze the container (`docker pause`); raises TargetError."""
+        ...
+
+    async def unpause(self, ref: str) -> None: ...
 
     async def logs(self, ref: str, *, tail: int) -> str: ...
 
@@ -223,6 +231,24 @@ class DockerTarget:
 
     async def logs(self, ref: str, *, tail: int) -> str:
         return await self._call(self._logs, ref, tail, deadline=PROVIDER_OP_TIMEOUT_S)
+
+    async def pause(self, ref: str) -> None:
+        await self._call(self._pause, ref, True, deadline=PROVIDER_OP_TIMEOUT_S)
+
+    async def unpause(self, ref: str) -> None:
+        await self._call(self._pause, ref, False, deadline=PROVIDER_OP_TIMEOUT_S)
+
+    def _pause(self, ref: str, freeze: bool) -> None:
+        from docker.errors import NotFound
+
+        try:
+            container = self._docker().containers.get(ref)
+            if freeze:
+                container.pause()
+            else:
+                container.unpause()
+        except NotFound:
+            return
 
     async def probe(self) -> TargetInfo:
         return await self._call(self._probe, deadline=PROVIDER_OP_TIMEOUT_S)
@@ -470,7 +496,11 @@ class DockerTarget:
         found = self._docker().containers.list(all=True, filters={"label": [key]})
         return [
             LabeledContainer(
-                c.name, c.labels[key], c.status in ("running", "paused", "restarting")
+                c.name,
+                c.labels[key],
+                c.status in ("running", "paused", "restarting"),
+                c.status == "paused",
+                c.id,
             )
             for c in found
             if key in c.labels
@@ -614,6 +644,12 @@ class KubernetesTarget:
             for p in pods
             if key in (p.metadata.labels or {})
         ]
+
+    async def pause(self, ref: str) -> None:
+        raise TargetError("pausing is not supported on Kubernetes")
+
+    async def unpause(self, ref: str) -> None:
+        raise TargetError("pausing is not supported on Kubernetes")
 
     async def probe(self) -> TargetInfo:
         try:

@@ -117,18 +117,18 @@ Source: the [disk guard draft](../drafts/2026-10-29.disk-guard.draft.md) and its
 [investigation](../reports/2026-10-29.disk-guard-investigation.ref.md). Where the
 investigation found a flaw, the corrected rule is stated and flagged **Decision**.
 
-**Status — admission slice implemented.** Filesystem measurement (data directory,
-`instances_root` when configured, local Docker `DockerRootDir`), `st_dev` dedup,
-warn/refuse hysteresis, one warning event per warn episode, typed `disk_low` claim
-admission from an in-memory snapshot, and authenticated read-only visibility are
-implemented. The paused-claim foundations below are implemented but **dormant**
-(no production path calls them). **Still pending (not implemented):** `docker pause`
-/ resume of paused containers and wiring the guard loop to the paused-claim API,
-shed, timeout exemption while paused, wiring ranked writers into pause/shed,
-and any host-disk filling. **Measurement foundation implemented** in
-``disk_guard_writer_ranking`` (cgroup ``io.stat`` parse/delta, bounded directory
-sample, deterministic ranking); still unwired from the guard loop. Do not treat
-pause/shed settings as live.
+**Status — implemented:** measurement (data directory, `instances_root` when
+configured, local Docker `DockerRootDir`), `st_dev` dedup, warn/refuse hysteresis,
+one warning event per warn episode, typed `disk_low` claim admission from an
+in-memory snapshot, authenticated read-only visibility, and the pause slice behind
+`ARGUS_DISK_GUARD_PAUSE` (default off): `docker pause` / resume of descendant agent
+containers, guard-side lease renewal, shed of the heaviest writer, the
+failed-measurement pause, and writer ranking by cgroup `io.stat` with a size
+fallback. **Not implemented:** a `timeout_s` exemption while paused (decided: none),
+pause on remote daemons or Kubernetes (warn and refuse only), and any host-disk
+filling. **Not verified:** the pause path has only synthetic tests (see
+Verification boundary); real `docker pause`, real cgroup `io.stat` and the
+disposable tmpfs scenario of the draft have not been run.
 
 One guard loop measures free space and acts in bands. The 64 MiB `disk` readiness
 check in 3.1 stays unchanged: data directory only, no effect from guard bands. The
@@ -140,17 +140,17 @@ database, reaper, reconciler, disk (64 MiB), secrets.
 | --- | --- | --- |
 | Warn | below 5 GiB, `5368709120` (`ARGUS_DISK_GUARD_WARN_BYTES`) | one warning event per episode; authenticated visibility shows it |
 | Warn clear | above 6 GiB, `6442450944` (`..._WARN_CLEAR_BYTES`) | the episode ends |
-| Refuse | below 2 GiB, `2147483648` (`..._REFUSE_BYTES`) | claims refused with typed admission reason `disk_low`; *pending:* running session containers paused (`docker pause`) |
-| Resume | above 2.5 GiB, `2684354560` (`..._RESUME_BYTES`) | claims admitted; *pending:* paused containers resumed |
-| Shed | still paused after 30 s (`..._SHED_AFTER_S=30`) | *pending:* stop the heaviest writer, `env_disk_full`, no attempt consumed; the rest stay paused |
+| Refuse | below 2 GiB, `2147483648` (`..._REFUSE_BYTES`) | claims refused with typed admission reason `disk_low`; with `ARGUS_DISK_GUARD_PAUSE`, running descendant session containers paused (`docker pause`) |
+| Resume | above 2.5 GiB, `2684354560` (`..._RESUME_BYTES`) | claims admitted; paused containers resumed and their pause cleared |
+| Shed | still paused and below refuse after 30 s (`..._SHED_AFTER_S=30`) | stop the heaviest writer, `env_disk_full`, no attempt consumed; the rest stay paused |
 
-Admission settings (validated at startup): `ARGUS_DISK_GUARD_ENABLED` (`true`),
-`ARGUS_DISK_GUARD_INTERVAL_S` (`5`, must be `> 0`), and the four byte thresholds
-above. An empty or whitespace-only value for a boolean setting means that setting's
-default. Startup requires `clear > warn > resume > refuse >= 0` and `interval > 0`;
+Settings (validated at startup): `ARGUS_DISK_GUARD_ENABLED` (`true`),
+`ARGUS_DISK_GUARD_INTERVAL_S` (`5`, must be `> 0`), the four byte thresholds above,
+`ARGUS_DISK_GUARD_PAUSE` (`false`; boolean), `ARGUS_DISK_GUARD_SHED_AFTER_S` (`30`,
+must be `> 0`) and `ARGUS_DISK_GUARD_FAIL_PAUSE_COUNT` (`2`, integer `>= 1`). An
+empty or whitespace-only value means that setting's default. Startup requires
+`clear > warn > resume > refuse >= 0`, `interval > 0` and the ranges above;
 otherwise Argus refuses to start with a message that names the bad setting.
-`ARGUS_DISK_GUARD_PAUSE`, `..._SHED_AFTER_S`, and `..._FAIL_PAUSE_COUNT` belong to
-the pending pause/shed slice and are not introduced here.
 
 - **Hysteresis.** A band clears only at its upper edge: warn above 6 GiB, refuse
   above 2.5 GiB. Equality at a threshold does not change state (`free < warn`
@@ -170,20 +170,26 @@ the pending pause/shed slice and are not introduced here.
   hysteresis edge; if no successful measurement is newer than
   `max(3 × interval, 30 s)`, the snapshot is reported **stale** and claims stay
   refused. Recovery to a measured free `> resume` readmits.
-- **Shed rule (Decision, changes the draft; pending implementation).** Shed at
-  most one writer per 30 s period. Resume is gated only on the 2.5 GiB band, never
-  on "resume the rest": resuming while still below 2 GiB would re-pause on the
-  next poll.
-- **Failed-measurement pause (pending).** **Decision (owner):** the draft pauses
-  running sessions on the first failure; the investigation recommends pausing only
-  after 2 consecutive failures (`ARGUS_DISK_GUARD_FAIL_PAUSE_COUNT=2`). Admission
-  already fails closed on the first unknown; pause behaviour is not implemented.
+- **Shed rule (Decision, changes the draft).** While claims are paused and free is
+  still below refuse, shed at most one writer per `SHED_AFTER_S` period, the first
+  `SHED_AFTER_S` after the pause. Shed is per container, which is per instance
+  (one agent per NanoClaw instance). The victim container is stopped and its
+  attempt ends `env_disk_full` (class `environment`): the task is `ready` again
+  with `failures` unchanged, like a release, and an unshared account lease ends with
+  it. The `disk.shed` event records the ranking basis. The other paused sessions
+  stay paused. Resume is gated only on the 2.5 GiB band, never on "resume the
+  rest": resuming while still below 2 GiB would re-pause on the next poll. Between
+  refuse and resume claims stay paused and no further shed runs.
+- **Failed-measurement pause.** **Decision (owner):** the draft pauses running
+  sessions on the first failure; the guard pauses only after
+  `ARGUS_DISK_GUARD_FAIL_PAUSE_COUNT` (2) consecutive failed passes. Admission
+  fails closed on the first unknown. A failed measurement never sheds: shed needs a
+  measured free below refuse.
 
 ### Pause, leases, and stall detection
 
-**Status — foundations implemented, dormant.** The state and the reaper rules
-below exist; nothing calls the guard-side API yet. *Still pending:* `docker pause`
-/ resume and shed, and the guard loop calling the API.
+**Status — implemented.** The guard loop sets and clears the pause, renews leases
+and resumes, as below; shed is under the band table.
 
 - **Guard-authoritative state.** The pause lives in the database: nullable
   `tasks.paused_disk_at`, set and cleared only by the server-side service API
@@ -194,9 +200,9 @@ below exist; nothing calls the guard-side API yet. *Still pending:* `docker paus
   release, expire, requeue, …) and every new claim clear it, so it never reaches
   another attempt.
 - A paused session cannot heartbeat, so the guard renews paused claims' leases
-  itself (`renew_paused_disk`, reason `paused_disk`), each by its `lease_ttl_s`.
-  An already expired lease is not revived; an unrenewed paused lease expires as
-  any other.
+  itself (`renew_paused_disk`, reason `paused_disk`), each by its `lease_ttl_s`,
+  at half the shortest paused TTL. An already expired lease is not revived; an
+  unrenewed paused lease expires as any other.
 - A heartbeat alone does not stop quiet or stalled: a paused container stops
   writing `activity_at`. `flag_quiet` and `expire_stalled` skip claims with
   `paused_disk_at` set, as a SQL condition in their own write transaction, so a
@@ -207,8 +213,8 @@ below exist; nothing calls the guard-side API yet. *Still pending:* `docker paus
 - `stall_cause` gains `paused_disk` for visibility only, derived from the column,
   never from an observation (task read, inbox, expiry errors and events). No worker
   reports the pause as authority; the API knows because it paused the claim.
-- The wall-clock `timeout_s` is not exempt while paused unless the owner decides
-  so (open question): a paused claim still times out.
+- **Decision:** the wall-clock `timeout_s` is not exempt while paused: a paused
+  claim still times out.
 
 ### Who runs the loop
 
@@ -218,37 +224,36 @@ the readiness `loops` map). The NanoClaw host needs no loop. Measurement runs of
 the event loop (`asyncio.to_thread`) and never while holding the DB writer; the
 claim path reads only the in-memory snapshot.
 
-*Pending for pause:* never pause the Argus-started host container (it sends lease
-heartbeats); pause only descendant agent containers found by `descendant_label`;
-pause only on a local unix-socket daemon (`shares_filesystem`). Remote daemons and
-Kubernetes get the warn and refuse bands only.
+The pause hook runs inside the loop, after each measurement. It never pauses the
+Argus-started host container (it sends lease heartbeats); it pauses only
+descendant agent containers found by `descendant_label`, and only on a local
+unix-socket daemon (`shares_filesystem`). Remote daemons and Kubernetes get the
+warn and refuse bands only. A restarted API adopts containers it finds already
+paused and resumes them with the rest.
 
 ### "Wrote most"
 
-**Status — measurement foundation implemented (unwired).** Pause/shed callers
-will rank by cgroup v2 ``io.stat`` ``wbytes`` delta per container, sampled at
-pause time and at shed time, with a bounded directory-size sample at pause time
-for tie-break and display. Shed wiring is still pending.
+**Decision, implemented:** rank by cgroup v2 `io.stat` `wbytes` delta.
 
-- Rank by the cgroup v2 `io.stat` `wbytes` delta per container, sampled at pause
-  time and at shed time.
+- Rank by the `io.stat` `wbytes` delta per container, sampled at pause time and at
+  shed time. A frozen cgroup only writes back dirty pages, so the delta is a
+  proxy for who was writing, not a byte-exact total.
 - Take one bounded directory-size sample of the container's instance directory at
-  pause time (the workspace-cleanup bounded walker): tie-break and the number shown
-  in the event.
+  pause time (the workspace-cleanup bounded walker), off the event loop: tie-break
+  and the number shown in the event. The loop does no other directory walk.
 - Reject `docker ps --size`: it reads the writable layer, is slow, and cannot see
   bind-mount writes.
-- **OPEN:** verify the `io` controller is enabled for the Docker slice and that
-  `wbytes` is readable on a Docker host. If unreadable, fall back to directory
-  size and say "ranked by size" in the event.
+- If `io.stat` is unreadable (controller not enabled for the Docker slice, or no
+  cgroup v2), rank by directory size and say "ranked by size" in the `disk.shed`
+  event. Not yet verified on a real Docker host.
 
 ### Filesystems
 
 Judged separately; the worst one decides. Paths on the same `st_dev` form one group
 and one episode; a group containing the data directory counts as the data directory.
-The admission slice needs no per-group role: the 64 MiB readiness check reads the
-data directory alone and limits use the worst free among groups. The role union
-(and the data-directory-strictness rule) becomes load-bearing only for pause and
-shed, which are pending.
+Pause and shed act on the role union of the groups below refuse; a group that
+contains the data directory counts as the data directory. The 64 MiB readiness
+check reads the data directory alone, and limits use the worst free among groups.
 Unknown beats every measured free; otherwise the minimum free among applicable
 groups decides the band. Bounded: a constant number of `stat` / `statvfs` /
 Docker-info calls per pass; no directory walks; Docker query with a short timeout.
@@ -283,22 +288,22 @@ paths or identifiers.
 
 ### Verification boundary
 
-Automated tests are synthetic: injected `statvfs` / `stat` / clock / Docker-info
-fixtures and disposable temporary directories. They do not prove behaviour against
-a real host disk, a live Docker daemon, or production free-space conditions. No
-runtime or real-disk evidence exists for this slice.
+Automated tests are synthetic: injected `statvfs` / `stat` / clock / Docker-info /
+`io.stat` / directory-size fixtures, a fake container target, and disposable
+temporary directories. They do not prove behaviour against a real host disk, a live
+Docker daemon (`docker pause`, cgroup `io.stat`), or production free-space
+conditions. The draft's disposable tmpfs test has not been run.
 
 ### Open questions (owner decisions)
 
-1. Shed outcome: `blocked` (existing `environment` class) or requeue without an
-   attempt (recommended; new rule).
-2. Defaults `ENABLED=true`, `PAUSE=false` (recommended).
-3. Absolute thresholds, or a percentage floor on small disks.
-4. Whether `timeout_s` is exempt while paused.
-5. Whether guard loop staleness fails `/readyz`.
-6. Data-directory band: pause and shed when sessions may not be the writers.
-7. Accept the two draft changes: resume gated on 2.5 GiB only; failed-measurement
-   pause threshold.
+Decided and implemented: shed requeues without consuming an attempt
+(`env_disk_full`); defaults `ENABLED=true`, `PAUSE=false`; `timeout_s` is not exempt
+while paused; the API process owns the loop; the two draft changes (resume gated on
+2.5 GiB only, failed-measurement pause threshold). Still open:
+
+1. Absolute thresholds, or a percentage floor on small disks.
+2. Whether guard loop staleness fails `/readyz`.
+3. Data-directory band: pause and shed when sessions may not be the writers.
 
 # 4. Open Questions
 

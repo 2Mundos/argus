@@ -34,6 +34,7 @@ from argus_api.db import Database, DataDirLock
 from argus_api.decisions.routes import router as decisions_router
 from argus_api.deps import get_db
 from argus_api.disk_guard import DiskGuard
+from argus_api.disk_guard_pause import PauseController
 from argus_api.engines.local import LocalModel
 from argus_api.engines.routes import router as engines_router
 from argus_api.errors import DomainError
@@ -163,7 +164,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         # Disk guard keeps its own LoopStats but must not join readiness `loops`
         # (operations 3.5: /readyz checks stay database/reaper/reconciler/disk/secrets).
         disk_guard_stats = LoopStats("disk_guard", settings.disk_guard_interval_s)
-        app.state.disk_guard = DiskGuard(settings, db, disk_guard_stats)
+        app.state.disk_guard = DiskGuard(
+            settings,
+            db,
+            disk_guard_stats,
+            pause=PauseController(settings, db, app.state.targets)
+            if settings.disk_guard_pause
+            else None,
+        )
         if settings.disk_guard_enabled:
             started = time.monotonic()
             try:
