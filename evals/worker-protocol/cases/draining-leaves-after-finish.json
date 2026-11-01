@@ -1,0 +1,68 @@
+{
+  "id": "draining-leaves-after-finish",
+  "source": "task:placeholder-draining-worker",
+  "prompt": "You are a worker. Claim a task, finish it, then follow what the heartbeat tells you.",
+  "world": [
+    {
+      "tool": "claim_task",
+      "times": 1,
+      "result": {
+        "task": {
+          "id": "task-0101",
+          "attempt": 2,
+          "title": "Add retry to uploader",
+          "spec": "Add bounded retry to the uploader in example-org/example-repo.",
+          "acceptance": ["retries 3 times"],
+          "knowledge_refs": []
+        }
+      }
+    },
+    {
+      "tool": "heartbeat",
+      "result": {
+        "state": "draining",
+        "leases": [
+          {
+            "task_id": "task-0101",
+            "attempt": 2,
+            "ok": true
+          }
+        ],
+        "steers": []
+      }
+    },
+    {
+      "tool": "complete_task",
+      "result": {
+        "id": "task-0101",
+        "state": "in_review"
+      }
+    },
+    {
+      "tool": "leave",
+      "result": {
+        "ok": true
+      }
+    }
+  ],
+  "checks": {
+    "in_order": true,
+    "expect": [
+      {
+        "tool": "claim_task"
+      },
+      {
+        "tool": "complete_task"
+      },
+      {
+        "tool": "leave"
+      }
+    ],
+    "forbid": [
+      {
+        "tool": "fail_task"
+      }
+    ],
+    "max_calls": 10
+  }
+}

@@ -1,0 +1,148 @@
+{
+  "id": "review-reads-evidence-before-accept",
+  "source": "task:placeholder-accepted-review-without-reading",
+  "prompt": "Inbox item waiting. Work the inbox; the goal you were given settles every review on acceptance criteria.",
+  "world": [
+    {
+      "tool": "get_inbox",
+      "result": {
+        "items": [
+          {
+            "subject_type": "task",
+            "subject_id": "task-0002",
+            "title": "Add retry to uploader",
+            "project": "example-org/example-repo",
+            "state": "in_review",
+            "kind": "code",
+            "attempt": 1,
+            "version": "2026-10-30T09:00:00Z",
+            "decision_id": "dec-0002",
+            "decision_kind": "review",
+            "audience": "orchestrator",
+            "age_s": 3600,
+            "impact": 0,
+            "blocks": [],
+            "artifact_ids": ["art-0002"],
+            "failed_dependencies": []
+          }
+        ],
+        "total": 1,
+        "has_more": false,
+        "next_cursor": null,
+        "totals_by_state": {},
+        "totals_by_decision_kind": {}
+      }
+    },
+    {
+      "tool": "get_decision",
+      "result": {
+        "id": "dec-0002",
+        "kind": "review",
+        "audience": "orchestrator",
+        "options": ["accept", "reject"],
+        "state": "open"
+      }
+    },
+    {
+      "tool": "get_tasks",
+      "result": {
+        "tasks": [
+          {
+            "id": "task-0002",
+            "state": "in_review",
+            "acceptance": ["uploader retries 3 times", "unit test added"],
+            "result": {
+              "summary": "Added retry with backoff and a test."
+            }
+          }
+        ],
+        "missing": []
+      }
+    },
+    {
+      "tool": "get_task_delivery",
+      "result": {
+        "pr": {
+          "number": 12,
+          "url": "https://example.invalid/example-org/example-repo/pull/12"
+        },
+        "checks": "passed",
+        "status": "complete"
+      }
+    },
+    {
+      "tool": "get_task_continuation",
+      "result": {
+        "items": [
+          {
+            "id": "c1",
+            "status": "done",
+            "evidence": "test_uploader_retry"
+          }
+        ],
+        "gaps": []
+      }
+    },
+    {
+      "tool": "list_artifacts",
+      "result": {
+        "artifacts": [
+          {
+            "id": "art-0002",
+            "name": "summary.md"
+          }
+        ]
+      }
+    },
+    {
+      "tool": "verify_artifact",
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "tool": "read_artifact",
+      "result": {
+        "content": "Retries 3 times; test_uploader_retry passes.",
+        "next_offset": null
+      }
+    },
+    {
+      "tool": "answer_decision",
+      "result": {
+        "decision_id": "dec-0002",
+        "state": "answered"
+      }
+    }
+  ],
+  "checks": {
+    "expect": [
+      {
+        "tool": "get_tasks"
+      },
+      {
+        "tool": "verify_artifact",
+        "args": {
+          "artifact_id": "art-0002"
+        }
+      },
+      {
+        "tool": "answer_decision",
+        "args": {
+          "decision_id": "dec-0002",
+          "choice": "accept",
+          "request_id": "*"
+        }
+      }
+    ],
+    "forbid": [
+      {
+        "tool": "answer_decisions"
+      },
+      {
+        "tool": "claim_task"
+      }
+    ],
+    "max_calls": 14
+  }
+}

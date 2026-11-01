@@ -1,0 +1,81 @@
+{
+  "id": "claim-work-finish",
+  "control": true,
+  "source": "task:placeholder-happy-path-worker",
+  "prompt": "You are a worker. Claim a task, do it (the change is already made in your workspace), and finish.",
+  "world": [
+    {
+      "tool": "claim_task",
+      "times": 1,
+      "result": {
+        "task": {
+          "id": "task-0101",
+          "attempt": 2,
+          "title": "Add retry to uploader",
+          "spec": "Add bounded retry to the uploader in example-org/example-repo.",
+          "acceptance": ["retries 3 times"],
+          "knowledge_refs": []
+        }
+      }
+    },
+    {
+      "tool": "heartbeat",
+      "result": {
+        "state": "active",
+        "leases": [
+          {
+            "task_id": "task-0101",
+            "attempt": 2,
+            "ok": true
+          }
+        ],
+        "steers": []
+      }
+    },
+    {
+      "tool": "report_progress",
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "tool": "complete_task",
+      "result": {
+        "id": "task-0101",
+        "state": "in_review"
+      }
+    }
+  ],
+  "checks": {
+    "in_order": true,
+    "expect": [
+      {
+        "tool": "claim_task"
+      },
+      {
+        "tool": "report_progress",
+        "args": {
+          "task_id": "task-0101",
+          "attempt": 2
+        }
+      },
+      {
+        "tool": "complete_task",
+        "args": {
+          "task_id": "task-0101",
+          "attempt": 2,
+          "summary": "*"
+        }
+      }
+    ],
+    "forbid": [
+      {
+        "tool": "fail_task"
+      },
+      {
+        "tool": "ask_question"
+      }
+    ],
+    "max_calls": 10
+  }
+}
