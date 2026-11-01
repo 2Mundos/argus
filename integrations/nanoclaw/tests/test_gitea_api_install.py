@@ -452,7 +452,10 @@ def test_install_sh_wires_quota_resume_files() -> None:
     for name in ("argus-quota-resume.ts", "argus-quota-resume.test.ts"):
         assert f'cp "$here/{name}" "$target/src/channels/{name}"' in script
         assert (NANOCLAW / name).is_file()
-    assert "src/channels/argus-quota-resume.test.ts" in (NANOCLAW / "provision.sh").read_text()
+    assert (
+        "src/channels/argus-quota-resume.test.ts"
+        in (NANOCLAW / "provision.sh").read_text()
+    )
 
 
 def test_install_sh_wires_copilot_delegate_runtime() -> None:
