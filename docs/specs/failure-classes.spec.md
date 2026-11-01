@@ -211,9 +211,9 @@ task. No model session starts and no attempt is spent.
 
 | Check | Reason |
 | --- | --- |
-| The task needs `repository:write` and its project has a repository URL | `env_repository_unconfigured` |
-| The repository lease is taken and applied (today's step) | `env_repository_unavailable` |
-| A preflight session (3.3.1) proves an authenticated write credential for exactly this repository, within its deadline, and is torn down | `env_repository_unreachable` |
+| The task's project has no repository URL in the pool map but the task needs write or a configured project checkout | `env_repository_unconfigured` |
+| The repository lease is taken and applied | `env_repository_unavailable` |
+| A preflight session (3.3.1) proves read or write access for exactly this repository (see [project code availability](project-code-availability.spec.md)), within its deadline, and is torn down | `env_repository_unreachable` |
 | The task workspace has a place: the agent group dir is known and the task has a repository URL | `env_workspace_unconfigured` |
 | The task workspace can be created and read (no `EACCES`, `EPERM` or `EROFS`) | `env_workspace_permission` |
 | The task workspace is a real directory under the workspaces root and a git repository | `env_workspace_invalid` |
@@ -229,8 +229,9 @@ task. No model session starts and no attempt is spent.
 | A required task input has a safe name and destination, and its size and SHA-256 match after the retry | `env_input_invalid` |
 | The task inputs stay within the per-input, per-task and file-count limits | `env_input_limit` |
 
-- The workspace checks run only for `repository:write` tasks, after the
-  repository checks; [task workspace](task-workspace.spec.md) 3.4 defines them.
+- The workspace checks run for every task whose project has a configured
+  repository, after the repository checks; [task workspace](task-workspace.spec.md)
+  3.4 defines them.
 - The input checks run for every task with a required input, before the
   workspace is prepared and before any model runs
   ([task inputs](task-inputs.spec.md) 3.4).

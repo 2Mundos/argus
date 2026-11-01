@@ -51,6 +51,7 @@ const verdict = (provider: string, repository: string, extra: object = {}) => ({
   repository,
   authenticated: true,
   write: true,
+  read: true,
   allowlist_refuses_other_host: true,
   allowlist_refuses_sibling: true,
   ...extra,

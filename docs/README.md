@@ -85,9 +85,12 @@ every new dependency is judged against it.
 - [Workspace cleanup](specs/workspace-cleanup.spec.md) — opt-in, dry-run-first
   deletion of terminated NanoClaw instance directories after their unpublished git
   work is archived and verified
+- [Project code availability](specs/project-code-availability.spec.md) — every
+  task on a project with a configured repository gets a checkout before the
+  model; push and forge mutation stay on `repository:write`
 - [Task workspace](specs/task-workspace.spec.md) — a stable git workspace per
-  `repository:write` task, keyed by task id, created and checked read-only
-  before the model, blocking with a typed `env_workspace_*` reason
+  such task, keyed by task id, created and checked before the model, blocking
+  with a typed `env_workspace_*` reason
 - [Task checkpoint](specs/task-checkpoint.spec.md) — hash-verified, node-local
   preservation of a task's unpublished work and its restore by the next attempt,
   or a typed `env_checkpoint_*` block

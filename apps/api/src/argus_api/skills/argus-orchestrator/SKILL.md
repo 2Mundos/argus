@@ -173,6 +173,12 @@ giving any worker more access:
 
 ## Creating and routing work
 
+Every task on a **project that has a repository configured on the pool** gets that
+repository checked out in the worker before the model runs ([project code
+availability](../../docs/specs/project-code-availability.spec.md)). You do **not** set
+a capability for read access. Set **`repository:write`** only when the task may
+push, publish commits, open or update PRs, or must satisfy branch/pr deliverables.
+
 `create_task` (you must name a `project`):
 
 - `title`, and a `spec` the worker can act on alone: the goal, the context,
@@ -186,15 +192,15 @@ giving any worker more access:
 - `deliverable`: what finishing means, checked when the worker completes.
   `response` (default), `knowledge`, `artifact`, `subtasks`, `branch`,
   `pr_open`, `pr_green` or `pr_merged`. The code levels need
-  `repository:write` and a repository for the project. A worker that
-  completes without the evidence is refused. `pr_green` and `pr_merged`
-  wait in review, and the accept is refused until the forge shows the PR
-  green or merged.
+  `repository:write` and a repository for the project at **create** time (422
+  if missing). A worker that completes without the evidence is refused.
+  `pr_green` and `pr_merged` wait in review, and the accept is refused until
+  the forge shows the PR green or merged.
 - `knowledge`: page ids the worker should read first (`search_knowledge`).
-- `required_capabilities`: what the task needs from a worker. A worker claims the
-  task only if its capabilities include every entry. Set `repository:write` on
-  any task that checks out, changes, tests or pushes a repository, and leave it
-  empty only for work that needs no repository (see "Repository work").
+- `required_capabilities`: what the task needs beyond the automatic project
+  checkout. Add **`repository:write`** when the task may change the remote
+  (commits, push, PRs, branch/pr deliverables). Leave it empty for read-and-report
+  work on a configured project.
 - Leave `harness_model`, `executor_model` and `harness_account` out unless
   the goal requires a specific model or account. A pin disables the fallback
   chain, and the task waits if that provider cannot serve.
@@ -226,28 +232,28 @@ before then.
 
 Three things look alike and are not the same:
 
+- **Project code availability:** a configured project repository is checked out
+  automatically; read-only when the task omits `repository:write`.
 - **Pool or agent capabilities** (the pool's configured capabilities, the
   `ARGUS_CAPABILITIES` of a worker) say what a worker can serve. A pool that
-  advertises `repository:write` does not give every task repository access.
-- **Task `required_capabilities`** say what one task needs. A task with `[]` is
-  claimable by any worker, and NanoClaw takes no repository lease for it: no
-  repository credential is applied, so `git push` and `argus-github-api create`
-  fail for lack of a credential. That is the designed result, not a worker fault.
+  advertises `repository:write` does not give every task push access.
+- **Task `required_capabilities`:** list **`repository:write`** when the task
+  may mutate the remote. A task with `[]` still gets a read checkout on a
+  configured project; it cannot push or satisfy branch/pr deliverables.
 - **Forge authentication** is a task-scoped `repository` account lease that
-  NanoClaw takes and applies through OneCLI, and only when the task carries
-  `repository:write`. A preflight then proves the credential for that one
-  repository. A capability string carries no credential; it only turns this
-  lease on.
+  NanoClaw takes and applies through OneCLI for every task on a configured
+  project (read preflight or write preflight). Push and forge mutation require
+  `repository:write` on the task.
 
-For a task that works in a repository, set `required_capabilities` to
-`["repository:write"]`. The code checks no other repository capability: there is
-no read-only lease, so a read-only checkout also takes `repository:write`.
+For a task that **changes** the repository (commits, push, PR, branch/pr
+deliverable), set `required_capabilities` to include **`repository:write`**.
+There is no read-only lease name; read access does not require you to set anything.
 
 | Work | Requirement |
 | --- | --- |
-| Checkout and read | `repository:write` |
-| Code changes, project gates (`make check`) | `repository:write`; the work happens in the task workspace |
-| Commit, push, open or update a PR (`argus-github-api`) | `repository:write` |
+| Read tree, run local gates on a configured project | nothing extra (automatic checkout) |
+| Code changes, commit, push, open or update a PR | `repository:write` |
+| Branch or PR deliverable at create time | `repository:write` + matching `deliverable` |
 | Shared input files | add `task-inputs` (see the input rules above) |
 
 The coding run goes through `argus-delegate` on the worker and needs no
