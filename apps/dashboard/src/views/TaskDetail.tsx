@@ -16,10 +16,9 @@ import { WorkerChip } from "../WorkerChip";
 import { Activity } from "./Activity";
 import { AttemptStrip } from "./AttemptStrip";
 import { EventList } from "./EventList";
-import { TaskChanges } from "./TaskChanges";
 import { TaskEditForm } from "./TaskEditForm";
-import { TaskLog } from "./TaskLog";
 import { TaskSteers } from "./TaskSteers";
+import { TaskTerminal } from "./TaskTerminal";
 
 /** Size of the History page; a full page may hide older events. */
 const HISTORY_LIMIT = 50;
@@ -285,9 +284,101 @@ export function TaskDetail({
           )}
           <Activity task={task} events={events ?? []} selected={selected} />
           {delivery && <TaskDelivery delivery={delivery} onChanged={reload} />}
-          <section className="task-models" aria-label="Models">
-            <header className="task-section-label">Models</header>
-            {modelTrace?.executions.length ? (
+          <dl className="facts task-facts">
+            <dt>State</dt>
+            <dd className="task-state-line">
+              <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
+              {task.block_reason && (
+                <span className="muted"> · {blockReasonText(task.block_reason)}</span>
+              )}
+              {task.oom_kill && <span className="muted"> · OOM-killed (kernel out of memory)</span>}
+            </dd>
+            {task.kind !== "generic" && (
+              <>
+                <dt>Kind</dt>
+                <dd>{task.kind}</dd>
+              </>
+            )}
+            <dt>Difficulty</dt>
+            <dd>
+              <span className={`badge difficulty-${task.difficulty ?? "standard"}`}>
+                {task.difficulty ?? "standard"}
+              </span>{" "}
+              <span className="muted small">({task.difficulty_source ?? "inferred"})</span>
+            </dd>
+            <dt>Deliverable</dt>
+            <dd>{deliverableLabel(task.deliverable)}</dd>
+            {task.knowledge.length > 0 && (
+              <>
+                <dt>Pinned pages</dt>
+                <dd>{task.knowledge.map(shortId).join(", ")}</dd>
+              </>
+            )}
+            <dt>Attempt</dt>
+            <dd>
+              {task.attempt} (failures {task.failures}/{task.max_attempts})
+            </dd>
+            <TaskFailover task={task} />
+            {task.assignee_agent_id && (
+              <>
+                <dt>Assignee</dt>
+                <dd>
+                  <WorkerChip agentId={task.assignee_agent_id} layout="inline" /> · lease{" "}
+                  <DateChip at={task.lease_expires_at} />
+                </dd>
+              </>
+            )}
+            {task.timeout_at && (
+              <>
+                <dt>Times out</dt>
+                <dd>
+                  <DateChip at={task.timeout_at} />
+                </dd>
+              </>
+            )}
+            {task.required_capabilities.length > 0 && (
+              <>
+                <dt>Needs</dt>
+                <dd>{task.required_capabilities.join(", ")}</dd>
+              </>
+            )}
+            {task.account_providers && (
+              <>
+                <dt>Runs on</dt>
+                <dd>{task.account_providers.join(", ")}</dd>
+              </>
+            )}
+            {task.harness_account && (
+              <>
+                <dt>Harness account</dt>
+                <dd>{task.harness_account}</dd>
+              </>
+            )}
+            {task.harness_model && (
+              <>
+                <dt>Harness</dt>
+                <dd>{pinText(task.harness_model)}</dd>
+              </>
+            )}
+            {task.executor_model && (
+              <>
+                <dt>Executor</dt>
+                <dd>{pinText(task.executor_model)}</dd>
+              </>
+            )}
+            {task.depends_on.length > 0 && (
+              <>
+                <dt>Depends on</dt>
+                <dd>{task.depends_on.map(shortId).join(", ")}</dd>
+              </>
+            )}
+            <dt>Created</dt>
+            <dd>
+              <DateChip at={task.created_at} /> by {task.created_by}
+            </dd>
+          </dl>
+          {!!modelTrace?.executions.length && (
+            <section className="task-models" aria-label="Models">
               <div className="task-models-list">
                 {modelAttempts.map((attempt) => (
                   <section
@@ -361,113 +452,8 @@ export function TaskDetail({
                   </section>
                 ))}
               </div>
-            ) : (
-              <p className="muted small">No model reports.</p>
-            )}
-          </section>
-          <dl className="facts">
-            <dt>State</dt>
-            <dd>
-              <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
-            </dd>
-            {task.block_reason && (
-              <>
-                <dt>Blocked</dt>
-                <dd>{blockReasonText(task.block_reason)}</dd>
-              </>
-            )}
-            {task.oom_kill && (
-              <>
-                <dt>Last exit</dt>
-                <dd>OOM-killed (the kernel reported it out of memory)</dd>
-              </>
-            )}
-            <dt>Kind</dt>
-            <dd>{task.kind}</dd>
-            <dt>Difficulty</dt>
-            <dd>
-              <span className={`badge difficulty-${task.difficulty ?? "standard"}`}>
-                {task.difficulty ?? "standard"}
-              </span>{" "}
-              <span className="muted small">({task.difficulty_source ?? "inferred"})</span>
-            </dd>
-            <dt>Deliverable</dt>
-            <dd>{deliverableLabel(task.deliverable)}</dd>
-            {task.project && (
-              <>
-                <dt>Project</dt>
-                <dd>{task.project}</dd>
-              </>
-            )}
-            {task.knowledge.length > 0 && (
-              <>
-                <dt>Pinned pages</dt>
-                <dd>{task.knowledge.map(shortId).join(", ")}</dd>
-              </>
-            )}
-            <dt>Attempt</dt>
-            <dd>
-              {task.attempt} (failures {task.failures}/{task.max_attempts})
-            </dd>
-            <TaskFailover task={task} />
-            {task.assignee_agent_id && (
-              <>
-                <dt>Assignee</dt>
-                <dd>
-                  <WorkerChip agentId={task.assignee_agent_id} layout="inline" /> · lease{" "}
-                  <DateChip at={task.lease_expires_at} />
-                </dd>
-              </>
-            )}
-            {task.timeout_at && (
-              <>
-                <dt>Times out</dt>
-                <dd>
-                  <DateChip at={task.timeout_at} />
-                </dd>
-              </>
-            )}
-            {task.required_capabilities.length > 0 && (
-              <>
-                <dt>Needs</dt>
-                <dd>{task.required_capabilities.join(", ")}</dd>
-              </>
-            )}
-            {task.account_providers && (
-              <>
-                <dt>Runs on</dt>
-                <dd>{task.account_providers.join(", ")}</dd>
-              </>
-            )}
-            {task.harness_account && (
-              <>
-                <dt>Harness account</dt>
-                <dd>{task.harness_account}</dd>
-              </>
-            )}
-            {task.harness_model && (
-              <>
-                <dt>Harness</dt>
-                <dd>{pinText(task.harness_model)}</dd>
-              </>
-            )}
-            {task.executor_model && (
-              <>
-                <dt>Executor</dt>
-                <dd>{pinText(task.executor_model)}</dd>
-              </>
-            )}
-            {task.depends_on.length > 0 && (
-              <>
-                <dt>Depends on</dt>
-                <dd>{task.depends_on.map(shortId).join(", ")}</dd>
-              </>
-            )}
-            <dt>Created</dt>
-            <dd>
-              <DateChip at={task.created_at} /> by {task.created_by}
-            </dd>
-          </dl>
+            </section>
+          )}
           {steerable && selected === task.attempt && supportsSteer !== false && (
             <TaskSteers
               taskId={taskId}
@@ -499,23 +485,18 @@ export function TaskDetail({
             </>
           )}
           {task.attempt > 0 && (
-            <TaskLog
-              key={`log-${selected}`}
+            <TaskTerminal
+              key={`terminal-${selected}`}
               taskId={taskId}
               attempt={selected}
+              changesAttempt={task.attempt}
+              showChanges={task.required_capabilities.includes("repository:write")}
+              changesSelected={selected}
               steer={
                 selected === task.attempt
                   ? { claimed: task.state === "claimed", assigneeId, supportsSteer }
                   : undefined
               }
-            />
-          )}
-          {task.attempt > 0 && task.required_capabilities.includes("repository:write") && (
-            <TaskChanges
-              key={`changes-${selected}`}
-              taskId={taskId}
-              attempt={task.attempt}
-              selected={selected}
             />
           )}
           {task.result && (

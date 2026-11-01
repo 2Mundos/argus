@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TaskChanges } from "./TaskChanges";
+import { TaskChanges, TaskChangesTabCounts } from "./TaskChanges";
 
 const mock = vi.hoisted(() => ({
   answers: new Map<number, unknown>(), // attempt → snapshot; missing → 404
@@ -112,5 +112,30 @@ describe("TaskChanges", () => {
     fireEvent.change(screen.getByLabelText("Attempt"), { target: { value: "2" } });
     await screen.findByText("older");
     expect(screen.getByText(/the patch is incomplete/)).toBeTruthy();
+  });
+});
+
+describe("TaskChangesTabCounts", () => {
+  it("shows file and line totals when a snapshot is loaded", () => {
+    render(
+      <TaskChangesTabCounts
+        snap={
+          {
+            changes: snapshot(),
+            files: snapshot().files,
+            added: 3,
+            deleted: 1,
+          } as never
+        }
+      />,
+    );
+    expect(screen.getByText(/Changes/)).toBeTruthy();
+    expect(document.body.textContent).toMatch(/1 file \+3 −1/);
+  });
+
+  it("shows only the label while loading", () => {
+    render(<TaskChangesTabCounts snap={{ changes: null } as never} />);
+    expect(screen.getByText("Changes")).toBeTruthy();
+    expect(screen.queryByText("+")).toBeNull();
   });
 });

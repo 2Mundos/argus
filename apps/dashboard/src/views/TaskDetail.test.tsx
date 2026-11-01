@@ -53,7 +53,7 @@ vi.mock("./EventList", () => ({
   ),
 }));
 vi.mock("./TaskEditForm", () => ({ TaskEditForm: () => null }));
-vi.mock("./TaskLog", () => ({ TaskLog: () => null }));
+vi.mock("./TaskTerminal", () => ({ TaskTerminal: () => null }));
 vi.mock("../delivery", () => ({ TaskDelivery: () => null }));
 vi.mock("../failover", () => ({ TaskFailover: () => null }));
 
@@ -90,31 +90,28 @@ describe("TaskDetail blocked reason", () => {
     await act(async () => {
       render(<TaskDetail taskId="t1" onClose={() => {}} />);
     });
-    expect(screen.getByText("Blocked").nextElementSibling?.textContent).toBe(
-      "its project has no repository configured",
-    );
+    expect(screen.getByText(/its project has no repository configured/)).toBeTruthy();
   });
 
-  it("shows no Blocked fact without a block_reason", async () => {
+  it("shows no block reason without a block_reason", async () => {
     mock.task = { ...base, state: "ready", block_reason: null };
     mock.trace = { executions: [], timeline: [] };
     await act(async () => {
       render(<TaskDetail taskId="t1" onClose={() => {}} />);
     });
-    expect(screen.queryByText("Blocked")).toBeNull();
-    expect(screen.queryByText("Last exit")).toBeNull();
+    expect(screen.queryByText(/repository configured/)).toBeNull();
+    expect(screen.queryByText(/OOM-killed/)).toBeNull();
   });
 
-  it("shows the env_oom sentence and the OOM-killed fact", async () => {
+  it("shows the env_oom sentence and the OOM-killed note on the state line", async () => {
     mock.task = { ...base, state: "blocked", block_reason: "env_oom", oom_kill: true };
     mock.trace = { executions: [], timeline: [] };
     await act(async () => {
       render(<TaskDetail taskId="t1" onClose={() => {}} />);
     });
-    expect(screen.getByText("Blocked").nextElementSibling?.textContent).toMatch(
-      /keep running out of memory/,
-    );
-    expect(screen.getByText("Last exit").nextElementSibling?.textContent).toMatch(/^OOM-killed/);
+    const state = screen.getByText("blocked").closest("dd");
+    expect(state?.textContent).toMatch(/keep running out of memory/);
+    expect(state?.textContent).toMatch(/OOM-killed/);
   });
 });
 

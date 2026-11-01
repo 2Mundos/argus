@@ -7,9 +7,9 @@ from api_support import DONE, FakeClock, FakeTarget
 from argus_api import model_policy
 from argus_api.agents import service as agents
 from argus_api.auth import Identity
-from argus_api.db import Database
+from argus_api.db import Database, ts
 from argus_api.decisions import service as decisions
-from argus_api.errors import UnauthorizedError
+from argus_api.errors import ConflictError, NotFoundError, UnauthorizedError
 from argus_api.fleet import service as fleet
 from argus_api.fleet.reconciler import FleetSettings, reconcile_pool
 from argus_api.fleet.targets import TargetRegistry, container_name
@@ -873,3 +873,60 @@ def test_only_the_system_pool_runs_as_orchestrator() -> None:
     system = pool.model_copy(update={"system": "orchestrator"})
     orchestrator = container_spec(system, "i-1", ["argus_boot_x"], "http://argus")
     assert orchestrator.env["ARGUS_AGENT_ROLE"] == "orchestrator"
+
+
+# -- delete -----------------------------------------------------------------------
+
+
+async def test_delete_pool_refuses_name_mismatch_system_and_live(
+    db: Database, registry: TargetRegistry
+) -> None:
+    await make_pool(db, desired=1)
+    await tick(db, registry)
+    await tick(db, registry)
+    with pytest.raises(ConflictError) as wrong:
+        async with db.write() as tx:
+            await fleet.delete_pool(tx, "web", "other", "admin:test")
+    assert wrong.value.code == "name_mismatch"
+    with pytest.raises(ConflictError) as live:
+        async with db.write() as tx:
+            await fleet.delete_pool(tx, "web", "web", "admin:test")
+    assert live.value.code == "pool_in_use"
+    assert "1 live" in live.value.message
+
+    async with db.write() as tx:
+        await fleet.upsert_pool(
+            tx,
+            "orchestrator",
+            PoolUpsert(image="orch:1", desired_replicas=0, max_replicas=1),
+            "admin:test",
+            system="orchestrator",
+        )
+    with pytest.raises(ConflictError) as system:
+        async with db.write() as tx:
+            await fleet.delete_pool(tx, "orchestrator", "orchestrator", "admin:test")
+    assert system.value.code == "system_pool"
+
+
+async def test_delete_pool_removes_terminated_instances(db: Database) -> None:
+    await make_pool(db, desired=0)
+    async with db.write() as tx:
+        now = ts(tx.now)
+        await tx.conn.execute(
+            "INSERT INTO instances (id, pool, provider_ref, state,"
+            " created_at, terminated_at) VALUES (?, 'web', 'c-1', 'terminated', ?, ?)",
+            ("i-gone", now, now),
+        )
+    async with db.write() as tx:
+        await fleet.delete_pool(tx, "web", "web", "admin:test")
+    async with db.read() as conn:
+        with pytest.raises(NotFoundError):
+            await fleet.get_pool(conn, "web")
+        async with conn.execute(
+            "SELECT count(*) FROM instances WHERE pool = 'web'"
+        ) as cur:
+            assert (await cur.fetchone() or (0,))[0] == 0
+        async with conn.execute(
+            "SELECT kind FROM events WHERE subject_id = 'web' AND kind = 'pool.deleted'"
+        ) as cur:
+            assert (await cur.fetchone())[0] == "pool.deleted"

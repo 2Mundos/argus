@@ -29232,6 +29232,55 @@
       }
     },
     "/api/pools/{name}": {
+      "delete": {
+        "description": "Delete a pool definition (admin only). `confirm_name` must equal the\ncurrent name; `409 system_pool` for the internal orchestrator;\n`409 pool_in_use` while any instance is not terminated. Terminated instance\nrows for the pool are removed with it.",
+        "operationId": "delete_pool_api_pools__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "confirm_name",
+            "required": true,
+            "schema": {
+              "title": "Confirm Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Pool",
+        "tags": [
+          "fleet"
+        ]
+      },
       "get": {
         "description": "A pool; `env` values are redacted unless an admin asks for `reveal_env`.",
         "operationId": "get_pool_api_pools__name__get",

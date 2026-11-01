@@ -103,6 +103,7 @@ def test_tools_are_listed_by_scope(client: TestClient) -> None:
     admin_only = {n for n, a in mcp_server.audiences.items() if a == {Scope.ADMIN}}
     assert admin_only == {
         "update_pool",
+        "delete_pool",
         "set_model_policy",
         "reset_model_policy",
         "set_setting",

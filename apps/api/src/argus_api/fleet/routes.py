@@ -23,7 +23,7 @@ from argus_core.fleet import (
     WorkspaceCleanupStatus,
     WorkspaceCleanupSummary,
 )
-from fastapi import APIRouter, Path, Query, Request
+from fastapi import APIRouter, Path, Query, Request, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
@@ -178,6 +178,21 @@ async def patch_pool(
         return service.redact(
             await service.patch_pool(tx, name, body, caller.actor, settings)
         )
+
+
+@router.delete("/pools/{name}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_pool(
+    name: PoolName,
+    confirm_name: str,
+    db: DbDep,
+    caller: AdminDep,
+) -> None:
+    """Delete a pool definition (admin only). `confirm_name` must equal the
+    current name; `409 system_pool` for the internal orchestrator;
+    `409 pool_in_use` while any instance is not terminated. Terminated instance
+    rows for the pool are removed with it."""
+    async with db.write() as tx:
+        await service.delete_pool(tx, name, confirm_name, caller.actor)
 
 
 @router.get("/pools/{name}/inspect")

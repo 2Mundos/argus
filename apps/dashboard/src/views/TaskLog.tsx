@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import { api, call } from "../api";
 import { useLive } from "../live";
 import { filterLines, type LogFilter, type LogLine, logEvent, mergeLines } from "../taskLog";
@@ -6,7 +6,7 @@ import { TaskSteers } from "./TaskSteers";
 
 const READ_LIMIT = 1000; // the API's largest page
 
-const FILTERS: [LogFilter, string][] = [
+export const LOG_FILTERS: [LogFilter, string][] = [
   ["all", "All"],
   ["worker", "Worker"],
   ["delegate", "Delegate"],
@@ -18,25 +18,29 @@ export type TaskLogSteer = {
   supportsSteer?: boolean;
 };
 
-/** The live panel: the attempt's log tail, then its `task.log` events as they arrive. */
-export function TaskLog({
-  taskId,
-  attempt,
-  steer,
-}: {
-  taskId: string;
-  attempt: number;
-  /** When set, a Steer button sits next to Pause (task steering spec 3.9). */
-  steer?: TaskLogSteer;
-}) {
+export type TaskLogState = {
+  lines: LogLine[];
+  ready: boolean;
+  pausedAt: number | null;
+  setPausedAt: (seq: number | null) => void;
+  steerOpen: boolean;
+  setSteerOpen: (open: boolean | ((open: boolean) => boolean)) => void;
+  error: string | undefined;
+  behind: number;
+  paused: boolean;
+  box: RefObject<HTMLPreElement | null>;
+  atEnd: RefObject<boolean>;
+};
+
+export function useTaskLog(taskId: string, attempt: number): TaskLogState {
   const { subscribe, connection } = useLive();
   const [lines, setLines] = useState<LogLine[]>([]);
-  const [filter, setFilter] = useState<LogFilter>("all");
-  const [pausedAt, setPausedAt] = useState<number | null>(null); // last seq shown while paused
+  const [ready, setReady] = useState(false);
+  const [pausedAt, setPausedAt] = useState<number | null>(null);
   const [steerOpen, setSteerOpen] = useState(false);
   const [error, setError] = useState<string>();
   const box = useRef<HTMLPreElement>(null);
-  const atEnd = useRef(true); // the reader is at the end: keep following
+  const atEnd = useRef(true);
   const catchUp = useRef(() => {});
 
   useEffect(() => {
@@ -46,18 +50,18 @@ export function TaskLog({
   useEffect(() => {
     let cancelled = false;
     let loaded = false;
-    let last = 0; // newest seq shown
+    let last = 0;
     let filling = false;
-    let refill: number | null = null; // a catch-up asked for while another runs
+    let refill: number | null = null;
     const early: LogLine[] = [];
     setLines([]);
+    setReady(false);
     setError(undefined);
+    setPausedAt(null);
     const add = (more: LogLine[]) => {
       for (const l of more) last = Math.max(last, l.seq);
       setLines((have) => mergeLines(have, more));
     };
-    // Task.log events are transient: whatever the stream dropped (a reconnect, a
-    // seq gap) is read back from the API, after the newest line held.
     const backfill = (after: number) => {
       if (filling) {
         refill = Math.min(refill ?? after, after);
@@ -76,7 +80,7 @@ export function TaskLog({
             if (page.lines.length === READ_LIMIT)
               refill = Math.min(refill ?? page.last_seq, page.last_seq);
           },
-          () => {}, // the next reconnect or gap tries again
+          () => {},
         )
         .finally(() => {
           filling = false;
@@ -88,9 +92,8 @@ export function TaskLog({
     };
     catchUp.current = () => {
       if (loaded) backfill(last);
-      else refill = 0; // the tail read may predate the stream: catch up after it
+      else refill = 0;
     };
-    // Subscribe first, then backfill, so nothing slips in between; merging dedupes by seq.
     const unsubscribe = subscribe((event) => {
       const got = logEvent(event, taskId);
       if (!got || got.attempt !== attempt) return;
@@ -98,8 +101,6 @@ export function TaskLog({
         early.push(...got.lines);
         return;
       }
-      // seq counts across attempts: an empty tail's last_seq is the task's log_seq, so
-      // last_seq + 1 is a no-gap start for any attempt
       const before = last;
       add(got.lines);
       if ((got.lines[0]?.seq ?? 0) > before + 1) backfill(before);
@@ -112,6 +113,7 @@ export function TaskLog({
       (page) => {
         if (cancelled) return;
         loaded = true;
+        setReady(true);
         last = page.last_seq;
         for (const l of early) last = Math.max(last, l.seq);
         setLines(mergeLines(mergeLines([], page.lines), early));
@@ -123,6 +125,7 @@ export function TaskLog({
       (err: Error) => {
         if (cancelled) return;
         loaded = true;
+        setReady(true);
         setError(err.message);
       },
     );
@@ -140,60 +143,103 @@ export function TaskLog({
     catchUp.current();
   }, [connection]);
 
-  const shown = filterLines(
-    pausedAt == null ? lines : lines.filter((l) => l.seq <= pausedAt),
-    filter,
-  );
   const behind = pausedAt == null ? 0 : lines.filter((l) => l.seq > pausedAt).length;
 
-  useEffect(() => {
-    if (pausedAt == null && atEnd.current && box.current)
-      box.current.scrollTop = box.current.scrollHeight;
-  }, [shown.length, pausedAt]);
+  return {
+    lines,
+    ready,
+    pausedAt,
+    setPausedAt,
+    steerOpen,
+    setSteerOpen,
+    error,
+    behind,
+    paused: pausedAt != null,
+    box,
+    atEnd,
+  };
+}
 
-  const paused = pausedAt != null;
+export function TaskLogBarActions({
+  log,
+  steer,
+  filter,
+  onFilterChange,
+  hideFilter = false,
+}: {
+  log: TaskLogState;
+  steer?: TaskLogSteer;
+  filter: LogFilter;
+  onFilterChange?: (filter: LogFilter) => void;
+  hideFilter?: boolean;
+}) {
+  const { lines, pausedAt, setPausedAt, steerOpen, setSteerOpen, behind, paused } = log;
   return (
-    <section className={`term task-log${paused ? " term-paused" : ""}`} aria-label="Live">
-      <div className="term-bar">
-        <span className="term-traffic" aria-hidden="true">
-          <i />
-          <i />
-          <i />
-        </span>
-        <span className="term-title">{`live · attempt ${attempt}`}</span>
+    <>
+      {!hideFilter && (
         <select
           className="term-filter"
           aria-label="Source"
           value={filter}
-          onChange={(e) => setFilter(e.target.value as LogFilter)}
+          onChange={(e) => onFilterChange?.(e.target.value as LogFilter)}
         >
-          {FILTERS.map(([value, label]) => (
+          {LOG_FILTERS.map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>
           ))}
         </select>
-        <span className={`term-pulse${paused ? "" : " on"}`} title={paused ? "Paused" : "Live"}>
-          {paused ? "paused" : "live"}
-        </span>
+      )}
+      <span className={`term-pulse${paused ? "" : " on"}`} title={paused ? "Paused" : "Live"}>
+        {paused ? "paused" : "live"}
+      </span>
+      <button
+        type="button"
+        className="term-action"
+        onClick={() => setPausedAt(paused ? null : (lines.at(-1)?.seq ?? 0))}
+      >
+        {paused ? `Resume${behind ? ` (+${behind})` : ""}` : "Pause"}
+      </button>
+      {steer?.claimed && (
         <button
           type="button"
           className="term-action"
-          onClick={() => setPausedAt(paused ? null : (lines.at(-1)?.seq ?? 0))}
+          aria-expanded={steerOpen}
+          onClick={() => setSteerOpen((open) => !open)}
         >
-          {paused ? `Resume${behind ? ` (+${behind})` : ""}` : "Pause"}
+          {steerOpen ? "Close steer" : "Steer"}
         </button>
-        {steer?.claimed && (
-          <button
-            type="button"
-            className="term-action"
-            aria-expanded={steerOpen}
-            onClick={() => setSteerOpen((open) => !open)}
-          >
-            {steerOpen ? "Close steer" : "Steer"}
-          </button>
-        )}
-      </div>
+      )}
+    </>
+  );
+}
+
+export function TaskLogContent({
+  taskId,
+  attempt,
+  steer,
+  log,
+  filter,
+}: {
+  taskId: string;
+  attempt: number;
+  steer?: TaskLogSteer;
+  log: TaskLogState;
+  filter: LogFilter;
+}) {
+  const { pausedAt, steerOpen, setSteerOpen, error, box, atEnd, lines } = log;
+  const shown = filterLines(
+    pausedAt == null ? lines : lines.filter((l) => l.seq <= pausedAt),
+    filter,
+  );
+
+  useEffect(() => {
+    if (pausedAt == null && atEnd.current && box.current)
+      box.current.scrollTop = box.current.scrollHeight;
+  }, [shown.length, pausedAt, box, atEnd]);
+
+  return (
+    <>
       {steer && (
         <TaskSteers
           taskId={taskId}
@@ -226,6 +272,35 @@ export function TaskLog({
           ))
         )}
       </pre>
+    </>
+  );
+}
+
+/** The live panel: the attempt's log tail, then its `task.log` events as they arrive. */
+export function TaskLog({
+  taskId,
+  attempt,
+  steer,
+}: {
+  taskId: string;
+  attempt: number;
+  steer?: TaskLogSteer;
+}) {
+  const [filter, setFilter] = useState<LogFilter>("all");
+  const log = useTaskLog(taskId, attempt);
+
+  return (
+    <section className={`term task-log${log.paused ? " term-paused" : ""}`} aria-label="Live">
+      <div className="term-bar">
+        <span className="term-traffic" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="term-title">{`live · attempt ${attempt}`}</span>
+        <TaskLogBarActions log={log} steer={steer} filter={filter} onFilterChange={setFilter} />
+      </div>
+      <TaskLogContent taskId={taskId} attempt={attempt} steer={steer} log={log} filter={filter} />
     </section>
   );
 }

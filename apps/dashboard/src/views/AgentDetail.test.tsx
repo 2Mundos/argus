@@ -171,7 +171,7 @@ describe("AgentDetail", () => {
     };
     render(<AgentDetail agentId="agent-1" onClose={() => {}} />);
     await flush();
-    expect(screen.getByLabelText("Current models").textContent).toMatch(/codex · gpt-6/);
+    expect(screen.getByText(/codex · gpt-6/)).toBeTruthy();
     expect(screen.getByLabelText("Recent model runs").textContent).toMatch(
       /delegate · claude · sonnet · succeeded/,
     );

@@ -84,6 +84,13 @@ export function Activity({
         )
       : null;
   const finalLine = task.finalization ? finalizationLine(task.finalization, now) : null;
+  const hasProgress =
+    task.progress_message != null ||
+    task.progress_percent != null ||
+    task.progress_at != null ||
+    task.progress_kind != null;
+  // Claimed tasks keep a progress row (lease / quiet); finished ones only with notes.
+  const showProgress = task.state === "claimed" || hasProgress;
   if (task.state !== "claimed" && notes.length === 0 && !quietLine && !finalLine) return null;
   return (
     <div className="activity">
@@ -97,31 +104,35 @@ export function Activity({
           {quietLine.charAt(0).toUpperCase() + quietLine.slice(1)}
         </p>
       )}
-      <div className="progress">
-        {task.progress_percent != null && (
-          <span className="bar">
-            <span style={{ width: `${task.progress_percent}%` }} />
+      {showProgress && (
+        <div className="progress">
+          {task.progress_percent != null && (
+            <span className="bar">
+              <span style={{ width: `${task.progress_percent}%` }} />
+            </span>
+          )}
+          <NoSignal task={task} now={now} />
+          <MilestoneLine task={task} now={now} />
+          {(task.progress_message || task.state === "claimed") && (
+            <span>{task.progress_message ?? "No progress note yet."}</span>
+          )}
+          <span className="muted small">
+            {task.progress_at ? (
+              <>
+                updated <DateChip at={task.progress_at} now={now} />
+              </>
+            ) : task.state === "claimed" ? (
+              "silent so far"
+            ) : null}
+            {task.state === "claimed" && (
+              <>
+                {" · lease "}
+                <DateChip at={task.lease_expires_at} now={now} />
+              </>
+            )}
           </span>
-        )}
-        <NoSignal task={task} now={now} />
-        <MilestoneLine task={task} now={now} />
-        <span>{task.progress_message ?? "No progress note yet."}</span>
-        <span className="muted small">
-          {task.progress_at ? (
-            <>
-              updated <DateChip at={task.progress_at} now={now} />
-            </>
-          ) : (
-            "silent so far"
-          )}
-          {task.state === "claimed" && (
-            <>
-              {" · lease "}
-              <DateChip at={task.lease_expires_at} now={now} />
-            </>
-          )}
-        </span>
-      </div>
+        </div>
+      )}
       {notes.length > 1 && (
         <ol className="notes">
           {notes.slice(1).map((e) => (

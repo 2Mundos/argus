@@ -1481,6 +1481,15 @@ async def update_pool(
     )
 
 
+@tool(ADMINS)
+async def delete_pool(ctx: Context, name: str, confirm_name: str) -> dict:
+    """Delete a worker pool (admin only). `confirm_name` must equal the pool's
+    current name. Refuses system pools and any still-live instance; scale to
+    zero and wait for termination first. Removes terminated instance rows."""
+    await _call(ctx, "DELETE", f"/pools/{name}", params={"confirm_name": confirm_name})
+    return {"deleted": True, "name": name}
+
+
 @tool(MANAGERS)
 async def get_instance(ctx: Context, instance_id: str) -> dict:
     """One instance: state, draining, image and digest, and its agents."""

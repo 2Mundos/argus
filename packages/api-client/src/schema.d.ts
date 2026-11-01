@@ -1759,7 +1759,14 @@ export interface paths {
          */
         put: operations["upsert_pool_api_pools__name__put"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete Pool
+         * @description Delete a pool definition (admin only). `confirm_name` must equal the
+         *     current name; `409 system_pool` for the internal orchestrator;
+         *     `409 pool_in_use` while any instance is not terminated. Terminated instance
+         *     rows for the pool are removed with it.
+         */
+        delete: operations["delete_pool_api_pools__name__delete"];
         options?: never;
         head?: never;
         /**
@@ -14317,6 +14324,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Pool"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_pool_api_pools__name__delete: {
+        parameters: {
+            query: {
+                confirm_name: string;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
