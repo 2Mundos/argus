@@ -1,5 +1,6 @@
 // Rules behind the Dashboard view (docs/specs/home.spec.md).
-import type { Overview, SystemSummary } from "./api";
+import type { Account, Overview, SystemSummary } from "./api";
+import { rejectedSinceAccepted } from "./authHealth";
 import type { StreamStatus } from "./sse";
 
 export type { Overview };
@@ -68,6 +69,8 @@ export function attention(input: {
   stream: StreamStatus;
   overview: Source<Overview>;
   system: Source<SystemSummary>;
+  /** Accounts with their auth-health facts; omitted where the list is not loaded. */
+  accounts?: Source<Account[]>;
 }): Attention {
   const items: AttentionItem[] = [];
   const unavailable: string[] = [];
@@ -236,6 +239,18 @@ export function attention(input: {
       count: o.knowledge.proposals_by_state.open ?? 0,
       text: `${plural(o.knowledge.proposals_by_state.open ?? 0, "open knowledge proposal")}.`,
       href: "#knowledge",
+    });
+  }
+
+  const rejected = (input.accounts?.data ?? []).filter(rejectedSinceAccepted);
+  for (const a of rejected) {
+    add({
+      id: `auth-rejected-${a.id}`,
+      severity: "attention",
+      human: false,
+      count: 1,
+      text: `Account "${a.name}" was rejected by its provider more recently than it last worked.`,
+      href: "#setup/accounts",
     });
   }
 

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ActionButton, useAction } from "../ActionButton";
+import { AuthFacts } from "../AuthFacts";
 import { type Account, api, call } from "../api";
 import { DateChip } from "../DateChip";
 import { relative } from "../format";
@@ -98,6 +99,8 @@ export function AccountDetail(props: {
         <p className="muted small">
           Credential: {a.secret_ref ? "stored" : "not stored"} (write-only, never shown).
         </p>
+
+        <AuthFacts account={a} />
 
         {!model ? (
           <p className="muted">Repository account: no model tokens or quota.</p>

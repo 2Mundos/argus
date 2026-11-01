@@ -336,3 +336,76 @@ async def test_ordinary_fail_after_auth_rejected_does_not_exhaust(
     assert (acct.state, acct.exhausted_until) == ("available", None)
     assert await events(db, "account.exhausted") == []
     assert await events(db, "account.failover") == []
+
+
+async def test_quota_exhaustion_sets_neither_timestamp(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+):
+    account_id = await add(db, store, "codex-quota", "openai")
+    task, _lease = await claim_and_lease(db, store)
+    async with db.write() as tx:
+        await accounts.exhausted(
+            tx,
+            A,
+            account_id,
+            ExhaustedReport(
+                reason="rate limit reached",
+                reason_code="quota_exhausted",
+                source="structured",
+                reset_status="absent",
+                role="engine",
+                runtime_providers=RUNTIME,
+                task_id=task.id,
+                attempt=task.attempt,
+            ),
+            store,
+        )
+    assert await events(db, "account.exhausted")
+    assert await health(db, clock) == {account_id: (None, None)}
+
+
+async def test_credential_state_is_derived_from_the_store(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+):
+    ok = await add(db, store, "claude-ok", "anthropic")
+    gone = await add(db, store, "claude-gone", "anthropic")
+    await store.delete("claude-gone")
+    expired = clock.now - timedelta(hours=1)
+    valid = clock.now + timedelta(hours=1)
+
+    async def oauth(name: str, at) -> str:
+        await store.put(
+            name,
+            {
+                "claudeAiOauth": {
+                    "accessToken": "a",
+                    "refreshToken": "r",
+                    "expiresAt": int(at.timestamp() * 1000),
+                }
+            },
+        )
+        async with db.write() as tx:
+            acct = await accounts.create_account(
+                tx,
+                name,
+                AccountCreate(
+                    name=name, provider="anthropic", secret_ref=f"sops:{name}"
+                ),
+                f"sops:{name}",
+                "admin:test",
+                store,
+            )
+        return acct.id
+
+    old = await oauth("claude-old", expired)
+    live = await oauth("claude-live", valid)
+    async with db.read() as conn:
+        listed = await accounts.list_accounts(conn, clock.now)
+    got = {
+        a.id: a.credential for a in accounts.with_credential(listed, store, clock.now)
+    }
+    assert got[ok].state == "present" and got[ok].expires_at is None
+    assert got[gone].state == "missing"
+    assert got[old].state == "expired" and got[old].expires_at == expired
+    assert got[live].state == "present" and got[live].expires_at == valid
+    assert all(a.credential is None for a in listed)

@@ -1038,7 +1038,9 @@ async def list_accounts(ctx: Context) -> dict:
     `quota_status` (state known|stale|unknown, a `reason` code saying why a figure
     is missing, the last probe's outcome and code) and token usage. A missing figure
     is unknown, never zero. `last_accepted_at` / `last_rejected_at` are the latest
-    measured output and recorded authentication rejection (null when none).
+    measured output and recorded authentication rejection (null when none). `credential` is
+    present|missing|expired as stored (never a health verdict; null for repository
+    accounts).
     Read-only; no credentials."""
     return {"accounts": await _call(ctx, "GET", "/accounts")}
 

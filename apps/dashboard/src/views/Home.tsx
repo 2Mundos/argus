@@ -34,7 +34,8 @@ export function Home({ onOpenSetup }: { onOpenSetup?: () => void }) {
   const events = useSource((signal) =>
     call(api.GET("/api/events", { params: { query: { limit: 10 } }, signal })),
   );
-  const att = attention({ stream: status, overview, system });
+  const accounts = useSource((signal) => call(api.GET("/api/accounts", { signal })));
+  const att = attention({ stream: status, overview, system, accounts });
   const o = overview.data;
   const [panel, setPanel] = useState<HomePanel>("overview");
 

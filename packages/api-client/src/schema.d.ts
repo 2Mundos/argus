@@ -3113,6 +3113,7 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            credential?: components["schemas"]["CredentialState"] | null;
             credit?: components["schemas"]["AccountCredit"] | null;
             /** Disabled Reason */
             disabled_reason: string | null;
@@ -4879,6 +4880,21 @@ export interface components {
             pool: components["schemas"]["Pool"];
             /** Requested */
             requested: number;
+        };
+        /**
+         * CredentialState
+         * @description What Argus stores about a credential, never a verdict that it works: `present`
+         *     is not "healthy" (account-usage.spec.md 3.5). `expires_at` is the stored Claude
+         *     `expiresAt`; the holder may have refreshed the token since.
+         */
+        CredentialState: {
+            /** Expires At */
+            expires_at?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "present" | "missing" | "expired";
         };
         /**
          * CredentialUpdate

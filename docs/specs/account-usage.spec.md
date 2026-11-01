@@ -258,6 +258,14 @@ account lease and must preserve the document structure and JSON value types.
     'account.auth_rejected'`, the event written when the provider rejects the
     stored credential (see the Codex and Claude account specs). Rate limits and
     quota never appear in it.
+- The read model also carries `credential`: `{state: present|missing|expired,
+  expires_at}`, derived on read from the in-memory secret store, with no provider
+  call, probe or `claude auth status`. `missing` is a secret ref the store does not
+  hold; `expired` is a Claude `claudeAiOauth.expiresAt` in the past; anything else
+  is `present`, which is never "healthy": the holder may have refreshed the token
+  since, and `setup-token` credentials have no expiry. `expires_at` is the stored
+  value. It is null for repository and `local` accounts, and in the answers to
+  create and update (list and get fill it).
 - `GET /api/accounts/usage?from&to&bucket=hour|day&tz=<IANA>[&account_id]`
   returns totals and a time series per account.
   - Buckets follow the viewer's timezone, so "Today" matches their clock.
@@ -280,11 +288,16 @@ account lease and must preserve the document structure and JSON value types.
   - state icons;
   - a quota cell (a bar per timed window with its age, a pill per pool, a
     credit line in USD, or the reason nothing is known, never a bare dash);
-  - a 7-day token sparkline.
+  - a 7-day token sparkline;
+  - an Auth cell: the credential state, the last accepted and the last rejected
+    time as three separate facts ("never" / "none" when absent), and a note when
+    the rejection is newer than the acceptance. No reason is shown: the event
+    records only its source.
 - **The detail panel:**
   - the time-window filter (Today, 24h, 7 days, 30 days, All time, in the
     browser's timezone; hourly buckets up to 24h, daily beyond);
   - stacked input/output/cached bars;
+  - the same auth facts;
   - totals and runs;
   - cost (API-key accounts only);
   - quota windows and credit with source and age, and the last probe's outcome;

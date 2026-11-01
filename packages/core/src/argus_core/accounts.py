@@ -383,6 +383,15 @@ class QuotaStatus(BaseModel):
     credit: AccountCredit | None = None
 
 
+class CredentialState(BaseModel):
+    """What Argus stores about a credential, never a verdict that it works: `present`
+    is not "healthy" (account-usage.spec.md 3.5). `expires_at` is the stored Claude
+    `expiresAt`; the holder may have refreshed the token since."""
+
+    state: Literal["present", "missing", "expired"]
+    expires_at: datetime | None = None
+
+
 class Account(BaseModel):
     """Registry entry. Never contains the credential."""
 
@@ -408,6 +417,8 @@ class Account(BaseModel):
     # Past evidence only (account-usage.spec.md 3.5); never a healthy verdict.
     last_accepted_at: datetime | None = None
     last_rejected_at: datetime | None = None
+    # Derived on read from the secret store; null where no store was consulted.
+    credential: CredentialState | None = None
     # `custom` accounts: where and how to call. Never contains the key.
     config: CustomConfig | None = None
     created_at: datetime

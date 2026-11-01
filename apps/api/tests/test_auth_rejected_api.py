@@ -227,3 +227,18 @@ def test_later_ordinary_fail_does_not_exhaust_claude(
     assert (got["state"], got["exhausted_until"]) == ("available", None)
     assert rejections(tmp_path, "account.exhausted") == []
     assert len(rejections(tmp_path)) == 1
+
+
+def test_accounts_api_exposes_credential_state(client: TestClient) -> None:
+    account_id = add_account(client, "cred-a", 1)
+    listed = client.get("/api/accounts").json()
+    assert listed[0]["credential"] == {"state": "present", "expires_at": None}
+    assert (
+        client.get(f"/api/accounts/{account_id}").json()["credential"]["state"]
+        == "present"
+    )
+    app.state.secrets._data.clear()
+    assert (
+        client.get(f"/api/accounts/{account_id}").json()["credential"]["state"]
+        == "missing"
+    )
