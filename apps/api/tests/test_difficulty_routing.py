@@ -102,7 +102,24 @@ def test_executor_chain_setting_is_validated(monkeypatch) -> None:
 
     monkeypatch.setenv("ARGUS_DIFFICULTY_EXECUTORS", '{"hard": ["codex"]}')
     assert Settings.from_env().difficulty_executors == {"hard": ("codex",)}
-    for bad in ('{"epic": ["codex"]}', '{"hard": []}', '{"hard": ["vim"]}', "[]"):
+    monkeypatch.setenv("ARGUS_DIFFICULTY_EXECUTORS", '{"trivial": []}')
+    assert Settings.from_env().difficulty_executors == {"trivial": ()}
+    monkeypatch.setenv("ARGUS_DIFFICULTY_EXECUTORS", '{"trivial": ["none"]}')
+    assert Settings.from_env().difficulty_executors == {"trivial": ()}
+    for bad in (
+        '{"epic": ["codex"]}',
+        '{"hard": ["vim"]}',
+        '{"hard": ["none", "claude"]}',
+        "[]",
+    ):
         monkeypatch.setenv("ARGUS_DIFFICULTY_EXECUTORS", bad)
         with pytest.raises(ValueError):
             Settings.from_env()
+
+
+def test_empty_executor_chain_means_no_delegated_executor() -> None:
+    ledger = exec_ledger("cursor-agent", "claude", "codex")
+    d = route(Difficulty.TRIVIAL, ledger, {"trivial": ()})
+    assert d.executor is None
+    assert d.executor_model is None
+    assert "no delegated executor" in (d.executor_reason or "")

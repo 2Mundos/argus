@@ -3,6 +3,13 @@ import { useLiveData } from "../live";
 import { compactDraft, type Draft, emptyChains, toDraft } from "../models";
 import { PageHeader } from "../PageHeader";
 import {
+  chainFromSelect,
+  chainSelectValue,
+  DEFAULT_DIFFICULTY_EXECUTORS,
+  DIFFICULTY_EXECUTOR_PRESETS,
+  DIFFICULTY_LEVELS,
+  type DifficultyExecutors,
+  type DifficultyLevel,
   fetchModelsOverride,
   fetchProjects,
   fetchSettings,
@@ -25,6 +32,7 @@ export function Settings() {
   const byKey = new Map((data?.settings ?? []).map((s) => [s.key, s]));
   const review = byKey.get("review.independent");
   const models = byKey.get("models");
+  const difficultyExecutors = byKey.get("difficulty.executors");
 
   return (
     <section className="settings-page">
@@ -59,6 +67,13 @@ export function Settings() {
         <>
           <div className="card">
             <ModelsSection project={project} setting={models} onChanged={() => reload()} />
+          </div>
+          <div className="card">
+            <DifficultyExecutorsSection
+              project={project}
+              setting={difficultyExecutors}
+              onChanged={() => reload()}
+            />
           </div>
           <div className="card">
             <IndependentReviewSection
@@ -177,6 +192,125 @@ function ProjectModelsEditor(props: {
       <div className="toolbar model-actions">
         <button type="button" disabled={busy} onClick={() => void save()}>
           Save override
+        </button>
+        <button type="button" disabled={busy || inherited} onClick={() => void reset()}>
+          Reset to inherited
+        </button>
+      </div>
+      {failure && (
+        <p className="error" role="alert">
+          {failure}
+        </p>
+      )}
+      {done && <p className="small">{done}</p>}
+    </section>
+  );
+}
+
+function DifficultyExecutorsSection(props: {
+  project: string | null;
+  setting?: SettingValue;
+  onChanged: () => void;
+}) {
+  const { project, setting, onChanged } = props;
+  const stored = (setting?.value ?? {}) as DifficultyExecutors;
+  const [draft, setDraft] = useState<DifficultyExecutors>(stored);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string>();
+  const [done, setDone] = useState<string>();
+  const inherited =
+    setting?.source === "default" ||
+    (project !== null && setting?.source !== "project") ||
+    (project === null && setting?.source !== "global" && setting?.source !== "env");
+
+  useEffect(() => {
+    setDraft((setting?.value ?? {}) as DifficultyExecutors);
+  }, [setting?.updated_at, setting?.value]);
+
+  function setLevel(level: DifficultyLevel, select: string) {
+    const next = { ...draft };
+    const chain = chainFromSelect(select);
+    if (chain === undefined) delete next[level];
+    else next[level] = chain;
+    setDraft(next);
+  }
+
+  async function save() {
+    setBusy(true);
+    setFailure(undefined);
+    setDone(undefined);
+    try {
+      await putSetting("difficulty.executors", draft, project);
+      setDone("Saved.");
+      onChanged();
+    } catch (e) {
+      setFailure(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reset() {
+    setBusy(true);
+    setFailure(undefined);
+    setDone(undefined);
+    try {
+      await resetSetting("difficulty.executors", project);
+      setDraft({});
+      setDone("Reset to inherited.");
+      onChanged();
+    } catch (e) {
+      setFailure(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section>
+      <div className="toolbar">
+        <h3>Difficulty executors</h3>
+      </div>
+      <p className="muted small">
+        Ordered CLI chain per task difficulty. Empty / None means the harness does the work with no
+        delegated executor (for example trivial → local model only). Unset levels keep the built-in
+        default. Stored: <strong>{setting ? sourceLabel(setting.source) : "…"}</strong>
+      </p>
+      {setting?.notice && (
+        <p className="error" role="alert">
+          {setting.notice}
+        </p>
+      )}
+      <div className="review-fields">
+        {DIFFICULTY_LEVELS.map((level) => {
+          const value = chainSelectValue(draft[level]);
+          const fallback = DEFAULT_DIFFICULTY_EXECUTORS[level].join(" → ");
+          return (
+            <label key={level}>
+              {level}
+              <select
+                aria-label={`difficulty executors ${level}`}
+                value={value}
+                disabled={setting?.source === "env"}
+                onChange={(e) => setLevel(level, e.target.value)}
+              >
+                {DIFFICULTY_EXECUTOR_PRESETS.map((p) => (
+                  <option key={p.value || "default"} value={p.value}>
+                    {p.value === "" ? `Default (${fallback})` : p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          );
+        })}
+      </div>
+      <div className="toolbar model-actions">
+        <button
+          type="button"
+          disabled={busy || setting?.source === "env"}
+          onClick={() => void save()}
+        >
+          Save
         </button>
         <button type="button" disabled={busy || inherited} onClick={() => void reset()}>
           Reset to inherited

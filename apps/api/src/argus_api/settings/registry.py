@@ -47,6 +47,23 @@ _REVIEW_SCHEMA: dict[str, Any] = {
     },
 }
 
+_DIFFICULTY_EXECUTORS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "propertyNames": {"enum": ["trivial", "simple", "standard", "hard"]},
+    "patternProperties": {
+        ".*": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+                "type": "string",
+                "enum": ["claude", "codex", "opencode", "agent", "none"],
+            },
+            "uniqueItems": True,
+        }
+    },
+}
+
 REVIEW_DEFAULT = IndependentReviewSetting().model_dump()
 
 REGISTRY: dict[str, SettingDefinition] = {
@@ -56,6 +73,16 @@ REGISTRY: dict[str, SettingDefinition] = {
         default={},  # effective default comes from model-policy.defaults.json
         scopes=["global", "project"],
         description="Ordered model chains per engine for harness and implementation.",
+    ),
+    "difficulty.executors": SettingDefinition(
+        key="difficulty.executors",
+        schema=_DIFFICULTY_EXECUTORS_SCHEMA,
+        default={},
+        scopes=["global", "project"],
+        description=(
+            "Ordered executor CLIs per task difficulty; empty or [none] means the "
+            "harness does the work with no delegated executor."
+        ),
     ),
     "review.independent": SettingDefinition(
         key="review.independent",

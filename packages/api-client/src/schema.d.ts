@@ -4362,6 +4362,8 @@ export interface components {
             depends_on: string[];
             /** @default standard */
             difficulty?: components["schemas"]["Difficulty"];
+            /** Difficulty Executors */
+            difficulty_executors?: string[] | null;
             /** @default inferred */
             difficulty_source?: components["schemas"]["DifficultySource"];
             /**
@@ -5927,7 +5929,7 @@ export interface components {
              * Executor
              * @enum {string}
              */
-            executor: "claude" | "codex" | "agent";
+            executor: "claude" | "codex" | "agent" | "opencode";
             /** Model */
             model: string;
         };

@@ -45,7 +45,7 @@ type PinField = (typeof PIN_FIELDS)[number];
 /** Engines and executors a pin may name, as the API accepts them (task models spec 3.1). */
 export const PIN_CHOICES: Record<PinField, string[]> = {
   harness_model: ["claude", "codex"],
-  executor_model: ["claude", "codex", "agent"],
+  executor_model: ["claude", "codex", "agent", "opencode"],
 };
 
 export function pinText(pin: HarnessPin | ExecutorPin | null | undefined): string {

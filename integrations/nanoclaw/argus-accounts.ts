@@ -408,15 +408,22 @@ export function runtimeProviders(role: "engine" | "executor"): string[] {
 /** The delegate CLI (`argus-delegate EXECUTOR`) that runs on a provider's account. */
 export function executorFor(provider: string): string | null {
   return (
-    { anthropic: "claude", openai: "codex", cursor: "agent", copilot: "copilot" }[provider] ?? null
+    {
+      anthropic: "claude",
+      openai: "codex",
+      cursor: "agent",
+      copilot: "copilot",
+      local: "opencode",
+    }[provider] ?? null
   );
 }
 
 /**
  * Recommended delegated CLI: that of the executor lease actually held, otherwise the
- * engine's own. A local or custom engine serves only the harness (no CLI of its own),
- * so with no executor leased the answer is null: never an unleased Cursor. Claude Code
- * never runs on the local model (the delegate refuses it), so it is not recommended there.
+ * engine's own. A local or custom engine serves only the harness by default (Cursor is
+ * leased first); with no executor leased the answer is null: never an unleased Cursor
+ * or OpenCode. Claude Code never runs on the local model (the delegate refuses it), so
+ * it is not recommended there. A `local` executor lease recommends OpenCode.
  */
 export function preferredExecutorForLease(
   engine: Pick<AccountLease, "provider"> | null,
@@ -427,7 +434,9 @@ export function preferredExecutorForLease(
       ? null
       : executorFor(executor.provider);
   }
-  return engine ? executorFor(engine.provider) : null;
+  // Engine alone: local/custom have no native CLI to recommend without an executor lease.
+  if (!engine || engine.provider === "local" || engine.provider === "custom") return null;
+  return executorFor(engine.provider);
 }
 
 /**

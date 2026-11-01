@@ -264,7 +264,7 @@ async def test_executor_lease_is_not_pinned(db: Database, store, agent) -> None:
                     executor="claude", model="claude-sonnet-5-5"
                 ),
             },
-            "delegates only to the Cursor agent",
+            "Cursor agent or OpenCode",
         ),
     ],
 )
@@ -272,6 +272,18 @@ async def test_pin_is_validated_at_creation(db: Database, store, kw, why) -> Non
     await fleet(db, store)
     with pytest.raises(ValidationFailedError, match=why):
         await make_task(db, **kw)
+
+
+async def test_local_harness_allows_opencode_executor_pin(db: Database, store) -> None:
+    await fleet(db, store)
+    task_id = await make_task(
+        db,
+        harness_account="strata-local",
+        executor_model=ExecutorModel(executor="opencode", model="qwen3"),
+    )
+    assert (await get(db, task_id)).executor_model == ExecutorModel(
+        executor="opencode", model="qwen3"
+    )
 
 
 async def test_pin_edit_rules(db: Database, store, agent) -> None:
@@ -284,7 +296,7 @@ async def test_pin_edit_rules(db: Database, store, agent) -> None:
         )
     assert edited.harness_account == "acc-strata"
     # a later edit of another field is checked against the stored pin
-    with pytest.raises(ValidationFailedError, match="Cursor agent"):
+    with pytest.raises(ValidationFailedError, match="Cursor agent or OpenCode"):
         async with db.write() as tx:
             await tasks.edit_task(
                 tx,

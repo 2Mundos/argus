@@ -224,8 +224,17 @@ def difficulty_executor(
     chains: dict[str, tuple[str, ...]] | None = None,
 ) -> tuple[str | None, str | None, str]:
     """(executor, model, reason): the first executor of the level's chain whose
-    executor layer is usable, with every one passed over named."""
-    chain = (chains or {}).get(difficulty, DEFAULT_EXECUTORS[difficulty])
+    executor layer is usable, with every one passed over named. An empty chain
+    means no delegated executor (harness does the work)."""
+    from argus_core.difficulty import chain_for
+
+    chain = chain_for(difficulty, chains, DEFAULT_EXECUTORS)
+    if not chain:
+        return (
+            None,
+            None,
+            f"{difficulty} runs with no delegated executor (harness does the work)",
+        )
     skipped: list[str] = []
     for name in chain:
         entry = _executor_entry(catalog, name)

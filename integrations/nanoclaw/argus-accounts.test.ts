@@ -896,8 +896,10 @@ describe("preferredExecutorForLease", () => {
     ["custom", null, null],
     ["local", "openai", "codex"],
     ["local", "cursor", "agent"],
+    ["local", "local", "opencode"], // local as executor runs through OpenCode
     ["local", "anthropic", null], // the delegate refuses claude on the local model
     ["local", null, null],
+    ["anthropic", "local", "opencode"],
     ["anthropic", null, "claude"], // native reuse: the engine's credential serves its CLI
     ["openai", null, "codex"],
     ["anthropic", "cursor", "agent"],
@@ -3569,5 +3571,40 @@ describe("Cursor first on a local or custom engine lease", () => {
       ["cursor"],
       ["anthropic", "openai", "local", "custom", "cursor", "copilot"],
     ]);
+  });
+
+  it("skips the executor lease when difficulty_executors is empty", async () => {
+    const w = world({
+      leases: [custom()],
+      tasks: [{ ...task(), difficulty_executors: [] }],
+    });
+    const h = createArgusAdapter({
+      url: "http://argus.test",
+      bootstrapToken: "boot",
+      capabilities: [],
+      name: "w",
+      fetch: w.fetchImpl,
+      claimWaitS: 1,
+      accounts: {
+        models: true,
+        onecli: new OneCliClient("http://127.0.0.1:10254", w.fetchImpl),
+        resolveTarget: async () => ({ identifier: "ag-group-1", name: "Worker" }),
+        selectEngine: vi.fn(async (_engine: string) => true),
+      },
+    });
+    live.push(h);
+    await h.setup({
+      onInbound: vi.fn(),
+      onInboundEvent: vi.fn(),
+      onMetadata: vi.fn(),
+      onAction: vi.fn(),
+    } as unknown as ChannelSetup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    expect(
+      w.calls.filter((c) => c.path === "/accounts/lease" && c.body?.role === "executor"),
+    ).toEqual([]);
+    expect(
+      w.calls.some((c) => c.path === "/accounts/release" && c.search === "?role=executor"),
+    ).toBe(true);
   });
 });

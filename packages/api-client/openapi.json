@@ -3876,6 +3876,20 @@
             "$ref": "#/components/schemas/Difficulty",
             "default": "standard"
           },
+          "difficulty_executors": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Difficulty Executors"
+          },
           "difficulty_source": {
             "$ref": "#/components/schemas/DifficultySource",
             "default": "inferred"
@@ -8581,7 +8595,8 @@
             "enum": [
               "claude",
               "codex",
-              "agent"
+              "agent",
+              "opencode"
             ],
             "title": "Executor",
             "type": "string"

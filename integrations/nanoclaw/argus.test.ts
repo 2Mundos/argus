@@ -266,6 +266,33 @@ describe("renderTask", () => {
     expect(fallback).toContain("argus-delegate claude");
     expect(fallback).not.toContain("argus-delegate agent");
   });
+  it("direct harness work when difficulty_executors is empty", () => {
+    const text = renderTask(
+      { ...task(), difficulty_executors: [], complexity: "trivial" } as any,
+      new Map(),
+      null,
+      { localHarness: true },
+    );
+    expect(text).toContain("No delegated executor for this difficulty");
+    expect(text).toContain("Local harness (direct)");
+    expect(text).toContain("Do not call argus-delegate");
+    expect(text).not.toContain("Delegated implementation (mandatory)");
+    expect(text).not.toContain("No usable executor is leased");
+    expect(text).not.toMatch(/argus-delegate (agent|claude|codex|opencode)/);
+    // A pin still forces the delegated path.
+    const pinned = renderTask(
+      {
+        ...task(),
+        difficulty_executors: [],
+        executor_model: { executor: "agent", model: "composer-2.5" },
+      } as any,
+      new Map(),
+      "agent",
+      { localHarness: true },
+    );
+    expect(pinned).toContain("Delegated implementation (mandatory)");
+    expect(pinned).toContain("This task pins EXECUTOR agent");
+  });
   it("names a pinned executor over the trivial and lease preference", () => {
     const pinned = renderTask(
       {

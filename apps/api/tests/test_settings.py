@@ -36,6 +36,7 @@ def test_registry_lists_phase1_keys(client: TestClient) -> None:
     body = client.get("/api/settings/registry", headers=ADMIN).json()
     keys = {d["key"] for d in body}
     assert "models" in keys
+    assert "difficulty.executors" in keys
     assert "review.independent" in keys
     assert "onboarding.dismissed" in keys
     assert "orchestrator.enabled" in keys
@@ -44,6 +45,9 @@ def test_registry_lists_phase1_keys(client: TestClient) -> None:
     assert review["default"] == {"mode": "off", "max_rounds": 3}
     assert "schema" in review
     assert set(review["scopes"]) == {"global", "project"}
+    executors = next(d for d in body if d["key"] == "difficulty.executors")
+    assert executors["default"] == {}
+    assert set(executors["scopes"]) == {"global", "project"}
 
 
 def test_global_defaults_and_admin_write(client: TestClient) -> None:
@@ -231,6 +235,52 @@ def test_claim_carries_effective_model_policy(client: TestClient) -> None:
     assert body["model_policy"]["implementation"]["codex"] == ["gpt-custom"]
     assert body["model_policy_revision"]
     assert len(body["model_policy_revision"]) == 64
+    # Built-in standard chain when difficulty.executors is unset.
+    assert body["difficulty_executors"] == ["claude", "codex"]
+
+
+def test_difficulty_executors_setting_and_claim(client: TestClient) -> None:
+    client.put(
+        "/api/projects/demo", json={"name": "Demo", "description": "d"}, headers=ADMIN
+    )
+    res = client.put(
+        "/api/settings/difficulty.executors",
+        json={"value": {"trivial": [], "standard": ["codex", "claude"]}},
+        headers=ADMIN,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["value"] == {"trivial": [], "standard": ["codex", "claude"]}
+    assert res.json()["source"] == "global"
+
+    got = client.get("/api/settings", headers=ADMIN).json()
+    by_key = {s["key"]: s for s in got["settings"]}
+    assert by_key["difficulty.executors"]["value"]["trivial"] == []
+
+    task = client.post(
+        "/api/tasks",
+        json={
+            "title": "copy tweak",
+            "project": "demo",
+            "spec": "Fix a typo in the README wording only.",
+            "difficulty": "trivial",
+        },
+        headers=ADMIN,
+    ).json()
+    assert task["difficulty"] == "trivial"
+    boot = client.post(
+        "/api/agents/bootstrap-tokens", json={"role": "worker"}, headers=ADMIN
+    ).json()
+    agent = client.post(
+        "/api/agents/register",
+        json={"bootstrap_token": boot["token"], "capabilities": []},
+    ).json()
+    claimed = client.post(
+        "/api/tasks/claim",
+        json={"capabilities": [], "wait_s": 0},
+        headers=bearer(agent["token"]),
+    )
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.json()["difficulty_executors"] == []
 
 
 def test_merge_and_partial_policy_unit() -> None:

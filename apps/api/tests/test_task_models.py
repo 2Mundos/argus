@@ -65,7 +65,7 @@ def test_pins_are_validated() -> None:
         {"harness_model": {"engine": "agent", "model": "x"}},
         {"harness_model": {"engine": "claude", "model": "-bad"}},
         {"harness_model": {"engine": "claude"}},
-        {"executor_model": {"executor": "opencode", "model": "x"}},
+        {"executor_model": {"executor": "copilot", "model": "x"}},
         {"executor_model": {"executor": "codex", "model": "x", "extra": 1}},
         # the pinned engine's provider is excluded by the restriction
         {"harness_model": OPUS, "account_providers": ["openai"]},
@@ -111,6 +111,51 @@ async def test_executor_pin_narrows_the_executor_lease(
             tx, A, RUNTIME, store, "executor", task_id=task.id, attempt=task.attempt
         )
     assert executor.provider == "cursor"
+
+
+async def test_opencode_pin_narrows_executor_lease_to_local(
+    db: Database, store, agent
+) -> None:
+    await add_account(db, store, "claude", "anthropic", priority=100)
+    local_cred = {
+        "base_url": "http://127.0.0.1:8080",
+        "auth_token": "argus-local-harness",
+        "model": "qwen3",
+    }
+    await store.put("strata", local_cred)
+    async with db.write() as tx:
+        await accounts.create_account(
+            tx,
+            "strata",
+            AccountCreate(
+                name="strata",
+                provider="local",
+                credential=local_cred,
+                priority=0,
+            ),
+            "sops:strata",
+            "admin:test",
+            store,
+        )
+    await make_task(
+        db, executor_model=ExecutorModel(executor="opencode", model="qwen3")
+    )
+    task = await claim(db)
+    assert task is not None
+    async with db.write() as tx:
+        executor = await accounts.lease(
+            tx,
+            A,
+            [*RUNTIME, "local"],
+            store,
+            "executor",
+            task_id=task.id,
+            attempt=task.attempt,
+        )
+    assert executor.provider == "local"
+    assert executor.settings is not None
+    assert executor.settings.label == "local"
+    assert executor.settings.model == "qwen3"
 
 
 async def test_harness_pin_yields_to_another_provider(

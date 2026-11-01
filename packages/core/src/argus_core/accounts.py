@@ -19,10 +19,12 @@ LeaseRole = Literal["engine", "executor", "repository"]
 GITHUB_HOST = "github.com"
 REPOSITORY_PROVIDERS = frozenset({"gitea", "github"})
 EXECUTOR_ONLY = frozenset({"cursor", "copilot"})
-# The node's own model, served on loopback (local harness spec): a harness, never
-# a delegated CLI, holding no credential and no quota of its own.
+# The node's own model, served on loopback (local harness spec): harness and/or
+# OpenCode executor, holding no real credential and no quota of its own.
 LOCAL_PROVIDER = "local"
-ENGINE_ONLY = frozenset({LOCAL_PROVIDER})
+# Providers that never serve a harness (the `engine` role). Empty today: `local`
+# is both harness and OpenCode executor (local harness spec).
+ENGINE_ONLY: frozenset[str] = frozenset()
 # Account providers a harness (the `engine` role) can run on: what a task may be
 # restricted to. Never the repository provider or the executor-only ones.
 ENGINE_PROVIDERS = frozenset({"anthropic", "openai", CUSTOM_PROVIDER, LOCAL_PROVIDER})
@@ -140,6 +142,21 @@ def local_credential_problem(credential: dict[str, Any]) -> str | None:
     ):
         return f"context_tokens must be an integer from {low} to {high}"
     return None
+
+
+def local_lease_settings(credential: dict[str, Any]) -> LeaseSettings | None:
+    """OpenCode (and similar) settings from a local credential: base URL and model,
+    label `local`, no provider block. None when the document is not a valid local
+    credential (local harness spec, local as executor)."""
+    if local_credential_problem(credential) is not None:
+        return None
+    model = credential.get("model")
+    return LeaseSettings(
+        base_url=validate_local_base_url(credential["base_url"]),
+        label="local",
+        model=model if isinstance(model, str) else None,
+        provider=None,
+    )
 
 
 class AccountKind(StrEnum):

@@ -1937,8 +1937,8 @@ async def _resolve_harness_account(
     """The id of the account a harness account pin names, checked against the
     task's other fields (task models spec 3.4); None when the task is not pinned.
     The account must be an engine account its `account_providers` and harness pin
-    allow; a local (Strata) harness only orchestrates, so its executor pin may only
-    be the Cursor agent."""
+    allow; a local (Strata) harness orchestrates and may pin Cursor (`agent`) or
+    OpenCode (`opencode`) as executor (local harness / task models specs)."""
     if ref is None:
         return None
     acc = await _named_account(conn, ref)
@@ -1956,11 +1956,11 @@ async def _resolve_harness_account(
     elif (
         provider == LOCAL_PROVIDER
         and executor_model is not None
-        and executor_model.executor != "agent"
+        and executor_model.executor not in ("agent", "opencode")
     ):
         why = (
-            f"account {name} is the local harness, which delegates only to the"
-            f" Cursor agent; executor_model {executor_model.executor} cannot run"
+            f"account {name} is the local harness, which delegates to the Cursor"
+            f" agent or OpenCode; executor_model {executor_model.executor} cannot run"
         )
     if why:
         raise ValidationFailedError(

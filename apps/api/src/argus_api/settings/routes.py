@@ -30,7 +30,10 @@ async def get_global_settings(
     """Global values with `source` per key (env | global | default)."""
     async with db.read() as conn:
         return await service.list_settings(
-            conn, settings.model_policy_path, service.GLOBAL
+            conn,
+            settings.model_policy_path,
+            service.GLOBAL,
+            env_difficulty_executors=settings.difficulty_executors,
         )
 
 
@@ -40,7 +43,12 @@ async def get_project_settings(
 ) -> SettingsResponse:
     """Effective values for a project, with `source` per key."""
     async with db.read() as conn:
-        return await service.list_settings(conn, settings.model_policy_path, slug)
+        return await service.list_settings(
+            conn,
+            settings.model_policy_path,
+            slug,
+            env_difficulty_executors=settings.difficulty_executors,
+        )
 
 
 @router.get("/projects/{slug}/settings/{key}/override")

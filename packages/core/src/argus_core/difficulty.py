@@ -2,6 +2,7 @@
 
 import re
 from enum import StrEnum
+from typing import Any
 
 
 class Difficulty(StrEnum):
@@ -13,6 +14,76 @@ class Difficulty(StrEnum):
 
 # Ascending; an escalation moves one step right.
 LEVELS = tuple(Difficulty)
+
+# Delegate CLIs a difficulty executor chain may name (plus empty / `none` = none).
+DIFFICULTY_EXECUTOR_CLIS = frozenset({"claude", "codex", "opencode", "agent"})
+NONE_EXECUTOR = "none"
+
+
+def parse_difficulty_executors(raw: object) -> dict[str, tuple[str, ...]]:
+    """Validate a difficulty → executor-chain map. Empty list or sole `none` means
+    no delegated executor. Raises ValueError with a fixed message on bad shape."""
+    if not isinstance(raw, dict):
+        raise ValueError(
+            "difficulty.executors: a JSON object of difficulty -> list of executors"
+        )
+    out: dict[str, tuple[str, ...]] = {}
+    for key, value in raw.items():
+        if key not in set(Difficulty):
+            raise ValueError(
+                f"difficulty.executors: unknown difficulty {key!r} "
+                f"(want {', '.join(d.value for d in Difficulty)})"
+            )
+        if not isinstance(value, list) or any(not isinstance(x, str) for x in value):
+            raise ValueError(
+                f"difficulty.executors.{key}: must be a list of executor names"
+            )
+        if value == [NONE_EXECUTOR] or value == []:
+            out[key] = ()
+            continue
+        if NONE_EXECUTOR in value:
+            raise ValueError(
+                f"difficulty.executors.{key}: {NONE_EXECUTOR!r} must be alone "
+                "(or use an empty list)"
+            )
+        if not set(value) <= DIFFICULTY_EXECUTOR_CLIS:
+            raise ValueError(
+                f"difficulty.executors.{key}: list of "
+                f"{', '.join(sorted(DIFFICULTY_EXECUTOR_CLIS))}, empty, or "
+                f"[{NONE_EXECUTOR!r}]"
+            )
+        out[key] = tuple(value)
+    return out
+
+
+def chain_for(
+    difficulty: Difficulty | str,
+    overrides: dict[str, tuple[str, ...]] | None,
+    defaults: dict[Difficulty, tuple[str, ...]],
+) -> tuple[str, ...]:
+    """Effective executor chain for a level: override if present, else default."""
+    key = difficulty if isinstance(difficulty, str) else difficulty.value
+    if overrides is not None and key in overrides:
+        return overrides[key]
+    level = difficulty if isinstance(difficulty, Difficulty) else Difficulty(difficulty)
+    return defaults[level]
+
+
+def as_jsonable(chains: dict[str, tuple[str, ...]]) -> dict[str, list[str]]:
+    """Settings / claim payload form (lists; empty = no executor)."""
+    return {k: list(v) for k, v in chains.items()}
+
+
+def merge_difficulty_executor_maps(
+    *layers: dict[str, Any] | None,
+) -> dict[str, tuple[str, ...]]:
+    """Later layers win per difficulty key. Each layer is validated."""
+    merged: dict[str, tuple[str, ...]] = {}
+    for layer in layers:
+        if not layer:
+            continue
+        merged.update(parse_difficulty_executors(layer))
+    return merged
 
 
 def escalated(difficulty: Difficulty) -> Difficulty:
