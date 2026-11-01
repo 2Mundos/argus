@@ -375,6 +375,23 @@ class Settings:
             )
 
 
+def refuse_preview_data(
+    data_dir: Path,
+    checkout: Path | None = None,
+    preview_root: Path | None = None,
+) -> None:
+    """Refuse a data dir that is the preview install's `data/` unless this code
+    runs from the preview checkout (worktree-dev-isolation draft, 1)."""
+    preview = (preview_root or Path.home() / "work" / "argus").resolve()
+    here = checkout or Path(__file__).resolve().parents[4]
+    if data_dir.resolve() == preview / "data" and here.resolve() != preview:
+        raise ValueError(
+            f"refusing to start: ARGUS_DATA_DIR {data_dir} is the preview install's"
+            f" data and this checkout ({here}) is not {preview}; use `make dev-api`"
+            " (state in .argus/) or a different data dir"
+        )
+
+
 def _difficulty_executors() -> dict[str, tuple[str, ...]]:
     """ARGUS_DIFFICULTY_EXECUTORS, validated at startup: a bad value must not route.
     Empty list or sole `none` means no delegated executor (task difficulty spec)."""

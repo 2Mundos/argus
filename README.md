@@ -70,8 +70,9 @@ Requires `uv`, [mise](https://mise.jdx.dev) (pins Python, Node, pnpm, uv, gitlea
 ```bash
 make setup        # uv sync + pnpm install
 make hooks        # enable the pre-push hook: make check-changed + secret scan
-make dev-api      # API on :8000 under /api (state in ./data, override with ARGUS_DATA_DIR)
-make dev-dashboard # http://localhost:3000, proxies /api to :8000
+make dev-api      # API under /api on this checkout's own port; state in ./.argus (seeded from the preview DB; DATA_DIR=, NO_SEED=1)
+make dev-dashboard # this checkout's dashboard port, proxies /api to its dev-api; both print one `dev:` line
+make seed-dev     # re-seed ./.argus from a pruned copy of the preview DB (ACCOUNTS=1 adds accounts)
 make check        # lint + typecheck + test (what CI runs)
 make check-changed # only what changed since origin/main's merge base can affect (full check if unknown)
 ```

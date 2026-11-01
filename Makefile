@@ -16,11 +16,17 @@ setup: ## Install Python and Node dependencies.
 hooks: ## Enable .githooks/pre-push.
 	git config core.hooksPath .githooks
 
-.PHONY: dev-api dev-dashboard
-dev-api: ## Run the API with reload on :8000.
-	$(UV) run uvicorn argus_api.main:app --reload
-dev-dashboard: ## Run the dashboard on :3000 (ARGUS_API_URL overrides the API proxy target).
-	$(PNPM) dev
+# Dev servers are per checkout: state in .argus/, ports from a hash of the path
+# (scripts/dev.py). DATA_DIR= overrides the data dir; an inherited ARGUS_DATA_DIR never does.
+PREVIEW_DB := $(HOME)/work/argus/data/argus.db
+
+.PHONY: dev-api dev-dashboard seed-dev
+dev-api: ## Run the API on this checkout's port with its own .argus/ data (NO_SEED=1, DATA_DIR=, ACCOUNTS=1).
+	$(UV) run python scripts/dev.py api --source "$(PREVIEW_DB)" $(if $(DATA_DIR),--data-dir "$(DATA_DIR)",) $(if $(NO_SEED),--no-seed,) $(if $(ACCOUNTS),--accounts,)
+dev-dashboard: ## Run the dashboard on this checkout's port, proxying its dev-api.
+	python3 scripts/dev.py dashboard
+seed-dev: ## Replace .argus/ data with a pruned copy of the preview DB (ACCOUNTS=1 adds accounts, PREVIEW_DB=).
+	$(UV) run python scripts/dev.py seed --source "$(PREVIEW_DB)" $(if $(DATA_DIR),--data-dir "$(DATA_DIR)",) $(if $(ACCOUNTS),--accounts,)
 
 .PHONY: image run-docker test-docker
 image: ## Build the control-plane image (deploy/Dockerfile.api → argus:local).

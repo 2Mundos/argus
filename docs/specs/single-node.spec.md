@@ -122,7 +122,8 @@ gateway as `DOCKER_BRIDGE_IP`; neither file publishes on all host interfaces.
 - The data layer is a thin repository module over `sqlite3`/`aiosqlite`, with
   one writer and a reader pool; tests use a temporary database file per test.
 - No Compose stack is needed for development: `make dev-api` creates
-  `./data/argus.db` on first run. For a packaged run, `deploy/compose.yaml` is
+  `./.argus/argus.db` on first run (seeded from the preview database, see the
+  [worktree dev isolation](../drafts/2026-10-31.worktree-dev-isolation.draft.md) draft). For a packaged run, `deploy/compose.yaml` is
   still one process and one named volume (`docker compose -f deploy/compose.yaml
   up --build`); an optional `deploy/compose.docker.yaml` overlay adds the host
   Docker socket and a bridge-gateway port binding when the operator wants local
