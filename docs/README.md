@@ -209,7 +209,7 @@ every new dependency is judged against it.
   the NanoClaw hook drops container stderr today (only `docker logs` stdout is kept)
 - [Bounded recovery](drafts/2026-10-29.bounded-recovery.draft.md) — throttled
   session starts, one recovery per unexpected exit, uncertain work never resent
-  (item 3 shipped for steers)
+  (shipped; only the NanoClaw start-path question is open)
 - [Verification boundary](drafts/2026-10-29.verification-boundary.draft.md) — a
   spec subsection stating what was verified, at which level and versions
 - [Model-facing evals](drafts/2026-10-31.model-facing-evals.draft.md) — run real
