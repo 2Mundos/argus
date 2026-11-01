@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "python3 /usr/local/lib/argus/command_guard.py" }]
+      }
+    ]
+  }
+}

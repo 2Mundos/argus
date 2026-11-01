@@ -22,5 +22,12 @@ COPY --chmod=0755 argus-delegate.mjs /usr/local/bin/argus-delegate
 COPY --chmod=0644 account-settings.mjs model-policy.mjs model-policy.defaults.json milestones.mjs livelog.mjs changes.mjs usage.mjs gitea-api.mjs github-api.mjs /usr/local/bin/
 COPY --chmod=0755 gitea-api.mjs /usr/local/bin/argus-gitea-api
 COPY --chmod=0755 github-api.mjs /usr/local/bin/argus-github-api
+# Command guard (docs/specs/command-guard.spec.md): a Claude Code PreToolUse hook
+# registered in managed settings, which a project's own .claude settings cannot
+# remove. The smoke fails the build if the guard does not block a known-bad command.
+COPY --chmod=0644 command_guard.py /usr/local/lib/argus/command_guard.py
+COPY --chmod=0644 claude-managed-settings.json /etc/claude-code/managed-settings.json
+RUN echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \
+      | python3 /usr/local/lib/argus/command_guard.py | grep -q '"deny"'
 USER node
-LABEL dev.argus.tools-layer="openssh-client rsync python3 uv make argus-delegate model-policy"
+LABEL dev.argus.tools-layer="openssh-client rsync python3 uv make argus-delegate model-policy command-guard"

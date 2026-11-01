@@ -139,6 +139,8 @@ every new dependency is judged against it.
   capabilities, pins and dependencies with one rule set for REST, MCP and the dashboard
 - [Task drafts](specs/task-drafts.spec.md) — persisted, never-claimable task drafts
   published in one validated, idempotent transaction (atomic or partial)
+- [Command guard](specs/command-guard.spec.md) — a `PreToolUse` hook that blocks a
+  short list of catastrophic shell commands; accident prevention, not a sandbox
 - [Pool editor](specs/pool-editor.spec.md) — separate host and NanoClaw agent image fields with verified
   choices, version-checked saves, field-level errors
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes
