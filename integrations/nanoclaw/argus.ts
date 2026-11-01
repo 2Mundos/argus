@@ -2993,14 +2993,36 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
+  /**
+   * Tell Argus how the checkpoint step is going (task finalization spec 3.3). Best
+   * effort: a refused or lost report is logged and never changes the attempt.
+   */
+  async function reportCheckpoint(
+    task: Pick<ArgusTask, "id" | "attempt">,
+    state: "running" | "saved" | "nothing_to_save" | "failed",
+    detail?: string,
+  ): Promise<void> {
+    try {
+      await client.call("POST", `/tasks/${task.id}/attempts/${task.attempt}/checkpoint`, {
+        state,
+        ...(detail ? { detail: detail.slice(0, 200) } : {}),
+      });
+    } catch (err) {
+      log.warn("Could not report the checkpoint step", { task: task.id, state, err });
+    }
+  }
+
   /** Save the task's unpublished work after an attempt that did not complete. Best effort. */
   async function checkpointAfterAttempt(task: ArgusTask): Promise<void> {
     const storeRoot = cfg.checkpointRoot ?? process.env.ARGUS_CHECKPOINT_DIR?.trim();
     if (!storeRoot || completedAttempt === `${task.id}:${task.attempt}`) return;
     if (!task.required_capabilities?.includes("repository:write")) return;
+    let started = false;
     try {
       const groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
       if (!groupDir) return;
+      await reportCheckpoint(task, "running");
+      started = true;
       const saved = await checkpointTaskWorkspace({
         groupDir,
         storeRoot,
@@ -3009,11 +3031,18 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         repositoryUrl: task.repository_url,
         maxBytes: maxCheckpointBytesFromEnv(),
       });
-      if (!saved.ok) log.warn("Could not checkpoint the task's work", { task: task.id, ...saved });
-      else if (!saved.empty)
+      if (!saved.ok) {
+        log.warn("Could not checkpoint the task's work", { task: task.id, ...saved });
+        await reportCheckpoint(task, "failed", saved.reason);
+      } else if (saved.empty) {
+        await reportCheckpoint(task, "nothing_to_save");
+      } else {
         log.info("Checkpointed the task's work", { task: task.id, ref: saved.ref });
+        await reportCheckpoint(task, "saved", saved.ref);
+      }
     } catch (err) {
       log.warn("Could not checkpoint the task's work", { task: task.id, err });
+      if (started) await reportCheckpoint(task, "failed", "env_checkpoint_invalid");
     }
   }
 

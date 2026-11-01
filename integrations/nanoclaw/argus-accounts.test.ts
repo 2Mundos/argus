@@ -2487,8 +2487,19 @@ describe("task-scoped repository auth", () => {
         existsSync(path.join(store, REPO_ID))
           ? readdirSync(path.join(store, REPO_ID)).filter((n) => /^[0-9]{14}-/.test(n))
           : [];
-      if (saved) await until(() => checkpoints().length === 1);
-      else expect(checkpoints()).toEqual([]);
+      // Task finalization spec 3.3: the step is reported only when it ran.
+      const steps = () =>
+        w.calls
+          .filter((c) => c.path === `/tasks/${REPO_ID}/attempts/1/checkpoint`)
+          .map((c) => c.body.state);
+      if (saved) {
+        await until(() => checkpoints().length === 1);
+        await until(() => steps().length === 2);
+        expect(steps()).toEqual(["running", "saved"]);
+      } else {
+        expect(checkpoints()).toEqual([]);
+        expect(steps()).toEqual([]);
+      }
     });
   }
 });

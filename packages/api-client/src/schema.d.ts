@@ -2564,6 +2564,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/attempts/{attempt}/checkpoint": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report Checkpoint
+         * @description The worker's checkpoint follow-up for an attempt whose claim has ended. Only
+         *     the agent that held the attempt may report it, and only for that attempt (409
+         *     `not_attempt_holder`, `claim_open`, `checkpoint_closed`).
+         */
+        post: operations["report_checkpoint_api_tasks__task_id__attempts__attempt__checkpoint_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/block": {
         parameters: {
             query?: never;
@@ -4322,6 +4344,32 @@ export interface components {
             /** Id */
             id: string;
             status: components["schemas"]["ItemStatus"];
+        };
+        /** CheckpointFacts */
+        CheckpointFacts: {
+            /** Detail */
+            detail: string | null;
+            /** Duration S */
+            duration_s: number | null;
+            /** Ended At */
+            ended_at: string | null;
+            /** Started At */
+            started_at: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "running" | "saved" | "nothing_to_save" | "failed" | "unknown";
+        };
+        /** CheckpointReport */
+        CheckpointReport: {
+            /** Detail */
+            detail?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "running" | "saved" | "nothing_to_save" | "failed";
         };
         /** ClaimHoldingAgent */
         ClaimHoldingAgent: {
@@ -6158,6 +6206,23 @@ export interface components {
              * @default false
              */
             task_blocked?: boolean;
+        };
+        /** Finalization */
+        Finalization: {
+            /** Attempt */
+            attempt: number;
+            checkpoint: components["schemas"]["CheckpointFacts"] | null;
+            /** Claim End Action */
+            claim_end_action: string | null;
+            /** Claim Ended At */
+            claim_ended_at: string | null;
+            /** Execution S */
+            execution_s: number | null;
+            /**
+             * Step
+             * @enum {string}
+             */
+            step: "executing" | "finalizing_checkpoint" | "finished" | "unknown";
         };
         /** FleetCapabilities */
         FleetCapabilities: {
@@ -10147,6 +10212,7 @@ export interface components {
             failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
+            finalization?: components["schemas"]["Finalization"] | null;
             /** Harness Account */
             harness_account?: string | null;
             harness_model?: components["schemas"]["HarnessModel"] | null;
@@ -15816,6 +15882,40 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TaskAttempt"][];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    report_checkpoint_api_tasks__task_id__attempts__attempt__checkpoint_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+                attempt: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointReport"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

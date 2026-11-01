@@ -59,6 +59,7 @@ from argus_api.settings import service as settings_svc
 from argus_api.tasks import (
     changes,
     delivery,
+    finalization,
     log,
     prerequisites,
     quota_resume,
@@ -547,6 +548,23 @@ async def fail_task(
             oom_kill=body.oom_kill,
             native_session=body.native_session,
         )
+
+
+@router.post(
+    "/{task_id}/attempts/{attempt}/checkpoint", status_code=status.HTTP_204_NO_CONTENT
+)
+async def report_checkpoint(
+    task_id: str,
+    attempt: int,
+    body: finalization.CheckpointReport,
+    db: DbDep,
+    agent_id: AgentDep,
+) -> None:
+    """The worker's checkpoint follow-up for an attempt whose claim has ended. Only
+    the agent that held the attempt may report it, and only for that attempt (409
+    `not_attempt_holder`, `claim_open`, `checkpoint_closed`)."""
+    async with db.write() as tx:
+        await finalization.report_checkpoint(tx, agent_id, task_id, attempt, body)
 
 
 @router.post("/{task_id}/quota-resume")

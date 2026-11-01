@@ -3736,6 +3736,107 @@
         "title": "ChecklistReport",
         "type": "object"
       },
+      "CheckpointFacts": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "duration_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration S"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "saved",
+              "nothing_to_save",
+              "failed",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "started_at",
+          "ended_at",
+          "duration_s",
+          "detail"
+        ],
+        "title": "CheckpointFacts",
+        "type": "object"
+      },
+      "CheckpointReport": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "saved",
+              "nothing_to_save",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "CheckpointReport",
+        "type": "object"
+      },
       "ClaimHoldingAgent": {
         "properties": {
           "agent_id": {
@@ -9295,6 +9396,78 @@
           }
         },
         "title": "FallbackResult",
+        "type": "object"
+      },
+      "Finalization": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "checkpoint": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CheckpointFacts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "claim_end_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim End Action"
+          },
+          "claim_ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Ended At"
+          },
+          "execution_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution S"
+          },
+          "step": {
+            "enum": [
+              "executing",
+              "finalizing_checkpoint",
+              "finished",
+              "unknown"
+            ],
+            "title": "Step",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "step",
+          "claim_ended_at",
+          "claim_end_action",
+          "execution_s",
+          "checkpoint"
+        ],
+        "title": "Finalization",
         "type": "object"
       },
       "FleetCapabilities": {
@@ -20750,6 +20923,16 @@
             "title": "Failures",
             "type": "integer"
           },
+          "finalization": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Finalization"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "harness_account": {
             "anyOf": [
               {
@@ -31832,6 +32015,66 @@
           }
         ],
         "summary": "List Attempts",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/attempts/{attempt}/checkpoint": {
+      "post": {
+        "description": "The worker's checkpoint follow-up for an attempt whose claim has ended. Only\nthe agent that held the attempt may report it, and only for that attempt (409\n`not_attempt_holder`, `claim_open`, `checkpoint_closed`).",
+        "operationId": "report_checkpoint_api_tasks__task_id__attempts__attempt__checkpoint_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "attempt",
+            "required": true,
+            "schema": {
+              "title": "Attempt",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckpointReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Report Checkpoint",
         "tags": [
           "tasks"
         ]

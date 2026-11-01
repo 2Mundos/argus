@@ -95,3 +95,60 @@ describe("Activity quiet claims", () => {
     expect(screen.queryByText(/Quiet for/)).toBeNull();
   });
 });
+
+describe("Activity finalization", () => {
+  const base = {
+    id: "t1",
+    state: "failed" as const,
+    attempt: 1,
+    progress_message: null,
+    progress_percent: null,
+    progress_at: null,
+    progress_kind: null,
+    progress_data: null,
+    lease_expires_at: null,
+  };
+  const fin = (step: string, checkpoint: object | null, execution_s: number | null = 125) => ({
+    attempt: 1,
+    step,
+    claim_ended_at: "2026-10-29T12:00:00.000Z",
+    claim_end_action: "fail",
+    execution_s,
+    checkpoint,
+  });
+  const cp = (state: string, over: object = {}) => ({
+    state,
+    started_at: "2026-10-29T12:00:01.000Z",
+    ended_at: null,
+    duration_s: null,
+    detail: null,
+    ...over,
+  });
+
+  it.each([
+    ["finished", null, "Agent finished (took 2m)."],
+    ["finalizing_checkpoint", cp("running"), "Agent finished (took 2m). Saving checkpoint…"],
+    [
+      "finished",
+      cp("failed", { detail: "env_checkpoint_limit", duration_s: 4 }),
+      "Agent finished (took 2m). Checkpoint failed: env_checkpoint_limit (took 4s).",
+    ],
+    [
+      "finished",
+      cp("saved", { detail: "checkpoint:x:y", duration_s: 3 }),
+      "Agent finished (took 2m). Checkpoint saved (took 3s).",
+    ],
+  ])("%s: %j", (step, checkpoint, text) => {
+    // biome-ignore lint/suspicious/noExplicitAny: a hand-built read fixture
+    const task: any = { ...base, finalization: fin(step, checkpoint) };
+    render(<Activity task={task} events={[]} />);
+    expect(screen.getByText(text)).toBeTruthy();
+  });
+
+  it("gives no duration when the execution end is not the agent's", () => {
+    // biome-ignore lint/suspicious/noExplicitAny: a hand-built read fixture
+    const task: any = { ...base, finalization: fin("finished", null, null) };
+    render(<Activity task={task} events={[]} />);
+    expect(screen.getByText("Agent finished.")).toBeTruthy();
+  });
+});

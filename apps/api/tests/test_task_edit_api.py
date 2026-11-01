@@ -17,7 +17,7 @@ FIELDS = {
 
 # GET /api/tasks/{id} is TaskRead (stall visibility 3.4); writes still return Task.
 _TASK_READ_EXTRA = frozenset(
-    {"quiet_at", "last_signal_at", "last_signal_source", "stall_cause"}
+    {"quiet_at", "last_signal_at", "last_signal_source", "stall_cause", "finalization"}
 )
 
 

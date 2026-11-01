@@ -28,6 +28,7 @@ from argus_api.paging import (
     encode_cursor,
 )
 from argus_api.tasks import service
+from argus_api.tasks.finalization import Finalization, newest
 
 MAX_IDS = 50
 MAX_QUERY_TERMS = 8
@@ -94,6 +95,8 @@ class TaskRead(Task):
     last_signal_at: datetime | None = None
     last_signal_source: str | None = None
     stall_cause: StallCause | None = None
+    # Execution versus follow-up of the newest attempt (task finalization spec 3.4).
+    finalization: Finalization | None = None
 
 
 async def read_task(
@@ -107,6 +110,7 @@ async def read_task(
         last_signal_at=facts.last_signal_at,
         last_signal_source=facts.last_signal_source,
         stall_cause=facts.stall_cause,
+        finalization=await newest(conn, task_id, task.state, now),
     )
 
 
