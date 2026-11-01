@@ -1,11 +1,13 @@
 """Settings store: registry, validation, resolution (docs/specs/settings.spec.md)."""
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import aiosqlite
+from argus_core.difficulty import as_jsonable, parse_difficulty_executors
 from argus_core.settings import (
     IndependentReviewSetting,
     SettingDefinition,
@@ -24,6 +26,7 @@ from argus_api.settings import registry
 GLOBAL = "global"
 MODELS_KEY = "models"
 REVIEW_KEY = "review.independent"
+DIFFICULTY_EXECUTORS_KEY = "difficulty.executors"
 
 
 def _check_schema(defn: SettingDefinition, value: Any) -> None:
@@ -51,6 +54,11 @@ def _normalize(key: str, value: Any) -> Any:
     _check_schema(defn, value)
     if key == REVIEW_KEY:
         return IndependentReviewSetting.model_validate(value).model_dump()
+    if key == DIFFICULTY_EXECUTORS_KEY:
+        try:
+            return as_jsonable(parse_difficulty_executors(value))
+        except ValueError as exc:
+            raise ValidationFailedError(str(exc)) from exc
     return value
 
 
@@ -120,6 +128,8 @@ async def _setting(
     path: Path,
     scope: str,
     key: str,
+    *,
+    env_difficulty_executors: dict[str, tuple[str, ...]] | None = None,
 ) -> SettingValue:
     defn = registry.definition(key)
     if defn is None:
@@ -128,6 +138,21 @@ async def _setting(
         if scope == GLOBAL:
             return _models_from_file(path)
         return await _models_for_project(conn, path, scope)
+    if (
+        key == DIFFICULTY_EXECUTORS_KEY
+        and os.environ.get("ARGUS_DIFFICULTY_EXECUTORS", "").strip()
+    ):
+        # ARGUS_DIFFICULTY_EXECUTORS wins over the store (settings.spec.md 3.7).
+        return SettingValue(
+            key=key,
+            value=as_jsonable(env_difficulty_executors or {}),
+            source="env",
+            notice=(
+                "ARGUS_DIFFICULTY_EXECUTORS is set in the service environment and wins "
+                "over saved settings. Edits here have no effect until that variable "
+                "is removed."
+            ),
+        )
 
     project_row = None if scope == GLOBAL else await _row(conn, scope, key)
     if project_row is not None:
@@ -151,21 +176,61 @@ async def _setting(
 
 
 async def list_settings(
-    conn: aiosqlite.Connection, path: Path, scope: str
+    conn: aiosqlite.Connection,
+    path: Path,
+    scope: str,
+    *,
+    env_difficulty_executors: dict[str, tuple[str, ...]] | None = None,
 ) -> SettingsResponse:
     await _require_project(conn, scope)
     values = [
-        await _setting(conn, path, scope, defn.key)
+        await _setting(
+            conn,
+            path,
+            scope,
+            defn.key,
+            env_difficulty_executors=env_difficulty_executors,
+        )
         for defn in registry.all_definitions()
     ]
     return SettingsResponse(scope=scope, settings=values)
 
 
 async def get_setting(
-    conn: aiosqlite.Connection, path: Path, scope: str, key: str
+    conn: aiosqlite.Connection,
+    path: Path,
+    scope: str,
+    key: str,
+    *,
+    env_difficulty_executors: dict[str, tuple[str, ...]] | None = None,
 ) -> SettingValue:
     await _require_project(conn, scope)
-    return await _setting(conn, path, scope, key)
+    return await _setting(
+        conn,
+        path,
+        scope,
+        key,
+        env_difficulty_executors=env_difficulty_executors,
+    )
+
+
+async def effective_difficulty_executors(
+    conn: aiosqlite.Connection,
+    path: Path,
+    project: str,
+    *,
+    env_difficulty_executors: dict[str, tuple[str, ...]] | None = None,
+) -> dict[str, tuple[str, ...]]:
+    """Override map for difficulty → executor chain (may be partial; empty tuple =
+    no executor). Env lock replaces the store entirely when set."""
+    setting = await _setting(
+        conn,
+        path,
+        project,
+        DIFFICULTY_EXECUTORS_KEY,
+        env_difficulty_executors=env_difficulty_executors,
+    )
+    return parse_difficulty_executors(setting.value)
 
 
 async def project_override(

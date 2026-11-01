@@ -9,6 +9,7 @@ from argus_core.continuation import (
     ObservationRequest,
 )
 from argus_core.delivery import Delivery
+from argus_core.difficulty import chain_for
 from argus_core.resumability import DEFAULT_READ_BOUND, ResumabilityReport
 from argus_core.task_edit import TaskAttempt, TaskEdit
 from argus_core.tasks import (
@@ -48,6 +49,7 @@ from argus_api.deps import (
     SettingsDep,
     TokenDep,
 )
+from argus_api.engines.router import DEFAULT_EXECUTORS
 from argus_api.errors import ValidationFailedError
 from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
@@ -283,6 +285,15 @@ async def claim_task(
                     policy, revision = await settings_svc.effective_model_policy(
                         conn, settings.model_policy_path, task.project
                     )
+                    exec_overrides = await settings_svc.effective_difficulty_executors(
+                        conn,
+                        settings.model_policy_path,
+                        task.project,
+                        env_difficulty_executors=settings.difficulty_executors,
+                    )
+                    difficulty_executors = list(
+                        chain_for(task.difficulty, exec_overrides, DEFAULT_EXECUTORS)
+                    )
                     switch = await service.attempt_model_switch(
                         conn, task.id, task.attempt
                     )
@@ -297,6 +308,7 @@ async def claim_task(
                     model_policy_revision=revision,
                     model_switch=switch,
                     steer_unknown=unknown,
+                    difficulty_executors=difficulty_executors,
                 )
             remaining = deadline - loop.time()
             try:

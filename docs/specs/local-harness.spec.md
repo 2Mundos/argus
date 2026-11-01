@@ -2,12 +2,15 @@
 
 # 1. Purpose and Scope
 
-When every cloud model account is exhausted or disabled, a NanoClaw worker keeps
-working by running Claude Code against the node's **local** Anthropic-compatible
-API (Strata on loopback), with **Cursor** (`agent`) as the preferred delegated
-executor. Scope: the `local` account provider, lease ranking, engine catalogue,
-NanoClaw env (`ANTHROPIC_BASE_URL` allowlist), and the existing `local` engine
-for router delegations.
+When every cloud model account is exhausted or disabled, **NanoClaw** (the
+harness) keeps working against the node's **local** model (Strata on loopback):
+its Anthropic-compatible provider talks to Strata, and **Cursor** (`agent`) is
+the preferred delegated executor. The same `local` account may also be leased as
+an **executor**; coding work on that model goes through **OpenCode** (OpenAI-
+compatible), never through `argus-delegate claude`. Scope: the `local` account
+provider, lease ranking, engine catalogue, NanoClaw env (`ANTHROPIC_BASE_URL`
+allowlist), OpenCode lease settings, and the existing `local` engine for router
+delegations.
 
 # 2. Non-Goals
 
@@ -27,20 +30,35 @@ for router delegations.
   the same probe as `ARGUS_LOCAL_MODEL_URL` via the reaper (`sync_local_health`).
 - **Lease ranking.** `fallback_tier`: every non-`local` account sorts before
   `local` (inverted for `trivial` tasks, see [task difficulty](task-difficulty.spec.md)), then `priority`, load, and deterministic ties (account selection spec).
-- **Harness.** NanoClaw `provider` stays `claude`; engine mapping for `local` is
-  `claude` on the redirected API. Executor preference: `agent` (Cursor).
+- **Harness is NanoClaw.** The worker loop is NanoClaw. For a `local` engine
+  lease its provider stays `claude` only as the Anthropic Messages client pointed
+  at Strata (`ANTHROPIC_BASE_URL`); that is not “Claude Code is the harness”.
+  Default executor preference: `agent` (Cursor).
+- **Custom / local models as executor → OpenCode.** An OpenAI-compatible model
+  (`local` or `custom`) used for delegated coding is reached with
+  `argus-delegate opencode` and lease `settings`, not with `argus-delegate
+  claude`. A `local` account may be leased for the `executor` role. The lease
+  carries `settings` `{base_url, label: "local", model}` from the credential (no
+  secret). NanoClaw passes those as `executor_settings` on the pinned
+  model-policy context; OpenCode applies them as `OPENCODE_CONFIG_CONTENT` (same
+  path as [custom accounts](custom-accounts.spec.md)). The public placeholder
+  `auth_token` is exposed only as `ARGUS_ACCOUNT_API_KEY` for OpenCode's
+  `{env:…}` reference. A task may pin `executor_model: {executor: opencode,
+  model}` ([task models](task-models.spec.md)); that pin leases the `local`
+  provider for the executor role. Default acquisition still prefers Cursor.
 - **Container → host.** Strata listens on `127.0.0.1:8080` on the host only (not
   on the LAN). Worker credentials use `http://host.docker.internal:8080` (pool
   `extra_hosts: host.docker.internal:host-gateway`). That name resolves inside the
   container to the Docker bridge gateway IP, which cannot reach a service bound only
-  on loopback. While a `local` engine lease is active, the NanoClaw host process
-  starts a small TCP listener on the `docker0` address (bridge gateway only),
-  forwarding to `127.0.0.1` on the same port (`argus-local-forward.ts`). If
-  `docker0` is absent (no Docker bridge), the forwarder is skipped and the
-  operator must publish Strata on the bridge address themselves (e.g. `socat`
-  `TCP-LISTEN:8080,bind=<bridge-ip>,fork` → `127.0.0.1:8080`). No OneCLI proxy
-  and no cloud secret for `api.anthropic.com` on this path; `NO_PROXY` includes
-  the local API host so Anthropic traffic does not traverse the egress proxy.
+  on loopback. While a `local` engine **or** executor lease is active, the
+  NanoClaw host process starts a small TCP listener on the `docker0` address
+  (bridge gateway only), forwarding to `127.0.0.1` on the same port
+  (`argus-local-forward.ts`). If `docker0` is absent (no Docker bridge), the
+  forwarder is skipped and the operator must publish Strata on the bridge
+  address themselves (e.g. `socat` `TCP-LISTEN:8080,bind=<bridge-ip>,fork` →
+  `127.0.0.1:8080`). No OneCLI proxy and no cloud secret for `api.anthropic.com`
+  on this path; `NO_PROXY` includes the local API host so Anthropic traffic does
+  not traverse the egress proxy.
 - **Redirect guard.** `api_redirected` is relaxed only when `ANTHROPIC_BASE_URL`
   equals `ARGUS_ALLOWED_ANTHROPIC_BASE_URL` (both set by the host for that
   lease) and the allowed URL's host is one of the local hosts (`127.0.0.1`,
@@ -65,8 +83,9 @@ for router delegations.
     even when cloud accounts are usable. Without a list the ranking is unchanged.
     The restriction only narrows: the live claim, `task_id` and `attempt` rules of
     account selection 3 still apply, and it never lets a worker take an account
-    for another task. The executor role is not restricted
-    (the `local` account is engine-only anyway).
+    for another task. `account_providers` still applies only to the engine role;
+    an `executor_model` of `opencode` narrows the executor lease to `local`
+    ([task models](task-models.spec.md) 3.2).
   - *Claim.* `POST /tasks/claim` skips a restricted task when the caller's
     `runtime_providers` do not intersect its list, or when no account of its
     listed providers is usable right now (available, not exhausted before reset,
@@ -76,32 +95,35 @@ for router delegations.
   - *Surfaces.* The dashboard task form, MCP `create_task` and the API client show
     and accept the field; OpenAPI and client types are regenerated.
 
-- **Harness orchestrates only; small context (2026-10-21).** Strata serves only
-  the NanoClaw harness. Two runs on the 64k window (db39c512 attempt 77/80,
-  ec7bbb45 attempt 54) died with "prompt leaves no room to answer in the context
-  (65536)": the harness itself (Claude Code on Strata) had read specs, drafts,
-  `AGENTS.md`, `git show` diffs and test files into its own context (40+ shell
-  calls, one read-only Cursor delegate); no Claude Code executor ran on Strata. So:
+- **NanoClaw orchestrates; OpenCode (or Cursor) executes.** Two runs on the 64k
+  window (db39c512 attempt 77/80, ec7bbb45 attempt 54) died with "prompt leaves
+  no room to answer in the context (65536)": NanoClaw's agent loop on Strata had
+  read specs, drafts, `AGENTS.md`, `git show` diffs and test files into its own
+  context (40+ shell calls, one read-only Cursor delegate). So:
   - *Prompt.* On a local engine lease the task message adds the local harness
     rules: orchestrate only, no bulk reads into the harness context, delegate all
-    investigation, implementation, gates and review to `argus-delegate agent`
-    (Cursor; `--read-only` for investigation), read only the delegate's JSON
-    report line, cap any shell output. A mid-task switch to the local account
-    re-renders the resent task with these rules.
-  - *No Claude Code executor on Strata.* The harness env carries
-    `ARGUS_LOCAL_HARNESS=1`; `argus-delegate claude` refuses there
+    investigation, implementation, gates and review to the leased executor
+    (default `argus-delegate agent` / Cursor; `--read-only` for investigation;
+    or `opencode` when that executor is leased or pinned), read only the
+    delegate's JSON report line, cap any shell output. A mid-task switch to the
+    local account re-renders the resent task with these rules.
+  - *No `argus-delegate claude` on a local/custom model.* The local engine env
+    carries `ARGUS_LOCAL_HARNESS=1`; `argus-delegate claude` refuses there
     (`auth_missing`, reason `local_harness_engine_only`) because it would inherit
-    `ANTHROPIC_BASE_URL` and run on the local model. `agent` and `codex` are
-    unaffected.
-  - *Cursor first.* The executor lease on a local engine lease asks for
-    `runtime_providers: ["cursor"]` first (falling back to any provider on
-    `no_account`), so the preferred `agent` has its Cursor stub even when a cloud
-    Anthropic account outranks Cursor. Only acquisition prefers Cursor: the prompt names
-    the CLI of the executor actually leased (`agent`, `codex`; `claude` is never
-    recommended on a local engine, the delegate refuses it), or states that delegation
-    is blocked for lack of an executor account. Same rule on a custom engine lease
-    ([custom harness](custom-harness.spec.md)), whose `claude` executor runs only on a
-    real Anthropic account through the gateway.
+    `ANTHROPIC_BASE_URL` and treat Claude Code as the client of the custom/local
+    model. For those models the coding executor is OpenCode (or Cursor on a
+    separate account). `agent`, `codex` and `opencode` are unaffected.
+  - *Cursor first (unless the difficulty chain is empty).* The executor lease on
+    a local engine lease asks for `runtime_providers: ["cursor"]` first (falling
+    back to any provider on `no_account`), so the preferred `agent` has its Cursor
+    stub even when a cloud Anthropic account outranks Cursor. An empty/`none`
+    difficulty executor chain ([task difficulty](task-difficulty.spec.md)) skips
+    the executor lease: NanoClaw does the work on the local model and the prompt
+    does not require `argus-delegate`. An `executor_model` pin of `opencode`
+    leases `local` for the executor role. Otherwise the prompt names the CLI
+    leased (`agent`, `codex`, `opencode`; `claude` is never recommended on a local
+    engine), or states that delegation is blocked. Same Cursor-first default on a
+    custom engine lease ([custom harness](custom-harness.spec.md)).
   - *Safety net: compaction sized to the window.* The local credential may name
     `context_tokens` (an integer, 4096 to 4 000 000; per account). When absent,
     `POST /accounts/lease` fills it from the local model probe's `n_ctx`; when
@@ -129,10 +151,13 @@ for router delegations.
 # 6. Implementation Consequences
 
 - `packages/core`: `LOCAL_PROVIDER`, `validate_local_base_url`, `fallback_tier`,
-  `role_accepts` engine-only for `local`.
-- `apps/api`: `accounts/service.py` ranking and `sync_local_health`; reaper probe;
-  `engines/catalog.py` local entry axes.
+  `role_accepts` for engine and executor, `local_lease_settings`,
+  `ExecutorModel` / `EXECUTOR_PROVIDERS` for `opencode` → `local`.
+- `apps/api`: `accounts/service.py` ranking, `_settings` for local,
+  `sync_local_health`; reaper probe; `engines/catalog.py` local entry axes;
+  harness-account pin allows `executor_model` `agent` or `opencode` with local.
 - `integrations/nanoclaw`: `argus-accounts.ts` (`local` mapping, `harnessEnvOnly`,
-  `preferredExecutorForLease`), `argus-local-harness.ts`, `argus-local-forward.ts`,
-  `anthropic-redirect.mjs`, `argus-delegate.mjs` guard, `argus.ts` harness file
+  `preferredExecutorForLease`, `executorFirst`), `argus-local-harness.ts`,
+  `argus-local-forward.ts` (engine or executor lease), `anthropic-redirect.mjs`,
+  `argus-delegate.mjs` guard and OpenCode settings, `argus.ts` harness/settings
   sync (under NanoClaw `DATA_DIR`), `install.sh` OneCLI wrap.

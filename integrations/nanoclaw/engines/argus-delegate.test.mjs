@@ -1498,6 +1498,7 @@ test("localHarnessRefusal spares other executors and cloud harnesses", () => {
   const local = { ARGUS_LOCAL_HARNESS: "1" };
   assert.equal(localHarnessRefusal("agent", local), null);
   assert.equal(localHarnessRefusal("codex", local), null);
+  assert.equal(localHarnessRefusal("opencode", local), null);
   assert.notEqual(localHarnessRefusal("claude", local), null);
   // older env without the marker: the local placeholder token on a redirect
   assert.notEqual(

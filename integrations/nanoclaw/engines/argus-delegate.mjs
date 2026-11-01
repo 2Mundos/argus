@@ -214,7 +214,7 @@ export function localHarnessRefusal(executor, e = process.env) {
     ((e.ANTHROPIC_BASE_URL ?? "").trim() !== "" &&
       (e.ANTHROPIC_AUTH_TOKEN ?? "").trim() === LOCAL_HARNESS_AUTH_TOKEN);
   return local
-    ? "the local model serves only the harness; delegate with EXECUTOR agent (Cursor) or codex"
+    ? "the local model does not run Claude Code as executor; delegate with EXECUTOR agent (Cursor), opencode, or codex"
     : null;
 }
 
@@ -846,6 +846,10 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
         account_label: settings.label,
         account_base_url: settings.base_url,
       };
+      // Local Strata ignores the token: fill the OpenCode env reference when the
+      // channel did not already inject a key (local harness / local executor).
+      if (settings.label === "local" && !env(e, CUSTOM_KEY_ENV))
+        e = { ...e, [CUSTOM_KEY_ENV]: "argus-local-harness" };
     }
     // --model, then the task's pin and the account's model (fixed choices: no chain),
     // then the policy chain.

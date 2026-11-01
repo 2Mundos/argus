@@ -473,6 +473,19 @@ export interface ArgusTask {
   model_policy_revision?: string | null;
   /** Steers the previous attempt was sent but never acknowledged (task steering spec 3.3). */
   steer_unknown?: number;
+  /** Effective executor chain for this task's difficulty (settings 3.7). Empty: harness does the work. */
+  difficulty_executors?: string[] | null;
+}
+
+/** Empty difficulty executor chain and no pin: NanoClaw does the work (task difficulty / local harness). */
+export function noDelegatedExecutor(
+  task: Pick<ArgusTask, "difficulty_executors" | "executor_model">,
+): boolean {
+  return (
+    Array.isArray(task.difficulty_executors) &&
+    task.difficulty_executors.length === 0 &&
+    !task.executor_model
+  );
 }
 
 export type ContinuationPhase = "implement" | "resume" | "reconcile" | "qa" | "close_evidence";
@@ -811,46 +824,70 @@ export function parseReply(raw: string, taskId?: string): Directive {
  * comes back as a short summary, so the harness context stays small
  * (local harness spec, "Harness orchestrates only"). Compaction sized to the window is only a safety net.
  */
-export const localHarnessRules = (cli: string | null): string[] => [
-  "Local harness (mandatory): this harness runs on the node's local model with a small context window.",
-  "You only orchestrate. Do not read the repository into your own context: no cat/sed/head of files, no",
-  "git show/git diff bodies, no Read of specs, drafts, AGENTS.md or tests, no grep with many matches, no logs.",
-  ...(cli
-    ? [
-        `Delegate ALL investigation, implementation, gates (make check, tests) and review to`,
-        `/usr/local/bin/argus-delegate ${cli} (the leased executor${cli === "agent" ? "; add --read-only for investigation or review" : ""}). Write a short`,
-      ]
-    : [
-        "No usable executor is leased to this worker (none leased, or the leased one cannot run on this harness):",
-        "delegation is blocked for lack of an account or capacity, not invalid credentials. Do not probe an",
-        "executor that was not leased; report the task blocked. When one is usable, write a short",
-      ]),
-  "prompt file that says what to find or change and asks for a summary of at most 20 lines.",
-  "From a delegate run read only its JSON report line (the last stdout line); never the .out file in full.",
-  "Any shell output you do need: cap it (`| tail -c 1500`). Keep git to status/branch/commit/push one-liners.",
-  "Never use EXECUTOR claude here: the local model serves only this harness and the delegate refuses it.",
-];
+export const localHarnessRules = (
+  cli: string | null,
+  opts: { direct?: boolean } = {},
+): string[] => {
+  if (opts.direct) {
+    return [
+      "Local harness (direct): this difficulty has no delegated executor. Do investigation,",
+      "implementation, gates (make check, tests) and review yourself on this local model.",
+      "Do not call argus-delegate. Prefer targeted reads; cap shell output (`| tail -c 1500`).",
+      "Keep git to status/branch/commit/push one-liners when you can.",
+    ];
+  }
+  return [
+    "Local harness (mandatory): this harness runs on the node's local model with a small context window.",
+    "You only orchestrate. Do not read the repository into your own context: no cat/sed/head of files, no",
+    "git show/git diff bodies, no Read of specs, drafts, AGENTS.md or tests, no grep with many matches, no logs.",
+    ...(cli
+      ? [
+          `Delegate ALL investigation, implementation, gates (make check, tests) and review to`,
+          `/usr/local/bin/argus-delegate ${cli} (the leased executor${cli === "agent" ? "; add --read-only for investigation or review" : ""}). Write a short`,
+        ]
+      : [
+          "No usable executor is leased to this worker (none leased, or the leased one cannot run on this harness):",
+          "delegation is blocked for lack of an account or capacity, not invalid credentials. Do not probe an",
+          "executor that was not leased; report the task blocked. When one is usable, write a short",
+        ]),
+    "prompt file that says what to find or change and asks for a summary of at most 20 lines.",
+    "From a delegate run read only its JSON report line (the last stdout line); never the .out file in full.",
+    "Any shell output you do need: cap it (`| tail -c 1500`). Keep git to status/branch/commit/push one-liners.",
+    "Never use EXECUTOR claude here: the delegate refuses it on the local harness; use agent (Cursor) or opencode.",
+  ];
+};
 
-export const customHarnessRules = (cli: string | null): string[] => [
-  "Custom harness (mandatory): this harness runs on a custom account (e.g. OpenRouter) that serves only the harness.",
-  "Invariant: the custom account's credential never serves a Claude executor (the delegate refuses with",
-  "custom_harness_engine_only); Claude Code runs only on a separately leased Anthropic account.",
-  ...(cli
-    ? [
-        `You orchestrate: delegate investigation, implementation, gates and review to /usr/local/bin/argus-delegate ${cli}`,
-        `(the executor leased to this worker${cli === "agent" ? "; add --read-only for investigation or review" : ""}). Do not probe an executor that was not leased.`,
-        ...(cli === "claude"
-          ? [
-              "It runs on a leased Anthropic account through the gateway, never on this harness's account.",
-            ]
-          : []),
-      ]
-    : [
-        "No usable executor is leased to this worker (none leased, or the leased one cannot run on this harness):",
-        "delegation is blocked for lack of an account or capacity, not invalid credentials. Do not probe an",
-        "executor that was not leased; report the task blocked.",
-      ]),
-];
+export const customHarnessRules = (
+  cli: string | null,
+  opts: { direct?: boolean } = {},
+): string[] => {
+  if (opts.direct) {
+    return [
+      "Custom harness (direct): this difficulty has no delegated executor. Do investigation,",
+      "implementation, gates and review yourself on this harness. Do not call argus-delegate.",
+    ];
+  }
+  return [
+    "Custom harness (mandatory): this harness runs on a custom account (e.g. OpenRouter) that serves only the harness.",
+    "Invariant: the custom account's credential never serves a Claude executor (the delegate refuses with",
+    "custom_harness_engine_only); Claude Code runs only on a separately leased Anthropic account.",
+    ...(cli
+      ? [
+          `You orchestrate: delegate investigation, implementation, gates and review to /usr/local/bin/argus-delegate ${cli}`,
+          `(the executor leased to this worker${cli === "agent" ? "; add --read-only for investigation or review" : ""}). Do not probe an executor that was not leased.`,
+          ...(cli === "claude"
+            ? [
+                "It runs on a leased Anthropic account through the gateway, never on this harness's account.",
+              ]
+            : []),
+        ]
+      : [
+          "No usable executor is leased to this worker (none leased, or the leased one cannot run on this harness):",
+          "delegation is blocked for lack of an account or capacity, not invalid credentials. Do not probe an",
+          "executor that was not leased; report the task blocked.",
+        ]),
+  ];
+};
 
 const SPEC_MAX_CHARS = 30_000; // the original spec; the full text stays in Argus (get_task)
 const HISTORY_MAX_CHARS = 3_000; // the newest part of the audit narrative
@@ -1062,6 +1099,7 @@ export function renderTask(
   } = {},
 ): string {
   const pinned = task.executor_model;
+  const direct = noDelegatedExecutor(task);
   // The leased executor is authoritative; a pin overrides it, trivial only names the leased Cursor.
   // Claude Code never runs on the local model (the delegate refuses it): a claude pin there is
   // reported blocked, never switched and never offered as a runnable command.
@@ -1095,6 +1133,14 @@ export function renderTask(
       body: pages.get(ref.page_id) ?? null,
     })),
   };
+  const howToRespond = [
+    "How to respond: send short progress updates as normal messages. When you are done, reply with a",
+    'message starting with "COMPLETE:" followed by a summary of what you did. If you cannot do it,',
+    'start with "FAIL:" and say why; only when the workspace, a tool or a credential is missing (not when the',
+    'work is hard), start with "FAIL (environment):" instead. If you need a real scope, cost or permission choice, start with "ASK:"',
+    'and ask the question; you will be given the answer. For a missing tool or environment start with "ASSIST:"',
+    "(see the operating rules). A directive must be the first thing in your reply.",
+  ];
   const lines = [
     `[Argus task] Task: ${task.id} · Project: ${task.project} · Attempt: ${task.attempt}`,
     ...(task.repository_url ? repositoryTaskLines(task, opts.workspace) : []),
@@ -1107,55 +1153,61 @@ export function renderTask(
     ...contractLines(task),
     ...steerUnknownLines(task),
     "",
-    "Delegated implementation (mandatory): run all coding/model work through /usr/local/bin/argus-delegate EXECUTOR.",
-    "EXECUTOR is the leased CLI role (claude | codex | opencode | agent | copilot). When Cursor is the selected coding executor, use EXECUTOR agent. For GitHub Copilot use EXECUTOR copilot (the model is always explicit).",
-    ...(pinned
-      ? pinBlocked
-        ? [
-            `This task pins EXECUTOR ${pinned.executor} (model ${pinned.model}), which cannot run on the local harness (local_harness_engine_only). Do not switch executor and do not delegate; report the task blocked.`,
-          ]
-        : [
-            `This task pins EXECUTOR ${pinned.executor} (model ${pinned.model}): use it for all delegated work; argus-delegate applies the model. Do not switch executor; if it is unavailable (auth_missing or not_installed), report the task blocked.`,
-          ]
-      : preferredExecutor
-        ? [
-            `Preferred EXECUTOR for this task: ${preferredExecutor} (the CLI of the best-priority account Argus leased to this worker).`,
-            ...(trivial
+    ...(direct
+      ? [
+          "No delegated executor for this difficulty: do the coding and model work yourself on this harness.",
+          "Do not call argus-delegate. Direct Git, gates, QA, and other shell commands in the checkout are fine.",
+          ...(opts.localHarness ? ["", ...localHarnessRules(null, { direct: true }), ""] : []),
+          ...(opts.customHarness ? ["", ...customHarnessRules(null, { direct: true }), ""] : []),
+          "",
+          ...howToRespond,
+        ]
+      : [
+          "Delegated implementation (mandatory): run all coding/model work through /usr/local/bin/argus-delegate EXECUTOR.",
+          "EXECUTOR is the leased CLI role (claude | codex | opencode | agent | copilot). When Cursor is the selected coding executor, use EXECUTOR agent. For GitHub Copilot use EXECUTOR copilot (the model is always explicit).",
+          ...(pinned
+            ? pinBlocked
               ? [
-                  "This task is trivial: use EXECUTOR agent (Cursor, model from the trivial policy); it is the leased executor.",
+                  `This task pins EXECUTOR ${pinned.executor} (model ${pinned.model}), which cannot run on the local harness (local_harness_engine_only). Do not switch executor and do not delegate; report the task blocked.`,
+                ]
+              : [
+                  `This task pins EXECUTOR ${pinned.executor} (model ${pinned.model}): use it for all delegated work; argus-delegate applies the model. Do not switch executor; if it is unavailable (auth_missing or not_installed), report the task blocked.`,
+                ]
+            : preferredExecutor
+              ? [
+                  `Preferred EXECUTOR for this task: ${preferredExecutor} (the CLI of the best-priority account Argus leased to this worker).`,
+                  ...(trivial
+                    ? [
+                        "This task is trivial: use EXECUTOR agent (Cursor, model from the trivial policy); it is the leased executor.",
+                      ]
+                    : []),
                 ]
               : []),
-          ]
-        : []),
-    ...(opts.localHarness ? ["", ...localHarnessRules(effective), ""] : []),
-    ...(opts.customHarness ? ["", ...customHarnessRules(effective), ""] : []),
-    "Do not invoke agent, cursor-agent, claude, codex, or opencode directly (nor copilot) for implementation — that bypasses",
-    "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
-    "Direct Git, gates, QA, and other non-delegated shell commands in the checkout are fine when they are not a",
-    "substitute for argus-delegate.",
-    "",
-    "Example (normal implementation, not --read-only):",
-    `  /usr/local/bin/argus-delegate ${effective ?? "EXECUTOR"} \\`,
-    "    --cwd <task-checkout> --prompt-file <prompt.txt> --out <task-checkout>/.argus-delegate --timeout <seconds>",
-    "Use the model and retry policy from argus-model-policy.json (or --model / --model-attempt when retrying).",
-    "",
-    "The delegate wrapper may materialize gateway stubs and cli-config metadata in a private writable directory;",
-    "that is authorized and is not a copy of real credentials. Do not chmod or remount read-only seed files, and",
-    "do not read auth.json or other secret material.",
-    "",
-    "Model policy: argus-model-policy.json pins this task policy for argus-delegate. Attach the delegate JSON",
-    "report (last stdout line) as a task artifact. After a failed verification/context limit, retry with",
-    "--model-attempt N --fallback-reason REASON; --model pins an override.",
-    "",
-    "If delegation fails, resume this same task (same Task id above) with the error and artifact context; do not",
-    "treat another task's block or missing Postgres as proof this task cannot proceed.",
-    "",
-    "How to respond: send short progress updates as normal messages. When you are done, reply with a",
-    'message starting with "COMPLETE:" followed by a summary of what you did. If you cannot do it,',
-    'start with "FAIL:" and say why; only when the workspace, a tool or a credential is missing (not when the',
-    'work is hard), start with "FAIL (environment):" instead. If you need a real scope, cost or permission choice, start with "ASK:"',
-    'and ask the question; you will be given the answer. For a missing tool or environment start with "ASSIST:"',
-    "(see the operating rules). A directive must be the first thing in your reply.",
+          ...(opts.localHarness ? ["", ...localHarnessRules(effective), ""] : []),
+          ...(opts.customHarness ? ["", ...customHarnessRules(effective), ""] : []),
+          "Do not invoke agent, cursor-agent, claude, codex, or opencode directly (nor copilot) for implementation — that bypasses",
+          "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
+          "Direct Git, gates, QA, and other non-delegated shell commands in the checkout are fine when they are not a",
+          "substitute for argus-delegate.",
+          "",
+          "Example (normal implementation, not --read-only):",
+          `  /usr/local/bin/argus-delegate ${effective ?? "EXECUTOR"} \\`,
+          "    --cwd <task-checkout> --prompt-file <prompt.txt> --out <task-checkout>/.argus-delegate --timeout <seconds>",
+          "Use the model and retry policy from argus-model-policy.json (or --model / --model-attempt when retrying).",
+          "",
+          "The delegate wrapper may materialize gateway stubs and cli-config metadata in a private writable directory;",
+          "that is authorized and is not a copy of real credentials. Do not chmod or remount read-only seed files, and",
+          "do not read auth.json or other secret material.",
+          "",
+          "Model policy: argus-model-policy.json pins this task policy for argus-delegate. Attach the delegate JSON",
+          "report (last stdout line) as a task artifact. After a failed verification/context limit, retry with",
+          "--model-attempt N --fallback-reason REASON; --model pins an override.",
+          "",
+          "If delegation fails, resume this same task (same Task id above) with the error and artifact context; do not",
+          "treat another task's block or missing Postgres as proof this task cannot proceed.",
+          "",
+          ...howToRespond,
+        ]),
   ];
   return lines.join("\n");
 }
@@ -2669,9 +2721,20 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     const selection = await cfg.selectModels(task, {
       engine: account ? { provider: account.provider, account_id: account.id } : null,
       executor: executor ? { provider: executor.provider, account_id: executor.id } : null,
-      engine_settings: engineLease?.provider === "custom" ? (engineLease.settings ?? null) : null,
-      executor_settings:
-        executorLease?.provider === "custom" ? (executorLease.settings ?? null) : null,
+      engine_settings:
+        engineLease?.provider === "custom" || engineLease?.provider === "local"
+          ? (engineLease.settings ?? null)
+          : null,
+      executor_settings: (() => {
+        // OpenCode needs settings from a custom/local executor lease. When reuse_held
+        // returns the engine lease (same local account, no executor row), the pin
+        // still names opencode and the engine settings apply.
+        if (executorLease?.provider === "custom" || executorLease?.provider === "local")
+          return executorLease.settings ?? null;
+        if (task.executor_model?.executor === "opencode" && engineLease?.provider === "local")
+          return engineLease.settings ?? null;
+        return null;
+      })(),
     });
     selectedModels = selection;
     const bytes = new TextEncoder().encode(JSON.stringify(selection, null, 2));
@@ -3224,13 +3287,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     acc: NonNullable<ArgusConfig["accounts"]>,
     lease: AccountLease,
     reason: "lease" | "exhausted",
-    task: { id: string; attempt: number },
+    task: Pick<ArgusTask, "id" | "attempt" | "difficulty_executors" | "executor_model">,
   ): Promise<void> {
     const held: AccountLease[] = [lease];
     // The executor (a delegated CLI) is the best usable account across providers
     // too. It is held only when it is of another provider than the engine's: the
     // vault keeps one account per provider, and the engine's serves the CLI of its
-    // own provider.
+    // own provider. An empty difficulty chain skips the lease (harness does the work).
     const leaseExecutor = async (runtime_providers: string[]) =>
       (
         await client.call("POST", "/accounts/lease", {
@@ -3243,33 +3306,37 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           attempt: task.attempt,
         })
       ).data as AccountLease;
-    try {
-      // A local or custom harness only orchestrates and prefers Cursor: lease Cursor
-      // first so its stub is mounted, any provider only when none is usable. Each call
-      // replaces the agent's executor lease, as the single call did; nothing is
-      // applied to the vault until both are done, so a failed Cursor try leaves the
-      // same end state (the fallback's lease, or none).
-      let candidate: AccountLease | null = null;
-      const first = executorFirst(lease.provider);
-      if (first) {
-        try {
-          candidate = await leaseExecutor([first]);
-        } catch (err) {
-          if (!(err instanceof ArgusError && err.code === "no_account")) throw err;
-        }
-      }
-      candidate ??= await leaseExecutor(runtimeProviders("executor"));
-      if (candidate.role === "executor" && candidate.provider !== lease.provider)
-        held.push(candidate);
-    } catch (err) {
-      if (!(err instanceof ArgusError && err.code === "no_account")) throw err;
-      log.warn("No executor account is usable; delegation to a CLI will be blocked", {
-        message: err.message,
-      });
-    }
-    if (held.length === 1) {
-      // Not needed (or none available): do not keep an executor lease around.
+    if (noDelegatedExecutor(task)) {
       await client.call("POST", "/accounts/release?role=executor").catch(() => undefined);
+    } else {
+      try {
+        // A local or custom harness only orchestrates and prefers Cursor: lease Cursor
+        // first so its stub is mounted, any provider only when none is usable. Each call
+        // replaces the agent's executor lease, as the single call did; nothing is
+        // applied to the vault until both are done, so a failed Cursor try leaves the
+        // same end state (the fallback's lease, or none).
+        let candidate: AccountLease | null = null;
+        const first = executorFirst(lease.provider);
+        if (first) {
+          try {
+            candidate = await leaseExecutor([first]);
+          } catch (err) {
+            if (!(err instanceof ArgusError && err.code === "no_account")) throw err;
+          }
+        }
+        candidate ??= await leaseExecutor(runtimeProviders("executor"));
+        if (candidate.role === "executor" && candidate.provider !== lease.provider)
+          held.push(candidate);
+      } catch (err) {
+        if (!(err instanceof ArgusError && err.code === "no_account")) throw err;
+        log.warn("No executor account is usable; delegation to a CLI will be blocked", {
+          message: err.message,
+        });
+      }
+      if (held.length === 1) {
+        // Not needed (or none available): do not keep an executor lease around.
+        await client.call("POST", "/accounts/release?role=executor").catch(() => undefined);
+      }
     }
     const target = await acc.resolveTarget();
     let engine: string;
@@ -3327,10 +3394,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         attempt: task.attempt,
       })
       .catch((err) => log.warn("Could not report the engine selection", { err }));
-    await syncLocalHarnessFile(lease);
+    await syncLocalHarnessFile(lease, held);
   }
 
-  async function syncLocalHarnessFile(lease: AccountLease): Promise<void> {
+  async function syncLocalHarnessFile(
+    lease: AccountLease,
+    held: AccountLease[] = [lease],
+  ): Promise<void> {
     const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
       "../db/messaging-groups.js"
     );
@@ -3385,15 +3455,23 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
     await syncCustomHarnessBridge(group.folder, null, null, fetchImpl);
     removeCustomHarnessFile(dataDir, group.folder);
-    if (lease.provider === "local") {
-      const harness = localHarnessFromCredential(lease.credential);
+    const localLease =
+      held.find((l) => l.provider === "local") ?? (lease.provider === "local" ? lease : null);
+    if (localLease) {
+      const harness = localHarnessFromCredential(localLease.credential);
       if (!harness) {
         log.warn("Local account lease has an invalid harness credential; not writing env file");
         removeLocalHarnessFile(dataDir, group.folder);
         await syncLocalStrataForward(null);
         return;
       }
-      await writeLocalHarnessFile(dataDir, group.folder, harness);
+      // Engine local: full harness env. Executor-only local: still forward Strata and
+      // keep the credential file so OpenCode can reach the loopback model.
+      if (lease.provider === "local") {
+        await writeLocalHarnessFile(dataDir, group.folder, harness);
+      } else {
+        removeLocalHarnessFile(dataDir, group.folder);
+      }
       await syncLocalStrataForward(harness);
       return;
     }

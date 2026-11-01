@@ -140,6 +140,18 @@ every [routine](routines.spec.md) without editing them: the scheduler creates no
 runs and leaves `next_run_at` as it is, so turning it back on gives each due
 routine one catch-up run. Run now still works while it is off.
 
+## 3.7 Difficulty executors
+
+Key `difficulty.executors`, scopes `global` and `project`. Value: a partial map
+of difficulty (`trivial` | `simple` | `standard` | `hard`) → ordered list of
+executor CLIs (`claude` | `codex` | `opencode` | `agent`), or `[]` / `["none"]`
+for no delegated executor ([task difficulty](task-difficulty.spec.md)). Default
+`{}` means the built-in defaults for every level. Unnamed levels inherit those
+defaults. `ARGUS_DIFFICULTY_EXECUTORS` (same JSON shape, validated at startup)
+wins over the store when set, reported as `source: env` like `models`. The
+Settings tab edits the map; claim sends the effective chain for the task's
+difficulty as `difficulty_executors`.
+
 # 4. Open Questions
 
 - Should orchestrators be allowed to write project overrides? Phase 1 says admin

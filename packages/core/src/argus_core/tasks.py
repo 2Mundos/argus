@@ -50,6 +50,7 @@ EXECUTOR_PROVIDERS: dict[str, str] = {
     "claude": "anthropic",
     "codex": "openai",
     "agent": "cursor",
+    "opencode": "local",
 }
 # An account id or name: what a harness account pin names (task models spec 3.4).
 AccountRef = Annotated[
@@ -78,7 +79,7 @@ class ExecutorModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    executor: Literal["claude", "codex", "agent"]
+    executor: Literal["claude", "codex", "agent", "opencode"]
     model: ModelId
 
     @property
@@ -566,3 +567,6 @@ class ClaimedTask(Task):
     # Steers the previous attempt was sent but never confirmed (task steering spec
     # 3.3): they may or may not have been applied. A count only, never the text.
     steer_unknown: int = 0
+    # Effective difficulty → executor chain for this task's level (task difficulty /
+    # settings 3.7). Empty list: no delegated executor; the harness does the work.
+    difficulty_executors: list[str] | None = None

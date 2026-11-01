@@ -162,6 +162,7 @@ describe("local context window (local harness spec)", () => {
     expect(compactAt + output).toBeLessThan(65536 * 0.85);
     expect(compactAt).toBeGreaterThan(65536 / 2);
     expect(env.ARGUS_LOCAL_HARNESS).toBe("1");
+    expect(env.ARGUS_ACCOUNT_API_KEY).toBe(harness.auth_token);
     expect(Number(env.CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS)).toBeLessThanOrEqual(4000);
     expect(Number(env.BASH_MAX_OUTPUT_LENGTH)).toBeLessThanOrEqual(8000);
   });

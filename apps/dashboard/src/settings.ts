@@ -23,6 +23,46 @@ export type IndependentReview = {
   max_rounds: number;
 };
 
+export type DifficultyLevel = "trivial" | "simple" | "standard" | "hard";
+export type DifficultyExecutor = "claude" | "codex" | "opencode" | "agent";
+/** Partial map; empty list = harness does the work (settings.spec.md 3.7). */
+export type DifficultyExecutors = Partial<Record<DifficultyLevel, DifficultyExecutor[]>>;
+
+export const DIFFICULTY_LEVELS: DifficultyLevel[] = ["trivial", "simple", "standard", "hard"];
+
+/** Built-in chains when a level is not overridden (task difficulty spec). */
+export const DEFAULT_DIFFICULTY_EXECUTORS: Record<DifficultyLevel, DifficultyExecutor[]> = {
+  trivial: ["agent", "claude", "codex"],
+  simple: ["agent", "claude", "codex"],
+  standard: ["claude", "codex"],
+  hard: ["claude", "codex"],
+};
+
+/** Select options: "" = inherit default; "none" = empty chain; else comma-joined chain. */
+export const DIFFICULTY_EXECUTOR_PRESETS: { value: string; label: string }[] = [
+  { value: "", label: "Default" },
+  { value: "none", label: "None (harness does the work)" },
+  { value: "agent,claude,codex", label: "agent → claude → codex" },
+  { value: "claude,codex", label: "claude → codex" },
+  { value: "agent", label: "agent only" },
+  { value: "claude", label: "claude only" },
+  { value: "codex", label: "codex only" },
+  { value: "opencode", label: "opencode only" },
+  { value: "agent,opencode", label: "agent → opencode" },
+];
+
+export function chainSelectValue(chain: DifficultyExecutor[] | undefined): string {
+  if (chain === undefined) return "";
+  if (chain.length === 0) return "none";
+  return chain.join(",");
+}
+
+export function chainFromSelect(value: string): DifficultyExecutor[] | undefined {
+  if (value === "") return undefined;
+  if (value === "none") return [];
+  return value.split(",") as DifficultyExecutor[];
+}
+
 async function request<T>(
   method: string,
   path: string,

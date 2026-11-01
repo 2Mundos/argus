@@ -1,8 +1,30 @@
 import pytest
 from argus_core.accounts import fallback_tier
-from argus_core.difficulty import MAX_TRIVIAL_SPEC, Difficulty, classify
+from argus_core.difficulty import (
+    MAX_TRIVIAL_SPEC,
+    Difficulty,
+    chain_for,
+    classify,
+    parse_difficulty_executors,
+)
 
 T, S = Difficulty.TRIVIAL, Difficulty.STANDARD
+
+
+def test_parse_difficulty_executors_empty_means_none() -> None:
+    assert parse_difficulty_executors({"trivial": []}) == {"trivial": ()}
+    assert parse_difficulty_executors({"trivial": ["none"]}) == {"trivial": ()}
+    assert parse_difficulty_executors({"hard": ["codex", "claude"]}) == {
+        "hard": ("codex", "claude")
+    }
+    with pytest.raises(ValueError, match="must be alone"):
+        parse_difficulty_executors({"hard": ["none", "claude"]})
+
+
+def test_chain_for_empty_override_wins_over_default() -> None:
+    defaults = {Difficulty.TRIVIAL: ("agent", "claude")}
+    assert chain_for(Difficulty.TRIVIAL, {"trivial": ()}, defaults) == ()
+    assert chain_for(Difficulty.TRIVIAL, {}, defaults) == ("agent", "claude")
 
 
 @pytest.mark.parametrize(

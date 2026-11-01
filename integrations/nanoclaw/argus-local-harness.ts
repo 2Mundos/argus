@@ -58,6 +58,7 @@ export const LOCAL_HARNESS_ENV_KEYS = [
   "ANTHROPIC_AUTH_TOKEN",
   "ARGUS_ALLOWED_ANTHROPIC_BASE_URL",
   "ANTHROPIC_MODEL",
+  "ARGUS_ACCOUNT_API_KEY",
   "ARGUS_LOCAL_HARNESS",
   "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
@@ -151,7 +152,9 @@ export function localHarnessEnv(harness: LocalHarnessConfig): Record<string, str
     ANTHROPIC_BASE_URL: base,
     ANTHROPIC_AUTH_TOKEN: harness.auth_token,
     ARGUS_ALLOWED_ANTHROPIC_BASE_URL: base,
-    // The delegate refuses `claude` as an executor here: Strata serves only the harness.
+    // OpenCode as local executor reads this via `{env:ARGUS_ACCOUNT_API_KEY}`.
+    ARGUS_ACCOUNT_API_KEY: harness.auth_token,
+    // The delegate refuses `claude` as an executor here: use agent or opencode.
     ARGUS_LOCAL_HARNESS: "1",
     ...localContextEnv(harness.context_tokens),
   };

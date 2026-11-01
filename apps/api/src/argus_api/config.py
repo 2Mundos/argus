@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from argus_core.difficulty import Difficulty
+from argus_core.difficulty import parse_difficulty_executors
 
 # Defaults for the lost-spike rule (agent-hygiene.spec.md 3); the rule and its
 # configuration read them here so they cannot disagree.
@@ -356,22 +356,15 @@ class Settings:
 
 
 def _difficulty_executors() -> dict[str, tuple[str, ...]]:
-    """ARGUS_DIFFICULTY_EXECUTORS, validated at startup: a bad value must not route."""
+    """ARGUS_DIFFICULTY_EXECUTORS, validated at startup: a bad value must not route.
+    Empty list or sole `none` means no delegated executor (task difficulty spec)."""
     raw = os.environ.get("ARGUS_DIFFICULTY_EXECUTORS")
-    chains = json.loads(raw) if raw else {}
-    valid = {"claude", "codex", "opencode", "agent"}
-    if not isinstance(chains, dict) or any(
-        k not in set(Difficulty)
-        or not isinstance(v, list)
-        or not v
-        or not set(v) <= valid
-        for k, v in chains.items()
-    ):
-        raise ValueError(
-            "ARGUS_DIFFICULTY_EXECUTORS: a JSON object of difficulty -> non-empty "
-            f"list of executors ({', '.join(sorted(valid))})"
-        )
-    return {k: tuple(v) for k, v in chains.items()}
+    if not raw:
+        return {}
+    try:
+        return parse_difficulty_executors(json.loads(raw))
+    except ValueError as exc:
+        raise ValueError(f"ARGUS_DIFFICULTY_EXECUTORS: {exc}") from exc
 
 
 def _csv(name: str) -> tuple[str, ...]:

@@ -49,12 +49,20 @@ the engine role, and the model-policy maps that pin the models.
   *executor layer* is usable ([engines](engines.spec.md)), with every one passed
   over named in `executor_reason`. Defaults: `trivial` and `simple` use
   `agent, claude, codex`; `standard` and `hard` use `claude, codex`.
-  `ARGUS_DIFFICULTY_EXECUTORS` (JSON `{"standard": ["codex", "claude"]}`, validated
-  at startup) overrides a level. The model is the first of the model policy's
-  `trivial` map for `trivial`/`simple`, `hard_implementation` for `hard`, else
-  `implementation`; none means the CLI default (`auto` for Cursor). The decision
-  and the `engine.routed` event record `difficulty`, `executor_model` and
-  `executor_reason`; `task_attempts.definition` snapshots the difficulty.
+  An operator overrides a level via the setting `difficulty.executors`
+  ([settings](settings.spec.md)) or `ARGUS_DIFFICULTY_EXECUTORS` (env wins), a
+  JSON object of difficulty → ordered list of `claude` | `codex` | `opencode` |
+  `agent`. An **empty list** (or the sole sentinel `none`) means **no delegated
+  executor**: NanoClaw (the harness) does the work itself — no executor lease,
+  no mandatory `argus-delegate`. That pairs with `trivial`'s soft preference for
+  the `local` account so an operator can set
+  `{"trivial": []}` for “local model, harness does everything”. The model is the
+  first of the model policy's `trivial` map for `trivial`/`simple`,
+  `hard_implementation` for `hard`, else `implementation`; none means the CLI
+  default (`auto` for Cursor). The decision and the `engine.routed` event record
+  `difficulty`, `executor_model` and `executor_reason`; claim delivers the
+  effective chain for the task's level as `difficulty_executors`; 
+  `task_attempts.definition` snapshots the difficulty.
 - **Escalation.** A failure with reason `context_overflow` or
   `verification_failed`, or a review rejection, raises the difficulty one level
   (stopping at `hard`), sets the source to `inferred` and records
@@ -104,8 +112,9 @@ the engine role, and the model-policy maps that pin the models.
   does. Flat maps rather than one nested `hard` object keep one policy shape
   (scope → engine → chain) for the API, `model-policy.mjs` and the Engines view.
   A policy without these maps keeps its revision.
-- **Executor.** For a `trivial` task the harness prefers the Cursor executor, as it
-  does on local leases, and falls back to the others only if Cursor is unavailable.
+- **Executor.** For a `trivial` task the default chain prefers the Cursor
+  executor, as on local leases, and falls back to the others only if Cursor is
+  unavailable. An empty/`none` chain (above) skips that entirely.
 - **Composition with `account_providers`.** When both exist, the task's
   `account_providers` narrows the candidate providers first and `difficulty` only
   reorders what remains: a task restricted to `["anthropic"]` stays on it whatever

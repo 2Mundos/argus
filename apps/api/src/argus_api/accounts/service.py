@@ -25,6 +25,7 @@ from argus_core.accounts import (
     Usage,
     UsageReport,
     fallback_tier,
+    local_lease_settings,
     quota_exempt,
     role_accepts,
 )
@@ -1183,7 +1184,7 @@ async def _try_lease(
                 kind=row["kind"],
                 role="engine",
                 credential=credential,
-                settings=_settings(row, "engine"),
+                settings=_settings(row, "engine", credential),
             )
         if row["state"] == "exhausted":  # reset time passed; recover() has not run yet
             await tx.conn.execute(
@@ -1220,7 +1221,7 @@ async def _try_lease(
             kind=row["kind"],
             role=role,
             credential=credential,
-            settings=_settings(row, role),
+            settings=_settings(row, role, credential),
         )
     return None
 
@@ -1231,11 +1232,17 @@ def _serves(row: aiosqlite.Row, role: LeaseRole) -> bool:
     return serves_role(row["provider"], config, role)
 
 
-def _settings(row: aiosqlite.Row, role: LeaseRole) -> LeaseSettings | None:
-    """Where and how to call a custom account, for the role it is leased in."""
-    if row["provider"] != CUSTOM_PROVIDER or not row["config"]:
-        return None
-    return lease_settings(CustomConfig.model_validate_json(row["config"]), role)
+def _settings(
+    row: aiosqlite.Row,
+    role: LeaseRole,
+    credential: dict | None = None,
+) -> LeaseSettings | None:
+    """Where and how to call a custom or local account, for the role it is leased in."""
+    if row["provider"] == CUSTOM_PROVIDER and row["config"]:
+        return lease_settings(CustomConfig.model_validate_json(row["config"]), role)
+    if row["provider"] == LOCAL_PROVIDER and credential is not None:
+        return local_lease_settings(credential)
+    return None
 
 
 async def _ranked(

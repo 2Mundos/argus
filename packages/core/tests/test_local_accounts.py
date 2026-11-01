@@ -5,6 +5,7 @@ from argus_core.accounts import (
     LOCAL_AUTH_TOKEN,
     AccountCreate,
     fallback_tier,
+    local_lease_settings,
     role_accepts,
     validate_local_base_url,
 )
@@ -43,9 +44,25 @@ def test_local_account_create_defaults_max_leases() -> None:
     assert body.max_leases == 1
 
 
-def test_role_accepts_local_only_as_engine() -> None:
+def test_role_accepts_local_as_engine_and_executor() -> None:
     assert role_accepts("engine", "local", ["local", "anthropic"])
-    assert not role_accepts("executor", "local", ["local", "cursor"])
+    assert role_accepts("executor", "local", ["local", "cursor"])
+
+
+def test_local_lease_settings_from_credential() -> None:
+    settings = local_lease_settings(
+        {
+            "base_url": "http://host.docker.internal:8080",
+            "auth_token": LOCAL_AUTH_TOKEN,
+            "model": "qwen3",
+        }
+    )
+    assert settings is not None
+    assert settings.base_url == "http://host.docker.internal:8080"
+    assert settings.label == "local"
+    assert settings.model == "qwen3"
+    assert settings.provider is None
+    assert local_lease_settings({"base_url": "http://evil.example:8080"}) is None
 
 
 def test_fallback_tier_puts_cloud_before_local() -> None:

@@ -25,10 +25,10 @@ the harness model the NanoClaw channel configures at claim, and the model
 - No change to the global policy, its revision or its chains.
 - No availability check of a model ID: like the policy, IDs are opaque and the
   operator must use one the provider serves.
-- No model pin for `opencode` or for `custom`/`local` accounts: their models
-  come from the account ([custom accounts](custom-accounts.spec.md), [local
-  harness](local-harness.spec.md)); such a task is pinned to the account itself
-  (3.4).
+- No model pin for `custom` accounts: their models come from the account
+  ([custom accounts](custom-accounts.spec.md)); such a task is pinned to the
+  account itself (3.4). A local OpenCode pin is allowed (3.1); the account still
+  supplies `base_url` ([local harness](local-harness.spec.md)).
 - No change of a running attempt: an edit never reaches a claimed task ([task
   edit](task-edit.spec.md) 3.4).
 
@@ -39,7 +39,7 @@ the harness model the NanoClaw channel configures at claim, and the model
 | Field | Shape | Provider it needs |
 | --- | --- | --- |
 | `harness_model` | `{engine: claude \| codex, model}` or `null` | `claude` → `anthropic`, `codex` → `openai` |
-| `executor_model` | `{executor: claude \| codex \| agent, model}` or `null` | `claude` → `anthropic`, `codex` → `openai`, `agent` → `cursor` |
+| `executor_model` | `{executor: claude \| codex \| agent \| opencode, model}` or `null` | `claude` → `anthropic`, `codex` → `openai`, `agent` → `cursor`, `opencode` → `local` |
 
 `model` is required and follows the policy's model-ID rule
 (`[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}`). `null` (the default) means "follow the
@@ -116,10 +116,10 @@ win on priority: the Strata local account (`strata-local`) or one custom account
   provider is an engine provider (`anthropic`, `openai`, `custom`, `local`); it is
   allowed by `account_providers`; it is the provider a `harness_model` engine
   needs (so a local or custom account takes no `harness_model`: the account
-  brings its model); and a `local` account allows only an `executor_model` of
-  `agent` (the Strata harness only orchestrates and delegates to Cursor, [local
-  harness](local-harness.spec.md)). A disabled account is accepted: the task
-  waits until it is enabled.
+  brings its model); and a `local` account allows an `executor_model` of
+  `agent` (default Cursor) or `opencode` (local model via OpenCode, [local
+  harness](local-harness.spec.md)), never `claude` or `codex`. A disabled
+  account is accepted: the task waits until it is enabled.
 - **Leases.** The pin is a preference for that one account, on top of 3.2: while
   the caller holds an engine lease on it or it is usable (available or past its
   reset, below `max_leases`, credential present) and its provider is in the
