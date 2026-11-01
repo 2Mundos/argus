@@ -108,7 +108,8 @@ if mode == "raw":
     # read would return the code without it, which says nothing about the manager.
     open({ready!r}, "w").write("1")
     first = os.read(0, 4096)
-    open({received!r}, "w").write(repr((first, os.read(0, 4096))))
+    open({received!r} + ".tmp", "w").write(repr((first, os.read(0, 4096))))
+    os.replace({received!r} + ".tmp", {received!r})  # appears whole or not at all
     sys.stdout.write("OAuth error: Request failed with status code 400\\n"); sys.stdout.flush()
     time.sleep(60)
 if mode == "paste":
@@ -176,9 +177,11 @@ def short_enter_delay(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def until_exists(path: Path) -> None:
+    # check-tests: allow poll-loop — the fake client is a real subprocess and its marker file is the only signal it gives
     for _ in range(500):
         if path.exists():
             return
+        # check-tests: allow sleep — waits for a real subprocess to create a file; no event exists to await
         await asyncio.sleep(0.01)
     raise AssertionError(f"{path} never appeared")
 
@@ -231,12 +234,33 @@ def homes(tmp_path: Path) -> set[Path]:
 
 
 async def settle(mgr: ClaudeLoginManager, login_id: str, owner: str = "tok-1") -> dict:
-    for _ in range(300):
-        view = mgr.get(login_id, owner)
-        if view["state"] != "pending":
-            return view
-        await asyncio.sleep(0.02)
-    return view
+    """Wait for the login's own task, which ends once the outcome is recorded."""
+    task = mgr._sessions[login_id].task
+    assert task is not None
+    await asyncio.wait_for(asyncio.shield(task), 10)
+    return mgr.get(login_id, owner)
+
+
+async def until_view(mgr: ClaudeLoginManager, login_id: str, ready, owner="tok-1"):
+    """Wait until `ready(view)` holds. The view only changes while the driver
+    handles output, so re-check each time it goes back to waiting for more."""
+    activity = mgr._sessions[login_id].activity
+    idle = asyncio.Event()
+    wait = activity.wait
+
+    async def spy() -> bool:
+        idle.set()
+        return await wait()
+
+    vars(activity)["wait"] = spy  # shadow the method on this one event
+
+    async def until() -> dict:
+        while not ready(view := mgr.get(login_id, owner)):
+            idle.clear()
+            await idle.wait()
+        return view
+
+    return await asyncio.wait_for(until(), 10)
 
 
 async def seed(db: Database, secrets, name="main", credential=OLD, **fields) -> str:
@@ -785,12 +809,15 @@ async def test_a_refused_code_can_be_followed_by_another(
     login_id = started["login_id"]
     assert started["attempts"] == 0 and started["max_attempts"] == 3
     first_url = started["url"]
+    refused = asyncio.create_task(
+        until_view(  # refused: we press its Enter and it prints a new link
+            mgr,
+            login_id,
+            lambda v: bool(v["refusal"]) and v["phase"] == "waiting_for_code",
+        )
+    )
     await mgr.submit_code(login_id, "tok-1", "wrong-code#state")
-    for _ in range(200):  # refused: we press its Enter and it prints a new link
-        view = mgr.get(login_id, "tok-1")
-        if view["refusal"] and view["phase"] == "waiting_for_code":
-            break
-        await asyncio.sleep(0.02)
+    view = await refused
     assert view["state"] == "pending" and view["phase"] == "waiting_for_code"
     assert view["refusal"] == "oauth_400" and view["attempts"] == 1
     assert view["url"] and view["url"] != first_url and "state=ST2" in view["url"]
@@ -826,13 +853,16 @@ async def test_the_number_of_codes_is_limited(
     started = await mgr.start("tok-1", "admin:one", None)
     login_id = started["login_id"]
     for n in range(1, 4):
+        refused = asyncio.create_task(
+            until_view(
+                mgr,
+                login_id,
+                lambda v: bool(v["refusal"]) and v["phase"] == "waiting_for_code",
+            )
+        )
         view = await mgr.submit_code(login_id, "tok-1", f"code{n}#s")
         assert view["attempts"] == n
-        for _ in range(200):
-            v = mgr.get(login_id, "tok-1")
-            if v["refusal"] and v["phase"] == "waiting_for_code":
-                break
-            await asyncio.sleep(0.02)
+        await refused
     with pytest.raises(ConflictError) as err:
         await mgr.submit_code(login_id, "tok-1", "code4#s")
     assert err.value.code == "login_attempts_exhausted"
@@ -845,16 +875,9 @@ async def test_the_code_and_enter_arrive_as_two_writes(
 ) -> None:
     mgr, _ = manager(db, secrets, tmp_path, mode="raw")
     started = await mgr.start("tok-1", "admin:one", None)
-    for _ in range(100):  # the client must be reading raw before the code is sent
-        if (tmp_path / "ready").exists():
-            break
-        await asyncio.sleep(0.02)
-    assert (tmp_path / "ready").exists()
+    await until_exists(tmp_path / "ready")  # the client must be reading raw first
     await mgr.submit_code(started["login_id"], "tok-1", CODE)
-    for _ in range(100):
-        if (tmp_path / "received").exists() and (tmp_path / "received").read_text():
-            break
-        await asyncio.sleep(0.02)
+    await until_exists(tmp_path / "received")
     assert (tmp_path / "received").read_text() == repr((CODE.encode(), b"\r"))
     await mgr.shutdown()
 
@@ -985,7 +1008,8 @@ async def test_cancel_and_expiry_during_persistence_report_the_account(
     now[0] = 901  # expiry and a cancel both land while the account is written
     assert mgr.get(started["login_id"], "tok-1")["state"] == "pending"
     cancelling = asyncio.create_task(mgr.cancel(started["login_id"], "tok-1"))
-    await asyncio.sleep(0.1)
+    for _ in range(20):  # let it run as far as it can
+        await asyncio.sleep(0)
     assert not cancelling.done()  # it waits for the outcome
     store.release.set()
     view = await cancelling
@@ -1017,11 +1041,21 @@ def _alive(pid: int) -> bool:
 
 
 async def _gone(pid: int, seconds: float = 8) -> bool:
-    for _ in range(int(seconds / 0.05)):
-        if not _alive(pid):
-            return True
-        await asyncio.sleep(0.05)
-    return False
+    try:
+        fd = os.pidfd_open(pid)  # readable once the process has exited
+    except ProcessLookupError:
+        return True
+    loop = asyncio.get_running_loop()
+    exited: asyncio.Future[None] = loop.create_future()
+    loop.add_reader(fd, lambda: exited.done() or exited.set_result(None))
+    try:
+        await asyncio.wait_for(exited, seconds)
+        return True
+    except TimeoutError:
+        return False
+    finally:
+        loop.remove_reader(fd)
+        os.close(fd)
 
 
 @pytest.mark.parametrize("mode", ["tree", "stubborn"])
