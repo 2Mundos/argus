@@ -120,3 +120,7 @@ secret-scan: ## Scan git history (or SECRET_SCAN_RANGE) for committed secrets.
 
 .PHONY: check
 check: lint typecheck test openapi-check ## Everything CI runs, locally.
+
+.PHONY: check-changed
+check-changed: ## Only the checks the files changed since origin/main's merge base can affect (pre-push).
+	python3 scripts/check_changed.py

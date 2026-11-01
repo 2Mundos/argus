@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Local mirror of the deterministic Quality jobs (`make check` + secret scan), so a
-# push that passes here passes CI. Enable with `make hooks`; bypass with
-# `git push --no-verify`.
+# Local mirror of the Quality jobs, narrowed to what the push changed
+# (`make check-changed`, full `make check` + `make build` when the merge base with
+# origin/main is unknown or a lock file changed), plus the secret scan. CI still
+# runs everything. Enable with `make hooks`; bypass with `git push --no-verify`.
 #
 # The checks run on the working tree, so it must be exactly the commit being pushed
-# (clean, at HEAD). The jobs are deterministic: a tree that passed once is skipped.
+# (clean, at HEAD). check-changed skips a rerun on the files that last passed; the
+# secret scan runs on every push.
 set -uo pipefail
 
-passed="$(git rev-parse --git-path argus-checked-trees)"
 zero=0000000000000000000000000000000000000000
 head="$(git rev-parse HEAD)"
 need=0
@@ -22,17 +23,10 @@ while read -r _ sha _ _; do
 done
 [ "$need" = 1 ] || exit 0
 
-tree="$(git rev-parse 'HEAD^{tree}')"
-if grep -qx "$tree" "$passed" 2>/dev/null; then
-  echo "pre-push: tree $tree already passed, skipping checks"
-  exit 0
-fi
-
 failed=()
 run() { echo "pre-push: $*"; "$@" || failed+=("$*"); }
 
-run make check
-run make build
+run make check-changed
 if command -v gitleaks >/dev/null; then
   run make secret-scan
 else
@@ -43,4 +37,3 @@ if [ "${#failed[@]}" -gt 0 ]; then
   printf 'pre-push: FAILED -> %s\n' "${failed[@]}" >&2
   exit 1
 fi
-echo "$tree" >>"$passed"

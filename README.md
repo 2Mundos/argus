@@ -69,10 +69,11 @@ Requires `uv`, [mise](https://mise.jdx.dev) (pins Python, Node, pnpm, uv, gitlea
 
 ```bash
 make setup        # uv sync + pnpm install
-make hooks        # enable the pre-push hook: make check + build + secret scan, skips trees that passed
+make hooks        # enable the pre-push hook: make check-changed + secret scan
 make dev-api      # API on :8000 under /api (state in ./data, override with ARGUS_DATA_DIR)
 make dev-dashboard # http://localhost:3000, proxies /api to :8000
 make check        # lint + typecheck + test (what CI runs)
+make check-changed # only what changed since origin/main's merge base can affect (full check if unknown)
 ```
 
 ## Run with Docker
