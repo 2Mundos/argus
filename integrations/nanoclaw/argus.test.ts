@@ -1464,6 +1464,21 @@ describe("delegate live log relay", () => {
     fs.rmSync(dir, { recursive: true });
   });
 
+  it("posts the harness file as source worker", async () => {
+    const { dir, file } = tmp();
+    const posts: any[] = [];
+    const relay = createDelegateLogRelay({
+      file,
+      task: { id: "t1", attempt: 1 },
+      source: "worker",
+      post: async (b) => void posts.push(b),
+    });
+    fs.writeFileSync(file, rec(["claude finished"]));
+    await relay.poll();
+    expect(posts).toEqual([{ attempt: 1, source: "worker", lines: ["claude finished"] }]);
+    fs.rmSync(dir, { recursive: true });
+  });
+
   it("backs off on 429 without losing the batch", async () => {
     const { dir, file } = tmp();
     let clock = 0;

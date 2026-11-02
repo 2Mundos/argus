@@ -163,10 +163,28 @@ run. URL schemes are bounded to 16 characters; names, URL users and passwords ar
   the back-off), so the drain does not cause a `429`. It waits at least 50 ms between
   polls and gives up (one warning) after three consecutive failed polls.
 
+## 3.8 Worker (harness) client
+
+- The harness (Claude Agent SDK in the agent container) is not an `argus-delegate`
+  run, so its stream never reaches 3.7. Without a worker source the Live panel's
+  **Harness** and **All** tabs stay hidden (they only appear when that source has
+  lines). The harness therefore posts its own live log.
+- Each SDK message of a claimed attempt is turned into short lines the same way as
+  the Claude executor in 3.7 (assistant text, `▸ Tool arg`, truncated tool results,
+  `claude finished` / error on `result`; never the echoed prompt or thinking). Lines
+  are redacted best effort and appended as JSON lines `{v, task_id, attempt, at,
+  lines}` to `argus-harness-log.jsonl` beside the model-policy snapshot (same
+  directory and safety rules as 3.7: exclusive create, `O_NOFOLLOW`, 8 MiB cap, silent
+  on failure). Outside a pinned task context nothing is written.
+- The channel recreates that file at task start, polls it with the same cadence and
+  batching as 3.7, and posts with `source: "worker"`. Before COMPLETE/FAIL/ASK it
+  drains the harness file together with the delegate file. Codex and other harness
+  engines are not parsed yet (open question).
+
 # 4. Open Questions
 
 - Only the `claude` executor is parsed into readable lines; other executors give
-  keepalive lines only.
+  keepalive lines only. The harness live log is Claude-only for the same reason.
 - Retention: no path deletes tasks, so a task's log lives as long as the task, bounded
   to 2000 lines for each of three attempts. A future task purge must delete its
   `task_log` rows first (the foreign key refuses otherwise).

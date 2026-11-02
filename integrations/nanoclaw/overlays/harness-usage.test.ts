@@ -6,7 +6,10 @@ import path from "path";
 import {
   createClaudeUsageTracker,
   createCodexUsageTracker,
+  HARNESS_LOG_FILE,
+  harnessLogLines,
   readHarnessContext,
+  recordHarnessLog,
   recordHarnessUsage,
   USAGE_RELAY_FILE,
 } from "./harness-usage.js";
@@ -265,6 +268,85 @@ describe("recordHarnessUsage", () => {
     expect(readHarnessContext(noAccount.env)).toBeNull();
     const ok = world(ctx);
     expect(recordHarnessUsage("claude", { kind: "none" }, "q", 1, ok.env)).toBe(false);
+    expect(fs.existsSync(ok.file)).toBe(false);
+  });
+});
+
+describe("harnessLogLines", () => {
+  it("renders assistant text, tool use, tool results and the result event", () => {
+    expect(
+      harnessLogLines({
+        type: "system",
+        subtype: "init",
+        model: "claude-sonnet-5-5",
+      }),
+    ).toEqual(["claude started (claude-sonnet-5-5)"]);
+    expect(
+      harnessLogLines({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "looking\nnext" },
+            { type: "tool_use", name: "Bash", input: { command: "ls -la" } },
+          ],
+        },
+      }),
+    ).toEqual(["looking", "next", "▸ Bash ls -la"]);
+    expect(
+      harnessLogLines({
+        type: "user",
+        message: {
+          content: [
+            { type: "tool_result", content: "ok\n", is_error: false },
+            { type: "tool_result", content: "boom", is_error: true },
+          ],
+        },
+      }),
+    ).toEqual(["  ↳ ok", "  ✗ error: boom"]);
+    expect(harnessLogLines({ type: "result", is_error: false })).toEqual(["claude finished"]);
+    expect(harnessLogLines({ type: "result", is_error: true, result: "quota" })).toEqual([
+      "claude finished with an error: quota",
+    ]);
+    expect(harnessLogLines({ type: "assistant", message: { content: [] } })).toEqual([]);
+  });
+});
+
+describe("recordHarnessLog", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  });
+  const world = (context: Record<string, unknown> | null) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argus-harness-log-"));
+    dirs.push(dir);
+    const policy = path.join(dir, "argus-model-policy.json");
+    if (context) fs.writeFileSync(policy, JSON.stringify({ policy: {}, revision: "r", context }));
+    return {
+      env: { ARGUS_MODEL_POLICY_FILE: policy } as NodeJS.ProcessEnv,
+      file: path.join(dir, HARNESS_LOG_FILE),
+    };
+  };
+  const ctx = { task_id: "t1", attempt: 2, engine_account_id: "acc-1" };
+
+  it("appends a relay record for the pinned task", () => {
+    const w = world(ctx);
+    expect(recordHarnessLog({ type: "result", is_error: false }, w.env)).toBe(true);
+    const rec = JSON.parse(fs.readFileSync(w.file, "utf8"));
+    expect(rec).toMatchObject({
+      v: 1,
+      task_id: "t1",
+      attempt: 2,
+      lines: ["claude finished"],
+    });
+    expect(typeof rec.at).toBe("string");
+  });
+
+  it("writes nothing outside a task or for a silent message", () => {
+    const none = world(null);
+    expect(recordHarnessLog({ type: "result", is_error: false }, none.env)).toBe(false);
+    expect(fs.existsSync(none.file)).toBe(false);
+    const ok = world(ctx);
+    expect(recordHarnessLog({ type: "assistant", message: { content: [] } }, ok.env)).toBe(false);
     expect(fs.existsSync(ok.file)).toBe(false);
   });
 });
