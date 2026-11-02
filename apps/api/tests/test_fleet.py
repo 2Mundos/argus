@@ -512,12 +512,12 @@ def test_retired_provider_lists_are_dropped_not_enforced() -> None:
     ok = {"install_dir": "/opt/nc", "instances_root": "/srv/i", "agent_image": "a:1"}
     opts = NanoclawOptions(
         account_providers=["openai"], executor_providers=["cursor"], **ok
-    )  # type: ignore[call-arg]
+    )
     dumped = opts.model_dump()
     assert "account_providers" not in dumped
     assert "executor_providers" not in dumped
     # Even values the old validation rejected no longer matter: nothing filters.
-    NanoclawOptions(account_providers=["cursor"], **ok)  # type: ignore[call-arg]
+    NanoclawOptions(account_providers=["cursor"], **ok)
 
 
 async def test_a_persisted_legacy_pool_cannot_keep_filtering_accounts(
@@ -722,7 +722,7 @@ def _sandboxed_pool(**nanoclaw: object) -> PoolUpsert:
             install_dir="/opt/nanoclaw",
             instances_root="/srv/nc-i",
             agent_image="nanoclaw-agent:1",
-            **nanoclaw,  # type: ignore[arg-type]
+            **nanoclaw,
         ),
     )
 

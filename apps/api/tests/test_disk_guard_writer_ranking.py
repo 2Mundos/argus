@@ -196,22 +196,25 @@ async def test_bounded_sample_timeout(
     inst = tmp_path / "slow"
     inst.mkdir()
 
-    def slow(*_args: object, **_kwargs: object) -> DirectorySizeSample:
-        import time
+    release = threading.Event()
 
-        time.sleep(2)
+    def slow(*_args: object, **_kwargs: object) -> DirectorySizeSample:
+        release.wait()  # outlives the timeout until the test lets it go
         return DirectorySizeSample(0, "measured", "measured")
 
     monkeypatch.setattr(
         "argus_api.disk_guard_writer_ranking.sample_instance_directory",
         slow,
     )
-    sample = await sample_instance_directory_bounded(
-        str(tmp_path),
-        "slow",
-        os.geteuid(),
-        timeout_s=0.05,
-    )
+    try:
+        sample = await sample_instance_directory_bounded(
+            str(tmp_path),
+            "slow",
+            os.geteuid(),
+            timeout_s=0.05,
+        )
+    finally:
+        release.set()
     assert sample.outcome == "timeout"
     assert sample.bytes is None
 

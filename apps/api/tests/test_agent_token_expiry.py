@@ -32,7 +32,7 @@ def _register(client: TestClient) -> tuple[str, dict[str, str]]:
 
 
 async def _set_expires(client: TestClient, token: str, delta: timedelta) -> str:
-    db: Database = client.app.state.db  # type: ignore[attr-defined]
+    db: Database = client.app.state.db
     async with db.write() as tx:
         expires = ts(tx.now + delta)
         await tx.conn.execute(
@@ -43,7 +43,7 @@ async def _set_expires(client: TestClient, token: str, delta: timedelta) -> str:
 
 
 async def _read_expires(client: TestClient, token: str) -> str | None:
-    db: Database = client.app.state.db  # type: ignore[attr-defined]
+    db: Database = client.app.state.db
     async with (
         db.read() as conn,
         conn.execute(

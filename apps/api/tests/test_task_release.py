@@ -2,13 +2,12 @@
 (worker lifecycle 3.3, 3.4, 3.5)."""
 
 import json
-import time
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from api_support import DONE, FakeClock, FakeTarget, insert_agent
+from api_support import DONE, FakeClock, FakeTarget, insert_agent, signal_when_waiting
 from argus_api.accounts import service as accounts
 from argus_api.agents import service as agents
 from argus_api.db import Database
@@ -516,24 +515,25 @@ def test_release_over_http(client: TestClient) -> None:
     assert res.status_code == 200
 
 
-def test_a_release_wakes_a_waiting_claim(client: TestClient) -> None:
+def test_a_release_wakes_a_waiting_claim(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     holder, waiter = register(client), register(client)
     task_id, _ = claimed(client, holder)
+    blocked = signal_when_waiting(monkeypatch)
     with ThreadPoolExecutor(1) as pool:
         waiting = pool.submit(
-            client.post, "/api/tasks/claim", json={"wait_s": 10}, headers=waiter
+            client.post, "/api/tasks/claim", json={"wait_s": 30}, headers=waiter
         )
-        time.sleep(0.3)
-        started = time.monotonic()
+        blocked.wait()  # the claim found nothing and is long-polling
         assert (
             client.post(
                 f"/api/tasks/{task_id}/release", json={"reason": "recycle"}
             ).status_code
             == 200
         )
-        res = waiting.result(timeout=5)
+        res = waiting.result()  # not woken: a 204 after wait_s
     assert (res.status_code, res.json()["id"]) == (200, task_id)
-    assert time.monotonic() - started < 5
 
 
 def test_terminate_and_recycle_take_requeue(client: TestClient) -> None:

@@ -397,7 +397,7 @@ def test_http_heartbeat_cannot_claim_a_pause_and_reads_show_it(
         async with db.write() as tx:
             await tasks.mark_paused_disk(tx, [(task["id"], task["attempt"])])
 
-    client.portal.call(pause, app.state.db)  # type: ignore[union-attr]
+    client.portal.call(pause, app.state.db)
     assert client.get(f"/api/tasks/{task['id']}").json()["stall_cause"] == (
         "paused_disk"
     )

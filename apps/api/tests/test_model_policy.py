@@ -220,7 +220,7 @@ def test_unreadable_file_is_the_named_error_not_a_crash(
     def boom(self: Path, *a: object, **k: object) -> str:
         if self == path:
             raise PermissionError("denied")
-        return real(self, *a, **k)  # type: ignore[arg-type]
+        return real(self, *a, **k)
 
     monkeypatch.setattr(Path, "read_text", boom)
     with pytest.raises(ValidationFailedError, match="not readable"):

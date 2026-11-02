@@ -388,8 +388,8 @@ def test_forge_timeout_is_bounded(
     tid = review_task(client, f"opened {URL}")
 
     async def slow(_: httpx.Request) -> httpx.Response:
-        await asyncio.sleep(0.5)
-        return httpx.Response(200, json={"state": "open", "merged": False})
+        await asyncio.Event().wait()  # never answers: only the budget ends the read
+        raise AssertionError("unreachable")
 
     forge(client, slow)
     monkeypatch.setattr(inbox_actions, "FORGE_BUDGET_S", 0.05)

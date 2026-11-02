@@ -71,7 +71,7 @@ async def test_writes_are_serialized(db: Database) -> None:
     async def writer(name: str) -> None:
         async with db.write():
             order.append(f"{name}:start")
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0)  # yield while holding the write: others must queue
             order.append(f"{name}:end")
 
     await asyncio.gather(writer("a"), writer("b"), writer("c"))

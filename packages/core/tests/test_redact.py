@@ -84,6 +84,7 @@ def test_redaction_is_idempotent() -> None:
 def test_worst_case_input_stays_linear(text: str) -> None:
     started = time.perf_counter()
     redact(text, ("exact-secret-value",))
+    # check-tests: allow elapsed-time — a backtracking guard: normal is ~1000x faster
     assert time.perf_counter() - started < 1.0
 
 

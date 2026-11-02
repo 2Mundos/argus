@@ -32,6 +32,7 @@ jobs:
           tar -xzf /tmp/age.tgz -C /tmp && sudo install -m 755 /tmp/age/age /tmp/age/age-keygen /usr/local/bin/
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      - run: uv run python scripts/check_tests.py --strict
       - run: uv run ty check
       - run: uv run pytest -n auto
       - name: OpenAPI contract drift

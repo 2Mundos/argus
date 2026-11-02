@@ -170,7 +170,7 @@ async def test_docker_deadlines(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(t, "_start", lambda spec: "ref")
     monkeypatch.setattr(t, "_list", lambda labels: [])
     monkeypatch.setattr(t, "_stop", lambda ref, grace: None)
-    await t.start(object())  # type: ignore[arg-type]
+    await t.start(object())
     await t.list({})
     await t.stop("x", grace=timedelta(seconds=30))
     assert seen == [120.0, 30.0, 60.0]  # stop: its grace plus the ordinary deadline
@@ -179,23 +179,31 @@ async def test_docker_deadlines(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_a_slow_provider_call_becomes_a_target_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import time
+    import threading
 
     monkeypatch.setattr(targets, "START_TIMEOUT_S", 0.05)
     t = DockerTarget()
-    monkeypatch.setattr(t, "_start", lambda spec: time.sleep(0.3))
-    with pytest.raises(TargetError, match="timed out"):
-        await t.start(object())  # type: ignore[arg-type]
+    release = threading.Event()
+    monkeypatch.setattr(
+        t, "_start", lambda spec: release.wait()
+    )  # blocks until released
+    try:
+        with pytest.raises(TargetError, match="timed out"):
+            await t.start(object())
+    finally:
+        release.set()  # let the abandoned thread end
 
 
 async def test_a_start_timeout_is_ambiguous_and_keeps_the_reservation(
     db: Database, registry: TargetRegistry, target: FakeTarget, clock: FakeClock
 ) -> None:
     """A start that outlives its deadline may still have created the container."""
-    import time
+    import threading
+
+    release, created = threading.Event(), threading.Event()
 
     def slow_create(spec) -> str:
-        time.sleep(0.2)
+        release.wait()  # outlives the deadline until the test lets it finish
         target.containers[spec.name] = {
             "instance_id": spec.instance_id,
             "pool": spec.labels["argus.pool"],
@@ -203,6 +211,7 @@ async def test_a_start_timeout_is_ambiguous_and_keeps_the_reservation(
             "exit_code": None,
         }
         target.started.append(spec.name)
+        created.set()
         return spec.name
 
     docker = DockerTarget()
@@ -210,12 +219,13 @@ async def test_a_start_timeout_is_ambiguous_and_keeps_the_reservation(
     async def start(spec) -> str:
         return await docker._call(slow_create, spec, deadline=0.05)
 
-    target.start = start  # type: ignore[method-assign]
+    target.start = start
     await make_pool(db, "web", 1)
     s = settings(1)
     await reconcile(db, registry, s)
     assert await states(db) == ["reserved"]  # timed out: kept, not failed
-    await asyncio.sleep(0.3)  # the abandoned thread finishes the create
+    release.set()
+    await asyncio.to_thread(created.wait)  # the abandoned thread finishes the create
     clock.advance(10)
     await reconcile(db, registry, s)  # resolved by instance id from the listing
     assert await states(db) == ["running"]

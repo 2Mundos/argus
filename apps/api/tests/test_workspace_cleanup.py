@@ -40,6 +40,13 @@ A = "11111111-1111-4111-8111-111111111111"
 B = "22222222-2222-4222-8222-222222222222"
 
 
+async def settle() -> None:
+    """Let every ready task run until it blocks; no wall time. Enough ticks for a
+    notification to reach the follower and, wrongly, start a run."""
+    for _ in range(10):
+        await asyncio.sleep(0)
+
+
 def git(cwd: Path, *args: str) -> str:
     # Strip GIT_* so a parent git hook (pre-push sets GIT_DIR) cannot redirect
     # these fixture repos into the caller's worktree.
@@ -593,7 +600,7 @@ async def test_state_flip_after_lease_aborts_and_restores(env: Env) -> None:
             )
         return await original(cand, paths)
 
-    cleaner._revalidate = flip  # type: ignore[method-assign]
+    cleaner._revalidate = flip
     await cleaner.run("manual", "admin:test", False)
     assert (path / "notes.txt").exists()
     assert not (env.root / (wc.TOMBSTONE + A)).exists()
@@ -615,7 +622,7 @@ async def test_state_flip_before_lease_aborts(env: Env) -> None:
             )
         return await original(run, cand)
 
-    cleaner._lease = flip  # type: ignore[method-assign]
+    cleaner._lease = flip
     await cleaner.run("manual", "admin:test", False)
     assert path.exists()
     assert (await env.entry(A))["reason"] == "state_changed"
@@ -1744,12 +1751,17 @@ async def test_notifications_coalesce_into_one_follow_up_run(
     entered, gate = asyncio.Event(), asyncio.Event()
     real = cleaner._run
 
+    finished: asyncio.Queue[str] = asyncio.Queue()
+
     async def gated(trigger: str, actor: str, dry_run: bool):
         triggers.append(trigger)
         entered.set()
         await gate.wait()
         gate.clear()
-        return await real(trigger, actor, dry_run)
+        try:
+            return await real(trigger, actor, dry_run)
+        finally:
+            finished.put_nowait(trigger)
 
     monkeypatch.setattr(cleaner, "_run", gated)
 
@@ -1763,7 +1775,7 @@ async def test_notifications_coalesce_into_one_follow_up_run(
         await entered.wait()
         for _ in range(3):  # while a run is busy
             cleaner.notify_terminated(A)
-        await asyncio.sleep(0.01)
+        await settle()
         assert triggers == ["manual"]
         await release()
         await manual
@@ -1775,7 +1787,9 @@ async def test_notifications_coalesce_into_one_follow_up_run(
         await entered.wait()
         assert triggers == ["manual", "terminated", "terminated"]
         await release()
-        await asyncio.sleep(0.05)
+        for _ in range(3):  # manual and both follow-ups have finished
+            await finished.get()
+        await settle()  # a wrong extra run would start here
         assert triggers == ["manual", "terminated", "terminated"]
         assert not cleaner.busy
     finally:

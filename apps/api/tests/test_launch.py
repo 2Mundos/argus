@@ -2,12 +2,11 @@
 
 import os
 import tempfile
-import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 import pytest
-from api_support import FakeTarget
+from api_support import FakeTarget, count_passes
 from argus_api.main import app
 from fastapi.testclient import TestClient
 from test_mcp import rpc, tool
@@ -60,6 +59,12 @@ def client(
         yield c
 
 
+@pytest.fixture
+def passes(client: TestClient) -> Callable[[int], None]:
+    """`passes(n)` blocks until n more fleet reconciler passes have finished."""
+    return count_passes(app.state.loops["reconciler"])
+
+
 def agent_token(client: TestClient, role: str) -> str:
     boot = client.post(
         "/api/agents/bootstrap-tokens", json={"role": role}, headers=ADMIN
@@ -76,15 +81,6 @@ def bearer(token: str) -> dict:
 def make_pool(client: TestClient, name: str = "web", **kw) -> None:
     res = client.put(f"/api/pools/{name}", json={**POOL, **kw}, headers=ADMIN)
     assert res.status_code == 200, res.text
-
-
-def wait_for(fn, timeout: float = 10):
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        if value := fn():
-            return value
-        time.sleep(0.1)
-    raise AssertionError("timed out")
 
 
 # -- permissions --------------------------------------------------------------------
@@ -267,28 +263,21 @@ def test_remote_daemon_paths_are_unverified_not_ok(client: TestClient) -> None:
 
 
 def test_launch_starts_and_tracks_an_instance(
-    client: TestClient, target: FakeTarget
+    client: TestClient, target: FakeTarget, passes: Callable[[int], None]
 ) -> None:
     make_pool(client)
     res = client.post("/api/pools/web/launch", json=FIRST, headers=ADMIN)
     assert res.status_code == 200
     assert res.json()["requested"] and res.json()["desired_replicas"] == 1
-    inst = wait_for(
-        lambda: next(
-            (
-                i
-                for i in client.get("/api/instances", headers=ADMIN).json()
-                if i["state"] == "running"
-            ),
-            None,
-        )
-    )
+    passes(3)  # one pass starts it, the next confirms it from the listing
+    [inst] = client.get("/api/instances", headers=ADMIN).json()
+    assert inst["state"] == "running"
     assert inst["provider_ref"] in target.containers
     assert len(target.started) == 1
 
 
 def test_launch_failure_is_visible_not_success(
-    client: TestClient, target: FakeTarget
+    client: TestClient, target: FakeTarget, passes: Callable[[int], None]
 ) -> None:
     make_pool(client)
     target.fail_start = True
@@ -296,13 +285,9 @@ def test_launch_failure_is_visible_not_success(
         client.post("/api/pools/web/launch", json=FIRST, headers=ADMIN).status_code
         == 200
     )
-    pool = wait_for(
-        lambda: (
-            (p := client.get("/api/pools/web", headers=ADMIN).json())["status"]
-            == "failing"
-            and p
-        )
-    )
+    passes(2)  # one whole pass after the launch
+    pool = client.get("/api/pools/web", headers=ADMIN).json()
+    assert pool["status"] == "failing"
     assert "image not found" in pool["last_error"]
     [inst] = client.get("/api/instances", headers=ADMIN).json()
     assert inst["state"] == "reserved" and "image not found" in inst["last_error"]

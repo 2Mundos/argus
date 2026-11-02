@@ -6,7 +6,7 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from api_support import FakeClock, insert_agent
+from api_support import KEEPALIVE, FakeClock, insert_agent, live, next_event
 from argus_api import mcp_server
 from argus_api.db import Database
 from argus_api.errors import (
@@ -154,13 +154,12 @@ async def test_rate_limit_is_per_source(
 async def test_secrets_are_redacted_before_storing_and_publishing(
     db: Database, claimed
 ) -> None:
-    stream = event_stream(db, after=None, keepalive=5)
-    pending = asyncio.ensure_future(anext(stream))
-    await asyncio.sleep(0.05)
+    stream = event_stream(db, after=None, keepalive=0.01)
+    await live(stream)
     await post(
         db, claimed, ["GITEA_TOKEN=abc123xyz", "Authorization: Bearer abcdefgh1234"]
     )
-    event = json.loads((await asyncio.wait_for(pending, 2)).split("data: ")[1])
+    event = json.loads((await next_event(stream)).split("data: ")[1])
     assert event["data"]["lines"] == [
         "GITEA_TOKEN=[redacted]",
         "Authorization: [redacted]",
@@ -252,6 +251,7 @@ def test_cleaning_a_worst_case_batch_is_fast(line: str) -> None:
 
     started = time.perf_counter()
     log.prepare([line], ("argus_agent_" + "t" * 32,))
+    # check-tests: allow elapsed-time — a backtracking guard: normal is ~1000x faster
     assert time.perf_counter() - started < 1.0
 
 
@@ -260,6 +260,7 @@ def test_cleaning_a_row_of_many_short_frames_is_fast() -> None:
 
     started = time.perf_counter()
     log.clean(["a-\r" * 21_000], ())
+    # check-tests: allow elapsed-time — a backtracking guard: normal is ~1000x faster
     assert time.perf_counter() - started < 2.0
 
 
@@ -351,11 +352,10 @@ async def test_an_empty_tail_gives_the_tasks_log_seq(
 
 
 async def test_task_log_is_live_only_and_not_persisted(db: Database, claimed) -> None:
-    stream = event_stream(db, after=None, keepalive=5)
-    pending = asyncio.ensure_future(anext(stream))
-    await asyncio.sleep(0.05)
+    stream = event_stream(db, after=None, keepalive=0.01)
+    await live(stream)
     await post(db, claimed, ["hello", "world"], source="delegate")
-    chunk = await asyncio.wait_for(pending, 2)
+    chunk = await next_event(stream)
     assert "id:" not in chunk  # Last-Event-ID must not move
     event = json.loads(chunk.split("data: ")[1])
     assert event["kind"] == "task.log" and event["subject_id"] == claimed.id
@@ -382,15 +382,14 @@ async def test_task_log_is_live_only_and_not_persisted(db: Database, claimed) ->
 async def test_stream_delivers_task_log_only_to_the_lessee(
     db: Database, claimed
 ) -> None:
-    other = event_stream(db, after=None, keepalive=0.2, projects={"demo"}, agent_id=B)
-    owner = event_stream(db, after=None, keepalive=5, projects={"demo"}, agent_id=A)
-    t_other, t_owner = (asyncio.ensure_future(anext(s)) for s in (other, owner))
-    await asyncio.sleep(0.05)
+    other = event_stream(db, after=None, keepalive=0.01, projects={"demo"}, agent_id=B)
+    owner = event_stream(db, after=None, keepalive=0.01, projects={"demo"}, agent_id=A)
+    await live(other)
+    await live(owner)
     await post(db, claimed, ["private"])
-    assert json.loads((await asyncio.wait_for(t_owner, 2)).split("data: ")[1])["data"][
-        "lines"
-    ] == ["private"]
-    assert await asyncio.wait_for(t_other, 2) == ": keepalive\n\n"
+    chunk = await next_event(owner)
+    assert json.loads(chunk.split("data: ")[1])["data"]["lines"] == ["private"]
+    assert await anext(other) == KEEPALIVE  # a leaked batch would come before it
     await other.aclose()
     await owner.aclose()
 
@@ -408,14 +407,11 @@ async def test_stream_checks_the_lease_once_per_task(
         return await real(conn, agent_id, task_id)
 
     monkeypatch.setattr(routes, "has_leased_task", counting)
-    owner = event_stream(db, after=None, keepalive=5, projects={"demo"}, agent_id=A)
-    pending = asyncio.ensure_future(anext(owner))
-    await asyncio.sleep(0.05)
+    owner = event_stream(db, after=None, keepalive=0.01, projects={"demo"}, agent_id=A)
+    await live(owner)
     for source in ("worker", "delegate"):  # one batch per source per interval
         await post(db, claimed, [source], source=source)
-        await asyncio.wait_for(pending, 2)
-        pending = asyncio.ensure_future(anext(owner))
-    pending.cancel()
+        await next_event(owner)
     await owner.aclose()
     assert checks == [claimed.id]
 
@@ -425,22 +421,21 @@ async def test_wait_ignores_the_transient_log_and_keeps_its_cursor(
 ) -> None:
     async with db.read() as conn, conn.execute("SELECT max(id) FROM events") as cur:
         head = (await cur.fetchone())[0]
-    pending = asyncio.ensure_future(wait(db, head, 0.3))
-    await asyncio.sleep(0.05)
+    pending = asyncio.ensure_future(wait(db, head, 0.05))
+    await asyncio.sleep(0)
     await post(db, claimed, ["output only"])
-    result = await asyncio.wait_for(pending, 2)
+    result = await pending
     assert result.timed_out and result.events == [] and result.next_cursor == head
 
 
 async def test_a_rolled_back_batch_publishes_nothing(db: Database, claimed) -> None:
-    stream = event_stream(db, after=None, keepalive=0.1)
-    pending = asyncio.ensure_future(anext(stream))
-    await asyncio.sleep(0.05)
+    stream = event_stream(db, after=None, keepalive=0.01)
+    await live(stream)
     with pytest.raises(RuntimeError):
         async with db.write() as tx:
             await log.append(tx, A, claimed.id, 1, "worker", ["x"])
             raise RuntimeError
-    assert await asyncio.wait_for(pending, 2) == ": keepalive\n\n"
+    assert await anext(stream) == KEEPALIVE  # a published batch would come before it
     await stream.aclose()
 
 

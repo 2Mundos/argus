@@ -367,10 +367,11 @@ async def test_network_error_and_missing_credential_are_unknown() -> None:
 
 async def test_concurrent_checks_share_one_flight_and_are_cached() -> None:
     calls = []
+    gate = asyncio.Event()
 
     async def handler(request: httpx.Request) -> httpx.Response:
         calls.append(str(request.url.path))
-        await asyncio.sleep(0.05)
+        await gate.wait()  # every caller arrives while the first read is in flight
         if request.url.path.endswith("/pulls/12"):
             return httpx.Response(200, json=open_pr())
         if "statuses" in request.url.path:
@@ -382,7 +383,10 @@ async def test_concurrent_checks_share_one_flight_and_are_cached() -> None:
         return httpx.Response(404, json={})
 
     c = checker(handler)
-    out = await asyncio.gather(*(c.check(CONN, REF) for _ in range(5)))  # ty: ignore[invalid-argument-type]
+    pending = asyncio.gather(*(c.check(CONN, REF) for _ in range(5)))  # ty: ignore[invalid-argument-type]
+    await asyncio.sleep(0)
+    gate.set()
+    out = await pending
     assert {o[0] for o in out} == {PrState.OPEN}
     pr_calls = [p for p in calls if p.endswith("/pulls/12")]
     assert len(pr_calls) == 1

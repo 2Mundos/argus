@@ -1,10 +1,10 @@
 import sqlite3
-import time
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from api_support import signal_when_waiting
 from argus_api.db import Database
 from argus_api.main import app
 from argus_api.tasks.views import LIST_COLUMNS, Refs, TaskSummary
@@ -79,21 +79,20 @@ def test_claim_with_nothing_ready_returns_204(
 
 
 def test_claim_long_poll_wakes_when_a_task_becomes_ready(
-    client: TestClient, agent: dict[str, str]
+    client: TestClient, agent: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    blocked = signal_when_waiting(monkeypatch)
     with ThreadPoolExecutor(1) as pool:
-        started = time.monotonic()
         waiting = pool.submit(
-            client.post, "/api/tasks/claim", json={"wait_s": 10}, headers=agent
+            client.post, "/api/tasks/claim", json={"wait_s": 30}, headers=agent
         )
-        time.sleep(0.3)
+        blocked.wait()  # the claim found nothing and is long-polling
         task = client.post(
             "/api/tasks", json={"project": "demo", "title": "late"}
         ).json()
-        res = waiting.result(timeout=5)
+        res = waiting.result()  # not woken: a 204 after wait_s
     assert res.status_code == 200
     assert res.json()["id"] == task["id"]
-    assert time.monotonic() - started < 5
 
 
 def test_worker_operations_require_an_agent(client: TestClient) -> None:

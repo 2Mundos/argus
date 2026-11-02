@@ -302,11 +302,11 @@ async def test_failed_unpause_keeps_that_claim_paused(world: World) -> None:
             raise TargetError("boom")
         await real(ref)
 
-    world.target.unpause = flaky  # type: ignore[method-assign]
+    world.target.unpause = flaky
     await ctrl.step(view(OK))
     assert (await world.row(world.sessions[0].task_id))["paused_disk_at"] is None
     assert (await world.row(world.sessions[1].task_id))["paused_disk_at"] is not None
-    world.target.unpause = real  # type: ignore[method-assign]
+    world.target.unpause = real
     await ctrl.step(view(OK))
     assert (await world.row(world.sessions[1].task_id))["paused_disk_at"] is None
 

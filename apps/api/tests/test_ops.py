@@ -1,5 +1,4 @@
 import asyncio
-import time
 from collections.abc import Generator
 from pathlib import Path
 
@@ -43,7 +42,7 @@ async def test_a_wedged_writer_makes_it_unready(
     monkeypatch.setattr(ops, "WRITE_PROBE_TIMEOUT_S", 0.2)
     async with db.write():  # someone holds the single writer
         assert (await ops.readiness(db, {}, tmp_path, secrets_ok=True)).ready
-        await asyncio.sleep(0.3)
+        db._write_since -= 1.0  # the write has now been held past the probe timeout
         r = await ops.readiness(db, {}, tmp_path, secrets_ok=True)
     assert not r.ready
     assert r.checks["database"].status == "failing"
@@ -67,19 +66,16 @@ async def test_readiness_never_queues_on_the_writer(
     await entered.wait()
     waiter = asyncio.create_task(_write_once(db))  # a real writer queued behind
     await asyncio.sleep(0)
-    start = time.monotonic()
-    results = await asyncio.wait_for(
-        asyncio.gather(
-            *(ops.readiness(db, {}, tmp_path, secrets_ok=True) for _ in range(50))
-        ),
-        timeout=ops.WRITE_PROBE_TIMEOUT_S / 2,
+    # A probe that queued on the writer would hit its own timeout and report
+    # "failing", so every probe being ready is the proof it did not wait.
+    results = await asyncio.gather(
+        *(ops.readiness(db, {}, tmp_path, secrets_ok=True) for _ in range(50))
     )
-    assert time.monotonic() - start < ops.WRITE_PROBE_TIMEOUT_S / 2
     assert all(r.ready for r in results)
+    assert not waiter.done()
     release.set()
     await holder
-    # The queued writer still gets its turn once the holder lets go.
-    await asyncio.wait_for(waiter, timeout=2)
+    await waiter  # the queued writer still gets its turn once the holder lets go
 
 
 async def _write_once(db: Database) -> None:
@@ -90,14 +86,18 @@ async def _write_once(db: Database) -> None:
 async def test_readiness_cache_runs_one_probe_per_window() -> None:
     cache = ops.ReadinessCache(ttl_s=60)
     calls = 0
+    gate = asyncio.Event()
 
     async def probe() -> ops.Readiness:
         nonlocal calls
         calls += 1
-        await asyncio.sleep(0.05)
+        await gate.wait()  # every caller arrives while the first probe runs
         return ops.Readiness({"database": ops.Check("ok")})
 
-    results = await asyncio.gather(*(cache.get(probe) for _ in range(100)))
+    pending = asyncio.gather(*(cache.get(probe) for _ in range(100)))
+    await asyncio.sleep(0)
+    gate.set()
+    results = await pending
     await cache.get(probe)
     assert calls == 1
     assert all(r is results[0] for r in results)
@@ -111,7 +111,7 @@ async def test_a_stalled_loop_is_failing_and_a_new_one_gets_a_grace_window(
     db: Database, tmp_path: Path
 ) -> None:
     stalled = ops.LoopStats("reconciler", interval_s=5)
-    stalled.started_at = time.monotonic() - 3600  # started long ago, never passed
+    stalled.started_at -= 3600  # started long ago, never passed
     brand_new = ops.LoopStats("reaper", interval_s=5)  # no pass yet, just started
     r = await ops.readiness(
         db, {"reconciler": stalled, "reaper": brand_new}, tmp_path, secrets_ok=True
@@ -145,8 +145,16 @@ async def test_the_reaper_records_passes_and_failures(
     db: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     stats = ops.LoopStats("reaper", 0.01)
+    passes: asyncio.Queue[bool] = asyncio.Queue()  # ok of each recorded pass
+    record = stats.record
+
+    def recorded(duration_s: float, ok: bool = True) -> None:
+        record(duration_s, ok)
+        passes.put_nowait(ok)
+
+    monkeypatch.setattr(stats, "record", recorded)
     task = asyncio.create_task(reaper.run(db, interval=0.01, stats=stats))
-    await asyncio.sleep(0.15)
+    assert await passes.get() and await passes.get()
     assert stats.passes_total >= 2 and stats.errors_total == 0
     assert stats.last_success_unix is not None
 
@@ -156,13 +164,11 @@ async def test_the_reaper_records_passes_and_failures(
     monkeypatch.setattr(reaper, "reap", boom)
     # A pass already in flight may still finish well; wait for the first failure
     # before taking the baseline.
-    for _ in range(100):
-        if stats.errors_total >= 1:
-            break
-        await asyncio.sleep(0.02)
+    while await passes.get():
+        pass
     errors, before = stats.errors_total, stats.last_success_unix
     assert errors >= 1
-    await asyncio.sleep(0.15)
+    assert await passes.get() is False  # and the next pass fails too
     task.cancel()
     assert stats.errors_total > errors
     assert stats.last_success_unix == before  # failures do not look like progress
@@ -279,8 +285,8 @@ def test_unready_returns_503(
 
 
 def test_readyz_does_not_block_on_a_held_writer(client: TestClient) -> None:
-    db: Database = client.app.state.db  # type: ignore[attr-defined]
-    portal = client.portal  # type: ignore[attr-defined]
+    db: Database = client.app.state.db
+    portal = client.portal
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def hold() -> None:
@@ -299,9 +305,8 @@ def test_readyz_does_not_block_on_a_held_writer(client: TestClient) -> None:
 
     holder = portal.call(start)
     try:
-        start_t = time.monotonic()
+        # A probe queued on the held writer would time out and answer 503.
         for _ in range(20):
             assert client.get("/readyz").status_code == 200
-        assert time.monotonic() - start_t < ops.WRITE_PROBE_TIMEOUT_S / 2
     finally:
         portal.call(finish, holder)

@@ -34,6 +34,7 @@ def jwt(exp: float | None, tag: str = "A") -> str:
 FUTURE = time.time() + 30 * 86400
 ACCESS = jwt(FUTURE, "ACCESSFAKE")
 REFRESH = jwt(FUTURE, "REFRESHFAKE")
+# check-tests: allow elapsed-time — a token expiry the parser checks against the real clock
 EXPIRED = jwt(time.time() - 3600, "EXPIREDFAKE")
 API_KEY = "key_" + "FAKEAPIKEY" * 4
 LOGIN = {"accessToken": ACCESS, "refreshToken": REFRESH}

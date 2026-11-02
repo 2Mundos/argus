@@ -299,12 +299,12 @@ def test_live_stream_filter_matches_replay_rule(client: TestClient) -> None:
     claimed = client.post("/api/tasks/claim", json={}, headers=alice).json()
     other = create_task(client, "alpha", title="b")
     agent_id = claimed["assignee_agent_id"]
-    db = client.app.state.db  # type: ignore[attr-defined]
+    db = client.app.state.db
     assert client.portal is not None
 
     def allowed(task_id: str) -> bool:
         event = Event(1, datetime.now(UTC), "x", "task", task_id, "task.updated", {})
-        return client.portal.call(_live_allowed, db, event, {"alpha"}, agent_id, set())  # type: ignore[union-attr]
+        return client.portal.call(_live_allowed, db, event, {"alpha"}, agent_id, set())
 
     assert allowed(claimed["id"])
     assert not allowed(other["id"])
@@ -317,7 +317,7 @@ def test_live_stream_filter_matches_replay_rule(client: TestClient) -> None:
         "task.attachment",
         {},
     )
-    assert not client.portal.call(  # type: ignore[union-attr]
+    assert not client.portal.call(
         _live_allowed, db, attached, {"alpha"}, agent_id, set()
     )
 

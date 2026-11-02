@@ -69,7 +69,7 @@ def test_task_read_and_inbox_share_quiet_facts(client: TestClient) -> None:
     quiet = claim(client, worker, "quiet-one")
     heartbeat(client, worker, quiet)
 
-    client.portal.call(run_reaper, app.state.db)  # type: ignore[union-attr]
+    client.portal.call(run_reaper, app.state.db)
 
     busy = claim(client, worker, "busy-one")
 
@@ -107,7 +107,7 @@ def test_released_quiet_task_has_no_quiet_facts(client: TestClient) -> None:
     worker = register(client)
     quiet = claim(client, worker, "quiet-release")
     heartbeat(client, worker, quiet)
-    client.portal.call(run_reaper, app.state.db)  # type: ignore[union-attr]
+    client.portal.call(run_reaper, app.state.db)
 
     res = client.post(f"/api/tasks/{quiet['id']}/release", json={"reason": "test"})
     assert res.status_code == 200, res.text

@@ -48,7 +48,7 @@ async def add(db: Database, store, account_id: str, name: str, provider: str, **
             name=name,
             provider=provider,
             secret_ref=f"sops:{account_id}",
-            config=CUSTOM if provider == "custom" else None,  # type: ignore[arg-type]
+            config=CUSTOM if provider == "custom" else None,
             **kw,
         )
     async with db.write() as tx:
