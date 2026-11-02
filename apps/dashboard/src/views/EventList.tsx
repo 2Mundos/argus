@@ -18,7 +18,6 @@ export function EventList({ events }: { events: ArgusEvent[] }) {
         <thead>
           <tr>
             <th>Time</th>
-            <th>Type</th>
             <th>Details</th>
             <th>Status</th>
             <th>Worker</th>
@@ -30,7 +29,6 @@ export function EventList({ events }: { events: ArgusEvent[] }) {
               <td>
                 <DateChip at={e.at} />
               </td>
-              <td>{e.kind}</td>
               <td>{eventDetail(e)}</td>
               <td>
                 <span className={`badge ${eventTone(e.kind)}`}>{e.kind.split(".").pop()}</span>
