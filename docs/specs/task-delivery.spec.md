@@ -131,7 +131,10 @@ when the task is `in_review`, has an open review decision and no pending checkli
 items; otherwise `accept_blocked` is `not_in_review`, `checklist_pending` or
 `no_review`. Accepting is the existing `POST /decisions/{id}/answer` with
 `choice: accept`, so ownership, human-review and orchestrator rules apply unchanged
-and pending QA cannot be discarded.
+and pending QA cannot be discarded. A task that failed `deliverable_missing` while
+its PR later merged shows `not_in_review` until a manager reconciles the delivery
+([deliverable](task-deliverable.spec.md) 3.8), which opens the review decision and
+nothing more; the checklist still blocks the offer.
 
 ## 3.5 Inbox coordination
 

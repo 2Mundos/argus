@@ -103,6 +103,7 @@ class ForgeSnapshot:
     merged_at: datetime | None
     head_sha: str | None = None
     head_ref: str | None = None
+    merge_sha: str | None = None  # the merge commit, when the forge reports one
     base_sha: str | None = None
     base_ref: str | None = None
     mergeable: bool | None = None
@@ -522,11 +523,15 @@ class PrChecker:
             mergeable_state = None
         head_ref = head["ref"] if isinstance(head.get("ref"), str) else None
         base_ref = base["ref"] if isinstance(base.get("ref"), str) else None
+        merge_sha = body.get("merge_commit_sha")
+        if state is not PrState.MERGED or not isinstance(merge_sha, str):
+            merge_sha = None
         return ForgeSnapshot(
             pr_state=state,
             merged_at=merged_at,
             head_sha=head_sha.lower() if head_sha else None,
             head_ref=head_ref,
+            merge_sha=merge_sha.lower() if merge_sha else None,
             base_sha=base_sha.lower() if base_sha else None,
             base_ref=base_ref,
             mergeable=mergeable,

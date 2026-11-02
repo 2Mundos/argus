@@ -249,6 +249,60 @@ async def test_inbox_decision_wakes_the_internal_orchestrator(
     assert len([b for b, s in await _inbox_wakes(db) if s == "queued"]) == 1
 
 
+async def _sweep(db: Database) -> bool:
+    async with db.read() as conn:
+        due = await conversations.inbox_wake_due(conn)
+    if not due:
+        return False
+    async with db.write() as tx:
+        return await conversations.sweep_inbox_wake(tx)
+
+
+async def test_inbox_sweep_announces_each_row_once(
+    db: Database, tmp_path: Path
+) -> None:
+    path = tmp_path / "models.json"
+    for _ in range(3):
+        await create(db)
+    task = await claim(db)
+    async with db.write() as tx:  # open before the orchestrator exists: no wake
+        await decisions.ask(tx, A, task.id, Ask(attempt=task.attempt, question="q"))
+    async with db.write() as tx:
+        await settings_service.put_setting(
+            tx, path, "global", "orchestrator.enabled", True, "admin:t"
+        )
+        await orchestrator.ensure_updates_conversation(tx, "admin:t")
+    assert await _inbox_wakes(db) == []
+
+    assert await _sweep(db)  # the backlog
+    [(body, _)] = await _inbox_wakes(db)
+    assert "source: sweep" in body and "rows: 1" in body
+    assert not await _sweep(db)  # a queued notice covers what waits
+
+    async with db.write() as tx:
+        claimed = await conversations.claim_next(tx, agent_id="orch", path=path)
+    assert claimed is not None
+    assert not await _sweep(db)  # delivered: the orchestrator read that row
+
+    task = await claim(db)  # a block with no decision, after the delivery
+    async with db.write() as tx:
+        await tasks.block(tx, A, task.id, task.attempt, "no account")
+    assert await _sweep(db)
+    assert len(await _inbox_wakes(db)) == 2
+
+    async with db.write() as tx:
+        await conversations.claim_next(tx, agent_id="orch", path=path)
+    task = await claim(db)
+    async with db.write() as tx:  # human audience is not the orchestrator's
+        await decisions.ask(
+            tx,
+            A,
+            task.id,
+            Ask(attempt=task.attempt, question="q", audience=Audience.HUMAN),
+        )
+    assert not await _sweep(db)
+
+
 async def _open_review(db: Database, task_id: str, audience=Audience.ANY) -> str:
     async with db.write() as tx:
         return await decision_store.open_decision(
