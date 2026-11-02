@@ -777,8 +777,9 @@ async def reconcile_task_pr(
     https://host/owner/repo; head_sha the exact 40-char lowercase head you expect.
     Argus reads the forge and refuses another repository (pr_wrong_repository), a
     moved head (pr_stale_head) or an unreadable PR (pr_unverified). Evidence only:
-    the task's state is unchanged and no gate is waived; a failed task still needs
-    retry_task. Replays are no-ops; another head for a bound PR is pr_already_bound."""
+    the task's state is unchanged and no gate is waived. A failed task whose PR merged
+    goes on with reconcile_task_delivery; otherwise retry_task. Replays are no-ops;
+    another head for a bound PR is pr_already_bound."""
     return await _call(
         ctx,
         "POST",
@@ -787,6 +788,40 @@ async def reconcile_task_pr(
             "repository": repository,
             "number": number,
             "head_sha": head_sha,
+            "reason": reason,
+        },
+    )
+
+
+@tool(MANAGERS)
+async def reconcile_task_delivery(
+    ctx: Context,
+    task_id: str,
+    repository: str,
+    number: int,
+    head_sha: str,
+    attempt: int,
+    failure_event_id: int,
+    reason: str,
+) -> dict:
+    """Take a task that failed deliverable_missing to in_review once its PR merged.
+    Bind the PR with reconcile_task_pr first. attempt is the task's attempt and
+    failure_event_id the id of the event that failed it (both from get_task and its
+    events). Argus checks the failure (stale_failure,
+    failure_not_deliverable_missing, task_not_failed), the binding (pr_not_bound,
+    pr_ambiguous) and the forge (pr_not_merged, pr_stale_head, pr_branch_mismatch,
+    pr_unverified). The review decision still decides: this never accepts, retries or
+    changes the checklist. Replays are no-ops."""
+    return await _call(
+        ctx,
+        "POST",
+        f"/tasks/{task_id}/reconcile-delivery",
+        json={
+            "repository": repository,
+            "number": number,
+            "head_sha": head_sha,
+            "attempt": attempt,
+            "failure_event_id": failure_event_id,
             "reason": reason,
         },
     )

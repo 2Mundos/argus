@@ -9,7 +9,7 @@ from argus_core.continuation import (
     EffectiveContinuation,
     ObservationRequest,
 )
-from argus_core.delivery import Delivery, PrBinding
+from argus_core.delivery import Delivery, DeliveryReconciliation, PrBinding
 from argus_core.difficulty import chain_for
 from argus_core.resumability import DEFAULT_READ_BOUND, ResumabilityReport
 from argus_core.task_edit import TaskAttempt, TaskEdit
@@ -695,6 +695,24 @@ async def reconcile_pr(
     state is unchanged and no gate is waived. Replaying the same binding changes
     nothing; another head for a bound PR is 409 `pr_already_bound`."""
     return await pr_binding.bind(
+        db, request.app.state.pr_checker, task_id, body, caller.actor
+    )
+
+
+@router.post("/{task_id}/reconcile-delivery")
+async def reconcile_delivery(
+    task_id: str,
+    body: DeliveryReconciliation,
+    request: Request,
+    db: DbDep,
+    caller: ManagerDep,
+) -> Task:
+    """Take a task that failed `deliverable_missing` to review once its bound PR
+    merged (orchestrator or admin). `attempt` and `failure_event_id` name the failure;
+    the forge must show the PR merged at exactly `head_sha`. The task moves to
+    `in_review` with the normal review decision, which still decides; attempts,
+    failures and checklist are unchanged. Replays change nothing."""
+    return await pr_binding.reconcile_delivery(
         db, request.app.state.pr_checker, task_id, body, caller.actor
     )
 

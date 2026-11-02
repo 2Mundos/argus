@@ -1600,6 +1600,55 @@ async def retry(tx: Tx, task_id: str, actor: str) -> Task:
     return await get_task(tx.conn, task_id)
 
 
+async def review_failed(
+    tx: Tx, row: aiosqlite.Row, actor: str, event: str, data: dict[str, Any]
+) -> Task:
+    """Move a `failed` task to `in_review` with the normal review decision, for a
+    delivery verified after the failure (task deliverable spec 3.8).
+
+    Not a state-machine action, as `retry` is not: only a manager leaves `failed`
+    this way, and the caller has checked the evidence. `attempt`, `failures`,
+    `error`, the checklist and every earlier event stay as they are; the decision is
+    the gate that may still accept or reject."""
+    if row["state"] != S.FAILED:
+        raise ConflictError(
+            f"task is {row['state']}, not failed", code="task_not_failed"
+        )
+    bumped = ts(max(tx.now, datetime.fromisoformat(row["updated_at"]) + _TICK))
+    await tx.conn.execute(
+        "UPDATE tasks SET state = ?, archived_at = NULL, retry_at = NULL,"
+        " updated_at = ? WHERE id = ?",
+        (S.IN_REVIEW, bumped, row["id"]),
+    )
+    review = Review(row["review"])
+    decision_id = await decisions.open_decision(
+        tx,
+        subject_type="task",
+        subject_id=row["id"],
+        kind=DecisionKind.REVIEW,
+        question=f"Review the result of {row['title']!r} (attempt {row['attempt']}).",
+        options=list(_REVIEW_OPTIONS),
+        audience=Audience.HUMAN if review is Review.HUMAN else Audience.ORCHESTRATOR,
+        requested_by=actor,
+    )
+    await record(
+        tx,
+        actor,
+        "task",
+        row["id"],
+        event,
+        {
+            "from": S.FAILED,
+            "to": S.IN_REVIEW,
+            "attempt": row["attempt"],
+            "failures": row["failures"],
+            "decision_id": decision_id,
+            **data,
+        },
+    )
+    return await get_task(tx.conn, row["id"])
+
+
 _ARCHIVABLE = sorted(TERMINAL)
 
 

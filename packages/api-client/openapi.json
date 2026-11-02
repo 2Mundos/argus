@@ -7142,6 +7142,55 @@
         "title": "DeliveryEvidence",
         "type": "object"
       },
+      "DeliveryReconciliation": {
+        "additionalProperties": false,
+        "description": "Move a task that failed `deliverable_missing` to review because its bound PR\nmerged (task deliverable spec 3.8). `attempt` and `failure_event_id` name the\nfailure the caller looked at; a newer one makes the request stale.",
+        "properties": {
+          "attempt": {
+            "minimum": 0.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "failure_event_id": {
+            "minimum": 1.0,
+            "title": "Failure Event Id",
+            "type": "integer"
+          },
+          "head_sha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "title": "Head Sha",
+            "type": "string"
+          },
+          "number": {
+            "maximum": 999999999.0,
+            "minimum": 1.0,
+            "title": "Number",
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "repository": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Repository",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "number",
+          "head_sha",
+          "reason",
+          "attempt",
+          "failure_event_id"
+        ],
+        "title": "DeliveryReconciliation",
+        "type": "object"
+      },
       "DeliveryReviewEvidence": {
         "properties": {
           "agentic_finding_count": {
@@ -33382,6 +33431,64 @@
           }
         ],
         "summary": "Take Quota Resume",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/reconcile-delivery": {
+      "post": {
+        "description": "Take a task that failed `deliverable_missing` to review once its bound PR\nmerged (orchestrator or admin). `attempt` and `failure_event_id` name the failure;\nthe forge must show the PR merged at exactly `head_sha`. The task moves to\n`in_review` with the normal review decision, which still decides; attempts,\nfailures and checklist are unchanged. Replays change nothing.",
+        "operationId": "reconcile_delivery_api_tasks__task_id__reconcile_delivery_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliveryReconciliation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reconcile Delivery",
         "tags": [
           "tasks"
         ]
