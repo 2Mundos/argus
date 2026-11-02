@@ -483,7 +483,7 @@ async def _add_custom(db: Database, store, name: str = "openrouter") -> str:
                 name=name,
                 provider="custom",
                 secret_ref=f"sops:{name}",
-                config=CUSTOM,  # type: ignore[arg-type]
+                config=CUSTOM,
                 max_leases=1,
             ),
             f"sops:{name}",

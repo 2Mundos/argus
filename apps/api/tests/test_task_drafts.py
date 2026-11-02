@@ -56,7 +56,7 @@ async def new(db: Database, **body):
 async def publish(db: Database, key: str, *batch, mode: str = "atomic"):
     req = PublishRequest(
         idempotency_key=key,
-        mode=mode,  # type: ignore[arg-type]
+        mode=mode,
         drafts=[PublishItem(draft_id=d.id, expected_version=d.version) for d in batch],
     )
     async with db.write() as tx:

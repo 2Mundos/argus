@@ -42,7 +42,7 @@ def test_no_fallbacks_with_order_pins_only() -> None:
         "only": ["a", "b"],
         "allow_fallbacks": False,
     }
-    assert block({"order": ["a"], "only": ["z"], "allow_fallbacks": False})["only"] == [  # type: ignore[index]
+    assert block({"order": ["a"], "only": ["z"], "allow_fallbacks": False})["only"] == [
         "z"
     ]
     assert block({"allow_fallbacks": False}) == {"allow_fallbacks": False}
@@ -57,9 +57,9 @@ def test_routing_options_model_matches_the_parser() -> None:
     options = RoutingOptions(order="a,b", allow_fallbacks=False)
     assert options.provider_block() == block({"order": "a,b", "allow_fallbacks": False})
     with pytest.raises(ValidationError):
-        RoutingOptions(order=[1])  # type: ignore[list-item]
+        RoutingOptions(order=[1])
     with pytest.raises(ValidationError):
-        RoutingOptions(unknown=1)  # type: ignore[call-arg]
+        RoutingOptions(unknown=1)
 
 
 @pytest.mark.parametrize(
@@ -94,16 +94,16 @@ def test_routing_options_need_the_openrouter_label() -> None:
         CustomConfig(
             base_url="http://localhost:8000/v1",
             label="vllm",
-            executor={"routing_options": {"order": ["a"]}},  # type: ignore[arg-type]
+            executor={"routing_options": {"order": ["a"]}},
         )
-    ok = CustomConfig(base_url=OR, label="openrouter", executor={"model": "a/b"})  # type: ignore[arg-type]
+    ok = CustomConfig(base_url=OR, label="openrouter", executor={"model": "a/b"})
     assert ok.host == "openrouter.ai"
 
 
 @pytest.mark.parametrize("model", ["has space", "-lead", "", "x" * 201])
 def test_model_ids_are_opaque_but_bounded(model: str) -> None:
     with pytest.raises(ValidationError):
-        CustomConfig(base_url=OR, label="openrouter", engine={"model": model})  # type: ignore[arg-type]
+        CustomConfig(base_url=OR, label="openrouter", engine={"model": model})
 
 
 @pytest.mark.parametrize(
@@ -124,21 +124,21 @@ def test_credential_shape(credential: dict) -> None:
 
 def test_account_create_needs_config_for_custom_only() -> None:
     cfg = {"base_url": OR, "label": "openrouter"}
-    AccountCreate(name="c", provider="custom", credential={"api_key": "k"}, config=cfg)  # type: ignore[arg-type]
+    AccountCreate(name="c", provider="custom", credential={"api_key": "k"}, config=cfg)
     with pytest.raises(ValidationError):
         AccountCreate(name="c", provider="custom", credential={"api_key": "k"})
     with pytest.raises(ValidationError):
         AccountCreate(
             name="c", provider="anthropic", credential={"api_key": "k"}, config=cfg
-        )  # type: ignore[arg-type]
+        )
 
 
 def test_lease_settings_and_chat_body_per_role() -> None:
     config = CustomConfig(
         base_url=OR,
         label="openrouter",
-        engine={"model": "a/engine"},  # type: ignore[arg-type]
-        executor={  # type: ignore[arg-type]
+        engine={"model": "a/engine"},
+        executor={
             "model": "a/exec",
             "routing_options": {"order": "deepinfra", "allow_fallbacks": False},
         },
@@ -199,12 +199,12 @@ def test_quota_notice_from_402_and_429() -> None:
     assert notice is not None
     hit = classify_quota(notice, "custom", NOW)
     assert hit is not None and hit.until == datetime(2026, 1, 1, 0, 2, tzinfo=UTC)
-    hit = classify_quota(quota_notice_from_response(402, {}, NOW), "custom", NOW)  # type: ignore[arg-type]
+    hit = classify_quota(quota_notice_from_response(402, {}, NOW), "custom", NOW)
     assert hit is not None and hit.until is None
     reset = quota_notice_from_response(
         429, {"X-RateLimit-Reset": str(int(NOW.timestamp() + 3600) * 1000)}, NOW
     )
-    assert classify_quota(reset, "custom", NOW).until == datetime(  # type: ignore[arg-type, union-attr]
+    assert classify_quota(reset, "custom", NOW).until == datetime(
         2026, 1, 1, 1, tzinfo=UTC
     )
 

@@ -220,24 +220,21 @@ async def test_reaper_loop_runs_passes_and_survives_errors(
     reg = await register(db)
     clock.advance(LOST_AFTER_S + 1)
     real_reap, calls = reaper.reap, []
+    third_pass = asyncio.Event()
 
     async def flaky_reap(tx, local=(None, ""), **kw):
         calls.append(1)
         if len(calls) == 1:
             raise RuntimeError("transient")
+        if len(calls) == 3:
+            third_pass.set()  # the second pass has committed
         return await real_reap(tx, local, **kw)
 
     monkeypatch.setattr(reaper, "reap", flaky_reap)
     loop = asyncio.create_task(reaper.run(db, interval=0.01))
     try:
-        async with asyncio.timeout(2):
-            while True:
-                async with db.read() as conn:
-                    if (
-                        await agents.get_agent(conn, reg.agent.id)
-                    ).state is AgentState.LOST:
-                        break
-                await asyncio.sleep(0.01)
+        await third_pass.wait()
     finally:
         loop.cancel()
-    assert len(calls) >= 2
+    async with db.read() as conn:
+        assert (await agents.get_agent(conn, reg.agent.id)).state is AgentState.LOST

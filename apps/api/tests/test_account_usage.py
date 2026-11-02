@@ -833,13 +833,14 @@ async def test_run_loop_sweeps_after_a_delay_probes_one_at_a_time_with_a_gap(
     a = await add(db, store, "a", "openai", chatgpt_login(), "subscription")
     b = await add(db, store, "b", "openai", chatgpt_login(), "subscription")
     fake = Clocks(clock)
-    gate = asyncio.Event()
+    probed = asyncio.Event()
     sleeps = fake.slept
 
     async def sleep(seconds: float) -> None:
         sleeps.append(seconds)
+        if sleeps.count(quota_probe.PROBE_GAP_S) == 2:
+            probed.set()  # the gap after the second probe: both are recorded
         if seconds == quota_probe.SWEEP_INTERVAL_S:
-            gate.set()
             await asyncio.Event().wait()  # park the sweeper after the first sweep
 
     p = QuotaProber(
@@ -851,15 +852,7 @@ async def test_run_loop_sweeps_after_a_delay_probes_one_at_a_time_with_a_gap(
         sleep=sleep,
     )
     task = asyncio.create_task(p.run())
-    await asyncio.wait_for(gate.wait(), 10)
-    for _ in range(200):  # let both probes finish
-        await asyncio.sleep(0.05)
-        async with (
-            db.read() as conn,
-            conn.execute("SELECT count(*) FROM account_quota_probe") as cur,
-        ):
-            if (await cur.fetchone())[0] == 2:
-                break
+    await probed.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task

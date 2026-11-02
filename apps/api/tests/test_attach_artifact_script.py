@@ -35,8 +35,10 @@ def api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[httpx.Clie
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     deadline = time.monotonic() + 10
+    # check-tests: allow poll-loop — uvicorn exposes no startup event, only `started`
     while not server.started:
         assert time.monotonic() < deadline, "API did not start"
+        # check-tests: allow sleep — the server runs in a thread; nothing to await
         time.sleep(0.02)
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=ADMIN) as c:

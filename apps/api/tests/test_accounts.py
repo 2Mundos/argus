@@ -1573,11 +1573,13 @@ def test_usage_reports_over_http_reason_idempotency_and_lease(
     assert total["runs_by_role"] == {"executor": 1}
     assert got["quota_status"]["reason"] == "no_provider_source"
     now = datetime.now(UTC)
+    # check-tests: allow elapsed-time — a query window around the server clock, not a delta
+    since, until = now - timedelta(days=1), now + timedelta(days=1)
     series = client.get(
         "/api/accounts/usage",
         params={
-            "from": (now - timedelta(days=1)).isoformat(),
-            "to": (now + timedelta(days=1)).isoformat(),
+            "from": since.isoformat(),
+            "to": until.isoformat(),
             "bucket": "day",
             "account_id": account_id,
         },

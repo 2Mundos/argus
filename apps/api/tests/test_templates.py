@@ -4,7 +4,7 @@
 import os
 import re
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -18,11 +18,11 @@ from test_launch import (  # noqa: F401  (fixtures)
     agent_token,
     bearer,
     client,
+    passes,
     public_url,
     rpc,
     target,
     tool,
-    wait_for,
 )
 
 ECHO = {"argus.worker": "plain", "argus.worker.capabilities": "python,git"}
@@ -188,7 +188,7 @@ def test_configured_images_must_be_present_on_the_node(
 
 
 def test_create_from_scratch_starts_a_real_launch(
-    client: TestClient, target: FakeTarget
+    client: TestClient, target: FakeTarget, passes: Callable[[int], None]
 ) -> None:
     target.labeled = {"echo:1": ECHO}
     res = create(
@@ -209,11 +209,10 @@ def test_create_from_scratch_starts_a_real_launch(
         3,
     )
     assert pool["docker"]["extra_hosts"] == ["host.docker.internal:host-gateway"]
-    wait_for(
-        lambda: any(
-            i["state"] == "running"
-            for i in client.get("/api/instances", headers=ADMIN).json()
-        )
+    passes(3)  # one pass starts the worker, the next confirms it from the listing
+    assert any(
+        i["state"] == "running"
+        for i in client.get("/api/instances", headers=ADMIN).json()
     )
     assert len(target.started) == 1
     # The suggested name moves on once taken.
@@ -427,7 +426,10 @@ def test_without_operator_gateway_settings_the_pool_keeps_its_defaults(
 
 @BOTH
 def test_missing_sandbox_runtime_does_not_block_the_approved_socket_choice(
-    client: TestClient, target: FakeTarget, extra_env: dict
+    client: TestClient,
+    target: FakeTarget,
+    extra_env: dict,
+    passes: Callable[[int], None],
 ) -> None:
     ready_node(target, sysbox=False)
     cat = templates(client)
@@ -436,7 +438,8 @@ def test_missing_sandbox_runtime_does_not_block_the_approved_socket_choice(
     missing = " | ".join(readiness(client, "nanoclaw-sandbox")["missing"])
     assert "sysbox-runc" in missing and "ARGUS_NANOCLAW_DOCKER_RUNTIME" in missing
     assert create(client, template="nanoclaw-socket", name="s").status_code == 201
-    assert wait_for(lambda: target.started)
+    passes(2)  # one whole pass after the create
+    assert target.started
     spec = next(iter(target.specs.values()))
     assert spec.runtime is None
     mounts = {m.container: m for m in spec.mounts}
@@ -765,7 +768,7 @@ def test_orchestrator_creates_from_templates_within_bounds(
 
 
 def test_retry_creates_neither_a_second_pool_nor_a_second_worker(
-    client: TestClient, target: FakeTarget
+    client: TestClient, target: FakeTarget, passes: Callable[[int], None]
 ) -> None:
     target.labeled = {"echo:1": ECHO}
     assert create(client, template="argus-worker", name="crew").status_code == 201
@@ -773,7 +776,7 @@ def test_retry_creates_neither_a_second_pool_nor_a_second_worker(
     assert again.status_code == 409 and again.json()["detail"]["code"] == "pool_exists"
     [pool] = pools(client)
     assert pool["desired_replicas"] == 1
-    wait_for(lambda: target.started)
+    passes(2)  # one whole pass after the create
     assert len(target.started) == 1
 
 

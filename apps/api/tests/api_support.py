@@ -1,5 +1,7 @@
 """Test helpers for the API tests (importable because of pytest `pythonpath`)."""
 
+import threading
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from argus_api.db import Database, ts
@@ -180,3 +182,64 @@ class FakeTarget:
 
     def exit(self, name: str, code: int = 1) -> None:
         self.containers[name] |= {"status": "exited", "exit_code": code}
+
+
+# -- event streams ---------------------------------------------------------------------
+
+KEEPALIVE = ": keepalive\n\n"
+
+
+async def live(stream) -> None:
+    """Read an event stream until its first keepalive: by then it has fixed its
+    cursor and is waiting live, so an event recorded next is delivered."""
+    while await anext(stream) != KEEPALIVE:
+        pass
+
+
+async def next_event(stream) -> str:
+    """The next chunk that is not a keepalive."""
+    while (chunk := await anext(stream)) == KEEPALIVE:
+        pass
+    return chunk
+
+
+def signal_when_waiting(monkeypatch) -> threading.Event:
+    """An event set when any request starts waiting on the event bus (a long-poll
+    claim found nothing and is now blocked), for tests on another thread."""
+    from argus_api.events import Subscription
+
+    waiting = threading.Event()
+    real = Subscription.next_matching
+
+    async def next_matching(self, predicate):
+        waiting.set()
+        return await real(self, predicate)
+
+    monkeypatch.setattr(Subscription, "next_matching", next_matching)
+    return waiting
+
+
+def count_passes(stats) -> Callable[[int], None]:
+    """Count the finished passes of an app loop (its `LoopStats`) and return a
+    blocking `wait(n)`: returns once `n` more passes have finished. The pass in
+    flight when `wait` is called may have started before an action under test, so
+    wait for one more pass than the action needs."""
+    finished = threading.Condition()
+    count = 0
+    real = stats.record
+
+    def record(duration_s: float, ok: bool = True) -> None:
+        nonlocal count
+        real(duration_s, ok)
+        with finished:
+            count += 1
+            finished.notify_all()
+
+    stats.record = record
+
+    def wait(n: int) -> None:
+        with finished:
+            goal = count + n
+            finished.wait_for(lambda: count >= goal)
+
+    return wait

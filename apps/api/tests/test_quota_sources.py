@@ -347,9 +347,9 @@ async def test_expired_login_and_api_key_make_no_request(
 ) -> None:
     expired = await add(db, store, "old", "anthropic", full_login(), "subscription")
     doc = full_login()
-    doc["claudeAiOauth"]["expiresAt"] = int(
-        (datetime.now(UTC) - timedelta(hours=1)).timestamp() * 1000
-    )
+    # check-tests: allow elapsed-time — an expiry the prober checks against the real clock
+    an_hour_ago = datetime.now(UTC) - timedelta(hours=1)
+    doc["claudeAiOauth"]["expiresAt"] = int(an_hour_ago.timestamp() * 1000)
     await store.put("old", doc)
     key = await add(
         db, store, "key", "anthropic", {"api_key": "sk-ant-api03-FAKE"}, "api_key"

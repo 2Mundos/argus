@@ -141,13 +141,13 @@ def test_silent_running_follow_up_is_unknown_not_a_result() -> None:
         "checkpoint_ended_at": None,
         "checkpoint_detail": None,
     }
-    assert derive(row, "ready", now).step == "finalizing_checkpoint"  # type: ignore[arg-type,union-attr]
-    late = derive(row, "ready", now + timedelta(seconds=1))  # type: ignore[arg-type]
-    assert (late.step, late.checkpoint.state, late.checkpoint.duration_s) == (  # type: ignore[union-attr]
+    assert derive(row, "ready", now).step == "finalizing_checkpoint"
+    late = derive(row, "ready", now + timedelta(seconds=1))
+    assert (late.step, late.checkpoint.state, late.checkpoint.duration_s) == (
         "unknown",
         "unknown",
         None,
     )
     # An attempt from before the migration has nothing recorded.
     legacy = {**row, "claim_ended_at": None, "checkpoint_state": None}
-    assert derive(legacy, "succeeded", now) is None  # type: ignore[arg-type]
+    assert derive(legacy, "succeeded", now) is None

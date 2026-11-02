@@ -1,12 +1,11 @@
 """Task changes (docs/specs/task-changes.spec.md)."""
 
-import asyncio
 import json
 from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from api_support import FakeClock, insert_agent
+from api_support import FakeClock, insert_agent, live, next_event
 from argus_api import mcp_server
 from argus_api.db import Database
 from argus_api.errors import (
@@ -222,11 +221,10 @@ async def test_three_attempts_keep_a_snapshot_and_retry_clears_them(
 
 
 async def test_task_changes_event_is_a_live_summary(db: Database, claimed) -> None:
-    stream = event_stream(db, after=None, keepalive=5)
-    pending = asyncio.ensure_future(anext(stream))
-    await asyncio.sleep(0.05)
+    stream = event_stream(db, after=None, keepalive=0.01)
+    await live(stream)
     await put(db, claimed)
-    chunk = await asyncio.wait_for(pending, 2)
+    chunk = await next_event(stream)
     assert "id:" not in chunk  # transient: Last-Event-ID must not move
     event = json.loads(chunk.split("data: ")[1])
     assert event["kind"] == "task.changes"

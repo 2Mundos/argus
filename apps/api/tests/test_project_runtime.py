@@ -56,6 +56,7 @@ class FakeDocker:
         self.failing_probes: set[str] = set()
         self.unreachable = False
         self.gate: asyncio.Event | None = None
+        self.building = asyncio.Event()  # set when a build reaches the daemon
 
     def _check(self) -> None:
         if self.unreachable:
@@ -79,6 +80,7 @@ class FakeDocker:
         self, *, dockerfile, files, base, ref, key, timeout_s
     ) -> BuildResult:
         self._check()
+        self.building.set()
         if self.gate is not None:
             await self.gate.wait()
         self.builds.append(
@@ -357,7 +359,7 @@ async def test_concurrent_builders_do_not_build_twice(db, manager, docker) -> No
     await manager.prepare(A, req(t))
     docker.gate = asyncio.Event()
     first = asyncio.create_task(manager.work_once())
-    await asyncio.sleep(0.05)
+    await docker.building.wait()
     assert (
         await manager.work_once() is False
     )  # the row is `building`, nothing else is queued

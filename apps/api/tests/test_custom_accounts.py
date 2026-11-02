@@ -334,7 +334,7 @@ async def add(db: Database, store: MemorySecretStore, name: str, **kw) -> str:
                 name=name,
                 provider="custom",
                 secret_ref=f"sops:{name}",
-                config=CONFIG,  # type: ignore[arg-type]
+                config=CONFIG,
                 **kw,
             ),
             f"sops:{name}",

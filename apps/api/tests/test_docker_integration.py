@@ -31,9 +31,11 @@ def free_port() -> int:
 
 def wait_for(check: Callable[[], bool], timeout: float, what: str) -> None:
     deadline = time.monotonic() + timeout
+    # check-tests: allow poll-loop — real Docker containers expose no event to await
     while time.monotonic() < deadline:
         if check():
             return
+        # check-tests: allow sleep — between checks of real Docker state
         time.sleep(0.5)
     raise AssertionError(f"timed out waiting for {what}")
 
