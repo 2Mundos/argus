@@ -384,6 +384,17 @@ export function applySettingsEnv(executor, e, settings, model) {
   };
 }
 
+/**
+ * The argus-task wait cap the executor's shell can hold (task-helpers spec 3.8). Claude's
+ * comes from its managed settings (480 s); every other executor gets the helper's default
+ * (110 s), not the harness's value it would otherwise inherit.
+ */
+export function waitCapEnv(executor, e) {
+  if (executor === "claude") return e;
+  const { ARGUS_TASK_WAIT_MAX_S: _, ...rest } = e;
+  return rest;
+}
+
 const BG_SHELL_TIMEOUT_S = 120;
 
 /** ARGUS_AGENT_BG_SHELL_TIMEOUT_S when it is a whole number of seconds >= 1, else the default. */
@@ -1081,6 +1092,7 @@ async function runAttempt(
     e,
   );
   e = applySettingsEnv(executor, e, settings, selection.configured_model);
+  e = waitCapEnv(executor, e);
   const args = cmd.promptVia === "argv" ? [...cmd.args, prompt] : cmd.args;
 
   const stdoutFile = `${base}.out`;

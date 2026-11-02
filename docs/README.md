@@ -106,6 +106,9 @@ every new dependency is judged against it.
   accounts, OneCLI injection for github.com, and `argus-github-api`
 - [Progress milestones](specs/progress-milestones.spec.md) — structured progress
   signals (commit, PR, CI, gate) on task cards and a no-signal indicator
+- [Task helpers](specs/task-helpers.spec.md) — `argus-task`: token-free waits on CI
+  and reviews that a steer interrupts, PR readiness, CI failure digest, and one-call
+  delivery; a `waiting` milestone
 - [Stall visibility](specs/stall-visibility.spec.md) — fail a vanished session
   (`session_lost`), flag quiet claimed tasks in the inbox and worker rail, and
   explain late lease/agent expiry and the likely stall cause

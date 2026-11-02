@@ -8378,7 +8378,7 @@ export interface components {
          * @description The closed set of structured progress milestones (progress-milestones spec 3.1).
          * @enum {string}
          */
-        ProgressKind: "commit_created" | "pr_opened" | "ci_running" | "ci_passed" | "ci_failed" | "gate_failed" | "waiting_input";
+        ProgressKind: "commit_created" | "pr_opened" | "ci_running" | "ci_passed" | "ci_failed" | "gate_failed" | "waiting_input" | "waiting";
         /** ProgressRequest */
         ProgressRequest: {
             /** Attempt */

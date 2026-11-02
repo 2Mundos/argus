@@ -387,7 +387,17 @@ def test_github_helper_installs_beside_the_gitea_module(tmp_path: Path) -> None:
     )
     assert no_proxy.returncode == POLICY_DENIED, no_proxy.stderr
     assert "proxy" in no_proxy.stderr.lower()
+    # argus-task imports both modules from the same directory.
+    task = bindir / "argus-task"
+    assert filecmp.cmp(task, SOURCE.with_name("argus-task.mjs"), shallow=False)
+    task_help = _run([str(task), "--help"], env=env)
+    assert task_help.returncode == 0, task_help.stderr
+    assert task_help.stdout.startswith("usage: argus-task ")
     engines = SOURCE.parent / "engines"
+    assert (
+        "COPY --chmod=0755 argus-task.mjs /usr/local/bin/argus-task"
+        in (engines / "Dockerfile.tools-layer").read_text()
+    )
     assert (
         "COPY --chmod=0755 github-api.mjs /usr/local/bin/argus-github-api"
         in (engines / "Dockerfile.tools-layer").read_text()

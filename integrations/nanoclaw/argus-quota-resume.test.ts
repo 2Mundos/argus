@@ -286,7 +286,10 @@ describe("resumeClaudeSessionFromEnv", () => {
       root,
       "data/v2-sessions/group-1/.claude-shared/projects/-workspace-agent",
     );
-    writeFileSync(path.join(project, `${SESSION}.jsonl`), "x".repeat(RUNNER_MAX_TRANSCRIPT_BYTES + 1));
+    writeFileSync(
+      path.join(project, `${SESSION}.jsonl`),
+      "x".repeat(RUNNER_MAX_TRANSCRIPT_BYTES + 1),
+    );
     expect(await resumeClaudeSessionFromEnv(SESSION, "argus:t1:2")).toBe(false);
     expect(nanoclaw.sessions.size).toBe(0);
     expect([...mailboxes.keys()]).toEqual([]);

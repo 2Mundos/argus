@@ -183,18 +183,22 @@ async def milestone(db: Database, task, kind, data=None, message: str = "m"):
 
 
 COMMIT = {"branch": "feat/x", "sha": "abc1234"}
+WAITING = {"on": "ci", "ref": "#412", "since": "2026-11-02T10:00:00.000Z"}
 
 
+@pytest.mark.parametrize(
+    ("kind", "data"), [("commit_created", COMMIT), ("waiting", WAITING)]
+)
 async def test_milestone_is_recorded_with_server_time(
-    db: Database, clock: FakeClock
+    db: Database, clock: FakeClock, kind, data
 ) -> None:
     await create(db)
     task = await claim(db)
-    after = await milestone(db, task, "commit_created", COMMIT)
-    assert after.progress_kind == "commit_created"
+    after = await milestone(db, task, kind, data)
+    assert after.progress_kind == kind
     assert after.progress_data is not None
     assert after.progress_data.pop("at")
-    assert after.progress_data == COMMIT
+    assert after.progress_data == data
 
 
 async def test_legacy_task_has_no_milestone(db: Database) -> None:
@@ -249,6 +253,9 @@ async def test_free_text_note_keeps_the_milestone_and_is_limited(
         ("pr_opened", {"number": 0, "url": "https://git.example.com/pulls/1"}),
         ("ci_failed", {}),
         ("waiting_input", {"x": 1}),
+        ("waiting", {**WAITING, "on": "deploy"}),
+        ("waiting", {**WAITING, "since": "yesterday"}),
+        ("waiting", {"on": "ci", "ref": "#1"}),
         (None, {"sha": "abc1234"}),
     ],
 )
