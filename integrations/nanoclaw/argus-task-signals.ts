@@ -6,51 +6,77 @@
  * blocking `argus-task wait` returns at once; the helper writes `waiting.json` while it
  * waits, and the host turns it into a `waiting` progress milestone.
  *
- * The workspace belongs to the container, so everything in it is untrusted: the host never
- * follows a symlink there, reads at most a few KiB, and rebuilds the milestone field by field.
+ * The workspace belongs to the container, so everything in it is untrusted. The host walks
+ * from its own group directory to `.git/argus` one component at a time, opening each as a
+ * directory without following symlinks, and then works only through the last open handle
+ * (`/proc/self/fd/N/...`), so a worker that swaps a directory for a symlink mid-way cannot
+ * redirect a read or write. It never opens a FIFO or device, reads at most a few KiB, and
+ * rebuilds the milestone field by field.
  */
 import { constants as fsc } from "node:fs";
-import { lstat, mkdir, open, rename, unlink } from "node:fs/promises";
-import path from "node:path";
+import { type FileHandle, mkdir, open, rename, unlink } from "node:fs/promises";
+import { TASK_WORKSPACES_DIR, taskWorkspacePath } from "./argus-workspace.js";
 
 const READ_MAX = 4096;
 const STALE_MS = 15 * 60_000; // a wait call is capped well below this (spec 3.3)
 const REPOST_MS = 5 * 60_000; // keeps a long wait out of the quiet flag (20 min)
+const DIR_FLAGS = fsc.O_RDONLY | fsc.O_DIRECTORY | fsc.O_NOFOLLOW;
 
 export type Waiting = { on: "ci" | "review"; ref: string; since: string };
 
-/** `.git/argus` under the workspace, or null when `.git` or it is not a plain directory. */
-async function signalDir(workspace: string, create: boolean): Promise<string | null> {
-  const gitDir = path.join(workspace, ".git");
-  const dir = path.join(gitDir, "argus");
+const via = (fh: FileHandle, name = "") => `/proc/self/fd/${fh.fd}${name ? `/${name}` : ""}`;
+
+/**
+ * Run `fn` with a path that resolves through an open handle on
+ * `<groupDir>/task-workspaces/<taskId>/.git/argus`; null when any component is missing or
+ * is not a plain directory. `create` makes the last component.
+ */
+async function inSignalDir<T>(
+  groupDir: string,
+  taskId: string,
+  create: boolean,
+  fn: (dir: string) => Promise<T>,
+): Promise<T | null> {
+  const handles: FileHandle[] = [];
   try {
-    if (!(await lstat(gitDir)).isDirectory()) return null;
-    if (create)
-      await mkdir(dir).catch((err) => (err?.code === "EEXIST" ? undefined : Promise.reject(err)));
-    return (await lstat(dir)).isDirectory() ? dir : null;
+    taskWorkspacePath(groupDir, taskId); // validates the id
+    let dir = await open(groupDir, fsc.O_RDONLY | fsc.O_DIRECTORY);
+    handles.push(dir);
+    for (const name of [TASK_WORKSPACES_DIR, taskId, ".git", "argus"]) {
+      if (name === "argus" && create)
+        await mkdir(via(dir, name)).catch((err) =>
+          err?.code === "EEXIST" ? undefined : Promise.reject(err),
+        );
+      dir = await open(via(dir, name), DIR_FLAGS);
+      handles.push(dir);
+    }
+    return await fn(via(dir));
   } catch {
     return null;
+  } finally {
+    for (const fh of handles.reverse()) await fh.close().catch(() => undefined);
   }
 }
 
 /** Tell any running wait that a steer arrived. Best effort: a failure only delays the steer. */
-export async function markSteer(workspace: string, now: Date): Promise<boolean> {
-  const dir = await signalDir(workspace, true);
-  if (!dir) return false;
-  const temp = path.join(dir, `.interrupt.${process.pid}.${now.getTime()}`);
-  try {
-    const fh = await open(temp, fsc.O_WRONLY | fsc.O_CREAT | fsc.O_EXCL | fsc.O_NOFOLLOW, 0o644);
+export async function markSteer(groupDir: string, taskId: string, now: Date): Promise<boolean> {
+  const written = await inSignalDir(groupDir, taskId, true, async (dir) => {
+    const temp = `${dir}/.interrupt.${process.pid}.${now.getTime()}`;
     try {
-      await fh.writeFile(`${JSON.stringify({ reason: "steer", at: now.toISOString() })}\n`);
-    } finally {
-      await fh.close();
+      const fh = await open(temp, fsc.O_WRONLY | fsc.O_CREAT | fsc.O_EXCL | fsc.O_NOFOLLOW, 0o644);
+      try {
+        await fh.writeFile(`${JSON.stringify({ reason: "steer", at: now.toISOString() })}\n`);
+      } finally {
+        await fh.close();
+      }
+      await rename(temp, `${dir}/interrupt`); // replaces a symlink, never follows it
+      return true;
+    } catch {
+      await unlink(temp).catch(() => undefined);
+      return false;
     }
-    await rename(temp, path.join(dir, "interrupt")); // replaces a symlink, never follows it
-    return true;
-  } catch {
-    await unlink(temp).catch(() => undefined);
-    return false;
-  }
+  });
+  return written === true;
 }
 
 /** Validate what the helper wrote; null for anything that is not exactly a waiting record. */
@@ -66,26 +92,31 @@ export function parseWaiting(raw: unknown, nowMs: number): Waiting | null {
 }
 
 /** The waiting record, or null when there is none, it is stale, or it is not valid. */
-export async function readWaiting(workspace: string, nowMs: number): Promise<Waiting | null> {
-  const dir = await signalDir(workspace, false);
-  if (!dir) return null;
-  let fh;
-  try {
-    fh = await open(path.join(dir, "waiting.json"), fsc.O_RDONLY | fsc.O_NOFOLLOW);
-  } catch {
-    return null;
-  }
-  try {
-    const st = await fh.stat();
-    if (!st.isFile() || nowMs - st.mtimeMs > STALE_MS) return null;
-    const buf = Buffer.alloc(READ_MAX);
-    const { bytesRead } = await fh.read(buf, 0, READ_MAX, 0);
-    return parseWaiting(JSON.parse(buf.subarray(0, bytesRead).toString("utf8")), nowMs);
-  } catch {
-    return null;
-  } finally {
-    await fh.close();
-  }
+export async function readWaiting(
+  groupDir: string,
+  taskId: string,
+  nowMs: number,
+): Promise<Waiting | null> {
+  return inSignalDir(groupDir, taskId, false, async (dir) => {
+    let fh: FileHandle;
+    try {
+      // O_NONBLOCK: a FIFO opens at once and is refused below instead of hanging the host.
+      fh = await open(`${dir}/waiting.json`, fsc.O_RDONLY | fsc.O_NOFOLLOW | fsc.O_NONBLOCK);
+    } catch {
+      return null;
+    }
+    try {
+      const st = await fh.stat();
+      if (!st.isFile() || nowMs - st.mtimeMs > STALE_MS) return null;
+      const buf = Buffer.alloc(READ_MAX);
+      const { bytesRead } = await fh.read(buf, 0, READ_MAX, 0);
+      return parseWaiting(JSON.parse(buf.subarray(0, bytesRead).toString("utf8")), nowMs);
+    } catch {
+      return null;
+    } finally {
+      await fh.close();
+    }
+  });
 }
 
 export function waitingMessage(w: Waiting): string {

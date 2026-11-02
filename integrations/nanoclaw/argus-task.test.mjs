@@ -73,6 +73,7 @@ async function run(argv, { routes, cwd = repo(), env = {}, onSleep } = {}) {
   return {
     code,
     out: out.length ? JSON.parse(out.join("")) : null,
+    raw: out.join(""),
     err: err.join(""),
     calls: f.calls,
     elapsed: (t - T0) / 1000,
@@ -115,6 +116,38 @@ describe("waitCap", () => {
 });
 
 describe("wait ci", () => {
+  it("keeps waiting after a failure until every check has finished", async () => {
+    let checks = 0;
+    const r = await run(["wait", "ci", "--pr", "7"], {
+      routes: {
+        "GET /pulls/7": pr(),
+        [`GET /statuses/${HEAD}`]: () => [
+          { id: 1, context: "lint", status: "failure" },
+          { id: 2, context: "test", status: ++checks < 2 ? "pending" : "success" },
+        ],
+      },
+    });
+    assert.equal(r.code, EXIT.ok);
+    assert.equal(r.elapsed, 30);
+    assert.deepEqual([r.out.state, r.out.failed, r.out.running], ["failure", ["lint"], 0]);
+  });
+
+  it("does not retry a failing request inside a wait; the next check is the retry", async () => {
+    let checks = 0;
+    const r = await run(["wait", "ci", "--pr", "7"], {
+      routes: {
+        "GET /pulls/7": pr(),
+        [`GET /statuses/${HEAD}`]: () =>
+          ++checks === 1
+            ? new Response("{}", { status: 503 })
+            : [{ id: 1, context: "test", status: "success" }],
+      },
+    });
+    assert.equal(r.code, EXIT.ok, r.err);
+    assert.equal(r.elapsed, 30);
+    assert.equal(r.calls.filter((c) => c.startsWith("GET /statuses")).length, 2);
+  });
+
   it("checks once per interval and returns when CI finishes", async () => {
     let checks = 0;
     let during = null;
@@ -234,6 +267,23 @@ describe("pr-ready", () => {
     assert.deepEqual(r.out.reasons, []);
   });
 
+  it("is not ready when the head moved between its reads", async () => {
+    let reads = 0;
+    const moved = "b".repeat(40);
+    const r = await run(["pr-ready", "--pr", "7"], {
+      routes: routes({
+        "GET /pulls/7": () => pr({ mergeable: true, head: { sha: ++reads === 1 ? HEAD : moved } }),
+        "GET /issues/7/comments": [
+          { id: 3, body: `Agentic review for head ${moved}: 0 findings`, created_at: iso(0) },
+        ],
+        [`GET /commits/${moved}/status`]: { state: "success" },
+        [`GET /commits/${moved}/statuses`]: [],
+      }),
+    });
+    assert.equal(r.code, EXIT.not_ready);
+    assert.deepEqual(r.out.reasons, ["head_moved"]);
+  });
+
   it("lists every reason it is not ready", async () => {
     const r = await run(["pr-ready", "--pr", "7"], {
       routes: routes({
@@ -284,6 +334,26 @@ describe("ci-digest", () => {
     assert.equal(small.truncated, true);
     assert.ok(Buffer.byteLength(small.text) <= 40);
     assert.match(small.text, /tail 29$/);
+  });
+
+  it("keeps the printed line within --max-bytes, escaping included", async () => {
+    const jobs = Array.from({ length: 6 }, (_, i) => ({
+      id: 30 + i,
+      name: `job "${i}"`,
+      conclusion: "failure",
+    }));
+    const routes = {
+      "GET /actions/runs/11": { id: 11, conclusion: "failure" },
+      "GET /actions/runs/11/jobs": { jobs },
+    };
+    for (const j of jobs)
+      routes[`GET /actions/jobs/${j.id}/logs`] = () =>
+        new Response(Array.from({ length: 40 }, (_, i) => `error "q\\${i}"\t`).join("\n"));
+    const r = await run(["ci-digest", "--run-id", "11", "--max-bytes", "600"], { routes });
+    assert.equal(r.code, EXIT.ok, r.err);
+    assert.ok(Buffer.byteLength(r.raw) - 1 <= 600, `${Buffer.byteLength(r.raw)} bytes`);
+    assert.equal(r.out.truncated, true);
+    assert.ok(r.out.excerpts.length >= 1 && r.out.excerpts.length < jobs.length);
   });
 
   it("names the failed run, job and step for the PR head", async () => {

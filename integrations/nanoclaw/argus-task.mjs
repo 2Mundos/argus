@@ -31,7 +31,11 @@ const MIN_INTERVAL_S = 10;
 const DEFAULT_MAX_S = 110; // under the shortest engine shell timeout we know of (spec 3.8)
 const CEILING_MAX_S = 540;
 const MARKER_TICK_MS = 1000;
+const PROBE_REQUEST_MS = 10_000; // per forge request inside a wait
+const PROBE_REQUESTS = 3; // the most requests one wait check makes
+const TRANSIENT = new Set(["network_error", "server_error", "rate_limited", "ambiguous"]);
 const DIGEST_BYTES = 2048;
+const MIN_EXCERPT_BYTES = 64;
 const TAIL_LINES = 20;
 const LOG_BYTES = 20 * 1024 * 1024;
 const ERROR_LINE =
@@ -141,11 +145,13 @@ export function waitCap(option, env) {
 async function checkCi(api, o) {
   const sha = await headSha(api, o.number, o.sha);
   const ci = ciSummary(await api.ciStatuses(sha));
-  if (ci.state === "success" || ci.state === "failure") return { done: true, sha, ...ci };
+  // Done only when every check has finished, even after one has failed (spec 3.3).
+  if (ci.state !== "missing" && ci.running === 0) return { done: true, sha, ...ci };
+  const failedSoFar = ci.failed.length ? `, ${ci.failed.length} failed` : "";
   const status =
     ci.state === "missing"
       ? "no checks reported yet"
-      : `${ci.running} of ${ci.total} checks running`;
+      : `${ci.running} of ${ci.total} checks running${failedSoFar}`;
   return { done: false, sha, status, ...ci };
 }
 
@@ -197,14 +203,25 @@ async function wait(api, o, ctx) {
     writeJson(file, { on, ref, since });
   }
   const clear = () => file && rmSync(file, { force: true });
+  // A check must not outlive the cap: no retries (the next check is the retry), and each
+  // request is cut to its share of the time left.
+  api.maxRetries = 0;
   try {
     for (;;) {
+      const left = capMs - (ctx.now() - start);
+      api.timeoutMs = Math.max(1000, Math.min(PROBE_REQUEST_MS, Math.floor(left / PROBE_REQUESTS)));
       const steer = interruptAfter(ctx.dir, start);
       if (steer) {
         clear();
         return { code: EXIT.interrupted, result: { on, ref, interrupted: steer.reason } };
       }
-      const check = on === "ci" ? await checkCi(api, o) : await checkReview(api, o, cursor);
+      let check;
+      try {
+        check = on === "ci" ? await checkCi(api, o) : await checkReview(api, o, cursor);
+      } catch (error) {
+        if (!(error instanceof GiteaError) || !TRANSIENT.has(error.code)) throw error;
+        check = { done: false, status: `forge not answering (${error.code}); will check again` };
+      }
       if (check.done) {
         clear();
         return {
@@ -248,7 +265,9 @@ async function prReady(api, o) {
   let review = null;
   if (!o["skip-review"]) {
     review = await api.reviewFindings(pr.number);
-    if (!review.matches_head || review.finding_count === null) reasons.push("review_missing");
+    // reviewFindings reads the PR again: a push in between would mix two heads' evidence.
+    if (review.head_sha !== head) reasons.push("head_moved");
+    else if (!review.matches_head || review.finding_count === null) reasons.push("review_missing");
     else if (review.finding_count > 0) reasons.push("review_findings");
   }
   const latest = new Map();
@@ -321,41 +340,52 @@ async function ciDigest(api, o) {
   for (const run of runs.filter(failed))
     for (const job of (await api.listJobs(run.id, { all: true, limit: 50 })).items.filter(failed))
       jobs.push({ run, job });
+  const failedRuns = runs.filter(failed).length;
   const excerpts = [];
-  let left = budget;
+  const size = (v) => Buffer.byteLength(JSON.stringify(v));
+  // The budget bounds the printed line: the envelope, every excerpt's fields and the
+  // escaped text all count.
+  let left =
+    budget - size({ head_sha: sha, failed_runs: failedRuns, excerpts: [], truncated: true });
   let truncated = false;
   for (const { run, job } of jobs) {
-    const step = (job.steps ?? []).find(failed)?.name ?? null;
-    let text = "";
-    let note = null;
-    if (left > 0) {
-      const chunks = [];
-      try {
-        await api.jobLogs(job.id, {
-          maxBytes: LOG_BYTES,
-          sink: (c) => chunks.push(Buffer.from(c)),
-        });
-        const d = digestLog(Buffer.concat(chunks).toString("utf8"), left);
-        text = d.text;
-        truncated ||= d.truncated;
-        left -= Buffer.byteLength(text);
-      } catch (error) {
-        if (!(error instanceof GiteaError)) throw error;
-        note = `log not read: ${error.code}`;
-      }
-    } else truncated = true;
-    excerpts.push({
+    const excerpt = {
       run_id: run.id,
       job_id: job.id,
-      job: job.name ?? null,
-      step,
-      text,
-      ...(note ? { note } : {}),
-    });
+      job: typeof job.name === "string" ? job.name.slice(0, 200) : null,
+      step: (job.steps ?? []).find(failed)?.name?.slice(0, 200) ?? null,
+      text: "",
+    };
+    const room = left - size(excerpt) - (excerpts.length ? 1 : 0);
+    if (room < MIN_EXCERPT_BYTES) {
+      truncated = true;
+      break;
+    }
+    const chunks = [];
+    try {
+      await api.jobLogs(job.id, { maxBytes: LOG_BYTES, sink: (c) => chunks.push(Buffer.from(c)) });
+      const log = Buffer.concat(chunks).toString("utf8");
+      // JSON escaping can grow the text; shrink the raw budget until the escaped text fits.
+      for (let raw = room; raw > 0; raw -= Math.max(16, size(excerpt.text) - 2 - room)) {
+        const d = digestLog(log, raw);
+        excerpt.text = d.text;
+        truncated ||= d.truncated;
+        if (size(excerpt.text) - 2 <= room) break;
+      }
+    } catch (error) {
+      if (!(error instanceof GiteaError)) throw error;
+      excerpt.note = `log not read: ${error.code}`;
+    }
+    if (size(excerpt) + (excerpts.length ? 1 : 0) > left) {
+      truncated = true;
+      break;
+    }
+    excerpts.push(excerpt);
+    left -= size(excerpt) + (excerpts.length > 1 ? 1 : 0);
   }
   return {
     code: EXIT.ok,
-    result: { head_sha: sha, failed_runs: runs.filter(failed).length, excerpts, truncated },
+    result: { head_sha: sha, failed_runs: failedRuns, excerpts, truncated },
   };
 }
 

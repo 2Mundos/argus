@@ -150,11 +150,7 @@ import {
   waitingMessage,
 } from "./argus-task-signals.js";
 import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
-import {
-  prepareTaskWorkspace,
-  taskWorkspacePath,
-  type WorkspaceResult,
-} from "./argus-workspace.js";
+import { prepareTaskWorkspace, type WorkspaceResult } from "./argus-workspace.js";
 import { registerChannelAdapter } from "./channel-registry.js";
 import {
   loadPolicy,
@@ -2610,17 +2606,17 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       injectedSteers.add(steer.id);
       steerAcks.add(steer.id);
       // An agent blocked in `argus-task wait` reads the steer only after the call returns.
-      const workspace = current ? await claimWorkspace(current) : null;
-      if (workspace) await markSteer(workspace, new Date(nowMs()));
+      const claim = current;
+      const groupDir = claim ? await claimGroupDir(claim) : null;
+      if (claim && groupDir) await markSteer(groupDir, claim.id, new Date(nowMs()));
     }
   }
 
-  /** The claimed task's workspace on the host, or null when it has none. */
-  async function claimWorkspace(task: Claim): Promise<string | null> {
+  /** The group directory holding the claimed task's workspace, or null when it has none. */
+  async function claimGroupDir(task: Claim): Promise<string | null> {
     if (!currentClaim?.repository_url || currentClaim.id !== task.id) return null;
     try {
-      const groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
-      return groupDir ? taskWorkspacePath(groupDir, task.id) : null;
+      return await (cfg.workspaceRoot ?? argusGroupDir)();
     } catch {
       return null;
     }
@@ -2629,13 +2625,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   /** Turn the helper's waiting record into a `waiting` milestone (task helpers spec 3.4). */
   async function relayWaiting(): Promise<void> {
     const task = current;
-    const workspace = task ? await claimWorkspace(task) : null;
-    if (!task || !workspace) {
+    const groupDir = task ? await claimGroupDir(task) : null;
+    if (!task || !groupDir) {
       waitingRelay.reset();
       return;
     }
     const now = nowMs();
-    const waiting = await readWaiting(workspace, now);
+    const waiting = await readWaiting(groupDir, task.id, now);
     if (!waiting || !waitingRelay.due(waiting, now)) {
       if (!waiting) waitingRelay.reset();
       return;

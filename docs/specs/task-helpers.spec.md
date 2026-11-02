@@ -79,8 +79,10 @@ argus-task wait review --pr N [--since CURSOR]
     [--interval SECONDS] [--max SECONDS]
 ```
 
-- `ci` returns when every check on the head SHA (or `--sha`) has finished. The JSON
-  carries the overall result and each failed check's name and run id.
+- `ci` returns when every check on the head SHA (or `--sha`) has finished, including
+  after one has already failed, so one result covers the whole run. The JSON carries the
+  overall result and the failed checks' names; a pending result says how many failed so
+  far.
 - `review` returns when a review or comment newer than `--since` appears. The JSON
   carries the new items' ids, authors and kinds (not their bodies; the agent reads those
   with the forge helper) and a `cursor` for the next call.
@@ -92,6 +94,9 @@ argus-task wait review --pr N [--since CURSOR]
   one-line status (`"3 of 5 checks running"`) so a re-call costs one short turn.
 - Between forge checks it reads the interrupt marker (3.4) once a second, a local file
   read, so a steer ends the wait within a second.
+- A check never outlives the cap: inside a wait the forge client does not retry (the
+  next check is the retry), each request is cut to a third of the time left (at most
+  10 s), and a network error, 5xx or 429 counts as still pending, not as a failure.
 
 ## 3.4 The `.git/argus/` file channel
 
@@ -113,9 +118,13 @@ with `git rev-parse --absolute-git-dir`, and outside a repository it runs withou
   a long wait never reaches the 20-minute quiet flag. A file not modified for 15 minutes is
   stale and ignored.
 
-The workspace belongs to the container, so the host treats both files as untrusted: it
-never follows a symlink (`.git`, `.git/argus` and the files must be plain), writes the
-marker through a new temporary file and a rename, reads at most 4 KiB, and rebuilds the
+The workspace belongs to the container, which can swap any directory in it for a symlink
+at any moment, so the host treats both files as untrusted. It walks from its own group
+directory to `.git/argus` one component at a time, opening each as a directory without
+following a symlink, and then reaches the files only through the last open handle
+(`/proc/self/fd/N/…`), so nothing is resolved by path again after a check. It writes the
+marker through a new temporary file and a rename, opens `waiting.json` non-blocking so a
+FIFO is refused instead of hanging the heartbeat, reads at most 4 KiB, and rebuilds the
 milestone field by field (`ref` printable ASCII, `since` a past ISO time).
 
 ## 3.5 `ci-digest`
@@ -127,8 +136,9 @@ argus-task ci-digest --pr N | --run RUN_ID [--max-bytes 2048]
 Finds the failed jobs and steps for the PR's head SHA (or one run), and from each
 failed step's log keeps the lines that look like errors (`error`, `failed`, `FAIL`,
 `Traceback`, `assert`, `panic`, exit-status lines) plus the last 20 lines. It strips ANSI
-codes and timestamps, removes repeated lines, and caps the whole output at `--max-bytes`
-(default 2048) with a `truncated` flag. The JSON names the job, step and run id of each
+codes and timestamps, and removes repeated lines. `--max-bytes` (default 2048) bounds the
+printed JSON line itself, field names and escaping included: excerpts are added until the
+next one would not fit, and `truncated` says something was left out. The JSON names the job, step and run id of each
 excerpt, so the agent can fetch the full log with the forge helper when the digest is not
 enough. Parsers for specific formats (pytest, vitest, ruff, tsc, biome) are added only for
 a format this pass handles badly, each with a fixture.
@@ -143,12 +153,13 @@ set:
 | `ci_running` | A check on the head SHA has not finished |
 | `ci_failed` | A check on the head SHA failed |
 | `ci_missing` | No check has reported on the head SHA |
+| `head_moved` | The head changed between the PR read and the review read; call again |
 | `review_missing` | No agentic review with a finding count covers the head SHA (`review-findings`) |
 | `review_findings` | The agentic review for the head SHA has findings |
 | `changes_requested` | A reviewer's latest non-comment review requests changes (dismissed ones are skipped) |
 | `not_mergeable` | The forge reports `mergeable: false` |
 
-`--skip-review` drops the two review reasons for repositories without agentic review.
+`--skip-review` drops the review reasons for repositories without agentic review.
 Unresolved review threads are not a reason: GitHub's REST API does not expose thread
 resolution, and a blocking review already shows as `changes_requested`. It never merges
 or approves.
@@ -216,10 +227,11 @@ check `command -v argus-task` first.
   the default), well under GitHub's 5,000 per hour per token.
 - Tests are deterministic: a fake forge and an injected clock, no sleeps or real
   intervals; `deliver` runs against real temporary git repositories. Covered: each
-  `wait` condition and the cap clamp, interrupt by a newer marker and not an older one,
-  the `pr-ready` reason set, digest truncation and deduplication, `deliver` on a clean
-  rebase and on a conflict, the `waiting` kind validation, the host's symlink refusals,
-  stale records and repost timing.
+  `wait` condition, a failure while other checks run, a 5xx without retry, the cap
+  clamp, interrupt by a newer marker and not an older one, the `pr-ready` reasons
+  including a moved head, digest deduplication and the printed-size bound, `deliver` on
+  a clean rebase and on a conflict, the `waiting` kind validation, the host's symlink
+  refusals at each component, FIFOs, stale records and repost timing.
 
 # 6. Implementation Consequences
 
