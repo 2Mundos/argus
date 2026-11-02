@@ -119,7 +119,7 @@ describe("startup order", () => {
       settled = true;
     });
     const adopting = mods.adoptRunningSessions();
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 0)); // readiness would settle on promises alone
     expect(settled).toBe(false);
     finishListing();
     await adopting;
@@ -137,6 +137,7 @@ describe("startup order", () => {
     );
     const ensured = vi.fn(async () => {
       // A slow gateway lease, as the real OneCLI call can be.
+      // check-tests: allow sleep — the slow lease is the subject of this test
       await new Promise((r) => setTimeout(r, 40));
       return {
         lease: { contribution: { env: { HTTPS_PROXY: "http://proxy.test:1" } } },
@@ -179,6 +180,7 @@ describe("startup order", () => {
     });
     probing.catch(() => undefined);
     const adopting = mods.adoptRunningSessions();
+    // check-tests: allow sleep — a quiet check over several of the probe's 5 ms polls
     await new Promise((r) => setTimeout(r, 120));
     expect(ensured).not.toHaveBeenCalled(); // gated: no lease while adoption lists sessions
     finishListing();

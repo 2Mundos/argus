@@ -117,6 +117,7 @@ async function smoke(t, selectModels) {
   const deadline = Date.now() + 1000;
   while (!inbound.length && !calls.some((c) => c.endsWith("/fail"))) {
     assert.ok(Date.now() < deadline, "channel completes setup promptly");
+    // check-tests: allow sleep — node:test file; the same poll as argus-test-until.ts
     await new Promise((r) => setTimeout(r, 5));
   }
   return { calls, inbound, uploads, adapter };

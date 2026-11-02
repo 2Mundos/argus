@@ -257,6 +257,7 @@ describe.skipIf(!IMAGE)("preflight in real containers (synthetic gateway and for
     forge.delayMs = 20_000;
     const pending = probe(60_000)(GITHUB, [GITHUB], "github");
     const caught = pending.catch((e: Error) => e);
+    // check-tests: allow sleep — waits for a real Docker container to appear
     for (let i = 0; i < 60 && !leftovers(); i++) await new Promise((r) => setTimeout(r, 250));
     docker("kill", leftovers().split("\n")[0]);
     expect(String(await caught)).toMatch(/exited with code 137/);

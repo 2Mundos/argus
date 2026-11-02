@@ -97,10 +97,12 @@ function maybe<T>(op: Op, fn: () => Promise<T>): Promise<T> {
     });
   return fn();
 }
+// check-tests: allow sleep — these tests drive the preflight's own wall-clock bounds
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const release = async () => {
   const all = pending.splice(0);
   for (const fn of all) fn();
+  // check-tests: allow sleep — released work finishes on the preflight's own timers
   await new Promise((r) => setTimeout(r, 30));
 };
 
@@ -377,6 +379,7 @@ describe("nothing is created before NanoClaw's startup adoption has finished", (
       open = resolve;
     });
     const pending = run(probe({}, 2000));
+    // check-tests: allow sleep — a quiet check: the gated preflight must not start
     await new Promise((r) => setTimeout(r, 60));
     expect(ensured).toBe(0);
     expect(cli.calls).toHaveLength(0);

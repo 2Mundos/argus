@@ -13,6 +13,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import { createArgusAdapter } from "./argus.js";
 import { INPUT_CONSUMED, INPUT_MANIFEST, INPUT_VERIFIER, TASK_INPUTS_DIR } from "./argus-inputs.js";
+import { until } from "./argus-test-until.js";
 
 // NanoClaw's own database and container runtime are not part of this test; the channel is.
 vi.mock("../db/messaging-groups.js", () => ({
@@ -86,14 +87,6 @@ async function api(
   }
   return { status: res.status, data };
 }
-
-const until = async (cond: () => boolean | Promise<boolean>, ms: number, what: string) => {
-  const start = Date.now();
-  while (!(await cond())) {
-    if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((r) => setTimeout(r, 100));
-  }
-};
 
 function worker(name: string, bootstrapToken: string) {
   const inbound: any[] = [];

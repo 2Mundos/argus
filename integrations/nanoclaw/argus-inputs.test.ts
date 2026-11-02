@@ -1074,6 +1074,7 @@ describe("the verifier and the consumed relay", () => {
     const verify = (d: string) =>
       spawnSync(process.execPath, [path.join(d, INPUT_VERIFIER)], {
         encoding: "utf8",
+        // check-tests: allow timeout-retry — bounds the spawned verifier, not the test
         timeout: 5_000,
         killSignal: "SIGKILL",
       });

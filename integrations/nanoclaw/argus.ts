@@ -458,6 +458,8 @@ export interface ArgusConfig {
   progressIntervalMs?: number;
   logPollMs?: number;
   claimWaitS?: number;
+  /** Heartbeat period; production uses the server's interval, at least 1 s. */
+  heartbeatMs?: number;
 }
 
 interface KnowledgeRef {
@@ -4279,7 +4281,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const interval = await register();
       registered = true;
       stopped = false;
-      heartbeatTimer = setInterval(() => void heartbeat(), Math.max(interval, 1) * 1000);
+      heartbeatTimer = setInterval(
+        () => void heartbeat(),
+        cfg.heartbeatMs ?? Math.max(interval, 1) * 1000,
+      );
       heartbeatTimer.unref?.();
       if (agentRole === "orchestrator") {
         orchestratorEngineReady = false;

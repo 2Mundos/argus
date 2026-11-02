@@ -18,6 +18,9 @@ from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parent.parent
 SCAN_DIRS = ("apps/api", "packages/core", "scripts")
+# TS/JS tests: a line scan (no parser), same rules where they apply.
+SCRIPT_DIRS = ("integrations/nanoclaw", "apps/dashboard/src")
+SCRIPT_SUFFIXES = (".test.ts", ".test.tsx", ".test.mjs")
 SKIP_PARTS = {".venv", "node_modules", "__pycache__", "dist", "build"}
 
 SLEEP_CALLS = {"time.sleep", "asyncio.sleep", "sleep"}
@@ -42,6 +45,12 @@ FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 REASON_MARKS = {"skip", "skipif", "xfail"}
 
 ALLOW = re.compile(r"#\s*check-tests:\s*allow\s+([\w-]+)\s*(?:—|--|-|:)\s*(\S.*)$")
+SCRIPT_ALLOW = re.compile(
+    r"//\s*check-tests:\s*allow\s+([\w-]+)\s*(?:—|--|-|:)\s*(\S.*)$"
+)
+# `setTimeout(resolve, 50)` style waits; a zero delay only yields and is fine.
+SCRIPT_SLEEP = re.compile(r"setTimeout\(\s*[\w.]+\s*,\s*(?!0\s*\))[^)\s]")
+SCRIPT_TIMEOUT_RETRY = re.compile(r"\b(?:timeout|retry):\s*[\d_]+\b")
 SUPPRESSIONS = (
     re.compile(r"noqa(?::\s*[A-Za-z]+\d+(?:\s*,\s*[A-Za-z]+\d+)*)?"),
     re.compile(r"type:\s*ignore(?:\[[^\]]*\])?"),
@@ -229,6 +238,25 @@ def check_source(source: str, kind: str, path: str = "<source>") -> list[Hit]:
     return hits
 
 
+def check_script(source: str, path: str = "<source>") -> list[Hit]:
+    """Check one TS/JS test file, line by line. Returns unsuppressed hits."""
+    lines = source.splitlines()
+    hits = []
+    for number, text in enumerate(lines, start=1):
+        code = text.split("//", 1)[0] if "://" not in text else text
+        found = []
+        if SCRIPT_SLEEP.search(code):
+            found.append(("sleep", "fixed-delay wait; wait for what marks the step"))
+        if SCRIPT_TIMEOUT_RETRY.search(code):
+            found.append(("timeout-retry", "per-test timeout or retry; fix the wait"))
+        for rule, message in found:
+            allow = SCRIPT_ALLOW.search(lines[number - 2]) if number > 1 else None
+            if allow and allow.group(1) == rule:
+                continue
+            hits.append(Hit(path, number, rule, message))
+    return hits
+
+
 def kind_of(path: Path) -> str | None:
     parts = path.parts
     if "argus_api" in parts and "tests" not in parts:
@@ -239,12 +267,14 @@ def kind_of(path: Path) -> str | None:
 
 
 def discover() -> list[Path]:
-    return sorted(
+    python = (p for d in SCAN_DIRS for p in (ROOT / d).rglob("*.py"))
+    scripts = (
         p
-        for d in SCAN_DIRS
-        for p in (ROOT / d).rglob("*.py")
-        if not SKIP_PARTS & set(p.parts)
+        for d in SCRIPT_DIRS
+        for p in (ROOT / d).rglob("*")
+        if p.name.endswith(SCRIPT_SUFFIXES)
     )
+    return sorted(p for p in (*python, *scripts) if not SKIP_PARTS & set(p.parts))
 
 
 def main(argv: list[str]) -> int:
@@ -254,6 +284,9 @@ def main(argv: list[str]) -> int:
     ]
     hits: list[Hit] = []
     for path in paths:
+        if path.name.endswith(SCRIPT_SUFFIXES):
+            hits += check_script((ROOT / path).read_text(), str(path))
+            continue
         kind = kind_of(ROOT / path)
         if kind:
             hits += check_source((ROOT / path).read_text(), kind, str(path))

@@ -1,5 +1,5 @@
 import pytest
-from check_tests import check_source, main
+from check_tests import check_script, check_source, main
 
 
 def rules(source: str, kind: str = "test") -> list[tuple[int, str]]:
@@ -93,3 +93,36 @@ def test_report_only_by_default_strict_fails(tmp_path, capsys, monkeypatch) -> N
     assert main(["test_x.py"]) == 0
     assert "test_x.py:2: sleep" in capsys.readouterr().out
     assert main(["test_x.py", "--strict"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("await new Promise((r) => setTimeout(r, 50));\n", [(1, "sleep")]),
+        (
+            "const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));\n",
+            [(1, "sleep")],
+        ),
+        ("await new Promise((r) => setTimeout(r, 0));\n", []),
+        ("setTimeout(() => done(), 50);\n", []),  # a callback timer, not a wait
+        ("await vi.waitFor(check, { timeout: 5_000 });\n", [(1, "timeout-retry")]),
+        ("it('x', fn, { retry: 3 });\n", [(1, "timeout-retry")]),
+        ("// await new Promise((r) => setTimeout(r, 50));\n", []),
+        (
+            "// check-tests: allow sleep — the fake answers late, as the server does\n"
+            "await new Promise((r) => setTimeout(r, 50));\n",
+            [],
+        ),
+        (
+            "// check-tests: allow sleep\nawait new Promise((r) => setTimeout(r, 50));\n",
+            [(2, "sleep")],
+        ),
+        (
+            "// check-tests: allow timeout-retry — wrong rule\n"
+            "await new Promise((r) => setTimeout(r, 50));\n",
+            [(2, "sleep")],
+        ),
+    ],
+)
+def test_script_rules(source: str, expected: list[tuple[int, str]]) -> None:
+    assert [(h.line, h.rule) for h in check_script(source)] == expected

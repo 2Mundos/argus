@@ -309,15 +309,20 @@ test("startLiveLog follows a growing stdout file and flushes on stop", async () 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "live-"));
   const out = path.join(dir, "out");
   const sent = [];
+  let arrived;
+  const first = new Promise((r) => (arrived = r));
   const live = startLiveLog({
     stdoutFile: out,
     executor: "claude",
-    send: (l) => sent.push(...l),
+    send: (l) => {
+      sent.push(...l);
+      arrived();
+    },
     intervalMs: 20,
     flushMs: 40,
   });
   fs.writeFileSync(out, ev(assistant({ type: "text", text: "first" })));
-  await new Promise((r) => setTimeout(r, 200));
+  await first; // the follower picked up the first line
   assert.deepEqual(sent, ["first"]);
   fs.appendFileSync(out, ev(assistant({ type: "text", text: "héllo wörld" })));
   live.stop();
@@ -480,15 +485,20 @@ test("cursor agent: progress reaches the relay before the process ends", async (
     const out = path.join(dir, "out");
     fs.writeFileSync(out, "");
     const sent = [];
+    let arrived;
+    const first = new Promise((r) => (arrived = r));
     const live = startLiveLog({
       stdoutFile: out,
       executor: "agent",
-      send: (l) => sent.push(...l),
+      send: (l) => {
+        sent.push(...l);
+        arrived();
+      },
       intervalMs: 10,
       flushMs: 10,
     });
     fs.appendFileSync(out, ev({ type: "system", subtype: "init", model: "m" }));
-    await new Promise((r) => setTimeout(r, 120));
+    await first; // the follower sent the init line
     assert.deepEqual(sent, ["agent started (m)"]); // before any result exists
     fs.appendFileSync(out, ev({ type: "result", is_error: false, result: "ok" }));
     live.stop();

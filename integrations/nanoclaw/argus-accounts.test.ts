@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onecliPathMatches } from "../gateway-providers/onecli-path-match.js";
+import { log } from "../log.js";
 import { OUTBOUND_SCHEMA } from "../mailbox/sqlite/schema.js";
 import type { ChannelSetup } from "./adapter.js";
 import { accountsFromEnv, closeSessionFromEnv, createArgusAdapter, renderTask } from "./argus.js";
@@ -45,6 +46,7 @@ import {
 } from "./argus-accounts.js";
 import { seedClaudeContinuation } from "./argus-quota-resume.js";
 import { sessionRepositoryProbe } from "./argus-repo-preflight.js";
+import { until } from "./argus-test-until.js";
 
 // NanoClaw's own modules are replaced, so the real `recycleRuntime` runs against a
 // fake registry of containers, not NanoClaw's database or a real container runtime.
@@ -432,6 +434,7 @@ function world(opts: {
         return json(200, t);
       }
       if (opts.idleClaimMs !== undefined) {
+        // check-tests: allow sleep — the fake's long-poll answers 204 after a wait, as Argus does
         await new Promise((r) => setTimeout(r, opts.idleClaimMs));
         return new Response(null, { status: 204 });
       }
@@ -487,7 +490,9 @@ function harness(
   } as unknown as ChannelSetup;
   const groupDir = mkdtempSync(path.join(os.tmpdir(), "argus-group-"));
   groupDirs.push(groupDir);
+  let skew = 0; // real time plus what the test advanced (rebalance windows)
   const adapter = createArgusAdapter({
+    now: () => Date.now() + skew,
     url: "http://argus.test",
     bootstrapToken: "boot",
     capabilities: [],
@@ -506,19 +511,23 @@ function harness(
         }
       : undefined,
   });
-  return { adapter, setup, inbound, thread: () => thread, groupDir };
+  const advance = (ms: number) => {
+    skew += ms;
+  };
+  return { adapter, setup, inbound, thread: () => thread, groupDir, advance };
 }
+
+/** Let `n` more heartbeats go by (harness `heartbeatMs: 50`): "time passed" made observable. */
+async function heartbeats(w: ReturnType<typeof world>, n = 2): Promise<void> {
+  const beats = () => w.calls.filter((c) => c.path === "/agents/me/heartbeat").length;
+  const goal = beats() + n;
+  await until(() => beats() >= goal, 8000, `${n} heartbeats`);
+}
+
+const FAST_HEARTBEAT = { heartbeatMs: 50 };
 
 const isRepositoryRelease = (c: Call) =>
   c.path === "/accounts/release" && c.search === "?role=repository";
-
-const until = async (cond: () => boolean, ms = 3000) => {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > ms) throw new Error("timed out waiting for condition");
-    await new Promise((r) => setTimeout(r, 5));
-  }
-};
 
 const live: Array<{ teardown: () => Promise<void> }> = [];
 afterEach(async () => {
@@ -1611,12 +1620,12 @@ describe("structured providerFailure on a failure notice", () => {
 
   it("ignores providerFailure without failureNotice", async () => {
     const w = world({ leases: [codexLease()], tasks: [task()] });
-    const h = harness(w, true);
+    const h = harness(w, true, {}, FAST_HEARTBEAT);
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
     await h.adapter.deliver("local", h.thread(), structured(ok, false) as any);
-    await new Promise((r) => setTimeout(r, 50));
+    await heartbeats(w);
     expect(exhaustedCalls(w)).toEqual([]);
     expect(w.calls.some((c) => /\/tasks\/t1\/fail$/.test(c.path))).toBe(false);
   });
@@ -1710,7 +1719,7 @@ describe("structured providerFailure on a failure notice", () => {
       await h.adapter.setup(h.setup);
       await until(() => h.inbound.length > 0);
       await h.adapter.deliver("local", h.thread(), msg as any);
-      await new Promise((r) => setTimeout(r, 50));
+      // Every case is a failure notice: wait for its outcome, then check it.
       await until(
         () =>
           !(msg as { content: { failureNotice: boolean } }).content.failureNotice ||
@@ -2145,10 +2154,15 @@ describe("task-scoped repository auth", () => {
       open = resolve;
     });
     const w = repoWorld();
-    const h = harness(w, true, { repositories: {} }, { startupReady: () => gate });
+    const h = harness(
+      w,
+      true,
+      { repositories: {} },
+      { startupReady: () => gate, ...FAST_HEARTBEAT },
+    );
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
-    await new Promise((r) => setTimeout(r, 600));
+    await heartbeats(w);
     expect(w.calls.some((call) => call.path === "/agents/register")).toBe(true);
     expect(claims(w)).toBe(0);
     open();
@@ -2184,11 +2198,12 @@ describe("task-scoped repository auth", () => {
         startupReady: async () => {
           throw new Error("listSessions exploded");
         },
+        ...FAST_HEARTBEAT,
       },
     );
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
-    await new Promise((r) => setTimeout(r, 800));
+    await heartbeats(w);
     expect(claimCount(w)).toBe(0);
   });
 
@@ -2202,6 +2217,7 @@ describe("task-scoped repository auth", () => {
     );
     await h.adapter.setup(h.setup);
     await h.adapter.teardown();
+    // check-tests: allow sleep — after teardown nothing ticks that a test could count
     await new Promise((r) => setTimeout(r, 400));
     expect(w.calls.some((call) => call.path === "/tasks/claim")).toBe(false);
   });
@@ -2210,14 +2226,18 @@ describe("task-scoped repository auth", () => {
     const w = repoWorld();
     let tornDown = false;
     const order: string[] = [];
+    let finishTeardown = () => {};
+    const tearingDown = new Promise<void>((r) => (finishTeardown = r));
+    const marked = vi.spyOn(log, "error");
+    const pastBounds = () => marked.mock.calls.some((c) => /past its bounds/.test(String(c[0])));
     const h = harness(
       w,
       true,
       { repositories: { global: "https://git.example.test/org/repo" } },
       {
-        // Slower than the log-only mark below: the session is still being torn down when it fires.
+        // Outlives the log-only mark below: the session is still being torn down when it fires.
         probeRepository: async () => {
-          await new Promise((r) => setTimeout(r, 400));
+          await tearingDown;
           tornDown = true;
           order.push("teardown concluded");
           throw new Error(
@@ -2229,10 +2249,12 @@ describe("task-scoped repository auth", () => {
     );
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
-    await new Promise((r) => setTimeout(r, 250));
+    await until(pastBounds, 8000, "the backstop mark");
     expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`)).toBe(false);
     expect(w.calls.some((call) => isRepositoryRelease(call))).toBe(false);
+    finishTeardown();
     await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    marked.mockRestore();
     expect(tornDown).toBe(true);
     expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
       reason: "env_repository_unreachable",
@@ -2877,7 +2899,7 @@ describe("global account selection in the channel", () => {
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
     expect(recycleRuntime).not.toHaveBeenCalled();
-    await new Promise((r) => setTimeout(r, 60));
+    h.advance(60); // past rebalanceMs: the next claim re-evaluates the account
     await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await until(() => selectEngine.mock.calls.some((c) => c[0] === "claude"), 5000);
     expect(selectEngine.mock.calls.map((c) => c[0])).toEqual(["codex", "claude"]);
@@ -2898,7 +2920,7 @@ describe("global account selection in the channel", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await new Promise((r) => setTimeout(r, 60));
+    h.advance(60); // past rebalanceMs: the next claim re-evaluates the account
     await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await until(() => w.calls.some((c) => c.path === "/tasks/t2/fail"), 5000);
     const fail = w.calls.find((c) => c.path === "/tasks/t2/fail")!;
@@ -2920,7 +2942,7 @@ describe("global account selection in the channel", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await new Promise((r) => setTimeout(r, 60));
+    h.advance(60); // past rebalanceMs: the next claim re-evaluates the account
     await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await until(() => h.inbound.length === 2, 5000); // t3 runs once the runtime stopped
     const fail = w.calls.find((c) => c.path === "/tasks/t2/fail")!;
@@ -2976,7 +2998,7 @@ describe("global account selection in the channel", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await new Promise((r) => setTimeout(r, 40));
+    h.advance(40); // past rebalanceMs: the next claim re-evaluates the account
     await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
     await until(() => h.inbound.length === 2, 5000);
     expect(w.calls.filter((c) => c.path === "/accounts/lease").length).toBeGreaterThanOrEqual(2);
@@ -3017,11 +3039,12 @@ describe("global account selection in the channel", () => {
       tasks: [task()],
     });
     const selectEngine = vi.fn(async (_engine: string) => true);
-    const h = harness(w, true, { rebalanceMs: 5, selectEngine });
+    const h = harness(w, true, { rebalanceMs: 5, selectEngine }, FAST_HEARTBEAT);
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
-    await new Promise((r) => setTimeout(r, 100)); // the task is never finished
+    h.advance(100); // well past rebalanceMs, but the task is never finished
+    await heartbeats(w);
     expect(selectEngine).toHaveBeenCalledTimes(1);
     expect(w.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(2);
   });

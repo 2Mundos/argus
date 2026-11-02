@@ -28,6 +28,8 @@ cp "$here/argus-usage-relay.test.ts" "$target/src/channels/argus-usage-relay.tes
 cp "$here/argus-changes-relay.ts" "$target/src/channels/argus-changes-relay.ts"
 cp "$here/argus-changes-relay.test.ts" "$target/src/channels/argus-changes-relay.test.ts"
 cp "$here/argus-workspace.ts" "$target/src/channels/argus-workspace.ts"
+# The one polling wait the channel tests share (test-hygiene lint draft).
+cp "$here/argus-test-until.ts" "$target/src/channels/argus-test-until.ts"
 # argus-task file channel (task-helpers spec 3.4): steer marker and waiting milestone.
 cp "$here/argus-task-signals.ts" "$target/src/channels/argus-task-signals.ts"
 cp "$here/argus-task-signals.test.ts" "$target/src/channels/argus-task-signals.test.ts"
