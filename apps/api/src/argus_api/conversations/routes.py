@@ -150,6 +150,12 @@ async def claim_chat(
     disk_guard = request.app.state.disk_guard
     loop = asyncio.get_running_loop()
     deadline = loop.time() + wait_s
+    # Once per poll: notice rows no decision-open wake covers (service.sweep_inbox_wake).
+    async with db.read() as conn:
+        sweep = await service.inbox_wake_due(conn)
+    if sweep:
+        async with db.write() as tx:
+            await service.sweep_inbox_wake(tx)
     while True:
         # Re-checked every pass so a refusal during the wait surfaces as
         # `disk_low` rather than a wait timeout.

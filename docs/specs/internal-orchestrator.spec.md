@@ -186,9 +186,19 @@ Getting a first account, worker and orchestrator is the
   such decision queues another. Audience `human` does not wake it. If Updates
   already holds 20 queued messages, the decision still opens and the notice is
   skipped. The channel frames that `system` message as a server notice.
+- **Inbox sweep.** Not everything the inbox shows is a decision, and a decision can
+  open while the orchestrator is off or Updates is full. Each time the orchestrator
+  starts a chat long-poll, Argus queues one notice (`source: sweep`, a row count,
+  no ids or text) when the inbox holds rows newer than the latest notice's delivery
+  that the orchestrator may act on: open decisions of audience `any` or
+  `orchestrator`, and `blocked`, `pending` (failed dependency) or quiet `claimed`
+  tasks with no open decision. Human decisions and tasks in review or approval
+  waiting on something else do not count. A notice covers every row that existed
+  when it was delivered, so an item the orchestrator cannot settle does not wake it
+  again; only newer rows do. With the orchestrator off or not polling, nothing is
+  queued; the backlog is announced once when it polls.
   A wake turn that is never answered expires like any stale turn; that does not
-  confirm the decision was answered. The inbox wait of the skill stays the
-  fallback for any decision still open.
+  confirm anything was answered. The inbox wait of the skill stays the fallback.
 - At most **one turn in flight per conversation**; later messages queue behind it.
   At most `orchestrator.max_concurrent_turns` (default 2) conversation turns run at
   once, plus the Updates loop.
@@ -340,8 +350,9 @@ header and cost; the Cost tab row; regenerated `openapi.json` and `schema.d.ts`.
 Tests: role minting, every refusal, enable/disable converging the pool, queueing
 while offline, per-conversation ordering and the concurrency cap, limits,
 truncation, redaction, the cap pausing and resuming, `origin_conversation_id`
-on created tasks, and an inbox decision of audience `any` or `orchestrator`
-waking Updates once while the orchestrator is enabled.
+on created tasks, an inbox decision of audience `any` or `orchestrator`
+waking Updates once while the orchestrator is enabled, and the inbox sweep
+(backlog, tasks blocked without a decision, each row announced once).
 
 **NanoClaw channel:** a session per conversation, inbound long-poll with
 idempotent ack, `deliver()` to the agent chat route, per-turn usage, resume then
