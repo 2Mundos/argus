@@ -14,8 +14,9 @@ refused up front, and at **closure**, so a task is not completed or accepted
 without the evidence its deliverable needs.
 
 In scope: the enum and its storage, the creation rules, the completion gate, the
-accept gate for results that depend on the forge, editing, and every entry point
-that creates, edits or closes a task.
+accept gate for results that depend on the forge, editing, binding a pull request
+the worker opened but never reported, and every entry point that creates, edits or
+closes a task.
 
 # 2. Non-Goals
 
@@ -123,20 +124,73 @@ rules of 3.3 run on the resulting capabilities and deliverable, so removing
 `repository:write` from a PR task is refused too. The edit is audited as any other
 ([task edit](task-edit.spec.md) 3.7).
 
-## 3.7 Entry points and engines
+## 3.7 Binding an unreported pull request
+
+A worker can open a PR and end without reporting `pr_opened` (task `cdd08585`
+failed `deliverable_missing` while its PR was open, and the PR later merged).
+`POST /api/tasks/{id}/reconcile-pr` (orchestrator or admin) binds such a PR to
+the task as its PR artifact, given `repository` (`https://host/owner/repo`),
+`number`, the exact 40-character lowercase `head_sha` and a `reason`.
+
+- **Checks before any write.** The repository must be the one the task's project
+  proves (3.3; none is `422 deliverable_repository`, another is `422
+  pr_wrong_repository`), checked before a credential is used. The PR is then read
+  with `PrChecker`, outside any write transaction. A PR the forge cannot confirm
+  (not found, unreadable, no head) is `409 pr_unverified`; a head other than
+  `head_sha` is `409 pr_stale_head`, naming the forge head. Nothing is guessed.
+- **One write.** In one transaction, at `tx.now`: a PR continuation artifact
+  (`ref` the number, `url`, `head_sha`, `state` open, merged or closed as read,
+  provenance `orchestrator`), and the event `task.pr_reconciled` with the actor,
+  reason, repository, number, URL, head, PR state, task state and contract
+  revision.
+- **Identity.** A PR is bound once, to one head. Repeating the same repository,
+  number and head returns the task and writes nothing (no forge read); another
+  head for a bound PR is `409 pr_already_bound`. A later push is the
+  continuation's business (observations and reconciliation entries,
+  [continuation](task-continuation.spec.md) 3.3), not a rebind.
+- **Evidence only.** The binding changes no state, attempt, failure count,
+  decision or checklist item, and waives no gate. It supplies the PR artifact the
+  completion gate (3.4) looks for; `pr_green` and `pr_merged` still pass the
+  closure gate (3.5) against the forge, and open checklist items still send a
+  completion to review.
+
+What that means per state:
+
+- `failed`, `cancelled`, `succeeded` stay as they are: a binding never resurrects
+  a task. A failed task (the `deliverable_missing` case) moves on only through
+  the existing operator `retry`; the next attempt's contract carries the bound
+  PR (phase `qa` when merged, `resume` when open), so the worker verifies and
+  completes instead of implementing again, and its completion meets the
+  deliverable gate. This adds no transition out of a terminal state and no
+  review decision without a completion: `retry` is already the one way out of
+  `failed`, and the acceptance evidence still comes from an attempt.
+- `claimed`: the holder's next `complete` sees the artifact.
+- `in_review` (including `deliverable_pending`): the bound PR is the newest PR
+  artifact, so the accept reads it.
+- Other states: recorded; the next claim sees it.
+
+There is no unbind: the binding is a forge-verified fact and the event is the
+audit record. A wrong PR cannot pass the checks; a PR that later changes is
+reported by observations, and an accept still reads the forge.
+
+## 3.8 Entry points and engines
 
 - **REST**: `deliverable` on `POST /api/tasks`, the task read and `PATCH`; the
-  decision answer routes enforce 3.5. **MCP**: `create_task` and `edit_task`
-  take it, `get_task` returns it; `answer_decision` goes through the same
-  routes. **Dashboard**: a select in the new-task form and the edit form, and a
-  line in the task facts. **Drafts and routines** use `TaskCreate`'s field.
+  decision answer routes enforce 3.5; `POST /api/tasks/{id}/reconcile-pr` (3.7).
+  **MCP**: `create_task` and `edit_task` take it, `get_task` returns it;
+  `answer_decision` goes through the same routes; `reconcile_task_pr` calls the
+  binding route. **Dashboard**: a select in the new-task form and the edit form,
+  and a line in the task facts; the binding is an orchestrator operation and has
+  no dashboard control. **Drafts and routines** use `TaskCreate`'s field.
 - **Engines**: the gates are server-side and engine independent. The NanoClaw
   channel states the deliverable, and whether merging is allowed, in the trusted
   part of the prompt, so Claude, Codex, Cursor, Copilot, custom and local
   workers all see the same rule. A runtime that does not use the channel is
-  still held to the completion gate.
+  still held to the completion gate. The binding (3.7) is server-side too and
+  serves every engine's tasks alike.
 - **Way back**: the deliverable can be edited (3.6); a refused completion
-  leaves the claim open; a rejected review returns the task to ready.
+  leaves the claim open; a rejected review returns the task to ready; a failed
+  task with a bound PR is retried (3.7).
 
 # 4. Open Questions
 
@@ -169,13 +223,17 @@ rules of 3.3 run on the resulting capabilities and deliverable, so removing
   `independent_review` opens a decision for forge-gated deliverables.
 - `decisions`: the single and batch answer routes read the forge first and
   pass the result to `answer`.
+- `apps/api/src/argus_api/tasks/pr_binding.py`: the binding (3.7), its route and
+  MCP `reconcile_task_pr`; `argus_core.delivery.PrBinding` is the request.
 - `argus_core.task_edit` (editable fields), MCP `create_task`/`edit_task`
   text, regenerated `openapi.json`/`schema.d.ts`, dashboard forms and facts,
   the NanoClaw prompt line, [task delivery](task-delivery.spec.md) and
   [task edit](task-edit.spec.md).
 - Tests: creation rules per level (and drafts, routines, edit), the completion
   gate per level, the pending path, the accept gate (met, unmet, unverified,
-  batch, independent review), the editable fields.
+  batch, independent review), the editable fields; the binding (success and
+  audit event, replay, stale head, wrong repository, unreadable forge, terminal
+  and pending states, no forge read while the write lock is held).
 
 ## Verification boundary
 

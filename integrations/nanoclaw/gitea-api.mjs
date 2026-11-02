@@ -1367,31 +1367,52 @@ function writePreflightResult(file, verdict) {
 }
 
 /**
+ * What the repository GET shows, in closed values only (failure-classes spec 3.3.1).
+ * Authentication is proven only by `push: true` or by a private repository answering;
+ * a public repository's answer without them proves nothing either way.
+ */
+export function preflightEvidence(data, status = 200) {
+  const perms = data?.permissions;
+  const present = typeof perms === "object" && perms !== null && !Array.isArray(perms);
+  const push = present && typeof perms.push === "boolean" ? perms.push : null;
+  const visibility =
+    data?.private === true ? "private" : data?.private === false ? "public" : "unknown";
+  return {
+    http_status: Number.isInteger(status) ? status : null,
+    permissions: present ? "present" : "absent",
+    push,
+    visibility,
+    authentication: push === true || visibility === "private" ? "proven" : "unknown",
+  };
+}
+
+/**
  * Host preflight, run in a short-lived session container behind the same OneCLI proxy
  * as the worker. A public repository answers an anonymous GET, so a 200 proves nothing:
  * `permissions.push` on the repository GET is the forge's effective write bit for the
  * credential on that request (not proof of OAuth scope or fine-grained token rights; a
  * user with write access can still yield push:true while a narrower scoped token would not
  * be distinguished here). Anonymous callers cannot get push:true. Then the allowlist must
- * refuse another host and a sibling repository (no network).
+ * refuse another host and a sibling repository (no network). Every verdict carries the
+ * closed evidence; the host classifies the outcome from it and the error code.
  */
 async function repoPreflight(api, resultFile, access = "write") {
   const { origin, owner, repo } = api.repository;
   const fullName = `${owner}/${repo}`;
   const needWrite = access === "write";
   let verdict;
+  let evidence;
   try {
     const data = await api.getRepository();
+    evidence = preflightEvidence(data);
     if (String(data?.full_name).toLowerCase() !== fullName.toLowerCase())
       throw new GiteaError("bad_response", "the response names a different repository");
     const perms = data.permissions ?? {};
     const canWrite = perms.push === true;
     const canRead = canWrite || perms.pull === true || perms.admin === true;
     if (needWrite) {
-      if (!canWrite)
-        throw policy("the credential is not authenticated with write access to the repository");
-    } else if (!canRead)
-      throw policy("the credential is not authenticated with read access to the repository");
+      if (!canWrite) throw policy("the response does not show write access to the repository");
+    } else if (!canRead) throw policy("the response does not show read access to the repository");
     const allowed = [`${origin}/${fullName}`];
     for (const other of [
       `https://preflight-denied.invalid/${fullName}`,
@@ -1409,14 +1430,17 @@ async function repoPreflight(api, resultFile, access = "write") {
       ok: true,
       provider: api.product.toLowerCase(),
       repository: `${origin}/${fullName}`,
-      authenticated: true,
+      authenticated: evidence.authentication === "proven",
       write: canWrite,
       read: canRead,
       allowlist_refuses_other_host: true,
       allowlist_refuses_sibling: true,
+      evidence,
     };
   } catch (error) {
-    if (resultFile) writePreflightResult(resultFile, { ok: false, error: errorPayload(error) });
+    evidence ??= preflightEvidence(null, error instanceof GiteaError ? error.status : null);
+    if (resultFile)
+      writePreflightResult(resultFile, { ok: false, evidence, error: errorPayload(error) });
     throw error;
   }
   if (resultFile) writePreflightResult(resultFile, verdict);

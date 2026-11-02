@@ -644,6 +644,89 @@ export async function applyRepositoryLease(
   }
 }
 
+/** One repository secret's state for the lease's agent, in closed values. */
+export interface RepositorySecretCheck {
+  state: "assigned" | "unassigned" | "missing";
+  /** `unlisted` when OneCLI's secret listing does not include the patterns. */
+  scope: "match" | "mismatch" | "unlisted";
+}
+
+/** The OneCLI side of a repository lease, read without writing (failure-classes 3.3.1). */
+export interface RepositoryAssignmentCheck {
+  agent: "found" | "missing";
+  secretMode: "selective" | "all" | "unknown";
+  rest: RepositorySecretCheck;
+  git: RepositorySecretCheck;
+  /** The scopes the secrets must have: hosts and path patterns derived on the host. */
+  scopes: {
+    rest: { host: string; path: string };
+    git: { host: string; path: string };
+  };
+}
+
+export function assignmentConfirmed(check: RepositoryAssignmentCheck): boolean {
+  const ok = (s: RepositorySecretCheck) => s.state === "assigned" && s.scope !== "mismatch";
+  return check.agent === "found" && ok(check.rest) && ok(check.git);
+}
+
+/**
+ * Confirm, with admin reads only, that the agent has both repository secrets assigned
+ * and scoped to this repository. Throws a fixed message when OneCLI cannot be read.
+ */
+export async function verifyRepositoryAssignment(
+  onecli: OneCliClient,
+  target: Pick<ApplyTarget, "identifier">,
+  repositoryUrl: string,
+): Promise<RepositoryAssignmentCheck> {
+  const repository = normalizeRepositoryUrl(repositoryUrl);
+  const scopes = {
+    rest: { host: repository.apiHost, path: `${repository.apiPath}/*` },
+    git: { host: repository.host, path: repository.gitPathPattern },
+  };
+  const absent: RepositorySecretCheck = { state: "missing", scope: "unlisted" };
+  try {
+    const agents: Array<{ id: string; identifier: string; secretMode?: unknown }> =
+      await onecli.call("GET", "/agents");
+    const agent = agents.find((a) => a.identifier === target.identifier);
+    if (!agent)
+      return { agent: "missing", secretMode: "unknown", rest: absent, git: absent, scopes };
+    const secrets: Array<{
+      id: string;
+      name: string;
+      hostPattern?: unknown;
+      pathPattern?: unknown;
+    }> = await onecli.call("GET", "/secrets");
+    const assigned: unknown = await onecli.call("GET", `/agents/${agent.id}/secrets`);
+    const ids = new Set(
+      Array.isArray(assigned) ? assigned.filter((id) => typeof id === "string") : [],
+    );
+    const check = (name: string, scope: { host: string; path: string }): RepositorySecretCheck => {
+      const secret = secrets.find((s) => s.name === name);
+      if (!secret) return absent;
+      const listed =
+        typeof secret.hostPattern === "string" && typeof secret.pathPattern === "string";
+      return {
+        state: ids.has(secret.id) ? "assigned" : "unassigned",
+        scope: !listed
+          ? "unlisted"
+          : secret.hostPattern === scope.host && secret.pathPattern === scope.path
+            ? "match"
+            : "mismatch",
+      };
+    };
+    const mode = agent.secretMode;
+    return {
+      agent: "found",
+      secretMode: mode === "selective" || mode === "all" ? mode : "unknown",
+      rest: check(`argus-${target.identifier}-repository-rest`, scopes.rest),
+      git: check(`argus-${target.identifier}-repository-git`, scopes.git),
+      scopes,
+    };
+  } catch {
+    throw new Error("could not read the OneCLI repository assignment");
+  }
+}
+
 /** Unassign the repository secret so a released lease is no longer usable. */
 export async function releaseRepositoryLease(
   onecli: OneCliClient,

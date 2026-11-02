@@ -2956,6 +2956,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/reconcile-pr": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Pr
+         * @description Bind a pull request the worker opened but never reported (orchestrator or
+         *     admin). The forge must show that PR in the project's repository at exactly
+         *     `head_sha`; it is then recorded as the task's PR artifact and audited. The task's
+         *     state is unchanged and no gate is waived. Replaying the same binding changes
+         *     nothing; another head for a bound PR is 409 `pr_already_bound`.
+         */
+        post: operations["reconcile_pr_api_tasks__task_id__reconcile_pr_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/release": {
         parameters: {
             query?: never;
@@ -7952,6 +7976,22 @@ export interface components {
             running: number;
             /** Total */
             total: number;
+        };
+        /**
+         * PrBinding
+         * @description Bind a pull request the worker opened but never reported to its task (task
+         *     deliverable spec 3.7). The head is the exact one the caller expects the forge to
+         *     show; anything else is refused.
+         */
+        PrBinding: {
+            /** Head Sha */
+            head_sha: string;
+            /** Number */
+            number: number;
+            /** Reason */
+            reason: string;
+            /** Repository */
+            repository: string;
         };
         /**
          * PrState
@@ -16653,6 +16693,41 @@ export interface operations {
                     "application/json": {
                         [key: string]: boolean;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_pr_api_tasks__task_id__reconcile_pr_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrBinding"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
                 };
             };
             /** @description Validation Error */

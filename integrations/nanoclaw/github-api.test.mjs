@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { GiteaApi } from "./gitea-api.mjs";
+import { GiteaApi, preflightEvidence } from "./gitea-api.mjs";
 import { GitHubApi, main, repositoryClient, repositoryProvider } from "./github-api.mjs";
 
 const REPO = "https://github.com/acme/widget";
@@ -58,6 +58,13 @@ describe("repo-preflight (offline logic; production proof is the session child)"
       read: true,
       allowlist_refuses_other_host: true,
       allowlist_refuses_sibling: true,
+      evidence: {
+        http_status: 200,
+        permissions: "present",
+        push: true,
+        visibility: "unknown",
+        authentication: "proven",
+      },
     });
     assert.deepEqual(
       r.calls.map((c) => c.url),
@@ -69,18 +76,53 @@ describe("repo-preflight (offline logic; production proof is the session child)"
     for (const permissions of [{ pull: true, push: false }, { pull: true }, undefined]) {
       const r = await run(["repo-preflight"], repo({ permissions }));
       assert.equal(r.code, 13, r.out);
-      assert.match(JSON.parse(r.err).error.message, /not authenticated with write access/);
+      assert.match(JSON.parse(r.err).error.message, /does not show write access/);
     }
   });
 
-  it("read mode accepts pull without push", async () => {
+  it("read mode accepts pull without push and does not call it authenticated on a public repo", async () => {
     const r = await run(
       ["repo-preflight", "--access", "read"],
-      repo({ permissions: { pull: true, push: false } }),
+      repo({ private: false, permissions: { pull: true, push: false } }),
     );
     assert.equal(r.code, 0, r.err);
     assert.equal(r.json().write, false);
     assert.equal(r.json().read, true);
+    assert.equal(r.json().authenticated, false);
+    assert.equal(r.json().evidence.authentication, "unknown");
+  });
+
+  it("records closed evidence; only push or a private answer proves authentication", () => {
+    const cases = [
+      [
+        { private: false, permissions: { pull: true, push: false } },
+        "present",
+        false,
+        "public",
+        "unknown",
+      ],
+      [{ private: false }, "absent", null, "public", "unknown"],
+      [{ full_name: "acme/widget" }, "absent", null, "unknown", "unknown"],
+      [
+        { private: true, permissions: { pull: true, push: false } },
+        "present",
+        false,
+        "private",
+        "proven",
+      ],
+      [{ private: false, permissions: { push: true } }, "present", true, "public", "proven"],
+      [{ permissions: { push: "yes" } }, "present", null, "unknown", "unknown"],
+    ];
+    for (const [data, permissions, push, visibility, authentication] of cases)
+      assert.deepEqual(preflightEvidence(data), {
+        http_status: 200,
+        permissions,
+        push,
+        visibility,
+        authentication,
+      });
+    assert.equal(preflightEvidence(null, 401).http_status, 401);
+    assert.equal(preflightEvidence(null, null).http_status, null);
   });
 
   it("read mode refuses when the credential cannot read", async () => {

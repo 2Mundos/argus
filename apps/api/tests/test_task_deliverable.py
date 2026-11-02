@@ -398,3 +398,217 @@ def test_lowering_the_deliverable_in_review_unblocks_the_accept(
     res = client.post(f"/api/decisions/{decision_id}/answer", json=accept)
     assert res.status_code == 200, res.text
     assert state(client, task_id) == "succeeded"
+
+
+# -- binding an unreported pull request (3.7) ----------------------------------------
+
+REPOSITORY = "https://git.example.test/team/argus"
+OTHER = "c" * 40
+
+
+def bind(client: TestClient, task_id: str, **body) -> httpx.Response:
+    body = {
+        "repository": REPOSITORY,
+        "number": 12,
+        "head_sha": HEAD,
+        "reason": "worker opened #12 but never reported it",
+        **body,
+    }
+    return client.post(f"/api/tasks/{task_id}/reconcile-pr", json=body)
+
+
+def bindings(client: TestClient, task_id: str) -> list[dict]:
+    events = client.get("/api/events", params={"subject_id": task_id}).json()
+    return [e for e in events if e["kind"] == "task.pr_reconciled"]
+
+
+def watched_forge(client: TestClient, pull: dict, statuses=None) -> list[str]:
+    """Serve a fresh forge (no cached read) and record each read, failing if the
+    write lock is held."""
+    client.app.state.pr_checker._cache.clear()  # ty: ignore[unresolved-attribute]
+    reads: list[str] = []
+    serve = full_forge(pull, statuses=statuses)
+    db: Database = client.app.state.db  # ty: ignore[unresolved-attribute]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert not db._write_lock.locked(), "forge read inside a write transaction"
+        reads.append(request.url.path)
+        return serve(request)
+
+    forge(client, handler)
+    return reads
+
+
+def failed_for_missing_pr(client: TestClient) -> str:
+    """The cdd08585 case: the PR exists but the attempt failed without reporting it."""
+    w = worker(client)
+    task_id = create(client, "pr_green", max_attempts=1).json()["id"]
+    claimed = claim(client, w)
+    assert code(complete(client, w, claimed)) == "deliverable_missing"
+    res = client.post(
+        f"/api/tasks/{task_id}/fail",
+        json={"attempt": claimed["attempt"], "error": "deliverable_missing"},
+        headers=w,
+    )
+    assert res.status_code == 200, res.text
+    assert state(client, task_id) == "failed"
+    return task_id
+
+
+def test_binding_a_failed_task_records_evidence_and_keeps_it_failed(
+    client: TestClient,
+) -> None:
+    task_id = failed_for_missing_pr(client)
+    reads = watched_forge(client, open_pr(), statuses=CI_OK)
+    res = bind(client, task_id)
+    assert res.status_code == 200, res.text
+    assert reads, "the binding reads the forge"
+    task = res.json()
+    assert (task["state"], task["failures"]) == ("failed", 1)
+    [pr] = [a for a in task["continuation"]["artifacts"] if a["kind"] == "pr"]
+    assert (pr["ref"], pr["url"], pr["head_sha"]) == ("12", URL, HEAD)
+    assert (pr["state"], pr["provenance"]) == ("open", "orchestrator")
+    [event] = bindings(client, task_id)
+    assert event["actor"] == "admin:preset"
+    assert event["data"] == {
+        "reason": "worker opened #12 but never reported it",
+        "repository": REPOSITORY,
+        "number": 12,
+        "url": URL,
+        "head_sha": HEAD,
+        "pr_state": "open",
+        "task_state": "failed",
+        "revision": task["continuation"]["revision"],
+    }
+    assert (
+        client.get("/api/decisions", params={"subject_id": task_id}).json()["items"]
+        == []
+    )
+
+    # The existing retry is the way on; the next attempt meets the gate without
+    # reporting the PR again, and the accept still reads the forge.
+    assert client.post(f"/api/tasks/{task_id}/retry").status_code == 200
+    w = worker(client)
+    claimed = claim(client, w)
+    assert claimed["id"] == task_id
+    assert complete(client, w, claimed).json()["state"] == "in_review"
+    [decision] = client.get("/api/decisions", params={"subject_id": task_id}).json()[
+        "items"
+    ]
+    accept = {"choice": "accept", "text": ""}
+    watched_forge(client, open_pr(), statuses=[])
+    res = client.post(f"/api/decisions/{decision['id']}/answer", json=accept)
+    assert code(res) == "deliverable_unverified"
+    watched_forge(client, open_pr(), statuses=CI_OK)
+    res = client.post(f"/api/decisions/{decision['id']}/answer", json=accept)
+    assert res.status_code == 200, res.text
+    assert state(client, task_id) == "succeeded"
+
+
+def test_binding_is_idempotent_and_refuses_another_head(client: TestClient) -> None:
+    task_id = failed_for_missing_pr(client)
+    watched_forge(client, open_pr())
+    first = bind(client, task_id)
+    assert first.status_code == 200, first.text
+    reads = watched_forge(client, open_pr())
+    again = bind(client, task_id, reason="replayed")
+    assert again.status_code == 200, again.text
+    assert again.json()["continuation"] == first.json()["continuation"]
+    assert reads == [], "a replay does not read the forge"
+    watched_forge(client, open_pr(head={"sha": OTHER, "ref": "feat"}))
+    res = bind(client, task_id, head_sha=OTHER)
+    assert (res.status_code, code(res)) == (409, "pr_already_bound")
+    assert len(bindings(client, task_id)) == 1
+
+
+@pytest.mark.parametrize(
+    ("body", "pull", "outcome"),
+    [
+        ({"head_sha": OTHER}, open_pr(), (409, "pr_stale_head")),
+        ({}, None, (409, "pr_unverified")),  # unreadable forge
+        (
+            {"repository": "https://git.example.test/team/other"},
+            open_pr(),
+            (422, "pr_wrong_repository"),
+        ),
+        (
+            {"repository": "https://evil.example/team/argus"},
+            open_pr(),
+            (422, "pr_wrong_repository"),
+        ),
+    ],
+)
+def test_binding_fails_closed(
+    client: TestClient, body: dict, pull: dict | None, outcome: tuple[int, str]
+) -> None:
+    task_id = failed_for_missing_pr(client)
+    reads: list[str] = []
+    if pull is None:
+        forge(client, lambda request: httpx.Response(500))
+    else:
+        reads = watched_forge(client, pull)
+    before = client.get(f"/api/tasks/{task_id}").json()
+    res = bind(client, task_id, **body)
+    assert (res.status_code, code(res)) == outcome
+    if outcome[1] == "pr_wrong_repository":
+        assert reads == [], "no credential goes to a repository from input"
+    after = client.get(f"/api/tasks/{task_id}").json()
+    assert after["continuation"] == before["continuation"]
+    assert after["state"] == "failed"
+    assert bindings(client, task_id) == []
+
+
+def test_binding_a_pending_deliverable_keeps_the_closure_gate(
+    client: TestClient,
+) -> None:
+    """A pr_green task with no review lands in_review as deliverable_pending; the
+    binding neither decides nor waives the exact-head check."""
+    w = worker(client)
+    task_id = create(client, "pr_green", review="none").json()["id"]
+    claimed = claim(client, w)
+    pr_opened(client, w, claimed)
+    assert complete(client, w, claimed).json()["state"] == "in_review"
+    [decision] = client.get("/api/decisions", params={"subject_id": task_id}).json()[
+        "items"
+    ]
+    watched_forge(client, open_pr(), statuses=[])
+    res = bind(client, task_id)
+    assert res.status_code == 200, res.text
+    assert res.json()["state"] == "in_review"
+    assert bindings(client, task_id)[0]["data"]["task_state"] == "in_review"
+    accept = {"choice": "accept", "text": ""}
+    res = client.post(f"/api/decisions/{decision['id']}/answer", json=accept)
+    assert code(res) == "deliverable_unverified"
+    assert state(client, task_id) == "in_review"
+
+
+@pytest.mark.parametrize("terminal", ["succeeded", "cancelled"])
+def test_binding_never_resurrects_a_terminal_task(
+    client: TestClient, terminal: str
+) -> None:
+    task_id = create(client, "pr_green").json()["id"]
+    db: Database = client.app.state.db  # ty: ignore[unresolved-attribute]
+
+    async def force() -> None:
+        async with db.write() as tx:
+            await tx.conn.execute(
+                "UPDATE tasks SET state = ? WHERE id = ?", (terminal, task_id)
+            )
+
+    assert client.portal is not None
+    client.portal.call(force)
+    watched_forge(client, merged_pr())
+    res = bind(client, task_id)
+    assert res.status_code == 200, res.text
+    assert res.json()["state"] == terminal
+    assert bindings(client, task_id)[0]["data"]["pr_state"] == "merged"
+
+
+def test_binding_needs_a_manager(client: TestClient) -> None:
+    task_id = create(client, "pr_green").json()["id"]
+    res = client.post(
+        f"/api/tasks/{task_id}/reconcile-pr",
+        json={"repository": REPOSITORY, "number": 12, "head_sha": HEAD, "reason": "r"},
+        headers=worker(client),
+    )
+    assert res.status_code == 403

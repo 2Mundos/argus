@@ -14,7 +14,13 @@ import { randomBytes } from "node:crypto";
 import { constants as fsc } from "node:fs";
 import { chown, lstat, mkdir, open, readdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { normalizeRepositoryUrl } from "./argus-accounts.js";
+import {
+  type AccountLease,
+  assignmentConfirmed,
+  normalizeRepositoryUrl,
+  type RepositoryAssignmentCheck,
+  type RepositorySecretCheck,
+} from "./argus-accounts.js";
 
 export const PREFLIGHT_TIMEOUT_MS = 90_000;
 /** Each teardown step (stop, list, release, ...) is bounded on its own. */
@@ -38,6 +44,8 @@ export interface PreflightChildRequest {
   repositoryUrl: string;
   timeoutMs: number;
   access?: "read" | "write";
+  /** The OneCLI agent (agent group id) whose assignments were checked; the session must be its. */
+  agentIdentifier?: string;
 }
 
 /**
@@ -100,49 +108,137 @@ export function safeText(text: string, max = 160): string {
   );
 }
 
+/** How a repository preflight ended (failure-classes spec 3.3.1, "Outcomes"). */
+export type PreflightOutcome =
+  | "ok"
+  | "assignment_missing"
+  | "assignment_unverified"
+  | "forge_denied"
+  | "network_failure"
+  | "unknown"
+  | "session_failure";
+
+/** A failed preflight with its outcome; the message is already scrubbed and bounded. */
+export class RepositoryPreflightError extends Error {
+  constructor(
+    readonly outcome: Exclude<PreflightOutcome, "ok">,
+    message: string,
+    readonly evidence: ProbeEvidence | null = null,
+  ) {
+    super(safeText(message, 300));
+    this.name = "RepositoryPreflightError";
+  }
+}
+
+/** What the session's verdict shows, re-read on the host into closed values only. */
+export interface ProbeEvidence {
+  helper_error: string | null;
+  http_status: number | null;
+  permissions: "present" | "absent" | "unknown";
+  push: boolean | null;
+  visibility: "private" | "public" | "unknown";
+  authentication: "proven" | "unknown";
+}
+
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return allowed.includes(value as T) ? (value as T) : fallback;
+}
+
+/** The verdict's evidence, or null when there is no verdict. Nothing is copied as text. */
+export function verdictEvidence(verdict: unknown): ProbeEvidence | null {
+  if (!isRecord(verdict)) return null;
+  const ev = isRecord(verdict.evidence) ? verdict.evidence : {};
+  const code = isRecord(verdict.error) ? verdict.error.code : undefined;
+  const status = ev.http_status;
+  const push = typeof ev.push === "boolean" ? ev.push : null;
+  const visibility = oneOf(ev.visibility, ["private", "public"] as const, "unknown");
+  return {
+    helper_error: typeof code === "string" && HELPER_ERROR_CODES.has(code) ? code : null,
+    http_status:
+      typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599
+        ? status
+        : null,
+    permissions: oneOf(ev.permissions, ["present", "absent"] as const, "unknown"),
+    push,
+    visibility,
+    // Recomputed here rather than trusted: only push or a private answer proves a credential.
+    authentication: push === true || visibility === "private" ? "proven" : "unknown",
+  };
+}
+
+/**
+ * The outcome of a failed child. A forge refusal (401/403/404) is a denial; a missing
+ * permission is a denial only when the answer proves a credential was attached, since a
+ * public repository answers without one. Anything that cannot prove it is `unknown`.
+ */
+export function failedOutcome(
+  evidence: ProbeEvidence | null,
+): "forge_denied" | "network_failure" | "unknown" | "session_failure" {
+  if (!evidence) return "session_failure";
+  switch (evidence.helper_error) {
+    case "unauthorized":
+    case "forbidden":
+    case "not_found":
+      return "forge_denied";
+    case "network_error":
+      return "network_failure";
+    case "policy_denied":
+      return evidence.http_status === 200 && evidence.authentication === "proven"
+        ? "forge_denied"
+        : "unknown";
+    default:
+      return "unknown";
+  }
+}
+
 /**
  * The positive the preflight accepts. Anything else, however close, fails closed:
- * exit 0 and an `ok` verdict for exactly this provider and repository, authenticated
- * with write access (forge-reported over the session proxy path) and the helper's own
- * allowlist refusals confirmed. The refusals are a local policy check: they say nothing
- * about OneCLI's host/path scoping or token permissions.
+ * exit 0 and an `ok` verdict for exactly this provider and repository with the helper's
+ * own allowlist refusals confirmed and, for write, authenticated write access
+ * (forge-reported over the session proxy path); for read, read access. The refusals are a
+ * local policy check: they say nothing about OneCLI's host/path scoping or token permissions.
+ * Returns the evidence; throws a `RepositoryPreflightError` with the outcome.
  */
 export function assertPreflightPositive(
   result: PreflightChildResult,
   expected: { provider: string; repository: string },
   access: "read" | "write" = "write",
-): void {
-  if (result.exitCode !== 0)
-    throw new Error(
-      `the repository preflight session exited with code ${result.exitCode} (${describeFailure(result.verdict)})`,
-    );
+): ProbeEvidence {
   const v = result.verdict;
-  if (!isRecord(v) || v.ok !== true)
-    throw new Error(`the repository preflight did not confirm access (${describeFailure(v)})`);
-  if (v.provider !== expected.provider)
-    throw new Error(`the repository preflight ran for another provider than ${expected.provider}`);
-  if (v.repository !== expected.repository)
-    throw new Error("the repository preflight ran against a different repository");
-  if (v.authenticated !== true)
-    throw new Error("the repository preflight did not report authenticated access in its verdict");
-  if (access === "write") {
-    if (v.write !== true)
-      throw new Error(
-        "the repository preflight did not report authenticated write access in its verdict",
-      );
-  } else if (v.read !== true && v.write !== true)
-    throw new Error(
-      "the repository preflight did not report authenticated read access in its verdict",
+  const evidence = verdictEvidence(v);
+  const fail = (message: string, outcome = failedOutcome(evidence)): never => {
+    throw new RepositoryPreflightError(outcome, message, evidence);
+  };
+  if (result.exitCode !== 0)
+    fail(
+      `the repository preflight session exited with code ${result.exitCode} (${describeFailure(v)})`,
     );
-  if (v.allowlist_refuses_other_host !== true || v.allowlist_refuses_sibling !== true)
-    throw new Error("the repository preflight did not confirm the helper allowlist refusals");
+  if (!isRecord(v) || v.ok !== true)
+    fail(`the repository preflight did not confirm access (${describeFailure(v)})`);
+  const ok = v as Record<string, unknown>;
+  if (ok.provider !== expected.provider)
+    fail(`the repository preflight ran for another provider than ${expected.provider}`, "unknown");
+  if (ok.repository !== expected.repository)
+    fail("the repository preflight ran against a different repository", "unknown");
+  if (access === "write") {
+    if (ok.authenticated !== true || ok.write !== true)
+      fail(
+        "the repository preflight did not report authenticated write access in its verdict",
+        "unknown",
+      );
+  } else if (ok.read !== true && ok.write !== true)
+    fail("the repository preflight did not report read access in its verdict", "unknown");
+  if (ok.allowlist_refuses_other_host !== true || ok.allowlist_refuses_sibling !== true)
+    fail("the repository preflight did not confirm the helper allowlist refusals", "unknown");
+  return evidence as ProbeEvidence;
 }
 
 /**
  * The `probeRepository` of the Argus channel, backed by an ephemeral session.
  * `provider` is the provider of the repository lease that was just applied: a lease
  * of the other provider (or a repository on the other host) is refused before any
- * container exists.
+ * container exists. `agentIdentifier` is the OneCLI agent whose assignments were checked:
+ * the session must run for that agent group.
  */
 export function sessionRepositoryProbe(
   run: PreflightRunner,
@@ -152,11 +248,13 @@ export function sessionRepositoryProbe(
   allowlist: readonly string[],
   provider: string,
   access?: "read" | "write",
-) => Promise<void> {
-  return async (repositoryUrl, allowlist, provider, access = "write") => {
+  agentIdentifier?: string,
+) => Promise<ProbeEvidence> {
+  return async (repositoryUrl, allowlist, provider, access = "write", agentIdentifier) => {
     const repository = normalizeRepositoryUrl(repositoryUrl);
     if (repository.provider !== provider)
-      throw new Error(
+      throw new RepositoryPreflightError(
+        "assignment_missing",
         `the repository is on ${repository.provider} but the applied lease is ${provider}`,
       );
     const identity = (raw: string) => {
@@ -165,14 +263,178 @@ export function sessionRepositoryProbe(
     };
     const exact = identity(repositoryUrl);
     if (!allowlist.some((entry) => identity(entry) === exact))
-      throw new Error("the repository is not in this worker's allowlist");
+      throw new RepositoryPreflightError(
+        "assignment_missing",
+        "the repository is not in this worker's allowlist",
+      );
     const result = await run({
       helper: repository.provider === "github" ? "argus-github-api" : "argus-gitea-api",
       repositoryUrl: repository.cloneUrl,
       timeoutMs,
       access,
+      agentIdentifier,
     });
-    assertPreflightPositive(result, { provider: repository.provider, repository: exact }, access);
+    return assertPreflightPositive(
+      result,
+      { provider: repository.provider, repository: exact },
+      access,
+    );
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The service: lease check, assignment check, probe, one evidence event.
+// ---------------------------------------------------------------------------
+
+/** The block reason the channel reports for an outcome; null for `ok`. */
+export function preflightReason(outcome: PreflightOutcome): string | null {
+  if (outcome === "ok") return null;
+  return outcome === "assignment_missing" || outcome === "assignment_unverified"
+    ? "env_repository_unavailable"
+    : "env_repository_unreachable";
+}
+
+/** One preflight's non-secret evidence (failure-classes spec 3.3.1, "Evidence events"). */
+export interface PreflightEvidenceEvent {
+  event: "repository_preflight";
+  preflight_id: string;
+  task_id: string;
+  attempt: number;
+  provider: string;
+  access: "read" | "write";
+  outcome: PreflightOutcome;
+  lease: { source: "host"; held: boolean; role: boolean; provider: boolean };
+  assignment:
+    | ({ source: "onecli_admin_read"; read: true } & Omit<RepositoryAssignmentCheck, "scopes">)
+    | { source: "onecli_admin_read"; read: false }
+    | null;
+  target: {
+    source: "host";
+    api_host: string;
+    api_path: string;
+    git_host: string;
+    git_path: string;
+  };
+  probe: ({ source: "preflight_session_verdict" } & ProbeEvidence) | null;
+}
+
+export interface RepositoryPreflightInput {
+  taskId: string;
+  attempt: number;
+  repositoryUrl: string;
+  access: "read" | "write";
+  /** The task-scoped repository lease the channel holds for this attempt, if any. */
+  lease: Pick<AccountLease, "lease_id" | "provider" | "role"> | null;
+  /** Admin reads only: the lease agent's repository secrets. */
+  verifyAssignment(): Promise<RepositoryAssignmentCheck>;
+  /** The session probe for the same agent; throws a `RepositoryPreflightError` on failure. */
+  probe(): Promise<ProbeEvidence | void>;
+  /** Receives the event; a throw or rejection is ignored. */
+  emit?(event: PreflightEvidenceEvent): unknown;
+  preflightId?: string;
+}
+
+export interface RepositoryPreflightResult {
+  outcome: PreflightOutcome;
+  /** The block reason, null when the task may start. */
+  reason: string | null;
+  error: string | null;
+  event: PreflightEvidenceEvent;
+}
+
+/**
+ * The repository preflight after the lease is applied: confirm the lease and the OneCLI
+ * assignments (no writes, so concurrent leases are untouched), then probe through a session
+ * of that agent. Fails closed with a distinct outcome at each step and emits one bounded,
+ * redacted evidence event.
+ */
+export async function runRepositoryPreflight(
+  input: RepositoryPreflightInput,
+): Promise<RepositoryPreflightResult> {
+  const repository = normalizeRepositoryUrl(input.repositoryUrl);
+  const host = (text: string) => safeText(text, 200);
+  const event: PreflightEvidenceEvent = {
+    event: "repository_preflight",
+    preflight_id: input.preflightId ?? randomBytes(8).toString("hex"),
+    task_id: safeText(input.taskId, 64),
+    attempt: Number.isInteger(input.attempt) ? input.attempt : -1,
+    provider: repository.provider,
+    access: input.access,
+    outcome: "unknown",
+    lease: {
+      source: "host",
+      held: Boolean(input.lease?.lease_id),
+      role: input.lease?.role === "repository",
+      provider: input.lease?.provider === repository.provider,
+    },
+    assignment: null,
+    target: {
+      source: "host",
+      api_host: host(repository.apiHost),
+      api_path: host(`${repository.apiPath}/*`),
+      git_host: host(repository.host),
+      git_path: host(repository.gitPathPattern),
+    },
+    probe: null,
+  };
+  const finish = async (outcome: PreflightOutcome, detail?: string) => {
+    event.outcome = outcome;
+    try {
+      await input.emit?.(event);
+    } catch {
+      // Evidence is best effort; it never changes the outcome.
+    }
+    return {
+      outcome,
+      reason: preflightReason(outcome),
+      error:
+        detail === undefined ? null : `repository preflight ${outcome}: ${safeText(detail, 300)}`,
+      event,
+    };
+  };
+  if (!event.lease.held || !event.lease.role || !event.lease.provider)
+    return finish(
+      "assignment_missing",
+      "no task-scoped repository lease for this provider is held",
+    );
+  let check: RepositoryAssignmentCheck;
+  try {
+    check = await input.verifyAssignment();
+  } catch {
+    event.assignment = { source: "onecli_admin_read", read: false };
+    return finish("assignment_unverified", "the OneCLI repository assignment could not be read");
+  }
+  const { scopes: _scopes, ...listed } = check;
+  event.assignment = {
+    source: "onecli_admin_read",
+    read: true,
+    agent: oneOf(listed.agent, ["found", "missing"] as const, "missing"),
+    secretMode: oneOf(listed.secretMode, ["selective", "all"] as const, "unknown"),
+    rest: closedSecret(listed.rest),
+    git: closedSecret(listed.git),
+  };
+  if (!assignmentConfirmed(check))
+    return finish(
+      "assignment_missing",
+      `the OneCLI agent ${event.assignment.agent === "found" ? "lacks a scoped, assigned repository secret" : "is missing"} (rest ${event.assignment.rest.state}/${event.assignment.rest.scope}, git ${event.assignment.git.state}/${event.assignment.git.scope})`,
+    );
+  try {
+    const evidence = await input.probe();
+    if (evidence) event.probe = { source: "preflight_session_verdict", ...evidence };
+    return finish("ok");
+  } catch (error) {
+    if (error instanceof RepositoryPreflightError) {
+      if (error.evidence) event.probe = { source: "preflight_session_verdict", ...error.evidence };
+      return finish(error.outcome, error.message);
+    }
+    return finish("session_failure", message(error));
+  }
+}
+
+function closedSecret(s: RepositorySecretCheck): RepositorySecretCheck {
+  return {
+    state: oneOf(s?.state, ["assigned", "unassigned", "missing"] as const, "missing"),
+    scope: oneOf(s?.scope, ["match", "mismatch", "unlisted"] as const, "unlisted"),
   };
 }
 
@@ -398,6 +660,11 @@ export function ephemeralSessionRunner(deps: EphemeralSessionDeps): PreflightRun
     try {
       await guard("NanoClaw's startup adoption", deps.startupReady(), remaining(), sink);
       const group = await guard("the agent group lookup", deps.group(), remaining(), sink);
+      if (request.agentIdentifier !== undefined && group.id !== request.agentIdentifier)
+        throw new RepositoryPreflightError(
+          "assignment_missing",
+          "the preflight session's agent group is not the OneCLI agent whose assignments were checked",
+        );
       // Best effort, inside the deadline: scratch left by a crashed host. Never fails the probe.
       try {
         const listed = await guard(
@@ -613,12 +880,19 @@ export function ephemeralSessionRunner(deps: EphemeralSessionDeps): PreflightRun
       }
     }
     if (teardown.length > 0)
-      throw new Error(
+      throw new RepositoryPreflightError(
+        "session_failure",
         `the repository preflight session was not torn down (${teardown.join("; ")})`,
       );
     // The error may carry text from a driver or OneCLI (a failed docker call prints its argv,
     // which holds the proxy URL): only scrubbed, bounded text leaves this module.
-    if (outcome.error) throw new Error(message(outcome.error));
+    if (outcome.error)
+      throw new RepositoryPreflightError(
+        outcome.error instanceof RepositoryPreflightError
+          ? outcome.error.outcome
+          : "session_failure",
+        message(outcome.error),
+      );
     return outcome.result as PreflightChildResult;
   };
 }

@@ -43,9 +43,9 @@ workspace specs.
 | Condition | Channel behaviour |
 | --- | --- |
 | Project has no entry in the pool repositories map | Unchanged: no repository lease, no workspace, no `task.repository_url`. |
-| Project has a configured repository | Before injection: resolve URL, take the task-scoped **`repository` lease**, apply OneCLI secrets, run repository preflight, prepare the [task workspace](task-workspace.spec.md), set `task.repository_url`, include workspace and read rules in the trusted prompt. |
+| Project has a configured repository | Before injection: resolve URL, take the task-scoped **`repository` lease**, apply OneCLI secrets, confirm both are assigned to the agent (OneCLI admin reads), run repository preflight ([failure classes 3.3.1](failure-classes.spec.md)), prepare the [task workspace](task-workspace.spec.md), set `task.repository_url`, include workspace and read rules in the trusted prompt. |
 | Same, and task lists **`repository:write`** | Preflight requires **write** (`permissions.push` on the forge GET, as today). Worker may fetch, commit, push, and use forge helpers for mutation. Checkpoints and publish paths unchanged. |
-| Same, and task does **not** list **`repository:write`** | Preflight requires **read** (authenticated repository GET with pull/admin/push on the forge permissions object). Workspace is the same path and branch naming; prompt states **read-only**: no push, no publishing commits, no opening PRs. `argus-delegate` and forge helpers that mutate the remote remain unavailable without write. |
+| Same, and task does **not** list **`repository:write`** | Preflight requires **read** (repository GET with pull/admin/push on the forge permissions object; on a public repository this does not prove the credential was attached, and the evidence says `authentication: unknown`). Workspace is the same path and branch naming; prompt states **read-only**: no push, no publishing commits, no opening PRs. `argus-delegate` and forge helpers that mutate the remote remain unavailable without write. |
 
 Every attempt of the task on the same instance reuses the same workspace key;
 validation rules in task workspace 3.4 apply to all prepared workspaces.

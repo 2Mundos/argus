@@ -14236,6 +14236,43 @@
         "title": "PoolsOverview",
         "type": "object"
       },
+      "PrBinding": {
+        "additionalProperties": false,
+        "description": "Bind a pull request the worker opened but never reported to its task (task\ndeliverable spec 3.7). The head is the exact one the caller expects the forge to\nshow; anything else is refused.",
+        "properties": {
+          "head_sha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "title": "Head Sha",
+            "type": "string"
+          },
+          "number": {
+            "maximum": 999999999.0,
+            "minimum": 1.0,
+            "title": "Number",
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "repository": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Repository",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "number",
+          "head_sha",
+          "reason"
+        ],
+        "title": "PrBinding",
+        "type": "object"
+      },
       "PrState": {
         "enum": [
           "open",
@@ -33345,6 +33382,64 @@
           }
         ],
         "summary": "Take Quota Resume",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/reconcile-pr": {
+      "post": {
+        "description": "Bind a pull request the worker opened but never reported (orchestrator or\nadmin). The forge must show that PR in the project's repository at exactly\n`head_sha`; it is then recorded as the task's PR artifact and audited. The task's\nstate is unchanged and no gate is waived. Replaying the same binding changes\nnothing; another head for a bound PR is 409 `pr_already_bound`.",
+        "operationId": "reconcile_pr_api_tasks__task_id__reconcile_pr_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrBinding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reconcile Pr",
         "tags": [
           "tasks"
         ]

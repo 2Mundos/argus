@@ -763,6 +763,35 @@ async def update_task_continuation(
     )
 
 
+@tool(MANAGERS)
+async def reconcile_task_pr(
+    ctx: Context,
+    task_id: str,
+    repository: str,
+    number: int,
+    head_sha: str,
+    reason: str,
+) -> dict:
+    """Bind a PR the worker opened but never reported (e.g. a task failed
+    deliverable_missing while its PR existed). repository is the project's
+    https://host/owner/repo; head_sha the exact 40-char lowercase head you expect.
+    Argus reads the forge and refuses another repository (pr_wrong_repository), a
+    moved head (pr_stale_head) or an unreadable PR (pr_unverified). Evidence only:
+    the task's state is unchanged and no gate is waived; a failed task still needs
+    retry_task. Replays are no-ops; another head for a bound PR is pr_already_bound."""
+    return await _call(
+        ctx,
+        "POST",
+        f"/tasks/{task_id}/reconcile-pr",
+        json={
+            "repository": repository,
+            "number": number,
+            "head_sha": head_sha,
+            "reason": reason,
+        },
+    )
+
+
 @tool(ANYONE)
 async def create_task(
     ctx: Context,
