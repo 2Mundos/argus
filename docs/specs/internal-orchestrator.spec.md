@@ -305,9 +305,8 @@ All are global only, admin-written, and follow the [settings](settings.spec.md) 
 - **Fleet scaling.** When the internal orchestrator has a track record, lift the
   3.5 restriction (perhaps up to `max_replicas` only, as for external ones).
 - **Native resume validity.** Whether a NanoClaw/Claude/Codex session survives a
-  credential swap is the open question of the
-  [quota resume research](../research/2026-10-29.quota-resume.research.md); 3.4
-  falls back to seeding either way. See [quota resume](quota-resume.spec.md).
+  credential swap is unproven with real accounts
+  ([quota resume](quota-resume.spec.md) 4.2); 3.4 falls back to seeding either way.
 - **Mid-turn messages.** Whether a message sent during a turn should be injected
   into it (like a steer) instead of queuing behind it.
 - **Token streaming.** Would need a streaming path through `deliver()`.

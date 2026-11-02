@@ -113,6 +113,7 @@ import {
   observeClaudeSession,
   type QuotaResumeOffer,
   RESUME_ENGINE,
+  seedClaudeContinuation,
 } from "./argus-quota-resume.js";
 import {
   nanoclawPreflightRunner,
@@ -4962,6 +4963,43 @@ export async function closeSessionFromEnv(thread: string | null): Promise<void> 
   await stopSessions([session.id], "argus: attempt ended");
 }
 
+/**
+ * Quota resume (spec 3.4): create the session of `thread` without a message and seed
+ * its Claude continuation, so the container the task message starts resumes
+ * `sessionId`. Only for the per-thread Argus wiring on NanoClaw's SQLite mailbox, whose
+ * layout this depends on; anything else is false and the attempt starts fresh.
+ */
+export async function resumeClaudeSessionFromEnv(
+  sessionId: string,
+  thread: string,
+): Promise<boolean> {
+  const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import(
+    "../db/messaging-groups.js"
+  );
+  const mg = await getMessagingGroupByPlatform(CHANNEL_TYPE, PLATFORM_ID);
+  const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
+  if (!mg || !wiring || wiring.session_mode !== "per-thread" || wiring.threads === 0) return false;
+  const group = wiring.agent_group_id;
+  if (!(await claudeSessionReadable(claudeProjectsDir(group), sessionId))) return false;
+  const { getAgentMailbox } = await import("../mailbox/index.js");
+  const { SqliteAgentMailbox, outboundDbPath } = await import("../mailbox/sqlite/index.js");
+  if (!(getAgentMailbox() instanceof SqliteAgentMailbox)) return false;
+  const { resolveSession } = await import("../session-manager.js");
+  const { session } = await resolveSession(group, mg.id, thread, "per-thread");
+  if (session.thread_id !== thread) return false;
+  return seedClaudeContinuation(outboundDbPath(group, session.id), sessionId);
+}
+
+/**
+ * Resume is opt-in (quota resume spec 3.9): only ARGUS_QUOTA_RESUME=1 turns it on;
+ * without it every offered session falls back to a fresh one (not_available).
+ */
+export function quotaResumeFromEnv(
+  env: NodeJS.ProcessEnv,
+): typeof resumeClaudeSessionFromEnv | undefined {
+  return env.ARGUS_QUOTA_RESUME === "1" ? resumeClaudeSessionFromEnv : undefined;
+}
+
 /** The redacted log tails of the group's session containers, from the runtime hooks. */
 function sessionLogTail(runtime: RuntimeHooks): () => Promise<SessionEvidence> {
   return async () => {
@@ -5012,9 +5050,8 @@ export function fromEnv(): ChannelAdapter | null {
       const group = await argusGroup();
       return group ? lastClaudeApiError(claudeProjectsDir(group.id), sinceMs) : null;
     },
-    // Observation only: nothing here can start a NanoClaw session from a native id yet
-    // (quota resume spec 4), so every offered session falls back to a fresh one.
     nativeSessions: {
+      resume: quotaResumeFromEnv(process.env),
       observe: async (sinceMs) => {
         const group = await argusGroup();
         return group ? observeClaudeSession(claudeProjectsDir(group.id), sinceMs) : null;

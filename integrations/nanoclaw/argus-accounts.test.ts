@@ -13,8 +13,10 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onecliPathMatches } from "../gateway-providers/onecli-path-match.js";
+import { OUTBOUND_SCHEMA } from "../mailbox/sqlite/schema.js";
 import type { ChannelSetup } from "./adapter.js";
 import { accountsFromEnv, closeSessionFromEnv, createArgusAdapter, renderTask } from "./argus.js";
 import {
@@ -41,6 +43,7 @@ import {
   sanitizeNotice,
   verifyRepositoryAssignment,
 } from "./argus-accounts.js";
+import { seedClaudeContinuation } from "./argus-quota-resume.js";
 import { sessionRepositoryProbe } from "./argus-repo-preflight.js";
 
 // NanoClaw's own modules are replaced, so the real `recycleRuntime` runs against a
@@ -3720,5 +3723,152 @@ describe("Cursor first on a local or custom engine lease", () => {
     expect(
       w.calls.some((c) => c.path === "/accounts/release" && c.search === "?role=executor"),
     ).toBe(true);
+  });
+});
+
+// -- quota resume -----------------------------------------------------------------------
+
+describe("quota resume in the channel (quota-resume.spec.md 3.3-3.5)", () => {
+  const SESSION = "5b1c0f3e-aaaa-bbbb-cccc-0123456789ab";
+  const offer = { session_id: SESSION, engine: "anthropic", node: "ag", from_attempt: 1 };
+  const paused = (over: Record<string, unknown> = {}) => ({
+    ...task(),
+    attempt: 2,
+    quota_resume: { ...offer, ...over },
+  });
+  const NOTE = "[Argus steer] From argus:quota-resume";
+
+  // The session mailboxes of one host, by thread: they outlive a channel restart.
+  let boxes: Map<string, string>;
+  beforeEach(() => {
+    boxes = new Map();
+  });
+  const continuation = (thread: string) => {
+    const file = boxes.get(thread);
+    if (!file) return null;
+    const db = new Database(file, { readonly: true });
+    try {
+      return (
+        (
+          db.prepare("SELECT value FROM session_state WHERE key = 'continuation:claude'").get() as
+            | { value: string }
+            | undefined
+        )?.value ?? null
+      );
+    } finally {
+      db.close();
+    }
+  };
+  /** NanoClaw's resume seam with a real seed: a new session's outbound.db per thread. */
+  const seeding = () =>
+    vi.fn(async (sessionId: string, thread: string) => {
+      if (!boxes.has(thread)) {
+        const dir = mkdtempSync(path.join(os.tmpdir(), "argus-qr-session-"));
+        groupDirs.push(dir);
+        const db = new Database(path.join(dir, "outbound.db"));
+        db.exec(OUTBOUND_SCHEMA);
+        db.close();
+        boxes.set(thread, path.join(dir, "outbound.db"));
+      }
+      return seedClaudeContinuation(boxes.get(thread)!, sessionId);
+    });
+
+  /** One claim of `claimed` with a scripted take (`first`, or an HTTP status). */
+  async function claim(
+    claimed: ReturnType<typeof paused>,
+    take: boolean | number,
+    resume?: (id: string, thread: string) => Promise<boolean>,
+    readable = true,
+  ) {
+    const w = world({ leases: [lease("a", "sk-ant-AAAA")], tasks: [claimed] });
+    const takes: any[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      if (new URL(url).pathname.endsWith("/quota-resume")) {
+        takes.push(JSON.parse(init.body as string));
+        if (typeof take === "number") return new Response("down", { status: take });
+        return new Response(JSON.stringify({ first: take }), { status: 200 });
+      }
+      return w.fetchImpl(url, init);
+    }) as unknown as typeof fetch;
+    const h = harness(
+      { ...w, fetchImpl },
+      true,
+      {},
+      {
+        nativeSessions: {
+          observe: async () => null,
+          readable: async (id) => readable && id === SESSION,
+          resume,
+        },
+      },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.teardown();
+    live.splice(live.indexOf(h.adapter), 1);
+    return { takes, text: h.inbound[0].content.text as string, thread: h.thread() };
+  }
+
+  it("resumes the same session: seeds the attempt's thread and sends the note once", async () => {
+    const resume = seeding();
+    const run = await claim(paused(), true, resume);
+    expect(resume).toHaveBeenCalledWith(SESSION, "argus:t1:2");
+    expect(run.thread).toBe("argus:t1:2");
+    expect(continuation("argus:t1:2")).toBe(SESSION);
+    expect(run.takes).toEqual([{ attempt: 2, outcome: "resumed" }]);
+    expect(run.text.startsWith(NOTE)).toBe(true);
+    expect(run.text.split(NOTE)).toHaveLength(2);
+  });
+
+  it("after a crash, the reclaimed attempt resumes again without a second note", async () => {
+    const resume = seeding();
+    await claim(paused(), true, resume);
+    // A new channel process claims the same attempt: the seed is already there.
+    const again = await claim(paused(), false, resume);
+    expect(again.takes).toEqual([{ attempt: 2, outcome: "resumed" }]);
+    expect(continuation("argus:t1:2")).toBe(SESSION);
+    expect(again.text).not.toContain(NOTE);
+  });
+
+  it("a stale lease or a failed take resumes without the note", async () => {
+    for (const status of [409, 503]) {
+      boxes = new Map();
+      const run = await claim(paused(), status, seeding());
+      expect(run.takes).toHaveLength(1);
+      expect(run.text).not.toContain(NOTE);
+    }
+  });
+
+  it("falls back to a fresh session, telling Argus why, and never seeds", async () => {
+    const cases: Array<[string, ReturnType<typeof paused>, boolean, boolean, string]> = [
+      ["other node", paused({ node: "elsewhere" }), true, true, "other_node"],
+      ["other engine", paused({ engine: "openai" }), true, true, "other_engine"],
+      ["transcript gone", paused(), true, false, "unreadable"],
+      ["host cannot resume", paused(), false, true, "not_available"],
+    ];
+    for (const [name, claimed, canResume, readable, reason] of cases) {
+      boxes = new Map();
+      const resume = seeding();
+      const run = await claim(claimed, true, canResume ? resume : undefined, readable);
+      expect(run.takes, name).toEqual([{ attempt: 2, outcome: "fallback", reason }]);
+      expect(resume, name).not.toHaveBeenCalled();
+      expect(run.text, name).not.toContain(NOTE);
+    }
+  });
+
+  it("reports resume_failed when the seed does not take, and leaks nothing", async () => {
+    // Another continuation already holds the thread's session.
+    const resume = seeding();
+    await resume("9d0e1f2a-aaaa-bbbb-cccc-0123456789ab", "argus:t1:2");
+    const run = await claim(paused(), true, resume);
+    expect(run.takes).toEqual([{ attempt: 2, outcome: "fallback", reason: "resume_failed" }]);
+    expect(continuation("argus:t1:2")).toBe("9d0e1f2a-aaaa-bbbb-cccc-0123456789ab");
+    const thrown = await claim(paused(), true, async () => {
+      throw new Error("LEAK-7731 /data/v2-sessions/group-1/.claude-shared/x.jsonl");
+    });
+    expect(thrown.takes).toEqual([{ attempt: 2, outcome: "fallback", reason: "resume_failed" }]);
+    expect(thrown.text).not.toContain(NOTE);
+    expect(thrown.text).not.toContain("LEAK-7731");
   });
 });

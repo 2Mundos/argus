@@ -121,7 +121,8 @@ every new dependency is judged against it.
   was dispatched and never acknowledged
 - [Quota resume](specs/quota-resume.spec.md) — a quota pause keeps the Claude session
   id; the next claim on the same node and engine sends one framed message or falls
-  back to a fresh session; resume itself is not wired yet
+  back to a fresh session; resume (opt-in, `ARGUS_QUOTA_RESUME=1`) seeds the new
+  session's runner continuation; real two-account run not done
 - [Account usage](specs/account-usage.spec.md) — tokens spent and quota left per
   provider account: reported usage, Codex quota probe, Cursor pools, charts
 - [Cost view](specs/cost-view.spec.md) — the Cost tab: tokens and estimated cost
@@ -222,6 +223,9 @@ every new dependency is judged against it.
 - [Quota resume research](research/2026-10-29.quota-resume.research.md) — credential
   swap is a container recreate today; session validity and Codex resume left open;
   spec-update plan folding into P4
+- [Quota resume spike](research/2026-11-02.quota-resume-spike.research.md) — a new
+  NanoClaw session whose runner continuation is seeded resumes the Claude Code
+  session, against a fake API; a seed with a missing transcript loses the first message
 - [Account auth health](drafts/2026-10-29.auth-health.draft.md) — credential
   state and last accepted/rejected request per account, kept separate
 - [Harness stderr tail](drafts/2026-10-29.harness-stderr-tail.draft.md) — a

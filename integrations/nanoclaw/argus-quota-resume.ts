@@ -1,7 +1,8 @@
 /**
  * Quota resume (docs/specs/quota-resume.spec.md): what the host can observe of a
- * Claude Code session, and the decision to resume it or start fresh. Pure and
- * file-system only; the channel does the Argus calls and the sending.
+ * Claude Code session, the decision to resume it or start fresh, and the seed that
+ * makes a new session resume it. File-system and session mailbox only; the channel
+ * does the Argus calls and the sending.
  */
 
 /** The native session a quota pause left, as the claim offers it (3.3). */
@@ -93,4 +94,62 @@ export async function claudeSessionReadable(
   sessionId: string,
 ): Promise<boolean> {
   return SESSION_ID.test(sessionId) && (await transcripts(projectsDir)).includes(sessionId);
+}
+
+/**
+ * The agent runner's key for the Claude session it resumes at container start, and
+ * the pre-per-provider key it would adopt instead (NanoClaw 8fbacc9,
+ * container/agent-runner/src/db/session-state.ts).
+ */
+const CONTINUATION_KEY = "continuation:claude";
+const LEGACY_CONTINUATION_KEY = "sdk_session_id";
+
+/**
+ * Make the session whose mailbox is `outboundDb` resume `sessionId` when its container
+ * starts (quota resume spec 3.4). True only when the continuation now holds exactly
+ * that id: written here once, or already there from an earlier call. False, writing
+ * nothing, for any other layout, another continuation, or a session that already ran.
+ */
+export async function seedClaudeContinuation(
+  outboundDb: string,
+  sessionId: string,
+): Promise<boolean> {
+  if (!SESSION_ID.test(sessionId)) return false;
+  let db: import("better-sqlite3").Database | undefined;
+  try {
+    const { default: Database } = await import("better-sqlite3");
+    db = new Database(outboundDb, { fileMustExist: true });
+    db.pragma("busy_timeout = 5000");
+    const conn = db;
+    const columns = (conn.pragma("table_info('session_state')") as { name: string }[])
+      .map((c) => c.name)
+      .sort()
+      .join(",");
+    if (columns !== "key,updated_at,value") return false;
+    const value = (key: string) =>
+      (
+        conn.prepare("SELECT value FROM session_state WHERE key = ?").get(key) as
+          | { value: string }
+          | undefined
+      )?.value;
+    return conn
+      .transaction(() => {
+        const held = value(CONTINUATION_KEY);
+        if (held !== undefined) return held === sessionId;
+        if (value(LEGACY_CONTINUATION_KEY) !== undefined) return false;
+        const ran =
+          conn.prepare("SELECT 1 FROM messages_out LIMIT 1").get() ??
+          conn.prepare("SELECT 1 FROM processing_ack LIMIT 1").get();
+        if (ran) return false;
+        conn
+          .prepare("INSERT INTO session_state (key, value, updated_at) VALUES (?, ?, ?)")
+          .run(CONTINUATION_KEY, sessionId, new Date().toISOString());
+        return true;
+      })
+      .immediate();
+  } catch {
+    return false;
+  } finally {
+    db?.close();
+  }
 }
