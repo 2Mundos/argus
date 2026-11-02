@@ -212,7 +212,7 @@ task. No model session starts and no attempt is spent.
 | Check | Reason |
 | --- | --- |
 | The task's project has no repository URL in the pool map but the task needs write or a configured project checkout | `env_repository_unconfigured` |
-| The repository lease is taken and applied | `env_repository_unavailable` |
+| The repository lease is taken and applied, and its OneCLI assignments are confirmed for the preflight's agent (3.3.1) | `env_repository_unavailable` |
 | A preflight session (3.3.1) proves read or write access for exactly this repository (see [project code availability](project-code-availability.spec.md)), within its deadline, and is torn down | `env_repository_unreachable` |
 | The task workspace has a place: the agent group dir is known and the task has a repository URL | `env_workspace_unconfigured` |
 | The task workspace can be created and read (no `EACCES`, `EPERM` or `EROFS`) | `env_workspace_permission` |
@@ -243,6 +243,17 @@ with the proxy and its CA, so a probe run in the host process can never reach th
 forge (it fails with `OneCLI HTTPS proxy is not configured`). The repository check
 therefore runs in a bounded, ephemeral, model-free session:
 
+- **Lease and assignment check first.** Before any session or forge request, the host
+  confirms, with OneCLI admin reads only (`GET /agents`, `GET /secrets`,
+  `GET /agents/{id}/secrets`): a task-scoped `repository` lease is held for this task
+  with the repository's provider; the OneCLI agent of the agent group exists; both
+  repository secrets (`argus-<group>-repository-rest` and `-git`) exist and are assigned
+  to that agent; and, when OneCLI lists them, their host and path patterns are exactly
+  the repository's REST and Git scopes. The preflight session must then run for that same
+  agent group. A failed check is outcome `assignment_missing` (a check that cannot be
+  read, `assignment_unverified`) and blocks with `env_repository_unavailable`, not as a
+  forge denial. The check writes nothing, so a concurrent worker session's lease and
+  every assignment stay as they are.
 - **Same session machinery.** A session of the Argus agent group, from the same image
   and the same driver, composed by NanoClaw's own `composeSessionSpec` with the gateway
   lease taken through `ensureGatewaySession` (the worker path's admission gate;
@@ -275,12 +286,38 @@ therefore runs in a bounded, ephemeral, model-free session:
   helper creates the file exclusively with mode 0600 and never follows a planted link. The
   result directory is owned by the container's mapped user (or chowned to it when the host
   is root); a user that cannot write it fails closed.
+- **Outcomes.** Every preflight ends with one outcome from a closed set, named first in the
+  block `error` (`repository preflight <outcome>: …`):
+
+  | Outcome | When | Block reason |
+  | --- | --- | --- |
+  | `ok` | Accepted (below) | none |
+  | `assignment_missing` | No task-scoped lease, no OneCLI agent, a repository secret absent, unassigned or scoped to another host or path, or the session's agent group is not the lease's agent | `env_repository_unavailable` |
+  | `assignment_unverified` | OneCLI's admin API could not be read for the check | `env_repository_unavailable` |
+  | `forge_denied` | The forge answered 401, 403 or 404, or a response that proves a credential was attached (a private repository) lacks the required permission. A 401 does not say whether the credential was absent or invalid | `env_repository_unreachable` |
+  | `network_failure` | The request did not get a forge answer: proxy or network error, timeout | `env_repository_unreachable` |
+  | `unknown` | The answer cannot prove authentication or token scope: a public (or unlabelled) repository whose response lacks the permissions object or the required permission, or any other forge answer (5xx, rate limit, another repository) | `env_repository_unreachable` |
+  | `session_failure` | The preflight session itself failed: no proxy in the contribution, a driver refusal, a missing verdict, the deadline, an unavailable gateway, an incomplete teardown | `env_repository_unreachable` |
+
+  A response that does not prove a credential is never called anonymous: an unproven case is
+  `unknown`, and the evidence says what was missing.
+- **Evidence events.** Each preflight emits one evidence event, correlated by task, attempt
+  and a random preflight id: provider, access, the lease check (held, role, provider), the
+  assignment checks (agent, each secret's state, scope match, secret mode), the target API
+  and Git hosts and their scoped path patterns, the probe outcome with the forge's HTTP
+  status, whether the permissions object was present, the push bit, the repository's
+  visibility and whether authentication is proven, and the evidence source of each part
+  (`onecli_admin_read`, `preflight_session_verdict`, `host`). Every field is a closed value,
+  a bounded integer, or a host and path the host derived itself; nothing the container wrote
+  is copied as text. No secret value, header, proxy URL or userinfo, or credential-bearing URL
+  is in an event. The channel logs it and posts it as one line to the task's live log for the
+  attempt (best effort; a failed post never changes the outcome).
 - **What the task is told.** Nothing the container wrote is passed on as text. A failing child
-  is reported as a closed reason: the helper's error code if it is one of its fixed codes, else
-  "of an unknown kind", else "no verdict was written". Provider and repository fields in the
-  verdict are compared, never echoed. Errors from the driver and OneCLI are printable-only,
-  credential-scrubbed and cut to 160 characters, and the channel redacts and bounds the block
-  `error` again.
+  is reported as a closed reason: its outcome and the helper's error code if they are in their
+  fixed sets, else "of an unknown kind", else "no verdict was written". Provider and repository
+  fields in the verdict are compared, never echoed. Errors from the driver and OneCLI are
+  printable-only, credential-scrubbed and cut to 160 characters, and the channel redacts and
+  bounds the block `error` again.
 - **Startup order.** NanoClaw's `index.ts` starts the channel adapters (the Argus claim loop)
   before it calls `adoptRunningSessions()`, which stops every listed session that has no
   database row, as a preflight session is. `install.sh` therefore wraps adoption and exports
@@ -308,9 +345,12 @@ therefore runs in a bounded, ephemeral, model-free session:
   session's directory cannot match. Residual: until the next host start the orphan container
   keeps running, and until the next preflight its scratch directory stays.
 - **What is accepted.** Exit code 0 and an `ok` verdict for the lease's provider and this
-  repository with `authenticated`, `write`, `allowlist_refuses_other_host` and
-  `allowlist_refuses_sibling` true. The driver reports a non-zero exit as `failed` with
-  the code and exit 0 as `stopped`; because Docker's transient `removing` state also reads
+  repository with `allowlist_refuses_other_host` and `allowlist_refuses_sibling` true and,
+  for write, `authenticated` and `write` true; for read, `read` true. `authenticated` is true
+  only when the response proves a credential was attached (`push` true, or a private
+  repository answered); a public repository's `pull` bit does not, so a read verdict may say
+  `authenticated: false` with `authentication: unknown` in its evidence. The driver reports
+  a non-zero exit as `failed` with the code and exit 0 as `stopped`; because Docker's transient `removing` state also reads
   as `stopped`, the host reads the status again before it trusts `stopped`, and a session that
   reads running again keeps being polled until the deadline. A lease of the
   other provider, a repository outside the allowlist, a missing proxy in the gateway
@@ -324,10 +364,12 @@ therefore runs in a bounded, ephemeral, model-free session:
 
 | Evidence | Proves | Does not prove |
 | --- | --- | --- |
-| `permissions.push` true for the same `owner/repo`, read by the helper through the session's proxy | The credential the gateway attached to that request is authenticated and may write to that repository, as the forge reports it. An anonymous read of a public repository cannot produce it. | That OneCLI's host/path rules stop the token reaching other hosts or repositories; that the token has no broader rights; Git smart-HTTP access (a different secret). |
+| OneCLI assignment check (admin reads) | The lease's agent has both repository secrets assigned, scoped (when listed) to the repository's REST and Git host and path. | That the proxy injected them on the probe request, or that the stored value is a valid token. |
+| `permissions.push` true for the same `owner/repo`, read by the helper through the session's proxy | The credential the gateway attached to that request is authenticated and may write to that repository, as the forge reports it. An anonymous read of a public repository cannot produce it. | That OneCLI's host/path rules stop the token reaching other hosts or repositories; that the token has no broader rights or its OAuth or fine-grained scope; Git smart-HTTP access (a different secret). |
+| A public repository's response without `permissions` or without the required bit | Nothing about authentication: outcome `unknown`. | That no credential was attached (it may be attached and lack rights), or that injection failed. |
 | `allowlist_refuses_other_host`, `allowlist_refuses_sibling` | The helper's own allowlist policy code refuses another host and a sibling repository (a local check, no network). | Anything about the proxy, OneCLI scoping or the token. Treat as a self-test of the helper in the deployed image. |
 | Offline tests with a fake docker CLI | The host's control flow: deadlines, late cleanup, teardown failures, verdict handling, what is accepted. | Forge or gateway behaviour. |
-| Container tests (`argus-repo-preflight.docker.test.ts`, set `ARGUS_PREFLIGHT_DOCKER_IMAGE`) against a synthetic CONNECT proxy and forge with a throwaway CA | With a real daemon and driver: the container user writes the verdict, exit codes (13, 15, 137) and removal, the deadline, a planted symlink is not followed, a wrong user fails closed. | Any real forge, real OneCLI, a real token or the production image. |
+| Container tests (`argus-repo-preflight.docker.test.ts`, set `ARGUS_PREFLIGHT_DOCKER_IMAGE`) against a synthetic CONNECT proxy and forge with a throwaway CA, and a synthetic OneCLI admin API | With a real daemon and driver: the container user writes the verdict, exit codes (13, 15, 137) and removal, the deadline, a planted symlink is not followed, a wrong user fails closed; the outcomes for an injected, an absent (no assignment: no container), a denied and an unproven public answer; no proxy userinfo or token in events, errors or logs. The synthetic forge's answers are NOT real GitHub authorization. | Any real forge, real OneCLI, a real token or the production image. |
 | The rollout canary ([worker lifecycle](worker-lifecycle.spec.md)) | The real OneCLI account and repository. This is the only evidence of production behaviour. | |
 
 - `env_workspace_missing` is not a preflight check: the channel blocks with it

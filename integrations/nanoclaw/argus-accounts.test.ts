@@ -24,6 +24,7 @@ import {
   applyLeasesDetailed,
   applyRepositoryLease,
   assertOneCliUrl,
+  assignmentConfirmed,
   CURSOR_EXPIRY_MARGIN_MS,
   classifyFailure,
   classifyLogTail,
@@ -38,6 +39,7 @@ import {
   releaseRepositoryLease,
   runtimeProviders,
   sanitizeNotice,
+  verifyRepositoryAssignment,
 } from "./argus-accounts.js";
 import { sessionRepositoryProbe } from "./argus-repo-preflight.js";
 
@@ -256,8 +258,46 @@ describe("repository lease vault mapping", () => {
     expect(JSON.stringify(w.calls.filter((call) => call.who === "argus"))).not.toContain(
       "dummy-gitea-token",
     );
+    const before = w.calls.length;
+    const check = await verifyRepositoryAssignment(
+      onecli,
+      target,
+      "https://git.example.test/org/project.git",
+    );
+    expect(check).toMatchObject({
+      agent: "found",
+      rest: { state: "assigned", scope: "match" },
+      git: { state: "assigned", scope: "match" },
+    });
+    expect(assignmentConfirmed(check)).toBe(true);
+    expect(w.calls.slice(before).every((call) => call.method === "GET")).toBe(true);
+    // Another repository's patterns are a mismatch, not a confirmation.
+    expect(
+      assignmentConfirmed(
+        await verifyRepositoryAssignment(onecli, target, "https://git.example.test/org/other"),
+      ),
+    ).toBe(false);
     await releaseRepositoryLease(onecli, target, []);
     expect(w.onecli.agents[0]!.secrets).toEqual([]);
+    expect(
+      await verifyRepositoryAssignment(onecli, target, "https://git.example.test/org/project"),
+    ).toMatchObject({
+      rest: { state: "unassigned" },
+      git: { state: "unassigned" },
+    });
+    await expect(
+      verifyRepositoryAssignment(
+        new OneCliClient(
+          "http://127.0.0.1:10254",
+          (async () =>
+            new Response("Authorization: token dummy-gitea-token", {
+              status: 500,
+            })) as unknown as typeof fetch,
+        ),
+        target,
+        "https://git.example.test/org/project",
+      ),
+    ).rejects.toThrow(/^could not read the OneCLI repository assignment$/);
   });
 });
 
@@ -322,6 +362,9 @@ function world(opts: {
         return json(200, { success: true });
       }
       m = /^\/agents\/([^/]+)\/secrets$/.exec(path);
+      if (method === "GET" && m) {
+        return json(200, onecli.agents.find((a) => a.id === m![1])?.secrets ?? []);
+      }
       if (method === "PUT" && m) {
         onecli.agents.find((a) => a.id === m![1])!.secrets = body.secretIds;
         return json(200, { success: true });
@@ -1925,7 +1968,7 @@ describe("task-scoped repository auth", () => {
     await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
     expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
       reason: "env_repository_unreachable",
-      error: "Error: Gitea API GET failed with HTTP 502",
+      error: "repository preflight session_failure: Gitea API GET failed with HTTP 502",
     });
     await until(() => w.calls.some((call) => isRepositoryRelease(call)));
     expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
@@ -1976,11 +2019,71 @@ describe("task-scoped repository auth", () => {
     await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
     expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
       reason: "env_repository_unreachable",
-      error: "Error: no repository preflight session is configured",
+      error: "repository preflight session_failure: no repository preflight session is configured",
     });
     await until(() => w.calls.some((call) => isRepositoryRelease(call)));
     expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
     expect(h.inbound).toHaveLength(0);
+  });
+
+  it("blocks as unavailable, before any forge request, when OneCLI does not show the assignment", async () => {
+    const w = repoWorld();
+    const fetchImpl = w.fetchImpl;
+    // OneCLI accepted the apply but its agent's assignment list does not show it.
+    w.fetchImpl = (async (url: string, init: RequestInit) =>
+      (init.method ?? "GET") === "GET" && /\/api\/agents\/[^/]+\/secrets$/.test(url)
+        ? new Response("[]", { status: 200 })
+        : fetchImpl(url, init)) as unknown as typeof fetch;
+    const probeRepository = vi.fn(async () => {});
+    const h = harness(
+      w,
+      true,
+      { repositories: { global: "https://git.example.test/org/repo" } },
+      { probeRepository },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
+      reason: "env_repository_unavailable",
+      error: expect.stringMatching(/^repository preflight assignment_missing: /),
+    });
+    expect(probeRepository).not.toHaveBeenCalled();
+    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    expect(h.inbound).toHaveLength(0);
+  });
+
+  it("posts one attempt-correlated, secret-free evidence line to the task log", async () => {
+    const w = repoWorld();
+    const h = harness(
+      w,
+      true,
+      { repositories: { global: "https://git.example.test/org/repo" } },
+      {
+        probeRepository: async () => {
+          throw new Error("proxy said http://agent:dummy-gitea-token@proxy:10255 refused");
+        },
+      },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    const logs = w.calls.filter((call) => call.path === `/tasks/${REPO_ID}/log`);
+    expect(logs).toHaveLength(1);
+    const body = logs[0].body as { attempt: number; source: string; lines: string[] };
+    expect(body).toMatchObject({ attempt: 1, source: "worker" });
+    expect(body.lines).toHaveLength(1);
+    const event = JSON.parse(body.lines[0].replace(/^\[repository-preflight\] /, ""));
+    expect(event).toMatchObject({
+      event: "repository_preflight",
+      task_id: REPO_ID,
+      attempt: 1,
+      provider: "gitea",
+      outcome: "session_failure",
+      assignment: { read: true, agent: "found", rest: { state: "assigned" } },
+    });
+    const posted = JSON.stringify(w.calls.filter((call) => call.who === "argus"));
+    expect(posted).not.toContain("dummy-gitea-token");
   });
 
   it("blocks, keeps the task and releases access when the preflight session is denied", async () => {

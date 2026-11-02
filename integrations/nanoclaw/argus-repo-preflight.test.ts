@@ -24,12 +24,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { composeSessionSpec } from "../container-runner.js";
 import { DockerSessionDriver } from "../drivers/docker-driver.js";
 import { FakeCli } from "../drivers/fake-cli.js";
+import type { RepositoryAssignmentCheck } from "./argus-accounts.js";
 import {
   assertPreflightPositive,
   ephemeralSessionRunner,
   type GatewayControl,
+  type PreflightEvidenceEvent,
   prepareResultDir,
+  RepositoryPreflightError,
   readVerdictFile,
+  runRepositoryPreflight,
   safeText,
   sessionRepositoryProbe,
   sweepPreflightResidue,
@@ -312,7 +316,7 @@ describe("repository preflight session", () => {
     child = () => ({ code: 0, verdict: verdict("github", "https://github.com/acme/other") });
     await expect(run()).rejects.toThrow(/different repository/);
     child = () => ({ code: 0, verdict: verdict("github", GITHUB, { authenticated: false }) });
-    await expect(run()).rejects.toThrow(/authenticated access in its verdict/);
+    await expect(run()).rejects.toThrow(/authenticated write access in its verdict/);
     child = () => ({
       code: 0,
       verdict: verdict("github", GITHUB, { allowlist_refuses_sibling: false }),
@@ -377,7 +381,7 @@ describe("nothing is created before NanoClaw's startup adoption has finished", (
     expect(ensured).toBe(0);
     expect(cli.calls).toHaveLength(0);
     open();
-    await expect(pending).resolves.toBeUndefined();
+    await expect(pending).resolves.toMatchObject({ authentication: "unknown" });
     expect(ensured).toBe(1);
   });
 
@@ -473,7 +477,7 @@ describe("the settle path and gateway availability fail closed", () => {
       { phase: "stopped" },
       { phase: "stopped" },
     ];
-    await expect(run(probe({}, 2000))).resolves.toBeUndefined();
+    await expect(run(probe({}, 2000))).resolves.toBeDefined();
   });
 
   it("a gateway outage reported as the child ends is not a pass", async () => {
@@ -529,7 +533,7 @@ describe("scratch left by a crashed host", () => {
   it("a probe sweeps it without touching another session or failing", async () => {
     const stale = dir(id(9), true);
     const other = dir("sess-live", true);
-    await expect(run()).resolves.toBeUndefined();
+    await expect(run()).resolves.toBeDefined();
     expect(existsSync(stale)).toBe(false);
     expect(existsSync(other)).toBe(true);
   });
@@ -788,5 +792,309 @@ describe("the helper's verdict satisfies the host's contract (mocked forge: logi
       ),
     ).toThrow();
     expect((await exec(githubMain, GITHUB, "acme/widget", false)).exitCode).toBe(13);
+  });
+});
+
+describe("outcome classification: denial, network, unproven and session failures differ", () => {
+  const outcomeOf = (result: { exitCode: number; verdict: unknown }, access?: "read" | "write") => {
+    try {
+      assertPreflightPositive(result, { provider: "github", repository: GITHUB }, access);
+      return "ok";
+    } catch (error) {
+      return error instanceof RepositoryPreflightError ? error.outcome : "untyped";
+    }
+  };
+  const failed = (code: string, evidence: object) => ({
+    exitCode: 13,
+    verdict: { ok: false, evidence, error: { code, message: "x" } },
+  });
+  const publicNoBit = {
+    http_status: 200,
+    permissions: "present",
+    push: false,
+    visibility: "public",
+  };
+
+  it.each([
+    ["401 from the forge", failed("unauthorized", { http_status: 401 }), "forge_denied"],
+    ["403 from the forge", failed("forbidden", { http_status: 403 }), "forge_denied"],
+    ["404 from the forge", failed("not_found", { http_status: 404 }), "forge_denied"],
+    [
+      "a private repository without push",
+      failed("policy_denied", { ...publicNoBit, visibility: "private" }),
+      "forge_denied",
+    ],
+    ["a public repository without push", failed("policy_denied", publicNoBit), "unknown"],
+    [
+      "a public repository without permissions",
+      failed("policy_denied", { http_status: 200, permissions: "absent", visibility: "public" }),
+      "unknown",
+    ],
+    [
+      "an unlabelled repository without push",
+      failed("policy_denied", { http_status: 200, permissions: "present", push: false }),
+      "unknown",
+    ],
+    [
+      "a helper that claims proof it did not show",
+      failed("policy_denied", { http_status: 200, push: false, authentication: "proven" }),
+      "unknown",
+    ],
+    ["a proxy or network error", failed("network_error", {}), "network_failure"],
+    ["a rate limit", failed("rate_limited", { http_status: 429 }), "unknown"],
+    ["a server error", failed("server_error", { http_status: 502 }), "unknown"],
+    [
+      "an old helper's verdict without evidence",
+      { exitCode: 13, verdict: { ok: false, error: { code: "policy_denied" } } },
+      "unknown",
+    ],
+    ["no verdict (killed)", { exitCode: 137, verdict: null }, "session_failure"],
+    [
+      "an ok verdict for write without push",
+      { exitCode: 0, verdict: verdict("github", GITHUB, { authenticated: false, write: false }) },
+      "unknown",
+    ],
+  ])("%s", (_label, result, outcome) => {
+    expect(outcomeOf(result as { exitCode: number; verdict: unknown })).toBe(outcome);
+  });
+
+  it("read access on a public repository passes without claiming authentication", () => {
+    const evidence = assertPreflightPositive(
+      {
+        exitCode: 0,
+        verdict: verdict("github", GITHUB, {
+          authenticated: false,
+          write: false,
+          evidence: { ...publicNoBit, authentication: "proven" },
+        }),
+      },
+      { provider: "github", repository: GITHUB },
+      "read",
+    );
+    expect(evidence).toMatchObject({
+      visibility: "public",
+      push: false,
+      authentication: "unknown",
+    });
+  });
+
+  it("a session that would run for another agent group is refused before any lease or container", async () => {
+    const p = probe();
+    await expect(p(GITHUB, [GITHUB], "github", "write", "ag-other")).rejects.toMatchObject({
+      outcome: "assignment_missing",
+    });
+    expect(ensured).toBe(0);
+    expect(cli.callMatching(/^create /)).toBeUndefined();
+  });
+
+  it("the session's own failures are session_failure", async () => {
+    gatewayEnv = { SSL_CERT_FILE: "/tmp/onecli-combined-ca.pem" };
+    await expect(run()).rejects.toMatchObject({ outcome: "session_failure" });
+  });
+});
+
+describe("runRepositoryPreflight: lease and assignment first, then the probe, one event", () => {
+  const LEASE = { lease_id: "lease-1", provider: "github", role: "repository" as const };
+  const assigned = (over: Partial<RepositoryAssignmentCheck> = {}): RepositoryAssignmentCheck => ({
+    agent: "found",
+    secretMode: "selective",
+    rest: { state: "assigned", scope: "match" },
+    git: { state: "assigned", scope: "match" },
+    scopes: {
+      rest: { host: "api.github.com", path: "/repos/acme/widget/*" },
+      git: { host: "github.com", path: "/acme/widget.git/*" },
+    },
+    ...over,
+  });
+  const preflight = (over: Partial<Parameters<typeof runRepositoryPreflight>[0]> = {}) => {
+    const events: PreflightEvidenceEvent[] = [];
+    const probeCalls = vi.fn(async () => ({
+      helper_error: null,
+      http_status: 200,
+      permissions: "present" as const,
+      push: true,
+      visibility: "private" as const,
+      authentication: "proven" as const,
+    }));
+    const done = runRepositoryPreflight({
+      taskId: "task-1",
+      attempt: 2,
+      repositoryUrl: `${GITHUB}.git`,
+      access: "write",
+      lease: LEASE,
+      verifyAssignment: async () => assigned(),
+      probe: probeCalls,
+      emit: (event) => {
+        events.push(structuredClone(event));
+      },
+      ...over,
+    });
+    return { done, events, probeCalls };
+  };
+
+  it("passes with the assignment confirmed and the probe's evidence, attempt-correlated", async () => {
+    const { done, events } = preflight();
+    const result = await done;
+    expect(result).toMatchObject({ outcome: "ok", reason: null, error: null });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      event: "repository_preflight",
+      task_id: "task-1",
+      attempt: 2,
+      provider: "github",
+      access: "write",
+      outcome: "ok",
+      lease: { source: "host", held: true, role: true, provider: true },
+      assignment: { source: "onecli_admin_read", read: true, agent: "found" },
+      target: {
+        source: "host",
+        api_host: "api.github.com",
+        api_path: "/repos/acme/widget/*",
+        git_host: "github.com",
+        git_path: "/acme/widget.git/*",
+      },
+      probe: { source: "preflight_session_verdict", push: true, authentication: "proven" },
+    });
+    expect(events[0].preflight_id).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it.each([
+    ["no lease", { lease: null }],
+    ["a lease of the other provider", { lease: { ...LEASE, provider: "gitea" } }],
+    ["a lease of another role", { lease: { ...LEASE, role: "engine" as never } }],
+  ])("%s is assignment_missing and never reads OneCLI or probes", async (_label, over) => {
+    const verifyAssignment = vi.fn(async () => assigned());
+    const { done, probeCalls } = preflight({ ...over, verifyAssignment });
+    expect(await done).toMatchObject({
+      outcome: "assignment_missing",
+      reason: "env_repository_unavailable",
+    });
+    expect(verifyAssignment).not.toHaveBeenCalled();
+    expect(probeCalls).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no agent", { agent: "missing" as const }],
+    [
+      "the REST secret missing",
+      { rest: { state: "missing" as const, scope: "unlisted" as const } },
+    ],
+    [
+      "the Git secret unassigned",
+      { git: { state: "unassigned" as const, scope: "match" as const } },
+    ],
+    [
+      "a secret scoped elsewhere",
+      { rest: { state: "assigned" as const, scope: "mismatch" as const } },
+    ],
+  ])(
+    "%s is assignment_missing, distinct from a forge denial, with no probe",
+    async (_label, over) => {
+      const { done, probeCalls, events } = preflight({
+        verifyAssignment: async () => assigned(over),
+      });
+      const result = await done;
+      expect(result.outcome).toBe("assignment_missing");
+      expect(result.reason).toBe("env_repository_unavailable");
+      expect(result.error).toMatch(/^repository preflight assignment_missing: /);
+      expect(probeCalls).not.toHaveBeenCalled();
+      expect(events[0].probe).toBeNull();
+    },
+  );
+
+  it("an unlisted scope is not a mismatch", async () => {
+    const unlisted = { state: "assigned" as const, scope: "unlisted" as const };
+    const { done } = preflight({
+      verifyAssignment: async () => assigned({ rest: unlisted, git: unlisted }),
+    });
+    expect((await done).outcome).toBe("ok");
+  });
+
+  it("an unreadable OneCLI is assignment_unverified", async () => {
+    const { done, probeCalls } = preflight({
+      verifyAssignment: async () => {
+        throw new Error("OneCLI GET /agents failed: 500");
+      },
+    });
+    expect(await done).toMatchObject({
+      outcome: "assignment_unverified",
+      reason: "env_repository_unavailable",
+    });
+    expect(probeCalls).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["forge_denied", "env_repository_unreachable"],
+    ["network_failure", "env_repository_unreachable"],
+    ["unknown", "env_repository_unreachable"],
+    ["session_failure", "env_repository_unreachable"],
+  ] as const)("a probe outcome %s is reported as %s", async (outcome, reason) => {
+    const { done, events } = preflight({
+      probe: async () => {
+        throw new RepositoryPreflightError(outcome, "the probe failed");
+      },
+    });
+    expect(await done).toMatchObject({
+      outcome,
+      reason,
+      error: `repository preflight ${outcome}: the probe failed`,
+    });
+    expect(events[0].outcome).toBe(outcome);
+  });
+
+  it("an untyped probe error is session_failure and a failing emit changes nothing", async () => {
+    const { done } = preflight({
+      probe: async () => {
+        throw new Error("boom");
+      },
+      emit: () => {
+        throw new Error("log post failed");
+      },
+    });
+    expect(await done).toMatchObject({ outcome: "session_failure" });
+  });
+
+  it("no secret, auth header, proxy userinfo or sensitive URL reaches the event or the error", async () => {
+    const TOKEN = "ghp_" + "Zx9".repeat(12);
+    const PROXY_URL = "http://agent:s3cr3t-agent-token@host.docker.internal:10255";
+    const leaky = `docker create -e HTTPS_PROXY=${PROXY_URL} Authorization: Bearer ${TOKEN} https://x-access-token:${TOKEN}@github.com/acme/widget.git`;
+    const check = (text: string) => {
+      expect(text).not.toContain(TOKEN);
+      expect(text).not.toContain("s3cr3t-agent-token");
+      expect(text).not.toContain("x-access-token:");
+      expect(text).not.toMatch(/Bearer\s+\S{8,}/);
+    };
+    for (const probe of [
+      async () => {
+        throw new RepositoryPreflightError("network_failure", leaky);
+      },
+      async () => {
+        throw new Error(leaky);
+      },
+    ]) {
+      const { done, events } = preflight({
+        taskId: `task-1 ${leaky}`,
+        verifyAssignment: async () =>
+          ({
+            ...assigned(),
+            secretMode: leaky,
+            extra: leaky,
+          }) as unknown as RepositoryAssignmentCheck,
+        probe: probe as never,
+      });
+      const result = await done;
+      check(result.error ?? "");
+      check(JSON.stringify(events));
+      expect(result.error?.length).toBeLessThanOrEqual(340);
+      expect(JSON.stringify(events[0]).length).toBeLessThan(2000);
+      expect(JSON.stringify(events[0])).not.toContain("extra");
+    }
+    const unreadable = preflight({
+      verifyAssignment: async () => {
+        throw new Error(leaky);
+      },
+    });
+    check((await unreadable.done).error ?? "");
+    check(JSON.stringify(unreadable.events));
   });
 });

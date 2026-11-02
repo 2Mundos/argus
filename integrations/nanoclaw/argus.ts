@@ -65,6 +65,7 @@ import {
   preferredExecutorForLease,
   releaseRepositoryLease,
   runtimeProviders,
+  verifyRepositoryAssignment,
 } from "./argus-accounts.js";
 import { CHANGES_RELAY_FILE, createChangesRelay } from "./argus-changes-relay.js";
 import {
@@ -117,6 +118,8 @@ import {
   nanoclawPreflightRunner,
   nanoclawStartupReady,
   PREFLIGHT_TOTAL_MS,
+  type ProbeEvidence,
+  runRepositoryPreflight,
   safeText,
   sessionRepositoryProbe,
 } from "./argus-repo-preflight.js";
@@ -314,15 +317,17 @@ export interface ArgusConfig {
    * applied and before any model session: it must prove read or write access for
    * exactly this repository, from inside a session container (the host has no OneCLI
    * proxy). `provider` is the applied lease's provider; `access` is `write` when the
-   * task lists `repository:write`, otherwise `read`. Absent: the preflight fails
-   * closed; `fromEnv` wires the ephemeral-session probe.
+   * task lists `repository:write`, otherwise `read`; `agentIdentifier` is the OneCLI agent
+   * whose assignments were just confirmed. It throws a `RepositoryPreflightError` to name
+   * the outcome. Absent: the preflight fails closed; `fromEnv` wires the ephemeral-session probe.
    */
   probeRepository?: (
     repositoryUrl: string,
     allowlist: readonly string[],
     provider: string,
     access?: "read" | "write",
-  ) => Promise<void>;
+    agentIdentifier?: string,
+  ) => Promise<ProbeEvidence | void>;
   /**
    * Settles when the host may start work: NanoClaw's startup adoption has finished
    * successfully. The claim loop claims nothing before it (adoption stops any session
@@ -2918,30 +2923,50 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     } catch (err) {
       return { reason: "env_repository_unavailable", error: String(err) };
     }
-    try {
-      if (!cfg.probeRepository) throw new Error("no repository preflight session is configured");
-      const probe = cfg.probeRepository(
-        task.repository_url,
-        activeRepositoryAllowlist,
-        activeRepositoryLease?.provider ?? "",
-        access,
-      );
-      const mark = setTimeout(
-        () =>
-          log.error("The repository preflight is past its bounds; waiting for its teardown", {
-            task: task.id,
-          }),
-        cfg.repositoryProbeBackstopMs ?? REPOSITORY_PROBE_BACKSTOP_MS,
-      );
-      try {
-        await probe;
-      } finally {
-        clearTimeout(mark);
-      }
-    } catch (err) {
-      return { reason: "env_repository_unreachable", error: String(err) };
-    }
-    return null;
+    const target = repositoryTarget;
+    const url = task.repository_url;
+    if (!target || !url)
+      return { reason: "env_repository_unavailable", error: "no OneCLI agent target" };
+    const result = await runRepositoryPreflight({
+      taskId: task.id,
+      attempt: task.attempt,
+      repositoryUrl: url,
+      access,
+      lease: activeRepositoryLease,
+      verifyAssignment: () => verifyRepositoryAssignment(acc.onecli, target, url),
+      probe: async () => {
+        if (!cfg.probeRepository) throw new Error("no repository preflight session is configured");
+        const probe = cfg.probeRepository(
+          url,
+          activeRepositoryAllowlist,
+          activeRepositoryLease?.provider ?? "",
+          access,
+          target.identifier,
+        );
+        const mark = setTimeout(
+          () =>
+            log.error("The repository preflight is past its bounds; waiting for its teardown", {
+              task: task.id,
+            }),
+          cfg.repositoryProbeBackstopMs ?? REPOSITORY_PROBE_BACKSTOP_MS,
+        );
+        try {
+          return await probe;
+        } finally {
+          clearTimeout(mark);
+        }
+      },
+      // Closed values and host-derived hosts and paths only (failure classes 3.3.1).
+      emit: async (event) => {
+        log.info("Repository preflight evidence", { evidence: event });
+        await client.call("POST", `/tasks/${task.id}/log`, {
+          attempt: task.attempt,
+          source: "worker",
+          lines: [`[repository-preflight] ${JSON.stringify(event)}`.slice(0, 2000)],
+        });
+      },
+    });
+    return result.reason ? { reason: result.reason, error: result.error ?? result.outcome } : null;
   }
 
   /**

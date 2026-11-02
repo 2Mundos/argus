@@ -8,7 +8,9 @@
  * never holds) and the forge. It proves: the container user can write the verdict, the exit
  * status and cleanup behave with a real daemon, and the helper only passes when the forge
  * reports write access. It does NOT prove OneCLI's host/path scoping, a real token's
- * permissions, or any real forge behaviour; no production credential is involved.
+ * permissions, or any real forge behaviour; no production credential is involved. The
+ * "NOT real GitHub authorization" cases run the whole host preflight (lease, synthetic
+ * OneCLI assignment read, session) and check its outcome and redacted evidence.
  */
 import { execFile, execFileSync, spawnSync } from "node:child_process";
 import {
@@ -30,9 +32,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { composeSessionSpec } from "../container-runner.js";
 import { realCli } from "../drivers/cli.js";
 import { DockerSessionDriver } from "../drivers/docker-driver.js";
+import type { RepositoryAssignmentCheck } from "./argus-accounts.js";
 import {
   ephemeralSessionRunner,
   type GatewayControl,
+  type PreflightEvidenceEvent,
+  runRepositoryPreflight,
   sessionRepositoryProbe,
 } from "./argus-repo-preflight.js";
 
@@ -50,6 +55,8 @@ interface Forge {
   inject: boolean;
   fullName: string;
   delayMs: number;
+  status: number;
+  private: boolean | undefined;
   seen: Array<{ host: string; path: string; clientAuth: string | undefined }>;
 }
 
@@ -57,7 +64,14 @@ describe.skipIf(!IMAGE)("preflight in real containers (synthetic gateway and for
   let root: string;
   let proxy: http.Server;
   let proxyUrl: string;
-  const forge: Forge = { inject: true, fullName: "acme/widget", delayMs: 0, seen: [] };
+  const forge: Forge = {
+    inject: true,
+    fullName: "acme/widget",
+    delayMs: 0,
+    status: 200,
+    private: undefined,
+    seen: [],
+  };
   const docker = (...args: string[]) => execFileSync("docker", args, { encoding: "utf8" }).trim();
   const leftovers = () =>
     docker("ps", "-a", "--filter", "label=argus-preflight=1", "--format", "{{.Names}}");
@@ -101,12 +115,20 @@ describe.skipIf(!IMAGE)("preflight in real containers (synthetic gateway and for
             ["api.github.com", "/repos/acme/widget"],
             ["git.example.test", "/api/v1/repos/acme/widget"],
           ].some(([h, p]) => req.headers.host === h && req.url === p);
-          res.writeHead(route ? 200 : 404, { "content-type": "application/json" });
+          const status = route ? forge.status : 404;
+          res.writeHead(status, { "content-type": "application/json" });
           res.end(
             JSON.stringify(
-              route
-                ? { full_name: forge.fullName, permissions: { pull: true, push: authenticated } }
-                : { message: "Not Found" },
+              status === 200
+                ? {
+                    full_name: forge.fullName,
+                    private: forge.private,
+                    permissions: { pull: true, push: authenticated },
+                  }
+                : {
+                    message:
+                      status === 403 ? "Resource not accessible by integration" : "Not Found",
+                  },
             ),
           );
         }, forge.delayMs);
@@ -131,6 +153,8 @@ describe.skipIf(!IMAGE)("preflight in real containers (synthetic gateway and for
     forge.inject = true;
     forge.fullName = "acme/widget";
     forge.delayMs = 0;
+    forge.status = 200;
+    forge.private = undefined;
     forge.seen = [];
   });
 
@@ -188,7 +212,9 @@ describe.skipIf(!IMAGE)("preflight in real containers (synthetic gateway and for
   }
 
   it("github: the container user writes the verdict; passes only through the injected path", async () => {
-    await expect(probe()(GITHUB, [GITHUB], "github")).resolves.toBeUndefined();
+    await expect(probe()(GITHUB, [GITHUB], "github")).resolves.toMatchObject({
+      authentication: "proven",
+    });
     expect(forge.seen).toEqual([
       { host: "api.github.com", path: "/repos/acme/widget", clientAuth: undefined },
     ]);
@@ -196,7 +222,9 @@ describe.skipIf(!IMAGE)("preflight in real containers (synthetic gateway and for
   }, 90_000);
 
   it("gitea: same flow against another host", async () => {
-    await expect(probe()(GITEA, [GITEA], "gitea")).resolves.toBeUndefined();
+    await expect(probe()(GITEA, [GITEA], "gitea")).resolves.toMatchObject({
+      authentication: "proven",
+    });
     expect(forge.seen[0]).toMatchObject({
       host: "git.example.test",
       path: "/api/v1/repos/acme/widget",
@@ -242,6 +270,96 @@ describe.skipIf(!IMAGE)("preflight in real containers (synthetic gateway and for
     expect(Date.now() - started).toBeLessThan(40_000);
     expect(leftovers()).toBe("");
   }, 90_000);
+
+  describe("the host preflight end to end (synthetic forge, NOT real GitHub authorization)", () => {
+    const assigned: RepositoryAssignmentCheck = {
+      agent: "found",
+      secretMode: "selective",
+      rest: { state: "assigned", scope: "match" },
+      git: { state: "assigned", scope: "match" },
+      scopes: {
+        rest: { host: "api.github.com", path: "/repos/acme/widget/*" },
+        git: { host: "github.com", path: "/acme/widget.git/*" },
+      },
+    };
+    const preflight = async (
+      check: RepositoryAssignmentCheck,
+      env: Record<string, string> = {},
+    ) => {
+      const events: PreflightEvidenceEvent[] = [];
+      const result = await runRepositoryPreflight({
+        taskId: "task-docker",
+        attempt: 1,
+        repositoryUrl: GITHUB,
+        access: "write",
+        lease: { lease_id: "lease-docker", provider: "github", role: "repository" },
+        verifyAssignment: async () => check,
+        probe: () => probe(60_000, env)(GITHUB, [GITHUB], "github", "write", "group-1"),
+        emit: (event) => {
+          events.push(structuredClone(event));
+        },
+      });
+      return { result, events };
+    };
+
+    it("injected: the assignment is confirmed and the forge proves write access", async () => {
+      const { result, events } = await preflight(assigned);
+      expect(result).toMatchObject({ outcome: "ok", reason: null });
+      expect(events[0].probe).toMatchObject({ push: true, authentication: "proven" });
+      expect(forge.seen.map((s) => s.clientAuth)).toEqual([undefined]);
+      expect(leftovers()).toBe("");
+    }, 90_000);
+
+    it("absent assignment: blocked as unavailable with no container and no forge request", async () => {
+      const { result } = await preflight({
+        ...assigned,
+        git: { state: "unassigned", scope: "match" },
+      });
+      expect(result).toMatchObject({
+        outcome: "assignment_missing",
+        reason: "env_repository_unavailable",
+      });
+      expect(forge.seen).toEqual([]);
+      expect(leftovers()).toBe("");
+    }, 30_000);
+
+    it("denied: a forge 403 is forge_denied, not a missing assignment", async () => {
+      forge.status = 403;
+      const { result, events } = await preflight(assigned);
+      expect(result).toMatchObject({
+        outcome: "forge_denied",
+        reason: "env_repository_unreachable",
+      });
+      expect(events[0].probe).toMatchObject({ helper_error: "forbidden", http_status: 403 });
+      expect(leftovers()).toBe("");
+    }, 90_000);
+
+    it("no injection on a public repository is unknown, never called anonymous or denied", async () => {
+      forge.inject = false;
+      forge.private = false;
+      const { result, events } = await preflight(assigned);
+      expect(result.outcome).toBe("unknown");
+      expect(events[0].probe).toMatchObject({
+        visibility: "public",
+        push: false,
+        authentication: "unknown",
+      });
+      expect(JSON.stringify(events)).not.toMatch(/anonymous/i);
+      expect(leftovers()).toBe("");
+    }, 90_000);
+
+    it("redaction: proxy userinfo never reaches the error or the evidence", async () => {
+      forge.status = 403;
+      const secret = "s3cr3t-proxy-userinfo";
+      const withUserinfo = proxyUrl.replace("http://", `http://argus:${secret}@`);
+      const { result, events } = await preflight(assigned, { HTTPS_PROXY: withUserinfo });
+      expect(result.outcome).not.toBe("ok");
+      expect(result.error ?? "").not.toContain(secret);
+      expect(JSON.stringify(events)).not.toContain(secret);
+      expect(JSON.stringify(events)).not.toContain(SYNTHETIC);
+      expect(leftovers()).toBe("");
+    }, 90_000);
+  });
 
   describe("the helper's result file inside a container", () => {
     // Async: the synthetic gateway lives in this process, so a blocking spawn would deadlock it.
