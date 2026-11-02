@@ -45,11 +45,21 @@ export function decideQuotaResume(
   return { action: "resume" };
 }
 
+/**
+ * Pinned runner `rotateClaudeContinuation` defaults (NanoClaw 8fbacc9): a seed whose
+ * transcript is over this size or older than this age is cleared and the container
+ * starts fresh. Matching them here is what makes `resumed` fail closed.
+ */
+export const RUNNER_MAX_TRANSCRIPT_BYTES = 12 * 1024 * 1024;
+export const RUNNER_MAX_TRANSCRIPT_AGE_MS = 14 * 86_400_000;
+
+type TranscriptHit = { id: string; path: string; size: number; mtimeMs: number };
+
 /** The session transcripts under `<projectsDir>/<project>/<session id>.jsonl`. */
-async function transcripts(projectsDir: string, sinceMs = 0): Promise<string[]> {
+async function transcripts(projectsDir: string, sinceMs = 0): Promise<TranscriptHit[]> {
   const { readdir, stat } = await import("node:fs/promises");
   const path = await import("node:path");
-  const found: string[] = [];
+  const found: TranscriptHit[] = [];
   let projects: string[];
   try {
     projects = await readdir(projectsDir);
@@ -65,13 +75,40 @@ async function transcripts(projectsDir: string, sinceMs = 0): Promise<string[]> 
     }
     for (const file of files) {
       try {
-        const info = await stat(path.join(projectsDir, project, file));
+        const filePath = path.join(projectsDir, project, file);
+        const info = await stat(filePath);
         if (info.isFile() && info.size > 0 && info.mtimeMs >= sinceMs)
-          found.push(file.slice(0, -".jsonl".length));
+          found.push({
+            id: file.slice(0, -".jsonl".length),
+            path: filePath,
+            size: info.size,
+            mtimeMs: info.mtimeMs,
+          });
       } catch {}
     }
   }
   return found;
+}
+
+/**
+ * True when the pinned runner would keep this transcript for a cold resume: non-empty,
+ * at most 12 MiB, and (when the first JSONL entry has a timestamp) at most 14 days old.
+ * Anything else is discarded before `Resuming agent session` is logged.
+ */
+export function transcriptResumableByRunner(
+  size: number,
+  firstLine: string,
+  nowMs = Date.now(),
+): boolean {
+  if (!(size > 0) || size > RUNNER_MAX_TRANSCRIPT_BYTES) return false;
+  try {
+    const timestamp = JSON.parse(firstLine)?.timestamp;
+    const startMs = timestamp ? Date.parse(timestamp) : NaN;
+    if (!Number.isNaN(startMs) && nowMs - startMs > RUNNER_MAX_TRANSCRIPT_AGE_MS) return false;
+  } catch {
+    // Runner ignores an unreadable first entry and still resumes on size alone.
+  }
+  return true;
 }
 
 /**
@@ -83,17 +120,36 @@ export async function observeClaudeSession(
   projectsDir: string,
   sinceMs: number,
 ): Promise<string | null> {
-  const ids = [...new Set(await transcripts(projectsDir, sinceMs))];
+  const ids = [...new Set((await transcripts(projectsDir, sinceMs)).map((t) => t.id))];
   const [only] = ids;
   return ids.length === 1 && only && SESSION_ID.test(only) ? only : null;
 }
 
-/** The transcript of `sessionId` still exists and is not empty. */
+/**
+ * The transcript of `sessionId` still exists and the pinned runner would actually
+ * resume it (not rotate it away). Missing, empty, oversized or too-old → false.
+ */
 export async function claudeSessionReadable(
   projectsDir: string,
   sessionId: string,
 ): Promise<boolean> {
-  return SESSION_ID.test(sessionId) && (await transcripts(projectsDir)).includes(sessionId);
+  if (!SESSION_ID.test(sessionId)) return false;
+  const hit = (await transcripts(projectsDir)).find((t) => t.id === sessionId);
+  if (!hit) return false;
+  try {
+    const { open } = await import("node:fs/promises");
+    const fh = await open(hit.path, "r");
+    try {
+      const buf = Buffer.alloc(4096);
+      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+      const firstLine = buf.subarray(0, bytesRead).toString("utf8").split(/\r?\n/, 1)[0] ?? "";
+      return transcriptResumableByRunner(hit.size, firstLine);
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return false;
+  }
 }
 
 /**

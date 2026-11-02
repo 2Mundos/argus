@@ -20,7 +20,10 @@ import {
   decideQuotaResume,
   observeClaudeSession,
   type QuotaResumeOffer,
+  RUNNER_MAX_TRANSCRIPT_AGE_MS,
+  RUNNER_MAX_TRANSCRIPT_BYTES,
   seedClaudeContinuation,
+  transcriptResumableByRunner,
 } from "./argus-quota-resume.js";
 
 const nanoclaw = vi.hoisted(() => ({
@@ -117,6 +120,25 @@ describe("host observation", () => {
     const odd = await projects({ "p/..%2Fx.jsonl": "x" });
     expect(await observeClaudeSession(odd, 0)).toBeNull();
     expect(await claudeSessionReadable(two, "../etc")).toBe(false);
+  });
+
+  it("is unreadable when the runner would rotate the transcript away", async () => {
+    const recent = JSON.stringify({ type: "user", timestamp: new Date().toISOString() });
+    const old = JSON.stringify({
+      type: "user",
+      timestamp: new Date(Date.now() - RUNNER_MAX_TRANSCRIPT_AGE_MS - 60_000).toISOString(),
+    });
+    expect(transcriptResumableByRunner(1, recent)).toBe(true);
+    expect(transcriptResumableByRunner(RUNNER_MAX_TRANSCRIPT_BYTES + 1, recent)).toBe(false);
+    expect(transcriptResumableByRunner(1, old)).toBe(false);
+    expect(transcriptResumableByRunner(1, "{not-json")).toBe(true); // size-only, like the runner
+
+    const oversized = await projects({
+      "p/5b1c0f3e-aaaa.jsonl": "x".repeat(RUNNER_MAX_TRANSCRIPT_BYTES + 1),
+    });
+    expect(await claudeSessionReadable(oversized, "5b1c0f3e-aaaa")).toBe(false);
+    const aged = await projects({ "p/5b1c0f3e-bbbb.jsonl": `${old}\n` });
+    expect(await claudeSessionReadable(aged, "5b1c0f3e-bbbb")).toBe(false);
   });
 });
 
@@ -255,6 +277,25 @@ describe("resumeClaudeSessionFromEnv", () => {
     }
     nanoclaw.wiring = { agent_group_id: "group-1", session_mode: "per-thread", threads: 1 };
     nanoclaw.sqlite = false; // another mailbox implementation
+    expect(await resumeClaudeSessionFromEnv(SESSION, "argus:t1:2")).toBe(false);
+    expect(nanoclaw.sessions.size).toBe(0);
+  });
+
+  it("never seeds a transcript the runner would discard, so resumed cannot be claimed", async () => {
+    const project = path.join(
+      root,
+      "data/v2-sessions/group-1/.claude-shared/projects/-workspace-agent",
+    );
+    writeFileSync(path.join(project, `${SESSION}.jsonl`), "x".repeat(RUNNER_MAX_TRANSCRIPT_BYTES + 1));
+    expect(await resumeClaudeSessionFromEnv(SESSION, "argus:t1:2")).toBe(false);
+    expect(nanoclaw.sessions.size).toBe(0);
+    expect([...mailboxes.keys()]).toEqual([]);
+
+    const old = JSON.stringify({
+      type: "user",
+      timestamp: new Date(Date.now() - RUNNER_MAX_TRANSCRIPT_AGE_MS - 1000).toISOString(),
+    });
+    writeFileSync(path.join(project, `${SESSION}.jsonl`), `${old}\n`);
     expect(await resumeClaudeSessionFromEnv(SESSION, "argus:t1:2")).toBe(false);
     expect(nanoclaw.sessions.size).toBe(0);
   });

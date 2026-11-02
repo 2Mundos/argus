@@ -390,11 +390,12 @@ paused Claude Code conversation instead of starting over
 sees `ARGUS_QUOTA_RESUME=1`, which a pool's `env` can set. Off, the session id is
 still recorded and offered, and every offer falls back to a fresh session
 (`not_available`). On, the channel seeds the new attempt session's runner
-continuation before its container starts. That needs per-thread wiring, the
-SQLite mailbox and the transcript still on disk; otherwise the attempt falls back to
-a fresh session. It is proven only against a fake API
-(`scripts/quota-resume-spike.sh`). A real two-account run is in the spec's
-verification boundary.
+continuation before its container starts only when the transcript still passes the
+pinned runner's resume checks (present, non-empty, ≤12 MiB, ≤14 days by first
+entry). Seed alone is never reported as `resumed`. That needs per-thread wiring
+and the SQLite mailbox; otherwise the attempt falls back to a fresh session. It
+is proven only against a fake API (`scripts/quota-resume-spike.sh`). A real
+two-account run is in the spec's verification boundary.
 
 ## Task inputs
 

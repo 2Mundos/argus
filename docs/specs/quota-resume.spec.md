@@ -57,8 +57,10 @@ are unchanged: `claim` bumps `attempt` and a quota pause never touches
 
 The channel decides in this order, and the first match is the fallback reason:
 `other_node`, `other_engine`, `engine_unsupported` (only `anthropic` can resume),
-`not_available` (resume is off, 3.9), `unreadable` (the transcript file is gone or
-empty). A fallback is today's fresh session with the checkpoint restored.
+`not_available` (resume is off, 3.9), `unreadable` (the transcript is gone, empty,
+over 12 MiB, or older than 14 days by its first entry — the same caps the pinned
+runner uses to drop a continuation before logging `Resuming agent session`). A
+fallback is today's fresh session with the checkpoint restored.
 
 To resume, the channel makes the attempt's NanoClaw session start from the native
 id before its container exists. It resolves the attempt's per-thread session
@@ -72,9 +74,11 @@ shares. The write happens only when the continuation is empty, there is no legac
 is idempotent. Any other state, an unexpected table layout, a wiring that is not
 per-thread or a non-SQLite mailbox writes nothing and gives `resume_failed`.
 
-`resumed` means the seed is in place before the container starts. The runner can
-still start fresh (4.3). A fresh conversation is never reported as a resume by the
-channel.
+`resumed` is reported only when the transcript passes those runner resume checks
+and the continuation seed then succeeds. A seed alone is not a resume: the runner
+clears a missing, oversized or too-old transcript and starts fresh (4.1, 4.3), so
+those paths are `unreadable` / `resume_failed` and never `resumed`. A fresh
+conversation is never reported as a resume by the channel.
 
 ## 3.5 One message, once
 
@@ -150,15 +154,17 @@ claude-agent-sdk 0.3.296, against a local fake Messages API
 
 ## 4.3 Risks
 
-- **Rotation after the report.** The runner drops a continuation whose transcript is
-  over 12 MiB or older than 14 days (by its first entry) and starts fresh. Argus has
-  already recorded `resumed` and the agent got the note. The task text is in the
-  note, so the work goes on as a cold start.
+- **Rotation after the report (closed for the known caps).** The channel applies the
+  runner's 12 MiB / 14-day caps before seeding and before reporting `resumed`, so a
+  transcript the runner would rotate is `unreadable`, not `resumed`. A custom
+  `CLAUDE_TRANSCRIPT_ROTATE_*` inside the container that is stricter than those
+  defaults is still unobserved on the host.
 - **Transcript gone at start.** If the transcript disappears between the check and the
   container start, the runner clears the continuation, and that first batch, which
   is the task message, is acknowledged without a model call. The attempt then waits
   like any failed run (the "Not done yet" timeout in the NanoClaw README). The window
-  is the seconds between the seed and the first poll.
+  is the seconds between the seed and the first poll; Argus may already have recorded
+  `resumed` for that race.
 - **Note lost, resume kept.** If the seed succeeds but the take answers `first:
   false` or fails, the session resumes without the note, and the task text arrives
   as usual.

@@ -4965,9 +4965,11 @@ export async function closeSessionFromEnv(thread: string | null): Promise<void> 
 
 /**
  * Quota resume (spec 3.4): create the session of `thread` without a message and seed
- * its Claude continuation, so the container the task message starts resumes
- * `sessionId`. Only for the per-thread Argus wiring on NanoClaw's SQLite mailbox, whose
- * layout this depends on; anything else is false and the attempt starts fresh.
+ * its Claude continuation only when the transcript still passes the pinned runner's
+ * resume checks. Seed success alone is not enough: a missing, oversized or too-old
+ * transcript is false here so the channel never reports `resumed` for a run the
+ * runner would start fresh. Only the per-thread Argus wiring on NanoClaw's SQLite
+ * mailbox is supported; anything else is false and the attempt starts fresh.
  */
 export async function resumeClaudeSessionFromEnv(
   sessionId: string,
@@ -4980,6 +4982,7 @@ export async function resumeClaudeSessionFromEnv(
   const wiring = mg ? (await getMessagingGroupAgents(mg.id))[0] : undefined;
   if (!mg || !wiring || wiring.session_mode !== "per-thread" || wiring.threads === 0) return false;
   const group = wiring.agent_group_id;
+  // Fail closed before resolveSession/seed: no mailbox write for a discarded transcript.
   if (!(await claudeSessionReadable(claudeProjectsDir(group), sessionId))) return false;
   const { getAgentMailbox } = await import("../mailbox/index.js");
   const { SqliteAgentMailbox, outboundDbPath } = await import("../mailbox/sqlite/index.js");
