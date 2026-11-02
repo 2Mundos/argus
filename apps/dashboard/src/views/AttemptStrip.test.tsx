@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskDetail } from "./TaskDetail";
 
 const mock = vi.hoisted(() => ({
   attempts: [] as number[],
+  current: 2,
+  reloads: new Set<() => void>(),
   logs: new Map<number, { seq: number; source: string; line: string }[]>(),
   changes: new Map<number, string>(), // attempt → commit subject; missing → 404
   notes: [] as unknown[],
@@ -58,7 +60,7 @@ vi.mock("../api", () => {
         title: "t",
         project: "p",
         state: "failed",
-        attempt: 2,
+        attempt: mock.current,
         failures: 1,
         max_attempts: 3,
         required_capabilities: ["repository:write"],
@@ -83,7 +85,12 @@ vi.mock("../live", async () => {
     useLiveData: (load: () => Promise<unknown>) => {
       const [data, setData] = React.useState<unknown>();
       React.useEffect(() => {
-        load().then(setData);
+        const reload = () => void load().then(setData);
+        mock.reloads.add(reload);
+        reload();
+        return () => {
+          mock.reloads.delete(reload);
+        };
       }, []);
       return { data, reload: () => {} };
     },
@@ -104,6 +111,8 @@ const line = (seq: number, text: string) => ({ seq, source: "worker", line: text
 
 beforeEach(() => {
   mock.attempts = [1, 2];
+  mock.current = 2;
+  mock.reloads.clear();
   mock.logs = new Map([
     [1, [line(3, "first run output")]],
     [2, [line(9, "second run output")]],
@@ -134,6 +143,22 @@ describe("attempt strip", () => {
     fireEvent.click(screen.getByRole("button", { name: "Attempt 2 (current)" }));
     await screen.findByText("second run output");
     expect(screen.queryByText("first run output")).toBeNull();
+  });
+
+  it("moves to a new current attempt even after an older one was picked", async () => {
+    render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    await screen.findByText("second run output");
+    fireEvent.click(screen.getByRole("button", { name: "Attempt 1" }));
+    await screen.findByText("first run output");
+    mock.attempts = [1, 2, 3];
+    mock.current = 3;
+    mock.logs.set(3, [line(12, "third run output")]);
+    await act(async () => {
+      for (const reload of mock.reloads) reload();
+    });
+    await screen.findByText("third run output");
+    const pressed = screen.getByRole("button", { pressed: true });
+    expect(pressed.textContent).toBe("Attempt 3 (current)");
   });
 
   it("shows an empty log and omits Changes when the attempt has no snapshot", async () => {
