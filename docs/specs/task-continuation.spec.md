@@ -78,6 +78,10 @@ The attempt snapshot (`task_attempts.definition`, [task edit](task-edit.spec.md)
 | `complete` with `result.checklist` | item status and evidence | `worker_reported` |
 | `POST /tasks/{id}/reconcile-pr` (orchestrator/admin, forge-verified repository and exact head; [deliverable](task-deliverable.spec.md) 3.7) | PR artifact | `orchestrator` |
 
+`POST /tasks/{id}/reconcile-delivery` ([deliverable](task-deliverable.spec.md)
+3.8) writes no continuation fact: it moves a failed task to review and leaves the
+artifacts, phase and checklist as they are.
+
 Inputs are closed models: a caller cannot send provenance or timestamps; free
 text is redacted ([redact](../../packages/core/src/argus_core/redact.py)) and
 bounded before storage. A stale `expected_revision` is 409 `stale_continuation`;

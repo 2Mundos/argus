@@ -52,6 +52,15 @@ class PrBinding(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
 
 
+class DeliveryReconciliation(PrBinding):
+    """Move a task that failed `deliverable_missing` to review because its bound PR
+    merged (task deliverable spec 3.8). `attempt` and `failure_event_id` name the
+    failure the caller looked at; a newer one makes the request stale."""
+
+    attempt: int = Field(ge=0)
+    failure_event_id: int = Field(ge=1)
+
+
 class DeliveryTask(BaseModel):
     id: str
     state: str

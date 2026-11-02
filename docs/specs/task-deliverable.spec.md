@@ -15,8 +15,9 @@ without the evidence its deliverable needs.
 
 In scope: the enum and its storage, the creation rules, the completion gate, the
 accept gate for results that depend on the forge, editing, binding a pull request
-the worker opened but never reported, and every entry point that creates, edits or
-closes a task.
+the worker opened but never reported, taking a task that failed for want of that PR
+to review once the PR merged, and every entry point that creates, edits or closes
+a task.
 
 # 2. Non-Goals
 
@@ -24,7 +25,9 @@ closes a task.
   knowledge or open a PR beyond its deliverable; only the deliverable is checked).
 - **No auto-close.** Argus never polls the forge to accept a task. A `pr_green` or
   `pr_merged` task waits for an orchestrator or human, as any reviewed task does
-  ([delivery](task-delivery.spec.md) 3.4: merged is not accepted by itself).
+  ([delivery](task-delivery.spec.md) 3.4: merged is not accepted by itself). The
+  delivery reconciliation (3.8) is an explicit manager request and ends in
+  `in_review`, never in `succeeded`.
 - **No forge writes** and no forge calls inside a write transaction.
 - **No judgement of quality.** The deliverable proves something exists, not that it
   is good; that stays with `acceptance`, `review` and independent review.
@@ -157,13 +160,10 @@ the task as its PR artifact, given `repository` (`https://host/owner/repo`),
 What that means per state:
 
 - `failed`, `cancelled`, `succeeded` stay as they are: a binding never resurrects
-  a task. A failed task (the `deliverable_missing` case) moves on only through
-  the existing operator `retry`; the next attempt's contract carries the bound
-  PR (phase `qa` when merged, `resume` when open), so the worker verifies and
-  completes instead of implementing again, and its completion meets the
-  deliverable gate. This adds no transition out of a terminal state and no
-  review decision without a completion: `retry` is already the one way out of
-  `failed`, and the acceptance evidence still comes from an attempt.
+  a task. A failed task (the `deliverable_missing` case) moves on through the
+  operator `retry`, whose next attempt's contract carries the bound PR (phase
+  `qa` when merged, `resume` when open), or, once the bound PR merged, through
+  the delivery reconciliation (3.8), which opens the review without a rerun.
 - `claimed`: the holder's next `complete` sees the artifact.
 - `in_review` (including `deliverable_pending`): the bound PR is the newest PR
   artifact, so the accept reads it.
@@ -173,24 +173,101 @@ There is no unbind: the binding is a forge-verified fact and the event is the
 audit record. A wrong PR cannot pass the checks; a PR that later changes is
 reported by observations, and an accept still reads the forge.
 
-## 3.8 Entry points and engines
+## 3.8 Reconciling a merged delivery
+
+The binding records the evidence but moves nothing, so a task that failed
+`deliverable_missing` whose PR later merged (task `1a7c140b`, PR #154) showed the
+delivery `merged`, `accept_blocked` `not_in_review`, a pending checklist and no
+decision: the only way on was a `retry` that reruns a worker to verify a merge.
+`POST /api/tasks/{id}/reconcile-delivery` (orchestrator or admin; a worker is
+`403`) moves such a task from `failed` to `in_review` and nothing else. The body
+is the binding's (`repository`, `number`, exact `head_sha`, `reason`) plus the
+failure the caller looked at: the task's `attempt` and the `failure_event_id` of
+its latest event into `failed`.
+
+- **Eligibility** (Argus's own facts, checked before the forge read and again in
+  the write): the repository passes 3.7's check (`422`); the task is `failed`
+  (else `409 task_not_failed`, so `succeeded`, `cancelled` and live states are
+  untouched); the named attempt and failure event are the current ones (else `409
+  stale_failure`); that failure is `deliverable_missing`, meaning a `channel_error`
+  fail whose error carries the channel's fixed refusal text `(422
+  deliverable_missing)` ([failure classes](failure-classes.spec.md) 3.1; any other
+  failure is `409 failure_not_deliverable_missing`); the PR is bound (3.7) at
+  `head_sha` (else `409 pr_not_bound`, or `409 pr_stale_head` when it is bound to
+  another head); and the task holds no other PR artifact (`409 pr_ambiguous`), so
+  the accept reads the same PR. A summary, note or progress text that names a
+  merged PR is not evidence: only the binding is.
+- **Forge** (read with `PrChecker`, outside any write transaction): the PR must be
+  `merged` at exactly `head_sha` with a merge commit. Unreadable, not found, or no
+  merge commit is `409 pr_unverified`; another head is `409 pr_stale_head`; open
+  or closed unmerged is `409 pr_not_merged`.
+- **One write.** In one transaction the checks above run again; when the task
+  recorded a branch (`commit_created`), the PR's head branch must be one of them
+  (`409 pr_branch_mismatch`). The task goes to `in_review` (`archived_at` and
+  `retry_at` cleared, as `retry` does) and the normal review decision opens
+  (audience human when `review` is `human`, else orchestrator). The event
+  `task.delivery_reconciled` records the actor, reason, `from`/`to`, attempt,
+  failure count, decision, failure event and reason, failure class, repository,
+  number, URL, head, head branch, merge commit, merge time and contract revision.
+- **What stays.** Attempt, failure count, error, attempt records, every earlier
+  event and the checklist are unchanged. No attempt starts, no retry is
+  scheduled, no other task is written. The review decision is the gate: merge and
+  green checks accept nothing, the delivery still shows `accept_blocked`
+  `checklist_pending` while items are open, and the accept passes 3.5 against the
+  forge. Rejecting returns the task to ready as any rejected review does.
+- **Idempotence.** The same failure, PR and head again returns the task and
+  writes nothing (no forge read); another PR or head for an already reconciled
+  failure is `409 delivery_already_reconciled`. Concurrent requests serialize on
+  the writer: the first moves the task, the rest replay.
+
+### Operator runbook
+
+1. **Verify on the forge** by hand: the PR is merged, its head commit is the
+   task's work (the branch from `commit_created`, the diff matches the spec), and
+   it is the only PR for the task. Note the full 40-character head SHA.
+2. **Read the failure**: `get_task` gives `attempt`; the task's events give the
+   latest one with `to` `failed`, whose `reason` is `channel_error` and whose
+   error contains `(422 deliverable_missing)`. Anything else is not this path:
+   use `retry`, or leave the task failed.
+3. **Bind**: `reconcile_task_pr` (`POST .../reconcile-pr`) with the repository,
+   number, head and a reason. `get_task_delivery` now shows the PR.
+4. **Reconcile**: `reconcile_task_delivery` (`POST .../reconcile-delivery`) with
+   the same PR and head, the attempt, the failure event id and a reason that says
+   what you verified.
+5. **Review**: check the acceptance items against the merged code, then answer
+   the review decision. Accept only when the checklist holds; reject sends the
+   task back to ready for a new attempt.
+
+What not to do: do not `retry` a task only to have a worker restate a merge; do
+not edit the database or force a state; do not bind a PR you have not read on the
+forge. There is no undo of the reconciliation: if it was wrong, reject the review
+decision (the task returns to ready) or cancel the task; the event stays as the
+audit record.
+
+## 3.9 Entry points and engines
 
 - **REST**: `deliverable` on `POST /api/tasks`, the task read and `PATCH`; the
-  decision answer routes enforce 3.5; `POST /api/tasks/{id}/reconcile-pr` (3.7).
-  **MCP**: `create_task` and `edit_task` take it, `get_task` returns it;
-  `answer_decision` goes through the same routes; `reconcile_task_pr` calls the
-  binding route. **Dashboard**: a select in the new-task form and the edit form,
-  and a line in the task facts; the binding is an orchestrator operation and has
-  no dashboard control. **Drafts and routines** use `TaskCreate`'s field.
+  decision answer routes enforce 3.5; `POST /api/tasks/{id}/reconcile-pr` (3.7)
+  and `POST /api/tasks/{id}/reconcile-delivery` (3.8). **MCP**: `create_task` and
+  `edit_task` take it, `get_task` returns it; `answer_decision` goes through the
+  same routes; `reconcile_task_pr` and `reconcile_task_delivery` call the same
+  service functions as the routes. **Dashboard**: a select in the new-task form
+  and the edit form, and a line in the task facts; the binding and the
+  reconciliation are orchestrator operations with no dashboard control (the
+  reconciled task's review decision shows as any other). **Drafts and routines**
+  use `TaskCreate`'s field.
 - **Engines**: the gates are server-side and engine independent. The NanoClaw
   channel states the deliverable, and whether merging is allowed, in the trusted
   part of the prompt, so Claude, Codex, Cursor, Copilot, custom and local
   workers all see the same rule. A runtime that does not use the channel is
-  still held to the completion gate. The binding (3.7) is server-side too and
-  serves every engine's tasks alike.
+  still held to the completion gate. The binding (3.7) and the reconciliation
+  (3.8) are server-side too and serve every engine's tasks alike; the
+  `deliverable_missing` failure text comes from the NanoClaw channel, so a task
+  of a runtime that does not use it is not eligible and is retried.
 - **Way back**: the deliverable can be edited (3.6); a refused completion
   leaves the claim open; a rejected review returns the task to ready; a failed
-  task with a bound PR is retried (3.7).
+  task with a bound PR is retried (3.7) or, once merged, reconciled to review
+  (3.8), whose decision can still reject.
 
 # 4. Open Questions
 
@@ -204,6 +281,9 @@ reported by observations, and an accept still reads the forge.
   an implementation kind a `pr_open`)?
 - `pr_green` on a PR whose repository reports no checks stays unverified
   forever; lowering the deliverable (3.6) is the way out today.
+- The `deliverable_missing` failure is recognized by the channel's fixed error
+  text. A typed failure reason sent by the channel would be exact; it needs a
+  channel change and a [failure classes](failure-classes.spec.md) row.
 
 # 5. Constraints
 
@@ -223,8 +303,11 @@ reported by observations, and an accept still reads the forge.
   `independent_review` opens a decision for forge-gated deliverables.
 - `decisions`: the single and batch answer routes read the forge first and
   pass the result to `answer`.
-- `apps/api/src/argus_api/tasks/pr_binding.py`: the binding (3.7), its route and
-  MCP `reconcile_task_pr`; `argus_core.delivery.PrBinding` is the request.
+- `apps/api/src/argus_api/tasks/pr_binding.py`: the binding (3.7) and the
+  delivery reconciliation (3.8), their routes and MCP `reconcile_task_pr` and
+  `reconcile_task_delivery`; `argus_core.delivery.PrBinding` and
+  `DeliveryReconciliation` are the requests; `service.review_failed` is the
+  transition; `delivery.ForgeSnapshot.merge_sha` carries the merge commit.
 - `argus_core.task_edit` (editable fields), MCP `create_task`/`edit_task`
   text, regenerated `openapi.json`/`schema.d.ts`, dashboard forms and facts,
   the NanoClaw prompt line, [task delivery](task-delivery.spec.md) and
@@ -233,7 +316,12 @@ reported by observations, and an accept still reads the forge.
   gate per level, the pending path, the accept gate (met, unmet, unverified,
   batch, independent review), the editable fields; the binding (success and
   audit event, replay, stale head, wrong repository, unreadable forge, terminal
-  and pending states, no forge read while the write lock is held).
+  and pending states, no forge read while the write lock is held); the
+  reconciliation (the incident fixture `1a7c140b`/#154 showing the gap, prose not
+  being evidence, success with history and checklist unchanged and accept still
+  gated, replay, concurrent requests, wrong repository, head, branch, stale
+  failure, open PR, unverified forge, missing merge commit, a second PR, a worker
+  caller, another failure, other states).
 
 ## Verification boundary
 

@@ -163,7 +163,7 @@ every new dependency is judged against it.
   exact-head checks/statuses, mergeability, review evidence; checklist and
   authorization separate) on REST, MCP and the dashboard; a merge is flagged for
   review, never accepted; green does not authorize merge.
-- [Task deliverable](specs/task-deliverable.spec.md) — what a task must leave behind
+- [Task deliverable](specs/task-deliverable.spec.md) — what a task must leave behind; includes the runbook for reconciling a failed task whose PR merged (3.8)
   (response, knowledge, artifact, subtasks, branch, PR open, green or merged),
   validated at creation against capabilities and repository, at completion against
   evidence, and at accept against the forge.

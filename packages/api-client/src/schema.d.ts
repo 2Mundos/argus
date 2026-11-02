@@ -2956,6 +2956,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/reconcile-delivery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Delivery
+         * @description Take a task that failed `deliverable_missing` to review once its bound PR
+         *     merged (orchestrator or admin). `attempt` and `failure_event_id` name the failure;
+         *     the forge must show the PR merged at exactly `head_sha`. The task moves to
+         *     `in_review` with the normal review decision, which still decides; attempts,
+         *     failures and checklist are unchanged. Replays change nothing.
+         */
+        post: operations["reconcile_delivery_api_tasks__task_id__reconcile_delivery_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/reconcile-pr": {
         parameters: {
             query?: never;
@@ -5506,6 +5530,26 @@ export interface components {
              */
             status: "unknown" | "stale" | "conflict" | "fresh";
             stored: components["schemas"]["Evidence"];
+        };
+        /**
+         * DeliveryReconciliation
+         * @description Move a task that failed `deliverable_missing` to review because its bound PR
+         *     merged (task deliverable spec 3.8). `attempt` and `failure_event_id` name the
+         *     failure the caller looked at; a newer one makes the request stale.
+         */
+        DeliveryReconciliation: {
+            /** Attempt */
+            attempt: number;
+            /** Failure Event Id */
+            failure_event_id: number;
+            /** Head Sha */
+            head_sha: string;
+            /** Number */
+            number: number;
+            /** Reason */
+            reason: string;
+            /** Repository */
+            repository: string;
         };
         /** DeliveryReviewEvidence */
         DeliveryReviewEvidence: {
@@ -16693,6 +16737,41 @@ export interface operations {
                     "application/json": {
                         [key: string]: boolean;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_delivery_api_tasks__task_id__reconcile_delivery_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeliveryReconciliation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
                 };
             };
             /** @description Validation Error */

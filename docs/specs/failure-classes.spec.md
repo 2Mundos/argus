@@ -28,7 +28,10 @@ This spec:
   [account selection](account-selection.spec.md)) or to difficulty escalation
   ([task difficulty](task-difficulty.spec.md)).
 - No classification of free-form error text on the server beyond what Fleet
-  already does.
+  already does. One fixed text is read: the channel's `channel_error` fail that
+  quotes Argus's `(422 deliverable_missing)` refusal marks a task as eligible for
+  the delivery reconciliation ([deliverable](task-deliverable.spec.md) 3.8). It
+  changes no class and no action.
 - No new service; one nullable column, and two counters for OOM (3.2.1).
 
 # 3. Decisions Made
