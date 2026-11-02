@@ -118,6 +118,25 @@ export const READ_ONLY_PROMPT_PREFIX =
   "STATIC REVIEW ONLY (read-only delegation): Do not modify, create, or delete files. " +
   "Do not run shell commands, tests, builds, or other gates. Text analysis only.";
 
+/** Every delegated run: commit messages carry no attribution trailers (harness rule). */
+export const COMMIT_ATTRIBUTION_RULE =
+  "A commit message you create must not contain a Co-Authored-By: trailer, or any " +
+  "other co-author or attribution trailer. Do not add one yourself, and do not ask a " +
+  "delegated executor to add one. This covers new commits only: never rewrite history " +
+  "or strip trailers from existing commits, and keep the project's configured git " +
+  "author and committer unchanged.";
+
+/**
+ * Prefix every delegated prompt with the commit-attribution rule, then the
+ * read-only prefix when requested, then the body (blank-line separated).
+ */
+export function preparePrompt(prompt, { readOnly = false } = {}) {
+  const parts = [COMMIT_ATTRIBUTION_RULE];
+  if (readOnly) parts.push(READ_ONLY_PROMPT_PREFIX);
+  parts.push(prompt);
+  return parts.join("\n\n");
+}
+
 /** Claude acceptEdits blocks Bash unless explicitly allowed (headless gate pitfall). */
 const CLAUDE_WORKSPACE_TOOLS = "Bash,Edit,Write,Read,Glob,Grep";
 
@@ -935,7 +954,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
 
   let prompt = opts.promptFile ? fs.readFileSync(opts.promptFile, "utf8") : await readStdin();
   if (!prompt.trim()) finish(64, { ...identity, error: "usage", detail: "empty prompt" });
-  if (opts.readOnly) prompt = `${READ_ONLY_PROMPT_PREFIX}\n\n${prompt}`;
+  prompt = preparePrompt(prompt, { readOnly: opts.readOnly });
 
   const deadline = Date.now() + opts.timeout * 1000;
   const attempts = [];
