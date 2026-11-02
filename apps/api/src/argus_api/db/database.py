@@ -91,6 +91,7 @@ class Database:
         self._clock = clock
         self._writer = writer
         self._write_lock = asyncio.Lock()
+        self._write_owner: asyncio.Task | None = None  # the task inside write()
         self._write_since: float | None = None  # monotonic start of the open write
         self._readers: asyncio.Queue[aiosqlite.Connection] = asyncio.Queue()
         self._all_readers = readers
@@ -138,6 +139,7 @@ class Database:
         """
         async with self._write_lock:
             self._write_since = time.monotonic()
+            self._write_owner = asyncio.current_task()
             try:
                 await self._writer.execute("BEGIN IMMEDIATE")
                 tx = Tx(self._writer, self._clock())
@@ -159,8 +161,17 @@ class Database:
                     raise
             finally:
                 self._write_since = None
+                self._write_owner = None
         for event in (*tx.events, *tx.transient):
             self.bus.publish(event)
+
+    def writing(self) -> bool:
+        """True inside this task's own write transaction; another task's open write
+        does not count (it is what concurrent requests see)."""
+        return (
+            self._write_owner is not None
+            and self._write_owner is asyncio.current_task()
+        )
 
     def now(self) -> datetime:
         """The same clock write transactions use (`tx.now`)."""

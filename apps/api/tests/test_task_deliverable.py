@@ -433,7 +433,7 @@ def watched_forge(client: TestClient, pull: dict, statuses=None) -> list[str]:
     db: Database = client.app.state.db  # ty: ignore[unresolved-attribute]
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert not db._write_lock.locked(), "forge read inside a write transaction"
+        assert not db.writing(), "forge read inside a write transaction"
         reads.append(request.url.path)
         return serve(request)
 
@@ -646,16 +646,19 @@ def pr_154(**extra) -> dict:
     }
 
 
-def incident_forge(client: TestClient, pull: dict | None) -> list[str]:
-    """Serve PR #154 fresh (no cached read), recording each read and failing if the
-    write lock is held. `None` is a forge that does not know the PR."""
+def incident_forge(
+    client: TestClient, pull: dict | None, on_read: Callable[[], None] = lambda: None
+) -> list[str]:
+    """Serve PR #154 fresh (no cached read), recording each read and failing if it
+    happens inside the reader's own write. `None` is a forge that does not know the PR."""
     client.app.state.pr_checker._cache.clear()  # ty: ignore[unresolved-attribute]
     db: Database = client.app.state.db  # ty: ignore[unresolved-attribute]
     serve = full_forge(pull or {})
     reads: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert not db._write_lock.locked(), "forge read inside a write transaction"
+        on_read()
+        assert not db.writing(), "forge read inside a write transaction"
         reads.append(request.url.path)
         if pull is None:
             return httpx.Response(404, json={"message": "not found"})
@@ -899,6 +902,42 @@ def test_concurrent_reconciliations_make_one_transition(client: TestClient) -> N
         )
         == 1
     )
+
+
+def test_a_forge_read_while_another_request_writes_is_not_inside_a_write(
+    client: TestClient,
+) -> None:
+    """The forge guard is per request: a reconciliation reads the forge while another
+    request holds the write lock (what made the concurrency test above flaky)."""
+    task_id = failed_like_1a7c140b(client)
+    bind_154(client, task_id)
+    app_state = client.app.state  # ty: ignore[unresolved-attribute]
+    db: Database = app_state.db
+
+    read = asyncio.Event()
+    incident_forge(client, pr_154(), on_read=read.set)
+    task = client.get(f"/api/tasks/{task_id}").json()
+    body = DeliveryReconciliation(
+        repository=REPOSITORY,
+        number=INCIDENT_PR,
+        head_sha=INCIDENT_HEAD,
+        attempt=task["attempt"],
+        failure_event_id=failure_event(client, task_id)["id"],
+        reason="race",
+    )
+
+    async def interleaved() -> str:
+        async with db.write():  # another request's write stays open during the read
+            reconcile = asyncio.create_task(
+                pr_binding.reconcile_delivery(
+                    db, app_state.pr_checker, task_id, body, "orchestrator:a"
+                )
+            )
+            await read.wait()
+        return (await reconcile).state.value
+
+    assert client.portal is not None
+    assert client.portal.call(interleaved) == "in_review"
 
 
 @pytest.mark.parametrize(

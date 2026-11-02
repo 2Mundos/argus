@@ -56,7 +56,12 @@ export function TaskDetail({
   const [error, setError] = useState<string>();
   const [confirmingRetry, setConfirmingRetry] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [picked, setPicked] = useState<number | null>(null);
+  // The attempt the user picked, kept with the task and current attempt it was picked
+  // under: a new current attempt or another task re-selects the current one. No effect
+  // resets it, so a click right after the panel loads is never overwritten.
+  const [pick, setPick] = useState<{ taskId: string; current: number; attempt: number } | null>(
+    null,
+  );
   const [steerOpen, setSteerOpen] = useState(false);
   const { data, reload } = useLiveData(
     (signal) =>
@@ -101,9 +106,8 @@ export function TaskDetail({
   const current = task?.attempt ?? 0;
   const prevTaskId = useRef(taskId);
   const prevCurrent = useRef<number | null>(null);
-  // A new current attempt (or another task) re-selects the current one.
+  // A new current attempt (or another task) closes the steer composer.
   useEffect(() => {
-    setPicked(null);
     const taskChanged = prevTaskId.current !== taskId;
     if (taskChanged) {
       setSteerOpen(false);
@@ -137,6 +141,7 @@ export function TaskDetail({
       : assigneeError
         ? false
         : undefined;
+  const picked = pick?.taskId === taskId && pick.current === current ? pick.attempt : null;
   const selected = picked !== null && attemptNumbers.includes(picked) ? picked : current;
   // Numbers restart after a retry: the newest row with the number is the one shown.
   const unknownSteers = Array.isArray(attemptList)
@@ -274,7 +279,7 @@ export function TaskDetail({
             attempts={attemptNumbers}
             current={current}
             selected={selected}
-            onSelect={setPicked}
+            onSelect={(attempt) => setPick({ taskId, current, attempt })}
           />
           {unknownSteers > 0 && (
             <p className="muted small" role="note">
