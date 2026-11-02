@@ -1,15 +1,17 @@
 /**
- * The agent runner's own token usage, handed to the Argus host (account usage spec 3.9).
+ * The agent runner's own token usage and live log, handed to the Argus host
+ * (account usage spec 3.9, task-live-log spec 3.8).
  *
  * The harness (the engine in the agent container: Claude Agent SDK or Codex app-server) is
- * not an `argus-delegate` run, so nothing else sees what it spent. The providers call the
- * trackers below at each finished turn; a delta that is really new is appended to a file in
- * the agent group's directory, which the NanoClaw host reads and posts with its own token
- * (argus-usage-relay.ts). The container never holds an Argus credential.
+ * not an `argus-delegate` run, so nothing else sees what it spent or printed. The providers
+ * call the trackers below at each finished turn (usage) and on every SDK message (live log);
+ * a delta / batch that is really new is appended to a file in the agent group's directory,
+ * which the NanoClaw host reads and posts with its own token. The container never holds an
+ * Argus credential.
  *
  * Nothing here estimates: a turn with no figures is recorded as `not_reported` with a
  * reason, a cost the SDK does not give stays null, and every function is best-effort (a
- * measurement must never break a turn).
+ * measurement or log line must never break a turn).
  *
  * Field rule, as for the delegate: input_tokens = prompt tokens not served from cache
  * (fresh + cache-creation), cached_input_tokens = cache reads, output_tokens as counted.
@@ -18,8 +20,14 @@ import fs from "fs";
 import path from "path";
 
 export const USAGE_RELAY_FILE = "argus-usage.jsonl";
+/** Live log of the harness stream; the channel posts it as `source: "worker"`. */
+export const HARNESS_LOG_FILE = "argus-harness-log.jsonl";
 const DEFAULT_POLICY_FILE = "/workspace/agent/argus-model-policy.json";
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
+const LOG_MAX_FILE_BYTES = 8 * 1024 * 1024;
+const LOG_LINE_MAX = 2000;
+const LOG_ARG_MAX = 120;
+const LOG_RESULT_MAX = 200;
 
 export interface Delta {
   input: number;
@@ -284,3 +292,116 @@ export function recordHarnessUsage(
 
 /** A per-query id, so keys of two runner processes (a restart) never collide. */
 export const newQueryId = (): string => Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+
+// ---------------------------------------------------------------------------------------
+// Live log for the host (task-live-log spec 3.8).
+
+export function harnessLogFile(env: NodeJS.ProcessEnv = process.env): string {
+  return (
+    env.ARGUS_HARNESS_LOG_FILE ||
+    path.join(path.dirname(env.ARGUS_MODEL_POLICY_FILE || DEFAULT_POLICY_FILE), HARNESS_LOG_FILE)
+  );
+}
+
+const cut = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+const oneLine = (s: unknown): string =>
+  String(s ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+function toolArgs(input: unknown): string {
+  if (!isObject(input)) return "";
+  for (const k of ["command", "file_path", "path", "pattern", "url", "query", "description"]) {
+    const v = input[k];
+    if (typeof v === "string" && v) return cut(oneLine(v), LOG_ARG_MAX);
+  }
+  try {
+    const json = JSON.stringify(input);
+    return json === "{}" ? "" : cut(json, LOG_ARG_MAX);
+  } catch {
+    return "";
+  }
+}
+
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((c) => (isObject(c) && typeof c.text === "string" ? c.text : "")).join(" ");
+}
+
+/**
+ * Short lines for one Claude Agent SDK message (same shape as stream-json). Unknown or
+ * empty messages give []. Thinking and the echoed user prompt are never shown.
+ */
+export function harnessLogLines(ev: unknown): string[] {
+  if (!isObject(ev)) return [];
+  const message = isObject(ev.message) ? ev.message : null;
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  const lines: string[] = [];
+  switch (ev.type) {
+    case "system":
+      if (ev.subtype === "init")
+        lines.push(
+          `claude started${typeof ev.model === "string" ? ` (${cut(ev.model, 80)})` : ""}`,
+        );
+      break;
+    case "assistant":
+      for (const b of blocks) {
+        if (!isObject(b)) continue;
+        if (b.type === "text" && typeof b.text === "string") {
+          for (const l of b.text.replace(/\r\n/g, "\n").split("\n"))
+            if (l.trim()) lines.push(cut(l, LOG_LINE_MAX));
+        } else if (b.type === "tool_use") {
+          const args = toolArgs(b.input);
+          lines.push(`▸ ${String(b.name ?? "tool").slice(0, 60)}${args ? ` ${args}` : ""}`);
+        }
+      }
+      break;
+    case "user":
+      for (const b of blocks) {
+        if (!isObject(b) || b.type !== "tool_result") continue;
+        const text = cut(oneLine(resultText(b.content)), LOG_RESULT_MAX);
+        if (b.is_error) lines.push(`  ✗ error: ${text}`);
+        else if (text) lines.push(`  ↳ ${text}`);
+      }
+      break;
+    case "result":
+      lines.push(
+        ev.is_error
+          ? `claude finished with an error: ${cut(oneLine(ev.result ?? ev.subtype ?? ""), LOG_RESULT_MAX)}`
+          : "claude finished",
+      );
+      break;
+    default:
+  }
+  return lines;
+}
+
+/**
+ * Append readable lines for one harness SDK message. Returns true when anything was
+ * written. Outside a pinned task context, or for a message with nothing to show, writes
+ * nothing. Best effort: never throws into the runner.
+ */
+export function recordHarnessLog(ev: unknown, env: NodeJS.ProcessEnv = process.env): boolean {
+  try {
+    const ctx = readHarnessContext(env);
+    if (!ctx) return false;
+    const lines = harnessLogLines(ev);
+    if (!lines.length) return false;
+    const file = harnessLogFile(env);
+    const rec = `${JSON.stringify({
+      v: 1,
+      task_id: ctx.task_id,
+      attempt: ctx.attempt,
+      at: new Date().toISOString(),
+      lines,
+    })}\n`;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (fs.existsSync(file) && fs.statSync(file).size + rec.length > LOG_MAX_FILE_BYTES)
+      return false;
+    fs.appendFileSync(file, rec, { mode: 0o660 });
+    return true;
+  } catch {
+    return false;
+  }
+}

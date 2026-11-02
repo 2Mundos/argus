@@ -1429,6 +1429,8 @@ class ArgusClient {
 
 /** Where `argus-delegate` (in the container) appends its live log; keep in step with livelog.mjs. */
 export const DELEGATE_LOG_FILE = "argus-task-log.jsonl";
+/** Where the harness (Claude Agent SDK) appends its live log; keep in step with harness-usage.ts. */
+export const HARNESS_LOG_FILE = "argus-harness-log.jsonl";
 const LOG_BATCH_LINES = 200; // POST /api/tasks/{id}/log limits (task-live-log spec 3.1)
 const LOG_BATCH_BYTES = 60 * 1024; // under the 64 KiB server limit
 const LOG_LINE_CHARS = 2000;
@@ -1535,21 +1537,29 @@ export function takeLogBatch(lines: string[]): string[] {
 }
 
 /**
- * Posts the delegate's relayed log to the task, one batch per poll (the server allows one
+ * Posts a relayed live-log file to the task, one batch per poll (the server allows one
  * per second per source). 409 `stale_attempt` / `not_assignee` / `not_claimed` stop it for
  * good; 429, a network error or a 5xx back off and keep the batch; any other refusal drops
- * the batch. Only status and code are logged, never a header.
+ * the batch. Only status and code are logged, never a header. `source` defaults to
+ * `delegate` (argus-delegate); the harness file uses `worker` (task-live-log spec 3.8).
  */
 export function createDelegateLogRelay(opts: {
   file: string;
   task: { id: string; attempt: number };
-  post: (body: { attempt: number; source: "delegate"; lines: string[] }) => Promise<unknown>;
+  source?: "worker" | "delegate";
+  post: (body: {
+    attempt: number;
+    source: "worker" | "delegate";
+    lines: string[];
+  }) => Promise<unknown>;
   postModels?: (body: unknown) => Promise<unknown>;
   postUsage?: (accountId: string, body: unknown) => Promise<unknown>;
   now?: () => number;
   /** Between batches in `drain()`; default just over the server's one-per-second limit. */
   paceMs?: number;
 }) {
+  const source = opts.source ?? "delegate";
+  const label = source === "worker" ? "Harness" : "Delegate";
   const now = opts.now ?? Date.now;
   let offset = 0;
   let pending: string[] = [];
@@ -1566,7 +1576,7 @@ export function createDelegateLogRelay(opts: {
 
   const unsafe = (why: string) => {
     stopped = true;
-    log.warn("Delegate log relay file is not a plain file; relay stopped", {
+    log.warn(`${label} log relay file is not a plain file; relay stopped`, {
       task: opts.task.id,
       why,
     });
@@ -1611,27 +1621,30 @@ export function createDelegateLogRelay(opts: {
       offset += end;
       const records = chunk.subarray(0, end).toString("utf8");
       pending.push(...relayLines(records, opts.task));
-      for (const item of relayModelReports(records, opts.task)) {
-        try {
-          await opts.postModels?.({
-            attempt: opts.task.attempt,
-            executions: item.executions,
-            selections: item.selections,
-          });
-        } catch (err) {
-          log.warn("Could not report delegate model trace", {
-            task: opts.task.id,
-            err: String(err).slice(0, 120),
-          });
-        }
-        try {
-          if (item.usage?.account_id && item.usage.payload)
-            await opts.postUsage?.(item.usage.account_id, item.usage.payload);
-        } catch (err) {
-          log.warn("Could not report delegate model usage", {
-            task: opts.task.id,
-            err: String(err).slice(0, 120),
-          });
+      // Model/usage reports share the delegate file only; the harness file is lines alone.
+      if (source === "delegate") {
+        for (const item of relayModelReports(records, opts.task)) {
+          try {
+            await opts.postModels?.({
+              attempt: opts.task.attempt,
+              executions: item.executions,
+              selections: item.selections,
+            });
+          } catch (err) {
+            log.warn("Could not report delegate model trace", {
+              task: opts.task.id,
+              err: String(err).slice(0, 120),
+            });
+          }
+          try {
+            if (item.usage?.account_id && item.usage.payload)
+              await opts.postUsage?.(item.usage.account_id, item.usage.payload);
+          } catch (err) {
+            log.warn("Could not report delegate model usage", {
+              task: opts.task.id,
+              err: String(err).slice(0, 120),
+            });
+          }
         }
       }
       if (pending.length > LOG_PENDING_MAX) pending = pending.slice(-LOG_PENDING_MAX);
@@ -1650,7 +1663,7 @@ export function createDelegateLogRelay(opts: {
     if (!pending.length || now() < Math.max(notBefore, lastPostAt + gapMs)) return;
     const batch = takeLogBatch(pending);
     try {
-      await opts.post({ attempt: opts.task.attempt, source: "delegate", lines: batch });
+      await opts.post({ attempt: opts.task.attempt, source, lines: batch });
       lastPostAt = now();
       pending = pending.slice(batch.length);
       backoffMs = 0;
@@ -1658,7 +1671,7 @@ export function createDelegateLogRelay(opts: {
       if (err instanceof ArgusError && err.status === 409) {
         if (CLAIM_LOST.includes(err.code)) {
           stopped = true;
-          log.warn("Argus refuses the delegate log; relay stopped", {
+          log.warn(`Argus refuses the ${source} log; relay stopped`, {
             task: opts.task.id,
             code: err.code,
           });
@@ -1667,7 +1680,7 @@ export function createDelegateLogRelay(opts: {
         stopped = true;
       } else if (err instanceof ArgusError && err.permanent) {
         pending = pending.slice(batch.length); // 413 / 422: this batch can never be accepted
-        log.warn("Argus rejected a delegate log batch; dropped", {
+        log.warn(`Argus rejected a ${source} log batch; dropped`, {
           task: opts.task.id,
           status: err.status,
           code: err.code,
@@ -1688,7 +1701,7 @@ export function createDelegateLogRelay(opts: {
       failures = 0;
     } catch (err) {
       failures += 1;
-      log.warn("Delegate log relay failed (will retry)", { err: String(err).slice(0, 200) });
+      log.warn(`${label} log relay failed (will retry)`, { err: String(err).slice(0, 200) });
     } finally {
       busy = false;
     }
@@ -1727,7 +1740,7 @@ export function createDelegateLogRelay(opts: {
           const unread = fileSize > offset;
           if (stopped || (ran && !pending.length && !unread) || Date.now() >= deadline) return;
           if (failures >= LOG_DRAIN_MAX_FAILURES) {
-            log.warn("Delegate log relay keeps failing; final drain abandoned", {
+            log.warn(`${label} log relay keeps failing; final drain abandoned`, {
               task: opts.task.id,
               failures,
             });
@@ -1886,6 +1899,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let taskDone: (() => void) | null = null;
   let logRelay: ReturnType<typeof createDelegateLogRelay> | null = null;
   let logTimer: ReturnType<typeof setInterval> | null = null;
+  let harnessLogRelay: ReturnType<typeof createDelegateLogRelay> | null = null;
+  let harnessLogTimer: ReturnType<typeof setInterval> | null = null;
   let usageRelay: ReturnType<typeof createUsageRelay> | null = null;
   let usageTimer: ReturnType<typeof setInterval> | null = null;
   let changesRelay: ReturnType<typeof createChangesRelay> | null = null;
@@ -1934,6 +1949,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     if (lastProgressAt > 0) times.push(lastProgressAt);
     if (logRelay && Number.isFinite(logRelay.lastPostAt) && logRelay.lastPostAt > 0) {
       times.push(logRelay.lastPostAt);
+    }
+    if (
+      harnessLogRelay &&
+      Number.isFinite(harnessLogRelay.lastPostAt) &&
+      harnessLogRelay.lastPostAt > 0
+    ) {
+      times.push(harnessLogRelay.lastPostAt);
     }
     if (cfg.runtime?.sessionActivityAt) {
       try {
@@ -2277,6 +2299,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const relay = createDelegateLogRelay({
         file,
         task,
+        source: "delegate",
         now: nowMs,
         post: (body) => client.call("POST", `/tasks/${task.id}/log`, body),
         postModels: (body: unknown) => client.call("POST", `/tasks/${task.id}/models`, body),
@@ -2288,6 +2311,28 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       logTimer.unref?.();
     } catch (err) {
       log.warn("Could not start the delegate log relay", { err: String(err).slice(0, 200) });
+    }
+  }
+
+  /** Relay the harness live log as `source: "worker"` (task-live-log spec 3.8). */
+  async function startHarnessLogRelay(task: { id: string; attempt: number }): Promise<void> {
+    try {
+      const logFile = await cfg.delegateLogFile?.();
+      if (!logFile) return;
+      const file = path.join(path.dirname(logFile), HARNESS_LOG_FILE);
+      await resetRelayFile(file);
+      const relay = createDelegateLogRelay({
+        file,
+        task,
+        source: "worker",
+        now: nowMs,
+        post: (body) => client.call("POST", `/tasks/${task.id}/log`, body),
+      });
+      harnessLogRelay = relay;
+      harnessLogTimer = setInterval(() => void relay.poll(), cfg.logPollMs ?? LOG_POLL_MS);
+      harnessLogTimer.unref?.();
+    } catch (err) {
+      log.warn("Could not start the harness log relay", { err: String(err).slice(0, 200) });
     }
   }
 
@@ -2383,6 +2428,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     logRelay = null;
     if (logTimer) clearInterval(logTimer);
     logTimer = null;
+    harnessLogRelay?.stop();
+    harnessLogRelay = null;
+    if (harnessLogTimer) clearInterval(harnessLogTimer);
+    harnessLogTimer = null;
     changesRelay?.stop();
     changesRelay = null;
     if (changesTimer) clearInterval(changesTimer);
@@ -3282,6 +3331,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       log.info("Argus task claimed", { task: task.id, attempt: task.attempt });
       step = "task injection";
       if (!logRelay) await startLogRelay(task);
+      if (!harnessLogRelay) await startHarnessLogRelay(task);
       if (!usageRelay) await startUsageRelay(task);
       if (!changesRelay) await startChangesRelay(task);
       resends = 0;
@@ -4274,7 +4324,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const d = parseReply(text, task.id);
       // The last lines of the run, before the attempt ends and Argus stops taking them.
       if (d.kind !== "progress" && !isFailureNotice)
-        await Promise.all([logRelay?.drain(), changesRelay?.drain()]);
+        await Promise.all([logRelay?.drain(), harnessLogRelay?.drain(), changesRelay?.drain()]);
       // Usage first, on every way out (a failure notice may rotate the leases it is billed to).
       if (d.kind !== "progress" || isFailureNotice) await drainUsage();
       if (current !== task) {

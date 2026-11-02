@@ -289,7 +289,11 @@ test("channel installer is idempotent and includes source and built policy asset
     );
   }
   const claude = readFileSync(path.join(providers, "claude.ts"), "utf8");
-  for (const hook of ["claudeRateLimitError(m.result, rateLimited)", "recordHarnessUsage('claude'"])
+  for (const hook of [
+    "claudeRateLimitError(m.result, rateLimited)",
+    "recordHarnessUsage('claude'",
+    "recordHarnessLog(message)",
+  ])
     assert.equal(claude.split(hook).length - 1, 1, `${hook} patched once after two installs`);
   const poll = readFileSync(path.join(runner, "poll-loop.ts"), "utf8");
   assert.equal(poll.split("claudeRateLimitFailure(error)").length - 1, 1, "poll-loop hooked once");

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Hook the harness's token usage into a NanoClaw agent runner (called by install.sh).
+"""Hook the harness's token usage and live log into a NanoClaw agent runner (install.sh).
 
 usage: patch-harness-usage.py /path/to/nanoclaw
 
 claude.ts and codex.ts hand each finished turn to overlays/harness-usage.ts (copied next to
 them first), which appends a usage record for the NanoClaw host to post (account usage spec
-3.9). Idempotent: every hook is "ensure this exact text"; an anchor that is missing or
-ambiguous stops the install (the upstream shape changed).
+3.9). Claude's SDK message loop also calls recordHarnessLog so the host can post the
+harness stream as task-log source `worker` (task-live-log spec 3.8). Idempotent: every
+hook is "ensure this exact text"; an anchor that is missing or ambiguous stops the install
+(the upstream shape changed).
 """
 
 import sys
@@ -23,9 +25,11 @@ def edit(root: Path, name: str, hooks: list[tuple[str, str, str]]) -> None:
     original = s
     for what, anchor, new in hooks:
         if what == "import" and "from './harness-usage.js'" in s:
-            continue
+            continue  # present (possibly the pre-log form); "import upgrade" rewrites it
         if new in s:
             continue
+        if what == "import upgrade" and anchor not in s:
+            continue  # never had the usage-only import
         if s.count(anchor) != 1:
             raise SystemExit(f"{p}: {what}: upstream shape changed")
         s = s.replace(anchor, new, 1)
@@ -35,7 +39,11 @@ def edit(root: Path, name: str, hooks: list[tuple[str, str, str]]) -> None:
 
 
 REGISTER = "import { registerProvider } from './provider-registry.js';\n"
-CLAUDE_IMPORT = "import { createClaudeUsageTracker, newQueryId, recordHarnessUsage } from './harness-usage.js';\n"
+CLAUDE_IMPORT_OLD = "import { createClaudeUsageTracker, newQueryId, recordHarnessUsage } from './harness-usage.js';\n"
+CLAUDE_IMPORT = (
+    "import { createClaudeUsageTracker, newQueryId, recordHarnessLog, "
+    "recordHarnessUsage } from './harness-usage.js';\n"
+)
 # Before `lastStreamActivityAt`: patch-claude-rate-limit.py anchors on the lines that follow it.
 CLAUDE_LOOP = "      let messageCount = 0;\n"
 CLAUDE_STATE = (
@@ -43,6 +51,13 @@ CLAUDE_STATE = (
     "      const usageTracker = createClaudeUsageTracker();\n"
     "      const usageQuery = newQueryId();\n"
     "      let usageSeq = 0;\n"
+)
+# The rate-limit patch owns `for await (const message of sdkResult)`; hook the body.
+CLAUDE_FOR = "      for await (const message of sdkResult) {\n"
+CLAUDE_LOG = (
+    "      for await (const message of sdkResult) {\n"
+    "        // Argus: harness live log for the NanoClaw host (task-live-log spec 3.8).\n"
+    "        recordHarnessLog(message);\n"
 )
 CLAUDE_RESULT = (
     "          const resultAsError = hint ? `${candidate}\\n${hint}` : '';\n"
@@ -82,7 +97,10 @@ def main(root: Path) -> None:
         "claude.ts",
         [
             ("import", REGISTER, REGISTER + CLAUDE_IMPORT),
+            # Upgrade a checkout that already had the usage-only import.
+            ("import upgrade", CLAUDE_IMPORT_OLD, CLAUDE_IMPORT),
             ("query state", CLAUDE_LOOP, CLAUDE_LOOP + CLAUDE_STATE),
+            ("live log", CLAUDE_FOR, CLAUDE_LOG),
             ("result usage", CLAUDE_RESULT, CLAUDE_RESULT + CLAUDE_RECORD),
         ],
     )
