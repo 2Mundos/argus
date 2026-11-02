@@ -103,9 +103,10 @@ async def test_codex_limit_fails_over_at_the_next_claim_without_an_attempt(
     task = await started(db, store)
     after = await fail(db, store, task, error)
     assert (after.state, after.attempt, after.failures) == (S.READY, 1, 0)
-    assert after.failover.reason_code == "quota_exhausted"  # type: ignore[union-attr]
-    assert after.failover.outcome == "switched"  # type: ignore[union-attr]
-    assert after.failover.apply == "pending"  # type: ignore[union-attr]
+    assert after.failover is not None
+    assert after.failover.reason_code == "quota_exhausted"
+    assert after.failover.outcome == "switched"
+    assert after.failover.apply == "pending"
     # No lease yet: the next claim takes a new one, bound to it.
     nxt = await claim(db)
     assert (nxt.attempt, nxt.failures) == (2, 0)
@@ -121,8 +122,9 @@ async def test_codex_limit_without_a_zone_uses_the_cooldown(
     assert (after.state, after.block_reason) == (S.BLOCKED, "awaiting_quota")
     assert after.refill_at == clock.now + timedelta(hours=1)
     f = after.failover
-    assert (f.reset_status, f.reset_text) == ("ambiguous", "Nov 19th, 2026 2:08 PM")  # type: ignore[union-attr]
-    assert "utm" not in f.reason  # type: ignore[union-attr]
+    assert f is not None
+    assert (f.reset_status, f.reset_text) == ("ambiguous", "Nov 19th, 2026 2:08 PM")
+    assert "utm" not in f.reason
     [event] = await events(db, "account.exhausted")
     assert event["until_kind"] == "cooldown"
 
@@ -135,7 +137,8 @@ async def test_expired_login_rotates_with_its_own_code(
     task = await started(db, store)
     after = await fail(db, store, task, EXPIRED)
     assert (after.state, after.failures) == (S.READY, 0)
-    assert after.failover.reason_code == "auth_expired"  # type: ignore[union-attr]
+    assert after.failover is not None
+    assert after.failover.reason_code == "auth_expired"
 
 
 async def test_model_talk_about_limits_still_counts(
@@ -168,7 +171,9 @@ async def test_runtime_switch_failed_blocks_without_spending_an_attempt(
             (A,),
         ) as cur,
     ):
-        assert (await cur.fetchone())[0] == 0  # type: ignore[index]
+        row = await cur.fetchone()
+        assert row is not None
+        assert row[0] == 0
 
 
 @pytest.mark.parametrize("how", ["exhausted", "disabled"])
@@ -258,7 +263,7 @@ async def test_exhausted_report_needs_a_claim_and_custom_is_an_engine(
                     "base_url": "https://openrouter.ai/api/v1",
                     "label": "or",
                     "engine": {"model": "m"},
-                },  # type: ignore[arg-type]
+                },  # type: ignore[arg-type] — the config dict is deliberately loosely typed
             ),
             "sops:c",
             "admin:test",
@@ -277,7 +282,8 @@ async def test_failover_labels_the_source_of_the_hit(
     await add(db, store, "codex-a")
     task = await started(db, store)
     after = await fail(db, store, task, error)
-    assert after.failover.source == source  # type: ignore[union-attr]
+    assert after.failover is not None
+    assert after.failover.source == source
 
 
 def test_exhausted_report_reset_status_must_match_until() -> None:
@@ -293,4 +299,4 @@ def test_exhausted_report_reset_status_must_match_until() -> None:
         {"reset_status": "ambiguous", "until": zoned},
     ):
         with pytest.raises(ValueError):
-            ExhaustedReport(**base, **bad)  # type: ignore[arg-type]
+            ExhaustedReport(**base, **bad)  # type: ignore[arg-type] — deliberately invalid kwargs
