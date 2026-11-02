@@ -444,6 +444,66 @@ async def test_nanoclaw_runtime_spec(
     assert spec.env["ARGUS_NANOCLAW_INSTANCES_ROOT"] == "/srv/nc-i"
     assert spec.env["ARGUS_BOOTSTRAP_TOKENS"].startswith("argus_boot_")
     assert (spec.user, spec.group_add) == ("1000:1000", ["999"])
+    # Worker display name: a mythology word stored on the instance, not pool-hash.
+    from argus_api.fleet.names import WORDS
+
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT agent_name FROM instances WHERE id = ?", (spec.instance_id,)
+        ) as cur,
+    ):
+        assigned = (await cur.fetchone())["agent_name"]
+    assert assigned in WORDS
+    assert spec.env["ARGUS_AGENT_NAME"] == assigned
+    assert not assigned.startswith("web-")
+
+
+def test_agent_name_prefers_assigned_mythology_word() -> None:
+    from argus_api.fleet.runtimes import agent_name
+
+    assert agent_name("web", "deadbeef-1", "atlas") == "atlas"
+    assert agent_name("web", "deadbeef-1", None) == "web-deadbeef"
+
+
+def test_nanoclaw_host_env_carries_assigned_worker_name() -> None:
+    from argus_api.fleet.runtimes import container_spec
+
+    pool = _pool_from_upsert("sbx", _sandboxed_pool(agent_image_archive="/srv/a.tar"))
+    named = container_spec(
+        pool, "i-1", ["argus_boot_x"], "http://argus", worker_name="nyx"
+    )
+    assert named.env["ARGUS_AGENT_NAME"] == "nyx"
+    legacy = container_spec(pool, "deadbeef-xxxx", ["argus_boot_x"], "http://argus")
+    assert legacy.env["ARGUS_AGENT_NAME"] == "sbx-deadbeef"
+
+
+async def test_two_workers_get_distinct_mythology_names(
+    db: Database, registry: TargetRegistry, target: FakeTarget
+) -> None:
+    from argus_api.fleet.names import WORDS
+    from argus_core.fleet import NanoclawOptions
+
+    async with db.write() as tx:
+        await fleet.upsert_pool(
+            tx,
+            "web",
+            PoolUpsert(
+                runtime="nanoclaw",
+                image="argus-nanoclaw-host:dev",
+                desired_replicas=2,
+                max_replicas=2,
+                nanoclaw=NanoclawOptions(
+                    install_dir="/opt/nanoclaw",
+                    instances_root="/srv/nc-i",
+                    agent_image="nanoclaw-agent:1",
+                ),
+            ),
+            "admin:test",
+        )
+    await tick(db, registry)
+    names = {s.env["ARGUS_AGENT_NAME"] for s in target.specs.values()}
+    assert len(names) == 2 and names <= set(WORDS)
 
 
 def test_retired_provider_lists_are_dropped_not_enforced() -> None:

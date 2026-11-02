@@ -25,17 +25,17 @@ class StaleAgent:
 
 
 def plan(
-    instances: list[tuple[str, str, str]],
+    instances: list[tuple[str, str, str, str | None]],
     agents: list[dict[str, Any]],
     secrets: list[dict[str, Any]],
 ) -> list[StaleAgent]:
     """The OneCLI agents to delete, with their secrets. `instances` is
-    `(id, pool, state)`. An agent is stale when its name is that of a terminated
-    instance and of no instance in another state (3.2, 3.3)."""
+    `(id, pool, state, agent_name)`. An agent is stale when its name is that of
+    a terminated instance and of no instance in another state (3.2, 3.3)."""
     terminated: set[str] = set()
     other: set[str] = set()
-    for instance_id, pool, state in instances:
-        name = agent_name(pool, instance_id)
+    for instance_id, pool, state, assigned in instances:
+        name = agent_name(pool, instance_id, assigned)
         (terminated if state == "terminated" else other).add(name)
     stale_names = terminated - other
     out: list[StaleAgent] = []
@@ -80,9 +80,9 @@ class OneCliCleaner:
         """One run: list, plan, delete (unless dry run), record the event."""
         async with (
             self.db.read() as conn,
-            conn.execute("SELECT id, pool, state FROM instances") as cur,
+            conn.execute("SELECT id, pool, state, agent_name FROM instances") as cur,
         ):
-            instances = [(r[0], r[1], r[2]) for r in await cur.fetchall()]
+            instances = [(r[0], r[1], r[2], r[3]) for r in await cur.fetchall()]
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         async with httpx.AsyncClient(
             base_url=self.url, headers=headers, timeout=30, transport=self.transport

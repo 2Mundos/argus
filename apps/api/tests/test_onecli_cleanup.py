@@ -13,7 +13,8 @@ TWIN = "deadbeef-9999-4000-8000-000000000003"
 
 
 def test_plan_matches_only_terminated_instances_by_exact_name() -> None:
-    instances = [(DEAD, "w", "terminated"), (LIVE, "w", "running")]
+    # agent_name NULL → legacy <pool>-<id[:8]>.
+    instances = [(DEAD, "w", "terminated", None), (LIVE, "w", "running", None)]
     agents = [
         {"id": "a-dead", "name": "w-deadbeef", "identifier": "ag-1-dead"},
         {"id": "a-live", "name": "w-11223344", "identifier": "ag-2-live"},
@@ -31,7 +32,26 @@ def test_plan_matches_only_terminated_instances_by_exact_name() -> None:
         ("a-dead", "w-deadbeef", ["s1", "s2"])
     ]
     # A colliding name of an instance that is not terminated keeps both.
-    assert plan([*instances, (TWIN, "w", "running")], agents, secrets) == []
+    assert plan([*instances, (TWIN, "w", "running", None)], agents, secrets) == []
+
+
+def test_plan_uses_assigned_mythology_names() -> None:
+    instances = [
+        (DEAD, "w", "terminated", "atlas"),
+        (LIVE, "w", "running", "nyx"),
+    ]
+    agents = [
+        {"id": "a-dead", "name": "atlas", "identifier": "ag-1"},
+        {"id": "a-live", "name": "nyx", "identifier": "ag-2"},
+    ]
+    secrets = [
+        {"id": "s1", "name": "argus-ag-1"},
+        {"id": "s2", "name": "argus-ag-2"},
+    ]
+    stale = plan(instances, agents, secrets)
+    assert [(a.id, a.name, a.secret_ids) for a in stale] == [
+        ("a-dead", "atlas", ["s1"])
+    ]
 
 
 async def _seed(db: Database) -> None:

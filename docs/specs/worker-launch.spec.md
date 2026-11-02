@@ -80,15 +80,26 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
   `desired_replicas`, so repeating it cannot start a container. A container is
   started only by the reconciler, from desired versus existing instances. It
   commits an `instance` row in state `reserved` (with its container name derived
-  from the instance id) before calling the target, and one pass sees at most one
-  start per reserved instance. After a crash between reserve and start, the next
-  pass observes the pool's containers: a `reserved` instance whose container is
-  running is marked `running`, one that exited is terminated, and one with no
-  container is started again under the same name (a name conflict from the
-  daemon or Kubernetes is treated as "already created", not an error). A failed
-  or ambiguous start leaves it `reserved` with `last_error` and `start_attempts`
-  visible and is retried with backoff. This is reconciliation by deterministic
-  name, not a transactional guarantee between the database and the target.
+  from the instance id, and a worker display name — see below) before calling
+  the target, and one pass sees at most one start per reserved instance. After a
+  crash between reserve and start, the next pass observes the pool's containers:
+  a `reserved` instance whose container is running is marked `running`, one that
+  exited is terminated, and one with no container is started again under the
+  same name (a name conflict from the daemon or Kubernetes is treated as
+  "already created", not an error). A failed or ambiguous start leaves it
+  `reserved` with `last_error` and `start_attempts` visible and is retried with
+  backoff. This is reconciliation by deterministic name, not a transactional
+  guarantee between the database and the target.
+- **Worker display names.** Each reserved instance gets a free single-word
+  display name from the same mythology/constellation list the catalog uses for
+  pool suggestions (`instances.agent_name`). The reconciler seeds the pick from
+  live agent names, other non-terminated instances' assigned names, and pool
+  names, so two workers never share a word and a worker is never named after a
+  pool. The name is stored on the instance row (stable across start retries) and
+  passed to NanoClaw as `ARGUS_AGENT_NAME`, which becomes the Argus agent name
+  and the OneCLI agent name. Rows that predate the column keep the legacy
+  `<pool>-<id[:8]>` form for cleanup matching. Pools are usually one per install;
+  the worker name is what operators see on chips and in the rail.
 - **Discovery is measured, never configured.** A check is `ok: true`,
   `ok: false`, or `ok: null` (could not be verified, with why); only `false`
   blocks. Docker targets report reachability, engine version, OCI runtimes,
@@ -173,16 +184,17 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
   `unknown_image`). Defaults (quantity 1, cap `max(quantity, 3)`, extra
   host `host.docker.internal:host-gateway`, template capabilities) come from the
   catalog and are the same for UI and MCP. The catalog also *suggests* a free
-  name, which the dashboard fills in (editable); the server never picks one
-  itself. The suggestion is a single lowercase word from a built-in list of
-  about 170 Greek-mythology and constellation names (`atlas`, `nyx`, `lyra`,
-  `orion`, ...), the same for every template. It is deterministic for a given
-  set of existing pool names (seeded from that set, no clock or RNG state), so
+  pool name, which the dashboard fills in (editable); the server never picks one
+  itself. The suggestion uses the same mythology/constellation word list as
+  worker display names (about 170 entries: `atlas`, `nyx`, `lyra`, `orion`,
+  ...), the same for every template. It is deterministic for a given set of
+  existing pool names (seeded from that set, no clock or RNG state), so
   re-reading the catalog does not reshuffle it, and it changes only once the
   suggested name is taken. It skips names already used by a pool and falls
   back to `<word>-2`, `<word>-3`, ... only when the whole list is taken. The
   list is a static module in `argus_api.fleet`, English only, with no
-  dependency, and every entry matches the pool name pattern.
+  dependency, and every entry matches the pool name pattern. Worker names are
+  assigned separately at instance reserve (see above); pools are usually one.
 - **Selecting or discovering never creates anything.** Only the confirmed POST
   writes: one transaction creates the pool (`desired_replicas` = quantity) and
   records `pool.created`. The name is the idempotency key: it is required (omitting it is `422`), so a

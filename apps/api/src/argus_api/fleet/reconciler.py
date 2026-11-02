@@ -42,6 +42,7 @@ from argus_api.errors import ValidationFailedError
 from argus_api.events import record
 from argus_api.fleet import runtimes
 from argus_api.fleet import service as fleet
+from argus_api.fleet.names import suggest, taken_worker_names
 from argus_api.fleet.targets import (
     POOL_LABEL,
     LabeledContainer,
@@ -298,12 +299,22 @@ async def _scale(tx: Tx, pool: Pool, settings: FleetSettings) -> list[_Start | _
             row = await cur.fetchone()
         in_flight = row["n"] if row else 0
         room = max(0, settings.max_starts_in_flight - in_flight)
+        taken = await taken_worker_names(tx.conn)
         for _ in range(min(desired - len(live), room)):
             instance_id = str(uuid4())
+            worker_name = suggest(taken)
+            taken.add(worker_name)
             await tx.conn.execute(
-                "INSERT INTO instances (id, pool, provider_ref, state, created_at)"
-                " VALUES (?, ?, ?, 'reserved', ?)",
-                (instance_id, pool.name, container_name(instance_id), ts(tx.now)),
+                "INSERT INTO instances"
+                " (id, pool, provider_ref, state, created_at, agent_name)"
+                " VALUES (?, ?, ?, 'reserved', ?, ?)",
+                (
+                    instance_id,
+                    pool.name,
+                    container_name(instance_id),
+                    ts(tx.now),
+                    worker_name,
+                ),
             )
             await record(
                 tx,
@@ -311,7 +322,7 @@ async def _scale(tx: Tx, pool: Pool, settings: FleetSettings) -> list[_Start | _
                 "instance",
                 instance_id,
                 "instance.reserved",
-                {"pool": pool.name},
+                {"pool": pool.name, "agent_name": worker_name},
             )
             actions.append(_Start(instance_id))
         return actions
@@ -429,6 +440,19 @@ async def _act(
             ).token
             for _ in range(pool.agents_per_instance)
         ]
+        async with tx.conn.execute(
+            "SELECT agent_name FROM instances WHERE id = ?", (action.instance_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        worker_name = row["agent_name"] if row and row["agent_name"] else None
+        if worker_name is None:
+            # Reserved before the column existed, or a test that omitted it.
+            taken = await taken_worker_names(tx.conn)
+            worker_name = suggest(taken)
+            await tx.conn.execute(
+                "UPDATE instances SET agent_name = ? WHERE id = ?",
+                (worker_name, action.instance_id),
+            )
         await tx.conn.execute(
             "UPDATE instances SET start_attempts = start_attempts + 1,"
             " last_start_at = ?, image = ? WHERE id = ?",
@@ -442,6 +466,7 @@ async def _act(
             tokens,
             settings.argus_url,
             model_policy=_model_policy(pool, settings),
+            worker_name=worker_name,
         )
         await target.start(spec)
     except TargetError as exc:
