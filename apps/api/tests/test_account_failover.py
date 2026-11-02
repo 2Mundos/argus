@@ -210,7 +210,9 @@ async def test_awaiting_quota_pause_keeps_the_session_too(
     async with db.write() as tx:
         again = await tasks.claim(tx, A, [])
     assert again is not None and (again.attempt, again.failures) == (2, 0)
-    assert (await offered(db, task.id, again.attempt)).session_id == SESSION.session_id  # type: ignore[union-attr]
+    resume = await offered(db, task.id, again.attempt)
+    assert resume is not None
+    assert resume.session_id == SESSION.session_id
 
 
 async def test_the_session_is_taken_once_and_a_retry_does_not_send_again(
@@ -325,22 +327,26 @@ async def test_quota_fail_fails_over_without_consuming_an_attempt(
     await add(db, store, "acct-b", priority=90)
     assert (await lease(db, store)).name == "acct-a"
     task = await new_task(db)
-    assert (await get(db, task.id)).serving_account.name == "acct-a"  # type: ignore[union-attr]
+    serving = (await get(db, task.id)).serving_account
+    assert serving is not None
+    assert serving.name == "acct-a"
 
     with caplog.at_level(logging.INFO, logger="argus_api.accounts.service"):
         after = await fail(db, store, task)
 
     assert (after.state, after.attempt, after.failures) == (S.READY, 1, 0)
     assert after.error is None
-    assert (after.failover.from_account, after.failover.to_account) == (  # type: ignore[union-attr]
+    assert after.failover is not None
+    assert (after.failover.from_account, after.failover.to_account) == (
         "acct-a",
         "acct-b",
     )
-    assert "five_hour" in after.failover.reason  # type: ignore[union-attr]
+    assert "five_hour" in after.failover.reason
     async with db.read() as conn:
         acct = await accounts.get_account(conn, a, clock.now)
     assert acct.state == "exhausted"
-    assert acct.exhausted_until.isoformat() == "2026-01-01T05:00:00+00:00"  # type: ignore[union-attr]
+    assert acct.exhausted_until is not None
+    assert acct.exhausted_until.isoformat() == "2026-01-01T05:00:00+00:00"
 
     # The agent now serves from B; the next claim is a new attempt, still no failure.
     async with db.write() as tx:
@@ -348,7 +354,9 @@ async def test_quota_fail_fails_over_without_consuming_an_attempt(
     assert again is not None and (again.attempt, again.failures) == (2, 0)
     assert again.serving_account is None  # nothing is leased before the new claim does
     assert (await lease(db, store, task=again)).name == "acct-b"
-    assert (await get(db, task.id)).serving_account.name == "acct-b"  # type: ignore[union-attr]
+    serving = (await get(db, task.id)).serving_account
+    assert serving is not None
+    assert serving.name == "acct-b"
 
     [event] = await events(db, "account.failover")
     assert event["actor"] == f"agent:{A}" and event["subject"] == task.id
@@ -386,7 +394,9 @@ async def test_quota_never_reaches_failed_however_often_it_repeats(
         task = await fail(db, store, task)
         assert (task.state, task.failures) == (S.READY, 0)
         async with db.write() as tx:
-            task = await tasks.claim(tx, A, [])  # type: ignore[assignment]
+            claimed = await tasks.claim(tx, A, [])
+            assert claimed is not None
+            task = claimed
         await lease(db, store, task=task)
     assert (await get(db, task.id)).state is S.CLAIMED
 
@@ -403,7 +413,9 @@ async def test_generic_provider_failure_still_counts(
         db.read() as conn,
         conn.execute("SELECT state FROM accounts WHERE id = ?", (a,)) as cur,
     ):
-        assert (await cur.fetchone())[0] == "available"  # type: ignore[index]
+        row = await cur.fetchone()
+        assert row is not None
+        assert row[0] == "available"
     assert await events(db, "account.failover") == []
 
 
@@ -420,7 +432,8 @@ async def test_claude_session_limit_line_resets_at_the_next_utc_clock_time(
     assert (after.state, after.failures) == (S.READY, 0)
     async with db.read() as conn:
         acct = await accounts.get_account(conn, a, clock.now)
-    assert acct.exhausted_until.isoformat() == "2026-01-02T02:00:00+00:00"  # type: ignore[union-attr]
+    assert acct.exhausted_until is not None
+    assert acct.exhausted_until.isoformat() == "2026-01-02T02:00:00+00:00"
 
 
 async def test_model_text_about_limits_still_counts_as_a_failure(
@@ -539,7 +552,8 @@ async def test_all_exhausted_awaits_quota_then_returns_to_ready(
     assert (after.state, after.block_reason) == (S.BLOCKED, "awaiting_quota")
     assert (after.attempt, after.failures) == (1, 0)
     assert after.refill_at == soon  # min(exhausted_until): B resets first
-    assert after.failover.to_account is None  # type: ignore[union-attr]
+    assert after.failover is not None
+    assert after.failover.to_account is None
 
     clock.advance(2 * 3600 + 1)
     async with db.write() as tx:
@@ -577,7 +591,8 @@ async def test_exhausted_endpoint_path_also_awaits_quota_with_refill(
         reset,
         1,
     )
-    assert got.failover.to_account is None  # type: ignore[union-attr]
+    assert got.failover is not None
+    assert got.failover.to_account is None
 
 
 async def test_legacy_no_account_rows_are_still_read_and_released(
@@ -706,7 +721,9 @@ async def test_concurrent_leases_never_exceed_max_leases(
             (solo,),
         ) as cur,
     ):
-        assert (await cur.fetchone())[0] == limit  # type: ignore[index]
+        row = await cur.fetchone()
+        assert row is not None
+        assert row[0] == limit
 
 
 async def test_two_agents_never_hold_the_same_task(
