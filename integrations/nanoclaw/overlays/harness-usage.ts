@@ -304,7 +304,10 @@ export function harnessLogFile(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 const cut = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
-const oneLine = (s: unknown): string => String(s ?? "").replace(/\s+/g, " ").trim();
+const oneLine = (s: unknown): string =>
+  String(s ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
 
 function toolArgs(input: unknown): string {
   if (!isObject(input)) return "";
@@ -379,10 +382,7 @@ export function harnessLogLines(ev: unknown): string[] {
  * written. Outside a pinned task context, or for a message with nothing to show, writes
  * nothing. Best effort: never throws into the runner.
  */
-export function recordHarnessLog(
-  ev: unknown,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
+export function recordHarnessLog(ev: unknown, env: NodeJS.ProcessEnv = process.env): boolean {
   try {
     const ctx = readHarnessContext(env);
     if (!ctx) return false;

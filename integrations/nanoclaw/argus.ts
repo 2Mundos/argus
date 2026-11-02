@@ -4324,11 +4324,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const d = parseReply(text, task.id);
       // The last lines of the run, before the attempt ends and Argus stops taking them.
       if (d.kind !== "progress" && !isFailureNotice)
-        await Promise.all([
-          logRelay?.drain(),
-          harnessLogRelay?.drain(),
-          changesRelay?.drain(),
-        ]);
+        await Promise.all([logRelay?.drain(), harnessLogRelay?.drain(), changesRelay?.drain()]);
       // Usage first, on every way out (a failure notice may rotate the leases it is billed to).
       if (d.kind !== "progress" || isFailureNotice) await drainUsage();
       if (current !== task) {

@@ -39,9 +39,7 @@ def edit(root: Path, name: str, hooks: list[tuple[str, str, str]]) -> None:
 
 
 REGISTER = "import { registerProvider } from './provider-registry.js';\n"
-CLAUDE_IMPORT_OLD = (
-    "import { createClaudeUsageTracker, newQueryId, recordHarnessUsage } from './harness-usage.js';\n"
-)
+CLAUDE_IMPORT_OLD = "import { createClaudeUsageTracker, newQueryId, recordHarnessUsage } from './harness-usage.js';\n"
 CLAUDE_IMPORT = (
     "import { createClaudeUsageTracker, newQueryId, recordHarnessLog, "
     "recordHarnessUsage } from './harness-usage.js';\n"
