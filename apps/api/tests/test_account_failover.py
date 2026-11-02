@@ -236,6 +236,8 @@ async def test_the_session_is_taken_once_and_a_retry_does_not_send_again(
     assert (event["attempt"], event["outcome"]) == (2, "resumed")
     with pytest.raises(LeaseConflictError):
         await take(db, B, again)  # fenced like every worker write
+    with pytest.raises(LeaseConflictError):
+        await take(db, A, task)  # the paused attempt's lease is stale
 
 
 async def test_a_fallback_also_consumes_the_session(

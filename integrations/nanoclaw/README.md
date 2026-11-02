@@ -382,6 +382,21 @@ recreated container refuses its own checkpoints as foreign
 Argus provides no shared store mount, so sharing checkpoints between instances is
 not supported yet.
 
+## Quota resume (off by default)
+
+After a quota pause, the next attempt on the same node and engine can continue the
+paused Claude Code conversation instead of starting over
+([spec](../../docs/specs/quota-resume.spec.md)). It is off unless the host process
+sees `ARGUS_QUOTA_RESUME=1`, which a pool's `env` can set. Off, the session id is
+still recorded and offered, and every offer falls back to a fresh session
+(`not_available`). On, the channel seeds the new attempt session's runner
+continuation before its container starts only when the transcript still passes the
+pinned runner's resume checks (present, non-empty, ≤12 MiB, ≤14 days by first
+entry). Seed alone is never reported as `resumed`. That needs per-thread wiring
+and the SQLite mailbox; otherwise the attempt falls back to a fresh session. It
+is proven only against a fake API (`scripts/quota-resume-spike.sh`). A real
+two-account run is in the spec's verification boundary.
+
 ## Task inputs
 
 Before the workspace and the model, the channel downloads the attachments an
