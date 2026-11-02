@@ -49,7 +49,7 @@ export function useWorkerPanel(): WorkerPanelContextValue {
   return ctx;
 }
 
-/** Chip label: agent name (e.g. `nanoclaw-socket-d6f8e4c0`), else a short id. */
+/** Chip label: agent name (e.g. `atlas`), else a short id. */
 export function workerLabel(agent: Agent | undefined, agentId: string): string {
   return agent?.name || shortId(agentId);
 }

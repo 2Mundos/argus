@@ -35,8 +35,14 @@ def descendant_label(pool: Pool) -> str | None:
     return "nanoclaw-group-folder" if pool.runtime == "nanoclaw" else None
 
 
-def agent_name(pool_name: str, instance_id: str) -> str:
-    return f"{pool_name}-{instance_id[:8]}"
+def agent_name(pool_name: str, instance_id: str, assigned: str | None = None) -> str:
+    """Display name for the NanoClaw host / OneCLI agent of this instance.
+
+    New instances get a mythology word in `instances.agent_name` at reserve.
+    Rows that predate that column (or plain tests that omit it) keep the legacy
+    `<pool>-<id[:8]>` form so OneCLI cleanup still matches them.
+    """
+    return assigned if assigned else f"{pool_name}-{instance_id[:8]}"
 
 
 def session_quota_env(pool: Pool) -> dict[str, str]:
@@ -78,6 +84,8 @@ def container_spec(
     bootstrap_tokens: list[str],
     argus_url: str,
     model_policy: str | None = None,
+    *,
+    worker_name: str | None = None,
 ) -> ContainerSpec:
     """Build the container for one instance.
 
@@ -116,7 +124,7 @@ def container_spec(
         env |= {
             "ARGUS_NANOCLAW_INSTALL_DIR": nc.install_dir,
             "ARGUS_NANOCLAW_INSTANCES_ROOT": nc.instances_root,
-            "ARGUS_AGENT_NAME": agent_name(pool.name, instance_id),
+            "ARGUS_AGENT_NAME": agent_name(pool.name, instance_id, worker_name),
             "CONTAINER_IMAGE": nc.agent_image,
             "NANOCLAW_GATEWAY_PROVIDER": "onecli",
             "ONECLI_URL": nc.onecli_url,

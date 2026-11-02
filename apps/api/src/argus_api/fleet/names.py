@@ -1,11 +1,17 @@
-"""Suggested pool names: one word, free, and stable (worker launch 3).
+"""Worker (and catalog) names: one word, free, and stable.
 
-The pick is seeded from the set of taken names, not a clock or RNG, so
-re-reading the catalog never reshuffles the suggestion; it moves on only once
-the suggested name is taken.
+`suggest` picks a free single word from a built-in list of Greek-mythology and
+constellation names. The pick is seeded from the set of taken names, not a
+clock or RNG, so re-reading never reshuffles; it moves on only once the
+suggested name is taken.
+
+Workers get a name at instance reserve (`instances.agent_name`); the catalog
+also uses the same picker for a suggested *pool* name.
 """
 
 import hashlib
+
+import aiosqlite
 
 _WORDS = """
     achilles adonis aeolus aether ajax alcyone amphion anteros apollo ares argo
@@ -42,3 +48,20 @@ def suggest(taken: set[str]) -> str:
     while f"{WORDS[start]}-{n}" in taken:
         n += 1
     return f"{WORDS[start]}-{n}"
+
+
+async def taken_worker_names(conn: aiosqlite.Connection) -> set[str]:
+    """Names that must not be reassigned: live agents, pending instances, pools."""
+    taken: set[str] = set()
+    async with conn.execute(
+        "SELECT name FROM agents WHERE state IN ('active', 'draining')"
+    ) as cur:
+        taken.update(r[0] for r in await cur.fetchall() if r[0])
+    async with conn.execute(
+        "SELECT agent_name FROM instances"
+        " WHERE state != 'terminated' AND agent_name IS NOT NULL"
+    ) as cur:
+        taken.update(r[0] for r in await cur.fetchall())
+    async with conn.execute("SELECT name FROM pools") as cur:
+        taken.update(r[0] for r in await cur.fetchall())
+    return taken

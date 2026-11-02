@@ -2,15 +2,17 @@
 
 # 1. Purpose and Scope
 
-Every NanoClaw instance creates its own OneCLI agent (named
-`<pool>-<first 8 of the instance id>`, keyed by its NanoClaw agent group id) and,
-for each account it leases, a secret named `argus-<agent group id>` plus a
-suffix ([account selection](account-selection.spec.md)). Nothing removes them
-when the instance ends. On one host this reached about 240 agents and 750
-secrets, most holding credentials that were rotated long ago. A OneCLI agent
-left in `all` secret mode injects every one of them, which once sent a stale
-Anthropic key on every orchestrator request (fixed by the orchestrator's own
-lease, [internal orchestrator](internal-orchestrator.spec.md) 3.1).
+Every NanoClaw instance creates its own OneCLI agent (named from
+`instances.agent_name`, a mythology word assigned at reserve — or, for rows that
+predate that column, the legacy `<pool>-<first 8 of the instance id>`), keyed by
+its NanoClaw agent group id, and for each account it leases, a secret named
+`argus-<agent group id>` plus a suffix
+([account selection](account-selection.spec.md)). Nothing removes them when the
+instance ends. On one host this reached about 240 agents and 750 secrets, most
+holding credentials that were rotated long ago. A OneCLI agent left in `all`
+secret mode injects every one of them, which once sent a stale Anthropic key on
+every orchestrator request (fixed by the orchestrator's own lease,
+[internal orchestrator](internal-orchestrator.spec.md) 3.1).
 
 This spec adds an opt-in, dry-run-first loop in the API that deletes the OneCLI
 agent and the secrets of instances stored as `terminated`.
@@ -44,8 +46,9 @@ instances use (often a Docker network name the API host cannot resolve).
 1. Read the instances stored as `terminated` and every other instance (one read
    transaction).
 2. List OneCLI agents and secrets (`GET /api/agents`, `GET /api/secrets`).
-3. A OneCLI agent is **stale** when its name equals
-   `<pool>-<id[:8]>` of a terminated instance and of no instance in any other
+3. A OneCLI agent is **stale** when its name equals the resolved display name
+   of a terminated instance (`instances.agent_name`, or legacy
+   `<pool>-<id[:8]>` when that column is null) and of no instance in any other
    state. Its secrets are those named `argus-<identifier>` or starting with
    `argus-<identifier>-`, where `identifier` is that agent's identifier.
 4. Dry run: report only. Otherwise delete each stale agent's secrets
