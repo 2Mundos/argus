@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PrState(StrEnum):
@@ -37,6 +37,19 @@ AUTH_NOTES = (
     "Green checks do not authorize merge. Merge is not acceptance. "
     "Authorization and checklist are separate from forge CI."
 )
+
+
+class PrBinding(BaseModel):
+    """Bind a pull request the worker opened but never reported to its task (task
+    deliverable spec 3.7). The head is the exact one the caller expects the forge to
+    show; anything else is refused."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    repository: str = Field(min_length=1, max_length=500)  # https://host/owner/repo
+    number: int = Field(ge=1, le=999_999_999)
+    head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class DeliveryTask(BaseModel):

@@ -9,7 +9,7 @@ from argus_core.continuation import (
     EffectiveContinuation,
     ObservationRequest,
 )
-from argus_core.delivery import Delivery
+from argus_core.delivery import Delivery, PrBinding
 from argus_core.difficulty import chain_for
 from argus_core.resumability import DEFAULT_READ_BOUND, ResumabilityReport
 from argus_core.task_edit import TaskAttempt, TaskEdit
@@ -61,6 +61,7 @@ from argus_api.tasks import (
     delivery,
     finalization,
     log,
+    pr_binding,
     prerequisites,
     quota_resume,
     resumability,
@@ -682,6 +683,20 @@ async def update_continuation(
     orchestrator provenance; stale `expected_revision` is 409 `stale_continuation`."""
     async with db.write() as tx:
         return await service.update_continuation(tx, task_id, body, caller.actor)
+
+
+@router.post("/{task_id}/reconcile-pr")
+async def reconcile_pr(
+    task_id: str, body: PrBinding, request: Request, db: DbDep, caller: ManagerDep
+) -> Task:
+    """Bind a pull request the worker opened but never reported (orchestrator or
+    admin). The forge must show that PR in the project's repository at exactly
+    `head_sha`; it is then recorded as the task's PR artifact and audited. The task's
+    state is unchanged and no gate is waived. Replaying the same binding changes
+    nothing; another head for a bound PR is 409 `pr_already_bound`."""
+    return await pr_binding.bind(
+        db, request.app.state.pr_checker, task_id, body, caller.actor
+    )
 
 
 @router.post("/{task_id}/observations")
