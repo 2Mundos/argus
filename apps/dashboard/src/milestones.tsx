@@ -51,6 +51,18 @@ export function noSignalMinutes(
 
 const text = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
 
+const WAITING_ON: Record<string, string> = { ci: "Waiting on CI", review: "Waiting on review" };
+
+/** "Waiting on CI for #412 · 6 min" (task-helpers spec 3.7); null for any other kind. */
+function waitingText(data: Record<string, unknown>, now: number): string | null {
+  const on = typeof data.on === "string" ? WAITING_ON[data.on] : undefined;
+  if (!on) return null;
+  const since = typeof data.since === "string" ? Date.parse(data.since) : Number.NaN;
+  const ref = text(data.ref);
+  const minutes = Number.isFinite(since) ? Math.max(0, Math.floor((now - since) / 60_000)) : null;
+  return `${on}${ref ? ` for ${ref}` : ""}${minutes == null ? "" : ` · ${minutes} min`}`;
+}
+
 /** Milestone label, short SHA, PR link and when it happened; nothing for a task without a kind. */
 export function MilestoneLine({ task, now }: { task: Signal; now: number }) {
   if (!task.progress_kind) return null;
@@ -60,6 +72,13 @@ export function MilestoneLine({ task, now }: { task: Signal; now: number }) {
   const number = typeof data.number === "number" ? data.number : null;
   const at = text(data.at) ?? task.progress_at;
   const link = url && /^https?:\/\//i.test(url) ? url : null;
+  const waiting = task.progress_kind === "waiting" ? waitingText(data, now) : null;
+  if (waiting)
+    return (
+      <span className="milestone small">
+        <strong>{waiting}</strong>
+      </span>
+    );
   return (
     <span className="milestone small">
       <strong>{LABELS[task.progress_kind] ?? task.progress_kind}</strong>

@@ -6,7 +6,9 @@
 #   install-gitea-api.sh patch-nanoclaw-dockerfile T → patch T/container/Dockerfile (install -m)
 #   install-gitea-api.sh stage-engines TARGET        → TARGET/container/{gitea,github}-api.mjs only
 #   install-gitea-api.sh stage-tools-ctx CTX         → CTX/{gitea,github}-api.mjs (tools-layer context)
-#   install-gitea-api.sh install-bin PREFIX          → PREFIX/usr/local/bin/{argus-gitea-api,argus-github-api,gitea-api.mjs,github-api.mjs}
+#   install-gitea-api.sh install-bin PREFIX          → PREFIX/usr/local/bin/{argus-gitea-api,argus-github-api,argus-task,gitea-api.mjs,github-api.mjs}
+# argus-task (argus-task.mjs, task-helpers spec) imports both modules and ships with them
+# through the tools layer and project layers (stage-tools-ctx).
 # Idempotent. Does not need Docker, network, or secrets.
 set -euo pipefail
 
@@ -15,7 +17,8 @@ src="$here/gitea-api.mjs"
 types="$here/gitea-api.d.mts"
 gh_src="$here/github-api.mjs"
 gh_types="$here/github-api.d.mts"
-for f in "$src" "$gh_src"; do [[ -f "$f" ]] || { echo "missing $f" >&2; exit 2; }; done
+task_src="$here/argus-task.mjs"
+for f in "$src" "$gh_src" "$task_src"; do [[ -f "$f" ]] || { echo "missing $f" >&2; exit 2; }; done
 
 cmd="${1:?usage: install-gitea-api.sh copy-nanoclaw|patch-nanoclaw-dockerfile|stage-engines|stage-tools-ctx|install-bin DEST}"
 dest="${2:?usage: install-gitea-api.sh $cmd DEST}"
@@ -72,6 +75,7 @@ PY
     mkdir -p "$dest"
     cp -p "$src" "$dest/gitea-api.mjs"
     cp -p "$gh_src" "$dest/github-api.mjs"
+    cp -p "$task_src" "$dest/argus-task.mjs"
     ;;
   install-bin)
     # Same semantics as Dockerfile / install -m / COPY --chmod for the helper binary.
@@ -81,6 +85,7 @@ PY
     install -m 0755 "$src" "$bindir/argus-gitea-api"
     install -m 0644 "$gh_src" "$bindir/github-api.mjs"
     install -m 0755 "$gh_src" "$bindir/argus-github-api"
+    install -m 0755 "$task_src" "$bindir/argus-task"
     ;;
   *)
     echo "unknown command: $cmd" >&2

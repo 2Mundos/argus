@@ -24,6 +24,7 @@ import {
   prepareExecutorEnv,
   preparePrompt,
   READ_ONLY_PROMPT_PREFIX,
+  waitCapEnv,
   withCliToolsPath,
 } from "./argus-delegate.mjs";
 import { policySnapshot } from "./model-policy.mjs";
@@ -2090,4 +2091,11 @@ test("copilotAuthRejected matches the pinned CLI's exact lines only", () => {
     "429 rate limit",
   ])
     assert.equal(copilotAuthRejected(text), false, text);
+});
+
+test("only a Claude executor keeps the harness's argus-task wait cap", () => {
+  const e = { ARGUS_TASK_WAIT_MAX_S: "480", PATH: "/bin" };
+  assert.equal(waitCapEnv("claude", e).ARGUS_TASK_WAIT_MAX_S, "480");
+  for (const executor of ["codex", "agent", "copilot", "opencode"])
+    assert.deepEqual(waitCapEnv(executor, e), { PATH: "/bin" });
 });

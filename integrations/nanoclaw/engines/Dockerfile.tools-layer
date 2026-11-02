@@ -22,6 +22,8 @@ COPY --chmod=0755 argus-delegate.mjs /usr/local/bin/argus-delegate
 COPY --chmod=0644 account-settings.mjs model-policy.mjs model-policy.defaults.json milestones.mjs livelog.mjs changes.mjs usage.mjs gitea-api.mjs github-api.mjs /usr/local/bin/
 COPY --chmod=0755 gitea-api.mjs /usr/local/bin/argus-gitea-api
 COPY --chmod=0755 github-api.mjs /usr/local/bin/argus-github-api
+# argus-task (docs/specs/task-helpers.spec.md) imports gitea-api.mjs and github-api.mjs beside it.
+COPY --chmod=0755 argus-task.mjs /usr/local/bin/argus-task
 # Command guard (docs/specs/command-guard.spec.md): a Claude Code PreToolUse hook
 # registered in managed settings, which a project's own .claude settings cannot
 # remove. The smoke fails the build if the guard does not block a known-bad command.
@@ -34,4 +36,4 @@ RUN echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \
 COPY --chmod=0644 argus-oom-priority.sh argus-cpu-count.sh argus-cpu-count.cjs /usr/local/lib/argus/
 COPY --chmod=0644 argus-cpu-count-sitecustomize.py /usr/local/lib/argus/pycpu/sitecustomize.py
 USER node
-LABEL dev.argus.tools-layer="openssh-client rsync python3 uv make argus-delegate model-policy command-guard"
+LABEL dev.argus.tools-layer="openssh-client rsync python3 uv make argus-delegate model-policy command-guard argus-task"

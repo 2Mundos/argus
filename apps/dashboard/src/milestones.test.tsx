@@ -48,6 +48,20 @@ describe("TaskSignal", () => {
     expect(screen.getByText("PR opened")).toBeTruthy();
   });
 
+  it("shows what a waiting task waits on and for how long", () => {
+    render(
+      <TaskSignal
+        now={NOW}
+        task={{
+          ...base,
+          progress_kind: "waiting",
+          progress_data: { on: "ci", ref: "#412", since: ago(6), at: ago(1) },
+        }}
+      />,
+    );
+    expect(screen.getByText("Waiting on CI for #412 · 6 min")).toBeTruthy();
+  });
+
   it("does not link a non-http url", () => {
     render(
       <TaskSignal

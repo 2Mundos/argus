@@ -15259,7 +15259,8 @@
           "ci_passed",
           "ci_failed",
           "gate_failed",
-          "waiting_input"
+          "waiting_input",
+          "waiting"
         ],
         "title": "ProgressKind",
         "type": "string"

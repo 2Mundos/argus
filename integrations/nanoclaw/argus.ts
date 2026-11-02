@@ -143,6 +143,12 @@ import {
   stderrTailMediaType,
   utf8Bytes,
 } from "./argus-stderr-tail.js";
+import {
+  createWaitingRelay,
+  markSteer,
+  readWaiting,
+  waitingMessage,
+} from "./argus-task-signals.js";
 import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
 import { prepareTaskWorkspace, type WorkspaceResult } from "./argus-workspace.js";
 import { registerChannelAdapter } from "./channel-registry.js";
@@ -631,6 +637,7 @@ function repositoryTaskLines(
     ...(readOnly
       ? []
       : [
+          `Task helper (when \`command -v argus-task\` finds it; run argus-task --help): prefer it to sleeping and re-polling ${helper}. argus-task wait ci|review --pr N blocks without using model turns until CI on the PR head finishes or a new review or comment lands; exit 10 means still pending (call it again), 11 means an operator steer arrived (read it first). Give your shell tool a timeout above $ARGUS_TASK_WAIT_MAX_S seconds. argus-task pr-ready --pr N exits 0 when mergeable or 12 with reasons; ci-digest --pr N prints the failed jobs' error lines (about 2 KB); deliver [--title T] [--body-file F] pushes your branch (rebasing onto the base only when clean), creates or updates its PR, and exits 12 with the conflicting files on a rebase conflict.`,
           `To open a PR (you can; push your branch first, then): ${helper} create --repository ${task.repository_url} --title "<title>" --head <branch> --base <base-branch> --body "<text>"   (a long body may use --body-file <path> or --body-stdin when --help lists them; older images silently ignore unsupported options, so check the returned PR body). create is idempotent: if an open PR for the same head and base exists it is returned instead of a duplicate. To edit one: ${helper} update --repository ${task.repository_url} --number <N> [--title T] [--body-file PATH | --body TEXT] [--base B] [--state open|closed]. Both print the PR JSON (number, html_url, head.sha).`,
         ]),
   ];
@@ -1886,6 +1893,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   const injectedSteers = new Set<string>();
   const injectingSteers = new Set<string>();
   const steerAcks = new Set<string>();
+  const waitingRelay = createWaitingRelay();
   let loop: Promise<void> | null = null;
   let agentRole: "orchestrator" | "worker" = cfg.role ?? "worker";
   let agentId: string | null = null;
@@ -2239,6 +2247,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const lost = current && data.rejected?.find((r: any) => r.task_id === current!.id);
       if (lost) await abandonTask(lost.code);
       await deliverSteers(Array.isArray(data.steers) ? data.steers : []);
+      await relayWaiting();
     } catch (err) {
       if (err instanceof ArgusError && err.status === 401) {
         log.error("Argus rejected this agent token; the channel stops", { err });
@@ -2596,6 +2605,49 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       }
       injectedSteers.add(steer.id);
       steerAcks.add(steer.id);
+      // An agent blocked in `argus-task wait` reads the steer only after the call returns.
+      const claim = current;
+      const groupDir = claim ? await claimGroupDir(claim) : null;
+      if (claim && groupDir) await markSteer(groupDir, claim.id, new Date(nowMs()));
+    }
+  }
+
+  /** The group directory holding the claimed task's workspace, or null when it has none. */
+  async function claimGroupDir(task: Claim): Promise<string | null> {
+    if (!currentClaim?.repository_url || currentClaim.id !== task.id) return null;
+    try {
+      return await (cfg.workspaceRoot ?? argusGroupDir)();
+    } catch {
+      return null;
+    }
+  }
+
+  /** Turn the helper's waiting record into a `waiting` milestone (task helpers spec 3.4). */
+  async function relayWaiting(): Promise<void> {
+    const task = current;
+    const groupDir = task ? await claimGroupDir(task) : null;
+    if (!task || !groupDir) {
+      waitingRelay.reset();
+      return;
+    }
+    const now = nowMs();
+    const waiting = await readWaiting(groupDir, task.id, now);
+    if (!waiting || !waitingRelay.due(waiting, now)) {
+      if (!waiting) waitingRelay.reset();
+      return;
+    }
+    try {
+      await client.call("POST", `/tasks/${task.id}/progress`, {
+        attempt: task.attempt,
+        message: waitingMessage(waiting),
+        kind: "waiting",
+        data: waiting,
+      });
+      waitingRelay.posted(waiting, now);
+    } catch (err) {
+      log.warn("Argus waiting milestone failed (will retry)", {
+        err: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

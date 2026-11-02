@@ -504,7 +504,7 @@ async def report_progress(
     """Post a short progress note shown to humans (at most one per 10 s). It also
     renews your lease on the task. Optional `kind` marks a milestone: commit_created
     {branch, sha}, pr_opened {number, url}, ci_running|ci_passed|ci_failed {sha},
-    gate_failed {gate}, waiting_input; a milestone is not limited unless its kind repeats."""
+    gate_failed {gate}, waiting_input, waiting {on, ref, since}; a milestone is not limited unless its kind repeats."""
     return await _call(
         ctx,
         "POST",

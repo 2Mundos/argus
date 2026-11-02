@@ -1,4 +1,5 @@
 {
+  "env": { "ARGUS_TASK_WAIT_MAX_S": "480" },
   "hooks": {
     "PreToolUse": [
       {
