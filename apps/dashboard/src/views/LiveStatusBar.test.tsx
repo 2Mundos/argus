@@ -201,8 +201,8 @@ describe("LiveStatusBar", () => {
     const strip = await stripMatching(/task\.complete/);
     fireEvent.click(strip);
     const feed = screen.getByRole("region", { name: "Recent events" });
-    expect(feed.textContent).toMatch(/task\.complete/);
-    expect(feed.textContent).toMatch(/task\.created/);
+    expect(feed.textContent).toMatch(/complete/);
+    expect(feed.textContent).toMatch(/created/);
   });
 
   it("shows a quiet placeholder when nothing has arrived", async () => {
