@@ -592,6 +592,9 @@ python3 "$here/patch-no-session-ceiling.py" "$target"
 # The shim files ship in the agent image (engines/Dockerfile.tools-layer); this wires session containers to them.
 python3 "$here/patch-agent-resource-hygiene.py" "$target"
 
+# Harness system prompt: no Co-Authored-By / attribution trailers in commit messages (worker-lifecycle spec 3.8).
+python3 "$here/patch-commit-trailers.py" "$target"
+
 # No self-modifying tools for Argus agents (internal orchestrator spec 3.1): create_agent,
 # install_packages and add_mcp_server need a NanoClaw owner's approval, which no Argus host has.
 mcp_tools="$target/container/agent-runner/src/mcp-tools/index.ts"

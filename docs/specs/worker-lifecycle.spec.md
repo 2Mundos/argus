@@ -643,6 +643,17 @@ earlier tasks neither inflate its cost nor contaminate its replies
 - The worker's agent group runs with `cli_scope: "disabled"`. The worker never
   uses `ncl`, and NanoClaw then leaves the `cli` and `scheduling` module
   instructions (about 7.7 KB) out of the composed `CLAUDE.md`.
+- The harness's system-level instruction forbids `Co-Authored-By:` (and other
+  co-author or attribution) trailers in commit messages it creates. The
+  instruction is installed into NanoClaw's core canon `container/CLAUDE.md`
+  (composed into `CLAUDE.md` for the claude provider and `AGENTS.md` for codex
+  on every spawn) and prepended to every `argus-delegate` run. It is an
+  instruction only: no hooks, no history rewriting, no trailer stripping, no
+  change to git author identity, and it does not alter existing task prompts,
+  engine behaviour or repo-wide settings. Limitation: executor-only CLIs
+  (Cursor/`agent`, `opencode`, `copilot`, and delegated `codex`/`claude`) never
+  load the harness project document, so they rely on the `argus-delegate`
+  prefix alone.
 
 The Argus-installed NanoClaw overlay imposes no wall-clock or heartbeat-age
 ceiling on a running container: a quiet or long-running session remains valid

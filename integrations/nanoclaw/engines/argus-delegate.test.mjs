@@ -11,6 +11,7 @@ import {
   authorizedCwd,
   authStatus,
   buildCommand,
+  COMMIT_ATTRIBUTION_RULE,
   COPILOT_SENTINEL_TOKEN,
   CUSTOM_KEY_ENV,
   copilotAuthRejected,
@@ -21,6 +22,7 @@ import {
   parseAccountSettings,
   pinnedModel,
   prepareExecutorEnv,
+  preparePrompt,
   READ_ONLY_PROMPT_PREFIX,
   withCliToolsPath,
 } from "./argus-delegate.mjs";
@@ -455,6 +457,24 @@ test("agent empty JSON result is an invalid execution", async (t) => {
   assert.equal(report.executor_error?.kind, "empty_result");
 });
 
+test("preparePrompt always prefixes the commit-attribution rule", () => {
+  const body = "implement the feature";
+  const normal = preparePrompt(body);
+  assert.ok(normal.startsWith(COMMIT_ATTRIBUTION_RULE));
+  assert.ok(normal.includes(body));
+  assert.ok(normal.indexOf(COMMIT_ATTRIBUTION_RULE) < normal.indexOf(body));
+  assert.equal(normal.includes(READ_ONLY_PROMPT_PREFIX), false);
+  assert.ok(normal.endsWith(body));
+
+  const readOnly = preparePrompt(body, { readOnly: true });
+  assert.ok(readOnly.startsWith(COMMIT_ATTRIBUTION_RULE));
+  assert.ok(readOnly.includes(READ_ONLY_PROMPT_PREFIX));
+  assert.ok(readOnly.includes(body));
+  assert.ok(readOnly.indexOf(COMMIT_ATTRIBUTION_RULE) < readOnly.indexOf(READ_ONLY_PROMPT_PREFIX));
+  assert.ok(readOnly.indexOf(READ_ONLY_PROMPT_PREFIX) < readOnly.indexOf(body));
+  assert.ok(readOnly.endsWith(body));
+});
+
 test("read-only agent uses print only with a static-review prompt prefix", async (t) => {
   const s = sandbox(t);
   const authDir = path.join(s.home, ".config", "cursor");
@@ -473,8 +493,33 @@ test("read-only agent uses print only with a static-review prompt prefix", async
     input: "inspect only",
   });
   const body = fs.readFileSync(got, "utf8");
+  assert.ok(body.includes(COMMIT_ATTRIBUTION_RULE));
   assert.ok(body.includes(READ_ONLY_PROMPT_PREFIX));
   assert.ok(body.includes("inspect only"));
+});
+
+test("delegated agent prompt always carries the commit-attribution rule", async (t) => {
+  const s = sandbox(t);
+  const authDir = path.join(s.home, ".config", "cursor");
+  fs.mkdirSync(authDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(authDir, "auth.json"),
+    '{"accessToken":"sentinel","refreshToken":"stub"}',
+  );
+  const got = path.join(s.dir, "prompt.txt");
+  s.fake(
+    "agent",
+    `if [ "$1" = "--version" ]; then echo v; exit 0; fi\necho "$@" >${got}; echo '{"type":"result","result":"ok"}'`,
+  );
+  const { code } = await run(["agent", "--cwd", s.work], {
+    env: { ...s.env, HOME: s.home },
+    input: "ship the change",
+  });
+  assert.equal(code, 0);
+  const body = fs.readFileSync(got, "utf8");
+  assert.ok(body.includes(COMMIT_ATTRIBUTION_RULE));
+  assert.ok(body.includes("ship the change"));
+  assert.equal(body.includes(READ_ONLY_PROMPT_PREFIX), false);
 });
 
 test("executorJsonFailure detects empty stdout", () => {
