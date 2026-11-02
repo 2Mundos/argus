@@ -17,6 +17,7 @@ import {
   createArgusAdapter,
   type RuntimeHooks,
 } from "./argus.js";
+import { until } from "./argus-test-until.js";
 
 const TASK = {
   id: "t1",
@@ -108,14 +109,6 @@ function harness(host: Host, over: Partial<ArgusConfig> = {}) {
   live.push(adapter);
   return { fake, adapter, setup, inbound };
 }
-
-const until = async (cond: () => boolean, ms = 4000) => {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > ms) throw new Error("timed out waiting for condition");
-    await new Promise((r) => setTimeout(r, 5));
-  }
-};
 
 const live: Array<{ teardown: () => Promise<void> }> = [];
 afterEach(async () => {

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import { type ArgusTask, createArgusAdapter, type RuntimeHooks } from "./argus.js";
 import { type DockerRun, isOomKill, readSessionEvidence } from "./argus-stderr-tail.js";
+import { until } from "./argus-test-until.js";
 
 const TASK = {
   id: "t1",
@@ -117,14 +118,6 @@ const live: Array<{ teardown: () => Promise<void> }> = [];
 afterEach(async () => {
   for (const a of live.splice(0)) await a.teardown();
 });
-
-const until = async (cond: () => boolean, ms = 8000) => {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > ms) throw new Error("timed out waiting for condition");
-    await new Promise((r) => setTimeout(r, 5));
-  }
-};
 
 /** Run one claim whose session ctr-1 vanishes; `docker` answers the evidence read. */
 async function loseSession(docker: DockerRun, failStatuses: number[] = []) {

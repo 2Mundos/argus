@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import { type ArgusTask, createArgusAdapter } from "./argus.js";
+import { until } from "./argus-test-until.js";
 
 const base: ArgusTask = JSON.parse(
   fs.readFileSync(
@@ -101,14 +102,6 @@ function fakeArgus(queue: ArgusTask[]) {
   }) as unknown as typeof fetch;
   return { calls, fetchImpl };
 }
-
-const until = async (cond: () => boolean, ms = 3000) => {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > ms) throw new Error("timed out waiting for condition");
-    await new Promise((r) => setTimeout(r, 5));
-  }
-};
 
 const live: Array<{ teardown: () => Promise<void> }> = [];
 afterEach(async () => {

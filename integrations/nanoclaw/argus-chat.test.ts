@@ -14,6 +14,7 @@ import {
   renderChatInbound,
   renderChatSeed,
 } from "./argus-chat.js";
+import { until } from "./argus-test-until.js";
 
 /** A long-poll that stays open until the loop aborts it. */
 const hang = (signal?: AbortSignal) =>
@@ -694,7 +695,7 @@ describe("createArgusAdapter orchestrator failures", () => {
       onAction: vi.fn(),
     } as unknown as ChannelSetup);
     // The chat loop looks again a second after the account is applied.
-    await vi.waitFor(() => expect(inbound.length).toBe(1), { timeout: 5_000 });
+    await until(() => inbound.length === 1, 5000, "the chat message");
     const fail = (providerFailure: unknown) =>
       adapter.deliver!("local", chatThread("c1"), {
         content: {
@@ -802,7 +803,7 @@ describe("orchestrator Argus MCP wiring (spec 3.1)", () => {
       onMetadata: vi.fn(),
       onAction: vi.fn(),
     } as unknown as ChannelSetup);
-    await vi.waitFor(() => expect(inbound.length).toBe(1), { timeout: 5_000 });
+    await until(() => inbound.length === 1, 5000, "the chat message");
     expect(setArgusMcp).toHaveBeenCalledWith("https://argus.test/mcp");
     const mcp = vault.state.secrets.find((x) => x.name === "argus-g-mcp");
     expect(mcp).toMatchObject({

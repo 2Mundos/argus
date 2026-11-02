@@ -129,18 +129,21 @@ function harness(
     fetch: fake.fetchImpl,
     now: () => clock,
     claimWaitS: 1,
+    heartbeatMs: 50,
     ...over,
   });
   return { adapter, setup, inbound, thread: () => thread, advance: (ms: number) => (clock += ms) };
 }
 
-const until = async (cond: () => boolean, ms = 2000) => {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > ms) throw new Error("timed out waiting for condition");
-    await new Promise((r) => setTimeout(r, 5));
-  }
-};
+/** Calls the fake has seen on `path`. */
+const count = (fake: ReturnType<typeof fakeArgus>, path: string) =>
+  fake.calls.filter((c) => c.path === path).length;
+
+/** Let `n` more heartbeats go by: the observable unit of "time passed" here. */
+async function heartbeats(fake: ReturnType<typeof fakeArgus>, n = 2): Promise<void> {
+  const goal = count(fake, "/agents/me/heartbeat") + n;
+  await until(() => count(fake, "/agents/me/heartbeat") >= goal, 8000, `${n} heartbeats`);
+}
 
 const live: Array<{ teardown: () => Promise<void> }> = [];
 afterEach(async () => {
@@ -779,7 +782,7 @@ describe("Argus channel", () => {
     await h.adapter.setup(h.setup);
     await until(() => fake.calls.some((c) => c.path === "/agents/me/heartbeat"), 2500);
     const claimsBefore = fake.calls.filter((c) => c.path === "/tasks/claim").length;
-    await new Promise((r) => setTimeout(r, 1300));
+    await heartbeats(fake, 3);
     // A claim already in flight may finish, but no new ones are started.
     expect(fake.calls.filter((c) => c.path === "/tasks/claim").length).toBeLessThanOrEqual(
       claimsBefore + 1,
@@ -796,6 +799,7 @@ describe("Argus channel", () => {
     expect(fake.calls.some((c) => c.path === "/agents/me/leave")).toBe(true);
     expect(h.adapter.isConnected()).toBe(false);
     const claims = fake.calls.filter((c) => c.path === "/tasks/claim").length;
+    // check-tests: allow sleep — a left agent has no heartbeat or claim left to count
     await new Promise((r) => setTimeout(r, 300));
     expect(fake.calls.filter((c) => c.path === "/tasks/claim").length).toBe(claims);
     expect(onDrained).toHaveBeenCalledTimes(1);
@@ -821,7 +825,7 @@ describe("Argus channel", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
-    await new Promise((r) => setTimeout(r, 1300)); // a heartbeat reports draining
+    await heartbeats(fake); // a heartbeat reports draining
     expect(onDrained).not.toHaveBeenCalled(); // still working
     expect(fake.calls.some((c) => c.path === "/agents/me/leave")).toBe(false);
 
@@ -850,7 +854,7 @@ describe("Argus channel", () => {
     await until(() => claims() > before, 3000);
     // A late reply from the abandoned run is dropped, not reported.
     await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
-    await new Promise((r) => setTimeout(r, 100));
+    await heartbeats(fake);
     // Harness model-trace posts on claim are fine; no complete/fail/ask/progress.
     expect(
       fake.calls.some(
@@ -906,6 +910,7 @@ import {
   SUMMARY_MAX_CHARS,
   withHashSuffix,
 } from "./argus.js";
+import { until } from "./argus-test-until.js";
 
 /** Like fakeArgus, with an artifact store and scriptable failures on /complete. */
 function resultArgus(
@@ -1746,6 +1751,8 @@ describe("delegate live log relay", () => {
     const { dir, file } = tmp();
     const posts: any[] = [];
     let slow = true;
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
     const relay = createDelegateLogRelay({
       file,
       task: { id: "t1", attempt: 1 },
@@ -1753,7 +1760,7 @@ describe("delegate live log relay", () => {
       post: async (b) => {
         if (slow) {
           slow = false;
-          await new Promise((r) => setTimeout(r, 100));
+          await held; // this periodic post is still in flight when the drain starts
         }
         posts.push(b);
       },
@@ -1765,7 +1772,9 @@ describe("delegate live log relay", () => {
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(file, rec(Array.from({ length: 250 }, (_, i) => `l${i}`)));
       const inFlight = relay.poll(); // a periodic poll is still posting when the drain starts
-      await relay.drain(5000);
+      const drained = relay.drain(5000);
+      release();
+      await drained;
       await inFlight;
       expect(warn.mock.calls.some((c) => /final drain abandoned/.test(String(c[0])))).toBe(false);
       expect(posts.flatMap((p) => p.lines)).toHaveLength(250);
@@ -1892,7 +1901,7 @@ describe("steers", () => {
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
     armed = true;
-    await new Promise((r) => setTimeout(r, 1200));
+    await heartbeats(fake);
     expect(h.inbound.filter((m) => String(m.id).startsWith("argus-steer-"))).toHaveLength(0);
     expect(fake.calls.some((c) => c.body?.steer_acks?.includes("s1"))).toBe(false);
     fail = false;
@@ -1902,7 +1911,7 @@ describe("steers", () => {
       parseFramedSteer(h.inbound.find((m) => m.id === "argus-steer-s1").content.text).message,
     ).toBe(forged);
     await until(() => fake.calls.some((c) => c.body?.steer_acks?.includes("s1")), 3000);
-    await new Promise((r) => setTimeout(r, 1200));
+    await heartbeats(fake);
     expect(h.inbound.filter((m) => m.id === "argus-steer-s1")).toHaveLength(1);
   });
 
@@ -1939,7 +1948,7 @@ describe("steers", () => {
     expect(h.inbound[0].content.text).toContain(
       "Operator steers: 1 steer(s) sent to the previous attempt were never confirmed.",
     );
-    await new Promise((r) => setTimeout(r, 1200));
+    await heartbeats(fake);
     expect(h.inbound.filter((m) => String(m.id).startsWith("argus-steer-"))).toHaveLength(0);
   });
 

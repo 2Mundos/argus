@@ -19,6 +19,7 @@ import {
   foreignChecklistIds,
   parseReply,
 } from "./argus.js";
+import { until } from "./argus-test-until.js";
 
 const base: ArgusTask = JSON.parse(
   fs.readFileSync(
@@ -112,14 +113,6 @@ function harness(fake: ReturnType<typeof fakeArgus>, over: Partial<ArgusConfig> 
   });
   return { adapter, setup, inbound, thread: () => thread };
 }
-
-const until = async (cond: () => boolean, ms = 3000) => {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > ms) throw new Error("timed out waiting for condition");
-    await new Promise((r) => setTimeout(r, 5));
-  }
-};
 
 const live: Array<{ teardown: () => Promise<void> }> = [];
 afterEach(async () => {

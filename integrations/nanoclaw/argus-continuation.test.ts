@@ -22,6 +22,7 @@ import {
   splitSpec,
   UNTRUSTED_TASK_DATA_RULES,
 } from "./argus.js";
+import { until } from "./argus-test-until.js";
 
 const fixture = (name: string): ArgusTask =>
   JSON.parse(
@@ -318,14 +319,6 @@ function harness(fake: ReturnType<typeof fakeArgus>, over: Partial<ArgusConfig> 
   return { adapter, setup, inbound, thread: () => thread };
 }
 
-const until = async (cond: () => boolean, ms = 2000) => {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > ms) throw new Error("timed out waiting for condition");
-    await new Promise((r) => setTimeout(r, 5));
-  }
-};
-
 const live: Array<{ teardown: () => Promise<void> }> = [];
 afterEach(async () => {
   for (const a of live.splice(0)) await a.teardown();
@@ -434,6 +427,7 @@ describe("Argus channel: claim -> preflight -> render -> reply", () => {
       `ask on ${task.id}: lower case`,
     ])
       await h.adapter.deliver("local", h.thread(), { kind: "chat", content: { text } });
+    // check-tests: allow sleep — a quiet check after deliver: nothing follows to count
     await new Promise((r) => setTimeout(r, 50));
     for (const tail of ["/ask", "/fail", "/complete"])
       expect(fake.calls.some((c) => c.path === `/tasks/${task.id}${tail}`)).toBe(false);

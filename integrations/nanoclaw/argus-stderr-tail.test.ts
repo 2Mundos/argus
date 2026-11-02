@@ -25,6 +25,7 @@ import {
   STDERR_TAIL_MAX_BYTES,
   utf8Bytes,
 } from "./argus-stderr-tail.js";
+import { until } from "./argus-test-until.js";
 
 const bytes = (s: string) => new TextEncoder().encode(s).length;
 /** Valid UTF-8 (no U+FFFD from a cut character) and the original's suffix. */
@@ -200,14 +201,6 @@ const live: Array<{ teardown: () => Promise<void> }> = [];
 afterEach(async () => {
   for (const a of live.splice(0)) await a.teardown();
 });
-
-const until = async (cond: () => boolean, ms = 4000) => {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > ms) throw new Error("timed out waiting for condition");
-    await new Promise((r) => setTimeout(r, 5));
-  }
-};
 
 async function start(
   evidence: SessionEvidence,

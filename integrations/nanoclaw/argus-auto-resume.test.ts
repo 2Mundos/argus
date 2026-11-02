@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import { type ArgusTask, createArgusAdapter, type RuntimeHooks } from "./argus.js";
 import type { SessionEvidence } from "./argus-stderr-tail.js";
+import { until } from "./argus-test-until.js";
 
 const TASK = {
   id: "t1",
@@ -24,7 +25,7 @@ const SECRET = ["sk", "-SYNTHETICAUTORESUME0123456789abcd"].join("");
 
 type Call = { path: string; body: any };
 
-type Fake = { failStatuses: number[]; failDelayMs?: number; rejectLease?: boolean };
+type Fake = { failStatuses: number[]; failHoldBeats?: number; rejectLease?: boolean };
 
 function fakeArgus(opts: Fake) {
   const { failStatuses } = opts;
@@ -49,7 +50,12 @@ function fakeArgus(opts: Fake) {
     if (path === "/tasks/t1/artifacts") return json(201, { id: "art-1" });
     if (path === "/tasks/t1/fail") {
       flight.max = Math.max(flight.max, ++flight.now);
-      if (opts.failDelayMs) await new Promise((r) => setTimeout(r, opts.failDelayMs));
+      if (opts.failHoldBeats) {
+        // Answer only after more heartbeats went by: heartbeats overlap the report.
+        const beats = () => calls.filter((c) => c.path === "/agents/me/heartbeat").length;
+        const goal = beats() + opts.failHoldBeats;
+        await until(() => beats() >= goal);
+      }
       flight.now--;
       const status = failStatuses.shift() ?? 200;
       if (status === 409)
@@ -76,14 +82,6 @@ const live: Array<{ teardown: () => Promise<void> }> = [];
 afterEach(async () => {
   for (const a of live.splice(0)) await a.teardown();
 });
-
-const until = async (cond: () => boolean, ms = 8000) => {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > ms) throw new Error("timed out waiting for condition");
-    await new Promise((r) => setTimeout(r, 5));
-  }
-};
 
 async function start(failStatuses: number[], opts: Omit<Fake, "failStatuses"> = {}) {
   const fakeOpts: Fake = { failStatuses, ...opts };
@@ -135,6 +133,7 @@ async function start(failStatuses: number[], opts: Omit<Fake, "failStatuses"> = 
     claimWaitS: 1,
     observe: async () => ({ artifacts: [] }),
     progressIntervalMs: 0,
+    heartbeatMs: 50,
     now: () => clock,
     runtime,
   });
@@ -208,7 +207,7 @@ describe("the confirmed exit reaches Argus (automatic resume, synthetic logs)", 
   }, 20_000);
 
   it("keeps one report in flight however heartbeats overlap", async () => {
-    const h = await start([503, 503], { failDelayMs: 2500 });
+    const h = await start([503, 503], { failHoldBeats: 3 });
     await h.lose();
     await until(() => claims(h.fake).length >= 2, 15_000);
     expect(fails(h.fake)).toHaveLength(3);
@@ -222,7 +221,10 @@ describe("the confirmed exit reaches Argus (automatic resume, synthetic logs)", 
     h.rejectLease();
     await until(() => claims(h.fake).length >= 2, 15_000);
     const seen = fails(h.fake).length;
-    await new Promise((r) => setTimeout(r, 1500));
+    const beats = h.fake.calls.filter((c) => c.path === "/agents/me/heartbeat").length;
+    await until(
+      () => h.fake.calls.filter((c) => c.path === "/agents/me/heartbeat").length >= beats + 5,
+    );
     expect(fails(h.fake)).toHaveLength(seen);
   }, 20_000);
 
