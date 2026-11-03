@@ -46,6 +46,16 @@ def out(text):
 def ref_of(img):
     return img[4:] if img.startswith("img:") else img
 
+def norm(ref):
+    """name:tag@digest is stored as name@digest, as Docker does."""
+    ref = ref_of(ref)
+    if "@" in ref:
+        name, digest = ref.split("@", 1)
+        if ":" in name.rsplit("/", 1)[-1]:
+            name = name.rsplit(":", 1)[0]
+        return name + "@" + digest
+    return ref
+
 def version_of(img):
     return ref_of(img).rsplit(":", 1)[1]
 
@@ -90,8 +100,12 @@ def run(args):
     if "-d" in d and d["--name"].startswith("argus-onecli"):
         # The gateway and its database: recorded, never "Argus".
         s["containers"][d["--name"]] = {
-            "image": img, "running": True, "env": [], "mounts": [], "args": args,
+            "image": norm(img), "running": True, "env": [], "mounts": [], "args": args,
         }
+        s["images"].append(norm(img))
+        for k, v in o:
+            if k == "-v":
+                volume(v.split(":")[0])
         return save()
     if "-d" in d:
         name = d["--name"]
@@ -134,6 +148,12 @@ def run(args):
         if "argus.db.restore" in script:
             v["db"] = v["backup_content"][rest[0]]
             return save()
+        if "secrets.sops.yaml" in script:  # the uninstall summary
+            out("%d\n%s\n" % (len(v["db"]), "yes" if "secrets.sops.yaml" in v["files"] else "no"))
+            for f in sorted(v["files"]):
+                if f.startswith("backups/"):
+                    out(f.removeprefix("backups/") + "\n")
+            return
         return backup(v, rest)
     raise SystemExit("fake docker: unexpected run " + repr(args))
 
@@ -162,12 +182,19 @@ elif cmd == "image" and rest[0] == "inspect":
     if rest[1] == "-f":
         out("PATH=/usr/bin\nARGUS_VERSION=x\nARGUS_DATA_DIR=/data\n")
     else:
-        sys.exit(0 if ref_of(rest[-1]) in s["images"] else 1)
+        sys.exit(0 if norm(rest[-1]) in s["images"] else 1)
 elif cmd == "pull":
     if s["pull_fails"] or any(rest[0].startswith(m) for m in s["missing_images"]):
         sys.stderr.write("Error response from daemon: unauthorized\n")
         sys.exit(1)
-    s["images"].append(rest[0])
+    s["images"].append(norm(rest[0]))
+    save()
+elif cmd == "rmi":
+    ref = norm(rest[-1])
+    if ref not in s["images"] or any(norm(c["image"]) == ref for c in s["containers"].values()):
+        sys.stderr.write("Error response from daemon: conflict\n")
+        sys.exit(1)
+    s["images"].remove(ref)
     save()
 elif cmd == "info":
     out(s["engine"] + "\n")
@@ -305,6 +332,7 @@ class Env:
             "FAKE_STATE": str(self.state_path),
             "ARGUS_POLL_INTERVAL": "0",
             "ARGUS_READY_TIMEOUT": "0",
+            "ARGUS_TTY": str(self.tmp / "no-terminal"),
             **(extra_env or {}),
         }
         r = subprocess.run(
@@ -340,6 +368,12 @@ class Env:
         return sorted(
             f.removeprefix("backups/") for f in files if f.startswith("backups/")
         )
+
+    def answer(self, text: str) -> dict[str, str]:
+        """A terminal that answers `text` to the launcher's question."""
+        tty = self.tmp / "tty"
+        tty.write_text(text + "\n")
+        return {"ARGUS_TTY": str(tty)}
 
     def install(self, version: str = "v0.7.0") -> None:
         """A launcher-managed install at `version`, running."""
@@ -584,6 +618,7 @@ def test_a_held_lock_refuses_mutating_commands(env: Env) -> None:
         ["down"],
         ["worker", "setup", "-y"],
         ["worker", "remove"],
+        ["uninstall", "-y"],
     ):
         r = env.run(*cmd, ok=False)
         assert "another argus command is running" in r.stderr, cmd
@@ -768,3 +803,143 @@ def test_restore_with_workers_uses_that_versions_workers(env: Env) -> None:
     assert calls.index(["create", f"{HOST}:v0.7.0"]) < calls.index(["stop", "argus"])
     root = nc_root(env)
     assert arg_env(env.run_args())["ARGUS_NANOCLAW_INSTALL_DIR"] == f"{root}/v0.7.0/src"
+
+
+# -- first run offers workers (local workers 3.7) -------------------------------
+
+
+@pytest.mark.parametrize(("answer", "workers"), [("", True), ("y", True), ("n", False)])
+def test_the_first_run_asks_once_whether_to_set_up_workers(
+    env: Env, answer: str, workers: bool
+) -> None:
+    r = env.run("up", extra_env=env.answer(answer))
+    assert "ROOT-EQUIVALENT" in r.stdout and "Set up workers?" in r.stdout
+    assert env.config()["ARGUS_WORKERS"] == ("1" if workers else "0")
+    assert ("argus-onecli" in env.state["containers"]) is workers
+    assert ("ARGUS_NANOCLAW_INSTALL_DIR" in arg_env(env.run_args())) is workers
+    starts = [c for c in env.state["calls"] if c[:2] == ["run", "-d"] and "argus" in c]
+    assert len(starts) == 1  # Argus starts once, already with the worker settings
+    r = env.run("up", extra_env=env.answer(answer))
+    assert "Set up workers?" not in r.stdout
+
+
+@pytest.mark.parametrize(
+    ("flags", "workers"), [(["--workers"], "1"), (["--no-workers"], "0"), ([], "0")]
+)
+def test_the_first_run_without_a_terminal_follows_the_flag_or_says_no(
+    env: Env, flags: list[str], workers: str
+) -> None:
+    r = env.run("up", *flags)
+    assert "Set up workers?" not in r.stdout
+    assert env.config()["ARGUS_WORKERS"] == workers
+    if workers == "0":
+        assert "argus worker setup" in r.stdout
+        assert "/var/run/docker.sock:/var/run/docker.sock" not in env.run_args()
+
+
+@pytest.mark.parametrize(
+    ("flag", "command"), [("--workers", "setup"), ("--no-workers", "remove")]
+)
+def test_later_runs_change_workers_only_with_the_worker_commands(
+    env: Env, flag: str, command: str
+) -> None:
+    env.install()
+    r = env.run("up", flag, ok=False)
+    assert f"argus worker {command}" in r.stderr
+
+
+def test_a_failed_worker_step_still_starts_argus_without_workers(env: Env) -> None:
+    env.state["missing_images"] = [HOST]
+    r = env.run("up", extra_env=env.answer("y"), ok=False)
+    assert "argus worker setup" in r.stderr
+    assert env.state["containers"]["argus"]["running"]
+    assert env.config()["ARGUS_WORKERS"] == "0"
+    assert "ARGUS_NANOCLAW_INSTALL_DIR" not in arg_env(env.run_args())
+    assert not (env.home / "lock").exists()
+
+
+def test_a_machine_that_cannot_run_workers_is_told_instead_of_asked(env: Env) -> None:
+    long_home = str(env.data_home / ("x" * 60))
+    r = env.run("up", extra_env={**env.answer("y"), "XDG_DATA_HOME": long_home})
+    assert "56 characters" in r.stdout and "Set up workers?" not in r.stdout
+    assert env.config()["ARGUS_WORKERS"] == "0"
+
+
+# -- uninstall (launcher 3.9) ---------------------------------------------------
+
+
+def with_workers_and_two_versions(env: Env) -> None:
+    """Workers set up, then an update: images and a backup of two versions."""
+    env.install("v0.7.0")
+    env.run("worker", "setup", "-y")
+    env.run("update", "-y")
+    env.state["containers"]["unrelated"] = {
+        "image": "nginx:1",
+        "running": True,
+        "env": [],
+        "mounts": [],
+        "args": [],
+    }
+    env.state["volumes"]["unrelated-data"] = {"db": "", "files": []}
+    env.state["images"].append("nginx:1")
+
+
+@pytest.mark.parametrize("keep_data", [False, True])
+def test_uninstall_removes_only_what_the_launcher_named(
+    env: Env, keep_data: bool
+) -> None:
+    with_workers_and_two_versions(env)
+    r = env.run("uninstall", "-y", *(["--keep-data"] if keep_data else []))
+    assert "database" in r.stdout or keep_data
+    assert set(env.state["containers"]) == {"unrelated"}
+    assert env.state["networks"] == []
+    assert env.state["images"] == ["nginx:1"]  # both versions, workers, gateway
+    assert not nc_root(env).exists()
+    assert not env.launcher.exists()
+    kept = {"argus-data", "argus-onecli-data", "argus-onecli-pg"} & set(
+        env.state["volumes"]
+    )
+    assert "unrelated-data" in env.state["volumes"]
+    if not keep_data:
+        assert kept == set() and not env.home.exists()
+        return
+    assert kept == {"argus-data", "argus-onecli-data", "argus-onecli-pg"}
+    assert env.home.exists()
+    # Reinstalling starts the same install, workers included.
+    shutil.copy(LAUNCHER, env.launcher)
+    env.run("up")
+    assert env.config()["ARGUS_VERSION"] == "v0.8.0"
+    assert "argus-onecli" in env.state["containers"]
+    assert arg_env(env.run_args())["ARGUS_NANOCLAW_INSTALL_DIR"].endswith("/v0.8.0/src")
+
+
+def test_uninstall_leaves_an_image_in_use_and_can_run_again(env: Env) -> None:
+    env.install("v0.7.0")
+    env.state["containers"]["unrelated"] = {
+        "image": f"{IMAGE}:v0.7.0",
+        "running": True,
+        "env": [],
+        "mounts": [],
+        "args": [],
+    }
+    r = env.run("uninstall", "-y", ok=False)
+    assert f"left image {IMAGE}:v0.7.0" in r.stderr
+    assert "unrelated" in env.state["containers"]
+    assert env.launcher.exists() and (env.home / "argus.env").exists()
+    assert "argus-data" not in env.state["volumes"]
+    del env.state["containers"]["unrelated"]
+    env.run("uninstall", "-y")
+    assert not env.launcher.exists() and not env.home.exists()
+
+
+@pytest.mark.parametrize("answer", [None, "n"])
+def test_uninstall_without_a_yes_removes_nothing(env: Env, answer: str | None) -> None:
+    env.install()
+    r = env.run("uninstall", extra_env=env.answer(answer) if answer else None, ok=False)
+    assert "rerun with -y" in r.stderr or "cancelled" in r.stderr
+    assert "argus-data" in r.stdout and "the age key go with it" in r.stdout
+    assert not any(
+        c[0] in ("stop", "rm", "rmi", "volume") and c[1:2] != ["inspect"]
+        for c in env.state["calls"]
+    )
+    assert env.launcher.exists() and env.state["containers"]["argus"]["running"]

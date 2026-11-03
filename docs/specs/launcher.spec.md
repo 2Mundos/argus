@@ -227,8 +227,8 @@ without `-y` it refuses). It removes, in this order:
 With `--keep-data` the volumes and `$ARGUS_HOME` stay, so running the install
 line and `argus up` again starts the same install at its configured version
 (an existing install, 3.8), with workers if they were set up. A step that
-fails is reported and the rest still run, so a second `uninstall` finishes
-the job; the command exits non-zero if anything was left behind.
+fails is reported and the rest still run; then `$ARGUS_HOME` and the launcher
+stay, and the command exits non-zero, so a second `uninstall` finishes the job.
 
 # 4. Open Questions
 

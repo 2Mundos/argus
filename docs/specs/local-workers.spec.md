@@ -114,7 +114,8 @@ image refs of that version, the opt-in, user and socket group),
 `<data home>/nanoclaw` at its own path. None of them is secret. `setup` asks
 for confirmation first, because the socket template and Docker access are
 root-equivalent on this Docker host (`-y` skips it). `up --no-docker` is
-refused while workers are set up.
+refused while workers are set up, and every `up` with workers set up also
+starts the gateway if it is missing (after an `uninstall --keep-data`, say).
 
 ## 3.5 Updates and the way back
 
