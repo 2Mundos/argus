@@ -142,6 +142,7 @@ async def create_task(
     as_worker: str | None = None,
     hourly_limit: int | None = None,
     untrusted: bool = False,
+    idempotency_key: str | None = None,
 ) -> Task:
     """Create a task.
 
@@ -149,8 +150,48 @@ async def create_task(
     currently holds (3.6). `hourly_limit` is the policy gate (3.10): past that
     many tasks by `actor` in the last hour, the task waits for human approval
     instead of being refused. `untrusted` gives the task `worker` prompt trust
-    without forcing approval (routine findings, routines spec 3.3).
+    without forcing approval (routine findings, routines spec 3.3). With an
+    `idempotency_key`, a repeat of the same request by the same actor returns
+    the task it created; another request under that key is a conflict.
     """
+    if idempotency_key is None:
+        return await _create_task(
+            tx, body, actor, as_worker, hourly_limit=hourly_limit, untrusted=untrusted
+        )
+    digest = hashlib.sha256(body.model_dump_json().encode()).hexdigest()
+    async with tx.conn.execute(
+        "SELECT request_digest, task_id FROM task_creation_keys"
+        " WHERE actor = ? AND idempotency_key = ?",
+        (actor, idempotency_key),
+    ) as cur:
+        seen = await cur.fetchone()
+    if seen is not None:
+        if seen["request_digest"] != digest:
+            raise ConflictError(
+                "this Idempotency-Key was used for another task creation request",
+                code="idempotency_key_reused",
+            )
+        return await get_task(tx.conn, seen["task_id"])
+    task = await _create_task(
+        tx, body, actor, as_worker, hourly_limit=hourly_limit, untrusted=untrusted
+    )
+    await tx.conn.execute(
+        "INSERT INTO task_creation_keys (actor, idempotency_key, request_digest,"
+        " task_id, created_at) VALUES (?, ?, ?, ?, ?)",
+        (actor, idempotency_key, digest, task.id, ts(tx.now)),
+    )
+    return task
+
+
+async def _create_task(
+    tx: Tx,
+    body: TaskCreate,
+    actor: str,
+    as_worker: str | None,
+    *,
+    hourly_limit: int | None,
+    untrusted: bool,
+) -> Task:
     if body.parent_id is not None:
         parent = await _row(tx.conn, body.parent_id)
         if as_worker is not None and not (

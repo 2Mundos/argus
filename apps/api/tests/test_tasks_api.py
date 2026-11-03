@@ -58,6 +58,25 @@ def test_create_get_list(client: TestClient) -> None:
     )
 
 
+def test_create_with_an_idempotency_key_is_once_per_actor(
+    client: TestClient,
+) -> None:
+    body = {"project": "demo", "title": "once"}
+    key = {"Idempotency-Key": "create-1"}
+    first = client.post("/api/tasks", json=body, headers=key)
+    again = client.post("/api/tasks", json=body, headers=key)
+    assert first.status_code == again.status_code == 201
+    assert again.json()["id"] == first.json()["id"]
+    reused = client.post("/api/tasks", json={**body, "title": "other"}, headers=key)
+    assert reused.status_code == 409
+    assert reused.json()["detail"]["code"] == "idempotency_key_reused"
+    orchestrator = register(client, "orchestrator")
+    theirs = client.post("/api/tasks", json=body, headers={**key, **orchestrator})
+    assert theirs.status_code == 201 and theirs.json()["id"] != first.json()["id"]
+    assert client.post("/api/tasks", json=body).json()["id"] != first.json()["id"]
+    assert client.get("/api/tasks").json()["total"] == 3
+
+
 def test_claim_and_complete(client: TestClient, agent: dict[str, str]) -> None:
     task = client.post("/api/tasks", json={"project": "demo", "title": "x"}).json()
     claimed = client.post("/api/tasks/claim", json={}, headers=agent).json()

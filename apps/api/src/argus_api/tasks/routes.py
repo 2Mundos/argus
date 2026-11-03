@@ -22,7 +22,7 @@ from argus_core.tasks import (
     TaskState,
     validate_milestone,
 )
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 from pydantic import (
     BaseModel,
     Field,
@@ -190,17 +190,28 @@ class BlockRequest(BaseModel):
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_task(
-    body: TaskCreate, db: DbDep, caller: CallerDep, settings: SettingsDep
+    body: TaskCreate,
+    db: DbDep,
+    caller: CallerDep,
+    settings: SettingsDep,
+    idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None,
 ) -> Task:
     """Orchestrators and admins create any task; workers only subtasks of a task
     they hold. Past the per-agent hourly limit, an agent's new tasks wait for
-    human approval (a `policy` decision) instead of being refused."""
+    human approval (a `policy` decision) instead of being refused. A retry with
+    the same `Idempotency-Key` and body returns the task the first call created;
+    the same key with another body is 409 `idempotency_key_reused`."""
     as_worker = caller.agent_id if caller.scope is Scope.WORKER else None
     limit = settings.max_tasks_per_agent_hour
     hourly_limit = limit if caller.agent_id is not None and limit > 0 else None
     async with db.write() as tx:
         return await service.create_task(
-            tx, body, caller.actor, as_worker=as_worker, hourly_limit=hourly_limit
+            tx,
+            body,
+            caller.actor,
+            as_worker=as_worker,
+            hourly_limit=hourly_limit,
+            idempotency_key=idempotency_key,
         )
 
 
