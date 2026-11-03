@@ -171,11 +171,14 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
   if every prerequisite is verified true; false *and* unverifiable prerequisites
   both make it not ready and are listed under `missing` with how to fix them.
   Host paths (NanoClaw install dir, instances root, archive) are verified only
-  when the Docker daemon provably shares this process's filesystem (local unix
-  socket, not Docker Desktop); on a remote or VM daemon they are unverifiable,
-  so the guided flow refuses and points at the pool editor. (Launching an
-  *existing*, admin-defined pool still treats unverifiable checks as non-blocking
-  and shows them as unverified.)
+  when the Docker daemon is reached through a local unix socket (no `DOCKER_HOST`,
+  or `unix://`) and runs on this filesystem. That covers Docker Engine and Docker
+  Desktop for WSL 2. Docker Desktop on macOS runs its daemon in a VM with its own
+  paths (the socket sits under `$HOME`), so there the checks stay unverifiable, as
+  before. A remote daemon (`tcp://`, `ssh://`, `https://`) is unverifiable too, so
+  the guided flow refuses and points at the pool editor. (Launching an *existing*,
+  admin-defined pool still treats unverifiable checks as non-blocking and shows
+  them as unverified.)
 - **Create is server-authoritative.** The request names a template, node,
   **required `name`** (the pool name), quantity (default 1) and, for `argus-worker`, an image chosen
   from the offered ones. The server rebuilds the whole pool from the template and

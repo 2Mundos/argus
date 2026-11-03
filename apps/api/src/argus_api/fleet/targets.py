@@ -10,6 +10,7 @@ import asyncio
 import builtins
 import json
 import os
+import platform
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -147,7 +148,8 @@ class TargetInfo:
     cpus: float | None = None
     memory_mb: int | None = None
     # True only if the daemon provably uses this process's filesystem (a local
-    # unix socket, not a VM such as Docker Desktop): then host paths can be checked.
+    # unix socket, Docker Desktop included; not a remote tcp/ssh daemon): then host
+    # paths can be checked.
     shares_filesystem: bool = False
 
 
@@ -279,12 +281,12 @@ class DockerTarget:
         client = self._docker()
         client.ping()
         info = client.info()
-        effective = self.host or os.environ.get("DOCKER_HOST")
-        local = (effective is None or effective.startswith("unix://")) and (
-            "desktop" not in str(info.get("OperatingSystem", "")).lower()
-        )
+        # Docker Desktop on macOS runs the daemon in a VM with its own paths (the
+        # socket sits under $HOME there), so only the WSL 2 flavour shares this filesystem.
+        desktop = "desktop" in str(info.get("OperatingSystem", "")).lower()
         return TargetInfo(
-            shares_filesystem=local,
+            shares_filesystem=self._local_unix_daemon()
+            and (not desktop or platform.system() == "Linux"),
             version=info.get("ServerVersion"),
             runtimes=sorted(info.get("Runtimes") or {}),
             cpus=info.get("NCPU"),
