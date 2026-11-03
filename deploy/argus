@@ -1,0 +1,602 @@
+#!/bin/sh
+# argus: run a single-node Argus with Docker (docs/specs/launcher.spec.md).
+# POSIX sh; needs only docker and curl on the host. Anything more runs in the image.
+set -eu
+
+ARGUS_HOME=${ARGUS_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/argus}
+CONF=$ARGUS_HOME/argus.env
+KEY=$ARGUS_HOME/age-key.txt
+LOCK=$ARGUS_HOME/lock
+REPO=${ARGUS_REPO:-2Mundos/argus}
+READY_TIMEOUT=${ARGUS_READY_TIMEOUT:-300}
+POLL=${ARGUS_POLL_INTERVAL:-1}
+SECRETS=/data/secrets.sops.yaml
+
+# Backup and restore run in an Argus container as its user, so files keep the
+# volume's ownership. Backups are named argus-<UTC timestamp>-<version>.db and
+# sort oldest first; the newest 5 are kept, plus an optional protected name.
+PY_BACKUP='
+import glob, os, sqlite3, sys
+dst = "/data/backups/" + sys.argv[1]
+protect = sys.argv[2] if len(sys.argv) > 2 else ""
+os.makedirs("/data/backups", exist_ok=True)
+src = sqlite3.connect("/data/argus.db")
+out = sqlite3.connect(dst + ".tmp")
+src.backup(out)
+out.close()
+src.close()
+os.replace(dst + ".tmp", dst)
+for f in sorted(glob.glob("/data/backups/argus-*.db"))[:-5]:
+    if os.path.basename(f) != protect:
+        os.remove(f)
+'
+PY_RESTORE='
+import os, shutil, sys
+src = "/data/backups/" + sys.argv[1]
+shutil.copyfile(src, "/data/argus.db.restore")
+for suffix in ("-wal", "-shm"):
+    try:
+        os.remove("/data/argus.db" + suffix)
+    except FileNotFoundError:
+        pass
+os.replace("/data/argus.db.restore", "/data/argus.db")
+'
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'argus: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+	cat <<'EOF'
+Usage: argus <command>
+
+  up [--docker|--no-docker] [--port N] [--age-key FILE] [--version vX.Y.Z]
+                     start or apply config changes (--version: first install only)
+  update [vX.Y.Z] [-y]
+                     back up, upgrade to the newest (or given) release, roll back on failure
+  backup             online backup of the database into the volume
+  restore <name>     restore a backup and run the version it was taken under
+  status             version, container state, readiness, backups
+  token              print the generated admin token, if there is one
+  logs [-f]          container logs
+  down               stop and remove the container (never the volume)
+  unlock             remove a stale lock left by a command that died
+
+Config: $ARGUS_HOME (default ~/.config/argus). Spec: docs/specs/launcher.spec.md
+EOF
+}
+
+# -- config --------------------------------------------------------------------
+
+load_config() {
+	ARGUS_IMAGE=ghcr.io/2mundos/argus
+	ARGUS_VERSION=
+	ARGUS_PORT=8000
+	ARGUS_CONTAINER=argus
+	ARGUS_VOLUME=argus-data
+	ARGUS_DOCKER=0
+	ARGUS_EXTRA_ENV=$ARGUS_HOME/extra.env
+	HAVE_CONFIG=0
+	if [ -f "$CONF" ]; then
+		# shellcheck disable=SC1090
+		. "$CONF"
+		HAVE_CONFIG=1
+	fi
+}
+
+save_config() {
+	ensure_home
+	tmp=$CONF.tmp.$$
+	cat >"$tmp" <<EOF
+# Written by argus (docs/specs/launcher.spec.md). Change the version with
+# \`argus update\`; edit the rest by hand or with \`argus up\` flags.
+ARGUS_IMAGE='$ARGUS_IMAGE'
+ARGUS_VERSION='$ARGUS_VERSION'
+ARGUS_PORT='$ARGUS_PORT'
+ARGUS_CONTAINER='$ARGUS_CONTAINER'
+ARGUS_VOLUME='$ARGUS_VOLUME'
+ARGUS_DOCKER='$ARGUS_DOCKER'
+ARGUS_EXTRA_ENV='$ARGUS_EXTRA_ENV'
+EOF
+	mv "$tmp" "$CONF"
+	HAVE_CONFIG=1
+}
+
+ensure_home() {
+	mkdir -p "$ARGUS_HOME"
+	chmod 700 "$ARGUS_HOME"
+}
+
+image() { printf '%s:%s' "$ARGUS_IMAGE" "${1:-$ARGUS_VERSION}"; }
+
+# -- lock (3.7) ----------------------------------------------------------------
+
+release_lock() { rm -rf "$LOCK"; }
+
+take_lock() {
+	ensure_home
+	if [ "${ARGUS_LOCK_HELD:-}" = "$$" ] && [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ]; then
+		: # inherited across `exec` by `update`
+	elif ! mkdir "$LOCK" 2>/dev/null; then
+		pid=$(cat "$LOCK/pid" 2>/dev/null || true)
+		if [ -z "$pid" ] || kill -0 "$pid" 2>/dev/null; then
+			die "another argus command is running (pid ${pid:-starting}); wait for it to finish"
+		fi
+		die "stale lock: pid $pid is not running. Check nothing is half-done, then run \`argus unlock\`"
+	else
+		echo "$$" >"$LOCK/pid"
+	fi
+	unset ARGUS_LOCK_HELD
+	trap release_lock EXIT
+	trap 'exit 130' INT TERM
+}
+
+# -- docker helpers ------------------------------------------------------------
+
+container_exists() { docker container inspect "$ARGUS_CONTAINER" >/dev/null 2>&1; }
+volume_exists() { docker volume inspect "$ARGUS_VOLUME" >/dev/null 2>&1; }
+running() {
+	[ "$(docker container inspect -f '{{.State.Running}}' "$ARGUS_CONTAINER" 2>/dev/null)" = true ]
+}
+
+ensure_image() {
+	docker image inspect "$1" >/dev/null 2>&1 || docker pull "$1" >/dev/null
+}
+
+# with_volume IMAGE ENTRYPOINT ARGS...: a one-off container with the volume at /data.
+with_volume() {
+	img=$1
+	ep=$2
+	shift 2
+	docker run --rm -v "$ARGUS_VOLUME:/data" --entrypoint "$ep" "$img" "$@"
+}
+
+valid_version() {
+	case $1 in
+	v[0-9]*.[0-9]*.[0-9]*) case $1 in *[!v0-9.]*) return 1 ;; esac ;;
+	*) return 1 ;;
+	esac
+}
+
+# version_lt a b: a < b, numerically per component.
+version_lt() {
+	awk -v a="${1#v}" -v b="${2#v}" 'BEGIN {
+		split(a, x, "."); split(b, y, ".")
+		for (i = 1; i <= 3; i++) {
+			if (x[i] + 0 < y[i] + 0) exit 0
+			if (x[i] + 0 > y[i] + 0) exit 1
+		}
+		exit 1
+	}'
+}
+
+latest_version() {
+	v=$(curl -fsSI "https://github.com/$REPO/releases/latest" |
+		tr -d '\r' | sed -n 's|^[Ll]ocation: .*/tag/\(v[0-9.]*\)$|\1|p')
+	valid_version "$v" || die "could not find the newest release of $REPO"
+	printf '%s' "$v"
+}
+
+stamp() { date -u +%Y%m%dT%H%M%SZ; }
+
+backup_online() {
+	name=argus-$(stamp)-$ARGUS_VERSION.db
+	docker exec "$ARGUS_CONTAINER" python -c "$PY_BACKUP" "$name"
+	printf '%s' "$name"
+}
+
+# backup_offline IMAGE VERSION [PROTECT]: the container must be stopped.
+backup_offline() {
+	name=argus-$(stamp)-$2.db
+	with_volume "$1" python -c "$PY_BACKUP" "$name" ${3:+"$3"}
+	printf '%s' "$name"
+}
+
+restore_offline() { with_volume "$1" python -c "$PY_RESTORE" "$2"; }
+
+stop_and_remove() {
+	if container_exists; then
+		docker stop "$ARGUS_CONTAINER" >/dev/null
+		docker rm "$ARGUS_CONTAINER" >/dev/null
+	fi
+}
+
+recipient() {
+	r=$(sed -n 's/^# public key: \(age1[0-9a-z]*\)$/\1/p' "$KEY")
+	[ -n "$r" ] || r=$(docker run --rm -v "$KEY:/keys/age.txt:ro" --entrypoint age-keygen "$(image)" -y /keys/age.txt)
+	printf '%s' "$r"
+}
+
+desktop_engine() { docker info --format '{{.OperatingSystem}}' 2>/dev/null | grep -qi 'docker desktop'; }
+
+# Start the container from the config (3.3).
+start_container() {
+	img=$(image)
+	set -- run -d --name "$ARGUS_CONTAINER" --restart unless-stopped \
+		--label io.argus.launcher=1 \
+		-p "127.0.0.1:$ARGUS_PORT:8000" -v "$ARGUS_VOLUME:/data" \
+		-v "$KEY:/keys/age.txt:ro" -e SOPS_AGE_KEY_FILE=/keys/age.txt \
+		-e "SOPS_AGE_RECIPIENTS=$(recipient)"
+	if [ -s "$ARGUS_EXTRA_ENV" ]; then
+		set -- "$@" --env-file "$ARGUS_EXTRA_ENV"
+	fi
+	if [ "$ARGUS_DOCKER" = 1 ]; then
+		gid=$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+			--entrypoint stat "$img" -c %g /var/run/docker.sock)
+		set -- "$@" -v /var/run/docker.sock:/var/run/docker.sock --group-add "$gid" \
+			--add-host host.docker.internal:host-gateway \
+			-e "ARGUS_PUBLIC_URL=http://host.docker.internal:$ARGUS_PORT"
+		if ! desktop_engine; then
+			bridge=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
+			set -- "$@" -p "$bridge:$ARGUS_PORT:8000"
+		fi
+	fi
+	docker "$@" "$img" >/dev/null
+}
+
+# Wait for /readyz (3.3); never for the admin-token file.
+wait_ready() {
+	start=$(date +%s)
+	while :; do
+		if curl -fsS -o /dev/null "http://127.0.0.1:$ARGUS_PORT/readyz" 2>/dev/null; then
+			return 0
+		fi
+		running || return 1
+		[ $(($(date +%s) - start)) -lt "$READY_TIMEOUT" ] || return 1
+		sleep "$POLL"
+	done
+}
+
+print_failure() {
+	say "Argus $ARGUS_VERSION did not become ready. Last log lines:" >&2
+	docker logs --tail 50 "$ARGUS_CONTAINER" >&2 2>&1 || true
+}
+
+print_access() {
+	say "Argus $ARGUS_VERSION is ready: http://127.0.0.1:$ARGUS_PORT"
+	if t=$(docker exec "$ARGUS_CONTAINER" cat /data/admin-token 2>/dev/null) && [ -n "$t" ]; then
+		say "Admin token: $t"
+	else
+		say "Sign in with your existing or preset (ARGUS_ADMIN_TOKEN) admin token."
+	fi
+}
+
+# -- age key -------------------------------------------------------------------
+
+install_key() {
+	tmp=$KEY.tmp.$$
+	cat "$1" >"$tmp"
+	chmod 644 "$tmp" # readable by the container's user; $ARGUS_HOME is 0700
+	mv "$tmp" "$KEY"
+}
+
+ensure_key() {
+	if [ -n "${1:-}" ]; then
+		[ -s "$1" ] || die "--age-key: $1 is empty or missing"
+		install_key "$1"
+	elif [ ! -s "$KEY" ]; then
+		if volume_exists && with_volume "$(image)" test -e "$SECRETS"; then
+			die "the volume already has encrypted provider credentials; pass the age key that encrypts them with --age-key FILE"
+		fi
+		tmp=$KEY.new.$$
+		docker run --rm --entrypoint age-keygen "$(image)" >"$tmp" 2>/dev/null
+		install_key "$tmp"
+		rm -f "$tmp"
+		say "Created an age key at $KEY; keep a copy, it decrypts provider credentials."
+	fi
+}
+
+# -- adoption (3.8) ------------------------------------------------------------
+
+# Refuse to adopt a container with settings the config would drop.
+check_adoptable() {
+	docker_ok=$1
+	key_given=$2
+	img_id=$(docker container inspect -f '{{.Image}}' "$ARGUS_CONTAINER")
+	base=$(docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$img_id" | sed -n 's/=.*//p')
+	allowed=" $(printf '%s' "$base" | tr '\n' ' ') "
+	if [ -s "$ARGUS_EXTRA_ENV" ]; then
+		allowed="$allowed $(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$ARGUS_EXTRA_ENV" | tr '\n' ' ') "
+	fi
+	[ "$docker_ok" = 1 ] && allowed="$allowed ARGUS_PUBLIC_URL "
+	[ "$key_given" = 1 ] && allowed="$allowed SOPS_AGE_KEY_FILE SOPS_AGE_RECIPIENTS SOPS_AGE_KEY "
+	extra=
+	for name in $(docker container inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$ARGUS_CONTAINER" | sed -n 's/=.*//p'); do
+		case $allowed in *" $name "*) ;; *) extra="$extra env:$name" ;; esac
+	done
+	keyfile=$(docker container inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$ARGUS_CONTAINER" |
+		sed -n 's/^SOPS_AGE_KEY_FILE=//p')
+	volume=
+	for m in $(docker container inspect -f '{{range .Mounts}}{{.Type}}:{{.Name}}:{{.Destination}}{{println}}{{end}}' "$ARGUS_CONTAINER"); do
+		dest=${m##*:}
+		case $m in
+		volume:*:/data)
+			volume=${m#volume:}
+			volume=${volume%:/data}
+			;;
+		*:/var/run/docker.sock) [ "$docker_ok" = 1 ] || extra="$extra mount:$dest" ;;
+		*)
+			if [ "$key_given" = 1 ] && [ -n "$keyfile" ] &&
+				{ [ "$dest" = "$keyfile" ] || case $keyfile in "$dest"/*) true ;; *) false ;; esac; }; then
+				:
+			else
+				extra="$extra mount:$dest"
+			fi
+			;;
+		esac
+	done
+	[ -n "$volume" ] || extra="$extra no-named-volume-at:/data"
+	if [ -n "$extra" ]; then
+		die "not adopting container $ARGUS_CONTAINER: it has settings the launcher would drop:$extra
+Move them into the config (--age-key FILE, --docker, or $ARGUS_EXTRA_ENV) and run \`argus up\` again."
+	fi
+	ARGUS_VOLUME=$volume
+	v=$(docker container inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' "$ARGUS_CONTAINER")
+	valid_version "$v" ||
+		die "not adopting container $ARGUS_CONTAINER: its image has no release version (got '${v:-none}'); run \`argus up --version vX.Y.Z\` with the release it runs"
+	ARGUS_VERSION=$v
+}
+
+# -- commands ------------------------------------------------------------------
+
+cmd_up() {
+	want_docker=
+	want_port=
+	key_src=
+	want_version=
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--docker) want_docker=1 ;;
+		--no-docker) want_docker=0 ;;
+		--port) want_port=${2:?--port needs a value} && shift ;;
+		--age-key) key_src=${2:?--age-key needs a file} && shift ;;
+		--version) want_version=${2:?--version needs vX.Y.Z} && shift ;;
+		*) die "up: unknown option $1" ;;
+		esac
+		shift
+	done
+	[ -z "$want_version" ] || valid_version "$want_version" || die "--version must look like vX.Y.Z"
+	take_lock
+	load_config
+	[ -z "$want_port" ] || ARGUS_PORT=$want_port
+	[ -z "$want_docker" ] || ARGUS_DOCKER=$want_docker
+	adopt=0
+	if [ "$HAVE_CONFIG" = 1 ]; then
+		[ -z "$want_version" ] || die "this install runs $ARGUS_VERSION; change versions with \`argus update\`"
+	elif container_exists; then
+		[ -z "$want_version" ] || die "container $ARGUS_CONTAINER exists; it is adopted at its own version, change it later with \`argus update\`"
+		check_adoptable "$ARGUS_DOCKER" "$([ -n "$key_src" ] && echo 1 || echo 0)"
+		adopt=1
+	elif volume_exists; then
+		[ -n "$want_version" ] ||
+			die "volume $ARGUS_VOLUME exists without a container; pass --version with the release that last ran on it"
+		ARGUS_VERSION=$want_version
+		adopt=1
+	else
+		ARGUS_VERSION=${want_version:-$(latest_version)}
+	fi
+	ensure_image "$(image)"
+	ensure_key "$key_src"
+	if [ "$adopt" = 1 ]; then
+		# Adopting starts a new container on existing data: keep a way back.
+		if container_exists; then
+			img_id=$(docker container inspect -f '{{.Image}}' "$ARGUS_CONTAINER")
+			docker stop "$ARGUS_CONTAINER" >/dev/null
+		else
+			img_id=$(image)
+		fi
+		name=$(backup_offline "$img_id" "$ARGUS_VERSION")
+		say "Backed up the database before adopting it: $name"
+	fi
+	save_config
+	stop_and_remove
+	start_container
+	if ! wait_ready; then
+		print_failure
+		exit 1
+	fi
+	print_access
+}
+
+cmd_update() {
+	assume_yes=0
+	target=
+	for a in "$@"; do
+		case $a in
+		-y | --yes) assume_yes=1 ;;
+		v*) target=$a ;;
+		*) die "update: unknown argument $a" ;;
+		esac
+	done
+	take_lock
+	load_config
+	[ "$HAVE_CONFIG" = 1 ] || die "no install found at $ARGUS_HOME; run \`argus up\` first"
+	current=$ARGUS_VERSION
+	[ -n "$target" ] || target=$(latest_version)
+	valid_version "$target" || die "update: $target is not vX.Y.Z"
+	if [ "$target" = "$current" ]; then
+		say "Already on $current."
+		return 0
+	fi
+	if version_lt "$target" "$current"; then
+		die "refusing to downgrade $current to $target: migrations are one-way. Use \`argus restore\` with a backup taken under $target."
+	fi
+	docker pull "$(image "$target")" >/dev/null
+	say "Upgrading Argus $current -> $target. Release notes:"
+	docker run --rm --entrypoint sh "$(image "$target")" -c \
+		'for f in /app/releases/*.ref.md; do echo "@@@ $f"; cat "$f"; done' |
+		awk -v cur="${current#v}" -v tgt="${target#v}" '
+			function key(v,  p) { split(v, p, "."); return p[1] * 1000000 + p[2] * 1000 + p[3] }
+			/^@@@ / {
+				v = $2; sub(/.*\.v/, "", v); sub(/\.ref\.md$/, "", v); gsub(/-/, ".", v)
+				show = key(v) > key(cur) && key(v) <= key(tgt); inup = 0
+				if (show) print "\n== v" v; next
+			}
+			show && /^## Upgrading/ { inup = 1; next }
+			show && inup && /^(## |Specs added)/ { inup = 0 }
+			show && inup { print }
+		'
+	if [ "$assume_yes" != 1 ]; then
+		[ -r /dev/tty ] || die "no terminal to confirm on; rerun with -y after reading the notes"
+		printf '\nBack up, stop Argus and upgrade to %s? [y/N] ' "$target"
+		read -r ans </dev/tty
+		case $ans in y | Y | yes) ;; *) die "cancelled" ;; esac
+	fi
+	# Run the rest with the target's launcher (3.4 step 4), keeping the lock.
+	case $0 in */*) self=$0 ;; *) self=$(command -v "$0") ;; esac
+	tmp=$self.new.$$
+	docker run --rm --entrypoint cat "$(image "$target")" /app/bin/argus >"$tmp"
+	sh -n "$tmp" || {
+		rm -f "$tmp"
+		die "the launcher in $target does not parse; nothing was changed"
+	}
+	chmod 755 "$tmp"
+	cp "$self" "$self.prev"
+	mv "$tmp" "$self"
+	trap - EXIT
+	ARGUS_LOCK_HELD=$$ exec "$self" __apply-update "$target"
+}
+
+# Internal: steps 5-7 of 3.4, run by the target version's launcher.
+cmd_apply_update() {
+	target=$1
+	take_lock
+	load_config
+	case $0 in */*) self=$0 ;; *) self=$(command -v "$0") ;; esac
+	current=$ARGUS_VERSION
+	if container_exists; then
+		old_image=$(docker container inspect -f '{{.Image}}' "$ARGUS_CONTAINER")
+	else
+		old_image=$(image)
+	fi
+	stop_and_remove
+	backup=$(backup_offline "$old_image" "$current")
+	say "Backed up the database: $backup"
+	ARGUS_VERSION=$target
+	save_config
+	start_container
+	if wait_ready; then
+		rm -f "$self.prev"
+		print_access
+		return 0
+	fi
+	print_failure
+	say "Rolling back to $current." >&2
+	stop_and_remove
+	restore_offline "$old_image" "$backup"
+	ARGUS_VERSION=$current
+	save_config
+	start_container
+	[ ! -f "$self.prev" ] || mv "$self.prev" "$self"
+	if wait_ready; then
+		say "Rolled back: Argus $current is running on the database from before the upgrade." >&2
+	else
+		say "Rollback did not become ready either. The pre-upgrade backup is $backup." >&2
+	fi
+	exit 1
+}
+
+cmd_backup() {
+	take_lock
+	load_config
+	running || die "Argus is not running; \`argus up\` first"
+	name=$(backup_online)
+	say "Backed up: $name (in $ARGUS_VOLUME:/data/backups)"
+}
+
+cmd_restore() {
+	name=${1:?usage: argus restore <name>}
+	case $name in argus-*-v*.db) ;; *) die "restore: expected a backup name like argus-20261103T120000Z-v0.8.0.db" ;; esac
+	case $name in */*) die "restore: give the backup name, not a path" ;; esac
+	version=${name##*-}
+	version=${version%.db}
+	valid_version "$version" || die "restore: no version in $name"
+	take_lock
+	load_config
+	[ "$HAVE_CONFIG" = 1 ] || die "no install found at $ARGUS_HOME; run \`argus up\` first"
+	if container_exists; then
+		cur_image=$(docker container inspect -f '{{.Image}}' "$ARGUS_CONTAINER")
+	else
+		cur_image=$(image)
+	fi
+	with_volume "$cur_image" test -f "/data/backups/$name" || die "restore: no backup $name in $ARGUS_VOLUME"
+	ensure_image "$(image "$version")"
+	stop_and_remove
+	before=$(backup_offline "$cur_image" "$ARGUS_VERSION" "$name")
+	say "Backed up the current database first: $before"
+	restore_offline "$cur_image" "$name"
+	ARGUS_VERSION=$version
+	save_config
+	start_container
+	if ! wait_ready; then
+		print_failure
+		exit 1
+	fi
+	print_access
+}
+
+cmd_status() {
+	load_config
+	[ "$HAVE_CONFIG" = 1 ] || {
+		say "No install at $ARGUS_HOME; run \`argus up\`."
+		return 0
+	}
+	say "Version:   $ARGUS_VERSION ($(image))"
+	say "Config:    $CONF"
+	if running; then
+		ready=no
+		curl -fsS -o /dev/null "http://127.0.0.1:$ARGUS_PORT/readyz" 2>/dev/null && ready=yes
+		say "Container: $ARGUS_CONTAINER running, ready: $ready, http://127.0.0.1:$ARGUS_PORT"
+		say "Backups:"
+		docker exec "$ARGUS_CONTAINER" sh -c 'ls -1 /data/backups 2>/dev/null | tail -n 5' | sed 's/^/  /'
+	else
+		say "Container: $ARGUS_CONTAINER not running (\`argus up\`)"
+	fi
+	[ ! -d "$LOCK" ] || say "Lock:      held by pid $(cat "$LOCK/pid" 2>/dev/null || echo '?')"
+}
+
+cmd_token() {
+	load_config
+	if t=$(docker exec "$ARGUS_CONTAINER" cat /data/admin-token 2>/dev/null) && [ -n "$t" ]; then
+		say "$t"
+	else
+		die "no generated admin token; sign in with your existing or preset admin token"
+	fi
+}
+
+cmd_unlock() {
+	[ -d "$LOCK" ] || {
+		say "Not locked."
+		return 0
+	}
+	pid=$(cat "$LOCK/pid" 2>/dev/null || true)
+	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+		die "pid $pid is still running; not unlocking"
+	fi
+	rm -rf "$LOCK"
+	say "Removed the stale lock (pid ${pid:-unknown})."
+}
+
+cmd=${1:-help}
+[ $# -eq 0 ] || shift
+case $cmd in
+up) cmd_up "$@" ;;
+update) cmd_update "$@" ;;
+__apply-update) cmd_apply_update "$@" ;;
+backup) cmd_backup ;;
+restore) cmd_restore "$@" ;;
+status) cmd_status ;;
+token) cmd_token ;;
+logs) load_config && exec docker logs "$@" "$ARGUS_CONTAINER" ;;
+down)
+	take_lock
+	load_config
+	stop_and_remove
+	say "Stopped and removed $ARGUS_CONTAINER; data stays in volume $ARGUS_VOLUME."
+	;;
+unlock) cmd_unlock ;;
+help | -h | --help) usage ;;
+*)
+	usage >&2
+	exit 2
+	;;
+esac

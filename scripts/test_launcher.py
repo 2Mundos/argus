@@ -1,0 +1,520 @@
+"""deploy/argus against a fake docker and curl (docs/specs/launcher.spec.md 6).
+
+The fakes keep their state in one JSON file: containers, volumes (with a fake
+database content and backup files), pulled images, and which versions fail to
+start. A version that fails exits at once, so readiness never waits.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+LAUNCHER = ROOT / "deploy" / "argus"
+IMAGE = "ghcr.io/2mundos/argus"
+
+FAKE_DOCKER = r'''
+import json, os, sys
+
+STATE = os.environ["FAKE_STATE"]
+with open(STATE) as f:
+    s = json.load(f)
+argv = sys.argv[1:]
+s["calls"].append(argv)
+
+def save():
+    with open(STATE, "w") as f:
+        json.dump(s, f)
+
+def out(text):
+    sys.stdout.write(text)
+
+def ref_of(img):
+    return img[4:] if img.startswith("img:") else img
+
+def version_of(img):
+    return ref_of(img).rsplit(":", 1)[1]
+
+def vkey(v):
+    return tuple(int(p) for p in v.lstrip("v").split("."))
+
+def volume(name):
+    return s["volumes"].setdefault(name, {"db": "", "files": []})
+
+def fmt(template, c):
+    if template == "{{.State.Running}}":
+        return "true" if c["running"] else "false"
+    if template == "{{.Image}}":
+        return "img:" + c["image"]
+    if template.startswith("{{index .Config.Labels"):
+        return c.get("label", "")
+    if template.startswith("{{range .Config.Env}}"):
+        return "".join(e + "\n" for e in c["env"])
+    if template.startswith("{{range .Mounts}}"):
+        return "".join(m + "\n" for m in c["mounts"])
+    raise SystemExit("fake docker: unknown template " + template)
+
+def opts(args):
+    """Split `run` options from image and command."""
+    flags = {"-d", "--rm", "-i", "-t"}
+    o, i = [], 0
+    while i < len(args) and args[i].startswith("-"):
+        if args[i] in flags:
+            o.append((args[i], None)); i += 1
+        else:
+            o.append((args[i], args[i + 1])); i += 2
+    return o, args[i], args[i + 1:]
+
+def run(args):
+    o, img, cmd = opts(args)
+    d = dict(o)
+    vol = None
+    for k, v in o:
+        if k == "-v" and v.endswith(":/data"):
+            vol = v.split(":")[0]
+    ep = d.get("--entrypoint")
+    if "-d" in d:
+        name = d["--name"]
+        ver = version_of(img)
+        ok = ver not in s["broken"]
+        env = [v for k, v in o if k == "-e"]
+        s["containers"][name] = {
+            "image": ref_of(img), "running": ok, "env": env, "label": ver,
+            "mounts": ["volume:%s:/data" % vol], "args": args,
+        }
+        if ok:
+            s["ready"] = True
+        # Starting a newer version migrates the database, even when it then fails.
+        v = volume(vol)
+        if not v["db"] or vkey(ver) > vkey(v["db"].split("@")[1]):
+            v["db"] = "schema@" + ver
+        return save()
+    if ep == "age-keygen":
+        if cmd[:1] == ["-y"]:
+            return out("age1fakederived\n")
+        return out("# created: now\n# public key: age1fakepublic\nAGE-SECRET-KEY-1FAKE\n")
+    if ep == "stat":
+        return out(s["socket_gid"] + "\n")
+    if ep == "cat" and cmd == ["/app/bin/argus"]:
+        with open(s["launcher_source"]) as f:
+            return out(f.read() + "\n# fake launcher for " + version_of(img) + "\n")
+    if ep == "sh":
+        for name, body in s["notes"].items():
+            out("@@@ /app/releases/" + name + "\n" + body + "\n")
+        return
+    if ep == "test":
+        path = cmd[1].removeprefix("/data/")
+        sys.exit(0 if path in volume(vol)["files"] else 1)
+    if ep == "python":
+        script, rest = cmd[1], cmd[2:]
+        v = volume(vol)
+        if "argus.db.restore" in script:
+            v["db"] = v["backup_content"][rest[0]]
+            return save()
+        return backup(v, rest)
+    raise SystemExit("fake docker: unexpected run " + repr(args))
+
+def backup(v, rest):
+    name = rest[0]
+    v["files"].append("backups/" + name)
+    v.setdefault("backup_content", {})[name] = v["db"]
+    backups = sorted(f for f in v["files"] if f.startswith("backups/argus-"))
+    protect = rest[1] if len(rest) > 1 else ""
+    for f in backups[:-5]:
+        if f != "backups/" + protect:
+            v["files"].remove(f)
+    save()
+
+cmd, rest = argv[0], argv[1:]
+if cmd == "container" and rest[0] == "inspect":
+    name = rest[-1]
+    c = s["containers"].get(name)
+    if c is None:
+        sys.exit(1)
+    if rest[1] == "-f":
+        out(fmt(rest[2], c))
+elif cmd == "volume" and rest[0] == "inspect":
+    sys.exit(0 if rest[1] in s["volumes"] else 1)
+elif cmd == "image" and rest[0] == "inspect":
+    if rest[1] == "-f":
+        out("PATH=/usr/bin\nARGUS_VERSION=x\nARGUS_DATA_DIR=/data\n")
+    else:
+        sys.exit(0 if ref_of(rest[-1]) in s["images"] else 1)
+elif cmd == "pull":
+    s["images"].append(rest[0])
+    save()
+elif cmd == "info":
+    out(s["engine"] + "\n")
+elif cmd == "network":
+    out("172.17.0.1\n")
+elif cmd == "run":
+    run(rest)
+elif cmd == "exec":
+    name, tool = rest[0], rest[1:]
+    c = s["containers"][name]
+    if tool[:2] == ["cat", "/data/admin-token"]:
+        if s["token"]:
+            out(s["token"] + "\n")
+        else:
+            sys.exit(1)
+    elif tool[0] == "python":
+        vol = c["mounts"][0].split(":")[1]
+        backup(volume(vol), tool[3:])
+    else:
+        out("")
+elif cmd in ("stop", "rm"):
+    c = s["containers"].get(rest[-1])
+    if cmd == "stop" and c:
+        c["running"] = False
+    if cmd == "rm":
+        s["containers"].pop(rest[-1], None)
+    save()
+elif cmd == "logs":
+    out("fake log line\n")
+else:
+    raise SystemExit("fake docker: unexpected " + repr(argv))
+'''
+
+FAKE_CURL = r"""
+import json, os, sys
+with open(os.environ["FAKE_STATE"]) as f:
+    s = json.load(f)
+url = sys.argv[-1]
+if url.endswith("/releases/latest"):
+    print("HTTP/2 302\r\nlocation: https://github.com/2Mundos/argus/releases/tag/%s\r\n" % s["latest"])
+    sys.exit(0)
+if url.endswith("/readyz"):
+    running = any(c["running"] for c in s["containers"].values())
+    sys.exit(0 if running and s["ready"] else 22)
+sys.exit(22)
+"""
+
+NOTES = {
+    "2026-10-30.v0-6-0.ref.md": "# v0.6.0\n\n## Upgrading\n\nNotes for 0.6\n",
+    "2026-10-31.v0-7-0.ref.md": "# v0.7.0\n\n## Upgrading\n\nMigrations 0062\n\nSpecs added or changed:\n- x\n",
+    "2026-11-02.v0-8-0.ref.md": "# v0.8.0\n\n## Upgrading\n\nMigrations 0069\n\n## Features\n- y\n",
+}
+
+
+class Env:
+    def __init__(self, tmp: Path) -> None:
+        self.tmp = tmp
+        self.state_path = tmp / "state.json"
+        self.home = tmp / "home"
+        self.bin = tmp / "bin"
+        self.bin.mkdir()
+        fakes = tmp / "fakes"
+        fakes.mkdir()
+        for name, body in (("docker", FAKE_DOCKER), ("curl", FAKE_CURL)):
+            (fakes / f"{name}.py").write_text(body)
+            stub = self.bin / name
+            stub.write_text(
+                f'#!/bin/sh\nexec "{sys.executable}" "{fakes / name}.py" "$@"\n'
+            )
+            stub.chmod(0o755)
+        self.launcher = self.bin / "argus"
+        shutil.copy(LAUNCHER, self.launcher)
+        self.state = {
+            "calls": [],
+            "containers": {},
+            "volumes": {},
+            "images": [],
+            "broken": [],
+            "ready": False,
+            "latest": "v0.8.0",
+            "engine": "Ubuntu 24.04",
+            "socket_gid": "998",
+            "token": "argus_admin_generated",
+            "notes": NOTES,
+            "launcher_source": str(LAUNCHER),
+        }
+        self.save()
+
+    def save(self) -> None:
+        self.state_path.write_text(json.dumps(self.state))
+
+    def load(self) -> dict:
+        self.state = json.loads(self.state_path.read_text())
+        return self.state
+
+    def run(self, *args: str, ok: bool = True) -> subprocess.CompletedProcess[str]:
+        self.save()
+        env = {
+            "PATH": f"{self.bin}:/usr/bin:/bin",
+            "HOME": str(self.tmp),
+            "ARGUS_HOME": str(self.home),
+            "FAKE_STATE": str(self.state_path),
+            "ARGUS_POLL_INTERVAL": "0",
+            "ARGUS_READY_TIMEOUT": "0",
+        }
+        r = subprocess.run(
+            ["sh", str(self.launcher), *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.load()
+        if ok:
+            assert r.returncode == 0, r.stdout + r.stderr
+        else:
+            assert r.returncode != 0, r.stdout + r.stderr
+        return r
+
+    def config(self) -> dict[str, str]:
+        out = {}
+        for line in (self.home / "argus.env").read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                out[k] = v.strip("'")
+        return out
+
+    def run_args(self) -> list[str]:
+        return self.state["containers"]["argus"]["args"]
+
+    def db(self) -> str:
+        return self.state["volumes"]["argus-data"]["db"]
+
+    def backups(self) -> list[str]:
+        files = self.state["volumes"]["argus-data"]["files"]
+        return sorted(
+            f.removeprefix("backups/") for f in files if f.startswith("backups/")
+        )
+
+    def install(self, version: str = "v0.7.0") -> None:
+        """A launcher-managed install at `version`, running."""
+        self.run("up", "--version", version)
+        self.state["calls"] = []
+
+
+@pytest.fixture
+def env(tmp_path: Path) -> Env:
+    return Env(tmp_path)
+
+
+def test_first_install_creates_config_key_and_prints_token(env: Env) -> None:
+    r = env.run("up")
+    assert env.config()["ARGUS_VERSION"] == "v0.8.0"  # newest release
+    key = env.home / "age-key.txt"
+    assert oct(key.stat().st_mode & 0o777) == "0o644"
+    assert oct(env.home.stat().st_mode & 0o777) == "0o700"
+    args = env.run_args()
+    assert "SOPS_AGE_RECIPIENTS=age1fakepublic" in args
+    assert "127.0.0.1:8000:8000" in args
+    assert "/var/run/docker.sock:/var/run/docker.sock" not in args
+    assert "argus_admin_generated" in r.stdout
+    assert not (env.home / "lock").exists()
+
+
+def test_ready_without_an_admin_token_file(env: Env) -> None:
+    env.state["token"] = ""
+    r = env.run("up")
+    assert "existing or preset" in r.stdout
+
+
+@pytest.mark.parametrize(
+    ("engine", "bridge"),
+    [("Ubuntu 24.04", True), ("Docker Desktop", False)],
+)
+def test_docker_pools_flags(env: Env, engine: str, bridge: bool) -> None:
+    env.state["engine"] = engine
+    env.run("up", "--docker", "--port", "8100")
+    args = env.run_args()
+    i = args.index("--group-add")
+    assert args[i + 1] == "998"
+    assert "host.docker.internal:host-gateway" in args
+    assert "ARGUS_PUBLIC_URL=http://host.docker.internal:8100" in args
+    assert ("172.17.0.1:8100:8000" in args) is bridge
+    assert env.config()["ARGUS_DOCKER"] == "1"
+
+
+def test_up_version_refused_on_existing_install(env: Env) -> None:
+    env.install()
+    r = env.run("up", "--version", "v0.8.0", ok=False)
+    assert "argus update" in r.stderr
+    assert env.config()["ARGUS_VERSION"] == "v0.7.0"
+
+
+def test_adopts_a_plain_readme_container_after_a_backup(env: Env) -> None:
+    env.state["volumes"]["argus-data"] = {"db": "schema@v0.7.0", "files": []}
+    env.state["containers"]["argus"] = {
+        "image": f"{IMAGE}:v0.7.0",
+        "running": True,
+        "env": ["PATH=/usr/bin", "ARGUS_VERSION=x", "ARGUS_DATA_DIR=/data"],
+        "label": "v0.7.0",
+        "mounts": ["volume:argus-data:/data"],
+        "args": [],
+    }
+    env.state["images"].append(f"{IMAGE}:v0.7.0")
+    env.run("up")
+    assert env.config()["ARGUS_VERSION"] == "v0.7.0"
+    assert len(env.backups()) == 1
+    assert env.backups()[0].endswith("-v0.7.0.db")
+
+
+@pytest.mark.parametrize(
+    ("env_vars", "mounts", "files", "message"),
+    [
+        (
+            ["SOPS_AGE_KEY_FILE=/keys/age.txt"],
+            ["bind::/keys"],
+            [],
+            "env:SOPS_AGE_KEY_FILE",
+        ),
+        (["LITESTREAM_REPLICA_URL=s3://b"], [], [], "env:LITESTREAM_REPLICA_URL"),
+        ([], ["bind::/srv/extra"], [], "mount:/srv/extra"),
+        ([], [], ["secrets.sops.yaml"], "--age-key"),
+    ],
+)
+def test_adoption_refused_before_anything_is_removed(
+    env: Env, env_vars: list[str], mounts: list[str], files: list[str], message: str
+) -> None:
+    env.state["volumes"]["argus-data"] = {"db": "schema@v0.7.0", "files": files}
+    env.state["containers"]["argus"] = {
+        "image": f"{IMAGE}:v0.7.0",
+        "running": True,
+        "env": ["PATH=/usr/bin", *env_vars],
+        "label": "v0.7.0",
+        "mounts": ["volume:argus-data:/data", *mounts],
+        "args": [],
+    }
+    env.state["images"].append(f"{IMAGE}:v0.7.0")
+    r = env.run("up", ok=False)
+    assert message in r.stderr
+    assert env.state["containers"]["argus"]["running"]
+    assert not any(c[0] in ("stop", "rm") for c in env.state["calls"])
+    assert not (env.home / "argus.env").exists()
+
+
+def test_adoption_with_the_existing_key(env: Env) -> None:
+    key = env.tmp / "old-key.txt"
+    key.write_text("# public key: age1oldkey\nAGE-SECRET-KEY-1OLD\n")
+    env.state["volumes"]["argus-data"] = {
+        "db": "schema@v0.7.0",
+        "files": ["secrets.sops.yaml"],
+    }
+    env.state["containers"]["argus"] = {
+        "image": f"{IMAGE}:v0.7.0",
+        "running": True,
+        "env": [
+            "PATH=/usr/bin",
+            "SOPS_AGE_KEY_FILE=/keys/age.txt",
+            "SOPS_AGE_RECIPIENTS=age1oldkey",
+        ],
+        "label": "v0.7.0",
+        "mounts": ["volume:argus-data:/data", "bind::/keys/age.txt"],
+        "args": [],
+    }
+    env.state["images"].append(f"{IMAGE}:v0.7.0")
+    env.run("up", "--age-key", str(key))
+    assert (env.home / "age-key.txt").read_text() == key.read_text()
+    assert "SOPS_AGE_RECIPIENTS=age1oldkey" in env.run_args()
+
+
+def test_update_backs_up_after_stopping_and_upgrades(env: Env) -> None:
+    env.install("v0.6.0")
+    r = env.run("update", "-y")
+    assert env.config()["ARGUS_VERSION"] == "v0.8.0"
+    assert env.state["containers"]["argus"]["image"] == f"{IMAGE}:v0.8.0"
+    # Notes of every skipped release, not the current one or later sections.
+    assert "Migrations 0062" in r.stdout and "Migrations 0069" in r.stdout
+    assert "Notes for 0.6" not in r.stdout and "Features" not in r.stdout
+    # The backup is taken offline, after the stop, from the pre-upgrade schema.
+    calls = env.state["calls"]
+    stop = calls.index(["stop", "argus"])
+    backup_run = next(i for i, c in enumerate(calls) if c[0] == "run" and "python" in c)
+    assert stop < backup_run
+    (backup,) = env.backups()
+    assert (
+        env.state["volumes"]["argus-data"]["backup_content"][backup] == "schema@v0.6.0"
+    )
+    assert "# fake launcher for v0.8.0" in env.launcher.read_text()
+    assert not (env.bin / "argus.prev").exists()
+
+
+def test_failed_update_rolls_back_image_database_version_and_launcher(env: Env) -> None:
+    env.install("v0.7.0")
+    before = env.launcher.read_text()
+    env.state["broken"] = ["v0.8.0"]
+    r = env.run("update", "-y", ok=False)
+    assert "Rolled back" in r.stderr
+    assert "fake log line" in r.stderr
+    assert env.config()["ARGUS_VERSION"] == "v0.7.0"
+    assert env.state["containers"]["argus"]["image"] == f"{IMAGE}:v0.7.0"
+    # v0.8.0 migrated the database before failing; the restore undid that.
+    assert env.db() == "schema@v0.7.0"
+    assert env.launcher.read_text() == before
+    assert not (env.home / "lock").exists()
+
+
+def test_update_refuses_a_downgrade(env: Env) -> None:
+    env.install("v0.8.0")
+    r = env.run("update", "v0.7.0", "-y", ok=False)
+    assert "refusing to downgrade" in r.stderr
+    assert not any(c[0] == "stop" for c in env.state["calls"])
+
+
+def test_restore_runs_the_backup_version_and_keeps_the_current_db(env: Env) -> None:
+    env.install("v0.7.0")
+    env.run("update", "-y")
+    (backup,) = env.backups()
+    env.run("restore", backup)
+    assert env.config()["ARGUS_VERSION"] == "v0.7.0"
+    assert len(env.backups()) == 2  # the restore backed up the v0.8.0 database first
+    assert (
+        env.state["volumes"]["argus-data"]["backup_content"][env.backups()[1]]
+        == "schema@v0.8.0"
+    )
+
+
+def test_backups_keep_the_newest_five(env: Env) -> None:
+    env.install()
+    vol = env.state["volumes"]["argus-data"]
+    vol["files"] = [f"backups/argus-2026010{i}T000000Z-v0.7.0.db" for i in range(1, 6)]
+    env.run("backup")
+    assert len(env.backups()) == 5
+    assert "argus-20260101T000000Z-v0.7.0.db" not in env.backups()
+
+
+def test_a_held_lock_refuses_mutating_commands(env: Env) -> None:
+    env.install()
+    (env.home / "lock").mkdir()
+    (env.home / "lock" / "pid").write_text(f"{os.getpid()}\n")
+    for cmd in (
+        ["up"],
+        ["update", "-y"],
+        ["backup"],
+        ["restore", "argus-1-v0.7.0.db"],
+        ["down"],
+    ):
+        r = env.run(*cmd, ok=False)
+        assert "another argus command is running" in r.stderr, cmd
+    assert env.state["containers"]["argus"]["running"]
+    env.run("status")  # read-only commands take no lock
+
+
+def test_a_stale_lock_needs_unlock(env: Env) -> None:
+    env.install()
+    dead = subprocess.run(
+        ["sh", "-c", "echo $$"], capture_output=True, text=True, check=True
+    )
+    (env.home / "lock").mkdir()
+    (env.home / "lock" / "pid").write_text(dead.stdout)
+    r = env.run("up", ok=False)
+    assert "argus unlock" in r.stderr
+    env.run("unlock")
+    env.run("up")
+
+
+def test_launcher_is_posix_sh() -> None:
+    for shell in ("sh", "dash"):
+        if shutil.which(shell):
+            subprocess.run([shell, "-n", str(LAUNCHER)], check=True)
+    assert LAUNCHER.read_text().startswith("#!/bin/sh\n")

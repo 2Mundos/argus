@@ -121,6 +121,9 @@ gateway as `DOCKER_BRIDGE_IP`; neither file publishes on all host interfaces.
   and `sops` binaries.
 - The data layer is a thin repository module over `sqlite3`/`aiosqlite`, with
   one writer and a reader pool; tests use a temporary database file per test.
+- The packaged run is the [launcher](launcher.spec.md): `argus up` runs the
+  published image with one named volume, and `argus update` upgrades it with a
+  backup first and a rollback on failure.
 - No Compose stack is needed for development: `make dev-api` creates
   `./.argus/argus.db` on first run (seeded from the preview database, see the
   [worktree dev isolation](../drafts/2026-10-31.worktree-dev-isolation.draft.md) draft). For a packaged run, `deploy/compose.yaml` is

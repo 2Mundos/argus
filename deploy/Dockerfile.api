@@ -29,8 +29,18 @@ FROM scratch AS sops-arm64
 ADD --checksum=sha256:53b0abacd38ef1b12a66d6c100956691b9cefce018d91f81e73ddf7438b94d77 \
     https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.arm64 /sops
 
+# age-keygen creates the launcher's age identity (docs/specs/launcher.spec.md 3.2).
+FROM scratch AS age-amd64
+ADD --checksum=sha256:cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10 \
+    https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz /age.tar.gz
+
+FROM scratch AS age-arm64
+ADD --checksum=sha256:6b8dc4333c53a5a57c9e5834e3a48f92605d7154014cd07269ff3327db5d37f4 \
+    https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-arm64.tar.gz /age.tar.gz
+
 ARG TARGETARCH
 FROM sops-${TARGETARCH} AS sops
+FROM age-${TARGETARCH} AS age
 
 FROM python:3.12-slim-trixie
 WORKDIR /app
@@ -38,15 +48,22 @@ COPY --from=litestream/litestream:0.5.17 /usr/local/bin/litestream /usr/local/bi
 # sops decrypts/encrypts the credentials file (age support is built in); the
 # binary matching the build platform comes from the stage selected below.
 COPY --from=sops --chmod=755 /sops /usr/local/bin/sops
+COPY --from=age /age.tar.gz /tmp/age.tar.gz
 COPY deploy/litestream.yml /etc/litestream.yml
 COPY deploy/entrypoint.sh /usr/local/bin/argus-entrypoint
 COPY --from=build /app /app
 COPY integrations/nanoclaw/engines/model-policy.defaults.json /app/integrations/nanoclaw/engines/
 COPY --from=dashboard /src/apps/dashboard/dist /app/dashboard
+# The host launcher and every release's notes travel with the image, so
+# `argus update` installs the matching launcher and shows notes offline.
+COPY --chmod=755 deploy/argus /app/bin/argus
+COPY docs/releases /app/releases
 # ssh: remote Docker targets (DOCKER_HOST=ssh://…). The data dir is created in the
 # image so a fresh named volume inherits nobody's ownership.
 RUN apt-get update && apt-get install -y --no-install-recommends openssh-client \
     && rm -rf /var/lib/apt/lists/* \
+    && tar -xzf /tmp/age.tar.gz -C /usr/local/bin --strip-components=1 age/age-keygen \
+    && rm /tmp/age.tar.gz \
     && mkdir /data && chown nobody:nogroup /data
 # Set by the release workflow (docs/specs/releases.spec.md); last, so it never
 # invalidates the layers above.

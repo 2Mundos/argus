@@ -27,6 +27,11 @@ PY_TEST_ROOTS = (
 )  # on pytest's pythonpath: imported by stem
 PY_AREAS = ("apps/api/", "packages/core/")
 TEST_DIRS = ("apps/api/tests", "packages/core/tests", "scripts")
+# Non-Python files whose behaviour a Python test covers.
+SHELL_TESTS = {
+    "deploy/argus": "scripts/test_launcher.py",
+    "deploy/install.sh": "scripts/test_launcher.py",
+}
 MIGRATIONS = re.compile(r"^apps/api/src/argus_api/db/migrations/.+\.sql$")
 FULL_CHECK = re.compile(
     r"(^|/)(uv\.lock|pnpm-lock\.yaml|pyproject\.toml|package\.json)$"
@@ -250,8 +255,10 @@ def plan(
         steps.append(
             Step("migration preflight", (*uv, "python", "-c", MIGRATION_PREFLIGHT), 120)
         )
-    elif any(c.endswith(".py") or "/tests/" in c for c in changed):
+    elif any(c.endswith(".py") or "/tests/" in c or c in SHELL_TESTS for c in changed):
         tests = python_tests(changed, all_files, graph)
+        if tests is not None:
+            tests |= {SHELL_TESTS[c] for c in changed if c in SHELL_TESTS}
         if tests is None:
             steps.append(
                 Step(

@@ -78,7 +78,7 @@ jobs:
           git fetch --no-tags --depth=1 origin "$BASE"
           # Paths copied by deploy/Dockerfile.api (or that change its context).
           # Compose overlays are docs for operators; they do not change the image.
-          pattern='^(deploy/Dockerfile\.api$|deploy/entrypoint\.sh$|deploy/litestream\.yml$|\.dockerignore$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.npmrc$|tsconfig\.base\.json$|packages/api-client/|apps/dashboard/|pyproject\.toml$|uv\.lock$|apps/api/|packages/core/|integrations/nanoclaw/engines/model-policy\.defaults\.json$|\.github/workflows/quality\.yaml$)'
+          pattern='^(deploy/Dockerfile\.api$|deploy/entrypoint\.sh$|deploy/argus$|docs/releases/|deploy/litestream\.yml$|\.dockerignore$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.npmrc$|tsconfig\.base\.json$|packages/api-client/|apps/dashboard/|pyproject\.toml$|uv\.lock$|apps/api/|packages/core/|integrations/nanoclaw/engines/model-policy\.defaults\.json$|\.github/workflows/quality\.yaml$)'
           if git diff --name-only "$BASE" HEAD | grep -E "$pattern" >/dev/null; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
@@ -147,6 +147,10 @@ jobs:
             argus_admin_*) ;;
             *) echo "expected admin token in /data/admin-token, got: ${token:0:20}…" >&2; exit 1 ;;
           esac
+          # The launcher, release notes and age-keygen ship in the image (launcher spec 3.1).
+          docker exec argus-ci sh -n /app/bin/argus
+          docker exec argus-ci sh -c 'ls /app/releases/*.ref.md >/dev/null'
+          docker exec argus-ci age-keygen >/dev/null 2>&1
           echo "image smoke ok"
 
   # Companion images the control plane expects on a Docker host: NanoClaw host
