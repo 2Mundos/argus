@@ -11,7 +11,9 @@ with `integrations/nanoclaw/provision.sh` (Node, pnpm, git on the host), a
 Until then the "New worker" dialog says `ARGUS_PUBLIC_URL is not set` and no
 template is ready.
 
-This spec makes it:
+Every install needs workers to run a task, so this spec makes them part of
+the first `argus up`, which asks before it gives Docker access or pulls the
+images (3.7). The steps it runs are also commands of their own:
 
 ```bash
 argus worker setup     # pull the worker images, start the gateway, reconfigure Argus
@@ -28,8 +30,8 @@ at the same version as Argus.
 
 - No change to Argus's own dependencies. Argus stays one process and one
   SQLite file ([single-node](single-node.spec.md)); the gateway and its Postgres
-  are NanoClaw's dependency, started only by `argus worker setup`, which is
-  opt-in. A launcher install without it is unchanged.
+  are NanoClaw's dependency, started only after the operator says yes (3.7).
+  Argus starts and serves the dashboard without them, as before.
 - No `nanoclaw-sandbox` through the launcher. It needs `sysbox-runc`, a
   host-level install; the manual route ([worker launch](worker-launch.spec.md),
   the runbook) stays for it.
@@ -132,6 +134,8 @@ refused while workers are set up.
 - `argus worker status` shows the worker images, the checkout and the gateway
   containers' state; the dashboard's "New worker" shows the template's
   readiness.
+- `argus uninstall` removes everything `setup` created, as `remove --purge`
+  does plus the images ([launcher](launcher.spec.md) 3.9).
 
 ## 3.6 Messages point to the launcher
 
@@ -139,6 +143,33 @@ The launcher sets `ARGUS_LAUNCHER=1` on the Argus container. Readiness reasons
 that name a variable the launcher manages (`ARGUS_PUBLIC_URL`, the NanoClaw
 settings) then say which command fixes them: `argus up --docker` or
 `argus worker setup`. Other installs keep today's messages.
+
+## 3.7 The first `up` offers workers
+
+On the first run ([launcher](launcher.spec.md) 3.8), `up` asks, before it
+pulls or starts anything:
+
+```
+Set up workers on this machine? They run coding agents in Docker.
+  - Argus gets the Docker socket: root-equivalent on this host.
+  - Pulls about 7 GB of images and starts the OneCLI gateway and its Postgres.
+Set up workers? [Y/n]
+```
+
+- Yes runs the `setup` steps (3.2 to 3.4) and then starts Argus once, with the
+  worker settings. No sets `ARGUS_WORKERS=0` and starts Argus as `up` did
+  before this spec.
+- `--workers` answers yes and `--no-workers` answers no without asking.
+  Without a terminal and without either flag, `up` answers no and prints
+  `argus worker setup`, so scripted installs never gain Docker access
+  silently.
+- If a worker step fails (a pull, the disk, the gateway), `up` still starts
+  Argus without workers, prints the error and `argus worker setup` to retry,
+  and exits non-zero. Setup's own checks (3.2's path length) run before the
+  question, so a machine that cannot run workers is told so instead of asked.
+- `up --workers` (or `--no-workers`) on a later run is refused and names
+  `argus worker setup` (or `remove`): the first run is the only time `up`
+  decides it.
 
 # 4. Open Questions
 
@@ -173,6 +204,10 @@ Delivered as separate PRs, in this order:
    `up`, the update and rollback steps (3.5), tests against the fake `docker`
    in `scripts/test_launcher.py`. [Launcher](launcher.spec.md) links here.
 4. API and dashboard: `ARGUS_LAUNCHER=1` messages (3.6).
+5. Launcher: the first-run question and `--workers|--no-workers` (3.7), and
+   `argus uninstall` ([launcher](launcher.spec.md) 3.9). The README
+   Quickstart drops the `argus worker setup` line and documents
+   `argus uninstall`.
 
 The runbook keeps the manual route and links here for the launcher one.
 
@@ -183,5 +218,5 @@ The runbook keeps the manual route and links here for the launcher one.
 - Verified: (per PR) launcher logic against a fake `docker`; images build in CI.
 - Not verified: on a clean Linux machine, `argus worker setup`, a task run end
   to end by a Claude account, `argus update` across two releases with workers,
-  and `argus worker remove --purge` leaving nothing behind. To be done by hand
+  `argus worker remove --purge` and `argus uninstall` leaving nothing behind. To be done by hand
   on the first release that ships all four parts and recorded here.

@@ -71,6 +71,9 @@ need durable transcripts upload them as artifacts.
 Any integration that needs another service (S3, a secret manager, OpenTelemetry
 export, chat notifications) is optional, configured explicitly, and disabled by
 default. Argus never fails to start because an optional service is missing.
+The launcher's worker gateway is NanoClaw's dependency, not Argus's: it starts
+only when the operator answers yes on the first `argus up`
+([local workers](local-workers.spec.md) 3.7), and Argus runs without it.
 
 ## 3.6 Secrets in a file, not a service
 
