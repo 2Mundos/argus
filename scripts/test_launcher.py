@@ -97,6 +97,9 @@ def run(args):
             v["db"] = "schema@" + ver
         return save()
     if ep == "age-keygen":
+        if version_of(img) in s["no_keygen"]:
+            sys.stderr.write("exec: age-keygen: not found\n")
+            sys.exit(127)
         if cmd[:1] == ["-y"]:
             return out("age1fakederived\n")
         return out("# created: now\n# public key: age1fakepublic\nAGE-SECRET-KEY-1FAKE\n")
@@ -148,6 +151,9 @@ elif cmd == "image" and rest[0] == "inspect":
     else:
         sys.exit(0 if ref_of(rest[-1]) in s["images"] else 1)
 elif cmd == "pull":
+    if s["pull_fails"]:
+        sys.stderr.write("Error response from daemon: unauthorized\n")
+        sys.exit(1)
     s["images"].append(rest[0])
     save()
 elif cmd == "info":
@@ -231,6 +237,8 @@ class Env:
             "latest": "v0.8.0",
             "engine": "Ubuntu 24.04",
             "socket_gid": "998",
+            "no_keygen": [],
+            "pull_fails": False,
             "token": "argus_admin_generated",
             "notes": NOTES,
             "launcher_source": str(LAUNCHER),
@@ -353,10 +361,32 @@ def test_adopts_a_plain_readme_container_after_a_backup(env: Env) -> None:
         "args": [],
     }
     env.state["images"].append(f"{IMAGE}:v0.7.0")
-    env.run("up")
+    env.state["no_keygen"] = ["v0.7.0"]  # images before the launcher lack age-keygen
+    r = env.run("up")
     assert env.config()["ARGUS_VERSION"] == "v0.7.0"
     assert len(env.backups()) == 1
     assert env.backups()[0].endswith("-v0.7.0.db")
+    assert "AGE-SECRET-KEY" in (env.home / "age-key.txt").read_text()
+    assert list(env.home.glob("age-key.txt.*")) == []
+    assert "http://127.0.0.1:8000" in r.stdout
+    assert "v0.8.0 is available" in r.stdout
+
+
+def test_token_and_status_without_an_install_say_run_up(env: Env) -> None:
+    r = env.run("token", ok=False)
+    assert "argus up" in r.stderr
+    env.install()
+    env.state["containers"]["argus"]["running"] = False
+    r = env.run("token", ok=False)
+    assert "not running" in r.stderr
+
+
+def test_an_unexpected_failure_is_reported(env: Env) -> None:
+    env.state["pull_fails"] = True
+    r = env.run("up", ok=False)
+    assert "unauthorized" in r.stderr
+    assert "argus: " in r.stderr
+    assert not (env.home / "lock").exists()
 
 
 @pytest.mark.parametrize(
