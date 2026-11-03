@@ -1,0 +1,67 @@
+version: 2
+# Weekly version updates. Minor and patch updates arrive as one grouped PR per
+# ecosystem; majors come one PR each so they can be reviewed on their own.
+# Toolchain versions (Python, Node, uv) are pinned in mise.toml and move there
+# on purpose, so the images and @types/node do not jump ahead of it.
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      node-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # integrations/nanoclaw/engines builds on local images; nothing to update there.
+  - package-ecosystem: docker
+    directories:
+      - /deploy
+      - /deploy/nanoclaw-host
+      - /examples/echo-worker
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      images:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: node
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: "*astral-sh/uv"
+        update-types: [version-update:semver-major, version-update:semver-minor]

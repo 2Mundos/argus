@@ -1,0 +1,62 @@
+name: Bug report
+description: Something in Argus does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Security problems must not be filed here; see SECURITY.md.
+        Please write in English, and remove tokens, keys and other secrets from logs.
+  - type: input
+    id: version
+    attributes:
+      label: Argus version
+      description: "`argus status`, the System tab, or the image tag (e.g. v0.9.0)."
+      placeholder: v0.9.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How Argus runs
+      options:
+        - argus launcher (install.sh)
+        - docker run
+        - Docker Compose
+        - From source (make dev-api)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Host OS, Docker version, and the worker target (local Docker, remote Docker, Kubernetes) if relevant.
+      placeholder: Ubuntu 24.04, Docker 27.3, local Docker pool
+  - type: input
+    id: engine
+    attributes:
+      label: Engine
+      description: The agent engine involved, if any (Claude Code, Codex, Cursor, Copilot, custom, local).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "Relevant output of `argus logs`, the task's live log, or the API response."
+      render: text
