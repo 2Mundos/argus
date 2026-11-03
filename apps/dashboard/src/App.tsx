@@ -110,8 +110,17 @@ export function parseRoute(): Route {
   ) {
     return { tab: head };
   }
-  // Empty/invalid: Shell may rewrite to #chat when the orchestrator is on.
+  // Empty/invalid: Shell rewrites it with `defaultHash`.
   return { tab: "dashboard" };
+}
+
+const ROUTE_HEADS = new Set(["tasks", "workers", "setup", ...Object.keys(TABS)]);
+
+/** The hash to rewrite an empty or invalid one to (onboarding 3.4), else null. */
+export function defaultHash(hash: string, orchestrator: boolean): string | null {
+  const head = hash.replace(/^#/, "").split("/")[0] ?? "";
+  if (ROUTE_HEADS.has(head) || head in LEGACY) return null;
+  return orchestrator ? "#chat" : "#dashboard";
 }
 
 export function App() {
@@ -181,7 +190,7 @@ function PageSearch() {
       <input
         ref={input}
         type="search"
-        placeholder="Search tasks, agents, inbox…"
+        placeholder="Go to a page…"
         aria-label="Go to a page"
         value={query}
         onChange={(event) => {
@@ -342,9 +351,8 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
   }, []);
   useEffect(() => {
     if (!onboarding) return;
-    const raw = window.location.hash.slice(1);
-    if (raw) return;
-    window.location.hash = onboarding.orchestrator ? "#chat" : "#dashboard";
+    const next = defaultHash(window.location.hash, onboarding.orchestrator);
+    if (next) window.location.hash = next;
   }, [onboarding]);
 
   const openDecisions = overview?.decisions.by_state.open;
