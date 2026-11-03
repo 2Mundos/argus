@@ -405,6 +405,12 @@ function DedicatedLogin({ renew, onClose, onDone }: Shared) {
           long-lived token for a Claude subscription; nothing is read from this computer.
         </p>
         <NameField renew={renew} name={name} setName={setName} />
+        {action.busy && (
+          <p className="muted small" role="status">
+            Starting… The first sign-in on this install downloads the Claude client (about 250 MB),
+            which can take a minute.
+          </p>
+        )}
         {error && <p className="error">{error}</p>}
         <div className="actions">
           <button type="button" disabled={action.busy} onClick={onClose}>

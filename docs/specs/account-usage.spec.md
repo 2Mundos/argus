@@ -179,7 +179,8 @@ account lease and must preserve the document structure and JSON value types.
   `bad_response`, `no_windows`, `no_usage_window_for_login`, `window_locked`. A probe that never ran reads `not_yet_probed`.
   `skipped` means nothing was asked; `failed` means it was asked and did not
   answer well. Neither erases figures nor fails a worker task.
-- **Codex.** The probe runs `ARGUS_CODEX_BIN app-server` in a throwaway
+- **Codex.** The probe runs `ARGUS_CODEX_BIN app-server` (or the client a Codex
+  sign-in downloaded, [login clients](login-clients.spec.md) 3.4) in a throwaway
   `CODEX_HOME` holding only that account's `auth.json`, calls the read-only
   `account/rateLimits/read`, and stores `primary` and `secondary` as `polled`
   snapshots. It has a 15 s timeout, and the directory is deleted afterwards.
@@ -476,7 +477,7 @@ usage row of the same run, `null` when none ([spec](model-observability.spec.md)
 # 5. Constraints
 
 - Single node, SQLite, no new service or dependency. The Codex probe is an
-  optional subprocess and needs `ARGUS_CODEX_BIN`; the Claude and OpenRouter
+  optional subprocess and needs `ARGUS_CODEX_BIN` or a downloaded client; the Claude and OpenRouter
   reads are plain HTTPS GETs, and the Cursor read three POSTs; none needs
   anything installed.
 - No outbound or subprocess call inside a write transaction. `tx.now` is the

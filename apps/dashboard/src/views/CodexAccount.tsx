@@ -223,6 +223,12 @@ function DedicatedLogin({ onClose, onDone }: { onClose: () => void; onDone: () =
           Name
           <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={100} />
         </label>
+        {action.busy && (
+          <p className="muted small" role="status">
+            Starting… The first sign-in on this install downloads the Codex client (about 110 MB),
+            which can take a minute.
+          </p>
+        )}
         {error && <p className="error">{error}</p>}
         <div className="actions">
           <button type="button" disabled={action.busy} onClick={onClose}>

@@ -93,6 +93,7 @@ class LoginManager[S: LoginSession]:
         self._settings = settings
         self._clock = clock
         self._sessions: dict[str, S] = {}
+        self._client: str | None = None  # a downloaded client (login clients spec)
         self._cleanups: set[asyncio.Task[None]] = set()
 
     # -- public --------------------------------------------------------------------
