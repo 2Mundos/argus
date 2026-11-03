@@ -18,6 +18,7 @@ REMOTE = "origin"
 NOTES_DIR = "docs/releases"
 MIGRATIONS = "apps/api/src/argus_api/db/migrations"
 SPECS = "docs/specs"
+REPO_URL = "https://github.com/2Mundos/argus"
 TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 PR_MERGE = re.compile(
     r"^Merge pull request '(?P<title>.+)' \(#(?P<pr>\d+)\) from "
@@ -118,7 +119,8 @@ def render(
         out.append("No schema migrations: rolling back to the previous image is safe.")
     if specs:
         out += ["", "Specs added or changed:", ""]
-        out += [f"- [`{s}`](../specs/{s})" for s in specs]
+        # The notes are also the GitHub release body, where relative links 404.
+        out += [f"- [`{s}`]({REPO_URL}/blob/{tag}/{SPECS}/{s})" for s in specs]
     if breaking:
         out += ["", "## Breaking changes", ""] + [c.line() for c in breaking]
     for title, kind in SECTIONS:

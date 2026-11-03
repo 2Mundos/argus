@@ -70,7 +70,10 @@ and, when there are any, tells the operator to back up the database (or confirm
 the Litestream replica is current) first and that rolling back means restoring
 that backup. With no migrations it says rolling back is safe. Specs added or
 changed in the range are linked there too, so behaviour changes are found
-without reading the diff.
+without reading the diff. Those links are absolute and pinned to the tag
+(`https://github.com/2Mundos/argus/blob/vX.Y.Z/docs/specs/<name>`): the same
+text is the GitHub release body, where a relative link resolves against the
+release page and 404s, and a tag-pinned link shows the spec as it shipped.
 
 ## 3.4 Guards
 

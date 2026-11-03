@@ -76,7 +76,10 @@ def test_render_groups_and_flags_migrations() -> None:
     assert notes.index("## Features") < notes.index("## Fixes")
     assert notes.index("## Fixes") < notes.index("## Maintenance")
     assert "`0016_x.sql`" in notes and "Back up the database" in notes
-    assert "[`releases.spec.md`](../specs/releases.spec.md)" in notes
+    assert (
+        "[`releases.spec.md`](https://github.com/2Mundos/argus/blob/v0.2.0/"
+        "docs/specs/releases.spec.md)"
+    ) in notes
     assert "## Breaking" not in notes
 
 
