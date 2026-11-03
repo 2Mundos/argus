@@ -141,6 +141,22 @@ def test_fresh_install_lists_templates_with_explicit_missing_prerequisites(
     assert pools(client) == [] and target.started == []
 
 
+@pytest.mark.parametrize("public_url", [None])
+@pytest.mark.parametrize("extra_env", [{"ARGUS_LAUNCHER": "1"}], indirect=True)
+def test_a_launcher_install_names_the_command_that_sets_workers_up(
+    client: TestClient, target: FakeTarget
+) -> None:
+    cat = templates(client)
+    assert cat["_"]["launcher"] is True and cat["_"]["public_url_configured"] is False
+    for t in ("nanoclaw-socket", "nanoclaw-orchestrator", "argus-worker"):
+        [r] = cat[t]["readiness"]
+        assert "argus worker setup" in r["missing"][0], t
+    [sandbox] = cat["nanoclaw-sandbox"]["readiness"]
+    assert "sysbox" in sandbox["missing"][0]
+    caps = client.get("/api/fleet/capabilities", headers=ADMIN).json()
+    assert caps["launcher"] is True
+
+
 def test_no_reachable_node_makes_everything_unavailable(
     client: TestClient, target: FakeTarget
 ) -> None:

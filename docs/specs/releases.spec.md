@@ -16,7 +16,10 @@ the tag builds and publishes everything else.
   GitHub container registry, and
   creates the GitHub release with the notes as its body. Quality CI also builds
   (without publishing) the NanoClaw host and echo-worker images so those
-  Dockerfiles cannot rot; only the control-plane image is a release artifact.
+  Dockerfiles cannot rot; the echo worker is never published.
+- A second job builds and pushes the worker images
+  `ghcr.io/<owner>/argus-nanoclaw-host:vX.Y.Z` and `…/argus-nanoclaw-agent:vX.Y.Z`
+  ([local workers](local-workers.spec.md) 3.1), with the same `latest` rule.
 - The image carries the host launcher (`/app/bin/argus`) and every release's
   notes (`/app/releases/`), so `argus update` installs the matching launcher
   and shows the Upgrading sections it skips over ([launcher](launcher.spec.md)).

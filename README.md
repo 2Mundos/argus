@@ -80,8 +80,11 @@ with the newest tag on the [releases page](https://github.com/2Mundos/argus/rele
 ```bash
 curl -fsSL https://raw.githubusercontent.com/2Mundos/argus/v0.9.0/deploy/install.sh | ARGUS_VERSION=v0.9.0 sh
 argus up --version v0.9.0   # prints the dashboard URL and admin token
-argus up --docker           # also run worker pools on this machine's Docker
+argus worker setup          # run coding-agent workers on this machine (pulls ~7 GB)
 ```
+
+`argus worker setup` ships in the first release after v0.9.0; with a v0.9.0
+launcher, `argus up --docker` runs worker pools on this machine's Docker instead.
 
 To always take the newest release instead, run the installer from `main`
 without `ARGUS_VERSION` and `argus up` without `--version`:

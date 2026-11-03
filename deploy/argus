@@ -12,6 +12,14 @@ READY_TIMEOUT=${ARGUS_READY_TIMEOUT:-300}
 POLL=${ARGUS_POLL_INTERVAL:-1}
 SECRETS=/data/secrets.sops.yaml
 
+# Local workers (docs/specs/local-workers.spec.md): the OneCLI gateway NanoClaw
+# needs, pinned by digest (1.43+ drops the secret-assignment API the channel uses).
+ONECLI_IMAGE=ghcr.io/onecli/onecli:1.42.0@sha256:8d4a3300e915259a2fcff13614ecd7394bfd35c75d6a64d69f28a28dd23f30fe
+ONECLI_DB_IMAGE=postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+GW=argus-onecli
+GW_DB=argus-onecli-db
+GW_NET=argus-onecli-control
+
 # Backup and restore run in an Argus container as its user, so files keep the
 # volume's ownership. Backups are named argus-<UTC timestamp>-<version>.db and
 # sort oldest first; the newest 5 are kept, plus an optional protected name.
@@ -78,6 +86,10 @@ Usage: argus <command>
   logs [-f]          container logs
   down               stop and remove the container (never the volume)
   unlock             remove a stale lock left by a command that died
+  worker setup [-y]  run workers on this machine: worker images, gateway, Docker access
+  worker status      what `worker setup` set up
+  worker remove [--purge]
+                     undo `worker setup` (--purge also deletes gateway data and checkouts)
 
 Config: $ARGUS_HOME (default ~/.config/argus). Spec: docs/specs/launcher.spec.md
 EOF
@@ -93,6 +105,8 @@ load_config() {
 	ARGUS_VOLUME=argus-data
 	ARGUS_DOCKER=0
 	ARGUS_EXTRA_ENV=$ARGUS_HOME/extra.env
+	ARGUS_WORKERS=0
+	ARGUS_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}/argus
 	HAVE_CONFIG=0
 	if [ -f "$CONF" ]; then
 		# shellcheck disable=SC1090
@@ -114,6 +128,8 @@ ARGUS_CONTAINER='$ARGUS_CONTAINER'
 ARGUS_VOLUME='$ARGUS_VOLUME'
 ARGUS_DOCKER='$ARGUS_DOCKER'
 ARGUS_EXTRA_ENV='$ARGUS_EXTRA_ENV'
+ARGUS_WORKERS='$ARGUS_WORKERS'
+ARGUS_DATA_HOME='$ARGUS_DATA_HOME'
 EOF
 	mv "$tmp" "$CONF"
 	HAVE_CONFIG=1
@@ -222,12 +238,119 @@ recipient() {
 }
 
 desktop_engine() { docker info --format '{{.OperatingSystem}}' 2>/dev/null | grep -qi 'docker desktop'; }
+bridge_ip() { docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}'; }
+
+# -- local workers (docs/specs/local-workers.spec.md) ---------------------------
+
+worker_image() { printf '%s/argus-nanoclaw-%s:%s' "${ARGUS_IMAGE%/*}" "$1" "${2:-$ARGUS_VERSION}"; }
+nc_root() { printf '%s/nanoclaw' "$ARGUS_DATA_HOME"; }
+nc_src() { printf '%s/%s/src' "$(nc_root)" "$1"; }
+
+# Pull a version's worker images and put its checkout on the host (3.1, 3.2).
+prepare_workers() {
+	v=$1
+	root=$(nc_root)
+	[ "${#root}" -le 54 ] ||
+		die "the instances root $root/i is longer than 56 characters; set ARGUS_DATA_HOME in $CONF to a shorter path"
+	for kind in host agent; do
+		ref=$(worker_image "$kind" "$v")
+		ensure_image "$ref" 2>/dev/null ||
+			die "no worker image $ref (releases before local workers have none); \`argus update\` to a newer release, or \`argus worker remove\` to run $v without workers"
+	done
+	mkdir -p "$root/i"
+	if [ ! -d "$(nc_src "$v")" ]; then
+		say "Copying the NanoClaw checkout for $v to $root/$v..."
+		part=$root/.$v.part.$$
+		rm -rf "$part"
+		mkdir -p "$part"
+		cid=$(docker create "$(worker_image host "$v")")
+		if ! docker cp "$cid:/opt/nanoclaw" "$part/src" >/dev/null; then
+			docker rm "$cid" >/dev/null
+			rm -rf "$part"
+			die "could not copy the NanoClaw checkout out of $(worker_image host "$v")"
+		fi
+		docker rm "$cid" >/dev/null
+		mv "$part" "$root/$v"
+	fi
+}
+
+# Keep only this version's checkout, once it is the one in use.
+prune_checkouts() {
+	root=$(nc_root)
+	[ -d "$root" ] || return 0
+	for d in "$root"/v* "$root"/.v*; do
+		[ -e "$d" ] || continue
+		[ "$d" = "$root/$1" ] || rm -rf "$d"
+	done
+}
+
+random_hex() { od -An -tx1 -N24 /dev/urandom | tr -d ' \n'; }
+
+# The OneCLI gateway and its database (3.3). Idempotent.
+gateway_up() {
+	genv=$ARGUS_HOME/onecli.env
+	if [ ! -s "$genv" ]; then
+		pw=$(random_hex)
+		part=$genv.part.$$
+		(
+			umask 077
+			printf '%s\n' "POSTGRES_USER=onecli" "POSTGRES_DB=onecli" "POSTGRES_PASSWORD=$pw" \
+				"DATABASE_URL=postgresql://onecli:$pw@$GW_DB:5432/onecli" \
+				"NEXTAUTH_SECRET=$(random_hex)" >"$part"
+		)
+		mv "$part" "$genv"
+	fi
+	docker network inspect "$GW_NET" >/dev/null 2>&1 || docker network create "$GW_NET" >/dev/null
+	if ! docker container inspect "$GW_DB" >/dev/null 2>&1; then
+		docker run -d --name "$GW_DB" --restart unless-stopped --network "$GW_NET" \
+			-v argus-onecli-pg:/var/lib/postgresql --env-file "$genv" "$ONECLI_DB_IMAGE" >/dev/null
+	fi
+	start=$(date +%s)
+	until docker exec "$GW_DB" pg_isready -U onecli >/dev/null 2>&1; do
+		[ $(($(date +%s) - start)) -lt "$READY_TIMEOUT" ] ||
+			die "the gateway database did not start; see \`docker logs $GW_DB\`"
+		sleep "$POLL"
+	done
+	if ! docker container inspect "$GW" >/dev/null 2>&1; then
+		# The management API (10254) stays on loopback and the private network;
+		# agents reach the proxy (10255) as host.docker.internal (runbook 3).
+		set -- run -d --name "$GW" --restart unless-stopped --network "$GW_NET" \
+			--add-host host.docker.internal:host-gateway \
+			-p 127.0.0.1:10254:10254 -p 127.0.0.1:10255:10255 \
+			-v argus-onecli-data:/app/data --env-file "$genv" \
+			-e APP_URL=http://127.0.0.1:10254 -e GATEWAY_API_URL=http://127.0.0.1:10255 \
+			-e INTERNAL_API_URL=http://localhost:10254
+		desktop_engine || set -- "$@" -p "$(bridge_ip):10255:10255"
+		docker "$@" "$ONECLI_IMAGE" >/dev/null
+	fi
+}
+
+gateway_down() {
+	for c in "$GW" "$GW_DB"; do
+		if docker container inspect "$c" >/dev/null 2>&1; then
+			docker stop "$c" >/dev/null
+			docker rm "$c" >/dev/null
+		fi
+	done
+	! docker network inspect "$GW_NET" >/dev/null 2>&1 || docker network rm "$GW_NET" >/dev/null
+}
+
+# (Re)start Argus from the config and wait for it.
+restart_argus() {
+	stop_and_remove
+	start_container
+	if ! wait_ready; then
+		print_failure
+		exit 1
+	fi
+	print_access
+}
 
 # Start the container from the config (3.3).
 start_container() {
 	img=$(image)
 	set -- run -d --name "$ARGUS_CONTAINER" --restart unless-stopped \
-		--label io.argus.launcher=1 \
+		--label io.argus.launcher=1 -e ARGUS_LAUNCHER=1 \
 		-p "127.0.0.1:$ARGUS_PORT:8000" -v "$ARGUS_VOLUME:/data" \
 		-v "$KEY:/keys/age.txt:ro" -e SOPS_AGE_KEY_FILE=/keys/age.txt \
 		-e "SOPS_AGE_RECIPIENTS=$(recipient)"
@@ -241,8 +364,22 @@ start_container() {
 			--add-host host.docker.internal:host-gateway \
 			-e "ARGUS_PUBLIC_URL=http://host.docker.internal:$ARGUS_PORT"
 		if ! desktop_engine; then
-			bridge=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
-			set -- "$@" -p "$bridge:$ARGUS_PORT:8000"
+			set -- "$@" -p "$(bridge_ip):$ARGUS_PORT:8000"
+		fi
+		if [ "$ARGUS_WORKERS" = 1 ]; then
+			# The settings provision.sh prints, for this version's images and checkout.
+			root=$(nc_root)
+			set -- "$@" -v "$root:$root" \
+				-e "ARGUS_NANOCLAW_INSTALL_DIR=$(nc_src "$ARGUS_VERSION")" \
+				-e "ARGUS_NANOCLAW_INSTANCES_ROOT=$root/i" \
+				-e "ARGUS_NANOCLAW_HOST_IMAGE=$(worker_image host)" \
+				-e "ARGUS_NANOCLAW_AGENT_IMAGE=$(worker_image agent)" \
+				-e "ARGUS_NANOCLAW_ONECLI_URL=http://$GW:10254" \
+				-e "ARGUS_NANOCLAW_NETWORK=$GW_NET" \
+				-e ARGUS_NANOCLAW_ALLOW_DOCKER_SOCKET=true \
+				-e ARGUS_NANOCLAW_DOCKER_SOCKET=/var/run/docker.sock \
+				-e "ARGUS_NANOCLAW_USER=$(id -u):$(id -g)" \
+				-e "ARGUS_NANOCLAW_GROUP_ADD=$gid"
 		fi
 	fi
 	say "Starting Argus $ARGUS_VERSION..."
@@ -388,6 +525,8 @@ cmd_up() {
 	load_config
 	[ -z "$want_port" ] || ARGUS_PORT=$want_port
 	[ -z "$want_docker" ] || ARGUS_DOCKER=$want_docker
+	[ "$ARGUS_WORKERS" != 1 ] || [ "$ARGUS_DOCKER" = 1 ] ||
+		die "workers need Docker access; run \`argus worker remove\` first"
 	adopt=0
 	if [ "$HAVE_CONFIG" = 1 ]; then
 		[ -z "$want_version" ] || die "this install runs $ARGUS_VERSION; change versions with \`argus update\`"
@@ -417,14 +556,9 @@ cmd_up() {
 		name=$(backup_offline "$img_id" "$ARGUS_VERSION")
 		say "Backed up the database before adopting it: $name"
 	fi
+	[ "$ARGUS_WORKERS" != 1 ] || prepare_workers "$ARGUS_VERSION"
 	save_config
-	stop_and_remove
-	start_container
-	if ! wait_ready; then
-		print_failure
-		exit 1
-	fi
-	print_access
+	restart_argus
 	if newest=$(latest_version 2>/dev/null) && version_lt "$ARGUS_VERSION" "$newest"; then
 		say "Argus $newest is available: run \`argus update\`."
 	fi
@@ -496,6 +630,8 @@ cmd_apply_update() {
 	load_config
 	case $0 in */*) self=$0 ;; *) self=$(command -v "$0") ;; esac
 	current=$ARGUS_VERSION
+	# Worker images and checkout first: a missing one stops here, before any change.
+	[ "$ARGUS_WORKERS" != 1 ] || prepare_workers "$target"
 	if container_exists; then
 		old_image=$(docker container inspect -f '{{.Image}}' "$ARGUS_CONTAINER")
 	else
@@ -509,6 +645,7 @@ cmd_apply_update() {
 	start_container
 	if wait_ready; then
 		rm -f "$self.prev"
+		[ "$ARGUS_WORKERS" != 1 ] || prune_checkouts "$target"
 		print_access
 		return 0
 	fi
@@ -553,6 +690,7 @@ cmd_restore() {
 	fi
 	with_volume "$cur_image" test -f "/data/backups/$name" || die "restore: no backup $name in $ARGUS_VOLUME"
 	ensure_image "$(image "$version")"
+	[ "$ARGUS_WORKERS" != 1 ] || prepare_workers "$version"
 	stop_and_remove
 	before=$(backup_offline "$cur_image" "$ARGUS_VERSION" "$name")
 	say "Backed up the current database first: $before"
@@ -565,6 +703,86 @@ cmd_restore() {
 		exit 1
 	fi
 	print_access
+}
+
+cmd_worker() {
+	sub=${1:-}
+	[ $# -eq 0 ] || shift
+	case $sub in
+	setup) worker_setup "$@" ;;
+	status) worker_status ;;
+	remove) worker_remove "$@" ;;
+	*) die "usage: argus worker setup [-y] | status | remove [--purge]" ;;
+	esac
+}
+
+worker_setup() {
+	assume_yes=0
+	for a in "$@"; do
+		case $a in -y | --yes) assume_yes=1 ;; *) die "worker setup: unknown argument $a" ;; esac
+	done
+	take_lock
+	load_config
+	[ "$HAVE_CONFIG" = 1 ] || die "no install found at $ARGUS_HOME; run \`argus up\` first"
+	if [ "$assume_yes" != 1 ]; then
+		[ -r /dev/tty ] || die "no terminal to confirm on; rerun with -y"
+		cat <<EOF
+This runs NanoClaw workers on this machine's Docker:
+  - pulls the worker images for $ARGUS_VERSION (about 7 GB),
+  - starts the OneCLI gateway ($GW, $GW_DB) on loopback and a private network,
+  - gives Argus and its worker hosts the Docker socket, which is
+    ROOT-EQUIVALENT on this Docker host.
+EOF
+		printf 'Continue? [y/N] '
+		read -r ans </dev/tty
+		case $ans in y | Y | yes) ;; *) die "cancelled" ;; esac
+	fi
+	prepare_workers "$ARGUS_VERSION"
+	say "Starting the gateway..."
+	gateway_up
+	ARGUS_DOCKER=1
+	ARGUS_WORKERS=1
+	save_config
+	restart_argus
+	say "Workers are set up. In the dashboard: Agents > New worker > \"NanoClaw, host Docker socket\"."
+}
+
+worker_status() {
+	load_config
+	if [ "$ARGUS_WORKERS" != 1 ]; then
+		say "Workers are not set up; run \`argus worker setup\`."
+		return 0
+	fi
+	say "Worker images: $(worker_image host) $(worker_image agent)"
+	src=$(nc_src "$ARGUS_VERSION")
+	[ -d "$src" ] && say "Checkout:      $src" || say "Checkout:      missing ($src); run \`argus up\`"
+	for c in "$GW" "$GW_DB"; do
+		state=$(docker container inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)
+		say "Gateway:       $c $state"
+	done
+}
+
+worker_remove() {
+	purge=0
+	for a in "$@"; do
+		case $a in --purge) purge=1 ;; *) die "worker remove: unknown argument $a" ;; esac
+	done
+	take_lock
+	load_config
+	[ "$HAVE_CONFIG" = 1 ] || die "no install found at $ARGUS_HOME"
+	gateway_down
+	ARGUS_WORKERS=0
+	save_config
+	restart_argus
+	if [ "$purge" = 1 ]; then
+		for vol in argus-onecli-data argus-onecli-pg; do
+			! docker volume inspect "$vol" >/dev/null 2>&1 || docker volume rm "$vol" >/dev/null
+		done
+		rm -rf "$(nc_root)" "$ARGUS_HOME/onecli.env"
+		say "Removed the workers, the gateway data and the NanoClaw checkouts."
+	else
+		say "Removed the workers. Gateway data and checkouts stay for a later setup (--purge deletes them)."
+	fi
 }
 
 cmd_status() {
@@ -629,6 +847,7 @@ down)
 	say "Stopped and removed $ARGUS_CONTAINER; data stays in volume $ARGUS_VOLUME."
 	;;
 unlock) cmd_unlock ;;
+worker) cmd_worker "$@" ;;
 help | -h | --help) usage ;;
 *)
 	usage >&2

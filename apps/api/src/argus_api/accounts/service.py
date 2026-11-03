@@ -532,9 +532,10 @@ async def exhausted(
         )
     task_id = report.task_id
     attempt = report.attempt
-    # Fence before any write: a stale or expired claim must not exhaust anything.
+    # Fence before any write: a stale claim must not exhaust anything. An expired
+    # one may, as for `fail`: the quota was hit while the lease still held.
     if task_id is not None and attempt is not None:
-        await tasks.check_lease(tx, task_id, attempt, agent_id)
+        await tasks.check_lease(tx, task_id, attempt, agent_id, allow_expired=True)
     async with tx.conn.execute(
         "SELECT provider FROM accounts WHERE id = ?", (account_id,)
     ) as cur:
@@ -605,7 +606,7 @@ async def exhausted(
         return FallbackResult(
             lease=None, earliest_reset=await earliest_reset(tx, role, allowed)
         )
-    await tasks.block(tx, agent_id, task_id, attempt, tasks.AWAITING_QUOTA)
+    await tasks.pause_for_quota(tx, agent_id, task_id, attempt, reason, wait=True)
     if report.native_session is not None:
         await quota_resume.record_session(
             tx, agent_id, task_id, attempt, report.native_session

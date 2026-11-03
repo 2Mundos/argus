@@ -9540,6 +9540,11 @@
       },
       "FleetCapabilities": {
         "properties": {
+          "launcher": {
+            "default": false,
+            "title": "Launcher",
+            "type": "boolean"
+          },
           "pools": {
             "items": {
               "$ref": "#/components/schemas/PoolCapability"
@@ -19469,6 +19474,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 100,
             "title": "Depends On",
             "type": "array"
           },
@@ -20256,6 +20262,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 100,
             "title": "Depends On",
             "type": "array"
           },
@@ -21832,6 +21839,11 @@
           "default_node": {
             "title": "Default Node",
             "type": "string"
+          },
+          "launcher": {
+            "default": false,
+            "title": "Launcher",
+            "type": "boolean"
           },
           "nodes": {
             "items": {
@@ -30188,7 +30200,7 @@
     },
     "/api/projects/{slug}/settings": {
       "get": {
-        "description": "Effective values for a project, with `source` per key.",
+        "description": "Effective values for a project, with `source` per key. Workers only read\nprojects of tasks they have leased.",
         "operationId": "get_project_settings_api_projects__slug__settings_get",
         "parameters": [
           {
@@ -31509,8 +31521,28 @@
         ]
       },
       "post": {
-        "description": "Orchestrators and admins create any task; workers only subtasks of a task\nthey hold. Past the per-agent hourly limit, an agent's new tasks wait for\nhuman approval (a `policy` decision) instead of being refused.",
+        "description": "Orchestrators and admins create any task; workers only subtasks of a task\nthey hold. Past the per-agent hourly limit, an agent's new tasks wait for\nhuman approval (a `policy` decision) instead of being refused. A retry with\nthe same `Idempotency-Key` and body returns the task the first call created;\nthe same key with another body is 409 `idempotency_key_reused`.",
         "operationId": "create_task_api_tasks_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {

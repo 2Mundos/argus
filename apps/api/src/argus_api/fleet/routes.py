@@ -64,7 +64,10 @@ async def fleet_capabilities(
     async with db.read() as conn:
         pools = await service.list_pools(conn)
     return await capabilities.discover(
-        pools, request.app.state.targets, settings.public_url
+        pools,
+        request.app.state.targets,
+        settings.public_url,
+        launcher=settings.launcher,
     )
 
 

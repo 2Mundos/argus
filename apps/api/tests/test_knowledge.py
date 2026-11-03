@@ -8,7 +8,7 @@ from argus_api.auth import Identity
 from argus_api.db import Database
 from argus_api.db.migrate import load_migrations
 from argus_api.decisions import service as decisions
-from argus_api.errors import ConflictError, NotFoundError
+from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
 from argus_api.knowledge import service as kn
 from argus_api.main import app
 from argus_api.tasks import service as tasks
@@ -201,6 +201,28 @@ async def test_task_project_and_pins_must_exist(db: Database) -> None:
                 await tasks.create_task(tx, body, "admin:test")
 
 
+async def test_a_task_pins_only_its_project_or_global(db: Database) -> None:
+    async with db.write() as tx:
+        await kn.upsert_project(tx, "web", ProjectUpsert(name="Web"), "admin:test")
+    foreign = await create_page(db, project="web", title="Web internals")
+    shared = await create_page(db, title="Conventions")
+    with pytest.raises(ValidationFailedError) as err:
+        async with db.write() as tx:
+            await tasks.create_task(
+                tx,
+                TaskCreate(project="demo", title="x", knowledge=[shared, foreign]),
+                "admin:test",
+            )
+    assert err.value.details == [f"knowledge: {foreign}: not in demo or global"]
+    async with db.write() as tx:
+        task = await tasks.create_task(
+            tx,
+            TaskCreate(project="web", title="x", knowledge=[shared, foreign]),
+            "admin:test",
+        )
+    assert task.knowledge == sorted([shared, foreign])
+
+
 # -- answers saved to knowledge ----------------------------------------------------------------
 
 
@@ -371,7 +393,10 @@ async def test_kind_pins_merge_with_task_pins(db: Database, clock: FakeClock) ->
     from argus_core.kinds import TaskKindUpsert
 
     await insert_agent(db, A)
-    runbook = await create_page(db, title="Deploy runbook")
+    async with db.write() as tx:
+        await kn.upsert_project(tx, "ops", ProjectUpsert(name="Ops"), "admin:test")
+    # The kind's pins are the admin's choice and may live in any project.
+    runbook = await create_page(db, project="ops", title="Deploy runbook")
     extra = await create_page(db, title="Release notes template")
     async with db.write() as tx:
         await kinds.upsert_kind(

@@ -472,6 +472,23 @@ describe("renderTask", () => {
     expect(text).not.toMatch(/\bRadar\b/i);
   });
 
+  it("lists only read commands and grants no merge to a task without repository:write", () => {
+    const readOnly = task({
+      repository_url: "https://github.com/acme/widget.git",
+      input: { delivery: { allow_merge: true } },
+    });
+    const text = renderTask(readOnly as any, new Map());
+    expect(text).toContain("Project code (read-only)");
+    expect(text).toContain("Read commands: get = pull request by number");
+    expect(text).toContain("pr-diff");
+    expect(text).not.toMatch(
+      /\bcreate = |\bupdate = |comment-create|label-list\/add|issue-list\/create/,
+    );
+    expect(text).not.toContain("argus-github-api create --repository");
+    expect(text).not.toContain("This task explicitly authorizes merge");
+    expect(text).toContain("Do not merge pull requests unless");
+  });
+
   it("adds merge preconditions when the task explicitly authorizes delivery merge", () => {
     const repoTask = task({
       repository_url: "https://git.example.test/org/repo.git",

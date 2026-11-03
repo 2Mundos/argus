@@ -72,6 +72,8 @@ class FleetSettings:
     model_policy_path: Path | None = None
     # Reconciler-wide cap on `reserved` instances no listing has confirmed yet.
     max_starts_in_flight: int = field(default_factory=default_start_cap)
+    # Started by the host launcher: name its command in status reasons.
+    launcher: bool = False
 
 
 @dataclass(frozen=True)
@@ -289,7 +291,8 @@ async def _scale(tx: Tx, pool: Pool, settings: FleetSettings) -> list[_Start | _
                 tx,
                 pool.name,
                 "failing",
-                "ARGUS_PUBLIC_URL is not set: containers cannot reach Argus",
+                "ARGUS_PUBLIC_URL is not set: containers cannot reach Argus"
+                + ("; run `argus worker setup`" if settings.launcher else ""),
             )
             return []
         # Reservations anywhere (this pass included) are starts in flight.

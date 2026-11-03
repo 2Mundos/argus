@@ -4,12 +4,14 @@ import asyncio
 import importlib
 import json
 from collections.abc import Generator
+from datetime import timedelta
 from pathlib import Path
 
 import httpx2 as httpx
 import pytest
-from argus_api.db import ts
+from argus_api.db import ts, utcnow
 from argus_api.main import app
+from argus_api.tasks import delivery
 from fastapi.testclient import TestClient
 from test_list_reads import ask, create, ok, register, walk
 from test_mcp import tool
@@ -303,6 +305,10 @@ def test_stale_stored_pr_conflicts_with_a_newer_merged_read(
     tid = review_task(client, f"opened {URL}")
     store_pr(client, tid, "open")
     monkeypatch.setattr(inbox_actions, "STALE_S", -1)  # every stored value is old
+    # The live read is newer by construction, not by the wall clock, which can step
+    # back (measured: up to 1.4 s under load on WSL 2) between two close reads.
+    later = utcnow() + timedelta(minutes=1)
+    monkeypatch.setattr(delivery, "utcnow", lambda: later)
     forge(client, pr_state("closed", merged=True))
     stored_only = row(actionable(client), tid)["actionable"]["delivery"]
     assert stored_only["stored"]["status"] == "stale"
@@ -314,7 +320,7 @@ def test_stale_stored_pr_conflicts_with_a_newer_merged_read(
     assert d["status"] == "conflict"
     assert d["stored"]["value"] == "open" and d["live"]["value"] == "merged"
     assert d["headline"] == d["live"] and d["headline"]["source"] == "live_forge"
-    assert d["live"]["observed_at"] >= page["snapshot_at"]
+    assert d["live"]["observed_at"] == ts(later)
     assert d["flags"] == ["delivery_merged_pending_review"]
     assert d["pr"] == URL
     a = row(page, tid)["actionable"]

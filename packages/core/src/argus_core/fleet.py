@@ -452,6 +452,7 @@ class PoolCapability(BaseModel):
 
 class FleetCapabilities(BaseModel):
     public_url_configured: bool
+    launcher: bool = False  # started by the host launcher (local workers spec 3.6)
     targets: list[TargetCapability]
     pools: list[PoolCapability]
 
@@ -543,6 +544,7 @@ class WorkerTemplate(BaseModel):
 
 class TemplateCatalog(BaseModel):
     public_url_configured: bool
+    launcher: bool = False  # started by the host launcher (local workers spec 3.6)
     default_node: str
     nodes: list[NodeOption]
     templates: list[WorkerTemplate]

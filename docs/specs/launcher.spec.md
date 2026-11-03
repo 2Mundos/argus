@@ -28,6 +28,7 @@ The commands:
 | `argus status` | Version, container state, `/readyz`, config path, the newest backups. |
 | `argus token` · `argus logs [-f]` · `argus down` | Print the admin token · container logs · stop and remove the container (never the volume). |
 | `argus unlock` | Removes a stale lock left by a command that died (3.7). |
+| `argus worker setup\|status\|remove` | Workers on this machine: published worker images, the OneCLI gateway, Docker access ([local workers](local-workers.spec.md)). Mutating subcommands take the lock (3.7). |
 
 # 2. Non-Goals
 
