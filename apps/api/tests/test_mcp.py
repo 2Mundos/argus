@@ -256,6 +256,14 @@ def test_errors_come_back_as_tool_errors_with_codes(client: TestClient) -> None:
     assert "project_required" in invalid["error"]
 
 
+def test_create_task_forwards_its_idempotency_key(client: TestClient) -> None:
+    args = {"title": "t", "project": "demo", "idempotency_key": "k1"}
+    first = tool(client, ADMIN_TOKEN, "create_task", **args)
+    assert tool(client, ADMIN_TOKEN, "create_task", **args)["id"] == first["id"]
+    reused = tool(client, ADMIN_TOKEN, "create_task", **{**args, "title": "u"})
+    assert reused["error"].startswith("409 idempotency_key_reused:")
+
+
 def test_tools_need_a_token(client: TestClient) -> None:
     assert "missing token" in tool(client, None, "list_tasks")["error"]
     assert tool(client, "bogus", "list_tasks")["error"].startswith("401 invalid_token")

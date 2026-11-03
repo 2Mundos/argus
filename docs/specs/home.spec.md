@@ -2,14 +2,17 @@
 
 # 1. Purpose and Scope
 
-Home is the first dashboard tab (`#home`) and the default for an empty or invalid
-hash. It answers three questions without opening another tab: what needs a person
-or an operator now, how big is each part of the fleet, and what happened lately.
+Home is the Dashboard tab (`#dashboard`; `#home` redirects there). Routing,
+including the default for an empty or invalid hash, is
+[onboarding](onboarding.spec.md) 3.4. It answers three questions without opening
+another tab: what needs a person or an operator now, how big is each part of the
+fleet, and what happened lately.
 
 The authenticated dashboard is a three-column shell on every route: a left
-navigation, the page, and a right rail of live workers only. Recent non-transient
-events appear in the bottom live status bar ([live work](live-work.spec.md) 3.4),
-not in the rail. The stream status and sign-out sit in the page top bar. A server-status
+navigation, the page, and a right rail of workers: the live ones, then the newest
+ended ones ([stall visibility](stall-visibility.spec.md) 3.5). Recent
+non-transient events appear in the bottom live status bar
+([live work](live-work.spec.md) 3.4), not in the rail. The stream status and sign-out sit in the page top bar. A server-status
 box sits at the bottom of the left navigation. It starts collapsed, showing
 only the verdict, and a button expands it to every readiness check. Navigation
 reaches every existing tab (Home, Tasks, Inbox, Agents, Pools, Accounts, and

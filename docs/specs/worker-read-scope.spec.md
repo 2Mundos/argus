@@ -19,7 +19,8 @@ that work. Orchestrators and admins keep global reads.
 - **Lease history.** Every successful claim inserts a `task_lease_grants` row
   `(task_id, agent_id, attempt, leased_at)`. A worker may read a task (and its
   artifacts / task-scoped decisions / model trace when gated the same way) iff
-  they have a grant for that task. Completing or releasing the lease does not
+  they have a grant for that task; the per-attempt runtime images
+  (`GET /runtime/tasks/{id}`) follow the same rule. Completing or releasing the lease does not
   remove the grant. The key is `(task_id, agent_id, attempt)`: an operator
   retry resets `attempt` to 0, so a later agent can lease the same attempt
   number and must still get its own grant.
@@ -27,8 +28,9 @@ that work. Orchestrators and admins keep global reads.
   these reads. Worker scope alone is narrowed.
 - **Projects from leased work.** A worker's allowed projects are the distinct
   `tasks.project` values of tasks they have lease grants for. Knowledge pages,
-  proposals, project list entries, and event rows that belong to a project are
-  visible only when that project is in the set. Non-project subjects (accounts,
+  proposals, project list entries, project settings and overrides, routines,
+  the project runtime, and event rows that belong to a project are visible only
+  when that project is in the set. Non-project subjects (accounts,
   pools, instances, agents, task kinds) are hidden from workers on the event
   APIs.
 - **Events follow leases, not just projects.** `task` events, and `decision`

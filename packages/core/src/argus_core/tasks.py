@@ -429,6 +429,7 @@ class TaskResult(BaseModel):
 
 SPEC_MAX_LENGTH = 200_000
 INPUT_MAX_CHARS = 100_000
+MAX_DEPENDENCIES = 100  # task dependencies 3.1
 
 
 class TaskCreate(BaseModel):
@@ -445,7 +446,7 @@ class TaskCreate(BaseModel):
     # completion and, for a PR that must be green or merged, at accept.
     deliverable: Deliverable = Deliverable.RESPONSE
     parent_id: str | None = None
-    depends_on: list[str] = []
+    depends_on: list[str] = Field(default=[], max_length=MAX_DEPENDENCIES)
     # Required; a subtask may omit it to inherit its parent's project.
     project: str | None = None
     knowledge: list[str] = []  # page ids pinned to the task, delivered on claim

@@ -1969,7 +1969,8 @@ export interface paths {
         };
         /**
          * Get Project Settings
-         * @description Effective values for a project, with `source` per key.
+         * @description Effective values for a project, with `source` per key. Workers only read
+         *     projects of tasks they have leased.
          */
         get: operations["get_project_settings_api_projects__slug__settings_get"];
         put?: never;
@@ -2376,7 +2377,9 @@ export interface paths {
          * Create Task
          * @description Orchestrators and admins create any task; workers only subtasks of a task
          *     they hold. Past the per-agent hourly limit, an agent's new tasks wait for
-         *     human approval (a `policy` decision) instead of being refused.
+         *     human approval (a `policy` decision) instead of being refused. A retry with
+         *     the same `Idempotency-Key` and body returns the task the first call created;
+         *     the same key with another body is 409 `idempotency_key_reused`.
          */
         post: operations["create_task_api_tasks_post"];
         delete?: never;
@@ -15667,7 +15670,9 @@ export interface operations {
     create_task_api_tasks_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "idempotency-key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };

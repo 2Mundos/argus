@@ -848,6 +848,7 @@ async def create_task(
     executor_model: ExecutorModel | None = None,
     harness_account: str | None = None,
     deliverable: Deliverable | None = None,
+    idempotency_key: str | None = None,
 ) -> dict:
     """Create a task. Workers may only create subtasks of a task they hold (set
     parent_id; the project is inherited). Orchestrators create any task and must name
@@ -883,7 +884,9 @@ async def create_task(
     or a custom OpenRouter account) pins the engine lease to that one account: the
     task waits as awaiting_quota while it cannot serve and never runs on another.
     Local and custom accounts bring their own model, so pair them with no
-    harness_model; a local (Strata) harness delegates only to the Cursor agent."""
+    harness_model; a local (Strata) harness delegates only to the Cursor agent.
+    Pass `idempotency_key` when you may retry: the same key and arguments return
+    the task the first call created instead of a duplicate."""
     body: dict[str, Any] = {
         "title": title,
         "project": project,
@@ -911,7 +914,8 @@ async def create_task(
         body["harness_account"] = harness_account
     if deliverable is not None:
         body["deliverable"] = deliverable.value
-    return await _call(ctx, "POST", "/tasks", json=body)
+    headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+    return await _call(ctx, "POST", "/tasks", json=body, headers=headers)
 
 
 @tool(AGENTS)

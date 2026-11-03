@@ -618,11 +618,11 @@ cat >/dev/null; echo '{"is_error":true,"result":"failed"}'`,
   assert.equal(selection.to_model, "opus");
 });
 
-test("claude observed model comes from the system/init event, else not_reported", async (t) => {
+test("only claude's system/init event yields an observed model, else not_reported", async (t) => {
   const s = sandbox(t);
-  const terminalExecution = async (stdoutLines) => {
+  const terminalExecution = async (stdoutLines, executor = "claude") => {
     s.fake(
-      "claude",
+      executor,
       `if [ "$1" = "--version" ]; then echo v; exit 0; fi
 cat >/dev/null; ${stdoutLines.map((l) => `echo '${l}'`).join("; ")}`,
     );
@@ -631,12 +631,12 @@ cat >/dev/null; ${stdoutLines.map((l) => `echo '${l}'`).join("; ")}`,
     // test does not depend on the host's /workspace/agent policy file being present.
     const { policySnapshot } = await import("./model-policy.mjs");
     const snapshot = policySnapshot(
-      { harness: {}, implementation: { claude: ["sonnet"] } },
+      { harness: {}, implementation: { [executor]: ["sonnet"] } },
       { task_id: "task1", attempt: 1 },
     );
     const file = path.join(s.dir, "policy.json");
     fs.writeFileSync(file, JSON.stringify(snapshot));
-    await run(["claude", "--cwd", s.work], {
+    await run([executor, "--cwd", s.work], {
       env: {
         ...s.env,
         ANTHROPIC_API_KEY: "x",
@@ -654,6 +654,15 @@ cat >/dev/null; ${stdoutLines.map((l) => `echo '${l}'`).join("; ")}`,
   const neither = await terminalExecution(['{"type":"result","result":"ok"}']);
   assert.equal(neither.observed_model, null);
   assert.equal(neither.evidence, "not_reported");
+  // Cursor agent's result `model` is not a verified served model (model observability 3.6).
+  fs.mkdirSync(path.join(s.home, ".config", "cursor"), { recursive: true });
+  fs.writeFileSync(path.join(s.home, ".config", "cursor", "auth.json"), '{"accessToken":"t"}');
+  const agent = await terminalExecution(
+    ['{"type":"result","model":"agent-model","usage":{"inputTokens":1,"outputTokens":1}}'],
+    "agent",
+  );
+  assert.equal(agent.observed_model, null);
+  assert.equal(agent.evidence, "not_reported");
 });
 
 test("invalid policies and invalid retry requests fail before CLI execution", async (t) => {

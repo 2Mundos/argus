@@ -1303,10 +1303,9 @@ async function runAttempt(
   const taskId = taskIdEarly;
   const usage = parseUsage(executor, stdoutText);
   // Only what the CLI printed: Claude's init model, else the dominant modelUsage entry.
+  // Other executors print no verified served model, whatever their usage carries.
   const observedModel =
-    executor === "claude"
-      ? (parseClaudeInitModel(stdoutText) ?? usage.model ?? null)
-      : (usage.model ?? null);
+    executor === "claude" ? (parseClaudeInitModel(stdoutText) ?? usage.model ?? null) : null;
   const key = runKeyEarly;
   // The delegate always runs as the executor role: it reports against the executor account.
   const accountId = accountIdEarly;

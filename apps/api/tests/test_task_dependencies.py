@@ -191,3 +191,17 @@ def test_stuck_dependents_show_in_the_inbox_and_are_released_over_mcp(
     ).json()
     changed = next(e for e in events if e["kind"] == "task.dependencies_changed")
     assert changed["data"] == {"added": [], "removed": [dep["id"]]}
+
+
+def test_creation_refuses_more_than_100_dependencies(client: TestClient) -> None:
+    dep = client.post(
+        "/api/tasks", json={"project": "demo", "title": "d"}, headers=ADMIN
+    ).json()["id"]
+    many = [dep] * 101
+    res = client.post(
+        "/api/tasks",
+        json={"project": "demo", "title": "t", "depends_on": many},
+        headers=ADMIN,
+    )
+    assert res.status_code == 422, res.text
+    assert client.get("/api/tasks", headers=ADMIN).json()["total"] == 1

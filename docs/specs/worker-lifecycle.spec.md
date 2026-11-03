@@ -598,7 +598,13 @@ as a managed pool of size 1 uses the same model: see
   authenticates with an admin token and follows the stream with `fetch` (not
   `EventSource`, which cannot send an `Authorization` header, so the token
   never goes into a URL).
-- Every mutating call accepts an `Idempotency-Key` header; agents retry often.
+- Agents retry often. Task creation (`POST /api/tasks`, MCP `create_task`'s
+  `idempotency_key`) accepts an `Idempotency-Key` header, scoped to the caller:
+  a repeat with the same key and body returns the task the first call created,
+  and the same key with another body is 409 `idempotency_key_reused`. Draft
+  publication takes its key in the body ([task drafts](task-drafts.spec.md)).
+  Other mutating calls take no key; the ones made under a lease are fenced by
+  (task, attempt) instead.
 
 ## 3.8 NanoClaw runtime
 
