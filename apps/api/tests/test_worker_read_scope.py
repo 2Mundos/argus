@@ -101,6 +101,35 @@ def test_worker_cannot_read_another_workers_artifact(client: TestClient) -> None
     assert listed.status_code == 403
 
 
+def test_worker_cannot_read_another_workers_task_runtime(client: TestClient) -> None:
+    alice, bob = register(client), register(client)
+    create_task(client, "alpha")
+    claimed, _ = claim_complete(client, alice)
+
+    path = f"/api/runtime/tasks/{claimed['id']}"
+    assert client.get(path, headers=alice).status_code == 200
+    denied = client.get(path, headers=bob)
+    assert (denied.status_code, denied.json()["detail"]["code"]) == (403, "not_leased")
+
+
+def test_worker_project_settings_are_project_scoped(client: TestClient) -> None:
+    alice, bob = register(client), register(client)
+    create_task(client, "alpha")
+    claim_complete(client, alice)
+
+    for path in (
+        "/api/projects/alpha/settings",
+        "/api/projects/alpha/settings/models/override",
+    ):
+        assert client.get(path, headers=alice).status_code == 200, path
+        assert client.get(path).status_code == 200, path  # admin stays global
+        denied = client.get(path, headers=bob)
+        assert (denied.status_code, denied.json()["detail"]["code"]) == (
+            403,
+            "project_scope",
+        ), path
+
+
 def test_worker_event_list_is_project_scoped(client: TestClient) -> None:
     alice, bob = register(client), register(client)
     create_task(client, "alpha")

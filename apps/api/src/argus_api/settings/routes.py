@@ -11,6 +11,7 @@ from argus_core.settings import (
 from fastapi import APIRouter, Request
 
 from argus_api import orchestrator
+from argus_api.access import require_project_readable
 from argus_api.deps import AdminDep, CallerDep, DbDep, SettingsDep
 from argus_api.settings import registry, service
 
@@ -39,10 +40,12 @@ async def get_global_settings(
 
 @router.get("/projects/{slug}/settings")
 async def get_project_settings(
-    slug: str, db: DbDep, settings: SettingsDep, _: CallerDep
+    slug: str, db: DbDep, settings: SettingsDep, caller: CallerDep
 ) -> SettingsResponse:
-    """Effective values for a project, with `source` per key."""
+    """Effective values for a project, with `source` per key. Workers only read
+    projects of tasks they have leased."""
     async with db.read() as conn:
+        await require_project_readable(conn, caller, slug)
         return await service.list_settings(
             conn,
             settings.model_policy_path,
@@ -53,11 +56,12 @@ async def get_project_settings(
 
 @router.get("/projects/{slug}/settings/{key}/override")
 async def get_project_override(
-    slug: str, key: str, db: DbDep, _: CallerDep
+    slug: str, key: str, db: DbDep, caller: CallerDep
 ) -> dict[str, Any]:
     """The stored project override alone (null value means inherit). Used by the
     Settings tab when editing a partial `models` override."""
     async with db.read() as conn:
+        await require_project_readable(conn, caller, slug)
         await service.ensure_project_exists(conn, slug)
         return {"key": key, "value": await service.project_override(conn, slug, key)}
 
