@@ -3,6 +3,7 @@ import http from "node:http";
 import { after, test } from "node:test";
 import {
   anthropicToOpenAIMessages,
+  BridgeRequestError,
   buildOpenAIChatBody,
   openAIChoiceToAnthropic,
   pipeOpenAIChatStreamToAnthropic,
@@ -18,6 +19,13 @@ test("anthropic messages become OpenAI chat messages", () => {
     { role: "system", content: "sys" },
     { role: "user", content: "hi" },
   ]);
+});
+
+test("buildOpenAIChatBody rejects a missing model as a bridge error", () => {
+  assert.throws(
+    () => buildOpenAIChatBody({ messages: [] }, {}),
+    (err) => err instanceof BridgeRequestError && /no model configured/.test(err.message),
+  );
 });
 
 test("buildOpenAIChatBody adds model and provider block", () => {
@@ -132,6 +140,52 @@ test("openAIChoiceToAnthropic maps tool calls", () => {
   });
   assert.equal(msg.stop_reason, "tool_use");
   assert.equal(msg.content[0].type, "tool_use");
+});
+
+test("bridge echoes its validation error and hides other failures", async () => {
+  const open = await startAnthropicOpenAIBridge({
+    settings: { base_url: "http://127.0.0.1:9/v1" },
+    apiKey: "k",
+  });
+  try {
+    const res = await fetch(`${open.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    const raw = await res.text();
+    assert.equal(res.status, 400, raw);
+    assert.equal(JSON.parse(raw).error.message, "no model configured for custom harness");
+  } finally {
+    await open.close();
+  }
+
+  const typed = await startAnthropicOpenAIBridge({
+    settings: { base_url: "http://127.0.0.1:9/v1", model: "m" },
+    apiKey: "k",
+  });
+  const logged = [];
+  const orig = console.error;
+  console.error = (...args) => {
+    logged.push(args);
+  };
+  try {
+    const res = await fetch(`${typed.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "null",
+    });
+    const raw = await res.text();
+    assert.equal(res.status, 400, raw);
+    assert.equal(JSON.parse(raw).error.message, "invalid request");
+    assert.equal(raw.includes("Cannot read"), false);
+    assert.equal(raw.includes("system"), false);
+    assert.ok(logged.length > 0);
+    assert.match(String(logged[0][1]), /Cannot read properties of null/);
+  } finally {
+    console.error = orig;
+    await typed.close();
+  }
 });
 
 test("a bridge beyond loopback requires a bridge key", async () => {

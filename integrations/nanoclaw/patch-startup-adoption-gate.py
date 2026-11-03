@@ -19,11 +19,6 @@ import re
 import sys
 from pathlib import Path
 
-p = Path(sys.argv[1]) / "src" / "container-runner.ts"
-if not p.is_file():
-    sys.exit(f"{p}: missing; NanoClaw layout changed upstream")
-s = p.read_text()
-
 GATE_DECL = """let resolveStartupAdoption!: () => void;
 let rejectStartupAdoption!: (reason?: unknown) => void;
 /** Argus: resolves after successful startup adoption, rejects when it throws (patch-startup-adoption-gate.py). */
@@ -126,10 +121,13 @@ def repair_duplicate_once_header(s: str) -> str:
     dup = ADOPT_ONCE_HEAD + "\n" + ADOPT_ONCE_HEAD
     while dup in s:
         s = s.replace(dup, ADOPT_ONCE_HEAD, 1)
+    # Blank lines between two copies of the header. The class excludes `\n`
+    # (CR is included so a CRLF gap still collapses), so the quantifiers cannot
+    # overlap: `\s` would include `\n` and backtrack exponentially.
     once_pat = re.compile(
         r"(async function adoptRunningSessionsOnce\(\):"
         r" Promise<\{ adopted: number; stopped: number \}> \{\n)"
-        r"(?:\s*\n)+"
+        r"(?:[ \t\r]*\n)+"
         r"\1"
     )
     while once_pat.search(s):
@@ -165,40 +163,55 @@ def upgrade_gate_declaration(s: str) -> str:
     return s
 
 
-if canonical_gate(s):
-    sys.exit(0)
+def main() -> None:
+    p = Path(sys.argv[1]) / "src" / "container-runner.ts"
+    if not p.is_file():
+        sys.exit(f"{p}: missing; NanoClaw layout changed upstream")
+    s = p.read_text()
+    _patch(p, s)
 
-changed = False
 
-if "startupAdoptionDone" in s:
-    s = repair_duplicate_once_header(s)
-    if ADOPT_BAD_FINALLY in s:
-        s = s.replace(ADOPT_BAD_FINALLY, ADOPT_WRAPPER, 1)
-        changed = True
-    upgraded = upgrade_gate_declaration(s)
-    if upgraded != s:
-        s = upgraded
-        changed = True
-    s = repair_duplicate_once_header(s)
-    listed = ensure_adoption_listing_fail_closed(s)
-    if listed != s:
-        s = listed
-        changed = True
+def _patch(p: Path, s: str) -> None:
     if canonical_gate(s):
-        if changed:
-            p.write_text(s)
-            print(f"upgraded {p} (startupAdoptionDone rejects on failure)")
         sys.exit(0)
-    sys.exit("container-runner.ts: startupAdoptionDone: installed shape unrecognized")
 
-OLD = "export async function adoptRunningSessions(): Promise<{ adopted: number; stopped: number }> {\n"
-if s.count(OLD) != 1:
-    sys.exit("container-runner.ts: adoptRunningSessions: upstream shape changed")
-s = s.replace(OLD, GATE_DECL + ADOPT_WRAPPER + ADOPT_ONCE_HEAD, 1)
-s = ensure_adoption_listing_fail_closed(s)
-if not canonical_gate(s):
-    sys.exit(
-        "container-runner.ts: startupAdoptionDone: patch did not produce canonical gate"
-    )
-p.write_text(s)
-print(f"patched {p} (startupAdoptionDone gate)")
+    changed = False
+
+    if "startupAdoptionDone" in s:
+        s = repair_duplicate_once_header(s)
+        if ADOPT_BAD_FINALLY in s:
+            s = s.replace(ADOPT_BAD_FINALLY, ADOPT_WRAPPER, 1)
+            changed = True
+        upgraded = upgrade_gate_declaration(s)
+        if upgraded != s:
+            s = upgraded
+            changed = True
+        s = repair_duplicate_once_header(s)
+        listed = ensure_adoption_listing_fail_closed(s)
+        if listed != s:
+            s = listed
+            changed = True
+        if canonical_gate(s):
+            if changed:
+                p.write_text(s)
+                print(f"upgraded {p} (startupAdoptionDone rejects on failure)")
+            sys.exit(0)
+        sys.exit(
+            "container-runner.ts: startupAdoptionDone: installed shape unrecognized"
+        )
+
+    old = "export async function adoptRunningSessions(): Promise<{ adopted: number; stopped: number }> {\n"
+    if s.count(old) != 1:
+        sys.exit("container-runner.ts: adoptRunningSessions: upstream shape changed")
+    s = s.replace(old, GATE_DECL + ADOPT_WRAPPER + ADOPT_ONCE_HEAD, 1)
+    s = ensure_adoption_listing_fail_closed(s)
+    if not canonical_gate(s):
+        sys.exit(
+            "container-runner.ts: startupAdoptionDone: patch did not produce canonical gate"
+        )
+    p.write_text(s)
+    print(f"patched {p} (startupAdoptionDone gate)")
+
+
+if __name__ == "__main__":
+    main()

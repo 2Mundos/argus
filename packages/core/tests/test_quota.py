@@ -1,9 +1,10 @@
 import json
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from argus_core.quota import classify_quota, failure_class
+from argus_core.quota import _reset, classify_quota, failure_class, sanitize_notice
 
 FIXTURE = Path(__file__).parent / "fixtures" / "quota-notices.json"
 CASES = json.loads(FIXTURE.read_text())
@@ -80,3 +81,44 @@ def test_clock_reset_is_strictly_after_a_non_utc_now() -> None:
     now = datetime.fromisoformat("2026-10-20T23:30:00-03:00")  # 02:30Z
     hit = classify_quota("You've hit your session limit · resets 2am (UTC)", now=now)
     assert hit is not None and hit.until == datetime(2026, 10, 22, 2, tzinfo=UTC)
+
+
+def test_zoned_iso_with_fraction_and_offset_still_parses() -> None:
+    raw = "2026-10-23T15:00:00.123456+00:00"
+    hit = classify_quota(f"Rate limit [x] (resets {raw})", "anthropic")
+    assert hit is not None and hit.until == datetime.fromisoformat(raw)
+    bare = classify_quota("Rate limit [x] (resets 2026-10-20T23:50:00)", "anthropic")
+    assert (
+        bare is not None
+        and bare.until is None
+        and bare.reset_text == "2026-10-20T23:50:00"
+    )
+
+
+def test_sanitize_notice_strips_queries_and_bounds_a_run_of_http_prefixes() -> None:
+    assert (
+        sanitize_notice("see https://a.io/p?token=zzz#f more")
+        == "see https://a.io/p more"
+    )
+    # A marker with no path character before it is not a query suffix.
+    assert "token" in sanitize_notice("http://?token=zzz")
+    assert sanitize_notice("(https://a.io/p?token=zzz)") == "(https://a.io/p)"
+    notice = "Bearer abcdefghijkl https://a.io/p?token=zzz " + ("http://" * 8000)
+    started = time.perf_counter()
+    out = sanitize_notice(notice)
+    # check-tests: allow elapsed-time — ReDoS regression for repeated http:// without a query
+    assert time.perf_counter() - started < 0.5
+    assert len(out) <= 500
+    assert "abcdefghijkl" not in out and "zzz" not in out and "?" not in out
+    assert out.startswith("[redacted] https://a.io/p")
+
+
+def test_unclosed_resets_markers_do_not_backtrack() -> None:
+    body = "(resets " * 8000
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    started = time.perf_counter()
+    assert _reset(body, now) is None
+    # check-tests: allow elapsed-time — ReDoS regression for unclosed "(resets" repeats
+    assert time.perf_counter() - started < 0.5
+    stamped = "(resets " * 100 + "(resets 2026-10-20T23:50:00Z)"
+    assert _reset(stamped, now) == datetime(2026, 10, 20, 23, 50, tzinfo=UTC)

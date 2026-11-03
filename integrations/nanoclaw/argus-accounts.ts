@@ -956,6 +956,15 @@ function foldNotice(notice: string): string {
     .trim();
 }
 
+const SANITIZE_INPUT_FACTOR = 8;
+
+/** Drop a `?`/`#` suffix when at least one path character precedes it. */
+function stripUrlQuery(url: string): string {
+  const restAt = url.indexOf("://") + 3;
+  const cut = url.slice(restAt).search(/[?#]/);
+  return cut <= 0 ? url : url.slice(0, restAt + cut);
+}
+
 /**
  * One line of provider text: control characters to spaces, bearer-like tokens and
  * URL query strings removed, bounded. Never a prompt or a credential. Mirrors
@@ -963,8 +972,9 @@ function foldNotice(notice: string): string {
  */
 export function sanitizeNotice(notice: string, limit = 500): string {
   return foldNotice(notice)
+    .slice(0, limit * SANITIZE_INPUT_FACTOR)
     .replace(/\b(?:bearer\s+|sk-|eyJ)[A-Za-z0-9._~+/=-]{8,}/gi, "[redacted]")
-    .replace(/(https?:\/\/[^\s?#)]+)[?#][^\s)]*/g, "$1")
+    .replace(/https?:\/\/[^\s)]+/g, stripUrlQuery)
     .replace(/\s{2,}/g, " ")
     .trim()
     .slice(0, limit);
@@ -1061,7 +1071,7 @@ function parseZonedIso(text: string): string | undefined {
  * Undefined when absent, zoneless or unparsable.
  */
 function parseResetTime(body: string, now: Date): string | undefined {
-  const iso = /\(resets ([^)]+)\)/i.exec(body);
+  const iso = /\(resets ([^()]{1,64})\)/i.exec(body);
   if (iso) {
     const when = parseZonedIso(iso[1]!);
     if (when) return when;

@@ -114,13 +114,21 @@ function anthropicToolsToOpenAI(tools) {
   return out.length ? out : undefined;
 }
 
+/** A request the bridge itself rejected. `message` is safe to return to the client. */
+export class BridgeRequestError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "BridgeRequestError";
+  }
+}
+
 export function buildOpenAIChatBody(anthropicBody, settings) {
   const model =
     settings.model ??
     (typeof anthropicBody.model === "string" && MODEL_ID.test(anthropicBody.model)
       ? anthropicBody.model
       : null);
-  if (!model) throw new Error("no model configured for custom harness");
+  if (!model) throw new BridgeRequestError("no model configured for custom harness");
   const body = {
     model,
     messages: anthropicToOpenAIMessages(anthropicBody),
@@ -381,7 +389,12 @@ export async function startAnthropicOpenAIBridge({
     try {
       openBody = buildOpenAIChatBody(anthropicBody, settings);
     } catch (err) {
-      writeAnthropicError(res, 400, String(err.message ?? err));
+      if (err instanceof BridgeRequestError) {
+        writeAnthropicError(res, 400, err.message);
+      } else {
+        console.error("anthropic-openai-bridge: invalid request", err);
+        writeAnthropicError(res, 400, "invalid request");
+      }
       return;
     }
     if (!upstreamUrlAllowed(upstream, chatUrl)) {

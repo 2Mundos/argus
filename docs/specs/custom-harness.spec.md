@@ -74,6 +74,9 @@ account's configured `base_url` with the leased API key held only in host memory
     bridge has a random key: requests without `x-argus-bridge-key: <key>` get 401. The
     key reaches Claude Code as `ANTHROPIC_CUSTOM_HEADERS` and is stored in the harness
     file; it guards only that bridge and dies with the lease.
+  - A request the bridge cannot translate is HTTP 400. Only its own validation
+    error (no model configured) is echoed; any other failure returns `invalid request`
+    and the detail is logged server-side, not sent to the client.
   - The real-Docker integration test (`make test-docker`) starts the bridge the way
     the fleet starts a NanoClaw host and proves an agent-network container reaches it
     with the key and is refused without it.

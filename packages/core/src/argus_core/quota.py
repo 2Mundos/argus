@@ -86,7 +86,9 @@ _PREFIX = re.compile(
 _RESET_MARKER = re.compile(
     r"\(resets |\bresets? (?:at |on )?|try again (?:at|in) ", re.I
 )
-_RESETS = re.compile(r"\(resets ([^)]+)\)", re.I)
+# Bounded and closed against nested "(" so "(resets (resets ..." cannot
+# backtrack. 64 covers an ISO timestamp with fractional seconds and an offset.
+_RESETS = re.compile(r"\(resets ([^()]{1,64})\)", re.I)
 _RESETS_CLOCK = re.compile(
     r"\bresets\s+(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\s*\(UTC\)", re.I | re.A
 )
@@ -120,15 +122,36 @@ def _fold(notice: str) -> str:
     return re.sub(r"\s{2,}", " ", re.sub(r"[\x00-\x1f\x7f]+", " ", notice)).strip()
 
 
+# Folded text is capped at this multiple of `limit` before the redaction
+# regexes. The stored line is still sliced to `limit`; the slack keeps an
+# ordinary notice intact when a token shrinks to `[redacted]`.
+_SANITIZE_INPUT_FACTOR = 8
+# One linear scan. Query stripping happens in Python so a run of `http://`
+# without `?` cannot force the engine to re-split the same characters.
+_URL = re.compile(r"https?://[^\s)]+")
+
+
+def _strip_url_query(match: re.Match[str]) -> str:
+    """Drop a `?`/`#` suffix when at least one path character precedes it."""
+    url = match.group(0)
+    scheme = url.find("://")
+    rest_at = scheme + 3
+    for i, ch in enumerate(url[rest_at:]):
+        if ch in "?#":
+            return url if i == 0 else url[: rest_at + i]
+    return url
+
+
 def sanitize_notice(notice: str, limit: int = REASON_MAX) -> str:
     """One line of provider text: control characters folded to spaces, bearer-like
     tokens and URL query strings dropped, bounded. Never a prompt or a credential."""
+    text = _fold(notice)[: limit * _SANITIZE_INPUT_FACTOR]
     text = re.sub(
         r"(?i)\b(?:bearer\s+|sk-|eyJ)[A-Za-z0-9._~+/=-]{8,}",
         "[redacted]",
-        _fold(notice),
+        text,
     )
-    text = re.sub(r"(https?://[^\s?#)]+)[?#][^\s)]*", r"\1", text)
+    text = _URL.sub(_strip_url_query, text)
     return re.sub(r"\s{2,}", " ", text).strip()[:limit]
 
 
