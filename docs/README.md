@@ -163,6 +163,8 @@ every new dependency is judged against it.
   system pools and any still-live instance
 - [Login clients](specs/login-clients.spec.md) — the pinned Claude and Codex
   clients are downloaded on first sign-in into the data volume, checksum-verified
+- [Local workers](specs/local-workers.spec.md) — `argus worker setup`: published
+  NanoClaw host and agent images, the OneCLI gateway, a ready worker template
 - [Launcher](specs/launcher.spec.md) — `argus`: one-line install, `argus up`, and
   `argus update` with a backup first and automatic rollback
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes
