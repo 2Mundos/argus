@@ -8,13 +8,46 @@
   Control plane for a fleet of AI coding agents. One process, one SQLite file.
 </p>
 
+<p align="center">
+  <a href="https://github.com/2Mundos/argus/actions/workflows/quality.yaml"><img src="https://github.com/2Mundos/argus/actions/workflows/quality.yaml/badge.svg?branch=main" alt="Quality CI"></a>
+  <a href="https://github.com/2Mundos/argus/releases/latest"><img src="https://img.shields.io/github/v/release/2Mundos/argus?sort=semver" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
+  <a href="https://github.com/orgs/2Mundos/packages/container/package/argus"><img src="https://img.shields.io/badge/image-ghcr.io%2F2mundos%2Fargus-2496ED?logo=docker&logoColor=white" alt="Container image on GHCR"></a>
+</p>
+
+**For** teams and solo developers who run several AI coding agents (Claude Code,
+Codex, Cursor, Copilot, local models) against their repositories and want them
+to share one queue instead of a pile of terminals.
+
+**The problem:** each agent works alone. Nobody knows who is on which task,
+work stalls when a subscription's quota runs out, and token spend is invisible
+until the bill arrives.
+
+**Why Argus?** It is the one place that hands out work, keeps it moving across
+accounts, and shows what it cost, and it deploys as a single container with no
+database server, broker or cloud service to run next to it.
+
+- **Leased task queue.** Workers claim tasks under a lease and heartbeat it; an
+  expired lease puts the task back, and retries, dependencies, blocking and
+  steering are built in ([worker lifecycle](docs/specs/worker-lifecycle.spec.md)).
+- **Account failover on quota.** Provider accounts are leased by priority and
+  availability; when one hits its quota the task goes back to the queue without
+  spending an attempt and runs on the next usable account, or waits until one
+  resets ([account selection](docs/specs/account-selection.spec.md)).
+- **MCP for your agents.** Claude Code, Codex and other MCP clients connect to
+  `/mcp` to claim, report and complete tasks ([MCP](#connecting-agents-mcp)).
+- **Cost and usage dashboard.** Tokens and estimated spend per project,
+  account and day, next to fleet health and live work ([cost view](docs/specs/cost-view.spec.md)).
+- **Worker pools anywhere.** Argus starts worker containers on local or remote
+  Docker hosts or Kubernetes, on request from the orchestrator or a user.
+
 Argus owns shared state (tasks, agents, assignments), exposes it to an orchestrator agent and to worker agents through an
 API, gives humans a dashboard for visibility, and deploys additional worker
 instances (containers) on request from the orchestrator or a user.
 
 **Lightweight and single-node first.** Argus is one process with one SQLite
 database (continuously backed up by Litestream) and no required external
-services: `docker run -v argus-data:/data ghcr.io/2mundos/argus:vX.Y.Z` is a full deployment. The fleet
+services: `docker run -v argus-data:/data ghcr.io/2mundos/argus:v0.9.0` is a full deployment. The fleet
 it manages can live on remote Docker hosts or Kubernetes; Argus itself stays on
 one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md).
 
@@ -41,13 +74,20 @@ one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md)
 
 Needs Docker and curl (Linux, macOS, or Windows with WSL 2).
 
+Install the launcher from a release tag and pin that version (replace `v0.9.0`
+with the newest tag on the [releases page](https://github.com/2Mundos/argus/releases)):
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/2Mundos/argus/main/deploy/install.sh | sh
-argus up            # prints the dashboard URL and admin token
-argus up --docker   # also run worker pools on this machine's Docker
+curl -fsSL https://raw.githubusercontent.com/2Mundos/argus/v0.9.0/deploy/install.sh | ARGUS_VERSION=v0.9.0 sh
+argus up --version v0.9.0   # prints the dashboard URL and admin token
+argus up --docker           # also run worker pools on this machine's Docker
 ```
 
-To upgrade, run `argus update`. It shows the release notes, backs up the
+To always take the newest release instead, run the installer from `main`
+without `ARGUS_VERSION` and `argus up` without `--version`:
+`curl -fsSL https://raw.githubusercontent.com/2Mundos/argus/main/deploy/install.sh | sh`.
+
+To upgrade, run `argus update` (newest release) or `argus update vX.Y.Z`. It shows the release notes, backs up the
 database, upgrades, and rolls back if the new version does not start.
 `argus status`, `argus backup`, `argus restore <name>`, `argus logs` and
 `argus down` cover the rest ([launcher](docs/specs/launcher.spec.md)). Settings
@@ -119,9 +159,12 @@ page](https://github.com/2Mundos/argus/releases), see
 deployment pins a version and upgrades on purpose, after reading the release
 notes: a release with a migration cannot be rolled back by switching images.
 
+Pin a version: the example uses `v0.9.0`; use the newest tag from the releases
+page.
+
 ```bash
 docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data \
-  ghcr.io/2mundos/argus:vX.Y.Z
+  ghcr.io/2mundos/argus:v0.9.0
 until docker exec argus test -s /data/admin-token 2>/dev/null; do sleep 1; done   # first start takes a while
 docker exec argus cat /data/admin-token   # sign in with this
 # Dashboard: http://127.0.0.1:8000
