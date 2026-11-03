@@ -10,7 +10,7 @@ const mock = vi.hoisted(() => ({
   tasks: [] as unknown[],
   events: [] as unknown[],
   taskLog: { attempt: 2, lines: [] as unknown[], last_seq: 0 },
-  fetchText: undefined as unknown as ReturnType<typeof vi.fn>,
+  fetchText: undefined as unknown as (path: string) => Promise<string>,
   listener: undefined as undefined | ((e: unknown) => void),
 }));
 
