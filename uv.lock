@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -279,7 +279,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "kubernetes", specifier = ">=36.0.3,<37" },
     { name = "mcp", specifier = ">=1.20" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
 ]
 
 [package.metadata.requires-dev]
