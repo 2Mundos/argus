@@ -111,8 +111,14 @@ function CreateWorker({ onError }: { onError: (message?: string) => void }) {
       {gate.reason && <p className="muted small">{gate.reason}</p>}
       {caps && !caps.public_url_configured && (
         <p className="error small">
-          ARGUS_PUBLIC_URL is not set: no worker can reach Argus. Set it to the address workers use
-          to reach this Argus (README, Run with Docker).
+          {caps.launcher ? (
+            <>
+              Workers are not set up on this install. On the machine running Argus, run{" "}
+              <code>argus worker setup</code>.
+            </>
+          ) : (
+            "ARGUS_PUBLIC_URL is not set: no worker can reach Argus. Set it to the address workers use to reach this Argus (README, Run with Docker)."
+          )}
         </p>
       )}
       {requested && <p className="small">{requested}</p>}

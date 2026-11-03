@@ -225,7 +225,11 @@ async def judge_pool(
 
 
 async def discover(
-    pools: list[Pool], targets: TargetRegistry, public_url: str | None
+    pools: list[Pool],
+    targets: TargetRegistry,
+    public_url: str | None,
+    *,
+    launcher: bool = False,
 ) -> FleetCapabilities:
     locs = list(dict.fromkeys([("docker", None, None), *map(_location, pools)]))
     probed = dict(
@@ -241,6 +245,7 @@ async def discover(
     )
     return FleetCapabilities(
         public_url_configured=public_url is not None,
+        launcher=launcher,
         targets=[cap for cap, _ in probed.values()],
         pools=list(judged),
     )

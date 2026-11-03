@@ -39,6 +39,8 @@ class Settings:
     account_cooldown_minutes: int = 60  # when a provider gives no reset time
     # How containers Argus starts reach it, e.g. http://host.docker.internal:8000.
     public_url: str | None = None
+    # Started by the host launcher (local workers spec 3.6): messages name its commands.
+    launcher: bool = False
     reconcile_interval_s: float = 5.0
     # Worker templates (worker launch 3). Nothing here has a personal default: a
     # template that needs a value is simply not ready until it is set.
@@ -206,6 +208,7 @@ class Settings:
             nanoclaw_user=os.environ.get("ARGUS_NANOCLAW_USER") or None,
             nanoclaw_group_add=_csv("ARGUS_NANOCLAW_GROUP_ADD"),
             nanoclaw_onecli_url=os.environ.get("ARGUS_NANOCLAW_ONECLI_URL") or None,
+            launcher=os.environ.get("ARGUS_LAUNCHER") == "1",
             nanoclaw_network=os.environ.get("ARGUS_NANOCLAW_NETWORK") or None,
             worker_images=_csv("ARGUS_WORKER_IMAGES"),
             project_runtime=os.environ.get("ARGUS_PROJECT_RUNTIME", "on") != "off",

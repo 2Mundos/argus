@@ -137,6 +137,20 @@ TEMPLATES = (NANOCLAW_SOCKET, NANOCLAW_SANDBOX, ARGUS_WORKER)
 ALL_TEMPLATES = (*TEMPLATES, NANOCLAW_ORCHESTRATOR)
 NANOCLAW_IDS = (NANOCLAW_SANDBOX.id, NANOCLAW_SOCKET.id, NANOCLAW_ORCHESTRATOR.id)
 
+# On a launcher install (local workers spec 3.6) the fix is a command, not settings.
+LAUNCHER_WORKERS = (
+    "Run `argus worker setup` on the machine running Argus: it provides the"
+    " prerequisites listed here"
+)
+LAUNCHER_PUBLIC_URL = (
+    "Run `argus worker setup` (NanoClaw workers) or `argus up --docker` (other"
+    " workers) on the machine running Argus"
+)
+LAUNCHER_SANDBOX = (
+    "Not set up by the launcher: this mode needs the sysbox-runc runtime on the"
+    " host (docs/runbooks/2026-10-16.nanoclaw-worker-setup.ref.md)"
+)
+
 
 class _Facts:
     """One node's option, probe result, and readiness for each template."""
@@ -525,7 +539,9 @@ async def _judge(
         "ARGUS_PUBLIC_URL is set"
         if settings.public_url
         else "ARGUS_PUBLIC_URL is not set",
-        "Set ARGUS_PUBLIC_URL to the address containers use to reach Argus",
+        LAUNCHER_PUBLIC_URL
+        if settings.launcher
+        else "Set ARGUS_PUBLIC_URL to the address containers use to reach Argus",
     )
     r.add(
         "node",
@@ -566,6 +582,11 @@ async def _judge(
             host_image, agent_image = _nanoclaw_images(settings, r, sandboxed)
         else:
             images = await _judge_worker(settings, f, targets, r)
+    if settings.launcher and r.missing:
+        if tpl.id in (NANOCLAW_SOCKET.id, NANOCLAW_ORCHESTRATOR.id):
+            r.missing.insert(0, LAUNCHER_WORKERS)
+        elif tpl.id == NANOCLAW_SANDBOX.id:
+            r.missing.insert(0, LAUNCHER_SANDBOX)
     return Readiness(
         node=f.option.id,
         ready=not r.missing,
@@ -654,6 +675,7 @@ async def catalog(
         )
     return TemplateCatalog(
         public_url_configured=settings.public_url is not None,
+        launcher=settings.launcher,
         default_node=LOCAL,
         nodes=[f.option for f in facts],
         templates=templates,
