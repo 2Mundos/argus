@@ -11,6 +11,7 @@ REPO=${ARGUS_REPO:-2Mundos/argus}
 READY_TIMEOUT=${ARGUS_READY_TIMEOUT:-300}
 POLL=${ARGUS_POLL_INTERVAL:-1}
 SECRETS=/data/secrets.sops.yaml
+TTY=${ARGUS_TTY:-/dev/tty} # where questions are read from (tests point it at a file)
 
 # Local workers (docs/specs/local-workers.spec.md): the OneCLI gateway NanoClaw
 # needs, pinned by digest (1.43+ drops the secret-assignment API the channel uses).
@@ -49,8 +50,39 @@ for suffix in ("-wal", "-shm"):
         pass
 os.replace("/data/argus.db.restore", "/data/argus.db")
 '
+# What the volume holds, for `uninstall`: database bytes, secrets yes/no, backup names.
+PY_SUMMARY='
+import os
+db, d = "/data/argus.db", "/data/backups"
+print(os.path.getsize(db) if os.path.exists(db) else 0)
+print("yes" if os.path.exists("/data/secrets.sops.yaml") else "no")
+for f in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+    print(f)
+'
 
 say() { printf '%s\n' "$*"; }
+have_tty() { (: <"$TTY") 2>/dev/null; }
+self_path() { case $0 in */*) printf '%s' "$0" ;; *) command -v "$0" ;; esac; }
+
+# run_step WHAT CMD...: run CMD with `set -e` in a subshell and set STEP_OK,
+# so a failed step is reported and the caller carries on. (`set -e` is ignored
+# inside `if` and `||`, so the subshell runs as a plain command.)
+run_step() {
+	what=$1
+	shift
+	set +e
+	(
+		set -e
+		"$@"
+	)
+	rc=$?
+	set -e
+	STEP_OK=1
+	if [ "$rc" != 0 ]; then
+		STEP_OK=0
+		printf 'argus: could not %s\n' "$what" >&2
+	fi
+}
 die() {
 	REPORTED=1
 	printf 'argus: %s\n' "$*" >&2
@@ -76,7 +108,9 @@ usage() {
 Usage: argus <command>
 
   up [--docker|--no-docker] [--port N] [--age-key FILE] [--version vX.Y.Z]
-                     start or apply config changes (--version: first install only)
+     [--workers|--no-workers]
+                     start or apply config changes (--version, --workers: first run only;
+                     the first run asks whether to set up workers)
   update [vX.Y.Z] [-y]
                      back up, upgrade to the newest (or given) release, roll back on failure
   backup             online backup of the database into the volume
@@ -90,6 +124,9 @@ Usage: argus <command>
   worker status      what `worker setup` set up
   worker remove [--purge]
                      undo `worker setup` (--purge also deletes gateway data and checkouts)
+  uninstall [--keep-data] [-y]
+                     remove everything the launcher created (--keep-data keeps
+                     the volumes and config for a later `argus up`)
 
 Config: $ARGUS_HOME (default ~/.config/argus). Spec: docs/specs/launcher.spec.md
 EOF
@@ -246,12 +283,18 @@ worker_image() { printf '%s/argus-nanoclaw-%s:%s' "${ARGUS_IMAGE%/*}" "$1" "${2:
 nc_root() { printf '%s/nanoclaw' "$ARGUS_DATA_HOME"; }
 nc_src() { printf '%s/%s/src' "$(nc_root)" "$1"; }
 
+# Prints why workers cannot run under ARGUS_DATA_HOME, if they cannot (3.2).
+data_home_problem() {
+	root=$(nc_root)
+	[ "${#root}" -gt 54 ] || return 1
+	printf 'the instances root %s/i is longer than 56 characters; set ARGUS_DATA_HOME in %s to a shorter path' "$root" "$CONF"
+}
+
 # Pull a version's worker images and put its checkout on the host (3.1, 3.2).
 prepare_workers() {
 	v=$1
 	root=$(nc_root)
-	[ "${#root}" -le 54 ] ||
-		die "the instances root $root/i is longer than 56 characters; set ARGUS_DATA_HOME in $CONF to a shorter path"
+	! why=$(data_home_problem) || die "$why"
 	for kind in host agent; do
 		ref=$(worker_image "$kind" "$v")
 		ensure_image "$ref" 2>/dev/null ||
@@ -325,6 +368,22 @@ gateway_up() {
 		desktop_engine || set -- "$@" -p "$(bridge_ip):10255:10255"
 		docker "$@" "$ONECLI_IMAGE" >/dev/null
 	fi
+}
+
+# Everything `worker setup` needs for a version: images, checkout, gateway.
+worker_steps() {
+	prepare_workers "$1"
+	say "Starting the gateway..."
+	gateway_up
+}
+
+explain_workers() {
+	cat <<EOF
+Workers run coding agents in Docker on this machine:
+  - Argus gets the Docker socket: ROOT-EQUIVALENT on this Docker host.
+  - Pulls the worker images for $ARGUS_VERSION (about 7 GB) and starts the
+    OneCLI gateway ($GW, $GW_DB) on loopback and a private network.
+EOF
 }
 
 gateway_down() {
@@ -511,8 +570,11 @@ cmd_up() {
 	want_port=
 	key_src=
 	want_version=
+	want_workers=
 	while [ $# -gt 0 ]; do
 		case $1 in
+		--workers) want_workers=1 ;;
+		--no-workers) want_workers=0 ;;
 		--docker) want_docker=1 ;;
 		--no-docker) want_docker=0 ;;
 		--port) want_port=${2:?--port needs a value} && shift ;;
@@ -523,8 +585,16 @@ cmd_up() {
 		shift
 	done
 	[ -z "$want_version" ] || valid_version "$want_version" || die "--version must look like vX.Y.Z"
+	[ "$want_workers" != 1 ] || [ "$want_docker" != 0 ] || die "--workers needs Docker access; drop --no-docker"
 	take_lock
 	load_config
+	first_run=$((1 - HAVE_CONFIG))
+	if [ "$first_run" = 0 ]; then
+		case $want_workers in
+		1) die "workers are set up on the first run only; run \`argus worker setup\`" ;;
+		0) die "workers are set up on the first run only; run \`argus worker remove\`" ;;
+		esac
+	fi
 	[ -z "$want_port" ] || ARGUS_PORT=$want_port
 	[ -z "$want_docker" ] || ARGUS_DOCKER=$want_docker
 	[ "$ARGUS_WORKERS" != 1 ] || [ "$ARGUS_DOCKER" = 1 ] ||
@@ -545,6 +615,23 @@ cmd_up() {
 	else
 		ARGUS_VERSION=${want_version:-$(latest_version)}
 	fi
+	# The first run decides whether this machine runs workers, before it pulls
+	# or starts anything (local workers 3.7).
+	if [ "$first_run" = 1 ]; then
+		if [ "$want_docker" = 0 ]; then
+			want_workers=0
+		elif why=$(data_home_problem); then
+			[ "$want_workers" != 1 ] || die "$why"
+			say "Workers cannot run here: $why."
+			want_workers=0
+		elif [ -z "$want_workers" ] && have_tty; then
+			explain_workers
+			printf 'Set up workers? [Y/n] '
+			read -r ans <"$TTY" || ans=n
+			case $ans in "" | y | Y | yes) want_workers=1 ;; *) want_workers=0 ;; esac
+		fi
+		want_workers=${want_workers:-0}
+	fi
 	ensure_image "$(image)"
 	ensure_key "$key_src"
 	if [ "$adopt" = 1 ]; then
@@ -558,11 +645,31 @@ cmd_up() {
 		name=$(backup_offline "$img_id" "$ARGUS_VERSION")
 		say "Backed up the database before adopting it: $name"
 	fi
-	[ "$ARGUS_WORKERS" != 1 ] || prepare_workers "$ARGUS_VERSION"
+	workers_failed=0
+	if [ "$want_workers" = 1 ]; then
+		run_step "set up workers" worker_steps "$ARGUS_VERSION"
+		if [ "$STEP_OK" = 1 ]; then
+			ARGUS_DOCKER=1
+			ARGUS_WORKERS=1
+		else
+			workers_failed=1
+		fi
+	elif [ "$ARGUS_WORKERS" = 1 ]; then
+		worker_steps "$ARGUS_VERSION"
+	fi
 	save_config
 	restart_argus
 	if newest=$(latest_version 2>/dev/null) && version_lt "$ARGUS_VERSION" "$newest"; then
 		say "Argus $newest is available: run \`argus update\`."
+	fi
+	if [ "$workers_failed" = 1 ]; then
+		REPORTED=1
+		say "Argus runs without workers because their setup failed (above); fix that and run \`argus worker setup\`." >&2
+		exit 1
+	elif [ "$want_workers" = 1 ]; then
+		say "Workers are set up. In the dashboard: Agents > New worker > \"NanoClaw, host Docker socket\"."
+	elif [ "$want_workers" = 0 ]; then
+		say "Workers are not set up, so tasks cannot run yet: run \`argus worker setup\` when you want them."
 	fi
 }
 
@@ -605,13 +712,13 @@ cmd_update() {
 			show && inup { print }
 		'
 	if [ "$assume_yes" != 1 ]; then
-		[ -r /dev/tty ] || die "no terminal to confirm on; rerun with -y after reading the notes"
+		have_tty || die "no terminal to confirm on; rerun with -y after reading the notes"
 		printf '\nBack up, stop Argus and upgrade to %s? [y/N] ' "$target"
-		read -r ans </dev/tty
+		read -r ans <"$TTY"
 		case $ans in y | Y | yes) ;; *) die "cancelled" ;; esac
 	fi
 	# Run the rest with the target's launcher (3.4 step 4), keeping the lock.
-	case $0 in */*) self=$0 ;; *) self=$(command -v "$0") ;; esac
+	self=$(self_path)
 	tmp=$self.new.$$
 	docker run --rm --entrypoint cat "$(image "$target")" /app/bin/argus >"$tmp"
 	sh -n "$tmp" || {
@@ -630,7 +737,7 @@ cmd_apply_update() {
 	target=$1
 	take_lock
 	load_config
-	case $0 in */*) self=$0 ;; *) self=$(command -v "$0") ;; esac
+	self=$(self_path)
 	current=$ARGUS_VERSION
 	# Worker images and checkout first: a missing one stops here, before any change.
 	[ "$ARGUS_WORKERS" != 1 ] || prepare_workers "$target"
@@ -727,21 +834,13 @@ worker_setup() {
 	load_config
 	[ "$HAVE_CONFIG" = 1 ] || die "no install found at $ARGUS_HOME; run \`argus up\` first"
 	if [ "$assume_yes" != 1 ]; then
-		[ -r /dev/tty ] || die "no terminal to confirm on; rerun with -y"
-		cat <<EOF
-This runs NanoClaw workers on this machine's Docker:
-  - pulls the worker images for $ARGUS_VERSION (about 7 GB),
-  - starts the OneCLI gateway ($GW, $GW_DB) on loopback and a private network,
-  - gives Argus and its worker hosts the Docker socket, which is
-    ROOT-EQUIVALENT on this Docker host.
-EOF
+		have_tty || die "no terminal to confirm on; rerun with -y"
+		explain_workers
 		printf 'Continue? [y/N] '
-		read -r ans </dev/tty
+		read -r ans <"$TTY"
 		case $ans in y | Y | yes) ;; *) die "cancelled" ;; esac
 	fi
-	prepare_workers "$ARGUS_VERSION"
-	say "Starting the gateway..."
-	gateway_up
+	worker_steps "$ARGUS_VERSION"
 	ARGUS_DOCKER=1
 	ARGUS_WORKERS=1
 	save_config
@@ -784,6 +883,132 @@ worker_remove() {
 		say "Removed the workers, the gateway data and the NanoClaw checkouts."
 	else
 		say "Removed the workers. Gateway data and checkouts stay for a later setup (--purge deletes them)."
+	fi
+}
+
+# -- uninstall (3.9) -----------------------------------------------------------
+
+digest_ref() { printf '%s@%s' "${1%%:*}" "${1#*@}"; } # name:tag@digest -> name@digest
+
+remove_containers() {
+	gateway_down
+	stop_and_remove
+}
+
+cmd_uninstall() {
+	keep=0
+	assume_yes=0
+	for a in "$@"; do
+		case $a in
+		--keep-data) keep=1 ;;
+		-y | --yes) assume_yes=1 ;;
+		*) die "uninstall: unknown argument $a" ;;
+		esac
+	done
+	take_lock
+	load_config
+	self=$(self_path)
+	[ "$HAVE_CONFIG" = 1 ] || die "no install found at $ARGUS_HOME; only the launcher is left: rm $self"
+
+	# Only what exists, and only names the launcher wrote or derives (3.6).
+	containers=
+	for c in "$GW" "$GW_DB" "$ARGUS_CONTAINER"; do
+		if docker container inspect "$c" >/dev/null 2>&1; then containers="$containers $c"; fi
+	done
+	network=
+	if docker network inspect "$GW_NET" >/dev/null 2>&1; then network=$GW_NET; fi
+	summary=
+	if volume_exists && docker image inspect "$(image)" >/dev/null 2>&1; then
+		summary=$(with_volume "$(image)" python -c "$PY_SUMMARY" 2>/dev/null) || summary=
+	fi
+	versions=$ARGUS_VERSION
+	for v in $(printf '%s\n' "$summary" | sed -n 's/^argus-.*-\(v[0-9.]*\)\.db$/\1/p' | sort -u); do
+		case " $versions " in *" $v "*) ;; *) versions="$versions $v" ;; esac
+	done
+	refs="$(digest_ref "$ONECLI_IMAGE") $(digest_ref "$ONECLI_DB_IMAGE")"
+	for v in $versions; do
+		refs="$refs $(image "$v") $(worker_image host "$v") $(worker_image agent "$v")"
+	done
+	images=
+	for ref in $refs; do
+		if docker image inspect "$ref" >/dev/null 2>&1; then images="$images $ref"; fi
+	done
+	root=$(nc_root)
+	volumes=
+	if [ "$keep" = 0 ]; then
+		for vol in "$ARGUS_VOLUME" argus-onecli-data argus-onecli-pg; do
+			if docker volume inspect "$vol" >/dev/null 2>&1; then volumes="$volumes $vol"; fi
+		done
+	fi
+
+	say "This removes:"
+	[ -z "$containers" ] || say "  containers:$containers"
+	[ -z "$network" ] || say "  network: $network"
+	for i in $images; do say "  image: $i"; done
+	[ ! -d "$root" ] || say "  worker checkouts: $root"
+	for vol in $volumes; do
+		if [ "$vol" = "$ARGUS_VOLUME" ] && [ -n "$summary" ]; then
+			size=$(printf '%s\n' "$summary" | sed -n 1p | awk '{ printf "%.1f MB", $1 / 1048576 }')
+			count=$(printf '%s\n' "$summary" | grep -c '^argus-' || true)
+			secrets=$(printf '%s\n' "$summary" | sed -n 2p)
+			say "  volume: $vol (database $size, $count backups, encrypted credentials: $secrets)"
+		else
+			say "  volume: $vol"
+		fi
+	done
+	if [ "$keep" = 0 ]; then
+		say "  config: $ARGUS_HOME (argus.env, the age key, gateway secrets)"
+	fi
+	say "  launcher: $self"
+	if [ "$keep" = 0 ]; then
+		say ""
+		say "The backups inside $ARGUS_VOLUME and the age key go with it; \`argus backup\` cannot"
+		say "save them. Copy a backup and $KEY out first, or rerun with --keep-data."
+	else
+		say "Kept (--keep-data): the volumes and $ARGUS_HOME."
+	fi
+	if [ "$assume_yes" != 1 ]; then
+		have_tty || die "no terminal to confirm on; rerun with -y"
+		printf 'Uninstall Argus? [y/N] '
+		read -r ans <"$TTY"
+		case $ans in y | Y | yes) ;; *) die "cancelled" ;; esac
+	fi
+
+	left=0
+	if [ -n "$containers$network" ]; then
+		run_step "remove the containers" remove_containers
+		[ "$STEP_OK" = 1 ] || left=$((left + 1))
+	fi
+	for i in $images; do
+		if ! docker rmi "$i" >/dev/null 2>&1; then
+			say "argus: left image $i: a container still uses it, or Docker refused" >&2
+			left=$((left + 1))
+		fi
+	done
+	if [ -d "$root" ]; then
+		run_step "remove $root" rm -rf "$root"
+		[ "$STEP_OK" = 1 ] || left=$((left + 1))
+	fi
+	for vol in $volumes; do
+		if ! docker volume rm "$vol" >/dev/null 2>&1; then
+			say "argus: could not remove volume $vol" >&2
+			left=$((left + 1))
+		fi
+	done
+	# The config and the launcher go last, and only when the rest went: a second
+	# `argus uninstall` needs them to finish the job.
+	if [ "$left" != 0 ]; then
+		die "uninstall left $left item(s) behind (above); kept $ARGUS_HOME and the launcher, so fix that and run \`argus uninstall\` again"
+	fi
+	if [ "$keep" = 0 ]; then
+		rm -rf "$ARGUS_HOME"
+		LOCK_OWNED=0
+	fi
+	rm -f "$self" "$self.prev"
+	if [ "$keep" = 0 ]; then
+		say "Uninstalled Argus."
+	else
+		say "Uninstalled Argus; the data stays. Run the install line and \`argus up\` to start it again."
 	fi
 }
 
@@ -849,6 +1074,7 @@ down)
 	say "Stopped and removed $ARGUS_CONTAINER; data stays in volume $ARGUS_VOLUME."
 	;;
 unlock) cmd_unlock ;;
+uninstall) cmd_uninstall "$@" ;;
 worker) cmd_worker "$@" ;;
 help | -h | --help) usage ;;
 *)

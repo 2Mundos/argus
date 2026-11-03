@@ -76,9 +76,13 @@ Needs Docker and curl (Linux, macOS, or Windows with WSL 2).
 
 ```bash
 curl -fsSL https://github.com/2Mundos/argus/releases/latest/download/install.sh | sh
-argus up            # prints the dashboard URL and admin token
-argus worker setup  # run coding-agent workers on this machine (pulls ~7 GB)
+argus up   # asks whether to set up workers, then prints the dashboard URL and admin token
 ```
+
+Workers run the coding agents in Docker on this machine. Saying yes gives
+Argus the Docker socket (root-equivalent on that host) and pulls about 7 GB.
+`argus up --workers` or `--no-workers` answers without asking; later,
+`argus worker setup` or `argus worker remove` changes it.
 
 This installs the newest [release](https://github.com/2Mundos/argus/releases).
 To pin one instead, set `ARGUS_VERSION=vX.Y.Z` for the installer and pass
@@ -90,7 +94,8 @@ database, upgrades, and rolls back if the new version does not start.
 `argus status`, `argus backup`, `argus restore <name>`, `argus logs` and
 `argus down` cover the rest ([launcher](docs/specs/launcher.spec.md)). Settings
 live in `~/.config/argus/`; keep a copy of `age-key.txt` there, since it decrypts
-provider credentials.
+provider credentials. `argus uninstall` removes everything the launcher
+created after listing it; `--keep-data` keeps the data for a later install.
 
 The manual route (plain `docker run`, Compose, building from source) is under
 [Run with Docker](#run-with-docker).
