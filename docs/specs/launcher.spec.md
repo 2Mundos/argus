@@ -8,9 +8,10 @@ install. `argus` is a POSIX shell script on the host that wraps `docker`:
 
 ```bash
 curl -fsSL https://github.com/2Mundos/argus/releases/latest/download/install.sh | sh
-argus up            # start (first run: create config, key, volume), print the sign-in URL and token
+argus up            # start (first run: create config, key, volume, offer workers), print the sign-in URL and token
 argus up --docker   # same, plus local Docker pools (mounts the Docker socket)
 argus update        # back up, upgrade to the newest release, roll back if it does not become ready
+argus uninstall     # remove everything the launcher created (--keep-data keeps the data)
 ```
 
 It covers the single-node install of [single-node](single-node.spec.md): one
@@ -21,14 +22,15 @@ The commands:
 
 | Command | Does |
 | --- | --- |
-| `argus up [--docker\|--no-docker] [--port N] [--age-key FILE] [--version vX.Y.Z]` | Writes the given options to the config, (re)creates the container from it at the configured version, waits for `/readyz`, prints the URL and, when one was generated, the admin token (3.3). `--version` is accepted only on a first install (3.8). |
+| `argus up [--docker\|--no-docker] [--port N] [--age-key FILE] [--version vX.Y.Z] [--workers\|--no-workers]` | Writes the given options to the config, (re)creates the container from it at the configured version, waits for `/readyz`, prints the URL and, when one was generated, the admin token (3.3). `--version` and `--workers\|--no-workers` are accepted only on the first run (3.8). |
 | `argus update [vX.Y.Z] [-y]` | The only way to change the version of an existing install (3.4). |
 | `argus backup` | Writes an online SQLite backup into the volume (3.5) and prints its name. |
 | `argus restore <name>` | Stops the container, backs up the current database, restores that backup, starts the version it was taken under (3.5). |
 | `argus status` | Version, container state, `/readyz`, config path, the newest backups. |
 | `argus token` · `argus logs [-f]` · `argus down` | Print the admin token · container logs · stop and remove the container (never the volume). |
 | `argus unlock` | Removes a stale lock left by a command that died (3.7). |
-| `argus worker setup\|status\|remove` | Workers on this machine: published worker images, the OneCLI gateway, Docker access ([local workers](local-workers.spec.md)). Mutating subcommands take the lock (3.7). |
+| `argus worker setup\|status\|remove` | Workers on this machine: published worker images, the OneCLI gateway, Docker access ([local workers](local-workers.spec.md)). The first `up` offers `setup`; these add or remove workers later. Mutating subcommands take the lock (3.7). |
+| `argus uninstall [--keep-data] [-y]` | Removes the containers, images, volumes, files and launcher this install created, after listing them and asking (3.9). |
 
 # 2. Non-Goals
 
@@ -151,13 +153,15 @@ the replica keeps working (Litestream starts a new generation after a restore).
 
 ## 3.6 What the launcher never touches
 
-It acts on the one container and volume named in its config. It never removes
-the volume and never prunes images, so the old image stays available for a
-rollback or restore. It does not stop any other container.
+It acts on the one container and volume named in its config, and on the worker
+containers, network and volumes it names itself ([local workers](local-workers.spec.md) 3.3).
+Outside `uninstall` (3.9) it never removes the volume and never prunes images,
+so the old image stays available for a rollback or restore. It never stops,
+removes or prunes anything it did not name, `uninstall` included.
 
 ## 3.7 One mutating command at a time
 
-`up`, `update`, `backup`, `restore` and `down` take an exclusive lock for their
+`up`, `update`, `backup`, `restore`, `down` and `uninstall` take an exclusive lock for their
 whole run: config changes, backups, container replacement, restore and
 rollback. The lock is `mkdir $ARGUS_HOME/lock` (atomic and portable; `flock`
 is not on macOS) with the holder's PID inside. A second command fails at once
@@ -193,6 +197,39 @@ Nothing is removed until these checks pass. Adoption then stops the old
 container and takes an offline backup (3.5) before starting the new one, so the
 first launcher-managed start can be undone with `argus restore`.
 
+The **first run** (a first install, or an adoption) also decides whether this
+machine runs workers: `up` asks, or takes `--workers` / `--no-workers`
+([local workers](local-workers.spec.md) 3.7). Later runs never ask again; the
+answer is changed with `argus worker setup` or `argus worker remove`.
+
+## 3.9 `uninstall` removes what the launcher created
+
+`argus uninstall` is the way out of the install line. It acts only on names
+the launcher wrote or derives from its config, and first prints every one of
+them with what it holds (database size, backup count, whether a secrets file
+exists), then asks for confirmation (`-y` skips it; without a terminal and
+without `-y` it refuses). It removes, in this order:
+
+1. The worker containers and network as `argus worker remove` does, if workers
+   are set up, and the Argus container as `argus down` does.
+2. The images the launcher pulled, by exact reference: Argus and the worker
+   images at the configured and previous versions (from `argus.prev` and the
+   backup names), and the pinned gateway images. An image another container
+   still uses is left and reported; nothing is pruned.
+3. The worker checkouts under `$ARGUS_DATA_HOME/nanoclaw`.
+4. Unless `--keep-data`: the Argus volume (database, artifacts and the backups
+   inside it), the gateway volumes, and `$ARGUS_HOME` (config, age key,
+   `onecli.env`). The confirmation names the volume and says that its backups
+   and the age key go with it, so `argus backup` cannot save them; copying a
+   backup and the key out comes first.
+5. The installed launcher and `argus.prev`, last.
+
+With `--keep-data` the volumes and `$ARGUS_HOME` stay, so running the install
+line and `argus up` again starts the same install at its configured version
+(an existing install, 3.8), with workers if they were set up. A step that
+fails is reported and the rest still run, so a second `uninstall` finishes
+the job; the command exits non-zero if anything was left behind.
+
 # 4. Open Questions
 
 1. Engines other than Docker Engine and Docker Desktop (Podman, Colima,
@@ -225,7 +262,10 @@ first launcher-managed start can be undone with `argus restore`.
   stop), refusing a downgrade and `up --version` on an existing install,
   adoption refused for extra env, mounts or an unkeyed secrets file, `up`
   ready without an admin-token file, a second mutating command refused while
-  the lock is held, and backup pruning. `install.sh` runs against the same
+  the lock is held, backup pruning, `uninstall` with and without
+  `--keep-data` (only named objects removed, an image still in use left,
+  refused without a terminal and `-y`), and the first-run worker question
+  (asked once; `--workers`, `--no-workers`, no terminal). `install.sh` runs against the same
   fakes: the newest release by default, `ARGUS_VERSION` when set.
 - README Quickstart becomes the install line and `argus up`. "Run with Docker"
   keeps plain `docker run` and Compose as the manual route.
