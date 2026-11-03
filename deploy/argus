@@ -314,8 +314,10 @@ gateway_up() {
 	if ! docker container inspect "$GW" >/dev/null 2>&1; then
 		# The management API (10254) stays on loopback and the private network;
 		# agents reach the proxy (10255) as host.docker.internal (runbook 3).
+		# The alias is the private Docker name Argus accepts for the admin API
+		# (http://onecli:10254 on a user-defined network).
 		set -- run -d --name "$GW" --restart unless-stopped --network "$GW_NET" \
-			--add-host host.docker.internal:host-gateway \
+			--network-alias onecli --add-host host.docker.internal:host-gateway \
 			-p 127.0.0.1:10254:10254 -p 127.0.0.1:10255:10255 \
 			-v argus-onecli-data:/app/data --env-file "$genv" \
 			-e APP_URL=http://127.0.0.1:10254 -e GATEWAY_API_URL=http://127.0.0.1:10255 \
@@ -374,7 +376,7 @@ start_container() {
 				-e "ARGUS_NANOCLAW_INSTANCES_ROOT=$root/i" \
 				-e "ARGUS_NANOCLAW_HOST_IMAGE=$(worker_image host)" \
 				-e "ARGUS_NANOCLAW_AGENT_IMAGE=$(worker_image agent)" \
-				-e "ARGUS_NANOCLAW_ONECLI_URL=http://$GW:10254" \
+				-e "ARGUS_NANOCLAW_ONECLI_URL=http://onecli:10254" \
 				-e "ARGUS_NANOCLAW_NETWORK=$GW_NET" \
 				-e ARGUS_NANOCLAW_ALLOW_DOCKER_SOCKET=true \
 				-e ARGUS_NANOCLAW_DOCKER_SOCKET=/var/run/docker.sock \

@@ -648,6 +648,7 @@ def test_worker_setup_prepares_images_checkout_gateway_and_argus(
     gw = env.state["containers"]["argus-onecli"]["args"]
     assert gw[-1].startswith("ghcr.io/onecli/onecli:1.42.0@sha256:")
     assert "127.0.0.1:10254:10254" in gw
+    assert gw[gw.index("--network-alias") + 1] == "onecli"  # the name Argus validates
     assert not any(
         p.endswith(":10254:10254") and not p.startswith("127.0.0.1:") for p in gw
     )
@@ -671,7 +672,7 @@ def test_worker_setup_prepares_images_checkout_gateway_and_argus(
     assert e["ARGUS_NANOCLAW_INSTANCES_ROOT"] == f"{root}/i"
     assert e["ARGUS_NANOCLAW_HOST_IMAGE"] == f"{HOST}:v0.7.0"
     assert e["ARGUS_NANOCLAW_AGENT_IMAGE"] == f"{AGENT}:v0.7.0"
-    assert e["ARGUS_NANOCLAW_ONECLI_URL"] == "http://argus-onecli:10254"
+    assert e["ARGUS_NANOCLAW_ONECLI_URL"] == "http://onecli:10254"
     assert e["ARGUS_NANOCLAW_GROUP_ADD"] == "998"
     assert password not in " ".join(args)  # gateway secrets never reach Argus
 
