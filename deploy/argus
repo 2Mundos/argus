@@ -43,7 +43,25 @@ os.replace("/data/argus.db.restore", "/data/argus.db")
 '
 
 say() { printf '%s\n' "$*"; }
-die() { printf 'argus: %s\n' "$*" >&2; exit 1; }
+die() {
+	REPORTED=1
+	printf 'argus: %s\n' "$*" >&2
+	exit 1
+}
+
+# Every exit says why: `set -e` alone would stop without a word.
+REPORTED=0
+LOCK_OWNED=0
+on_exit() {
+	rc=$?
+	[ "$LOCK_OWNED" = 0 ] || rm -rf "$LOCK"
+	if [ "$rc" -ne 0 ] && [ "$REPORTED" = 0 ]; then
+		printf 'argus: stopped after an unexpected error (exit %s); rerun with ARGUS_DEBUG=1 to trace it\n' "$rc" >&2
+	fi
+}
+trap on_exit EXIT
+trap 'exit 130' INT TERM
+[ -z "${ARGUS_DEBUG:-}" ] || set -x
 
 usage() {
 	cat <<'EOF'
@@ -110,8 +128,6 @@ image() { printf '%s:%s' "$ARGUS_IMAGE" "${1:-$ARGUS_VERSION}"; }
 
 # -- lock (3.7) ----------------------------------------------------------------
 
-release_lock() { rm -rf "$LOCK"; }
-
 take_lock() {
 	ensure_home
 	if [ "${ARGUS_LOCK_HELD:-}" = "$$" ] && [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ]; then
@@ -126,8 +142,7 @@ take_lock() {
 		echo "$$" >"$LOCK/pid"
 	fi
 	unset ARGUS_LOCK_HELD
-	trap release_lock EXIT
-	trap 'exit 130' INT TERM
+	LOCK_OWNED=1
 }
 
 # -- docker helpers ------------------------------------------------------------
@@ -230,7 +245,9 @@ start_container() {
 			set -- "$@" -p "$bridge:$ARGUS_PORT:8000"
 		fi
 	fi
+	say "Starting Argus $ARGUS_VERSION..."
 	docker "$@" "$img" >/dev/null
+	say "Waiting for it to be ready (first start can take a minute)..."
 }
 
 # Wait for /readyz (3.3); never for the admin-token file.
@@ -247,6 +264,7 @@ wait_ready() {
 }
 
 print_failure() {
+	REPORTED=1
 	say "Argus $ARGUS_VERSION did not become ready. Last log lines:" >&2
 	docker logs --tail 50 "$ARGUS_CONTAINER" >&2 2>&1 || true
 }
@@ -263,10 +281,18 @@ print_access() {
 # -- age key -------------------------------------------------------------------
 
 install_key() {
-	tmp=$KEY.tmp.$$
-	cat "$1" >"$tmp"
-	chmod 644 "$tmp" # readable by the container's user; $ARGUS_HOME is 0700
-	mv "$tmp" "$KEY"
+	part=$KEY.part.$$
+	cat "$1" >"$part"
+	chmod 644 "$part" # readable by the container's user; $ARGUS_HOME is 0700
+	mv "$part" "$KEY"
+}
+
+# Images before the launcher have no age-keygen; use the newest release's then.
+gen_key() {
+	docker run --rm --entrypoint age-keygen "$(image)" 2>/dev/null && return 0
+	newest=$(image "$(latest_version)")
+	ensure_image "$newest"
+	docker run --rm --entrypoint age-keygen "$newest" 2>/dev/null
 }
 
 ensure_key() {
@@ -278,7 +304,10 @@ ensure_key() {
 			die "the volume already has encrypted provider credentials; pass the age key that encrypts them with --age-key FILE"
 		fi
 		tmp=$KEY.new.$$
-		docker run --rm --entrypoint age-keygen "$(image)" >"$tmp" 2>/dev/null
+		if ! gen_key >"$tmp" || [ ! -s "$tmp" ]; then
+			rm -f "$tmp"
+			die "could not create an age key; create one with age-keygen and pass it with --age-key FILE"
+		fi
 		install_key "$tmp"
 		rm -f "$tmp"
 		say "Created an age key at $KEY; keep a copy, it decrypts provider credentials."
@@ -365,6 +394,7 @@ cmd_up() {
 	elif container_exists; then
 		[ -z "$want_version" ] || die "container $ARGUS_CONTAINER exists; it is adopted at its own version, change it later with \`argus update\`"
 		check_adoptable "$ARGUS_DOCKER" "$([ -n "$key_src" ] && echo 1 || echo 0)"
+		say "Adopting container $ARGUS_CONTAINER (Argus $ARGUS_VERSION, volume $ARGUS_VOLUME)."
 		adopt=1
 	elif volume_exists; then
 		[ -n "$want_version" ] ||
@@ -395,6 +425,9 @@ cmd_up() {
 		exit 1
 	fi
 	print_access
+	if newest=$(latest_version 2>/dev/null) && version_lt "$ARGUS_VERSION" "$newest"; then
+		say "Argus $newest is available: run \`argus update\`."
+	fi
 }
 
 cmd_update() {
@@ -556,6 +589,8 @@ cmd_status() {
 
 cmd_token() {
 	load_config
+	[ "$HAVE_CONFIG" = 1 ] || die "no install found at $ARGUS_HOME; run \`argus up\` first"
+	running || die "Argus is not running; run \`argus up\`"
 	if t=$(docker exec "$ARGUS_CONTAINER" cat /data/admin-token 2>/dev/null) && [ -n "$t" ]; then
 		say "$t"
 	else
