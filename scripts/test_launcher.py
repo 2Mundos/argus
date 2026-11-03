@@ -12,6 +12,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -32,6 +34,11 @@ s["calls"].append(argv)
 def save():
     with open(STATE, "w") as f:
         json.dump(s, f)
+
+
+# Every call is recorded, including those that change no other state.
+import atexit
+atexit.register(save)
 
 def out(text):
     sys.stdout.write(text)
@@ -80,6 +87,12 @@ def run(args):
         if k == "-v" and v.endswith(":/data"):
             vol = v.split(":")[0]
     ep = d.get("--entrypoint")
+    if "-d" in d and d["--name"].startswith("argus-onecli"):
+        # The gateway and its database: recorded, never "Argus".
+        s["containers"][d["--name"]] = {
+            "image": img, "running": True, "env": [], "mounts": [], "args": args,
+        }
+        return save()
     if "-d" in d:
         name = d["--name"]
         ver = version_of(img)
@@ -151,7 +164,7 @@ elif cmd == "image" and rest[0] == "inspect":
     else:
         sys.exit(0 if ref_of(rest[-1]) in s["images"] else 1)
 elif cmd == "pull":
-    if s["pull_fails"]:
+    if s["pull_fails"] or any(rest[0].startswith(m) for m in s["missing_images"]):
         sys.stderr.write("Error response from daemon: unauthorized\n")
         sys.exit(1)
     s["images"].append(rest[0])
@@ -159,7 +172,27 @@ elif cmd == "pull":
 elif cmd == "info":
     out(s["engine"] + "\n")
 elif cmd == "network":
-    out("172.17.0.1\n")
+    if rest[:2] == ["inspect", "bridge"]:
+        out("172.17.0.1\n")
+    elif rest[0] == "inspect":
+        sys.exit(0 if rest[1] in s["networks"] else 1)
+    elif rest[0] == "create":
+        s["networks"].append(rest[1])
+        save()
+    elif rest[0] == "rm":
+        s["networks"].remove(rest[1])
+        save()
+elif cmd == "create":
+    out("cid-" + rest[0] + "\n")
+elif cmd == "cp":
+    # Copying /opt/nanoclaw out of a host image: a small built checkout.
+    dest = rest[1]
+    os.makedirs(os.path.join(dest, "dist"))
+    with open(os.path.join(dest, "dist", "index.js"), "w") as f:
+        f.write(rest[0])
+elif cmd == "volume" and rest[0] == "rm":
+    s["volumes"].pop(rest[1], None)
+    save()
 elif cmd == "run":
     run(rest)
 elif cmd == "exec":
@@ -197,7 +230,7 @@ if url.endswith("/releases/latest"):
     print("HTTP/2 302\r\nlocation: https://github.com/2Mundos/argus/releases/tag/%s\r\n" % s["latest"])
     sys.exit(0)
 if url.endswith("/readyz"):
-    running = any(c["running"] for c in s["containers"].values())
+    running = s["containers"].get("argus", {}).get("running", False)
     sys.exit(0 if running and s["ready"] else 22)
 sys.exit(22)
 """
@@ -214,6 +247,8 @@ class Env:
         self.tmp = tmp
         self.state_path = tmp / "state.json"
         self.home = tmp / "home"
+        # A short data home: the NanoClaw instances root is capped at 56 characters.
+        self.data_home = Path(tempfile.mkdtemp(prefix="argus-t"))
         self.bin = tmp / "bin"
         self.bin.mkdir()
         fakes = tmp / "fakes"
@@ -239,6 +274,8 @@ class Env:
             "socket_gid": "998",
             "no_keygen": [],
             "pull_fails": False,
+            "missing_images": [],
+            "networks": [],
             "token": "argus_admin_generated",
             "notes": NOTES,
             "launcher_source": str(LAUNCHER),
@@ -258,6 +295,7 @@ class Env:
             "PATH": f"{self.bin}:/usr/bin:/bin",
             "HOME": str(self.tmp),
             "ARGUS_HOME": str(self.home),
+            "XDG_DATA_HOME": str(self.data_home),
             "FAKE_STATE": str(self.state_path),
             "ARGUS_POLL_INTERVAL": "0",
             "ARGUS_READY_TIMEOUT": "0",
@@ -303,8 +341,10 @@ class Env:
 
 
 @pytest.fixture
-def env(tmp_path: Path) -> Env:
-    return Env(tmp_path)
+def env(tmp_path: Path) -> Generator[Env]:
+    e = Env(tmp_path)
+    yield e
+    shutil.rmtree(e.data_home, ignore_errors=True)
 
 
 def test_first_install_creates_config_key_and_prints_token(env: Env) -> None:
@@ -523,11 +563,14 @@ def test_a_held_lock_refuses_mutating_commands(env: Env) -> None:
         ["backup"],
         ["restore", "argus-1-v0.7.0.db"],
         ["down"],
+        ["worker", "setup", "-y"],
+        ["worker", "remove"],
     ):
         r = env.run(*cmd, ok=False)
         assert "another argus command is running" in r.stderr, cmd
     assert env.state["containers"]["argus"]["running"]
     env.run("status")  # read-only commands take no lock
+    env.run("worker", "status")
 
 
 def test_a_stale_lock_needs_unlock(env: Env) -> None:
@@ -548,3 +591,160 @@ def test_launcher_is_posix_sh() -> None:
         if shutil.which(shell):
             subprocess.run([shell, "-n", str(LAUNCHER)], check=True)
     assert LAUNCHER.read_text().startswith("#!/bin/sh\n")
+
+
+# -- local workers (docs/specs/local-workers.spec.md) --------------------------
+
+HOST = "ghcr.io/2mundos/argus-nanoclaw-host"
+AGENT = "ghcr.io/2mundos/argus-nanoclaw-agent"
+
+
+def arg_env(args: list[str]) -> dict[str, str]:
+    pairs = [args[i + 1] for i, a in enumerate(args) if a == "-e"]
+    return dict(p.split("=", 1) for p in pairs)
+
+
+def nc_root(env: Env) -> Path:
+    return env.data_home / "argus" / "nanoclaw"
+
+
+@pytest.mark.parametrize(
+    ("engine", "bridge"), [("Ubuntu 24.04", True), ("Docker Desktop", False)]
+)
+def test_worker_setup_prepares_images_checkout_gateway_and_argus(
+    env: Env, engine: str, bridge: bool
+) -> None:
+    env.state["engine"] = engine
+    env.install("v0.7.0")
+    r = env.run("worker", "setup", "-y")
+    assert "New worker" in r.stdout
+    assert {f"{HOST}:v0.7.0", f"{AGENT}:v0.7.0"} <= set(env.state["images"])
+    root = nc_root(env)
+    assert (root / "v0.7.0" / "src" / "dist" / "index.js").is_file()
+    assert (root / "i").is_dir()
+    assert list(root.glob(".v*")) == []  # no partial copy left
+    cfg = env.config()
+    assert (cfg["ARGUS_WORKERS"], cfg["ARGUS_DOCKER"]) == ("1", "1")
+
+    gw = env.state["containers"]["argus-onecli"]["args"]
+    assert gw[-1].startswith("ghcr.io/onecli/onecli:1.42.0@sha256:")
+    assert "127.0.0.1:10254:10254" in gw
+    assert not any(
+        p.endswith(":10254:10254") and not p.startswith("127.0.0.1:") for p in gw
+    )
+    assert ("172.17.0.1:10255:10255" in gw) is bridge
+    db = env.state["containers"]["argus-onecli-db"]["args"]
+    assert db[-1].startswith("postgres:18-alpine@sha256:") and "-p" not in db
+    assert env.state["networks"] == ["argus-onecli-control"]
+    secrets = env.home / "onecli.env"
+    assert oct(secrets.stat().st_mode & 0o777) == "0o600"
+    password = next(
+        line.split("=", 1)[1]
+        for line in secrets.read_text().splitlines()
+        if line.startswith("POSTGRES_PASSWORD=")
+    )
+
+    args = env.run_args()
+    assert f"{root}:{root}" in args
+    e = arg_env(args)
+    assert e["ARGUS_LAUNCHER"] == "1"
+    assert e["ARGUS_NANOCLAW_INSTALL_DIR"] == f"{root}/v0.7.0/src"
+    assert e["ARGUS_NANOCLAW_INSTANCES_ROOT"] == f"{root}/i"
+    assert e["ARGUS_NANOCLAW_HOST_IMAGE"] == f"{HOST}:v0.7.0"
+    assert e["ARGUS_NANOCLAW_AGENT_IMAGE"] == f"{AGENT}:v0.7.0"
+    assert e["ARGUS_NANOCLAW_ONECLI_URL"] == "http://argus-onecli:10254"
+    assert e["ARGUS_NANOCLAW_GROUP_ADD"] == "998"
+    assert password not in " ".join(args)  # gateway secrets never reach Argus
+
+
+def test_worker_setup_without_worker_images_changes_nothing(env: Env) -> None:
+    env.install("v0.7.0")
+    env.state["missing_images"] = [HOST]
+    r = env.run("worker", "setup", "-y", ok=False)
+    assert "argus worker remove" in r.stderr or "argus update" in r.stderr
+    assert env.config()["ARGUS_WORKERS"] == "0"
+    assert "argus-onecli" not in env.state["containers"]
+    assert not any(c[0] == "stop" for c in env.state["calls"])
+
+
+def test_update_with_workers_prepares_first_and_prunes_after(env: Env) -> None:
+    env.install("v0.7.0")
+    env.run("worker", "setup", "-y")
+    env.state["calls"] = []
+    env.run("update", "-y")
+    calls = env.state["calls"]
+    pull = calls.index(["pull", f"{AGENT}:v0.8.0"])
+    assert pull < calls.index(["stop", "argus"])
+    root = nc_root(env)
+    assert sorted(p.name for p in root.iterdir()) == ["i", "v0.8.0"]
+    assert arg_env(env.run_args())["ARGUS_NANOCLAW_INSTALL_DIR"] == f"{root}/v0.8.0/src"
+
+
+def test_failed_update_with_workers_keeps_the_old_checkout_in_use(env: Env) -> None:
+    env.install("v0.7.0")
+    env.run("worker", "setup", "-y")
+    env.state["broken"] = ["v0.8.0"]
+    env.run("update", "-y", ok=False)
+    root = nc_root(env)
+    assert (root / "v0.7.0" / "src").is_dir()
+    assert arg_env(env.run_args())["ARGUS_NANOCLAW_INSTALL_DIR"] == f"{root}/v0.7.0/src"
+
+
+def test_update_to_a_release_without_worker_images_stops_before_any_change(
+    env: Env,
+) -> None:
+    env.install("v0.7.0")
+    env.run("worker", "setup", "-y")
+    env.state["missing_images"] = [f"{HOST}:v0.8.0"]
+    env.state["calls"] = []
+    env.run("update", "-y", ok=False)
+    assert not any(c[0] == "stop" for c in env.state["calls"])
+    assert env.config()["ARGUS_VERSION"] == "v0.7.0"
+
+
+@pytest.mark.parametrize("purge", [False, True])
+def test_worker_remove_undoes_setup(env: Env, purge: bool) -> None:
+    env.install("v0.7.0")
+    env.run("worker", "setup", "-y")
+    env.state["volumes"]["argus-onecli-data"] = {"db": "", "files": []}
+    env.run("worker", "remove", *(["--purge"] if purge else []))
+    assert not {"argus-onecli", "argus-onecli-db"} & set(env.state["containers"])
+    assert env.state["networks"] == []
+    assert env.config()["ARGUS_WORKERS"] == "0"
+    assert not any(k.startswith("ARGUS_NANOCLAW_") for k in arg_env(env.run_args()))
+    assert nc_root(env).exists() is not purge
+    assert (env.home / "onecli.env").exists() is not purge
+    assert ("argus-onecli-data" in env.state["volumes"]) is not purge
+    assert "argus-data" in env.state["volumes"]  # Argus's own data is never touched
+
+
+def test_workers_need_docker_access(env: Env) -> None:
+    env.install("v0.7.0")
+    env.run("worker", "setup", "-y")
+    r = env.run("up", "--no-docker", ok=False)
+    assert "argus worker remove" in r.stderr
+    assert env.config()["ARGUS_DOCKER"] == "1"
+
+
+def test_a_long_data_home_is_refused(env: Env) -> None:
+    env.install("v0.7.0")
+    long_home = env.data_home / ("x" * 60)
+    cfg = (env.home / "argus.env").read_text()
+    (env.home / "argus.env").write_text(cfg + f"ARGUS_DATA_HOME='{long_home}'\n")
+    r = env.run("worker", "setup", "-y", ok=False)
+    assert "56 characters" in r.stderr
+    assert env.state["images"].count(f"{HOST}:v0.7.0") == 0
+
+
+def test_restore_with_workers_uses_that_versions_workers(env: Env) -> None:
+    env.install("v0.7.0")
+    env.run("worker", "setup", "-y")
+    env.run("update", "-y")
+    (backup,) = env.backups()
+    # The v0.7.0 checkout was pruned by the update; restore brings it back first.
+    env.state["calls"] = []
+    env.run("restore", backup)
+    calls = env.state["calls"]
+    assert calls.index(["create", f"{HOST}:v0.7.0"]) < calls.index(["stop", "argus"])
+    root = nc_root(env)
+    assert arg_env(env.run_args())["ARGUS_NANOCLAW_INSTALL_DIR"] == f"{root}/v0.7.0/src"
