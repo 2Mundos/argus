@@ -50,7 +50,8 @@ The commands:
 The image carries `/app/bin/argus` (the launcher) and `/app/releases/`
 (`docs/releases/*.ref.md`). The launcher therefore always matches its image
 version, and the notes for every version are available offline. `install.sh`
-resolves the newest tag (3.4), pulls that image and copies the launcher out of
+resolves the newest tag (3.4), or takes `ARGUS_VERSION=vX.Y.Z` to pin one
+(fetched from that tag, `install.sh` is pinned too), pulls that image and copies the launcher out of
 it into `~/.local/bin/argus` (or `$ARGUS_BIN_DIR`); it installs nothing else.
 The only network calls besides `docker pull` are the newest-tag lookup and
 fetching `install.sh` itself.

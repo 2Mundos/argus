@@ -1,7 +1,9 @@
 #!/bin/sh
 # Install the argus launcher (docs/specs/launcher.spec.md 3.1):
 #   curl -fsSL https://raw.githubusercontent.com/2Mundos/argus/main/deploy/install.sh | sh
-# It copies /app/bin/argus out of the newest release image; it installs nothing else.
+# or pinned to a release:
+#   curl -fsSL https://raw.githubusercontent.com/2Mundos/argus/vX.Y.Z/deploy/install.sh | ARGUS_VERSION=vX.Y.Z sh
+# It copies /app/bin/argus out of the newest (or the pinned) release image; it installs nothing else.
 set -eu
 
 REPO=${ARGUS_REPO:-2Mundos/argus}
