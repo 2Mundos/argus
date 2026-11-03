@@ -48,8 +48,9 @@ let the operator **renew** an existing one without recreating it:
 - **Dedicated login** is a session object in memory, like the Codex one:
   `POST /api/accounts/claude-login` (admin; optional `name`, or `renew_account_id`),
   `GET …/{id}`, `POST …/{id}/code`, `DELETE …/{id}`. Rules:
-  - runs the pinned client (`ARGUS_CLAUDE_LOGIN_IMAGE` = the agent image, or
-    `ARGUS_CLAUDE_BIN`) as `claude setup-token` on a **pseudo-terminal** (standard
+  - runs the pinned client (`ARGUS_CLAUDE_LOGIN_IMAGE` = the agent image,
+    `ARGUS_CLAUDE_BIN`, or the client downloaded on first use, see
+    [login clients](login-clients.spec.md)) as `claude setup-token` on a **pseudo-terminal** (standard
     library `pty`); the terminal is 1000 columns wide so nothing wraps;
   - `HOME`, `CLAUDE_CONFIG_DIR`, `XDG_*`, `TMPDIR` and the working directory are
     one private 0700 directory under the Argus data dir, deleted on completion,

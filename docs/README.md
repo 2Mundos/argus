@@ -161,6 +161,8 @@ every new dependency is judged against it.
   choices, version-checked saves, field-level errors
 - [Pool delete](specs/pool-delete.spec.md) — admin DELETE with name confirmation; refuses
   system pools and any still-live instance
+- [Login clients](specs/login-clients.spec.md) — the pinned Claude and Codex
+  clients are downloaded on first sign-in into the data volume, checksum-verified
 - [Launcher](specs/launcher.spec.md) — `argus`: one-line install, `argus up`, and
   `argus update` with a backup first and automatic rollback
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes

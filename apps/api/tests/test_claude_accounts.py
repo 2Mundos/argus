@@ -4,6 +4,8 @@ accounts spec). No real client, no network, no host credentials."""
 
 import asyncio
 import contextlib
+import hashlib
+import io
 import json
 import os
 import re
@@ -16,13 +18,14 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from argus_api.accounts import claude_login, login_base, service, terminal
+from argus_api.accounts import claude_login, clients, login_base, service, terminal
 from argus_api.accounts.claude_login import (
     ClaudeLoginManager,
     LoginState,
     LoginUnavailableError,
     url_allowed,
 )
+from argus_api.accounts.clients import Pin
 from argus_api.config import Settings
 from argus_api.db import Database
 from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
@@ -977,11 +980,38 @@ async def test_a_foreign_or_missing_url_aborts_the_login(
 
 
 async def test_unavailable_without_a_client(
-    db: Database, secrets, tmp_path: Path
+    db: Database, secrets, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mgr = ClaudeLoginManager(db, secrets, Settings(data_dir=tmp_path))
-    with pytest.raises(LoginUnavailableError):
+    assert not mgr.configured()
+    with pytest.raises(LoginUnavailableError, match="setup-token"):
         await mgr.start("tok-1", "admin:one", None)
+    # A download that fails says why and points to the token path too.
+    monkeypatch.setattr(clients, "pin", lambda c: Pin("9.9.9", "https://x/c", "0" * 64))
+    monkeypatch.setattr(clients, "fetch", lambda url: io.BytesIO(b"not it"))
+    on = Settings(data_dir=tmp_path, client_downloads=True)
+    mgr = ClaudeLoginManager(db, secrets, on)
+    assert mgr.configured()
+    with pytest.raises(LoginUnavailableError, match=r"checksum.*setup-token"):
+        await mgr.start("tok-1", "admin:one", None)
+    assert homes(tmp_path) == set()
+
+
+async def test_login_runs_the_downloaded_client(
+    db: Database, secrets, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary, _ = fake_claude(tmp_path)
+    body = Path(binary).read_bytes()
+    digest = hashlib.sha256(body).hexdigest()
+    monkeypatch.setattr(clients, "pin", lambda c: Pin("9.9.9", "https://x/c", digest))
+    monkeypatch.setattr(clients, "fetch", lambda url: io.BytesIO(body))
+    settings = Settings(data_dir=tmp_path, client_downloads=True)
+    mgr = ClaudeLoginManager(db, secrets, settings)
+    started = await mgr.start("tok-1", "admin:one", "Claude main")
+    assert started["state"] == "pending" and started["url"]
+    assert (tmp_path / "tools" / "claude-9.9.9" / "claude").read_bytes() == body
+    await mgr.submit_code(started["login_id"], "tok-1", CODE)
+    assert (await settle(mgr, started["login_id"]))["state"] == "completed"
 
 
 class GatedStore(MemorySecretStore):

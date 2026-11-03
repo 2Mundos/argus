@@ -31,7 +31,7 @@ from argus_core.accounts import QuotaRefresh, QuotaReport, QuotaStatusReason
 from argus_core.custom_accounts import PROVIDER as CUSTOM_PROVIDER
 from argus_core.custom_accounts import CustomConfig
 
-from argus_api.accounts import quota_readers, usage
+from argus_api.accounts import clients, quota_readers, usage
 from argus_api.config import Settings
 from argus_api.db import Database, ts, utcnow
 from argus_api.events import Event, OverflowedError, record
@@ -390,8 +390,13 @@ class QuotaProber:
         )
         return Reading(credit=credit)
 
+    def _codex_bin(self) -> str | None:
+        # A client a Codex sign-in downloaded counts; the probe never downloads.
+        found = self._settings.codex_bin or clients.installed(self._settings, "codex")
+        return str(found) if found else None
+
     async def _read_codex(self, name: str | None, doc: dict[str, Any]) -> Reading:
-        if not self._settings.codex_bin:
+        if not self._codex_bin():
             raise Skip(
                 "probe_disabled", "codex binary not configured (ARGUS_CODEX_BIN)"
             )
@@ -430,9 +435,10 @@ class QuotaProber:
             raise
 
     async def _ask(self, home: Path) -> dict[str, Any]:
-        assert self._settings.codex_bin
+        binary = self._codex_bin()
+        assert binary
         proc = await asyncio.create_subprocess_exec(
-            self._settings.codex_bin,
+            binary,
             "app-server",
             "-c",
             'cli_auth_credentials_store="file"',

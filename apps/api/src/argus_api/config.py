@@ -81,6 +81,9 @@ class Settings:
     # Dedicated Claude login (claude accounts spec 3): `claude setup-token`, same shape.
     claude_login_image: str | None = None
     claude_bin: str | None = None
+    # With neither set, download the pinned client on first login (login clients
+    # spec). Off in a bare Settings; from_env turns it on unless ARGUS_CLIENT_DOWNLOADS=0.
+    client_downloads: bool = False
     # Price table for the cost view (cost view 3.2); default is the shipped one.
     pricing_file: Path | None = None
     # Agent hygiene (agent-hygiene.spec.md): default age before an admin may
@@ -232,6 +235,7 @@ class Settings:
             codex_bin=os.environ.get("ARGUS_CODEX_BIN") or None,
             claude_login_image=os.environ.get("ARGUS_CLAUDE_LOGIN_IMAGE") or None,
             claude_bin=os.environ.get("ARGUS_CLAUDE_BIN") or None,
+            client_downloads=os.environ.get("ARGUS_CLIENT_DOWNLOADS", "1") != "0",
             pricing_file=(
                 Path(f) if (f := os.environ.get("ARGUS_PRICING_FILE")) else None
             ),

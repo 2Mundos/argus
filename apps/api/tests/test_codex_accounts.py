@@ -2,6 +2,8 @@
 
 import asyncio
 import contextlib
+import hashlib
+import io
 import json
 import os
 import signal
@@ -12,6 +14,8 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+from argus_api.accounts import clients
+from argus_api.accounts.clients import Pin
 from argus_api.accounts.codex_login import (
     CodexLoginManager,
     LoginState,
@@ -353,8 +357,24 @@ async def test_login_unavailable_without_a_client(
     db: Database, secrets, tmp_path: Path
 ) -> None:
     mgr = CodexLoginManager(db, secrets, Settings(data_dir=tmp_path))
-    with pytest.raises(LoginUnavailableError):
+    with pytest.raises(LoginUnavailableError, match=r"auth\.json"):
         await mgr.start("tok", "admin:x", None)
+
+
+async def test_login_runs_the_downloaded_client(
+    db: Database, secrets, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary, go = fake_codex(tmp_path)
+    body = Path(binary).read_bytes()
+    digest = hashlib.sha256(body).hexdigest()
+    monkeypatch.setattr(clients, "pin", lambda c: Pin("9.9.9", "https://x/c", digest))
+    monkeypatch.setattr(clients, "fetch", lambda url: io.BytesIO(body))
+    settings = Settings(data_dir=tmp_path, client_downloads=True)
+    mgr = CodexLoginManager(db, secrets, settings)
+    started = await mgr.start("tok-1", "admin:one", "Codex main")
+    assert started["user_code"] == "ABCD-1234"
+    go.write_text("")
+    assert (await settle(mgr, started["login_id"], "tok-1"))["state"] == "completed"
 
 
 # -- expiry, cancel and persistence are linearised ----------------------------------

@@ -13,8 +13,9 @@ from zoneinfo import ZoneInfo
 import pytest
 from api_support import FakeClock, insert_agent
 from argus_api import ops
-from argus_api.accounts import quota_probe, usage
+from argus_api.accounts import clients, quota_probe, usage
 from argus_api.accounts import service as accounts
+from argus_api.accounts.clients import Pin
 from argus_api.accounts.quota_probe import QuotaProber
 from argus_api.config import Settings
 from argus_api.db import Database, ts
@@ -352,6 +353,24 @@ async def test_probe_without_a_binary_is_skipped(
         "skipped",
         "codex binary not configured (ARGUS_CODEX_BIN)",
     )
+
+
+async def test_probe_uses_a_client_a_sign_in_downloaded(
+    db: Database,
+    store: MemorySecretStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = Pin("9.9.9", "https://x/c", "0" * 64)
+    monkeypatch.setattr(clients, "pin", lambda c: pin)
+    monkeypatch.setattr(
+        clients, "fetch", lambda url: pytest.fail("the probe downloaded")
+    )
+    target = tmp_path / "tools" / "codex-9.9.9" / "codex"
+    target.parent.mkdir(parents=True)
+    fake_codex(tmp_path).rename(target)
+    c = await add(db, store, "codex-1", "openai", chatgpt_login())
+    assert (await prober(db, store, tmp_path, None).refresh(c)).status == "updated"
 
 
 async def test_a_rotated_login_is_written_back(

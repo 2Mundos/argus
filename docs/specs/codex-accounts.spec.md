@@ -47,7 +47,8 @@ equal paths that end in the same record, and let the pool choose the engine:
   `POST /api/accounts/codex-login` starts it (admin), `GET …/{id}` reads
   status, `DELETE …/{id}` cancels, completion creates the account. Rules:
   - runs the pinned official client's `app-server` over stdio; the pin is
-    `ARGUS_CODEX_LOGIN_IMAGE` (the agent image) or `ARGUS_CODEX_BIN`; Argus
+    `ARGUS_CODEX_LOGIN_IMAGE` (the agent image), `ARGUS_CODEX_BIN`, or the client
+    downloaded on first use ([login clients](login-clients.spec.md)); Argus
     sends `initialize`, then `account/login/start {type: "chatgptDeviceCode"}`
     and waits for the `account/login/completed` notification;
   - a private temporary `CODEX_HOME` (mode 0700, file credential store), deleted

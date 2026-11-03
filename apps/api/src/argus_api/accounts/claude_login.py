@@ -24,7 +24,7 @@ from uuid import uuid4
 
 from argus_core import claude_auth
 
-from argus_api.accounts import service, terminal
+from argus_api.accounts import clients, service, terminal
 from argus_api.accounts.login_base import (
     LOGIN_TTL_S,
     START_TIMEOUT_S,
@@ -169,16 +169,24 @@ class ClaudeLoginManager(LoginManager[_Session]):
     # -- public --------------------------------------------------------------------
 
     def configured(self) -> bool:
-        return bool(self._settings.claude_login_image or self._settings.claude_bin)
+        s_ = self._settings
+        return bool(
+            s_.claude_login_image or s_.claude_bin or clients.supported(s_, "claude")
+        )
 
     async def start(
         self, owner: str, actor: str, name: str | None, renew_id: str | None = None
     ) -> dict[str, Any]:
-        if not self.configured():
-            raise LoginUnavailableError(
-                "no Claude client is configured: set ARGUS_CLAUDE_LOGIN_IMAGE or "
-                "ARGUS_CLAUDE_BIN"
-            )
+        s_ = self._settings
+        if not (s_.claude_login_image or s_.claude_bin):
+            try:
+                self._client = str(await clients.ensure(s_, "claude"))
+            except clients.ClientDownloadError as exc:
+                raise LoginUnavailableError(
+                    f"Sign-in with Claude is not available here ({exc}). Run "
+                    "claude setup-token on your own computer and paste the token "
+                    "under 'Use a token or API key'."
+                ) from exc
         if renew_id is not None:
             async with self._db.read() as conn:
                 account = await service.get_account(conn, renew_id, utcnow())
@@ -328,12 +336,13 @@ class ClaudeLoginManager(LoginManager[_Session]):
                 argv += ["-e", f"{key}={value}"]
             argv += ["--entrypoint", "claude", s_.claude_login_image, "setup-token"]
             return argv, {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
-        assert s_.claude_bin
+        binary = s_.claude_bin or self._client
+        assert binary
         paths = self._paths(str(s.home))
         env |= paths
         env["BROWSER"] = f"{s.home}/bin/browser"
         env["PATH"] = f"{s.home}/bin:{os.environ.get('PATH', '/usr/bin:/bin')}"
-        return [s_.claude_bin, "setup-token"], env
+        return [binary, "setup-token"], env
 
     @staticmethod
     def _paths(root: str) -> dict[str, str]:

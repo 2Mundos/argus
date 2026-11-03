@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from argus_core import codex_auth
 
+from argus_api.accounts import clients
 from argus_api.accounts.login_base import (
     LOGIN_TTL_S,
     START_TIMEOUT_S,
@@ -66,13 +67,21 @@ class CodexLoginManager(LoginManager[_Session]):
     # -- public --------------------------------------------------------------------
 
     def configured(self) -> bool:
-        return bool(self._settings.codex_login_image or self._settings.codex_bin)
+        s_ = self._settings
+        return bool(
+            s_.codex_login_image or s_.codex_bin or clients.supported(s_, "codex")
+        )
 
     async def start(self, owner: str, actor: str, name: str | None) -> dict[str, Any]:
-        if not self.configured():
-            raise LoginUnavailableError(
-                "no Codex client is configured: set ARGUS_CODEX_LOGIN_IMAGE or ARGUS_CODEX_BIN"
-            )
+        s_ = self._settings
+        if not (s_.codex_login_image or s_.codex_bin):
+            try:
+                self._client = str(await clients.ensure(s_, "codex"))
+            except clients.ClientDownloadError as exc:
+                raise LoginUnavailableError(
+                    f"Sign-in with Codex is not available here ({exc}). Run "
+                    "codex login on your own computer and import ~/.codex/auth.json."
+                ) from exc
         self._admit(owner)
         session = _Session(
             id=uuid4().hex,
@@ -138,9 +147,10 @@ class CodexLoginManager(LoginManager[_Session]):
                 ],
                 {"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
             )
-        assert s_.codex_bin
+        binary = s_.codex_bin or self._client
+        assert binary
         return (
-            [s_.codex_bin, "app-server", *cfg],
+            [binary, "app-server", *cfg],
             {
                 "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                 "CODEX_HOME": str(s.home),

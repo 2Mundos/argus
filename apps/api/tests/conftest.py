@@ -45,6 +45,8 @@ def _disk_guard_off(monkeypatch: pytest.MonkeyPatch) -> None:
     (`test_disk_guard.py`) turn it back on explicitly.
     """
     monkeypatch.setenv("ARGUS_DISK_GUARD_ENABLED", "false")
+    # No test downloads a login client (login clients spec).
+    monkeypatch.setenv("ARGUS_CLIENT_DOWNLOADS", "0")
 
 
 @pytest.fixture
