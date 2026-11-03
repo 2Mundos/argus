@@ -147,7 +147,8 @@ class TargetInfo:
     cpus: float | None = None
     memory_mb: int | None = None
     # True only if the daemon provably uses this process's filesystem (a local
-    # unix socket, not a VM such as Docker Desktop): then host paths can be checked.
+    # unix socket, Docker Desktop included; not a remote tcp/ssh daemon): then host
+    # paths can be checked.
     shares_filesystem: bool = False
 
 
@@ -279,12 +280,8 @@ class DockerTarget:
         client = self._docker()
         client.ping()
         info = client.info()
-        effective = self.host or os.environ.get("DOCKER_HOST")
-        local = (effective is None or effective.startswith("unix://")) and (
-            "desktop" not in str(info.get("OperatingSystem", "")).lower()
-        )
         return TargetInfo(
-            shares_filesystem=local,
+            shares_filesystem=self._local_unix_daemon(),
             version=info.get("ServerVersion"),
             runtimes=sorted(info.get("Runtimes") or {}),
             cpus=info.get("NCPU"),
