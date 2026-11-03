@@ -87,7 +87,8 @@ single-node layout:
   `argus-onecli-data` and `argus-onecli-pg`, `restart: unless-stopped`.
 - The management API (10254) is published on `127.0.0.1` only and joins a
   private network `argus-onecli-control` with the NanoClaw **host**
-  containers only; Postgres publishes no port; the egress proxy (10255) is
+  containers only, under the network alias `onecli` (the only private name Argus
+  accepts, `http://onecli:10254`); Postgres publishes no port; the egress proxy (10255) is
   published on loopback and the Docker bridge address so agent containers reach
   it as `host.docker.internal:10255`.
 - Generated secrets (Postgres password, OneCLI keys) go in
@@ -106,7 +107,7 @@ another version's images or checkout: the settings `provision.sh env` prints
 for the socket template (`ARGUS_NANOCLAW_INSTALL_DIR` =
 `<data home>/nanoclaw/<version>/src`, the instances root, the two published
 image refs of that version, the opt-in, user and socket group),
-`ARGUS_NANOCLAW_ONECLI_URL=http://argus-onecli:10254` and
+`ARGUS_NANOCLAW_ONECLI_URL=http://onecli:10254` and
 `ARGUS_NANOCLAW_NETWORK=argus-onecli-control`, plus a bind mount of
 `<data home>/nanoclaw` at its own path. None of them is secret. `setup` asks
 for confirmation first, because the socket template and Docker access are
