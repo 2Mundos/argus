@@ -18,7 +18,7 @@ dependencies = [
 argus-replay = "argus_api.replay.cli:main"  # refuses to run without ARGUS_DEV_REPLAY=1
 
 [build-system]
-requires = ["uv_build>=0.8,<0.12"]
+requires = ["uv_build>=0.13.6,<0.14"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
