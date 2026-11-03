@@ -10,6 +10,7 @@ import asyncio
 import builtins
 import json
 import os
+import platform
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -280,8 +281,12 @@ class DockerTarget:
         client = self._docker()
         client.ping()
         info = client.info()
+        # Docker Desktop on macOS runs the daemon in a VM with its own paths (the
+        # socket sits under $HOME there), so only the WSL 2 flavour shares this filesystem.
+        desktop = "desktop" in str(info.get("OperatingSystem", "")).lower()
         return TargetInfo(
-            shares_filesystem=self._local_unix_daemon(),
+            shares_filesystem=self._local_unix_daemon()
+            and (not desktop or platform.system() == "Linux"),
             version=info.get("ServerVersion"),
             runtimes=sorted(info.get("Runtimes") or {}),
             cpus=info.get("NCPU"),
