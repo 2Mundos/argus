@@ -311,13 +311,19 @@ def plan(
         steps.append(Step("tsc", ("pnpm", "typecheck"), 600))
         tests = dashboard_tests(changed, all_files, graph)
         if tests:
-            cmd = ("pnpm", "--filter", "@argus/dashboard", "exec", "vitest", "run")
+            # Workers match the step's weight: vitest's default, one per core, next
+            # to pytest and tsc oversubscribed the CPUs and timed slow tests out.
+            weight = 2
+            cmd = (
+                *("pnpm", "--filter", "@argus/dashboard", "exec", "vitest", "run"),
+                f"--maxWorkers={weight}",
+            )
             args = (
                 []
                 if tests is True
                 else [t.removeprefix("apps/dashboard/") for t in sorted(tests)]
             )
-            steps.append(Step("vitest", (*cmd, *args), 900, 2))
+            steps.append(Step("vitest", (*cmd, *args), 900, weight))
         steps.append(Step("dashboard build", ("pnpm", "build"), 900, 2))
 
     if any(c.startswith("docs/") for c in changed):

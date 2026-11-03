@@ -76,6 +76,9 @@ def test_dashboard_only_never_runs_pytest_or_python_tools() -> None:
     assert [s.name for s in steps] == ["biome", "tsc", "vitest", "dashboard build"]
     vitest = steps[2]
     assert "src/b.test.ts" in vitest.cmd and "src/c.test.ts" not in vitest.cmd
+    # vitest stays within its CPU budget: its default (a worker per core) next to
+    # pytest and tsc oversubscribed the machine and timed slow tests out.
+    assert f"--maxWorkers={vitest.weight}" in vitest.cmd
 
 
 def test_api_client_change_runs_openapi_and_dashboard_tests_not_pytest() -> None:
