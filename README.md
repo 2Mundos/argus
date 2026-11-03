@@ -44,7 +44,7 @@ Needs Docker and curl (Linux, macOS, or Windows with WSL 2).
 ```bash
 curl -fsSL https://raw.githubusercontent.com/2Mundos/argus/main/deploy/install.sh | sh
 argus up            # prints the dashboard URL and admin token
-argus up --docker   # also run worker pools on this machine's Docker
+argus worker setup  # run coding-agent workers on this machine (pulls ~7 GB)
 ```
 
 To upgrade, run `argus update`. It shows the release notes, backs up the

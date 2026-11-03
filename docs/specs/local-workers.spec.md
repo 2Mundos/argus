@@ -99,30 +99,38 @@ single-node layout:
 
 ## 3.4 What `setup` changes in Argus
 
-It writes `$ARGUS_HOME/worker.env` (the settings `provision.sh env` prints, with
-the socket template's opt-in, the published image refs, and
-`ARGUS_NANOCLAW_ONECLI_URL=http://argus-onecli:10254`,
-`ARGUS_NANOCLAW_NETWORK=argus-onecli-control`), sets `ARGUS_DOCKER=1` and
-`ARGUS_WORKERS=1` in the config, and runs `up`. With `ARGUS_WORKERS=1`, `up`
-also passes `worker.env` and bind-mounts the checkout and the instances root at
-their own paths. It asks for confirmation first, because the socket template
-and `--docker` are root-equivalent on this Docker host (`-y` skips it).
+It sets `ARGUS_DOCKER=1` and `ARGUS_WORKERS=1` in the config and restarts Argus.
+With `ARGUS_WORKERS=1`, every start of the Argus container derives the worker
+settings from the config and the running version, so they can never point at
+another version's images or checkout: the settings `provision.sh env` prints
+for the socket template (`ARGUS_NANOCLAW_INSTALL_DIR` =
+`<data home>/nanoclaw/<version>/src`, the instances root, the two published
+image refs of that version, the opt-in, user and socket group),
+`ARGUS_NANOCLAW_ONECLI_URL=http://argus-onecli:10254` and
+`ARGUS_NANOCLAW_NETWORK=argus-onecli-control`, plus a bind mount of
+`<data home>/nanoclaw` at its own path. None of them is secret. `setup` asks
+for confirmation first, because the socket template and Docker access are
+root-equivalent on this Docker host (`-y` skips it). `up --no-docker` is
+refused while workers are set up.
 
 ## 3.5 Updates and the way back
 
-- `argus update` with `ARGUS_WORKERS=1` pulls both worker images of the target
-  version before stopping Argus, extracts the new checkout, then upgrades as
-  before; a rollback also restores the previous checkout path in `worker.env`.
-  Running workers are replaced by the fleet's own drift handling when Argus
-  restarts with the new images.
+- `argus update` and `argus restore` with workers set up pull the worker images
+  of the version they move to and copy its checkout **before** stopping Argus;
+  a release without worker images stops the command there, with nothing
+  changed. After a successful update, other versions' checkouts are removed; a
+  rollback keeps the previous one, and starting the previous version points at
+  it again. Running workers are replaced by the fleet's own drift handling when
+  Argus restarts with the new images.
 - `argus worker remove` stops and removes the gateway containers and network,
-  deletes `worker.env`, sets `ARGUS_WORKERS=0` and runs `up`. Pools that use
-  the socket template become not-ready and say why, as for any missing
+  sets `ARGUS_WORKERS=0` and restarts Argus without the worker settings. Pools
+  that use the socket template become not-ready and say why, as for any missing
   prerequisite. `--purge` also deletes the gateway volumes, the checkouts and
-  `onecli.env`; without it they stay for a later `setup`.
-- `argus worker status` shows the versions, the gateway's health and whether
-  Argus sees the template as ready (`GET /api/fleet/templates` with the admin
-  token).
+  `onecli.env`; without it they stay for a later `setup`. Argus's own volume is
+  never touched.
+- `argus worker status` shows the worker images, the checkout and the gateway
+  containers' state; the dashboard's "New worker" shows the template's
+  readiness.
 
 ## 3.6 Messages point to the launcher
 
@@ -146,8 +154,9 @@ settings) then say which command fixes them: `argus up --docker` or
   or git.
 - The gateway's management API is never reachable from agent containers
   (runbook 3); the launcher creates no other network membership.
-- No secret in `argus.env`, `worker.env` or `docker inspect`-visible
-  environment other than what OneCLI itself requires in `onecli.env`.
+- No secret in `argus.env` or in Argus's `docker inspect`-visible environment;
+  the gateway's generated secrets live only in `onecli.env` (0600) and the
+  gateway containers.
 - Image versions move only with the Argus version; no `latest` in any config.
 
 # 6. Implementation Consequences
