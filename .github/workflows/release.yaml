@@ -84,11 +84,16 @@ jobs:
           IMAGE: ${{ steps.meta.outputs.image }}
         run: |
           set -euo pipefail
+          # install.sh is an asset so the README can fetch releases/latest/download/install.sh;
+          # tags before v0.8.0 have none.
+          assets=()
+          [ -f deploy/install.sh ] && assets=(deploy/install.sh)
           if gh release view "$TAG" >/dev/null 2>&1; then
+            [ ${#assets[@]} -eq 0 ] || gh release upload "$TAG" "${assets[@]}" --clobber
             echo "Release $TAG already exists"; exit 0
           fi
           { printf 'Image: `%s:%s`\n\n' "$IMAGE" "$TAG"; tail -n +2 "$NOTES" | sed '/./,$!d'; } > /tmp/release-notes.md
-          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file /tmp/release-notes.md
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file /tmp/release-notes.md "${assets[@]}"
           echo "Created release $TAG"
 
   # Worker images for `argus worker setup` (docs/specs/local-workers.spec.md 3.1):

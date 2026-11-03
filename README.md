@@ -47,7 +47,7 @@ instances (containers) on request from the orchestrator or a user.
 
 **Lightweight and single-node first.** Argus is one process with one SQLite
 database (continuously backed up by Litestream) and no required external
-services: `docker run -v argus-data:/data ghcr.io/2mundos/argus:v0.9.0` is a full deployment. The fleet
+services: `docker run -v argus-data:/data ghcr.io/2mundos/argus:latest` is a full deployment. The fleet
 it manages can live on remote Docker hosts or Kubernetes; Argus itself stays on
 one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md).
 
@@ -74,23 +74,18 @@ one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md)
 
 Needs Docker and curl (Linux, macOS, or Windows with WSL 2).
 
-Install the launcher from a release tag and pin that version (replace `v0.9.0`
-with the newest tag on the [releases page](https://github.com/2Mundos/argus/releases)):
-
 ```bash
-curl -fsSL https://raw.githubusercontent.com/2Mundos/argus/v0.9.0/deploy/install.sh | ARGUS_VERSION=v0.9.0 sh
-argus up --version v0.9.0   # prints the dashboard URL and admin token
-argus worker setup          # run coding-agent workers on this machine (pulls ~7 GB)
+curl -fsSL https://github.com/2Mundos/argus/releases/latest/download/install.sh | sh
+argus up            # prints the dashboard URL and admin token
+argus worker setup  # run coding-agent workers on this machine (pulls ~7 GB)
 ```
 
-`argus worker setup` ships in the first release after v0.9.0; with a v0.9.0
-launcher, `argus up --docker` runs worker pools on this machine's Docker instead.
+This installs the newest [release](https://github.com/2Mundos/argus/releases).
+To pin one instead, set `ARGUS_VERSION=vX.Y.Z` for the installer and pass
+`--version vX.Y.Z` to the first `argus up`; later, `argus update vX.Y.Z`
+moves to a chosen release.
 
-To always take the newest release instead, run the installer from `main`
-without `ARGUS_VERSION` and `argus up` without `--version`:
-`curl -fsSL https://raw.githubusercontent.com/2Mundos/argus/main/deploy/install.sh | sh`.
-
-To upgrade, run `argus update` (newest release) or `argus update vX.Y.Z`. It shows the release notes, backs up the
+To upgrade, run `argus update`. It shows the release notes, backs up the
 database, upgrades, and rolls back if the new version does not start.
 `argus status`, `argus backup`, `argus restore <name>`, `argus logs` and
 `argus down` cover the rest ([launcher](docs/specs/launcher.spec.md)). Settings
@@ -161,13 +156,11 @@ page](https://github.com/2Mundos/argus/releases), see
 [releases](docs/specs/releases.spec.md)). `latest` is fine for trying Argus; a
 deployment pins a version and upgrades on purpose, after reading the release
 notes: a release with a migration cannot be rolled back by switching images.
-
-Pin a version: the example uses `v0.9.0`; use the newest tag from the releases
-page.
+To pin, replace `latest` below with a release tag (`vX.Y.Z`).
 
 ```bash
 docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data \
-  ghcr.io/2mundos/argus:v0.9.0
+  ghcr.io/2mundos/argus:latest
 until docker exec argus test -s /data/admin-token 2>/dev/null; do sleep 1; done   # first start takes a while
 docker exec argus cat /data/admin-token   # sign in with this
 # Dashboard: http://127.0.0.1:8000

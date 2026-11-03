@@ -289,7 +289,13 @@ class Env:
         self.state = json.loads(self.state_path.read_text())
         return self.state
 
-    def run(self, *args: str, ok: bool = True) -> subprocess.CompletedProcess[str]:
+    def run(
+        self,
+        *args: str,
+        ok: bool = True,
+        script: Path | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         self.save()
         env = {
             "PATH": f"{self.bin}:/usr/bin:/bin",
@@ -299,9 +305,10 @@ class Env:
             "FAKE_STATE": str(self.state_path),
             "ARGUS_POLL_INTERVAL": "0",
             "ARGUS_READY_TIMEOUT": "0",
+            **(extra_env or {}),
         }
         r = subprocess.run(
-            ["sh", str(self.launcher), *args],
+            ["sh", str(script or self.launcher), *args],
             env=env,
             capture_output=True,
             text=True,
@@ -359,6 +366,18 @@ def test_first_install_creates_config_key_and_prints_token(env: Env) -> None:
     assert "/var/run/docker.sock:/var/run/docker.sock" not in args
     assert "argus_admin_generated" in r.stdout
     assert not (env.home / "lock").exists()
+
+
+@pytest.mark.parametrize(("pin", "expected"), [(None, "v0.8.0"), ("v0.7.0", "v0.7.0")])
+def test_install_sh_takes_the_newest_release_unless_pinned(
+    env: Env, pin: str | None, expected: str
+) -> None:
+    bin_dir = env.tmp / "installed"
+    extra = {"ARGUS_BIN_DIR": str(bin_dir)} | ({"ARGUS_VERSION": pin} if pin else {})
+    r = env.run(script=ROOT / "deploy" / "install.sh", extra_env=extra)
+    assert ["pull", f"{IMAGE}:{expected}"] in env.state["calls"]
+    assert (bin_dir / "argus").read_text().endswith(f"fake launcher for {expected}\n")
+    assert f"Installed argus ({expected})" in r.stdout
 
 
 def test_ready_without_an_admin_token_file(env: Env) -> None:

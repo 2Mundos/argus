@@ -1,8 +1,7 @@
 #!/bin/sh
 # Install the argus launcher (docs/specs/launcher.spec.md 3.1):
-#   curl -fsSL https://raw.githubusercontent.com/2Mundos/argus/main/deploy/install.sh | sh
-# or pinned to a release:
-#   curl -fsSL https://raw.githubusercontent.com/2Mundos/argus/vX.Y.Z/deploy/install.sh | ARGUS_VERSION=vX.Y.Z sh
+#   curl -fsSL https://github.com/2Mundos/argus/releases/latest/download/install.sh | sh
+# Set ARGUS_VERSION=vX.Y.Z (for sh, after the pipe) to pin a release.
 # It copies /app/bin/argus out of the newest (or the pinned) release image; it installs nothing else.
 set -eu
 
