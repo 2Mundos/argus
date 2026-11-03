@@ -17,8 +17,8 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - run: uv sync --all-packages --group dev --frozen
@@ -41,11 +41,11 @@ jobs:
   node:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v5
         with:
           version: 10.0.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: pnpm
@@ -63,7 +63,7 @@ jobs:
   image:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Decide whether image inputs changed
         id: need
         env:
@@ -85,9 +85,9 @@ jobs:
             echo "build=false" >> "$GITHUB_OUTPUT"
             echo "Skipping image build: no Dockerfile inputs changed"
           fi
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
         if: steps.need.outputs.build == 'true'
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         if: steps.need.outputs.build == 'true'
         with:
           path: /tmp/.buildx-cache
@@ -99,7 +99,7 @@ jobs:
         run: mkdir -p /tmp/.buildx-cache
       - name: Build image
         if: steps.need.outputs.build == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: deploy/Dockerfile.api
@@ -159,7 +159,7 @@ jobs:
   companion-images:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Decide whether companion image inputs changed
         id: need
         env:
@@ -200,7 +200,7 @@ jobs:
   tools-layer:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Decide whether tools-layer inputs changed
         id: need
         env:
@@ -255,7 +255,7 @@ jobs:
   nanoclaw-vitest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Decide whether NanoClaw inputs changed
         id: need
         env:
@@ -287,8 +287,8 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --all-packages --group dev --frozen
       - run: make test-docker
 
@@ -299,8 +299,8 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --all-packages --group dev --frozen
       - name: Install kind (checksum pinned)
         run: |
@@ -319,13 +319,13 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: python3 scripts/validate_docs.py
 
   secret-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Install gitleaks
@@ -342,11 +342,11 @@ jobs:
     # Advisories appear without code changes: run on a schedule-like manual trigger and on lockfile PRs.
     if: github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v5
         with:
           version: 10.0.0
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --all-packages --group dev --frozen
       - run: pnpm install --frozen-lockfile
       - run: make audit
