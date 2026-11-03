@@ -9,12 +9,12 @@ dependencies = []
 dev = [
     "argus-api",
     "argus-core",
-    "pytest>=9.0",
-    "pytest-asyncio>=0.24",
-    "ruff>=0.8",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1",
+    "ruff>=0.17.3",
     "pip-audit>=2.7",
-    "ty>=0.0.87",
-    "httpx2>=2.13.1",
+    "ty>=0.0.95",
+    "httpx2>=2.16.0",
     "pytest-xdist>=3.8.0",
 ]
 
