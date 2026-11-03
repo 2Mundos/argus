@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/2Mundos/argus/security/policy
+    about: Do not open a public issue; report it privately as described in SECURITY.md.
+  - name: Questions and ideas
+    url: https://github.com/2Mundos/argus/discussions
+    about: Ask how to use Argus or discuss an idea before filing a feature request.

@@ -272,6 +272,11 @@ The tools cover the whole loop: `claim_task`, `heartbeat`, `report_progress`,
 with quota fallback.
 
 
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
+Report vulnerabilities privately ([`SECURITY.md`](SECURITY.md)).
+
 ## License
 
 Apache License 2.0. See [`LICENSE`](LICENSE).
