@@ -16,7 +16,7 @@ from argus_core.runtime import (
 )
 from fastapi import APIRouter, Path, Request
 
-from argus_api.access import require_project_readable
+from argus_api.access import require_project_readable, require_task_readable
 from argus_api.deps import AdminDep, AgentDep, CallerDep, DbDep
 from argus_api.errors import ConflictError
 from argus_api.runtime import service
@@ -98,7 +98,8 @@ async def used(body: UsedRequest, request: Request, agent_id: AgentDep) -> UsedR
 
 
 @router.get("/runtime/tasks/{task_id}")
-async def task_runtime(task_id: str, db: DbDep, _: CallerDep) -> list[dict]:
+async def task_runtime(task_id: str, db: DbDep, caller: CallerDep) -> list[dict]:
     """Selected versus actually used image of each attempt of the task."""
     async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
         return await service.task_runtime(conn, task_id)

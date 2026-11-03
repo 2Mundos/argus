@@ -623,6 +623,11 @@ function repositoryTaskLines(
 ): string[] {
   const github = normalizeRepositoryUrl(task.repository_url ?? "").provider === "github";
   const helper = github ? "argus-github-api" : "argus-gitea-api";
+  const status = github
+    ? "commit statuses and check runs (GitHub Actions) for the PR head SHA, with combined_state"
+    : "commit statuses for the PR head SHA";
+  const reviewFindings =
+    "review-findings --pr N (agentic review for the exact head SHA; finding_count null means unknown, never zero)";
   const lines = [
     `Repository (allowlisted): ${task.repository_url}`,
     ...(readOnly
@@ -635,7 +640,9 @@ function repositoryTaskLines(
           `Workspace: ${workspace.containerPath}, branch ${workspace.branch}, remote origin ${task.repository_url}; run git fetch and work in this directory; do not create another checkout. It may already hold work from an earlier attempt of this task: keep it.`,
         ]
       : []),
-    `Use /usr/local/bin/${helper} for repository API access; do not handle credentials or add auth headers yourself. Commands: get = pull request by number; issue-get = issue tracker item; list-prs = paginated PR list with --state; status = ${github ? "commit statuses and check runs (GitHub Actions) for the PR head SHA, with combined_state" : "commit statuses for the PR head SHA"}; create = open a pull request; update = edit a pull request. Newer images add repo-get, default-branch, branch-get, issue-list/create/update/close/reopen, label-list/add/remove, comment-list/get/create/edit/delete (issues and PRs; comment-create --idempotency-key K), pr-commits, pr-files, pr-diff, pr-review-list/get/comments/create, statuses --sha, run-list/get, job-list, job-logs, artifact-list/download, and review-findings --pr N (agentic review for the exact head SHA; finding_count null means unknown, never zero). Run ${helper} --help first: it lists the commands and exit codes your image supports.`,
+    readOnly
+      ? `Use /usr/local/bin/${helper} for repository API reads; do not handle credentials or add auth headers yourself. Read commands: get = pull request by number; issue-get = issue tracker item; list-prs = paginated PR list with --state; status = ${status}. Newer images add repo-get, default-branch, branch-get, issue-list, label-list, comment-list/get (issues and PRs), pr-commits, pr-files, pr-diff, pr-review-list/get/comments, statuses --sha, run-list/get, job-list, job-logs, artifact-list/download, and ${reviewFindings}. Use no other ${helper} command: this task may not write to the repository. Run ${helper} --help first: it lists the commands and exit codes your image supports.`
+      : `Use /usr/local/bin/${helper} for repository API access; do not handle credentials or add auth headers yourself. Commands: get = pull request by number; issue-get = issue tracker item; list-prs = paginated PR list with --state; status = ${status}; create = open a pull request; update = edit a pull request. Newer images add repo-get, default-branch, branch-get, issue-list/create/update/close/reopen, label-list/add/remove, comment-list/get/create/edit/delete (issues and PRs; comment-create --idempotency-key K), pr-commits, pr-files, pr-diff, pr-review-list/get/comments/create, statuses --sha, run-list/get, job-list, job-logs, artifact-list/download, and ${reviewFindings}. Run ${helper} --help first: it lists the commands and exit codes your image supports.`,
     ...(readOnly
       ? []
       : [
@@ -643,7 +650,7 @@ function repositoryTaskLines(
           `To open a PR (you can; push your branch first, then): ${helper} create --repository ${task.repository_url} --title "<title>" --head <branch> --base <base-branch> --body "<text>"   (a long body may use --body-file <path> or --body-stdin when --help lists them; older images silently ignore unsupported options, so check the returned PR body). create is idempotent: if an open PR for the same head and base exists it is returned instead of a duplicate. To edit one: ${helper} update --repository ${task.repository_url} --number <N> [--title T] [--body-file PATH | --body TEXT] [--base B] [--state open|closed]. Both print the PR JSON (number, html_url, head.sha).`,
         ]),
   ];
-  if (taskAuthorizesMerge(task)) {
+  if (!readOnly && taskAuthorizesMerge(task)) {
     lines.push(
       "This task explicitly authorizes merge when every precondition below holds; otherwise stop after CI/review without merging.",
       `Before merge: re-read the PR (\`get\`), confirm the current head SHA, and use \`status\` so every required check on that exact SHA is success (pending, failure, cancelled, or unknown is not approval; skipped is not execution). Resolve agentic review findings P1–P3. Respect repository branch protections and reviews. Never use force_merge, bypass, force-push, or mark a PR merged without a successful ${github ? "GitHub merge API call (PUT /pulls/N/merge with the head sha)" : "Gitea merge API call"} through the same allowlisted OneCLI-proxied HTTPS path as other ${helper} operations (${github ? "GitHubApi" : "GiteaApi"}.request). If the head changes, re-run gates and CI on the new SHA before merging. After merge, read the PR back and record merged state and merge_commit_sha; a failed ${github ? "PUT" : "POST"} is not success.`,

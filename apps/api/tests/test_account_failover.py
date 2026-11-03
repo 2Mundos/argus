@@ -597,6 +597,29 @@ async def test_exhausted_endpoint_path_also_awaits_quota_with_refill(
     assert got.failover.to_account is None
 
 
+async def test_exhausted_report_accepts_an_expired_lease_like_fail(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    a = await add(db, store, "acct-a")
+    task = await new_task(db)
+    await lease(db, store, task=task)
+    clock.advance(task.lease_ttl_s + 1)  # quota seen, report lands after the deadline
+    report = ExhaustedReport(
+        reason=QUOTA,
+        task_id=task.id,
+        attempt=task.attempt,
+        runtime_providers=["anthropic"],
+    )
+    async with db.write() as tx:
+        result = await accounts.exhausted(tx, A, a, report, store)
+    assert result.task_blocked
+    got = await get(db, task.id)
+    assert (got.state, got.block_reason) == (S.BLOCKED, "awaiting_quota")
+    assert (got.attempt, got.failures) == (task.attempt, 0)
+    async with db.read() as conn:
+        assert (await accounts.get_account(conn, a, clock.now)).state == "exhausted"
+
+
 async def test_legacy_no_account_rows_are_still_read_and_released(
     db: Database, store: MemorySecretStore, clock: FakeClock
 ) -> None:

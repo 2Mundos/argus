@@ -47,8 +47,9 @@ fenced by its own `revision`; `NULL` means "never recorded". `Task.continuation`
 
 - `phase`: the explicit one if an orchestrator set it, else derived: `reconcile`
   while a reconciliation entry is open; `qa` when a PR is merged and any item is
-  not done (**merged is not accepted**); `close_evidence` when merged and all
-  items are done; `resume` when any artifact or WIP is known; else `implement`.
+  not done (**merged is not accepted**); `close_evidence` when merged and the
+  checklist has items, all done (an empty checklist has nothing to close, so it
+  falls through); `resume` when any artifact or WIP is known; else `implement`.
 - `artifacts`: unique by (kind, ref). Each carries `provenance`
   (`orchestrator`, `worker_reported`, `argus_event`, `runtime_observed`),
   `observed_at` and `state` (`unknown`, `open`, `merged`, `closed`,
