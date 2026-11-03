@@ -7,7 +7,7 @@ upgrading it takes one command that cannot leave the operator without a working
 install. `argus` is a POSIX shell script on the host that wraps `docker`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/2Mundos/argus/main/deploy/install.sh | sh
+curl -fsSL https://github.com/2Mundos/argus/releases/latest/download/install.sh | sh
 argus up            # start (first run: create config, key, volume), print the sign-in URL and token
 argus up --docker   # same, plus local Docker pools (mounts the Docker socket)
 argus update        # back up, upgrade to the newest release, roll back if it does not become ready
@@ -51,11 +51,16 @@ The commands:
 The image carries `/app/bin/argus` (the launcher) and `/app/releases/`
 (`docs/releases/*.ref.md`). The launcher therefore always matches its image
 version, and the notes for every version are available offline. `install.sh`
-resolves the newest tag (3.4), or takes `ARGUS_VERSION=vX.Y.Z` to pin one
-(fetched from that tag, `install.sh` is pinned too), pulls that image and copies the launcher out of
-it into `~/.local/bin/argus` (or `$ARGUS_BIN_DIR`); it installs nothing else.
-The only network calls besides `docker pull` are the newest-tag lookup and
-fetching `install.sh` itself.
+resolves the newest tag (3.4), or takes `ARGUS_VERSION=vX.Y.Z` to pin one,
+pulls that image and copies the launcher out of it into `~/.local/bin/argus`
+(or `$ARGUS_BIN_DIR`); it installs nothing else. The only network calls besides
+`docker pull` are the newest-tag lookup and fetching `install.sh` itself.
+
+`install.sh` is fetched from the newest release, not from `main`: the release
+workflow attaches it to every release as an asset, so
+`releases/latest/download/install.sh` is the copy that shipped with the newest
+tag. The README's install line uses that URL and names no version; pinning is
+an optional note (`ARGUS_VERSION`, `up --version`, `update vX.Y.Z`).
 
 ## 3.2 One config file, rewritten by flags
 
@@ -193,8 +198,6 @@ first launcher-managed start can be undone with `argus restore`.
 1. Engines other than Docker Engine and Docker Desktop (Podman, Colima,
    OrbStack). `host.docker.internal` and the socket path differ; until tested,
    `--docker` on them is unsupported and `up` says which engine it detected.
-2. Whether `install.sh` should be fetched from the newest tag instead of
-   `main`, once a release contains it.
 
 # 5. Constraints
 
@@ -222,7 +225,8 @@ first launcher-managed start can be undone with `argus restore`.
   stop), refusing a downgrade and `up --version` on an existing install,
   adoption refused for extra env, mounts or an unkeyed secrets file, `up`
   ready without an admin-token file, a second mutating command refused while
-  the lock is held, and backup pruning.
+  the lock is held, and backup pruning. `install.sh` runs against the same
+  fakes: the newest release by default, `ARGUS_VERSION` when set.
 - README Quickstart becomes the install line and `argus up`. "Run with Docker"
   keeps plain `docker run` and Compose as the manual route.
 - [Single-node](single-node.spec.md) 6 names the launcher as the packaged run;

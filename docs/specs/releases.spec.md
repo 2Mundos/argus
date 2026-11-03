@@ -14,7 +14,9 @@ the tag builds and publishes everything else.
   existing tag). It builds `deploy/Dockerfile.api` with the version baked in,
   pushes `ghcr.io/<owner>/argus:vX.Y.Z` (and moves `latest` to it, 3.7) to the
   GitHub container registry, and
-  creates the GitHub release with the notes as its body. Quality CI also builds
+  creates the GitHub release with the notes as its body and `deploy/install.sh`
+  as its one asset ([launcher](launcher.spec.md) 3.1); for a release that
+  already exists it leaves the notes alone and re-attaches that asset. Quality CI also builds
   (without publishing) the NanoClaw host and echo-worker images so those
   Dockerfiles cannot rot; the echo worker is never published.
 - A second job builds and pushes the worker images
@@ -105,7 +107,8 @@ The workflow also tags the image `latest` when the tag it builds is the highest
 `vX.Y.Z` in the repository, so a dispatch rebuild of an older tag never moves
 `latest` backwards. `latest` is for trying Argus; a deployment pins `vX.Y.Z`,
 because pulling `latest` can apply migrations that make the upgrade one-way (3.3)
-without the operator reading the notes first. The README says so.
+without the operator reading the notes first. The README names no version: its
+`docker run` uses `latest` and says to replace it with a `vX.Y.Z` tag to pin.
 
 # 4. Open Questions
 
