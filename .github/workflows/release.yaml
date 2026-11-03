@@ -21,6 +21,9 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      owner: ${{ steps.meta.outputs.owner }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,6 +45,7 @@ jobs:
             echo "tag=$TAG"
             echo "notes=$notes"
             echo "image=ghcr.io/${GITHUB_REPOSITORY,,}"
+            echo "owner=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
           } >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@v3
@@ -86,3 +90,44 @@ jobs:
           { printf 'Image: `%s:%s`\n\n' "$IMAGE" "$TAG"; tail -n +2 "$NOTES" | sed '/./,$!d'; } > /tmp/release-notes.md
           gh release create "$TAG" --verify-tag --title "$TAG" --notes-file /tmp/release-notes.md
           echo "Created release $TAG"
+
+  # Worker images for `argus worker setup` (docs/specs/local-workers.spec.md 3.1):
+  # the NanoClaw host with its built checkout, and the ~6 GB agent image.
+  worker-images:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Free disk for the agent image
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af >/dev/null
+          df -h /
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push the worker images
+        env:
+          TAG: ${{ needs.publish.outputs.tag }}
+          OWNER: ${{ needs.publish.outputs.owner }}
+        run: |
+          set -euo pipefail
+          host="$OWNER/argus-nanoclaw-host"
+          agent="$OWNER/argus-nanoclaw-agent"
+          IMAGE_LABELS="org.opencontainers.image.version=$TAG
+          org.opencontainers.image.revision=$(git rev-parse HEAD)
+          org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            deploy/nanoclaw-host/build-release.sh "$host:$TAG" "$agent:$TAG"
+          newest=$(git tag -l 'v*.*.*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          for image in "$host" "$agent"; do
+            docker push "$image:$TAG"
+            if [ "$TAG" = "$newest" ]; then
+              docker tag "$image:$TAG" "$image:latest"
+              docker push "$image:latest"
+            fi
+          done

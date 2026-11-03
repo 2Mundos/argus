@@ -1,0 +1,28 @@
+# The published NanoClaw host image (docs/specs/local-workers.spec.md 3.1): the
+# runtime image from ./Dockerfile plus the built NanoClaw checkout at
+# /opt/nanoclaw. `argus worker setup` copies that checkout to a host path, since
+# NanoClaw hands bind-mount paths to the host's Docker daemon (3.2).
+# Built by build-release.sh from the repository root:
+#   docker build -f deploy/nanoclaw-host/Dockerfile.release \
+#     --build-arg HOST_IMAGE=<runtime image> -t <ref> .
+ARG HOST_IMAGE=argus-nanoclaw-host:dev
+
+# The checkout is built on the runtime image's own Node and glibc, so its native
+# modules (better-sqlite3) load in the host container.
+FROM node:22-trixie-slim AS checkout
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        bash git ca-certificates python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+RUN corepack enable
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 ARGUS_NANOCLAW_STATE=/build ARGUS_NANOCLAW_ENGINES=1
+COPY integrations/nanoclaw /argus/integrations/nanoclaw
+# install.sh also copies this shared fixture (read by argus-accounts.test.ts).
+COPY packages/core/tests/fixtures/quota-notices.json /argus/packages/core/tests/fixtures/
+# The same steps as `provision.sh check` on a host: pinned commit, Argus channel,
+# gateway adapter, engines overlay, build, and the Argus vitest suite.
+RUN /argus/integrations/nanoclaw/provision.sh check
+
+FROM ${HOST_IMAGE}
+ARG NANOCLAW_COMMIT
+COPY --from=checkout /build/src /opt/nanoclaw
+LABEL argus.nanoclaw.commit=${NANOCLAW_COMMIT}

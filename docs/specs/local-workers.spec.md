@@ -52,10 +52,15 @@ engine the fleet supports is present:
 - `ghcr.io/2mundos/argus-nanoclaw-agent:vX.Y.Z`: NanoClaw's agent image with the
   Argus tools layer, what `provision.sh` tags `argus-nanoclaw-agent:<commit>-engines`.
 
-Both are built by the same scripts `provision.sh` runs (no second recipe), and
-quality CI keeps building them without publishing when their inputs change, as
-it does for the host image today. `latest` follows the newest release as for
-`argus` (releases 3.7).
+`deploy/nanoclaw-host/build-release.sh` builds both with the scripts
+`provision.sh` runs (no second recipe): `Dockerfile.release` runs
+`provision.sh check` on the runtime image's Node (so native modules match) and
+copies the checkout in; the agent image is NanoClaw's `container/build.sh` on a
+copy of that checkout plus the Argus tools layer. Quality CI builds the host
+image (which runs the Argus vitest suite) when `integrations/nanoclaw/` or
+`deploy/nanoclaw-host/` change; the agent image is built by the release
+workflow only. Both carry the OCI source, version and revision labels, and
+`latest` follows the newest release as for `argus` (releases 3.7).
 
 ## 3.2 The checkout lives on the host
 
