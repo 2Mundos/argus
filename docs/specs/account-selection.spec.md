@@ -260,7 +260,8 @@ isolation or sandbox/TLS restrictions.
     Without a stated time the account rests for the Argus cooldown and the
     event says `until_kind: cooldown`; with one, `stated`. The raw notice is
     kept sanitized (one line, bearer-like tokens and URL query strings dropped,
-    bounded) beside a `reason_code`: `quota_exhausted`, or `auth_expired` for
+    bounded; the folded text is capped at a small multiple of that limit before
+    redaction) beside a `reason_code`: `quota_exhausted`, or `auth_expired` for
     an expired login, which rotates the same way. `failure_class` on the Task
     separates `quota_exhausted`, `auth_expired`, `network_unavailable`,
     `runtime_switch_failed` and `implementation`; only the first two rotate and

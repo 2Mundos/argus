@@ -2,13 +2,16 @@
 (pristine 8fbacc91, the function head verbatim). When ARGUS_NANOCLAW_INSTALL_DIR points at a
 built NanoClaw checkout, also typechecks container-runner.ts after install."""
 
+import importlib.util
 import io
 import os
 import shutil
 import subprocess
 import sys
 import tarfile
+import time
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -152,6 +155,36 @@ async function adoptRunningSessionsOnce(): Promise<{{ adopted: number; stopped: 
     text = (root / "src" / "container-runner.ts").read_text()
     assert LIST_FAIL_CLOSED in text
     assert LIST_FAIL_SOFT not in text
+
+
+def _module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("patch_startup_adoption_gate", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_blank_lines_between_duplicate_headers_collapse() -> None:
+    gate = _module()
+    header = gate.ADOPT_ONCE_HEAD
+    for sep in ("\n", "\n\n", " \n", "\t\n", "\n \n\t\n", "\r\n", "\n\r\n"):
+        text = f"// before\n{header}{sep}{header}  return;\n"
+        fixed = gate.repair_duplicate_once_header(text)
+        assert fixed.count("async function adoptRunningSessionsOnce()") == 1
+        assert fixed.endswith("  return;\n")
+
+
+def test_duplicate_header_repair_is_fast_on_ambiguous_newlines() -> None:
+    gate = _module()
+    header = gate.ADOPT_ONCE_HEAD
+    # The second copy almost matches, which is what makes (?:\s*\n)+ explore
+    # every way to split the newlines. A real duplicate is covered above.
+    blob = header + ("\n" * 26) + header[:-1] + "X"
+    started = time.perf_counter()
+    assert gate.repair_duplicate_once_header(blob) == blob
+    # check-tests: allow elapsed-time — ReDoS regression for duplicate Once headers
+    assert time.perf_counter() - started < 0.5
 
 
 def test_repairs_duplicate_once_from_broken_upgrade(tmp_path: Path) -> None:

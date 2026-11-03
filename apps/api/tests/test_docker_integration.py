@@ -24,8 +24,11 @@ POOL = "it-echo"
 
 
 def free_port() -> int:
+    # The probe only discovers a free port number. uvicorn then listens on
+    # 0.0.0.0 so a Docker container can reach this process through
+    # host.docker.internal; the probe itself stays on loopback.
     with socket.socket() as s:
-        s.bind(("", 0))
+        s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
 
