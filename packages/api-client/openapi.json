@@ -19469,6 +19469,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 100,
             "title": "Depends On",
             "type": "array"
           },
@@ -20256,6 +20257,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 100,
             "title": "Depends On",
             "type": "array"
           },
@@ -30188,7 +30190,7 @@
     },
     "/api/projects/{slug}/settings": {
       "get": {
-        "description": "Effective values for a project, with `source` per key.",
+        "description": "Effective values for a project, with `source` per key. Workers only read\nprojects of tasks they have leased.",
         "operationId": "get_project_settings_api_projects__slug__settings_get",
         "parameters": [
           {

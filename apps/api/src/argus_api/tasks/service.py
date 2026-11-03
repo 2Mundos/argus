@@ -39,6 +39,7 @@ from argus_core.quota import failure_class
 from argus_core.task_edit import CLEARABLE, TaskAttempt, TaskChanges, editable_fields
 from argus_core.tasks import (
     ENV_OOM,
+    MAX_DEPENDENCIES,
     TERMINAL,
     Action,
     ExecutorModel,
@@ -162,6 +163,7 @@ async def create_task(
             )
     elif as_worker is not None:
         raise ForbiddenError("workers may only create subtasks (set parent_id)")
+    own_pins = body.knowledge
     body = _apply_kind_defaults(body, await kinds.get_kind(tx.conn, body.kind))
     if body.project is None:
         if body.parent_id is None:
@@ -178,7 +180,7 @@ async def create_task(
         prompt_trust = PromptTrust.WORKER
     else:
         prompt_trust = PromptTrust.ORCHESTRATOR
-    await _check_project_and_pins(tx.conn, body)
+    await _check_project_and_pins(tx.conn, body, own_pins)
     harness_account = await _resolve_harness_account(
         tx.conn,
         body.harness_account,
@@ -1732,7 +1734,6 @@ async def _set_archived(
     )
 
 
-MAX_DEPENDENCIES = 100
 _DEPS_EDITABLE = (S.PENDING, S.AWAITING_APPROVAL, S.READY)
 
 
@@ -3475,9 +3476,10 @@ async def check_create(conn: aiosqlite.Connection, body: TaskCreate) -> None:
     """The create rules that need no actor or parent: the kind and its input schema,
     the project and pinned pages. Routine templates are checked with it on save
     (routines spec 3.1)."""
+    own_pins = body.knowledge
     body = _apply_kind_defaults(body, await kinds.get_kind(conn, body.kind))
     _refuse_global(body.project)
-    await _check_project_and_pins(conn, body)
+    await _check_project_and_pins(conn, body, own_pins)
 
 
 def _refuse_global(project: str | None) -> None:
@@ -3489,7 +3491,11 @@ def _refuse_global(project: str | None) -> None:
         )
 
 
-async def _check_project_and_pins(conn: aiosqlite.Connection, body: TaskCreate) -> None:
+async def _check_project_and_pins(
+    conn: aiosqlite.Connection, body: TaskCreate, own_pins: list[str]
+) -> None:
+    """`own_pins` are the caller's; a kind's pins are the admin's choice and may
+    live in any project (task edit 3.1)."""
     if body.project is not None:
         async with conn.execute(
             "SELECT 1 FROM projects WHERE slug = ?", (body.project,)
@@ -3503,6 +3509,8 @@ async def _check_project_and_pins(conn: aiosqlite.Connection, body: TaskCreate) 
     )
     if body.knowledge:
         await _check_pages_exist(conn, body.knowledge)
+    if body.project is not None:
+        await _check_new_pins(conn, body.project, list(dict.fromkeys(own_pins)))
 
 
 async def _check_pages_exist(conn: aiosqlite.Connection, pages: list[str]) -> None:

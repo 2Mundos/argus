@@ -364,7 +364,11 @@ def test_worker_can_read_page_pinned_on_leased_task(client: TestClient) -> None:
             "tags": [],
         },
     ).json()["page"]
-    create_task(client, "alpha", knowledge=[page["id"]])
+    # A task pins only its project or `global`; a kind's pins may come from anywhere.
+    client.put(
+        "/api/task-kinds/runbook", json={"default_knowledge": [page["id"]]}
+    ).raise_for_status()
+    create_task(client, "alpha", kind="runbook")
     claimed = client.post("/api/tasks/claim", json={}, headers=alice).json()
     assert [r["page_id"] for r in claimed["knowledge_refs"]] == [page["id"]]
 

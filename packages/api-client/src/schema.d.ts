@@ -1969,7 +1969,8 @@ export interface paths {
         };
         /**
          * Get Project Settings
-         * @description Effective values for a project, with `source` per key.
+         * @description Effective values for a project, with `source` per key. Workers only read
+         *     projects of tasks they have leased.
          */
         get: operations["get_project_settings_api_projects__slug__settings_get"];
         put?: never;
