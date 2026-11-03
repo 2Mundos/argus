@@ -39,14 +39,22 @@ one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md)
 
 ## Quickstart
 
+Needs Docker and curl (Linux, macOS, or Windows with WSL 2).
+
 ```bash
-docker run --name argus -d -p 127.0.0.1:8000:8000 -v argus-data:/data \
-  ghcr.io/2mundos/argus:latest   # newest release; pin vX.Y.Z for a deployment
-until docker exec argus test -s /data/admin-token 2>/dev/null; do sleep 1; done   # first start takes a while
-docker exec argus cat /data/admin-token   # sign in at http://127.0.0.1:8000
+curl -fsSL https://raw.githubusercontent.com/2Mundos/argus/main/deploy/install.sh | sh
+argus up            # prints the dashboard URL and admin token
+argus up --docker   # also run worker pools on this machine's Docker
 ```
 
-Configuration, building from source, Compose, Docker pools and backups are under
+To upgrade, run `argus update`. It shows the release notes, backs up the
+database, upgrades, and rolls back if the new version does not start.
+`argus status`, `argus backup`, `argus restore <name>`, `argus logs` and
+`argus down` cover the rest ([launcher](docs/specs/launcher.spec.md)). Settings
+live in `~/.config/argus/`; keep a copy of `age-key.txt` there, since it decrypts
+provider credentials.
+
+The manual route (plain `docker run`, Compose, building from source) is under
 [Run with Docker](#run-with-docker).
 
 ## Layout
@@ -101,7 +109,8 @@ Record a fixture from a **copy** of a database, then review it before committing
 
 ## Run with Docker
 
-One process, one volume ([single-node](docs/specs/single-node.spec.md)): the
+The [Quickstart](#quickstart) launcher does all of this for you; this section is
+the manual equivalent. One process, one volume ([single-node](docs/specs/single-node.spec.md)): the
 same port serves the dashboard at `/` and the API under `/api`. Every release
 publishes the image to `ghcr.io/2mundos/argus:vX.Y.Z` and moves `latest` to the
 newest one (versions are on the [releases

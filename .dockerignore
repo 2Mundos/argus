@@ -5,4 +5,5 @@ node_modules
 .pytest_cache
 .ruff_cache
 docs
+!docs/releases
 **/dist

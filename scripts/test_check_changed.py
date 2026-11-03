@@ -65,6 +65,12 @@ def test_docs_only_runs_only_docs_validation() -> None:
     assert steps_for(["docs/README.md"]) == ["validate docs"]
 
 
+def test_launcher_change_runs_its_python_test() -> None:
+    steps = cc.plan(["deploy/argus"], sorted(FILES), cc.Graph(FILES), 8)
+    assert [s.name for s in steps] == ["pytest (1 files)"]
+    assert "scripts/test_launcher.py" in steps[0].cmd
+
+
 def test_dashboard_only_never_runs_pytest_or_python_tools() -> None:
     steps = cc.plan(["apps/dashboard/src/a.ts"], sorted(FILES), cc.Graph(FILES), 8)
     assert [s.name for s in steps] == ["biome", "tsc", "vitest", "dashboard build"]

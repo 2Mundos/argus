@@ -17,6 +17,9 @@ the tag builds and publishes everything else.
   creates the GitHub release with the notes as its body. Quality CI also builds
   (without publishing) the NanoClaw host and echo-worker images so those
   Dockerfiles cannot rot; only the control-plane image is a release artifact.
+- The image carries the host launcher (`/app/bin/argus`) and every release's
+  notes (`/app/releases/`), so `argus update` installs the matching launcher
+  and shows the Upgrading sections it skips over ([launcher](launcher.spec.md)).
 - The running process reports that version: `argus_build_info{version}`,
   `GET /api/system`, and the Home System widgets ([operations](operations.spec.md)).
 
