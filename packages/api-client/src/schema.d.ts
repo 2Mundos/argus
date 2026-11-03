@@ -6311,6 +6311,11 @@ export interface components {
         };
         /** FleetCapabilities */
         FleetCapabilities: {
+            /**
+             * Launcher
+             * @default false
+             */
+            launcher?: boolean;
             /** Pools */
             pools: components["schemas"]["PoolCapability"][];
             /** Public Url Configured */
@@ -10551,6 +10556,11 @@ export interface components {
         TemplateCatalog: {
             /** Default Node */
             default_node: string;
+            /**
+             * Launcher
+             * @default false
+             */
+            launcher?: boolean;
             /** Nodes */
             nodes: components["schemas"]["NodeOption"][];
             /** Pools */

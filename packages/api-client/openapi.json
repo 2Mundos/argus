@@ -9540,6 +9540,11 @@
       },
       "FleetCapabilities": {
         "properties": {
+          "launcher": {
+            "default": false,
+            "title": "Launcher",
+            "type": "boolean"
+          },
           "pools": {
             "items": {
               "$ref": "#/components/schemas/PoolCapability"
@@ -21832,6 +21837,11 @@
           "default_node": {
             "title": "Default Node",
             "type": "string"
+          },
+          "launcher": {
+            "default": false,
+            "title": "Launcher",
+            "type": "boolean"
           },
           "nodes": {
             "items": {
