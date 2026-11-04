@@ -129,6 +129,13 @@ REGISTRY: dict[str, SettingDefinition] = {
         scopes=["global"],
         description="Daily spend cap (USD, UTC day) for the internal orchestrator.",
     ),
+    "inbox.stuck_after_s": SettingDefinition(
+        key="inbox.stuck_after_s",
+        schema={"type": "integer", "minimum": 60},
+        default=21600,
+        scopes=["global"],
+        description="Seconds a task may keep the same block reason or progress before the inbox flags it stuck.",
+    ),
     "orchestrator.max_concurrent_turns": SettingDefinition(
         key="orchestrator.max_concurrent_turns",
         schema={"type": "integer", "minimum": 1, "maximum": 4},

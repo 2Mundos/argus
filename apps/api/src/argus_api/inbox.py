@@ -25,6 +25,7 @@ from argus_api.paging import (
     encode_cursor,
 )
 from argus_api.tasks import service as tasks_service
+from argus_api.settings import service as settings_service
 from argus_api.tasks import views as tasks
 from argus_api.tasks.views import TaskDetail
 
@@ -36,6 +37,20 @@ class BlockedTask(BaseModel):
     id: str
     title: str
     state: TaskState
+
+
+STUCK_AFTER_KEY = "inbox.stuck_after_s"
+
+
+class Stuck(BaseModel):
+    """A task that kept the same block reason or progress past the threshold.
+    Advisory and derived on read; nothing sets or clears it."""
+
+    kind: Literal["block_reason", "progress"]
+    reason: str  # the block reason, or the progress message
+    since: datetime
+    age_s: int
+    threshold_s: int
 
 
 class InboxItem(BaseModel):
@@ -61,6 +76,7 @@ class InboxItem(BaseModel):
     )
     last_signal_source: str | None = None  # activity, progress, log, or claim
     stall_cause: StallCause | None = None  # quiet claims (stall visibility 3.7)
+    stuck: Stuck | None = None  # same block reason or progress past the threshold
     task: TaskDetail | None = None  # view=detail only
     decision: DecisionDetail | None = None  # view=detail only
     _cursor: str = PrivateAttr(default="")  # resumes after this row (budget cuts)
@@ -216,6 +232,8 @@ async def inbox(
         if r["subject_type"] == "task" and r["state"] == TaskState.CLAIMED
     ]
     last_signals = await _quiet_last_signals(snap, quiet_ids)
+    threshold_s = int(await settings_service.global_value(conn, STUCK_AFTER_KEY))
+    stuck_by_task = await _stuck(snap, rows, threshold_s)
     items: list[InboxItem] = []
     omitted: set[str] = set()
     for r in rows:
@@ -231,6 +249,7 @@ async def inbox(
             }
         )
         item._cursor = encode_cursor(_cursor_key(r, order), filters)
+        item.stuck = stuck_by_task.get(r["subject_id"])
         if sig := last_signals.get(r["subject_id"]):
             item.last_signal_at, item.last_signal_source, item.stall_cause = sig
         if view == "detail":
@@ -358,6 +377,42 @@ async def _failed_dependencies(
     async with snap.conn.execute(sql + " ORDER BY u.id", task_ids) as cur:
         for task_id, dep_id in await cur.fetchall():
             found[task_id].append(dep_id)
+    return found
+
+
+async def _stuck(snap: Snapshot, rows: list[Any], threshold_s: int) -> dict[str, Stuck]:
+    """Task rows whose current block reason or progress is older than the threshold.
+
+    No column records when `block_reason` was set, so a blocked task's reason dates
+    from `updated_at`, which every transition bumps (a block, a quota-wait change)
+    and which a plain edit also bumps, so an edit only ever hides a stuck task.
+    Progress dates from `progress_at`. A block reason wins over progress."""
+    ids = [r["subject_id"] for r in rows if r["subject_type"] == "task"]
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    sql = (
+        "SELECT id, state, block_reason, updated_at, progress_message, progress_at"  # noqa: S608
+        f" FROM tasks WHERE id IN ({marks})"
+    )
+    found: dict[str, Stuck] = {}
+    async with snap.conn.execute(sql, ids) as cur:
+        for t in await cur.fetchall():
+            if t["state"] == TaskState.BLOCKED and t["block_reason"]:
+                kind, reason, at = "block_reason", t["block_reason"], t["updated_at"]
+            elif t["progress_message"] and t["progress_at"]:
+                kind, reason, at = "progress", t["progress_message"], t["progress_at"]
+            else:
+                continue
+            age = max(0, int((snap.now - _at(at)).total_seconds()))
+            if age >= threshold_s:
+                found[t["id"]] = Stuck(
+                    kind=kind,  # ty: ignore[invalid-argument-type]
+                    reason=reason[:200],
+                    since=_at(at),
+                    age_s=age,
+                    threshold_s=threshold_s,
+                )
     return found
 
 
